@@ -1,0 +1,24 @@
+{
+  "name": "zorid",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.2",
+  "scripts": {
+    "lint": "node scripts/check-import-boundaries.mjs",
+    "typecheck": "tsc -b tsconfig.packages.json --pretty false",
+    "build": "tsc -b tsconfig.packages.json --pretty false",
+    "test": "vitest run",
+    "quality": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm perf:smoke",
+    "perf:smoke": "node scripts/perf-smoke.mjs"
+  },
+  "devDependencies": {
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.0",
+    "@types/node": "latest",
+    "electron": "^42.3.0",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}

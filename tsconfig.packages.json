@@ -1,0 +1,89 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "apps/desktop"
+    },
+    {
+      "path": "apps/mobile"
+    },
+    {
+      "path": "packages/shared"
+    },
+    {
+      "path": "packages/platform-api"
+    },
+    {
+      "path": "packages/plugin-api"
+    },
+    {
+      "path": "packages/app-kernel"
+    },
+    {
+      "path": "packages/vault"
+    },
+    {
+      "path": "packages/workspace"
+    },
+    {
+      "path": "packages/editor"
+    },
+    {
+      "path": "packages/metadata"
+    },
+    {
+      "path": "packages/object-store"
+    },
+    {
+      "path": "packages/db"
+    },
+    {
+      "path": "packages/index-api"
+    },
+    {
+      "path": "packages/indexer-js"
+    },
+    {
+      "path": "packages/index-worker"
+    },
+    {
+      "path": "packages/plugin-host"
+    },
+    {
+      "path": "packages/sync"
+    },
+    {
+      "path": "packages/ui-vue"
+    },
+    {
+      "path": "packages/desktop-shell"
+    },
+    {
+      "path": "packages/mobile-shell"
+    },
+    {
+      "path": "plugins/core/file-explorer"
+    },
+    {
+      "path": "plugins/core/search"
+    },
+    {
+      "path": "plugins/core/backlinks"
+    },
+    {
+      "path": "plugins/core/outline"
+    },
+    {
+      "path": "plugins/core/tags"
+    },
+    {
+      "path": "plugins/core/status-bar"
+    },
+    {
+      "path": "plugins/core/fields"
+    },
+    {
+      "path": "plugins/core/data-views"
+    }
+  ]
+}

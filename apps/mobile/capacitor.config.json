@@ -1,0 +1,6 @@
+{
+  "appId": "app.zorid.mobile",
+  "appName": "Zorid",
+  "webDir": "dist",
+  "server": { "androidScheme": "https" }
+}

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "zorid.core.backlinks",
+  "name": "Backlinks",
+  "version": "0.1.0",
+  "kind": "core",
+  "entry": "./src/index.ts",
+  "zoridApi": "^0.1.0",
+  "platforms": ["desktop"],
+  "capabilities": { "required": ["metadata.read", "workspace.views", "commands.register"], "optional": [] },
+  "activation": ["onCommand:backlinks.open"],
+  "contributes": { "commands": [{ "id": "backlinks.open", "title": "Open Backlinks" }] }
+}

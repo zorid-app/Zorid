@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "zorid.core.status-bar",
+  "name": "Status Bar",
+  "version": "0.1.0",
+  "kind": "core",
+  "entry": "./src/index.ts",
+  "zoridApi": "^0.1.0",
+  "platforms": ["desktop"],
+  "capabilities": { "required": ["status.register", "commands.register"], "optional": [] },
+  "activation": ["onCommand:status-bar.open"],
+  "contributes": { "commands": [{ "id": "status-bar.open", "title": "Open Status Bar" }], "statusItems": [{ "id": "zorid.core.status-bar" }] }
+}

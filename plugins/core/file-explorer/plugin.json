@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "zorid.core.file-explorer",
+  "name": "File Explorer",
+  "version": "0.1.0",
+  "kind": "core",
+  "entry": "./src/index.ts",
+  "zoridApi": "^0.1.0",
+  "platforms": ["desktop"],
+  "capabilities": { "required": ["vault.read", "vault.write", "workspace.views", "workspace.navigation", "commands.register"], "optional": [] },
+  "activation": ["onCommand:file-explorer.open-root", "onCommand:file-explorer.open-readme"],
+  "contributes": { "commands": [{ "id": "file-explorer.open-root", "title": "Open File Explorer" }, { "id": "file-explorer.open-readme", "title": "Open README" }] }
+}

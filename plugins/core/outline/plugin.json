@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "zorid.core.outline",
+  "name": "Outline",
+  "version": "0.1.0",
+  "kind": "core",
+  "entry": "./src/index.ts",
+  "zoridApi": "^0.1.0",
+  "platforms": ["desktop"],
+  "capabilities": { "required": ["metadata.read", "workspace.navigation", "commands.register"], "optional": [] },
+  "activation": ["onCommand:outline.open"],
+  "contributes": { "commands": [{ "id": "outline.open", "title": "Open Outline" }] }
+}
