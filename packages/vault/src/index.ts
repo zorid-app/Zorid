@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { constants, watch as fsWatch, mkdirSync, realpathSync, type FSWatcher } from 'node:fs';
-import { lstat, mkdir, open, readdir, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { ZoridError, normalizeVaultPath, type Disposable, type VaultPath } from '@zorid/shared';
 import type { VaultAPI, VaultChangeEvent, VaultFileStat } from '@zorid/platform-api';
@@ -15,7 +16,8 @@ export class FolderVault implements VaultAPI {
     mkdirSync(options.root, { recursive: true });
     this.root = path.resolve(options.root);
     this.#realRoot = realpathSync(this.root);
-    this.profile = { id: this.#realRoot, kind: 'folder' as const, rootLabel: path.basename(this.#realRoot) };
+    const id = `folder:${createHash('sha256').update(this.#realRoot).digest('hex').slice(0, 16)}`;
+    this.profile = { id, kind: 'folder' as const, rootLabel: path.basename(this.#realRoot) };
   }
 
   resolve(vaultPath: VaultPath): string {
@@ -96,6 +98,7 @@ export class FolderVault implements VaultAPI {
     const full = this.resolve(vaultPath);
     const info = await lstat(full);
     if (info.isSymbolicLink()) await unlink(full);
+    else if (info.isDirectory()) await rm(await this.#resolveExisting(vaultPath), { recursive: true, force: true });
     else await unlink(await this.#resolveExisting(vaultPath));
   }
   async rename(from: VaultPath, to: VaultPath): Promise<void> {

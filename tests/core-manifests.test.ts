@@ -33,6 +33,15 @@ describe('core plugin manifests', () => {
     expect(index.onFileExtension.get('.zbase')).toEqual(['zorid.core.data-views']);
   });
 
+
+  it('can expose static settings schemas from manifests without runtime activation', async () => {
+    const manifests = (await readCoreManifests()).map(({ manifest }) => manifest);
+    const statusBar = manifests.find((manifest) => manifest.id === 'zorid.core.status-bar');
+    expect(statusBar?.contributes?.settings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'status-bar', title: 'Status Bar' }),
+    ]));
+  });
+
   it('keeps runtime source usage aligned with required capabilities and contributions', async () => {
     for (const { manifest, source } of await readCoreManifests()) {
       const required = manifest.capabilities.required;
@@ -45,6 +54,7 @@ describe('core plugin manifests', () => {
       if (source.includes('workspace.openFile')) expect(required, manifest.id).toContain('workspace.navigation');
       if (source.includes('register.viewRenderer') || source.includes('dataViews.openBase')) expect(required, manifest.id).toContain('workspace.views');
       if (source.includes('dataViews.openBase')) expect(required, manifest.id).toContain('vault.read');
+      if (source.includes('register.setting') || (manifest.contributes?.settings?.length ?? 0) > 0) expect(required, manifest.id).toContain('settings.register');
     }
   });
 });

@@ -8,7 +8,19 @@ const repoRoot = path.resolve(desktopRoot, '../..');
 
 const workspaceAliases = {
   '@zorid/shared': path.resolve(repoRoot, 'packages/shared/src/index.ts'),
+  '@zorid/platform-api': path.resolve(repoRoot, 'packages/platform-api/src/index.ts'),
+  '@zorid/plugin-api': path.resolve(repoRoot, 'packages/plugin-api/src/index.ts'),
+  '@zorid/app-kernel': path.resolve(repoRoot, 'packages/app-kernel/src/index.ts'),
+  '@zorid/plugin-host': path.resolve(repoRoot, 'packages/plugin-host/src/index.ts'),
   '@zorid/vault': path.resolve(repoRoot, 'packages/vault/src/index.ts'),
+  '@zorid/workspace': path.resolve(repoRoot, 'packages/workspace/src/index.ts'),
+  '@zorid/editor': path.resolve(repoRoot, 'packages/editor/src/index.ts'),
+  '@zorid/db/node-sqlite': path.resolve(repoRoot, 'packages/db/src/node-sqlite.ts'),
+  '@zorid/db': path.resolve(repoRoot, 'packages/db/src/index.ts'),
+  '@zorid/index-api': path.resolve(repoRoot, 'packages/index-api/src/index.ts'),
+  '@zorid/indexer-js': path.resolve(repoRoot, 'packages/indexer-js/src/index.ts'),
+  '@zorid/index-worker': path.resolve(repoRoot, 'packages/index-worker/src/index.ts'),
+  '@zorid/object-store': path.resolve(repoRoot, 'packages/object-store/src/index.ts'),
   '@zorid/desktop-shell': path.resolve(repoRoot, 'packages/desktop-shell/src/index.ts'),
 };
 
@@ -28,6 +40,10 @@ export default defineConfig({
       outDir: 'out/preload',
       rollupOptions: {
         input: path.resolve(desktopRoot, 'src/preload/index.ts'),
+        output: {
+          format: 'cjs',
+          entryFileNames: '[name].cjs',
+        },
       },
     },
   },

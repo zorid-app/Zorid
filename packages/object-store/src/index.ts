@@ -1,6 +1,6 @@
 import { ok, ZoridError, normalizeVaultPath, type Disposable, type JsonValue, type PluginId, type VaultPath } from '@zorid/shared';
 import type { DataViewRenderOptions, DataViewRenderer, DataViewsAPI, FieldValue, FieldsAPI, FileRecord, ObjectStoreAPI, ZbaseDocument, ZbaseFilters, ZbaseView, ZtypeDocument, ZtypeField } from '@zorid/platform-api';
-import type { InMemoryIndexStore } from '@zorid/db';
+import type { IndexStore } from '@zorid/db';
 
 function parsePrimitive(value: string): JsonValue {
   const trimmed = value.trim();
@@ -134,9 +134,9 @@ export class JsonObjectStoreService implements ObjectStoreAPI {
 }
 
 export class FieldsService implements FieldsAPI {
-  #store: InMemoryIndexStore;
+  #store: IndexStore;
   #objects: JsonObjectStoreService;
-  constructor(store: InMemoryIndexStore, objects = new JsonObjectStoreService()) { this.#store = store; this.#objects = objects; }
+  constructor(store: IndexStore, objects = new JsonObjectStoreService()) { this.#store = store; this.#objects = objects; }
   async getFields(path: VaultPath): Promise<readonly FieldValue[]> { const record = this.#store.get(path); return Object.entries(record?.fields ?? {}).map(([key, value]) => ({ key, value, source: 'frontmatter' as const })); }
   async getType(path: VaultPath): Promise<ZtypeDocument | undefined> { const record = this.#store.get(path); const type = record?.fields['zorid.type']; if (typeof type !== 'string') return undefined; return this.#objects.readType(normalizeVaultPath(`.zorid/types/${type}.ztype`)); }
   async updateField(path: VaultPath, key: string, value: JsonValue): Promise<void> { const record = this.#store.get(path); if (!record) throw new ZoridError('fields.file-missing', `No indexed file: ${path}`); this.#store.upsert({ ...record, fields: { ...record.fields, [key]: value }, frontmatter: { ...record.frontmatter, [key]: value } }); }
@@ -144,10 +144,10 @@ export class FieldsService implements FieldsAPI {
 }
 
 export class DataViewsService implements DataViewsAPI {
-  #store: InMemoryIndexStore;
+  #store: IndexStore;
   #objects: JsonObjectStoreService;
   #renderers = new Map<string, DataViewRenderer>();
-  constructor(store: InMemoryIndexStore, objects = new JsonObjectStoreService()) { this.#store = store; this.#objects = objects; this.registerRenderer(defaultTableRenderer); this.registerRenderer(defaultListRenderer); }
+  constructor(store: IndexStore, objects = new JsonObjectStoreService()) { this.#store = store; this.#objects = objects; this.registerRenderer(defaultTableRenderer); this.registerRenderer(defaultListRenderer); }
   registerRenderer(renderer: DataViewRenderer): Disposable { this.#renderers.set(renderer.type, renderer); return { dispose: () => { this.#renderers.delete(renderer.type); } }; }
   async evaluateFilters(filters: ZbaseFilters): Promise<readonly FileRecord[]> { return this.#recordsMatching(filters); }
   async openBase(path: VaultPath): Promise<void> { await this.#readBase(path); }
@@ -185,5 +185,5 @@ export const defaultTableRenderer: DataViewRenderer = { type: 'table', render(co
 export const defaultListRenderer: DataViewRenderer = { type: 'list', render(container, records) { clearContainer(container); for (const record of records) appendText(container, 'li', String(record.path)); return { dispose: () => { clearContainer(container); } }; } };
 
 export function createObjectStoreService(initial?: Record<string, string>): JsonObjectStoreService { return new JsonObjectStoreService(initial); }
-export function createFieldsService(store: InMemoryIndexStore, objects?: JsonObjectStoreService): FieldsService { return new FieldsService(store, objects); }
-export function createDataViewsService(store: InMemoryIndexStore, objects?: JsonObjectStoreService): DataViewsService { return new DataViewsService(store, objects); }
+export function createFieldsService(store: IndexStore, objects?: JsonObjectStoreService): FieldsService { return new FieldsService(store, objects); }
+export function createDataViewsService(store: IndexStore, objects?: JsonObjectStoreService): DataViewsService { return new DataViewsService(store, objects); }

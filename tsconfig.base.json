@@ -101,6 +101,9 @@
       ],
       "@zorid/plugin-data-views": [
         "plugins/core/data-views/src/index.ts"
+      ],
+      "@zorid/db/node-sqlite": [
+        "packages/db/src/node-sqlite.ts"
       ]
     },
     "types": [

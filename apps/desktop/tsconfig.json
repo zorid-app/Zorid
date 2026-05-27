@@ -19,6 +19,39 @@
     },
     {
       "path": "../../packages/desktop-shell"
+    },
+    {
+      "path": "../../packages/platform-api"
+    },
+    {
+      "path": "../../packages/plugin-api"
+    },
+    {
+      "path": "../../packages/app-kernel"
+    },
+    {
+      "path": "../../packages/plugin-host"
+    },
+    {
+      "path": "../../packages/workspace"
+    },
+    {
+      "path": "../../packages/editor"
+    },
+    {
+      "path": "../../packages/db"
+    },
+    {
+      "path": "../../packages/index-api"
+    },
+    {
+      "path": "../../packages/indexer-js"
+    },
+    {
+      "path": "../../packages/index-worker"
+    },
+    {
+      "path": "../../packages/object-store"
     }
   ]
 }

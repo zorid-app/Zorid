@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@zorid/app-kernel': fileURLToPath(new URL('./packages/app-kernel/src/index.ts', import.meta.url)),
+      '@zorid/db/node-sqlite': fileURLToPath(new URL('./packages/db/src/node-sqlite.ts', import.meta.url)),
       '@zorid/db': fileURLToPath(new URL('./packages/db/src/index.ts', import.meta.url)),
       '@zorid/desktop-app': fileURLToPath(new URL('./apps/desktop/src/index.ts', import.meta.url)),
       '@zorid/desktop-shell': fileURLToPath(new URL('./packages/desktop-shell/src/index.ts', import.meta.url)),

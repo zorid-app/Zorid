@@ -7,7 +7,7 @@ import { createMetadataService, createSearchService } from '../packages/metadata
 
 describe('index/metadata/search slice', () => {
   it('declares rebuildable derived index schema migrations', () => {
-    expect(indexMigrations[0]?.sql).toContain('CREATE TABLE files');
+    expect(indexMigrations[0]?.sql).toContain('CREATE TABLE IF NOT EXISTS files');
     expect(indexMigrations[0]?.sql).toContain('search_fts');
   });
 

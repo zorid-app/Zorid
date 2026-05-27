@@ -1,4 +1,4 @@
-import { DisposableStack, ZoridError, asPluginId, normalizeVaultPath, type Disposable } from '@zorid/shared';
+import { DisposableStack, ZoridError, asPluginId, normalizeVaultPath, type Disposable, type JsonValue } from '@zorid/shared';
 import type { ActivationTrigger, PluginManifest, ZoridPlugin, ZoridPluginContext } from '@zorid/plugin-api';
 import type { CapabilityName, CommandsAPI, DataViewRenderOptions, DataViewsAPI, EditorAPI, EventBusAPI, FieldsAPI, MetadataAPI, ObjectStoreAPI, PluginRegistryAPI, SearchAPI, SettingsAPI, VaultAPI, WorkspaceAPI } from '@zorid/platform-api';
 
@@ -19,6 +19,15 @@ export interface PluginLoadRecord {
   lastError?: string;
   durationMs?: number;
   capabilityDiagnostics?: readonly CapabilityDiagnostic[];
+}
+
+
+export interface StaticPluginSettingsContribution {
+  readonly pluginId: string;
+  readonly id: string;
+  readonly title: string;
+  readonly schema: JsonValue;
+  readonly pluginStatus: PluginLoadStatus;
 }
 
 export interface CapabilityDiagnostic { readonly code: 'plugin.capability.missing' | 'plugin.capability.undeclared'; readonly capability: CapabilityName; readonly pluginId: string; }
@@ -148,6 +157,17 @@ export class PluginHost {
   }
 
   records(): readonly PluginLoadRecord[] { return [...this.#records.values()].map((record) => ({ ...record })); }
+
+  staticSettings(): readonly StaticPluginSettingsContribution[] {
+    const settings: StaticPluginSettingsContribution[] = [];
+    for (const manifest of this.manifests.values()) {
+      const record = this.#records.get(manifest.id);
+      for (const section of manifest.contributes?.settings ?? []) {
+        settings.push({ pluginId: manifest.id, id: section.id, title: section.title, schema: section.schema, pluginStatus: record?.status ?? 'discovered' });
+      }
+    }
+    return settings;
+  }
   record(pluginId: string): PluginLoadRecord | undefined { const record = this.#records.get(pluginId); return record ? { ...record } : undefined; }
   #emit(event: 'plugin:placeholder-registered' | 'plugin:load-started' | 'plugin:loaded' | 'plugin:failed' | 'plugin:disabled' | 'plugin:unloaded', record: PluginLoadRecord): void {
     this.#options.events?.emit(event, { ...record });

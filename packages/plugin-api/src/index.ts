@@ -15,6 +15,7 @@ import type {
   PluginStorageAPI,
   SearchAPI,
   SettingsAPI,
+  SettingsContribution,
   VaultAPI,
   WorkspaceAPI,
 } from '@zorid/platform-api';
@@ -82,4 +83,5 @@ export interface StaticContributions {
   readonly views?: readonly { readonly id: string; readonly title: string }[];
   readonly viewRenderers?: readonly { readonly type: string }[];
   readonly statusItems?: readonly { readonly id: string }[];
+  readonly settings?: readonly SettingsContribution[];
 }
