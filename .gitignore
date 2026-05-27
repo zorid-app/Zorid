@@ -5,3 +5,7 @@ coverage/
 .vite/
 *.tsbuildinfo
 .zorid/
+out/
+release/
+apps/desktop/out/
+apps/desktop/release/

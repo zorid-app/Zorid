@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DesktopBridge } from './index.js';
+import type { DesktopBridge } from '../index.js';
 
 const bridge: DesktopBridge = {
   openVault: () => ipcRenderer.invoke('zorid:open-vault'),

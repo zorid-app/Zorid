@@ -1,0 +1,12 @@
+appId: app.zorid.desktop
+productName: Zorid
+copyright: Copyright © 2026 Zorid
+asar: true
+npmRebuild: false
+directories:
+  output: release
+files:
+  - out/**/*
+  - package.json
+mac:
+  identity: null
