@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feature Plan"
+  short_description: "Interview users and produce implementation-ready feature specs"
+  default_prompt: "Help me clarify this feature and produce an implementation-ready plan."
