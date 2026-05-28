@@ -23,6 +23,8 @@ const workspaceAliases = {
   '@zorid/object-store': path.resolve(repoRoot, 'packages/object-store/src/index.ts'),
   '@zorid/desktop-shell': path.resolve(repoRoot, 'packages/desktop-shell/src/index.ts'),
   '@zorid/ui-vue/tokens.css': path.resolve(repoRoot, 'packages/ui-vue/src/tokens.css'),
+  '@zorid/ui-vue/components.css': path.resolve(repoRoot, 'packages/ui-vue/src/components.css'),
+  '@zorid/ui-vue': path.resolve(repoRoot, 'packages/ui-vue/src/index.ts'),
 };
 
 export default defineConfig({

@@ -6,7 +6,9 @@
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
   },
   "include": [
-    "src/**/*.ts"
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "src/**/*.vue"
   ],
   "references": []
 }

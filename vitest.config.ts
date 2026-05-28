@@ -1,7 +1,9 @@
 import { fileURLToPath } from 'node:url';
+import vue from '@vitejs/plugin-vue';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  plugins: [vue()],
   resolve: {
     alias: {
       '@zorid/app-kernel': fileURLToPath(new URL('./packages/app-kernel/src/index.ts', import.meta.url)),
@@ -30,6 +32,7 @@ export default defineConfig({
       '@zorid/plugin-tags': fileURLToPath(new URL('./plugins/core/tags/src/index.ts', import.meta.url)),
       '@zorid/shared': fileURLToPath(new URL('./packages/shared/src/index.ts', import.meta.url)),
       '@zorid/sync': fileURLToPath(new URL('./packages/sync/src/index.ts', import.meta.url)),
+      '@zorid/ui-vue/components.css': fileURLToPath(new URL('./packages/ui-vue/src/components.css', import.meta.url)),
       '@zorid/ui-vue': fileURLToPath(new URL('./packages/ui-vue/src/index.ts', import.meta.url)),
       '@zorid/vault': fileURLToPath(new URL('./packages/vault/src/index.ts', import.meta.url)),
       '@zorid/workspace': fileURLToPath(new URL('./packages/workspace/src/index.ts', import.meta.url))

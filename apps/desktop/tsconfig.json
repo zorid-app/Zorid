@@ -52,6 +52,9 @@
     },
     {
       "path": "../../packages/object-store"
+    },
+    {
+      "path": "../../packages/ui-vue"
     }
   ]
 }

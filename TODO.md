@@ -1,10 +1,4 @@
 # Quick
-The status bar should wrap it's contents.
-
-
-
-
-
 
 
 

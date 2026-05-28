@@ -2,6 +2,7 @@ import type { JsonValue } from '@zorid/shared';
 import type { PluginStatus, VaultEntry, VaultProfile } from '@zorid/platform-api';
 import type { RecentVaultDto } from './main/recent-vaults.js';
 import type { BacklinkDto, BaseDto, CommandDto, DataViewResultDto, FieldValidationDiagnosticDto, FileFieldsDto, IndexStatusDto, MarkdownEmbedDto, OutlineItemDto, SearchResultDto, SettingsSectionDto, SettingValueDto, TagDto, TypeDto } from './main/runtime.js';
+export type { BacklinkDto, BaseDto, CommandDto, DataViewResultDto, FieldDto, FieldValidationDiagnosticDto, FileFieldsDto, IndexStatusDto, MarkdownEmbedDto, OutlineItemDto, SearchResultDto, SettingsSectionDto, SettingValueDto, TagDto, TypeDto } from './main/runtime.js';
 import type { VaultWindowRole } from './main/vault-window-manager.js';
 
 export interface DesktopLauncherBridge {

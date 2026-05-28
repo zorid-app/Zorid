@@ -87,11 +87,14 @@ describe('desktop shell pane layout helpers', () => {
   it('keeps desktop chrome and wrapping behavior wired in renderer styles', () => {
     const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
     const app = readFileSync('apps/desktop/src/renderer/src/App.vue', 'utf8');
+    const titlebar = readFileSync('apps/desktop/src/renderer/src/components/TopTabStrip.vue', 'utf8');
+    const resizeHandle = readFileSync('apps/desktop/src/renderer/src/components/AppResizeHandle.vue', 'utf8');
 
-    expect(app).toContain('class="editor-titlebar"');
+    expect(titlebar).toContain('class="editor-titlebar"');
     expect(app).toContain('class="traffic-light-spacer launcher-traffic-light-spacer"');
     expect(app).not.toContain('class="window-dots"');
-    expect(app).toContain(":class=\"resizeHandleClasses('left')\"");
+    expect(titlebar).not.toContain('class="window-dots"');
+    expect(resizeHandle).toContain('class="resize-handle"');
     expect(styles).toContain('grid-template-rows: var(--titlebar-height) minmax(0, 1fr) auto;');
     expect(styles).toContain('max-height: var(--status-bar-max-height);');
     expect(styles).toMatch(/\.launcher-shell\s*\{[^}]*-webkit-app-region:\s*drag;[^}]*\}/s);
