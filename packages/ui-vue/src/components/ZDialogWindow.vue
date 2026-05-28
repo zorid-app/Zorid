@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, useId } from 'vue';
+import { computed } from 'vue';
 import { DialogContent, DialogPortal, DialogRoot } from 'reka-ui';
 import ZDialogBackdrop from './ZDialogBackdrop.vue';
 import ZDialogDescription from './ZDialogDescription.vue';
@@ -23,8 +23,6 @@ const props = withDefaults(defineProps<{
 });
 
 const emit = defineEmits<{ 'update:open': [value: boolean] }>();
-const titleId = useId();
-const descriptionId = useId();
 const fallbackTitle = 'Dialog';
 const model = computed({
   get: () => props.open,
@@ -41,8 +39,8 @@ const model = computed({
         :class="[`z-dialog-window--${size}`, { 'z-dialog-window--centered': centered }]"
         data-z-dialog-window
       >
-        <ZDialogTitle :hidden="frameless">{{ title ?? ariaLabel ?? fallbackTitle }}</ZDialogTitle>
-        <ZDialogDescription :hidden="frameless || !description">{{ description ?? `${title ?? ariaLabel ?? fallbackTitle} window` }}</ZDialogDescription>
+        <ZDialogTitle hidden>{{ title ?? ariaLabel ?? fallbackTitle }}</ZDialogTitle>
+        <ZDialogDescription hidden>{{ description ?? `${title ?? ariaLabel ?? fallbackTitle} window` }}</ZDialogDescription>
         <slot v-if="frameless" />
         <ZWindowFrame v-else>
           <template v-if="title || description || $slots.actions" #header>

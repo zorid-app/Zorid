@@ -6,9 +6,9 @@
   "packageManager": "pnpm@9.15.2",
   "scripts": {
     "lint": "node scripts/check-import-boundaries.mjs",
-    "typecheck": "tsc -b tsconfig.packages.json --pretty false",
-    "build": "tsc -b tsconfig.packages.json --pretty false",
-    "test": "vitest run",
+    "typecheck": "pnpm run prepare:ui-vue && tsc -b tsconfig.packages.json --pretty false",
+    "build": "pnpm run prepare:ui-vue && tsc -b tsconfig.packages.json --pretty false",
+    "test": "pnpm run prepare:ui-vue && vitest run",
     "quality": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm perf:smoke",
     "perf:smoke": "node scripts/perf-smoke.mjs",
     "desktop:dev": "pnpm --filter @zorid/desktop-app run dev",
@@ -16,7 +16,8 @@
     "desktop:start": "pnpm --filter @zorid/desktop-app run start",
     "desktop:build": "pnpm --filter @zorid/desktop-app run build",
     "desktop:pack": "pnpm --filter @zorid/desktop-app run pack",
-    "desktop:dist": "pnpm --filter @zorid/desktop-app run dist"
+    "desktop:dist": "pnpm --filter @zorid/desktop-app run dist",
+    "prepare:ui-vue": "pnpm --filter @zorid/ui-vue run build"
   },
   "devDependencies": {
     "@codemirror/lang-markdown": "^6.5.0",

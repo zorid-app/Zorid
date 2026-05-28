@@ -36,13 +36,20 @@ describe('ui-vue package wiring', () => {
     const desktopPkg = readJson<{ dependencies?: Record<string, string> }>('apps/desktop/package.json');
     const electronConfig = readFileSync('apps/desktop/electron.vite.config.ts', 'utf8');
     const desktopTsconfig = readJson<{ references?: Array<{ path: string }> }>('apps/desktop/tsconfig.json');
-    const rootPkg = readJson<{ devDependencies?: Record<string, string> }>('package.json');
+    const rootPkg = readJson<{ devDependencies?: Record<string, string>; scripts?: Record<string, string> }>('package.json');
+    const baseTsconfig = readJson<{ compilerOptions?: { paths?: Record<string, string[]> } }>('tsconfig.base.json');
 
     expect(desktopPkg.dependencies?.['@zorid/ui-vue']).toBe('workspace:*');
     expect(electronConfig).toContain("'@zorid/ui-vue': path.resolve(repoRoot, 'packages/ui-vue/src/index.ts')");
     expect(electronConfig).toContain("'@zorid/ui-vue/tokens.css': path.resolve(repoRoot, 'packages/ui-vue/src/tokens.css')");
     expect(electronConfig).toContain("'@zorid/ui-vue/components.css': path.resolve(repoRoot, 'packages/ui-vue/src/components.css')");
     expect(desktopTsconfig.references?.map((reference) => reference.path)).toContain('../../packages/ui-vue');
+    expect(baseTsconfig.compilerOptions?.paths?.['@zorid/ui-vue/tokens.css']).toEqual(['packages/ui-vue/src/tokens.css']);
+    expect(baseTsconfig.compilerOptions?.paths?.['@zorid/ui-vue/components.css']).toEqual(['packages/ui-vue/src/components.css']);
+    expect(rootPkg.scripts?.['prepare:ui-vue']).toBe('pnpm --filter @zorid/ui-vue run build');
+    expect(rootPkg.scripts?.typecheck).toContain('pnpm run prepare:ui-vue');
+    expect(rootPkg.scripts?.build).toContain('pnpm run prepare:ui-vue');
+    expect(rootPkg.scripts?.test).toContain('pnpm run prepare:ui-vue');
     expect(rootPkg.devDependencies?.['@vue/test-utils']).toBeDefined();
     expect(rootPkg.devDependencies?.['happy-dom']).toBeDefined();
   });

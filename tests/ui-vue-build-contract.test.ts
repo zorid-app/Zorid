@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 const requiredDistAssets = [
   'packages/ui-vue/dist/index.js',
@@ -11,6 +12,11 @@ const requiredDistAssets = [
 ];
 
 describe('ui-vue build contract', () => {
+  beforeAll(() => {
+    rmSync('packages/ui-vue/dist', { recursive: true, force: true });
+    execFileSync('pnpm', ['--filter', '@zorid/ui-vue', 'run', 'build'], { stdio: 'pipe' });
+  });
+
   it('emits the CSS and SFC assets referenced by the package dist entry', () => {
     for (const file of requiredDistAssets) {
       expect(existsSync(file), file).toBe(true);

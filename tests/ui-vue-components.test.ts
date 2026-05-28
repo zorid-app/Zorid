@@ -66,6 +66,19 @@ describe('shared ui-vue primitives', () => {
     expect(wrapper.emitted('update:open')?.at(-1)).toEqual([false]);
   });
 
+  it('keeps framed dialog semantic title hidden so visual title is not duplicated', async () => {
+    mount(ZDialogWindow, {
+      props: { open: true, title: 'Settings', description: 'Configure the app' },
+      slots: { default: '<p>Settings body</p>' },
+      attachTo: document.body,
+    });
+    await nextTick();
+
+    expect(document.body.querySelectorAll('.z-window-frame__title')).toHaveLength(1);
+    expect(document.body.querySelector('.z-visually-hidden')?.textContent).toBe('Settings');
+    expect(document.body.querySelector('[data-z-dialog-window]')?.textContent).toContain('Settings');
+  });
+
 
   it('renders accessible titles for frameless dialog windows without Reka warnings', async () => {
     const warnings: string[] = [];

@@ -104,6 +104,12 @@
       ],
       "@zorid/db/node-sqlite": [
         "packages/db/src/node-sqlite.ts"
+      ],
+      "@zorid/ui-vue/tokens.css": [
+        "packages/ui-vue/src/tokens.css"
+      ],
+      "@zorid/ui-vue/components.css": [
+        "packages/ui-vue/src/components.css"
       ]
     },
     "types": [
