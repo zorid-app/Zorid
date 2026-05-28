@@ -27,6 +27,16 @@ describe('desktop renderer reusable UI migration', () => {
     expect(settings).toContain('ZDialogWindow');
   });
 
+  it('uses shared icon buttons for the activity rail', () => {
+    const activityRail = readFileSync('apps/desktop/src/renderer/src/components/ActivityRail.vue', 'utf8');
+
+    expect(activityRail).toContain('ZIconButton');
+    expect(activityRail).toContain(':label="item"');
+    expect(activityRail).toContain('label="Command palette"');
+    expect(activityRail).toContain('label="Settings"');
+    expect(activityRail).not.toContain('<button');
+  });
+
   it('uses shared panel/tag/status/resize primitives while keeping desktop visual classes', () => {
     const rightSidebar = readFileSync('apps/desktop/src/renderer/src/components/RightSidebarPanels.vue', 'utf8');
     const status = readFileSync('apps/desktop/src/renderer/src/components/AppStatusBar.vue', 'utf8');

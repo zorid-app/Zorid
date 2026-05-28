@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Command, Settings } from '@lucide/vue';
+import { ZIconButton } from '@zorid/ui-vue';
 import type { Component } from 'vue';
 
 defineProps<{
@@ -11,14 +12,14 @@ const emit = defineEmits<{ openCommandPalette: []; openSettings: [] }>();
 
 <template>
   <aside class="activity-rail" aria-label="Primary navigation" data-app-activity-rail>
-    <button v-for="item in items" :key="item" type="button" class="rail-button" :title="item" :aria-label="item">
+    <ZIconButton v-for="item in items" :key="item" class="rail-button" :label="item">
       <component :is="iconFor(item)" class="icon" aria-hidden="true" />
-    </button>
-    <button type="button" class="rail-button" title="Command palette" aria-label="Command palette" @click="emit('openCommandPalette')">
+    </ZIconButton>
+    <ZIconButton class="rail-button" label="Command palette" @click="emit('openCommandPalette')">
       <Command class="icon" aria-hidden="true" />
-    </button>
-    <button type="button" class="rail-button" title="Settings" aria-label="Settings" @click="emit('openSettings')">
+    </ZIconButton>
+    <ZIconButton class="rail-button" label="Settings" @click="emit('openSettings')">
       <Settings class="icon" aria-hidden="true" />
-    </button>
+    </ZIconButton>
   </aside>
 </template>

@@ -34,7 +34,7 @@ Desktop app components live under `apps/desktop/src/renderer/src/components/`. T
 | `CommandPaletteWindow` | `ZDialogWindow` | Command palette floating window; closes on Esc/outside via shared dialog behavior |
 | `SettingsWindow` | `ZDialogWindow`, `ZButton` | Settings floating window and editable app/plugin settings |
 | `TopTabStrip` | None yet | Titlebar traffic-light spacing, tab strip, status context |
-| `ActivityRail` | None yet | Rail buttons and command/settings launch actions |
+| `ActivityRail` | `ZIconButton` | Rail buttons and command/settings launch actions |
 | `FileTree` | None yet | Root/nested file tree rendering and open-entry eventing |
 | `RightSidebarPanels` | `ZPanel`, `ZTag` | Search, outline, backlinks, tags, fields, types, bases/data views, embeds, status, plugin and settings panels |
 | `AppResizeHandle` | `ZResizeHandle` | Left/right pane resize handles preserving desktop grid classes |

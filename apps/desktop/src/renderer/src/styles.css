@@ -133,7 +133,6 @@ button.top-tab {
   background: var(--z-rail-bg);
 }
 
-.rail-button,
 .primary {
   border: 1px solid var(--z-control-border);
   color: var(--z-color-text);
