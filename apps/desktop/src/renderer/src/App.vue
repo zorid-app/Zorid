@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import type { Component } from 'vue';
+import { ChevronDown, ChevronRight, Command, FileText, Files, Folder, Link2, Search, Settings, Tag } from '@lucide/vue';
 import { createDesktopShellState } from '@zorid/desktop-shell';
 import type { PluginStatus, VaultEntry } from '@zorid/platform-api';
 import MarkdownEditor from './components/MarkdownEditor.vue';
@@ -72,6 +74,12 @@ const desktop = window.zoridDesktop as unknown as {
 };
 
 const shell = createDesktopShellState();
+const activityIcons: Record<string, Component> = {
+  files: Files,
+  search: Search,
+  backlinks: Link2,
+  tags: Tag,
+};
 const vaultLabel = ref<string>();
 const entriesByDirectory = ref<Record<string, readonly VaultEntry[]>>({});
 const expandedDirectories = ref<Record<string, boolean>>({ '': true });
@@ -115,6 +123,10 @@ const activeBase = computed(() => bases.value.find((base) => base.path === activ
 
 function settingsKey(section: SettingsSectionDto): string {
   return `${section.pluginId ?? 'app'}:${section.id}`;
+}
+
+function activityIconFor(item: string): Component {
+  return activityIcons[item] ?? Files;
 }
 
 function jsonRecord(value: unknown): JsonRecord {
@@ -434,11 +446,15 @@ onBeforeUnmount(() => {
 <template>
   <main class="zorid-shell" data-zorid-shell data-z-theme="dark">
     <aside class="activity-rail" aria-label="Primary navigation">
-      <button v-for="item in shell.activityRail" :key="item" type="button" class="rail-button">
-        {{ item.slice(0, 1).toUpperCase() }}
+      <button v-for="item in shell.activityRail" :key="item" type="button" class="rail-button" :title="item" :aria-label="item">
+        <component :is="activityIconFor(item)" class="icon" aria-hidden="true" />
       </button>
-      <button type="button" class="rail-button" title="Command palette" @click="openCommandPalette">⌘K</button>
-      <button type="button" class="rail-button" title="Settings" @click="settingsOpen = true">⚙</button>
+      <button type="button" class="rail-button" title="Command palette" aria-label="Command palette" @click="openCommandPalette">
+        <Command class="icon" aria-hidden="true" />
+      </button>
+      <button type="button" class="rail-button" title="Settings" aria-label="Settings" @click="settingsOpen = true">
+        <Settings class="icon" aria-hidden="true" />
+      </button>
     </aside>
 
     <aside class="sidebar" data-region="left-sidebar">
@@ -456,13 +472,16 @@ onBeforeUnmount(() => {
       <ul class="file-tree" aria-label="Vault files">
         <li v-for="entry in rootEntries" :key="entry.path">
           <button type="button" class="tree-item" :class="{ selected: selectedPath === entry.path }" @click="openEntry(entry)">
-            <span>{{ entry.kind === 'directory' ? (expandedDirectories[entry.path] ? '▾' : '▸') : '•' }}</span>
+            <ChevronDown v-if="entry.kind === 'directory' && expandedDirectories[entry.path]" class="tree-icon" aria-hidden="true" />
+            <ChevronRight v-else-if="entry.kind === 'directory'" class="tree-icon" aria-hidden="true" />
+            <FileText v-else class="tree-icon" aria-hidden="true" />
             {{ entry.path }}
           </button>
           <ul v-if="entry.kind === 'directory' && expandedDirectories[entry.path]" class="nested">
             <li v-for="child in entriesByDirectory[entry.path] ?? []" :key="child.path">
               <button type="button" class="tree-item" :class="{ selected: selectedPath === child.path }" @click="openEntry(child)">
-                <span>{{ child.kind === 'directory' ? '▸' : '•' }}</span>
+                <Folder v-if="child.kind === 'directory'" class="tree-icon" aria-hidden="true" />
+                <FileText v-else class="tree-icon" aria-hidden="true" />
                 {{ child.path.split('/').at(-1) }}
               </button>
             </li>

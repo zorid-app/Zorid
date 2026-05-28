@@ -57,9 +57,17 @@ select:focus-visible {
 }
 
 .rail-button {
+  display: inline-grid;
   width: 34px;
   height: 34px;
+  place-items: center;
   border-radius: var(--z-radius-md);
+}
+
+.icon {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.9;
 }
 
 .sidebar,
@@ -148,10 +156,21 @@ h2 {
 }
 
 .tree-item {
+  display: flex;
   width: 100%;
+  align-items: center;
+  gap: 7px;
   margin: 2px 0;
   padding: 7px 8px;
   text-align: left;
+}
+
+.tree-icon {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  color: var(--z-color-muted);
+  stroke-width: 1.9;
 }
 
 .tree-item.selected {
