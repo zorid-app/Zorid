@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createDesktopRuntime } from '../apps/desktop/src/main/runtime';
 import { normalizeVaultPath } from '../packages/shared/src/index';
 import type { PluginManifest } from '../packages/plugin-api/src/index';
@@ -175,6 +175,99 @@ status: done
       await rm(first, { recursive: true, force: true });
       await rm(second, { recursive: true, force: true });
     }
+  });
+
+
+
+  it('deactivates active plugin stacks during runtime disposal', async () => {
+    const deactivate = vi.fn();
+    const disposable = { dispose: vi.fn() };
+    const runtime = createDesktopRuntime({
+      manifests: [settingsPluginManifest],
+      load: () => ({
+        activate(ctx) {
+          ctx.register.disposable(disposable);
+          ctx.register.command({ id: 'status-bar.open', title: 'Open Status Bar', callback: async () => 'opened' });
+        },
+        deactivate,
+      }),
+    });
+
+    await runtime.executeCommand('status-bar.open');
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('active');
+
+    await runtime.dispose();
+
+    expect(deactivate).toHaveBeenCalledOnce();
+    expect(disposable.dispose).toHaveBeenCalledOnce();
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+  });
+
+
+  it('disposes plugin stacks even when plugin deactivation throws', async () => {
+    const deactivate = vi.fn(() => { throw new Error('deactivate failed'); });
+    const disposable = { dispose: vi.fn() };
+    const runtime = createDesktopRuntime({
+      manifests: [settingsPluginManifest],
+      load: () => ({
+        activate(ctx) {
+          ctx.register.disposable(disposable);
+          ctx.register.command({ id: 'status-bar.open', title: 'Open Status Bar', callback: async () => 'opened' });
+        },
+        deactivate,
+      }),
+    });
+
+    await runtime.executeCommand('status-bar.open');
+    await expect(runtime.dispose()).rejects.toThrow('Desktop runtime disposal failed.');
+
+    expect(deactivate).toHaveBeenCalledOnce();
+    expect(disposable.dispose).toHaveBeenCalledOnce();
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+  });
+
+
+  it('clears plugin active state even when plugin disposable cleanup throws', async () => {
+    const deactivate = vi.fn();
+    const runtime = createDesktopRuntime({
+      manifests: [settingsPluginManifest],
+      load: () => ({
+        activate(ctx) {
+          ctx.register.disposable({ dispose: () => { throw new Error('disposable failed'); } });
+          ctx.register.command({ id: 'status-bar.open', title: 'Open Status Bar', callback: async () => 'opened' });
+        },
+        deactivate,
+      }),
+    });
+
+    await runtime.executeCommand('status-bar.open');
+    await expect(runtime.dispose()).rejects.toThrow('Desktop runtime disposal failed.');
+
+    expect(deactivate).toHaveBeenCalledOnce();
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+  });
+
+
+  it('continues runtime cleanup when a non-plugin disposable throws synchronously', async () => {
+    const throwingWatcher = { dispose: vi.fn(() => { throw new Error('watcher failed'); }) };
+    const disposingKernel = { dispose: vi.fn() };
+    const pluginRuntime = createDesktopRuntime({
+      manifests: [settingsPluginManifest],
+      load: () => ({
+        activate(ctx) {
+          ctx.register.disposable(throwingWatcher);
+          ctx.register.disposable(disposingKernel);
+          ctx.register.command({ id: 'status-bar.open', title: 'Open Status Bar', callback: async () => 'opened' });
+        },
+      }),
+    });
+
+    await pluginRuntime.executeCommand('status-bar.open');
+    await expect(pluginRuntime.dispose()).rejects.toThrow('Desktop runtime disposal failed.');
+
+    expect(throwingWatcher.dispose).toHaveBeenCalledOnce();
+    expect(disposingKernel.dispose).toHaveBeenCalledOnce();
+    expect(pluginRuntime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
   });
 
   it('activates a lazy plugin only when its placeholder command runs', async () => {

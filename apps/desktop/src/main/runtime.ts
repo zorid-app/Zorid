@@ -685,7 +685,23 @@ export class DesktopRuntime {
     return [...groups.entries()].map(([groupKey, groupedRows]) => ({ key: groupKey, rows: groupedRows }));
   }
 
-  async dispose(): Promise<void> { if (this.#indexUpdateTimer) clearTimeout(this.#indexUpdateTimer); await this.#indexWatcher?.dispose(); this.#vaultServiceRegistration?.dispose(); this.#indexServiceRegistration?.dispose(); this.#indexStore?.dispose(); await this.kernel.disposables.dispose(); }
+  async dispose(): Promise<void> {
+    if (this.#indexUpdateTimer) {
+      clearTimeout(this.#indexUpdateTimer);
+      this.#indexUpdateTimer = undefined;
+    }
+    const cleanupTasks = [
+      ...this.pluginHost.records().filter((record) => record.status === 'active').map((record) => () => this.pluginHost.deactivate(record.pluginId)),
+      () => this.#indexWatcher?.dispose(),
+      () => this.#vaultServiceRegistration?.dispose(),
+      () => this.#indexServiceRegistration?.dispose(),
+      () => this.#indexStore?.dispose(),
+      () => this.kernel.disposables.dispose(),
+    ];
+    const cleanupResults = await Promise.allSettled(cleanupTasks.map((task) => Promise.resolve().then(task)));
+    const failures = cleanupResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length > 0) throw new AggregateError(failures.map((failure) => failure.reason), 'Desktop runtime disposal failed.');
+  }
 
   registerAppCommands(): void {
     this.kernel.disposables.use(this.kernel.commands.register({ id: 'vault.open', title: 'Open Vault', callback: async () => ({ action: 'vault.open' }) }));

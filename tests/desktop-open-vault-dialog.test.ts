@@ -27,6 +27,22 @@ describe('desktop open vault dialog flow', () => {
     expect(openVault).toHaveBeenCalledWith('/tmp/Vault');
   });
 
+
+  it('records the selected root after a vault is opened', async () => {
+    const { openVaultFromDialog } = await import('../apps/desktop/src/main/open-vault-dialog');
+    const sender = {} as WebContents;
+    const profile: VaultProfile = { id: 'folder:abc', kind: 'folder', rootLabel: 'Vault' };
+    const openVault = vi.fn(async () => profile);
+    const onOpened = vi.fn(async () => undefined);
+    const showOpenDialog = vi.fn(async () => ({ canceled: false, filePaths: ['/tmp/Vault'] }));
+    electronMock.fromWebContents.mockReturnValue(undefined);
+
+    await expect(openVaultFromDialog({ sender }, { openVault }, showOpenDialog, { onOpened })).resolves.toBe(profile);
+
+    expect(openVault).toHaveBeenCalledWith('/tmp/Vault');
+    expect(onOpened).toHaveBeenCalledWith('/tmp/Vault', profile);
+  });
+
   it('does not mutate the active vault when the chooser is canceled', async () => {
     const { openVaultFromDialog } = await import('../apps/desktop/src/main/open-vault-dialog');
     const openVault = vi.fn();

@@ -367,12 +367,23 @@ export class PluginHost {
     const record = this.#records.get(pluginId);
     if (!plugin || !manifest || !record) return;
     const stack = this.#stacks.get(pluginId);
-    await plugin.deactivate?.(this.#createPluginContext(manifest, stack ?? new DisposableStack()));
-    await stack?.dispose();
+    const failures: unknown[] = [];
+    try {
+      await plugin.deactivate?.(this.#createPluginContext(manifest, stack ?? new DisposableStack()));
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await stack?.dispose();
+    } catch (error) {
+      failures.push(error);
+    }
     this.#plugins.delete(pluginId);
     this.#stacks.delete(pluginId);
     record.status = 'placeholder';
     this.#emit('plugin:unloaded', record);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, `Plugin deactivation failed: ${pluginId}`);
   }
 }
 

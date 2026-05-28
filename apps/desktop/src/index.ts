@@ -1,9 +1,23 @@
 import type { JsonValue } from '@zorid/shared';
 import type { PluginStatus, VaultEntry, VaultProfile } from '@zorid/platform-api';
+import type { RecentVaultDto } from './main/recent-vaults.js';
 import type { BacklinkDto, BaseDto, CommandDto, DataViewResultDto, FieldValidationDiagnosticDto, FileFieldsDto, IndexStatusDto, MarkdownEmbedDto, OutlineItemDto, SearchResultDto, SettingsSectionDto, SettingValueDto, TagDto, TypeDto } from './main/runtime.js';
+import type { VaultWindowRole } from './main/vault-window-manager.js';
 
-export interface DesktopBridge {
+export interface DesktopLauncherBridge {
+  getWindowRole(): Promise<VaultWindowRole | undefined>;
+  createVault(): Promise<VaultProfile | undefined>;
   openVault(): Promise<VaultProfile | undefined>;
+  listRecentVaults(): Promise<readonly RecentVaultDto[]>;
+  openRecentVault(id: string): Promise<VaultProfile>;
+}
+
+export interface EditorSnapshotDto {
+  readonly profile?: VaultProfile;
+  readonly indexStatus: IndexStatusDto;
+}
+
+export interface DesktopEditorBridge {
   getVaultProfile(): Promise<VaultProfile | undefined>;
   listVault(path?: string): Promise<readonly VaultEntry[]>;
   readVaultText(path: string): Promise<string>;
@@ -26,6 +40,7 @@ export interface DesktopBridge {
   renderDataView(basePath: string, viewId?: string): Promise<DataViewResultDto>;
   getMarkdownEmbeds(path: string): Promise<readonly MarkdownEmbedDto[]>;
   onIndexUpdated(callback: () => void): () => void;
+  onEditorSnapshot(callback: (snapshot: EditorSnapshotDto) => void): () => void;
   listCommands(): Promise<readonly CommandDto[]>;
   executeCommand(id: string, args?: JsonValue): Promise<unknown>;
   listPluginStatuses(): Promise<readonly PluginStatus[]>;
@@ -33,6 +48,11 @@ export interface DesktopBridge {
   getSettingValue(sectionId: string, pluginId?: string): Promise<SettingValueDto>;
   setSettingValue(sectionId: string, value: JsonValue, pluginId?: string): Promise<SettingValueDto>;
 }
+
+export type DesktopBridge = DesktopLauncherBridge & DesktopEditorBridge & {
+  readonly launcher: DesktopLauncherBridge;
+  readonly editor: DesktopEditorBridge;
+};
 
 export const preloadApiName = 'zoridDesktop' as const;
 

@@ -34,6 +34,9 @@ interface FileFieldsDto { readonly path: string; readonly typeName?: string; rea
 interface BaseDto { readonly path: string; readonly name: string; readonly views: readonly { readonly id: string; readonly renderer: string }[]; readonly diagnostics: readonly string[]; }
 interface DataViewResultDto { readonly basePath: string; readonly viewId: string; readonly renderer: string; readonly columns: readonly string[]; readonly rows: readonly { readonly path: string; readonly fields: Record<string, unknown> }[]; readonly groups: readonly { readonly key: string; readonly rows: readonly { readonly path: string; readonly fields: Record<string, unknown> }[] }[]; }
 interface MarkdownEmbedDto { readonly sourcePath: string; readonly basePath: string; readonly viewId?: string; }
+type WindowRole = 'launcher' | 'editor';
+interface RecentVaultDto { readonly id: string; readonly name: string; readonly path: string; readonly lastOpenedAt: string; }
+interface EditorSnapshotDto { readonly profile?: { readonly rootLabel: string }; readonly indexStatus: IndexStatusDto; }
 
 interface SettingProperty {
   readonly name: string;
@@ -44,7 +47,12 @@ interface SettingProperty {
 }
 
 const desktop = window.zoridDesktop as unknown as {
+  getWindowRole(): Promise<WindowRole | undefined>;
+  createVault(): Promise<{ rootLabel: string } | undefined>;
   openVault(): Promise<{ rootLabel: string } | undefined>;
+  listRecentVaults(): Promise<readonly RecentVaultDto[]>;
+  openRecentVault(id: string): Promise<{ rootLabel: string }>;
+  getVaultProfile(): Promise<{ rootLabel: string } | undefined>;
   listVault(path?: string): Promise<readonly VaultEntry[]>;
   readVaultText(path: string): Promise<string>;
   writeVaultText(path: string, contents: string): Promise<void>;
@@ -65,6 +73,7 @@ const desktop = window.zoridDesktop as unknown as {
   renderDataView(basePath: string, viewId?: string): Promise<DataViewResultDto>;
   getMarkdownEmbeds(path: string): Promise<readonly MarkdownEmbedDto[]>;
   onIndexUpdated(callback: () => void): () => void;
+  onEditorSnapshot(callback: (snapshot: EditorSnapshotDto) => void): () => void;
   listCommands(): Promise<readonly CommandDto[]>;
   executeCommand(id: string, args?: unknown): Promise<unknown>;
   listPluginStatuses(): Promise<readonly PluginStatus[]>;
@@ -74,6 +83,10 @@ const desktop = window.zoridDesktop as unknown as {
 };
 
 const shell = createDesktopShellState();
+const windowRole = ref<WindowRole>();
+const recentVaults = ref<readonly RecentVaultDto[]>([]);
+const launcherError = ref<string>();
+const launcherBusy = ref(false);
 const activityIcons: Record<string, Component> = {
   files: Files,
   search: Search,
@@ -109,6 +122,7 @@ const activeViewId = ref<string>();
 const dataView = ref<DataViewResultDto>();
 const markdownEmbeds = ref<readonly MarkdownEmbedDto[]>([]);
 let unsubscribeIndexUpdates: (() => void) | undefined;
+let unsubscribeEditorSnapshot: (() => void) | undefined;
 
 const status = computed(() => vaultLabel.value ?? 'No vault open');
 const rootEntries = computed(() => entriesByDirectory.value[''] ?? []);
@@ -241,17 +255,63 @@ async function loadDirectory(path = ''): Promise<void> {
 async function openVault(): Promise<void> {
   error.value = undefined;
   try {
-    const profile = await desktop.openVault();
-    if (!profile) return;
-    vaultLabel.value = profile.rootLabel;
-    selectedPath.value = undefined;
-    editorText.value = '';
-    savedText.value = '';
-    openTabs.value = [];
-    await loadDirectory('');
-    await refreshShellData();
+    await desktop.openVault();
+    if (windowRole.value === 'launcher') await loadRecentVaults();
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : String(caught);
+  }
+}
+
+
+async function loadRecentVaults(): Promise<void> {
+  recentVaults.value = await desktop.listRecentVaults();
+}
+
+async function runLauncherAction(action: () => Promise<unknown>): Promise<void> {
+  launcherError.value = undefined;
+  launcherBusy.value = true;
+  try {
+    await action();
+    await loadRecentVaults();
+  } catch (caught) {
+    launcherError.value = caught instanceof Error ? caught.message : String(caught);
+  } finally {
+    launcherBusy.value = false;
+  }
+}
+
+async function createVaultFromLauncher(): Promise<void> {
+  await runLauncherAction(() => desktop.createVault());
+}
+
+async function openFolderFromLauncher(): Promise<void> {
+  await runLauncherAction(() => desktop.openVault());
+}
+
+async function openRecentFromLauncher(id: string): Promise<void> {
+  await runLauncherAction(() => desktop.openRecentVault(id));
+}
+
+function applyEditorSnapshot(snapshot: EditorSnapshotDto): void {
+  if (snapshot.profile) vaultLabel.value = snapshot.profile.rootLabel;
+  indexStatus.value = snapshot.indexStatus;
+  void loadDirectory('').then(() => refreshShellData()).catch((caught: unknown) => { error.value = caught instanceof Error ? caught.message : String(caught); });
+}
+
+async function initializeWindow(): Promise<void> {
+  const role = await desktop.getWindowRole() ?? 'editor';
+  windowRole.value = role;
+  if (role === 'launcher') {
+    await loadRecentVaults();
+    return;
+  }
+  unsubscribeIndexUpdates = desktop.onIndexUpdated(() => { void refreshShellData(); });
+  unsubscribeEditorSnapshot = desktop.onEditorSnapshot(applyEditorSnapshot);
+  const profile = await desktop.getVaultProfile().catch(() => undefined);
+  if (profile) {
+    vaultLabel.value = profile.rootLabel;
+    await loadDirectory('');
+    await refreshShellData();
   }
 }
 
@@ -434,17 +494,59 @@ function handleKeydown(event: KeyboardEvent): void {
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
-  unsubscribeIndexUpdates = desktop.onIndexUpdated(() => { void refreshShellData(); });
-  void refreshShellData();
+  void initializeWindow().catch((caught: unknown) => { error.value = caught instanceof Error ? caught.message : String(caught); });
 });
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown);
   unsubscribeIndexUpdates?.();
+  unsubscribeEditorSnapshot?.();
 });
 </script>
 
 <template>
-  <main class="zorid-shell" data-zorid-shell data-z-theme="dark">
+  <main v-if="windowRole === 'launcher'" class="launcher-shell" data-z-theme="dark">
+    <aside class="launcher-recents" aria-label="Recent vaults">
+      <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+      <header>
+        <p class="eyebrow">Zorid</p>
+        <h1>Recent vaults</h1>
+      </header>
+      <ul v-if="recentVaults.length > 0" class="recent-list">
+        <li v-for="vault in recentVaults" :key="vault.id">
+          <button type="button" @click="openRecentFromLauncher(vault.id)" :disabled="launcherBusy">
+            <strong>{{ vault.name }}</strong>
+            <span>{{ vault.path }}</span>
+          </button>
+        </li>
+      </ul>
+      <p v-else class="muted">No vaults opened yet.</p>
+    </aside>
+
+    <section class="launcher-main" aria-label="Open a vault">
+      <div class="zorid-gem" aria-hidden="true"></div>
+      <h2>Zorid</h2>
+      <p class="launcher-version">Choose a vault to start</p>
+      <div class="launcher-card">
+        <article class="launcher-action">
+          <div>
+            <h3>Create new vault</h3>
+            <p>Create a new Zorid vault under a folder.</p>
+          </div>
+          <button type="button" class="accent" :disabled="launcherBusy" @click="createVaultFromLauncher">Create</button>
+        </article>
+        <article class="launcher-action">
+          <div>
+            <h3>Open folder as vault</h3>
+            <p>Choose an existing folder of Markdown files.</p>
+          </div>
+          <button type="button" :disabled="launcherBusy" @click="openFolderFromLauncher">Open</button>
+        </article>
+        <p v-if="launcherError" class="error">{{ launcherError }}</p>
+      </div>
+    </section>
+  </main>
+
+  <main v-else-if="windowRole === 'editor'" class="zorid-shell" data-zorid-shell data-z-theme="dark">
     <aside class="activity-rail" aria-label="Primary navigation">
       <button v-for="item in shell.activityRail" :key="item" type="button" class="rail-button" :title="item" :aria-label="item">
         <component :is="activityIconFor(item)" class="icon" aria-hidden="true" />
@@ -718,5 +820,9 @@ onBeforeUnmount(() => {
         </article>
       </section>
     </div>
+  </main>
+
+  <main v-else class="launcher-shell loading" data-z-theme="dark">
+    <p class="muted">Loading Zorid…</p>
   </main>
 </template>
