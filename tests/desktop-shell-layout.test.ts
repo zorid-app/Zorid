@@ -116,6 +116,28 @@ describe('desktop shell pane layout helpers', () => {
     const resizeHandle = readFileSync('apps/desktop/src/renderer/src/components/AppResizeHandle.vue', 'utf8');
 
     expect(titlebar).toContain('class="editor-titlebar"');
+    expect(titlebar).toContain("import { ZIconButton } from '@zorid/ui-vue';");
+    expect(titlebar).toContain('newTab: []');
+    expect(titlebar).toContain('toggleLeftPane: []');
+    expect(titlebar).toContain('toggleRightPane: []');
+    expect(titlebar).toContain('updateTabOverflow');
+    expect(titlebar).not.toContain('<button type="button" class="top-tab"');
+    expect(app).toContain('fileTabId(path)');
+    expect(app).toContain('placeholderTabCounter');
+    expect(app).toContain('@new-tab="createPlaceholderTab"');
+    expect(app).toContain('@toggle-left-pane="toggleLeftPane"');
+    expect(app).toContain('@toggle-right-pane="toggleRightPane"');
+    expect(app).toContain("event.key.toLowerCase() === 'w'");
+    expect(app).toContain(
+      'openTabs.value = openTabs.value.map((tab) => (tab.id === fileTabId(previous) ? fileTab(next) : tab))',
+    );
+    expect(app).toContain('await closeTab(fileTabId(previous))');
+    expect(app).toMatch(
+      /function createPlaceholderTab\(\): void \{[\s\S]*placeholderTabCounter\.value \+= 1;[\s\S]*activatePlaceholderTab\(tab\.id\);[\s\S]*\}/,
+    );
+    expect(app).toMatch(
+      /function clearFileSelection\(\): void \{[\s\S]*selectedPath\.value = undefined;[\s\S]*editorText\.value = '';[\s\S]*savedText\.value = '';[\s\S]*\}/,
+    );
     expect(app).toContain('class="traffic-light-spacer launcher-traffic-light-spacer"');
     expect(app).not.toContain('class="window-dots"');
     expect(titlebar).not.toContain('class="window-dots"');
@@ -127,6 +149,11 @@ describe('desktop shell pane layout helpers', () => {
       /\.launcher-shell\s+:is\([^)]*button[^)]*a[^)]*input[^)]*select[^)]*textarea[^)]*\[role='button'\][^)]*\[contenteditable='true'\][^)]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag;[^}]*\}/s,
     );
     expect(styles).toContain('.resize-handle.active::before');
+    expect(styles).toContain('.titlebar-left-actions');
+    expect(styles).toContain('.titlebar-right-actions');
+    expect(styles).toContain('.tab-add-button');
+    expect(styles).toContain('.top-tab:hover .top-tab-close');
+    expect(styles).toContain('-webkit-app-region: no-drag;');
     expect(styles).toContain('overflow-wrap: anywhere;');
     expect(styles).toContain('white-space: normal;');
     expect(styles).not.toContain('.tab-bar');

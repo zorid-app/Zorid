@@ -19,6 +19,8 @@ import MarkdownEditor from './components/MarkdownEditor.vue';
 import RightSidebarPanels from './components/RightSidebarPanels.vue';
 import SettingsWindow from './components/SettingsWindow.vue';
 import TopTabStrip from './components/TopTabStrip.vue';
+import type { TopTabItem } from './components/top-tab-model.js';
+import { fileTab, fileTabId, nextTabIdAfterClose, placeholderTab } from './components/top-tab-model.js';
 import type { PaneLayout } from './shell-layout.js';
 import {
   DEFAULT_PANE_LAYOUT,
@@ -107,7 +109,9 @@ const entriesByDirectory = ref<Record<string, readonly VaultEntry[]>>({});
 const expandedDirectories = ref<Record<string, boolean>>({ '': true });
 const fileTreeSortMode = ref<FileTreeSortMode>('name-asc');
 const selectedPath = ref<string>();
-const openTabs = ref<string[]>([]);
+const openTabs = ref<TopTabItem[]>([]);
+const selectedTabId = ref<string>();
+const placeholderTabCounter = ref(0);
 const editorText = ref('');
 const savedText = ref('');
 const error = ref<string>();
@@ -166,7 +170,13 @@ const sortedEntriesByDirectory = computed<Record<string, readonly VaultEntry[]>>
 const rootEntries = computed(() => sortedEntriesByDirectory.value[''] ?? []);
 const fileTreeSortLabel = computed(() => sortModeLabel(fileTreeSortMode.value));
 const dirty = computed(() => selectedPath.value !== undefined && editorText.value !== savedText.value);
-const editorTitle = computed(() => selectedPath.value?.split('/').at(-1) ?? vaultLabel.value ?? 'Zorid');
+const activeTab = computed(() => openTabs.value.find((tab) => tab.id === selectedTabId.value));
+const editorHeading = computed(() => activeTab.value?.title ?? selectedPath.value ?? 'Open a Markdown file');
+const editorEmptyText = computed(() =>
+  activeTab.value?.kind === 'placeholder'
+    ? 'Create new note (⌘ N), go to file (⌘ O), or close this placeholder tab.'
+    : 'Select a Markdown file from the filesystem-backed explorer.',
+);
 const editorStartupOnlyCommandIds = new Set(['vault.open', 'file-explorer.open-root']);
 const visibleCommands = computed(() =>
   windowRole.value === 'editor'
@@ -433,6 +443,89 @@ async function initializeWindow(): Promise<void> {
   }
 }
 
+function clearFileSelection(): void {
+  selectedPath.value = undefined;
+  editorText.value = '';
+  savedText.value = '';
+  backlinks.value = [];
+  outline.value = [];
+  fileFields.value = undefined;
+  markdownEmbeds.value = [];
+}
+
+function activatePlaceholderTab(tabId: string): void {
+  selectedTabId.value = tabId;
+  clearFileSelection();
+}
+
+async function activateFilePath(path: string): Promise<void> {
+  selectedTabId.value = fileTabId(path);
+  selectedPath.value = path;
+  const text = await desktop.readVaultText(path);
+  editorText.value = text;
+  savedText.value = text;
+  await refreshMetadataPanels();
+}
+
+async function openFileTab(path: string): Promise<void> {
+  const id = fileTabId(path);
+  if (!openTabs.value.find((tab) => tab.id === id)) openTabs.value = [...openTabs.value, fileTab(path)];
+  await activateFilePath(path);
+}
+
+function createPlaceholderTab(): void {
+  placeholderTabCounter.value += 1;
+  const tab = placeholderTab(placeholderTabCounter.value);
+  openTabs.value = [...openTabs.value, tab];
+  activatePlaceholderTab(tab.id);
+}
+
+async function activateTab(tabId: string): Promise<void> {
+  const tab = openTabs.value.find((candidate) => candidate.id === tabId);
+  if (!tab) return;
+  if (tab.kind === 'placeholder') {
+    activatePlaceholderTab(tab.id);
+    return;
+  }
+  await activateFilePath(tab.path);
+}
+
+async function closeTab(tabId: string): Promise<void> {
+  const nextId = nextTabIdAfterClose(openTabs.value, tabId);
+  const closingActiveTab = selectedTabId.value === tabId;
+  openTabs.value = openTabs.value.filter((tab) => tab.id !== tabId);
+  if (!closingActiveTab) return;
+  if (nextId) await activateTab(nextId);
+  else {
+    selectedTabId.value = undefined;
+    clearFileSelection();
+  }
+}
+
+function toggleLeftPane(): void {
+  const nextCollapsed = !paneLayout.value.leftCollapsed;
+  updatePaneLayout(
+    {
+      leftCollapsed: nextCollapsed,
+      leftWidth: nextCollapsed ? SHELL_LAYOUT.collapsedWidth : SHELL_LAYOUT.leftDefaultWidth,
+    },
+    'left',
+  );
+  savePaneLayout();
+}
+
+function toggleRightPane(): void {
+  const nextCollapsed = !paneLayout.value.rightCollapsed;
+  updatePaneLayout(
+    {
+      rightCollapsed: nextCollapsed,
+      rightWidth: nextCollapsed ? SHELL_LAYOUT.collapsedWidth : SHELL_LAYOUT.rightDefaultWidth,
+    },
+    'right',
+  );
+  savePaneLayout();
+}
+
 async function openEntry(entry: VaultEntry): Promise<void> {
   error.value = undefined;
   if (entry.kind === 'directory') {
@@ -440,12 +533,7 @@ async function openEntry(entry: VaultEntry): Promise<void> {
     if (expandedDirectories.value[entry.path]) await loadDirectory(entry.path);
     return;
   }
-  selectedPath.value = entry.path;
-  if (!openTabs.value.includes(entry.path)) openTabs.value = [...openTabs.value, entry.path];
-  const text = await desktop.readVaultText(entry.path);
-  editorText.value = text;
-  savedText.value = text;
-  await refreshMetadataPanels();
+  await openFileTab(entry.path);
 }
 
 async function createNote(): Promise<void> {
@@ -470,17 +558,10 @@ async function renameSelected(): Promise<void> {
   const previous = selectedPath.value;
   await desktop.renameVaultPath(previous, next);
   selectedPath.value = next;
-  openTabs.value = openTabs.value.map((path) => (path === previous ? next : path));
+  selectedTabId.value = fileTabId(next);
+  openTabs.value = openTabs.value.map((tab) => (tab.id === fileTabId(previous) ? fileTab(next) : tab));
   await loadDirectory('');
   await refreshShellData();
-}
-
-async function activateTab(path: string): Promise<void> {
-  selectedPath.value = path;
-  const text = await desktop.readVaultText(path);
-  editorText.value = text;
-  savedText.value = text;
-  await refreshMetadataPanels();
 }
 
 async function saveActive(): Promise<void> {
@@ -500,10 +581,7 @@ async function deleteSelected(): Promise<void> {
   )
     return;
   await desktop.deleteVaultPath(previous);
-  selectedPath.value = undefined;
-  editorText.value = '';
-  savedText.value = '';
-  openTabs.value = openTabs.value.filter((path) => path !== previous);
+  await closeTab(fileTabId(previous));
   await loadDirectory('');
   await refreshShellData();
 }
@@ -514,12 +592,7 @@ function openCommandPalette(): void {
 }
 
 async function openSearchResult(path: string): Promise<void> {
-  selectedPath.value = path;
-  if (!openTabs.value.includes(path)) openTabs.value = [...openTabs.value, path];
-  const text = await desktop.readVaultText(path);
-  editorText.value = text;
-  savedText.value = text;
-  await refreshMetadataPanels();
+  await openFileTab(path);
 }
 
 async function searchTag(tag: string): Promise<void> {
@@ -598,6 +671,10 @@ function handleKeydown(event: KeyboardEvent): void {
     event.preventDefault();
     void saveActive();
   }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'w') {
+    event.preventDefault();
+    if (selectedTabId.value) void closeTab(selectedTabId.value);
+  }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
     openCommandPalette();
@@ -668,10 +745,14 @@ onBeforeUnmount(() => {
   <main v-else-if="windowRole === 'editor'" class="zorid-shell" :style="shellStyle" data-zorid-shell data-z-theme="dark">
     <TopTabStrip
       :open-tabs="openTabs"
-      :selected-path="selectedPath"
-      :editor-title="editorTitle"
-      :status="status"
+      :selected-tab-id="selectedTabId"
+      :left-collapsed="paneLayout.leftCollapsed"
+      :right-collapsed="paneLayout.rightCollapsed"
       @activate="activateTab"
+      @close="closeTab"
+      @new-tab="createPlaceholderTab"
+      @toggle-left-pane="toggleLeftPane"
+      @toggle-right-pane="toggleRightPane"
     />
 
     <ActivityRail
@@ -722,14 +803,14 @@ onBeforeUnmount(() => {
 
     <section class="editor" data-region="editor">
       <p class="eyebrow">Markdown editor</p>
-      <h2>{{ selectedPath ?? 'Open a Markdown file' }} <span v-if="dirty" class="dirty">• unsaved</span></h2>
+      <h2>{{ editorHeading }} <span v-if="dirty" class="dirty">• unsaved</span></h2>
       <div class="toolbar inline" aria-label="Selected file actions">
         <button type="button" :disabled="!selectedPath || !dirty" @click="saveActive">Save</button>
         <button type="button" :disabled="!selectedPath" @click="renameSelected">Rename</button>
         <button type="button" :disabled="!selectedPath" @click="deleteSelected">Delete</button>
       </div>
       <MarkdownEditor v-if="selectedPath" :text="editorText" @change="(text) => { editorText = text; }" @save="saveActive" />
-      <p v-else class="muted">Select a Markdown file from the filesystem-backed explorer.</p>
+      <p v-else class="muted new-tab-empty">{{ editorEmptyText }}</p>
     </section>
 
     <AppResizeHandle
