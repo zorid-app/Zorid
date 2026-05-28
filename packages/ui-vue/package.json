@@ -9,7 +9,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./tokens.css": "./src/tokens.css"
   },
   "scripts": {
     "build": "tsc -b",

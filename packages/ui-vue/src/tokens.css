@@ -1,0 +1,168 @@
+:root,
+[data-z-theme="dark"] {
+  color-scheme: dark;
+
+  /* Primitive neutral palette: Notion-like foundation, tuned for long editor sessions. */
+  --z-gray-0: #ffffff;
+  --z-gray-50: #f7f7f5;
+  --z-gray-100: #ececea;
+  --z-gray-200: #d8dbe3;
+  --z-gray-300: #b9c0cf;
+  --z-gray-400: #9aa3b5;
+  --z-gray-500: #6f788a;
+  --z-gray-600: #4b5364;
+  --z-gray-700: #2a303d;
+  --z-gray-800: #1b1f2a;
+  --z-gray-850: #171b24;
+  --z-gray-900: #151820;
+  --z-gray-925: #11141c;
+  --z-gray-950: #0f1115;
+  --z-gray-975: #080a0f;
+
+  /* Primitive accent/status palette. */
+  --z-blue-400: #7da2ff;
+  --z-blue-500: #5b8cff;
+  --z-blue-600: #3f72e5;
+  --z-red-400: #ff9b9b;
+  --z-red-500: #ff6b6b;
+  --z-amber-400: #ffd27a;
+  --z-green-400: #91dda4;
+  --z-green-500: #65d486;
+
+  /* Alpha scale: use for token definitions, not ad-hoc component styling. */
+  --z-alpha-1: 0.04;
+  --z-alpha-2: 0.06;
+  --z-alpha-3: 0.09;
+  --z-alpha-4: 0.12;
+  --z-alpha-5: 0.16;
+  --z-alpha-6: 0.18;
+  --z-alpha-7: 0.22;
+  --z-alpha-8: 0.34;
+  --z-alpha-9: 0.48;
+  --z-alpha-10: 0.58;
+  --z-alpha-11: 0.72;
+  --z-alpha-12: 0.9;
+
+  /* Whole-element opacity tokens. Prefer alpha colors for surfaces/borders. */
+  --z-opacity-disabled: 0.45;
+  --z-opacity-muted: 0.68;
+  --z-opacity-hidden: 0;
+  --z-opacity-visible: 1;
+
+  /* Semantic app colors. */
+  --z-color-bg: var(--z-gray-950);
+  --z-color-bg-elevated: var(--z-gray-925);
+  --z-color-surface: var(--z-gray-900);
+  --z-color-surface-raised: var(--z-gray-850);
+  --z-color-panel: var(--z-gray-800);
+  --z-color-panel-strong: var(--z-gray-975);
+  --z-color-border: rgba(255, 255, 255, var(--z-alpha-3));
+  --z-color-border-strong: rgba(255, 255, 255, var(--z-alpha-4));
+  --z-color-divider: rgba(255, 255, 255, var(--z-alpha-2));
+  --z-color-overlay: rgba(2, 4, 8, var(--z-alpha-10));
+
+  --z-color-text: #eef1f7;
+  --z-color-text-soft: #dfe8ff;
+  --z-color-muted: var(--z-gray-400);
+  --z-color-subtle: var(--z-gray-500);
+  --z-color-inverse: var(--z-gray-0);
+
+  --z-color-accent: var(--z-blue-500);
+  --z-color-accent-hover: var(--z-blue-600);
+  --z-color-accent-soft: rgba(91, 140, 255, var(--z-alpha-5));
+  --z-color-accent-muted: rgba(91, 140, 255, var(--z-alpha-6));
+  --z-color-accent-hover-bg: rgba(91, 140, 255, var(--z-alpha-7));
+  --z-color-accent-border: rgba(91, 140, 255, var(--z-alpha-9));
+
+  --z-color-danger: var(--z-red-400);
+  --z-color-danger-bg: rgba(255, 107, 107, var(--z-alpha-5));
+  --z-color-warning: var(--z-amber-400);
+  --z-color-warning-bg: rgba(255, 210, 122, var(--z-alpha-5));
+  --z-color-success: var(--z-green-400);
+
+  /* Component/state colors. */
+  --z-control-bg: rgba(255, 255, 255, var(--z-alpha-2));
+  --z-control-bg-hover: rgba(255, 255, 255, var(--z-alpha-3));
+  --z-control-bg-active: rgba(255, 255, 255, var(--z-alpha-4));
+  --z-control-bg-strong: rgba(5, 8, 15, var(--z-alpha-11));
+  --z-control-border: rgba(255, 255, 255, var(--z-alpha-4));
+  --z-control-border-subtle: rgba(255, 255, 255, var(--z-alpha-3));
+  --z-control-text: var(--z-color-text-soft);
+  --z-control-placeholder: var(--z-color-muted);
+
+  --z-panel-bg: rgba(255, 255, 255, var(--z-alpha-1));
+  --z-sidebar-bg: rgba(12, 15, 23, var(--z-alpha-11));
+  --z-rail-bg: rgba(5, 8, 15, var(--z-alpha-9));
+  --z-editor-bg: rgba(20, 24, 35, var(--z-alpha-11));
+  --z-statusbar-bg: rgba(4, 7, 13, var(--z-alpha-12));
+
+  --z-selected-bg: var(--z-color-accent-muted);
+  --z-selected-border: var(--z-color-accent-border);
+  --z-hover-bg: var(--z-color-accent-soft);
+  --z-focus-ring: 0 0 0 2px rgba(91, 140, 255, 0.45);
+
+  --z-shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.45);
+
+  /* Shared non-color tokens that colors depend on visually. */
+  --z-font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --z-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --z-radius-sm: 8px;
+  --z-radius-md: 10px;
+  --z-radius-lg: 12px;
+  --z-radius-xl: 16px;
+  --z-radius-pill: 999px;
+}
+
+[data-z-theme="light"] {
+  color-scheme: light;
+
+  --z-color-bg: #fbfbfa;
+  --z-color-bg-elevated: #ffffff;
+  --z-color-surface: #ffffff;
+  --z-color-surface-raised: #f7f7f5;
+  --z-color-panel: #f4f4f2;
+  --z-color-panel-strong: #ececea;
+  --z-color-border: rgba(20, 20, 20, 0.1);
+  --z-color-border-strong: rgba(20, 20, 20, 0.14);
+  --z-color-divider: rgba(20, 20, 20, 0.08);
+  --z-color-overlay: rgba(20, 20, 20, 0.28);
+
+  --z-color-text: #202124;
+  --z-color-text-soft: #2f343d;
+  --z-color-muted: #6b7280;
+  --z-color-subtle: #8a8f98;
+  --z-color-inverse: #ffffff;
+
+  --z-color-accent: #315fdc;
+  --z-color-accent-hover: #244cb8;
+  --z-color-accent-soft: rgba(49, 95, 220, 0.08);
+  --z-color-accent-muted: rgba(49, 95, 220, 0.12);
+  --z-color-accent-hover-bg: rgba(49, 95, 220, 0.16);
+  --z-color-accent-border: rgba(49, 95, 220, 0.35);
+
+  --z-color-danger: #b42318;
+  --z-color-danger-bg: rgba(180, 35, 24, 0.1);
+  --z-color-warning: #986800;
+  --z-color-warning-bg: rgba(152, 104, 0, 0.12);
+  --z-color-success: #16723a;
+
+  --z-control-bg: rgba(20, 20, 20, 0.04);
+  --z-control-bg-hover: rgba(20, 20, 20, 0.07);
+  --z-control-bg-active: rgba(20, 20, 20, 0.1);
+  --z-control-bg-strong: rgba(255, 255, 255, 0.88);
+  --z-control-border: rgba(20, 20, 20, 0.12);
+  --z-control-border-subtle: rgba(20, 20, 20, 0.09);
+  --z-control-text: var(--z-color-text-soft);
+
+  --z-panel-bg: rgba(20, 20, 20, 0.025);
+  --z-sidebar-bg: rgba(247, 247, 245, 0.86);
+  --z-rail-bg: rgba(244, 244, 242, 0.92);
+  --z-editor-bg: rgba(255, 255, 255, 0.84);
+  --z-statusbar-bg: rgba(244, 244, 242, 0.94);
+
+  --z-selected-bg: var(--z-color-accent-muted);
+  --z-selected-border: var(--z-color-accent-border);
+  --z-hover-bg: var(--z-color-accent-soft);
+  --z-focus-ring: 0 0 0 2px rgba(49, 95, 220, 0.35);
+  --z-shadow-overlay: 0 24px 80px rgba(20, 20, 20, 0.18);
+}

@@ -432,7 +432,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="zorid-shell" data-zorid-shell>
+  <main class="zorid-shell" data-zorid-shell data-z-theme="dark">
     <aside class="activity-rail" aria-label="Primary navigation">
       <button v-for="item in shell.activityRail" :key="item" type="button" class="rail-button">
         {{ item.slice(0, 1).toUpperCase() }}
