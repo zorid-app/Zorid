@@ -83,6 +83,40 @@
   padding: var(--z-window-body-padding, 16px 20px 20px);
 }
 
+.z-icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--z-radius-sm);
+  padding: 0;
+  color: var(--z-color-muted);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.z-icon-button:hover:not(:disabled),
+.z-icon-button:focus-visible {
+  color: var(--z-color-text);
+  background: color-mix(in srgb, var(--z-control-bg) 70%, transparent);
+}
+
+.z-icon-button:active:not(:disabled) {
+  background: var(--z-control-bg-active);
+}
+
+.z-icon-button:focus-visible {
+  outline: none;
+  box-shadow: var(--z-focus-ring);
+}
+
+.z-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: var(--z-opacity-disabled);
+}
+
 .z-button {
   border: 1px solid var(--z-control-border-subtle);
   border-radius: var(--z-radius-sm);

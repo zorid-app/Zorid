@@ -4,6 +4,7 @@ export { default as ZCheckboxField } from './components/ZCheckboxField.vue';
 export { default as ZConfirmDialog } from './components/ZConfirmDialog.vue';
 export { default as ZDialogBackdrop } from './components/ZDialogBackdrop.vue';
 export { default as ZDialogWindow } from './components/ZDialogWindow.vue';
+export { default as ZIconButton } from './components/ZIconButton.vue';
 export { default as ZModalWindow } from './components/ZModalWindow.vue';
 export { default as ZPanel } from './components/ZPanel.vue';
 export { default as ZPromptDialog } from './components/ZPromptDialog.vue';

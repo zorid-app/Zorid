@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ArrowDownUp, ChevronsDown, ChevronsUp, FilePlus, Files, FolderPlus, Link2, Search, Tag } from '@lucide/vue';
 import { createDesktopShellState } from '@zorid/desktop-shell';
+import { ZIconButton } from '@zorid/ui-vue';
 import type { Component, CSSProperties } from 'vue';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import ActivityRail from './components/ActivityRail.vue';
@@ -687,24 +688,24 @@ onBeforeUnmount(() => {
       </header>
       <p class="muted">{{ status }}</p>
       <div class="file-pane-toolbar" aria-label="File actions">
-        <button type="button" class="file-pane-action" @click="createNote" :disabled="!vaultLabel" aria-label="New file" title="New file">
+        <ZIconButton label="New file" @click="createNote" :disabled="!vaultLabel">
           <FilePlus class="file-pane-action-icon" aria-hidden="true" />
-        </button>
-        <button type="button" class="file-pane-action" @click="createFolder" :disabled="!vaultLabel" aria-label="New folder" title="New folder">
+        </ZIconButton>
+        <ZIconButton label="New folder" @click="createFolder" :disabled="!vaultLabel">
           <FolderPlus class="file-pane-action-icon" aria-hidden="true" />
-        </button>
+        </ZIconButton>
         <label class="file-pane-sort" :title="`Sort files: ${fileTreeSortLabel}`">
           <ArrowDownUp class="file-pane-action-icon" aria-hidden="true" />
           <select :value="fileTreeSortMode" :aria-label="`Sort files: ${fileTreeSortLabel}`" @change="updateFileTreeSortMode">
             <option v-for="mode in FILE_TREE_SORT_MODES" :key="mode" :value="mode">{{ sortModeLabel(mode) }}</option>
           </select>
         </label>
-        <button type="button" class="file-pane-action" @click="expandLoadedDirectories" :disabled="!vaultLabel" aria-label="Expand loaded folders" title="Expand loaded folders">
+        <ZIconButton label="Expand loaded folders" @click="expandLoadedDirectories" :disabled="!vaultLabel">
           <ChevronsDown class="file-pane-action-icon" aria-hidden="true" />
-        </button>
-        <button type="button" class="file-pane-action" @click="collapseLoadedDirectories" :disabled="!vaultLabel" aria-label="Collapse loaded folders" title="Collapse loaded folders">
+        </ZIconButton>
+        <ZIconButton label="Collapse loaded folders" @click="collapseLoadedDirectories" :disabled="!vaultLabel">
           <ChevronsUp class="file-pane-action-icon" aria-hidden="true" />
-        </button>
+        </ZIconButton>
       </div>
       <p v-if="error" class="error">{{ error }}</p>
       <FileTree

@@ -6,7 +6,9 @@ describe('desktop file tree scoped styles', () => {
     const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
 
     expect(styles).toContain("[data-region='left-sidebar'] .file-pane-toolbar");
-    expect(styles).toContain("[data-region='left-sidebar'] .file-pane-action");
+    expect(styles).not.toContain("[data-region='left-sidebar'] .file-pane-action,");
+    expect(styles).not.toContain("[data-region='left-sidebar'] .file-pane-action:hover");
+    expect(styles).not.toContain("[data-region='left-sidebar'] .file-pane-action:disabled");
     expect(styles).toContain("[data-region='left-sidebar'] .file-pane-sort");
     expect(styles).toContain('.toolbar.inline');
     expect(styles).toContain('.tree-type-label');

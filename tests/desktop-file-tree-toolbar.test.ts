@@ -30,9 +30,12 @@ describe('desktop file tree toolbar contract', () => {
       expect(app).toContain(symbol);
     }
     expect(app).toContain('class="file-pane-toolbar"');
-    expect(app).toContain('class="file-pane-action"');
-    expect(app).toContain('aria-label="New file"');
-    expect(app).toContain('aria-label="New folder"');
+    expect(app).toContain("import { ZIconButton } from '@zorid/ui-vue';");
+    expect(app).toContain('<ZIconButton label="New file"');
+    expect(app).toContain('<ZIconButton label="New folder"');
+    expect(app).toContain('<ZIconButton label="Expand loaded folders"');
+    expect(app).toContain('<ZIconButton label="Collapse loaded folders"');
+    expect(app).not.toContain('class="file-pane-action"');
   });
 
   it('exposes discoverable name/modified sort modes and loaded-directory expand/collapse', () => {

@@ -7,6 +7,7 @@ import {
   ZCheckboxField,
   ZConfirmDialog,
   ZDialogWindow,
+  ZIconButton,
   ZPanel,
   ZPromptDialog,
   ZResizeHandle,
@@ -15,7 +16,7 @@ import {
   ZTextField,
   ZWindowFrame,
 } from '@zorid/ui-vue';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, ref } from 'vue';
 
 afterEach(() => {
@@ -70,6 +71,26 @@ describe('shared ui-vue primitives', () => {
     expect(wrapper.find('[data-z-tag]').text()).toContain('2');
     expect(wrapper.find('[data-z-resize-handle]').attributes('role')).toBe('separator');
     expect(wrapper.find('[data-z-status-bar]').text()).toBe('Ready');
+  });
+
+  it('renders icon-only buttons with accessible labels and native click handling', async () => {
+    const onClick = vi.fn();
+    const wrapper = mount(ZIconButton, {
+      props: { label: 'New file' },
+      attrs: { onClick },
+      slots: { default: '<svg aria-hidden="true"></svg>' },
+    });
+
+    const button = wrapper.get('button');
+    expect(button.attributes('type')).toBe('button');
+    expect(button.attributes('aria-label')).toBe('New file');
+    expect(button.attributes('title')).toBe('New file');
+    expect(button.attributes('data-z-icon-button')).toBe('');
+    expect(button.classes()).toContain('z-icon-button');
+
+    await button.trigger('click');
+
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 
   it('renders a Reka-backed dialog window and emits close on outside interaction', async () => {

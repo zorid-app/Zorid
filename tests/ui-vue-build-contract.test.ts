@@ -9,6 +9,7 @@ const requiredDistAssets = [
   'packages/ui-vue/dist/tokens.css',
   'packages/ui-vue/dist/components/ZDialogWindow.vue',
   'packages/ui-vue/dist/components/ZButton.vue',
+  'packages/ui-vue/dist/components/ZIconButton.vue',
 ];
 
 describe('ui-vue build contract', () => {

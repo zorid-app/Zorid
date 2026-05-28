@@ -15,6 +15,7 @@ Shared components live under `packages/ui-vue/src/components/` and are exported 
 | `ZPromptDialog` | Vue SFC composition over `ZDialogWindow` + `ZTextField` | Prompt dialogs that collect a string and close on submit/cancel | Indirect |
 | `ZWindowFrame` | Plain Vue/CSS | Reusable floating window chrome/header/body | No |
 | `ZButton` | Plain Vue/CSS | Shared button variants | No |
+| `ZIconButton` | Plain Vue/CSS | Borderless icon-only toolbar/action buttons with required labels | No |
 | `ZTextField` | Plain Vue/CSS | Labelled text/search/number/etc. input | No |
 | `ZCheckboxField` | Plain Vue/CSS | Labelled checkbox input | No |
 | `ZPanel` | Plain Vue/CSS | Sidebar/card panels | No |

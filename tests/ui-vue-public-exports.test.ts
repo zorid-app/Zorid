@@ -8,6 +8,7 @@ const expectedSharedExports = [
   'ZConfirmDialog',
   'ZDialogBackdrop',
   'ZDialogWindow',
+  'ZIconButton',
   'ZModalWindow',
   'ZPanel',
   'ZPromptDialog',
