@@ -15,6 +15,14 @@ pnpm desktop:pack       # build an unpacked local app into apps/desktop/release
 pnpm desktop:dist       # build current-platform distributables
 ```
 
+## WSL2 / headless Linux
+
+`pnpm desktop:dev` prepares the Electron binary before launching. On WSL2, if a tmux shell lost `DISPLAY`/`WAYLAND_DISPLAY`, the launcher restores WSLg variables so the Electron window can appear on Windows. It does **not** use invisible `xvfb-run` by default. For headless smoke testing only, run:
+
+```sh
+ZORID_DESKTOP_HEADLESS=1 pnpm desktop:dev
+```
+
 ## Architecture
 
 - Electron main process: `apps/desktop/src/main/index.ts`

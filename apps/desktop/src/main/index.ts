@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
@@ -7,6 +8,26 @@ import { createDesktopRuntime } from './runtime.js';
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDirectory = path.dirname(currentFile);
+
+function isWslRuntime(): boolean {
+  if (process.platform !== 'linux') return false;
+  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true;
+  try {
+    return fs.readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft');
+  } catch {
+    return false;
+  }
+}
+
+function shouldDisableGpu(): boolean {
+  return process.env.ZORID_DISABLE_GPU === '1' || isWslRuntime();
+}
+
+if (shouldDisableGpu()) {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+}
 
 const runtime = createDesktopRuntime();
 const windows = new Set<BrowserWindow>();

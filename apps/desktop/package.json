@@ -12,8 +12,8 @@
     }
   },
   "scripts": {
-    "dev": "electron-vite dev",
-    "dev:watch": "electron-vite dev --watch",
+    "dev": "node ../../scripts/desktop-dev.mjs",
+    "dev:watch": "node ../../scripts/desktop-dev.mjs --watch",
     "typecheck": "tsc -b --pretty false && vue-tsc --noEmit --pretty false",
     "build": "pnpm typecheck && electron-vite build",
     "start": "pnpm build && electron-vite preview --skipBuild",
