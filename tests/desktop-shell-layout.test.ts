@@ -67,12 +67,12 @@ describe('desktop shell pane layout helpers', () => {
     expect(SHELL_LAYOUT.statusBarMaxHeight).toBeGreaterThan(SHELL_LAYOUT.statusBarMinHeight);
   });
 
-  it('applies native titlebar chrome only to editor windows', () => {
+  it('applies native titlebar chrome to launcher and editor windows', () => {
     const launcher = managedWindowOptions('launcher', '/tmp/preload.cjs');
     const editor = managedWindowOptions('editor', '/tmp/preload.cjs');
 
-    expect(launcher.titleBarStyle).toBeUndefined();
-    expect(launcher.trafficLightPosition).toBeUndefined();
+    expect(launcher.titleBarStyle).toBe('hiddenInset');
+    expect(launcher.trafficLightPosition).toEqual(EDITOR_TRAFFIC_LIGHT_POSITION);
     expect(editor.titleBarStyle).toBe('hiddenInset');
     expect(editor.trafficLightPosition).toEqual(EDITOR_TRAFFIC_LIGHT_POSITION);
     expect(editor.webPreferences).toMatchObject({
@@ -89,13 +89,17 @@ describe('desktop shell pane layout helpers', () => {
     const app = readFileSync('apps/desktop/src/renderer/src/App.vue', 'utf8');
 
     expect(app).toContain('class="editor-titlebar"');
+    expect(app).toContain('class="traffic-light-spacer launcher-traffic-light-spacer"');
+    expect(app).not.toContain('class="window-dots"');
     expect(app).toContain(":class=\"resizeHandleClasses('left')\"");
     expect(styles).toContain('grid-template-rows: var(--titlebar-height) minmax(0, 1fr) auto;');
     expect(styles).toContain('max-height: var(--status-bar-max-height);');
-    expect(styles).toContain('-webkit-app-region: drag;');
+    expect(styles).toMatch(/\.launcher-shell\s*\{[^}]*-webkit-app-region:\s*drag;[^}]*\}/s);
+    expect(styles).toMatch(/\.launcher-shell\s+:is\([^)]*button[^)]*a[^)]*input[^)]*select[^)]*textarea[^)]*\[role=\"button\"\][^)]*\[contenteditable=\"true\"\][^)]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag;[^}]*\}/s);
     expect(styles).toContain('.resize-handle.active::before');
     expect(styles).toContain('overflow-wrap: anywhere;');
     expect(styles).toContain('white-space: normal;');
     expect(styles).not.toContain('.tab-bar');
+    expect(styles).not.toContain('.window-dots');
   });
 });

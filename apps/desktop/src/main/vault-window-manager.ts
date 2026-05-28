@@ -163,7 +163,10 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
       if (role === 'launcher') this.#launchersBySender.delete(senderId);
       else {
         const entry = this.#editorsBySender.get(senderId);
-        if (entry) void this.#disposeEditor(entry);
+        if (entry) {
+          void this.#disposeEditor(entry)
+            .catch((error: unknown) => { console.error('Failed to dispose Zorid editor runtime after window closed.', error); });
+        }
       }
     });
   }

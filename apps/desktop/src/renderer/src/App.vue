@@ -581,7 +581,7 @@ onBeforeUnmount(() => {
 <template>
   <main v-if="windowRole === 'launcher'" class="launcher-shell" data-z-theme="dark">
     <aside class="launcher-recents" aria-label="Recent vaults">
-      <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="traffic-light-spacer launcher-traffic-light-spacer" aria-hidden="true"></div>
       <header>
         <p class="eyebrow">Zorid</p>
         <h1>Recent vaults</h1>

@@ -266,4 +266,31 @@ describe('VaultWindowManager', () => {
 
     expect(runtime.dispose).toHaveBeenCalledOnce();
   });
+
+  it('logs close-triggered editor disposal failures instead of leaving an unhandled rejection', async () => {
+    const { VaultWindowManager } = await import('../apps/desktop/src/main/vault-window-manager');
+    const win = new FakeWindow();
+    const runtime = new FakeRuntime();
+    const disposalError = new Error('close cleanup failed');
+    runtime.dispose.mockRejectedValueOnce(disposalError);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const unhandled = vi.fn();
+    process.once('unhandledRejection', unhandled);
+    const manager = new VaultWindowManager<FakeWindow, FakeRuntime>({
+      createWindow: () => win,
+      loadWindow: async () => undefined,
+      createRuntime: () => runtime,
+    });
+
+    await manager.openVault('/tmp/RejectedCloseCleanupVault');
+    win.close();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runtime.dispose).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith('Failed to dispose Zorid editor runtime after window closed.', expect.any(AggregateError));
+    expect(unhandled).not.toHaveBeenCalled();
+
+    process.removeListener('unhandledRejection', unhandled);
+    consoleError.mockRestore();
+  });
 });

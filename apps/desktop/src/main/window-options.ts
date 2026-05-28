@@ -9,10 +9,8 @@ export function managedWindowOptions(role: VaultWindowRole, preloadPath: string)
     minWidth: role === 'launcher' ? 820 : 960,
     minHeight: role === 'launcher' ? 560 : 640,
     show: false,
-    ...(role === 'editor' ? {
-      titleBarStyle: 'hiddenInset' as const,
-      trafficLightPosition: EDITOR_TRAFFIC_LIGHT_POSITION,
-    } : {}),
+    titleBarStyle: 'hiddenInset' as const,
+    trafficLightPosition: EDITOR_TRAFFIC_LIGHT_POSITION,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,

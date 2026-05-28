@@ -715,11 +715,13 @@ input::placeholder {
 }
 
 .launcher-shell {
+  --traffic-light-space: 84px;
   display: grid;
   grid-template-columns: 360px minmax(480px, 1fr);
   min-height: 100vh;
   color: var(--z-color-text);
   background: #1c1c1f;
+  -webkit-app-region: drag;
 }
 
 .launcher-shell.loading {
@@ -728,26 +730,19 @@ input::placeholder {
 }
 
 .launcher-recents {
-  padding: 22px 26px;
+  padding: 12px 26px 22px;
   border-right: 1px solid rgba(255, 255, 255, 0.09);
   background: #242426;
 }
 
-.window-dots {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 48px;
+.launcher-traffic-light-spacer {
+  height: 58px;
+  margin-bottom: 22px;
 }
 
-.window-dots span {
-  width: 15px;
-  height: 15px;
-  border-radius: 999px;
-  background: #ff5f57;
+.launcher-shell :is(button, a, input, select, textarea, [role="button"], [contenteditable="true"]) {
+  -webkit-app-region: no-drag;
 }
-
-.window-dots span:nth-child(2) { background: #ffbd2e; }
-.window-dots span:nth-child(3) { background: #7a7a7d; }
 
 .recent-list {
   display: grid;
