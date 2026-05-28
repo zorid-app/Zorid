@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import type { Component } from 'vue';
+import type { Component, CSSProperties } from 'vue';
 import { ChevronDown, ChevronRight, Command, FileText, Files, Folder, Link2, Search, Settings, Tag } from '@lucide/vue';
 import { createDesktopShellState } from '@zorid/desktop-shell';
 import type { PluginStatus, VaultEntry } from '@zorid/platform-api';
 import MarkdownEditor from './components/MarkdownEditor.vue';
+import { DEFAULT_PANE_LAYOUT, SHELL_LAYOUT, parsePaneLayout, resolveDraggedPaneWidth, safePaneLayoutStorageKey, resolvePaneLayout, serializePaneLayout } from './shell-layout.js';
+import type { PaneLayout } from './shell-layout.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -36,7 +38,8 @@ interface DataViewResultDto { readonly basePath: string; readonly viewId: string
 interface MarkdownEmbedDto { readonly sourcePath: string; readonly basePath: string; readonly viewId?: string; }
 type WindowRole = 'launcher' | 'editor';
 interface RecentVaultDto { readonly id: string; readonly name: string; readonly path: string; readonly lastOpenedAt: string; }
-interface EditorSnapshotDto { readonly profile?: { readonly rootLabel: string }; readonly indexStatus: IndexStatusDto; }
+interface VaultProfileDto { readonly id: string; readonly kind: 'folder' | 'app-private'; readonly rootLabel: string; }
+interface EditorSnapshotDto { readonly profile?: VaultProfileDto; readonly indexStatus: IndexStatusDto; }
 
 interface SettingProperty {
   readonly name: string;
@@ -48,11 +51,11 @@ interface SettingProperty {
 
 const desktop = window.zoridDesktop as unknown as {
   getWindowRole(): Promise<WindowRole | undefined>;
-  createVault(): Promise<{ rootLabel: string } | undefined>;
-  openVault(): Promise<{ rootLabel: string } | undefined>;
+  createVault(): Promise<VaultProfileDto | undefined>;
+  openVault(): Promise<VaultProfileDto | undefined>;
   listRecentVaults(): Promise<readonly RecentVaultDto[]>;
-  openRecentVault(id: string): Promise<{ rootLabel: string }>;
-  getVaultProfile(): Promise<{ rootLabel: string } | undefined>;
+  openRecentVault(id: string): Promise<VaultProfileDto>;
+  getVaultProfile(): Promise<VaultProfileDto | undefined>;
   listVault(path?: string): Promise<readonly VaultEntry[]>;
   readVaultText(path: string): Promise<string>;
   writeVaultText(path: string, contents: string): Promise<void>;
@@ -93,6 +96,7 @@ const activityIcons: Record<string, Component> = {
   backlinks: Link2,
   tags: Tag,
 };
+const vaultProfile = ref<VaultProfileDto>();
 const vaultLabel = ref<string>();
 const entriesByDirectory = ref<Record<string, readonly VaultEntry[]>>({});
 const expandedDirectories = ref<Record<string, boolean>>({ '': true });
@@ -121,16 +125,32 @@ const activeBasePath = ref<string>();
 const activeViewId = ref<string>();
 const dataView = ref<DataViewResultDto>();
 const markdownEmbeds = ref<readonly MarkdownEmbedDto[]>([]);
+const paneLayout = ref<PaneLayout>({ ...DEFAULT_PANE_LAYOUT });
+type ResizeSide = 'left' | 'right';
+interface PaneResizeState { readonly side: ResizeSide; readonly startX: number; readonly startLeftWidth: number; readonly startRightWidth: number; }
+const paneResize = ref<PaneResizeState>();
 let unsubscribeIndexUpdates: (() => void) | undefined;
 let unsubscribeEditorSnapshot: (() => void) | undefined;
 
 const status = computed(() => vaultLabel.value ?? 'No vault open');
+const paneLayoutStorageKeyForActiveVault = computed(() => safePaneLayoutStorageKey(vaultProfile.value?.id));
+const shellStyle = computed<CSSProperties>(() => ({
+  '--left-sidebar-width': `${paneLayout.value.leftWidth}px`,
+  '--right-sidebar-width': `${paneLayout.value.rightWidth}px`,
+  '--activity-rail-width': `${SHELL_LAYOUT.railWidth}px`,
+  '--resize-handle-width': `${SHELL_LAYOUT.resizeHandleWidth}px`,
+}));
 const rootEntries = computed(() => entriesByDirectory.value[''] ?? []);
 const dirty = computed(() => selectedPath.value !== undefined && editorText.value !== savedText.value);
+const editorStartupOnlyCommandIds = new Set(['vault.open', 'file-explorer.open-root']);
+const visibleCommands = computed(() => windowRole.value === 'editor'
+  ? commands.value.filter((command) => !editorStartupOnlyCommandIds.has(command.id))
+  : commands.value);
 const filteredCommands = computed(() => {
   const query = commandQuery.value.trim().toLowerCase();
-  if (!query) return commands.value;
-  return commands.value.filter((command: CommandDto) => `${command.title} ${command.id}`.toLowerCase().includes(query));
+  const source = visibleCommands.value;
+  if (!query) return source;
+  return source.filter((command: CommandDto) => `${command.title} ${command.id}`.toLowerCase().includes(query));
 });
 const activePlugins = computed(() => plugins.value.filter((plugin) => plugin.status === 'active').length);
 const activeBase = computed(() => bases.value.find((base) => base.path === activeBasePath.value));
@@ -141,6 +161,66 @@ function settingsKey(section: SettingsSectionDto): string {
 
 function activityIconFor(item: string): Component {
   return activityIcons[item] ?? Files;
+}
+
+function applyVaultProfile(profile: VaultProfileDto): void {
+  vaultProfile.value = profile;
+  vaultLabel.value = profile.rootLabel;
+  loadPaneLayout(profile.id);
+}
+
+function loadPaneLayout(vaultId?: string): void {
+  const storageKey = safePaneLayoutStorageKey(vaultId);
+  const stored = storageKey ? parsePaneLayout(localStorage.getItem(storageKey)) : undefined;
+  paneLayout.value = resolvePaneLayout(stored ?? DEFAULT_PANE_LAYOUT, { viewportWidth: window.innerWidth });
+}
+
+function savePaneLayout(): void {
+  const storageKey = paneLayoutStorageKeyForActiveVault.value;
+  if (!storageKey) return;
+  localStorage.setItem(storageKey, serializePaneLayout(paneLayout.value));
+}
+
+function updatePaneLayout(next: Partial<PaneLayout>, preserveSide?: ResizeSide): void {
+  paneLayout.value = resolvePaneLayout(
+    { ...paneLayout.value, ...next },
+    { viewportWidth: window.innerWidth, ...(preserveSide ? { preserveSide } : {}) },
+  );
+}
+
+function handlePanePointerMove(event: PointerEvent): void {
+  const resize = paneResize.value;
+  if (!resize) return;
+  const delta = event.clientX - resize.startX;
+  if (resize.side === 'left') {
+    const next = resolveDraggedPaneWidth(resize.startLeftWidth + delta, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth);
+    updatePaneLayout({ leftWidth: next.width, leftCollapsed: next.collapsed }, 'left');
+  } else {
+    const next = resolveDraggedPaneWidth(resize.startRightWidth - delta, SHELL_LAYOUT.rightMinWidth, SHELL_LAYOUT.rightMaxWidth);
+    updatePaneLayout({ rightWidth: next.width, rightCollapsed: next.collapsed }, 'right');
+  }
+}
+
+function stopPaneResize(): void {
+  if (!paneResize.value) return;
+  paneResize.value = undefined;
+  window.removeEventListener('pointermove', handlePanePointerMove);
+  window.removeEventListener('pointerup', stopPaneResize);
+  window.removeEventListener('pointercancel', stopPaneResize);
+  savePaneLayout();
+}
+
+function startPaneResize(side: ResizeSide, event: PointerEvent): void {
+  event.preventDefault();
+  paneResize.value = {
+    side,
+    startX: event.clientX,
+    startLeftWidth: paneLayout.value.leftWidth,
+    startRightWidth: paneLayout.value.rightWidth,
+  };
+  window.addEventListener('pointermove', handlePanePointerMove);
+  window.addEventListener('pointerup', stopPaneResize);
+  window.addEventListener('pointercancel', stopPaneResize);
 }
 
 function jsonRecord(value: unknown): JsonRecord {
@@ -252,17 +332,6 @@ async function loadDirectory(path = ''): Promise<void> {
   entriesByDirectory.value = { ...entriesByDirectory.value, [path]: await desktop.listVault(path) };
 }
 
-async function openVault(): Promise<void> {
-  error.value = undefined;
-  try {
-    await desktop.openVault();
-    if (windowRole.value === 'launcher') await loadRecentVaults();
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : String(caught);
-  }
-}
-
-
 async function loadRecentVaults(): Promise<void> {
   recentVaults.value = await desktop.listRecentVaults();
 }
@@ -293,7 +362,7 @@ async function openRecentFromLauncher(id: string): Promise<void> {
 }
 
 function applyEditorSnapshot(snapshot: EditorSnapshotDto): void {
-  if (snapshot.profile) vaultLabel.value = snapshot.profile.rootLabel;
+  if (snapshot.profile) applyVaultProfile(snapshot.profile);
   indexStatus.value = snapshot.indexStatus;
   void loadDirectory('').then(() => refreshShellData()).catch((caught: unknown) => { error.value = caught instanceof Error ? caught.message : String(caught); });
 }
@@ -309,7 +378,7 @@ async function initializeWindow(): Promise<void> {
   unsubscribeEditorSnapshot = desktop.onEditorSnapshot(applyEditorSnapshot);
   const profile = await desktop.getVaultProfile().catch(() => undefined);
   if (profile) {
-    vaultLabel.value = profile.rootLabel;
+    applyVaultProfile(profile);
     await loadDirectory('');
     await refreshShellData();
   }
@@ -466,10 +535,6 @@ async function runCommand(command: CommandDto): Promise<void> {
       openCommandPalette();
       return;
     }
-    if (command.id === 'vault.open' || command.id === 'file-explorer.open-root') {
-      await openVault();
-      return;
-    }
     await desktop.executeCommand(command.id);
     await refreshShellData();
   } catch (caught) {
@@ -497,6 +562,7 @@ onMounted(() => {
   void initializeWindow().catch((caught: unknown) => { error.value = caught instanceof Error ? caught.message : String(caught); });
 });
 onBeforeUnmount(() => {
+  stopPaneResize();
   window.removeEventListener('keydown', handleKeydown);
   unsubscribeIndexUpdates?.();
   unsubscribeEditorSnapshot?.();
@@ -546,7 +612,7 @@ onBeforeUnmount(() => {
     </section>
   </main>
 
-  <main v-else-if="windowRole === 'editor'" class="zorid-shell" data-zorid-shell data-z-theme="dark">
+  <main v-else-if="windowRole === 'editor'" class="zorid-shell" :style="shellStyle" data-zorid-shell data-z-theme="dark">
     <aside class="activity-rail" aria-label="Primary navigation">
       <button v-for="item in shell.activityRail" :key="item" type="button" class="rail-button" :title="item" :aria-label="item">
         <component :is="activityIconFor(item)" class="icon" aria-hidden="true" />
@@ -559,12 +625,11 @@ onBeforeUnmount(() => {
       </button>
     </aside>
 
-    <aside class="sidebar" data-region="left-sidebar">
+    <aside v-show="!paneLayout.leftCollapsed" class="sidebar" data-region="left-sidebar">
       <header>
         <p class="eyebrow">Zorid</p>
         <h1>Files</h1>
       </header>
-      <button type="button" class="primary" @click="openVault">Open vault</button>
       <p class="muted">{{ status }}</p>
       <div class="toolbar" aria-label="File actions">
         <button type="button" @click="createNote" :disabled="!vaultLabel">New note</button>
@@ -592,6 +657,14 @@ onBeforeUnmount(() => {
       </ul>
     </aside>
 
+    <div
+      class="resize-handle left"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize file sidebar"
+      @pointerdown="startPaneResize('left', $event)"
+    />
+
     <section class="editor" data-region="editor">
       <p class="eyebrow">Markdown editor</p>
       <h2>{{ selectedPath ?? 'Open a Markdown file' }} <span v-if="dirty" class="dirty">• unsaved</span></h2>
@@ -606,10 +679,18 @@ onBeforeUnmount(() => {
         <button type="button" :disabled="!selectedPath" @click="deleteSelected">Delete</button>
       </div>
       <MarkdownEditor v-if="selectedPath" :text="editorText" @change="(text) => { editorText = text; }" @save="saveActive" />
-      <p v-else class="muted">Open a vault, then select a Markdown file from the real filesystem-backed explorer.</p>
+      <p v-else class="muted">Select a Markdown file from the filesystem-backed explorer.</p>
     </section>
 
-    <aside class="sidebar right" data-region="right-sidebar">
+    <div
+      class="resize-handle right"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize right sidebar"
+      @pointerdown="startPaneResize('right', $event)"
+    />
+
+    <aside v-show="!paneLayout.rightCollapsed" class="sidebar right" data-region="right-sidebar">
       <section class="panel">
         <p class="eyebrow">Search</p>
         <input v-model="searchQuery" class="side-input" placeholder="Search files, tags, headings…" @input="runSearch" />

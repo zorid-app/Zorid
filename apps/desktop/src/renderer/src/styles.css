@@ -27,9 +27,15 @@ select:focus-visible {
 }
 
 .zorid-shell {
+  --activity-rail-width: 56px;
+  --left-sidebar-width: 280px;
+  --right-sidebar-width: 260px;
+  --resize-handle-width: 8px;
   display: grid;
-  grid-template-columns: 56px 280px minmax(420px, 1fr) 260px;
+  grid-template-columns: var(--activity-rail-width) var(--left-sidebar-width) var(--resize-handle-width) minmax(420px, 1fr) var(--resize-handle-width) var(--right-sidebar-width);
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
   background: linear-gradient(135deg, var(--z-color-bg) 0%, var(--z-color-surface-raised) 100%);
 }
 
@@ -72,7 +78,10 @@ select:focus-visible {
 
 .sidebar,
 .editor {
+  min-width: 0;
+  overflow: auto;
   padding: 24px;
+  padding-bottom: 48px;
 }
 
 .sidebar {
@@ -86,6 +95,7 @@ select:focus-visible {
 
 .editor {
   display: flex;
+  min-width: 420px;
   flex-direction: column;
   justify-content: center;
   background: var(--z-editor-bg);
@@ -252,19 +262,50 @@ h2 {
 }
 
 .zorid-shell {
-  grid-template-rows: minmax(0, 1fr) 30px;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.resize-handle {
+  position: relative;
+  z-index: 2;
+  min-width: var(--resize-handle-width);
+  background: color-mix(in srgb, var(--z-color-border) 52%, transparent);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resize-handle:hover,
+.resize-handle:focus-visible {
+  background: var(--z-selected-border);
 }
 
 .status-bar {
-  grid-column: 1 / -1;
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: calc(var(--activity-rail-width) + var(--left-sidebar-width) + var(--resize-handle-width));
+  z-index: 20;
   display: flex;
+  min-width: 0;
+  justify-content: flex-end;
   gap: 18px;
   align-items: center;
+  overflow: hidden;
   padding: 0 12px;
+  height: 30px;
   color: var(--z-color-muted);
   background: var(--z-statusbar-bg);
   border-top: 1px solid var(--z-color-border);
+  border-left: 1px solid var(--z-color-border);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.status-bar span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel {
