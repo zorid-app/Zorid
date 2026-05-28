@@ -139,9 +139,14 @@ const shellStyle = computed<CSSProperties>(() => ({
   '--right-sidebar-width': `${paneLayout.value.rightWidth}px`,
   '--activity-rail-width': `${SHELL_LAYOUT.railWidth}px`,
   '--resize-handle-width': `${SHELL_LAYOUT.resizeHandleWidth}px`,
+  '--titlebar-height': `${SHELL_LAYOUT.titlebarHeight}px`,
+  '--traffic-light-space': `${SHELL_LAYOUT.trafficLightReservedWidth}px`,
+  '--status-bar-min-height': `${SHELL_LAYOUT.statusBarMinHeight}px`,
+  '--status-bar-max-height': `${SHELL_LAYOUT.statusBarMaxHeight}px`,
 }));
 const rootEntries = computed(() => entriesByDirectory.value[''] ?? []);
 const dirty = computed(() => selectedPath.value !== undefined && editorText.value !== savedText.value);
+const editorTitle = computed(() => selectedPath.value?.split('/').at(-1) ?? vaultLabel.value ?? 'Zorid');
 const editorStartupOnlyCommandIds = new Set(['vault.open', 'file-explorer.open-root']);
 const visibleCommands = computed(() => windowRole.value === 'editor'
   ? commands.value.filter((command) => !editorStartupOnlyCommandIds.has(command.id))
@@ -161,6 +166,10 @@ function settingsKey(section: SettingsSectionDto): string {
 
 function activityIconFor(item: string): Component {
   return activityIcons[item] ?? Files;
+}
+
+function resizeHandleClasses(side: ResizeSide): Record<string, boolean> {
+  return { active: paneResize.value?.side === side };
 }
 
 function applyVaultProfile(profile: VaultProfileDto): void {
@@ -613,6 +622,24 @@ onBeforeUnmount(() => {
   </main>
 
   <main v-else-if="windowRole === 'editor'" class="zorid-shell" :style="shellStyle" data-zorid-shell data-z-theme="dark">
+    <header class="editor-titlebar" aria-label="Editor title bar">
+      <div class="traffic-light-spacer" aria-hidden="true"></div>
+      <nav class="top-tab-strip" aria-label="Open Markdown files">
+        <button
+          v-for="path in openTabs"
+          :key="path"
+          type="button"
+          class="top-tab"
+          :class="{ selected: selectedPath === path }"
+          @click="activateTab(path)"
+        >
+          {{ path.split('/').at(-1) }}
+        </button>
+        <span v-if="openTabs.length === 0" class="top-tab selected">{{ editorTitle }}</span>
+      </nav>
+      <span class="titlebar-context">{{ status }}</span>
+    </header>
+
     <aside class="activity-rail" aria-label="Primary navigation">
       <button v-for="item in shell.activityRail" :key="item" type="button" class="rail-button" :title="item" :aria-label="item">
         <component :is="activityIconFor(item)" class="icon" aria-hidden="true" />
@@ -659,20 +686,17 @@ onBeforeUnmount(() => {
 
     <div
       class="resize-handle left"
+      :class="resizeHandleClasses('left')"
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize file sidebar"
+      tabindex="0"
       @pointerdown="startPaneResize('left', $event)"
     />
 
     <section class="editor" data-region="editor">
       <p class="eyebrow">Markdown editor</p>
       <h2>{{ selectedPath ?? 'Open a Markdown file' }} <span v-if="dirty" class="dirty">• unsaved</span></h2>
-      <nav v-if="openTabs.length > 0" class="tab-bar" aria-label="Open Markdown files">
-        <button v-for="path in openTabs" :key="path" type="button" :class="{ selected: selectedPath === path }" @click="activateTab(path)">
-          {{ path.split('/').at(-1) }}
-        </button>
-      </nav>
       <div class="toolbar inline" aria-label="Selected file actions">
         <button type="button" :disabled="!selectedPath || !dirty" @click="saveActive">Save</button>
         <button type="button" :disabled="!selectedPath" @click="renameSelected">Rename</button>
@@ -684,9 +708,11 @@ onBeforeUnmount(() => {
 
     <div
       class="resize-handle right"
+      :class="resizeHandleClasses('right')"
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize right sidebar"
+      tabindex="0"
       @pointerdown="startPaneResize('right', $event)"
     />
 

@@ -45,6 +45,7 @@ export interface VaultWindowManagerOptions<TWindow extends ManagedWindow = Manag
 
 interface EditorEntry<TRuntime extends ManagedRuntime, TWindow extends ManagedWindow> {
   readonly root: string;
+  readonly senderId: number;
   readonly window: TWindow;
   readonly runtime: TRuntime;
   readonly eventDisposables: DisposableLike[];
@@ -110,8 +111,9 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
 
     const window = this.#createWindow('editor');
     const runtime = this.#createRuntime();
-    const entry: EditorEntry<TRuntime, TWindow> = { root: normalizedRoot, window, runtime, eventDisposables: [] };
-    this.#editorsBySender.set(window.webContents.id, entry);
+    const senderId = window.webContents.id;
+    const entry: EditorEntry<TRuntime, TWindow> = { root: normalizedRoot, senderId, window, runtime, eventDisposables: [] };
+    this.#editorsBySender.set(senderId, entry);
     this.#editorsByRoot.set(normalizedRoot, entry);
     this.#prepareWindow(window, 'editor');
     this.#forwardRuntimeEvents(entry);
@@ -155,11 +157,12 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
   }
 
   #prepareWindow(window: TWindow, role: VaultWindowRole): void {
+    const senderId = window.webContents.id;
     window.once('ready-to-show', () => window.show());
     window.on('closed', () => {
-      if (role === 'launcher') this.#launchersBySender.delete(window.webContents.id);
+      if (role === 'launcher') this.#launchersBySender.delete(senderId);
       else {
-        const entry = this.#editorsBySender.get(window.webContents.id);
+        const entry = this.#editorsBySender.get(senderId);
         if (entry) void this.#disposeEditor(entry);
       }
     });
@@ -186,7 +189,7 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
         () => entry.runtime.dispose(),
       ];
       const cleanupResults = await Promise.allSettled(cleanupTasks.map((task) => Promise.resolve().then(task)));
-      this.#editorsBySender.delete(entry.window.webContents.id);
+      this.#editorsBySender.delete(entry.senderId);
       if (this.#editorsByRoot.get(entry.root) === entry) this.#editorsByRoot.delete(entry.root);
       const failures = cleanupResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failures.length > 0) throw new AggregateError(failures.map((failure) => failure.reason), 'Editor runtime disposal failed.');

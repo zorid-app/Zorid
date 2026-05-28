@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { EDITOR_TRAFFIC_LIGHT_POSITION, MACOS_TRAFFIC_LIGHT_CONTROL_GROUP_WIDTH } from '../apps/desktop/src/chrome-layout';
+import { managedWindowOptions } from '../apps/desktop/src/main/window-options';
 import { DEFAULT_PANE_LAYOUT, SHELL_LAYOUT, clampPaneWidth, collapseThreshold, paneLayoutStorageKey, parsePaneLayout, resolveDraggedPaneWidth, resolvePaneLayout, shouldCollapsePane } from '../apps/desktop/src/renderer/src/shell-layout';
 
 describe('desktop shell pane layout helpers', () => {
@@ -51,5 +54,48 @@ describe('desktop shell pane layout helpers', () => {
 
   it('falls back to default layout for missing persisted input', () => {
     expect(resolvePaneLayout({}, { viewportWidth: 1600 })).toEqual(DEFAULT_PANE_LAYOUT);
+  });
+
+  it('reserves app chrome while keeping resize hit targets separate from visible highlights', () => {
+    expect(SHELL_LAYOUT.titlebarHeight).toBeGreaterThanOrEqual(36);
+    expect(SHELL_LAYOUT.trafficLightReservedWidth).toBeGreaterThanOrEqual(72);
+    expect(SHELL_LAYOUT.trafficLightReservedWidth).toBeGreaterThanOrEqual(
+      EDITOR_TRAFFIC_LIGHT_POSITION.x + MACOS_TRAFFIC_LIGHT_CONTROL_GROUP_WIDTH,
+    );
+    expect(SHELL_LAYOUT.resizeHandleWidth).toBeGreaterThanOrEqual(8);
+    expect(SHELL_LAYOUT.statusBarMinHeight).toBe(30);
+    expect(SHELL_LAYOUT.statusBarMaxHeight).toBeGreaterThan(SHELL_LAYOUT.statusBarMinHeight);
+  });
+
+  it('applies native titlebar chrome only to editor windows', () => {
+    const launcher = managedWindowOptions('launcher', '/tmp/preload.cjs');
+    const editor = managedWindowOptions('editor', '/tmp/preload.cjs');
+
+    expect(launcher.titleBarStyle).toBeUndefined();
+    expect(launcher.trafficLightPosition).toBeUndefined();
+    expect(editor.titleBarStyle).toBe('hiddenInset');
+    expect(editor.trafficLightPosition).toEqual(EDITOR_TRAFFIC_LIGHT_POSITION);
+    expect(editor.webPreferences).toMatchObject({
+      preload: '/tmp/preload.cjs',
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    });
+    expect(launcher.webPreferences).toEqual(editor.webPreferences);
+  });
+
+  it('keeps desktop chrome and wrapping behavior wired in renderer styles', () => {
+    const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
+    const app = readFileSync('apps/desktop/src/renderer/src/App.vue', 'utf8');
+
+    expect(app).toContain('class="editor-titlebar"');
+    expect(app).toContain(":class=\"resizeHandleClasses('left')\"");
+    expect(styles).toContain('grid-template-rows: var(--titlebar-height) minmax(0, 1fr) auto;');
+    expect(styles).toContain('max-height: var(--status-bar-max-height);');
+    expect(styles).toContain('-webkit-app-region: drag;');
+    expect(styles).toContain('.resize-handle.active::before');
+    expect(styles).toContain('overflow-wrap: anywhere;');
+    expect(styles).toContain('white-space: normal;');
+    expect(styles).not.toContain('.tab-bar');
   });
 });

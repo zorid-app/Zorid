@@ -39,12 +39,13 @@ class FakeWindow implements ManagedWindow {
   readonly handlers = new Map<string, Array<() => void>>();
   destroyed = false;
   focused = false;
-  readonly webContents = {
+  readonly #webContents = {
     id: nextWindowId++,
     send: (channel: string, payload: unknown) => { this.sent.push({ channel, payload }); },
     isDestroyed: () => this.destroyed,
   };
 
+  get webContents(): ManagedWindow['webContents'] { return this.#webContents; }
   once(event: 'ready-to-show', listener: () => void): void { this.on(event, listener); }
   on(event: 'closed' | 'ready-to-show', listener: () => void): void {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), listener]);
@@ -57,6 +58,13 @@ class FakeWindow implements ManagedWindow {
   close(): void {
     this.destroyed = true;
     for (const listener of this.handlers.get('closed') ?? []) listener();
+  }
+}
+
+class ThrowingWebContentsAfterDestroyWindow extends FakeWindow {
+  override get webContents(): ManagedWindow['webContents'] {
+    if (this.destroyed) throw new Error('Object has been destroyed');
+    return super.webContents;
   }
 }
 
@@ -239,5 +247,23 @@ describe('VaultWindowManager', () => {
     expect(fixture.windows[1]!.sent).toContainEqual({ channel: 'zorid:index-status', payload: { state: 'open' } });
     expect(() => manager.runtimeForSender(closed.webContents.id)).toThrow('No editor runtime');
     expect(fixture.runtimes[0]!.events.count('metadata:index-status')).toBe(0);
+  });
+
+  it('does not read webContents after Electron destroys a closing editor window', async () => {
+    const { VaultWindowManager } = await import('../apps/desktop/src/main/vault-window-manager');
+    const win = new ThrowingWebContentsAfterDestroyWindow();
+    const runtime = new FakeRuntime();
+    const manager = new VaultWindowManager<ThrowingWebContentsAfterDestroyWindow, FakeRuntime>({
+      createWindow: () => win,
+      loadWindow: async () => undefined,
+      createRuntime: () => runtime,
+    });
+
+    await manager.openVault('/tmp/DestroyedCloseVault');
+
+    expect(() => win.close()).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runtime.dispose).toHaveBeenCalledOnce();
   });
 });

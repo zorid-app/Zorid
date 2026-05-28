@@ -9,6 +9,7 @@ import { createRecentVaultStore, openRecentVault, type RecentVaultStore } from '
 import { createDesktopRuntime, type DesktopRuntime } from './runtime.js';
 import { installRuntimeShutdown } from './shutdown.js';
 import { VaultWindowManager, type VaultWindowRole } from './vault-window-manager.js';
+import { managedWindowOptions } from './window-options.js';
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDirectory = path.dirname(currentFile);
@@ -49,19 +50,7 @@ function rendererUrl(role: VaultWindowRole): string | undefined {
 }
 
 function createManagedWindow(role: VaultWindowRole): BrowserWindow {
-  return new BrowserWindow({
-    width: role === 'launcher' ? 1040 : 1280,
-    height: role === 'launcher' ? 720 : 860,
-    minWidth: role === 'launcher' ? 820 : 960,
-    minHeight: role === 'launcher' ? 560 : 640,
-    show: false,
-    webPreferences: {
-      preload: path.join(currentDirectory, '../preload/index.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
+  return new BrowserWindow(managedWindowOptions(role, path.join(currentDirectory, '../preload/index.cjs')));
 }
 
 async function loadManagedWindow(win: BrowserWindow, role: VaultWindowRole): Promise<void> {

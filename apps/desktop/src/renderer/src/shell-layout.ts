@@ -1,3 +1,10 @@
+import {
+  EDITOR_TITLEBAR_HEIGHT,
+  EDITOR_TRAFFIC_LIGHT_RESERVED_WIDTH,
+  STATUS_BAR_MAX_HEIGHT,
+  STATUS_BAR_MIN_HEIGHT,
+} from '../../chrome-layout.js';
+
 export interface PaneLayout {
   readonly leftWidth: number;
   readonly rightWidth: number;
@@ -25,6 +32,10 @@ export interface PaneLayoutViewport {
 export const SHELL_LAYOUT = {
   railWidth: 56,
   resizeHandleWidth: 8,
+  titlebarHeight: EDITOR_TITLEBAR_HEIGHT,
+  trafficLightReservedWidth: EDITOR_TRAFFIC_LIGHT_RESERVED_WIDTH,
+  statusBarMinHeight: STATUS_BAR_MIN_HEIGHT,
+  statusBarMaxHeight: STATUS_BAR_MAX_HEIGHT,
   editorMinWidth: 420,
   leftDefaultWidth: 280,
   rightDefaultWidth: 260,
