@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { Component, CSSProperties } from 'vue';
-import { Files, Link2, Search, Tag } from '@lucide/vue';
+import { ArrowDownUp, ChevronsDown, ChevronsUp, FilePlus, Files, FolderPlus, Link2, Search, Tag } from '@lucide/vue';
 import { createDesktopShellState } from '@zorid/desktop-shell';
 import ActivityRail from './components/ActivityRail.vue';
 import AppResizeHandle from './components/AppResizeHandle.vue';
 import AppStatusBar from './components/AppStatusBar.vue';
 import CommandPaletteWindow from './components/CommandPaletteWindow.vue';
 import FileTree from './components/FileTree.vue';
+import { FILE_TREE_SORT_MODES, sortEntries, sortModeLabel, type FileTreeSortMode } from './components/file-tree-model.js';
 import MarkdownEditor from './components/MarkdownEditor.vue';
 import RightSidebarPanels from './components/RightSidebarPanels.vue';
 import SettingsWindow from './components/SettingsWindow.vue';
@@ -69,6 +70,7 @@ const vaultProfile = ref<VaultProfileDto>();
 const vaultLabel = ref<string>();
 const entriesByDirectory = ref<Record<string, readonly VaultEntry[]>>({});
 const expandedDirectories = ref<Record<string, boolean>>({ '': true });
+const fileTreeSortMode = ref<FileTreeSortMode>('name-asc');
 const selectedPath = ref<string>();
 const openTabs = ref<string[]>([]);
 const editorText = ref('');
@@ -113,7 +115,11 @@ const shellStyle = computed<CSSProperties>(() => ({
   '--status-bar-min-height': `${SHELL_LAYOUT.statusBarMinHeight}px`,
   '--status-bar-max-height': `${SHELL_LAYOUT.statusBarMaxHeight}px`,
 }));
-const rootEntries = computed(() => entriesByDirectory.value[''] ?? []);
+const sortedEntriesByDirectory = computed<Record<string, readonly VaultEntry[]>>(() => Object.fromEntries(
+  Object.entries(entriesByDirectory.value).map(([directory, entries]) => [directory, sortEntries(entries, fileTreeSortMode.value)]),
+));
+const rootEntries = computed(() => sortedEntriesByDirectory.value[''] ?? []);
+const fileTreeSortLabel = computed(() => sortModeLabel(fileTreeSortMode.value));
 const dirty = computed(() => selectedPath.value !== undefined && editorText.value !== savedText.value);
 const editorTitle = computed(() => selectedPath.value?.split('/').at(-1) ?? vaultLabel.value ?? 'Zorid');
 const editorStartupOnlyCommandIds = new Set(['vault.open', 'file-explorer.open-root']);
@@ -275,6 +281,30 @@ async function updateSettingProperty(section: SettingsSectionDto, property: Sett
 
 async function loadDirectory(path = ''): Promise<void> {
   entriesByDirectory.value = { ...entriesByDirectory.value, [path]: await desktop.listVault(path) };
+}
+
+function updateFileTreeSortMode(event: Event): void {
+  fileTreeSortMode.value = (event.target as HTMLSelectElement).value as FileTreeSortMode;
+}
+
+function loadedDirectoryPaths(): string[] {
+  const directories = new Set<string>();
+  for (const entries of Object.values(entriesByDirectory.value)) {
+    for (const entry of entries) {
+      if (entry.kind === 'directory') directories.add(entry.path);
+    }
+  }
+  return [...directories];
+}
+
+function expandLoadedDirectories(): void {
+  const next: Record<string, boolean> = { ...expandedDirectories.value, '': true };
+  for (const directory of loadedDirectoryPaths()) next[directory] = true;
+  expandedDirectories.value = next;
+}
+
+function collapseLoadedDirectories(): void {
+  expandedDirectories.value = { '': true };
 }
 
 async function loadRecentVaults(): Promise<void> {
@@ -573,14 +603,30 @@ onBeforeUnmount(() => {
         <h1>Files</h1>
       </header>
       <p class="muted">{{ status }}</p>
-      <div class="toolbar" aria-label="File actions">
-        <button type="button" @click="createNote" :disabled="!vaultLabel">New note</button>
-        <button type="button" @click="createFolder" :disabled="!vaultLabel">New folder</button>
+      <div class="file-pane-toolbar" aria-label="File actions">
+        <button type="button" class="file-pane-action" @click="createNote" :disabled="!vaultLabel" aria-label="New file" title="New file">
+          <FilePlus class="file-pane-action-icon" aria-hidden="true" />
+        </button>
+        <button type="button" class="file-pane-action" @click="createFolder" :disabled="!vaultLabel" aria-label="New folder" title="New folder">
+          <FolderPlus class="file-pane-action-icon" aria-hidden="true" />
+        </button>
+        <label class="file-pane-sort" :title="`Sort files: ${fileTreeSortLabel}`">
+          <ArrowDownUp class="file-pane-action-icon" aria-hidden="true" />
+          <select :value="fileTreeSortMode" :aria-label="`Sort files: ${fileTreeSortLabel}`" @change="updateFileTreeSortMode">
+            <option v-for="mode in FILE_TREE_SORT_MODES" :key="mode" :value="mode">{{ sortModeLabel(mode) }}</option>
+          </select>
+        </label>
+        <button type="button" class="file-pane-action" @click="expandLoadedDirectories" :disabled="!vaultLabel" aria-label="Expand loaded folders" title="Expand loaded folders">
+          <ChevronsDown class="file-pane-action-icon" aria-hidden="true" />
+        </button>
+        <button type="button" class="file-pane-action" @click="collapseLoadedDirectories" :disabled="!vaultLabel" aria-label="Collapse loaded folders" title="Collapse loaded folders">
+          <ChevronsUp class="file-pane-action-icon" aria-hidden="true" />
+        </button>
       </div>
       <p v-if="error" class="error">{{ error }}</p>
       <FileTree
         :root-entries="rootEntries"
-        :entries-by-directory="entriesByDirectory"
+        :entries-by-directory="sortedEntriesByDirectory"
         :expanded-directories="expandedDirectories"
         :selected-path="selectedPath"
         @open-entry="openEntry"
