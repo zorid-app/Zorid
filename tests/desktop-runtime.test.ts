@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createDesktopRuntime } from '../apps/desktop/src/main/runtime';
-import { normalizeVaultPath } from '../packages/shared/src/index';
 import type { PluginManifest } from '../packages/plugin-api/src/index';
+import { normalizeVaultPath } from '../packages/shared/src/index';
 
 async function waitFor(assertion: () => void, timeoutMs = 1_000): Promise<void> {
   const start = Date.now();
@@ -44,20 +44,42 @@ describe('desktop runtime composition', () => {
     const statuses = runtime.listPluginStatuses();
     expect(statuses.length).toBeGreaterThan(0);
     expect(statuses.every((status) => status.status === 'placeholder')).toBe(true);
-    expect(runtime.listCommands().map((command) => command.id)).toEqual(expect.arrayContaining(['file-explorer.open-root', 'status-bar.open']));
-    expect(runtime.listCommands().map((command) => command.id)).toEqual(expect.arrayContaining(['vault.open', 'command-palette.open', 'settings.open']));
+    expect(runtime.listCommands().map((command) => command.id)).toEqual(
+      expect.arrayContaining(['file-explorer.open-root', 'status-bar.open']),
+    );
+    expect(runtime.listCommands().map((command) => command.id)).toEqual(
+      expect.arrayContaining(['vault.open', 'command-palette.open', 'settings.open']),
+    );
 
     const settings = runtime.listSettingsSections();
-    expect(settings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'app.general', source: 'app' }),
-      expect.objectContaining({ id: 'status-bar', source: 'plugin-manifest', pluginId: 'zorid.core.status-bar', pluginStatus: 'placeholder' }),
-    ]));
-    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+    expect(settings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'app.general', source: 'app' }),
+        expect.objectContaining({
+          id: 'status-bar',
+          source: 'plugin-manifest',
+          pluginId: 'zorid.core.status-bar',
+          pluginStatus: 'placeholder',
+        }),
+      ]),
+    );
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe(
+      'placeholder',
+    );
 
-    expect(runtime.setSettingValue('app.general', { confirmDeletes: false })).toMatchObject({ sectionId: 'app.general', value: { confirmDeletes: false } });
+    expect(runtime.setSettingValue('app.general', { confirmDeletes: false })).toMatchObject({
+      sectionId: 'app.general',
+      value: { confirmDeletes: false },
+    });
     expect(runtime.getSettingValue('app.general').value).toEqual({ confirmDeletes: false });
-    expect(runtime.setSettingValue('status-bar', { compact: true }, 'zorid.core.status-bar')).toMatchObject({ sectionId: 'status-bar', pluginId: 'zorid.core.status-bar', value: { compact: true } });
-    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+    expect(runtime.setSettingValue('status-bar', { compact: true }, 'zorid.core.status-bar')).toMatchObject({
+      sectionId: 'status-bar',
+      pluginId: 'zorid.core.status-bar',
+      value: { compact: true },
+    });
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe(
+      'placeholder',
+    );
   });
 
   it('opens a folder vault through safe profile DTOs and file-operation bridge methods', async () => {
@@ -88,8 +110,6 @@ describe('desktop runtime composition', () => {
     }
   });
 
-
-
   it('rebuilds and incrementally updates the derived SQLite index while ignoring DB artifacts', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'zorid-index-vault-'));
     try {
@@ -98,42 +118,88 @@ describe('desktop runtime composition', () => {
       expect(runtime.getIndexStatus()).toMatchObject({ state: 'watching', fileCount: 0 });
 
       await runtime.createVaultFolder('.zorid/types');
-      await runtime.writeVaultText('.zorid/types/task.ztype', `fields:
+      await runtime.writeVaultText(
+        '.zorid/types/task.ztype',
+        `fields:
   - key: status
     type: string
     required: true
   - key: done
     type: boolean
-`);
-      expect(await runtime.listTypes()).toEqual([expect.objectContaining({ name: 'task', fields: expect.arrayContaining([expect.objectContaining({ key: 'status' })]) })]);
+`,
+      );
+      expect(await runtime.listTypes()).toEqual([
+        expect.objectContaining({
+          name: 'task',
+          fields: expect.arrayContaining([expect.objectContaining({ key: 'status' })]),
+        }),
+      ]);
 
-      await runtime.createMarkdownFile('A.md', `---
+      await runtime.createMarkdownFile(
+        'A.md',
+        `---
 zorid.type: task
 status: open
 done: false
 ---
 # A
 See [[B.md]] #tag
-![[.zorid/views/tasks.zbase#open]]`);
-      await runtime.createMarkdownFile('B.md', `---
+![[.zorid/views/tasks.zbase#open]]`,
+      );
+      await runtime.createMarkdownFile(
+        'B.md',
+        `---
 status: done
 ---
-# B`);
+# B`,
+      );
       await runtime.createVaultFolder('.zorid/views');
-      await runtime.writeVaultText('.zorid/views/tasks.zbase', JSON.stringify({ views: [{ id: 'open', renderer: 'table', filters: { expression: { equals: ['status', 'open'] } }, groupBy: 'status', sortBy: 'status' }] }));
-      expect(runtime.getIndexedFile('A.md')).toMatchObject({ headings: ['A'], links: expect.arrayContaining(['B.md']), tags: ['tag'] });
+      await runtime.writeVaultText(
+        '.zorid/views/tasks.zbase',
+        JSON.stringify({
+          views: [
+            {
+              id: 'open',
+              renderer: 'table',
+              filters: { expression: { equals: ['status', 'open'] } },
+              groupBy: 'status',
+              sortBy: 'status',
+            },
+          ],
+        }),
+      );
+      expect(runtime.getIndexedFile('A.md')).toMatchObject({
+        headings: ['A'],
+        links: expect.arrayContaining(['B.md']),
+        tags: ['tag'],
+      });
       expect(runtime.getIndexStatus().fileCount).toBe(4);
       expect(runtime.searchIndex('tag')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
       expect(runtime.listTags()).toEqual([{ tag: 'tag', count: 1 }]);
       expect(runtime.getOutline('A.md')).toEqual([{ path: 'A.md', heading: 'A', ordinal: 1 }]);
       expect(runtime.getBacklinks('B.md')).toEqual([expect.objectContaining({ fromPath: 'A.md' })]);
-      await expect(runtime.listBases()).resolves.toEqual([expect.objectContaining({ name: 'tasks', views: [expect.objectContaining({ id: 'open', renderer: 'table' })] })]);
-      await expect(runtime.renderDataView('.zorid/views/tasks.zbase', 'open')).resolves.toMatchObject({ viewId: 'open', renderer: 'table', rows: [expect.objectContaining({ path: 'A.md' })], groups: [expect.objectContaining({ key: 'open' })] });
-      expect(runtime.getMarkdownEmbeds('A.md')).toEqual([{ sourcePath: 'A.md', basePath: '.zorid/views/tasks.zbase', viewId: 'open' }]);
-      await expect(runtime.getFileFields('A.md')).resolves.toMatchObject({ typeName: 'task', diagnostics: [], fields: expect.arrayContaining([expect.objectContaining({ key: 'status', value: 'open', type: 'string' })]) });
+      await expect(runtime.listBases()).resolves.toEqual([
+        expect.objectContaining({ name: 'tasks', views: [expect.objectContaining({ id: 'open', renderer: 'table' })] }),
+      ]);
+      await expect(runtime.renderDataView('.zorid/views/tasks.zbase', 'open')).resolves.toMatchObject({
+        viewId: 'open',
+        renderer: 'table',
+        rows: [expect.objectContaining({ path: 'A.md' })],
+        groups: [expect.objectContaining({ key: 'open' })],
+      });
+      expect(runtime.getMarkdownEmbeds('A.md')).toEqual([
+        { sourcePath: 'A.md', basePath: '.zorid/views/tasks.zbase', viewId: 'open' },
+      ]);
+      await expect(runtime.getFileFields('A.md')).resolves.toMatchObject({
+        typeName: 'task',
+        diagnostics: [],
+        fields: expect.arrayContaining([expect.objectContaining({ key: 'status', value: 'open', type: 'string' })]),
+      });
       await runtime.updateFileField('A.md', 'done', true);
       await expect(runtime.readVaultText('A.md')).resolves.toContain('done: true');
-      await expect(runtime.updateFileField('A.md', 'status', null)).resolves.toMatchObject({ diagnostics: [expect.objectContaining({ key: 'status' })] });
+      await expect(runtime.updateFileField('A.md', 'status', null)).resolves.toMatchObject({
+        diagnostics: [expect.objectContaining({ key: 'status' })],
+      });
 
       await runtime.createVaultFolder('Folder');
       await runtime.createMarkdownFile('Folder/Child.md', '# Child');
@@ -177,8 +243,6 @@ status: done
     }
   });
 
-
-
   it('deactivates active plugin stacks during runtime disposal', async () => {
     const deactivate = vi.fn();
     const disposable = { dispose: vi.fn() };
@@ -194,18 +258,23 @@ status: done
     });
 
     await runtime.executeCommand('status-bar.open');
-    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('active');
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe(
+      'active',
+    );
 
     await runtime.dispose();
 
     expect(deactivate).toHaveBeenCalledOnce();
     expect(disposable.dispose).toHaveBeenCalledOnce();
-    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe(
+      'placeholder',
+    );
   });
 
-
   it('disposes plugin stacks even when plugin deactivation throws', async () => {
-    const deactivate = vi.fn(() => { throw new Error('deactivate failed'); });
+    const deactivate = vi.fn(() => {
+      throw new Error('deactivate failed');
+    });
     const disposable = { dispose: vi.fn() };
     const runtime = createDesktopRuntime({
       manifests: [settingsPluginManifest],
@@ -223,9 +292,10 @@ status: done
 
     expect(deactivate).toHaveBeenCalledOnce();
     expect(disposable.dispose).toHaveBeenCalledOnce();
-    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe(
+      'placeholder',
+    );
   });
-
 
   it('clears plugin active state even when plugin disposable cleanup throws', async () => {
     const deactivate = vi.fn();
@@ -233,7 +303,11 @@ status: done
       manifests: [settingsPluginManifest],
       load: () => ({
         activate(ctx) {
-          ctx.register.disposable({ dispose: () => { throw new Error('disposable failed'); } });
+          ctx.register.disposable({
+            dispose: () => {
+              throw new Error('disposable failed');
+            },
+          });
           ctx.register.command({ id: 'status-bar.open', title: 'Open Status Bar', callback: async () => 'opened' });
         },
         deactivate,
@@ -244,12 +318,17 @@ status: done
     await expect(runtime.dispose()).rejects.toThrow('Desktop runtime disposal failed.');
 
     expect(deactivate).toHaveBeenCalledOnce();
-    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe(
+      'placeholder',
+    );
   });
 
-
   it('continues runtime cleanup when a non-plugin disposable throws synchronously', async () => {
-    const throwingWatcher = { dispose: vi.fn(() => { throw new Error('watcher failed'); }) };
+    const throwingWatcher = {
+      dispose: vi.fn(() => {
+        throw new Error('watcher failed');
+      }),
+    };
     const disposingKernel = { dispose: vi.fn() };
     const pluginRuntime = createDesktopRuntime({
       manifests: [settingsPluginManifest],
@@ -267,7 +346,9 @@ status: done
 
     expect(throwingWatcher.dispose).toHaveBeenCalledOnce();
     expect(disposingKernel.dispose).toHaveBeenCalledOnce();
-    expect(pluginRuntime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+    expect(
+      pluginRuntime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status,
+    ).toBe('placeholder');
   });
 
   it('activates a lazy plugin only when its placeholder command runs', async () => {
@@ -280,12 +361,18 @@ status: done
         },
       }),
     });
-    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('placeholder');
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe(
+      'placeholder',
+    );
     await expect(runtime.executeCommand('status-bar.open')).resolves.toBe('opened');
-    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe('active');
-    expect(runtime.listSettingsSections()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'status-bar', source: 'plugin-manifest' }),
-      expect.objectContaining({ id: 'runtime-status-bar', source: 'plugin-runtime' }),
-    ]));
+    expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe(
+      'active',
+    );
+    expect(runtime.listSettingsSections()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'status-bar', source: 'plugin-manifest' }),
+        expect.objectContaining({ id: 'runtime-status-bar', source: 'plugin-runtime' }),
+      ]),
+    );
   });
 });

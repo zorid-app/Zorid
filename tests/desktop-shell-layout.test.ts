@@ -1,8 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { EDITOR_TRAFFIC_LIGHT_POSITION, MACOS_TRAFFIC_LIGHT_CONTROL_GROUP_WIDTH } from '../apps/desktop/src/chrome-layout';
+import {
+  EDITOR_TRAFFIC_LIGHT_POSITION,
+  MACOS_TRAFFIC_LIGHT_CONTROL_GROUP_WIDTH,
+} from '../apps/desktop/src/chrome-layout';
 import { managedWindowOptions } from '../apps/desktop/src/main/window-options';
-import { DEFAULT_PANE_LAYOUT, SHELL_LAYOUT, clampPaneWidth, collapseThreshold, paneLayoutStorageKey, parsePaneLayout, resolveDraggedPaneWidth, resolvePaneLayout, shouldCollapsePane } from '../apps/desktop/src/renderer/src/shell-layout';
+import {
+  clampPaneWidth,
+  collapseThreshold,
+  DEFAULT_PANE_LAYOUT,
+  paneLayoutStorageKey,
+  parsePaneLayout,
+  resolveDraggedPaneWidth,
+  resolvePaneLayout,
+  SHELL_LAYOUT,
+  shouldCollapsePane,
+} from '../apps/desktop/src/renderer/src/shell-layout';
 
 describe('desktop shell pane layout helpers', () => {
   it('clamps pane widths to safe bounds', () => {
@@ -13,11 +26,17 @@ describe('desktop shell pane layout helpers', () => {
 
   it('clamps at min width before collapsing below half the min width', () => {
     expect(collapseThreshold(SHELL_LAYOUT.leftMinWidth)).toBe(SHELL_LAYOUT.leftMinWidth / 2);
-    expect(shouldCollapsePane((SHELL_LAYOUT.leftMinWidth / 2) - 1, SHELL_LAYOUT.leftMinWidth)).toBe(true);
+    expect(shouldCollapsePane(SHELL_LAYOUT.leftMinWidth / 2 - 1, SHELL_LAYOUT.leftMinWidth)).toBe(true);
     expect(shouldCollapsePane(SHELL_LAYOUT.leftMinWidth / 2, SHELL_LAYOUT.leftMinWidth)).toBe(false);
-    expect(resolveDraggedPaneWidth(SHELL_LAYOUT.leftMinWidth + 12, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth)).toEqual({ width: SHELL_LAYOUT.leftMinWidth + 12, collapsed: false });
-    expect(resolveDraggedPaneWidth(SHELL_LAYOUT.leftMinWidth - 10, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth)).toEqual({ width: SHELL_LAYOUT.leftMinWidth, collapsed: false });
-    expect(resolveDraggedPaneWidth((SHELL_LAYOUT.leftMinWidth / 2) - 1, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth)).toEqual({ width: 0, collapsed: true });
+    expect(
+      resolveDraggedPaneWidth(SHELL_LAYOUT.leftMinWidth + 12, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth),
+    ).toEqual({ width: SHELL_LAYOUT.leftMinWidth + 12, collapsed: false });
+    expect(
+      resolveDraggedPaneWidth(SHELL_LAYOUT.leftMinWidth - 10, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth),
+    ).toEqual({ width: SHELL_LAYOUT.leftMinWidth, collapsed: false });
+    expect(
+      resolveDraggedPaneWidth(SHELL_LAYOUT.leftMinWidth / 2 - 1, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth),
+    ).toEqual({ width: 0, collapsed: true });
   });
 
   it('resolves unsafe persisted values to safe clamped widths', () => {
@@ -29,7 +48,10 @@ describe('desktop shell pane layout helpers', () => {
       rightCollapsed: false,
     });
     expect(parsePaneLayout('{bad json')).toBeUndefined();
-    expect(parsePaneLayout(JSON.stringify({ leftWidth: 320, rightWidth: 300 }))).toMatchObject({ leftWidth: 320, rightWidth: 300 });
+    expect(parsePaneLayout(JSON.stringify({ leftWidth: 320, rightWidth: 300 }))).toMatchObject({
+      leftWidth: 320,
+      rightWidth: 300,
+    });
   });
 
   it('uses vault id, not root label, for distinct storage keys', () => {
@@ -40,14 +62,17 @@ describe('desktop shell pane layout helpers', () => {
     expect(paneLayoutStorageKey(first.id)).not.toBe(paneLayoutStorageKey(second.id));
   });
 
-
   it('keeps combined side panes within the viewport side budget', () => {
     const viewportWidth = 1200;
     const layout = resolvePaneLayout({ leftWidth: 520, rightWidth: 480 }, { viewportWidth });
-    const sideBudget = viewportWidth - SHELL_LAYOUT.railWidth - (SHELL_LAYOUT.resizeHandleWidth * 2) - SHELL_LAYOUT.editorMinWidth;
+    const sideBudget =
+      viewportWidth - SHELL_LAYOUT.railWidth - SHELL_LAYOUT.resizeHandleWidth * 2 - SHELL_LAYOUT.editorMinWidth;
     expect(layout.leftWidth + layout.rightWidth).toBeLessThanOrEqual(sideBudget);
 
-    const preserveRight = resolvePaneLayout({ leftWidth: 520, rightWidth: 480 }, { viewportWidth, preserveSide: 'right' });
+    const preserveRight = resolvePaneLayout(
+      { leftWidth: 520, rightWidth: 480 },
+      { viewportWidth, preserveSide: 'right' },
+    );
     expect(preserveRight.rightWidth).toBe(SHELL_LAYOUT.rightMaxWidth);
     expect(preserveRight.leftWidth + preserveRight.rightWidth).toBeLessThanOrEqual(sideBudget);
   });
@@ -98,7 +123,9 @@ describe('desktop shell pane layout helpers', () => {
     expect(styles).toContain('grid-template-rows: var(--titlebar-height) minmax(0, 1fr) auto;');
     expect(styles).toContain('max-height: var(--status-bar-max-height);');
     expect(styles).toMatch(/\.launcher-shell\s*\{[^}]*-webkit-app-region:\s*drag;[^}]*\}/s);
-    expect(styles).toMatch(/\.launcher-shell\s+:is\([^)]*button[^)]*a[^)]*input[^)]*select[^)]*textarea[^)]*\[role=\"button\"\][^)]*\[contenteditable=\"true\"\][^)]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag;[^}]*\}/s);
+    expect(styles).toMatch(
+      /\.launcher-shell\s+:is\([^)]*button[^)]*a[^)]*input[^)]*select[^)]*textarea[^)]*\[role='button'\][^)]*\[contenteditable='true'\][^)]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag;[^}]*\}/s,
+    );
     expect(styles).toContain('.resize-handle.active::before');
     expect(styles).toContain('overflow-wrap: anywhere;');
     expect(styles).toContain('white-space: normal;');

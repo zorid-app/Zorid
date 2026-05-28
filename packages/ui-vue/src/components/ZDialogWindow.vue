@@ -1,26 +1,29 @@
 <script setup lang="ts">
-import { computed } from 'vue';
 import { DialogContent, DialogPortal, DialogRoot } from 'reka-ui';
+import { computed } from 'vue';
 import ZDialogBackdrop from './ZDialogBackdrop.vue';
 import ZDialogDescription from './ZDialogDescription.vue';
 import ZDialogTitle from './ZDialogTitle.vue';
 import ZWindowFrame from './ZWindowFrame.vue';
 
-const props = withDefaults(defineProps<{
-  open: boolean;
-  title?: string | undefined;
-  description?: string | undefined;
-  ariaLabel?: string | undefined;
-  modal?: boolean;
-  size?: 'sm' | 'md' | 'lg' | 'xl' | undefined;
-  centered?: boolean;
-  frameless?: boolean;
-}>(), {
-  modal: true,
-  size: 'md',
-  centered: false,
-  frameless: false,
-});
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    title?: string | undefined;
+    description?: string | undefined;
+    ariaLabel?: string | undefined;
+    modal?: boolean;
+    size?: 'sm' | 'md' | 'lg' | 'xl' | undefined;
+    centered?: boolean;
+    frameless?: boolean;
+  }>(),
+  {
+    modal: true,
+    size: 'md',
+    centered: false,
+    frameless: false,
+  },
+);
 
 const emit = defineEmits<{ 'update:open': [value: boolean] }>();
 const fallbackTitle = 'Dialog';

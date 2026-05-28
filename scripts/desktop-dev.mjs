@@ -1,7 +1,7 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { spawnSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
 const wslgRuntimeDir = '/mnt/wslg/runtime-dir';
@@ -81,7 +81,9 @@ export function runDesktopDev() {
   if (display.repaired) {
     console.log('No display variables found; using WSLg so the Electron window can appear on Windows.');
   } else if (usedVirtualDisplay) {
-    console.log('No DISPLAY/WAYLAND_DISPLAY found; launching Electron through invisible xvfb-run because ZORID_DESKTOP_HEADLESS=1.');
+    console.log(
+      'No DISPLAY/WAYLAND_DISPLAY found; launching Electron through invisible xvfb-run because ZORID_DESKTOP_HEADLESS=1.',
+    );
   } else if (needsDisplay({ env: display.env })) {
     console.error('No DISPLAY/WAYLAND_DISPLAY found. Start WSLg or a Windows X server for a visible Electron window.');
     console.error('For headless smoke testing only, rerun with ZORID_DESKTOP_HEADLESS=1.');

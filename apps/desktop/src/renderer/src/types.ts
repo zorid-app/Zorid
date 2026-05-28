@@ -35,8 +35,16 @@ export type WindowRole = VaultWindowRole;
 export type VaultProfileDto = VaultProfile;
 export type { PluginStatus, VaultEntry };
 
-export interface RecentVaultDto { readonly id: string; readonly name: string; readonly path: string; readonly lastOpenedAt: string; }
-export interface EditorSnapshotDto { readonly profile?: VaultProfileDto; readonly indexStatus: IndexStatusDto; }
+export interface RecentVaultDto {
+  readonly id: string;
+  readonly name: string;
+  readonly path: string;
+  readonly lastOpenedAt: string;
+}
+export interface EditorSnapshotDto {
+  readonly profile?: VaultProfileDto;
+  readonly indexStatus: IndexStatusDto;
+}
 
 export interface SettingProperty {
   readonly name: string;

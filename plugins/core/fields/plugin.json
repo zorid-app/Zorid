@@ -7,7 +7,10 @@
   "entry": "./src/index.ts",
   "zoridApi": "^0.1.0",
   "platforms": ["desktop"],
-  "capabilities": { "required": ["metadata.read", "vault.write.markdown", "vault.write.ztype", "commands.register"], "optional": [] },
+  "capabilities": {
+    "required": ["metadata.read", "vault.write.markdown", "vault.write.ztype", "commands.register"],
+    "optional": []
+  },
   "activation": ["onCommand:fields.inspect-active"],
   "contributes": { "commands": [{ "id": "fields.inspect-active", "title": "Inspect Active Fields" }] }
 }

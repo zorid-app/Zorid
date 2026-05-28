@@ -24,7 +24,9 @@ describe('ui-vue build contract', () => {
   });
 
   it('exposes explicit style entries instead of hidden component CSS side effects', () => {
-    const pkg = JSON.parse(readFileSync('packages/ui-vue/package.json', 'utf8')) as { exports: Record<string, unknown> };
+    const pkg = JSON.parse(readFileSync('packages/ui-vue/package.json', 'utf8')) as {
+      exports: Record<string, unknown>;
+    };
     const index = readFileSync('packages/ui-vue/src/index.ts', 'utf8');
 
     expect(pkg.exports).toHaveProperty('./components.css', './dist/components.css');

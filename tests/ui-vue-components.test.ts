@@ -1,8 +1,6 @@
 // @vitest-environment happy-dom
 import { readFileSync } from 'node:fs';
 import { mount } from '@vue/test-utils';
-import { afterEach, describe, expect, it } from 'vitest';
-import { defineComponent, h, nextTick, ref } from 'vue';
 import {
   ZBadge,
   ZButton,
@@ -17,6 +15,8 @@ import {
   ZTextField,
   ZWindowFrame,
 } from '@zorid/ui-vue';
+import { afterEach, describe, expect, it } from 'vitest';
+import { defineComponent, h, nextTick, ref } from 'vue';
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -33,14 +33,25 @@ describe('shared ui-vue primitives', () => {
   });
 
   it('exports plain frame/control/panel/status primitives with stable data hooks', () => {
-    const wrapper = mount(defineComponent({
-      components: { ZBadge, ZButton, ZCheckboxField, ZPanel, ZResizeHandle, ZStatusBar, ZTag, ZTextField, ZWindowFrame },
-      setup() {
-        const text = ref('note');
-        const checked = ref(false);
-        return { text, checked };
-      },
-      template: `
+    const wrapper = mount(
+      defineComponent({
+        components: {
+          ZBadge,
+          ZButton,
+          ZCheckboxField,
+          ZPanel,
+          ZResizeHandle,
+          ZStatusBar,
+          ZTag,
+          ZTextField,
+          ZWindowFrame,
+        },
+        setup() {
+          const text = ref('note');
+          const checked = ref(false);
+          return { text, checked };
+        },
+        template: `
         <ZWindowFrame title="Window" description="Shared shell">
           <ZPanel title="Panel"><ZBadge>active</ZBadge><ZTag :count="2">tag</ZTag></ZPanel>
           <ZTextField v-model="text" label="Name" />
@@ -50,7 +61,8 @@ describe('shared ui-vue primitives', () => {
           <ZStatusBar><span>Ready</span></ZStatusBar>
         </ZWindowFrame>
       `,
-    }));
+      }),
+    );
 
     expect(wrapper.find('[data-z-window-frame]').exists()).toBe(true);
     expect(wrapper.find('[data-z-panel]').exists()).toBe(true);
@@ -89,11 +101,13 @@ describe('shared ui-vue primitives', () => {
     expect(document.body.querySelector('[data-z-dialog-window]')?.textContent).toContain('Settings');
   });
 
-
   it('renders accessible titles for frameless dialog windows without Reka warnings', async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
-    console.warn = (message?: unknown, ...args: unknown[]) => { warnings.push(String(message)); originalWarn(message, ...args); };
+    console.warn = (message?: unknown, ...args: unknown[]) => {
+      warnings.push(String(message));
+      originalWarn(message, ...args);
+    };
     try {
       mount(ZDialogWindow, {
         props: { open: true, ariaLabel: 'Command palette', frameless: true },
@@ -106,12 +120,20 @@ describe('shared ui-vue primitives', () => {
     }
 
     expect(document.body.querySelector('[data-z-dialog-window]')).not.toBeNull();
-    expect(warnings.filter((warning) => warning.includes('DialogTitle') || warning.includes('Missing `Description`'))).toEqual([]);
+    expect(
+      warnings.filter((warning) => warning.includes('DialogTitle') || warning.includes('Missing `Description`')),
+    ).toEqual([]);
   });
 
   it('uses Alert Dialog semantics for confirmation flows', async () => {
     const wrapper = mount(ZConfirmDialog, {
-      props: { open: true, title: 'Delete file', description: 'This cannot be undone.', confirmLabel: 'Delete', destructive: true },
+      props: {
+        open: true,
+        title: 'Delete file',
+        description: 'This cannot be undone.',
+        confirmLabel: 'Delete',
+        destructive: true,
+      },
       attachTo: document.body,
     });
     await nextTick();
@@ -136,7 +158,9 @@ describe('shared ui-vue primitives', () => {
     input!.value = 'new.md';
     input!.dispatchEvent(new Event('input'));
     await nextTick();
-    document.body.querySelector<HTMLFormElement>('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    document.body
+      .querySelector<HTMLFormElement>('form')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await nextTick();
 
     expect(wrapper.emitted('submit')?.at(-1)).toEqual(['new.md']);
@@ -146,7 +170,9 @@ describe('shared ui-vue primitives', () => {
 
   it('keeps virtual window helper behavior available beside component exports', async () => {
     const module = await import('@zorid/ui-vue');
-    expect(module.computeVirtualWindow({ itemCount: 10, itemHeight: 20, viewportHeight: 40, scrollTop: 40, overscan: 1 })).toEqual({
+    expect(
+      module.computeVirtualWindow({ itemCount: 10, itemHeight: 20, viewportHeight: 40, scrollTop: 40, overscan: 1 }),
+    ).toEqual({
       start: 1,
       end: 5,
       offsetTop: 20,

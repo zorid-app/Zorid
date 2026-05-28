@@ -9,7 +9,12 @@ export interface DesktopShellState {
 }
 
 export function createDesktopShellState(): DesktopShellState {
-  return { activityRail: ['files', 'search', 'backlinks', 'tags'], leftSidebarVisible: true, rightSidebarVisible: true, openTabs: [] };
+  return {
+    activityRail: ['files', 'search', 'backlinks', 'tags'],
+    leftSidebarVisible: true,
+    rightSidebarVisible: true,
+    openTabs: [],
+  };
 }
 
 export function withActiveTab(state: DesktopShellState, path: VaultPath): DesktopShellState {

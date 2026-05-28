@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isImportAllowed, checkWorkspace } from '../scripts/check-import-boundaries.mjs';
+import { checkWorkspace, isImportAllowed } from '../scripts/check-import-boundaries.mjs';
 
 describe('import boundary rules', () => {
   it('rejects forbidden platform-to-shell imports', () => {

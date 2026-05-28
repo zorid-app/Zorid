@@ -10,7 +10,11 @@ export default defineZoridPlugin({
         await ctx.workspace.openView({
           id: 'file-explorer',
           title: 'Files',
-          view: { mount(mountCtx) { mountCtx.root.textContent = 'Files'; } },
+          view: {
+            mount(mountCtx) {
+              mountCtx.root.textContent = 'Files';
+            },
+          },
         });
       },
     });

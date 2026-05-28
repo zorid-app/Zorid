@@ -14,8 +14,19 @@ export { default as ZTextField } from './components/ZTextField.vue';
 export { default as ZVisuallyHidden } from './components/ZVisuallyHidden.vue';
 export { default as ZWindowFrame } from './components/ZWindowFrame.vue';
 
-export interface VirtualWindow { readonly start: number; readonly end: number; readonly offsetTop: number; readonly totalHeight: number; }
-export function computeVirtualWindow(options: { readonly itemCount: number; readonly itemHeight: number; readonly viewportHeight: number; readonly scrollTop: number; readonly overscan?: number }): VirtualWindow {
+export interface VirtualWindow {
+  readonly start: number;
+  readonly end: number;
+  readonly offsetTop: number;
+  readonly totalHeight: number;
+}
+export function computeVirtualWindow(options: {
+  readonly itemCount: number;
+  readonly itemHeight: number;
+  readonly viewportHeight: number;
+  readonly scrollTop: number;
+  readonly overscan?: number;
+}): VirtualWindow {
   const overscan = options.overscan ?? 5;
   const visible = Math.ceil(options.viewportHeight / options.itemHeight);
   const start = Math.max(0, Math.floor(options.scrollTop / options.itemHeight) - overscan);

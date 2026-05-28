@@ -1,6 +1,11 @@
-import { BrowserWindow } from 'electron';
-import type { BrowserWindow as BrowserWindowType, IpcMainInvokeEvent, OpenDialogOptions, OpenDialogReturnValue } from 'electron';
 import type { VaultProfile } from '@zorid/platform-api';
+import type {
+  BrowserWindow as BrowserWindowType,
+  IpcMainInvokeEvent,
+  OpenDialogOptions,
+  OpenDialogReturnValue,
+} from 'electron';
+import { BrowserWindow } from 'electron';
 
 export interface OpenVaultRuntime {
   openVault(root: string): Promise<VaultProfile>;
@@ -21,9 +26,7 @@ export async function selectVaultRootFromDialog(
 ): Promise<string | undefined> {
   const options = { properties: ['openDirectory'] } satisfies OpenDialogOptions;
   const parentWindow = BrowserWindow.fromWebContents(event.sender);
-  const result = parentWindow
-    ? await showOpenDialog(parentWindow, options)
-    : await showOpenDialog(options);
+  const result = parentWindow ? await showOpenDialog(parentWindow, options) : await showOpenDialog(options);
 
   const selectedRoot = result.filePaths[0];
   if (result.canceled || selectedRoot === undefined) return undefined;

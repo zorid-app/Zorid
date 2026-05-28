@@ -43,14 +43,17 @@ const editor: DesktopEditorBridge = {
   onEditorSnapshot: (callback) => {
     const listener = (_event: unknown, snapshot: Parameters<typeof callback>[0]) => callback(snapshot);
     ipcRenderer.on('zorid:editor-snapshot', listener);
-    return () => { ipcRenderer.removeListener('zorid:editor-snapshot', listener); };
+    return () => {
+      ipcRenderer.removeListener('zorid:editor-snapshot', listener);
+    };
   },
   listCommands: () => ipcRenderer.invoke('zorid:list-commands'),
   executeCommand: (id, args) => ipcRenderer.invoke('zorid:execute-command', id, args),
   listPluginStatuses: () => ipcRenderer.invoke('zorid:list-plugin-statuses'),
   listSettingsSections: () => ipcRenderer.invoke('zorid:list-settings-sections'),
   getSettingValue: (sectionId, pluginId) => ipcRenderer.invoke('zorid:get-setting-value', sectionId, pluginId),
-  setSettingValue: (sectionId, value, pluginId) => ipcRenderer.invoke('zorid:set-setting-value', sectionId, value, pluginId),
+  setSettingValue: (sectionId, value, pluginId) =>
+    ipcRenderer.invoke('zorid:set-setting-value', sectionId, value, pluginId),
 };
 
 const bridge: DesktopBridge = { ...launcher, ...editor, launcher, editor };

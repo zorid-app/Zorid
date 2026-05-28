@@ -56,9 +56,15 @@ describe('desktop file tree toolbar contract', () => {
       value: {
         getWindowRole: vi.fn().mockResolvedValue('editor'),
         getVaultProfile: vi.fn().mockResolvedValue({ id: 'vault-1', rootLabel: 'Vault' }),
-        listVault: vi.fn().mockImplementation((path = '') => Promise.resolve(path === ''
-          ? [entry('FolderB', 'directory', 20), entry('c.md', 'file', 30), entry('a.md', 'file', 10)]
-          : [])),
+        listVault: vi
+          .fn()
+          .mockImplementation((path = '') =>
+            Promise.resolve(
+              path === ''
+                ? [entry('FolderB', 'directory', 20), entry('c.md', 'file', 30), entry('a.md', 'file', 10)]
+                : [],
+            ),
+          ),
         listCommands: vi.fn().mockResolvedValue([]),
         listPluginStatuses: vi.fn().mockResolvedValue([]),
         listSettingsSections: vi.fn().mockResolvedValue([]),
@@ -112,7 +118,12 @@ describe('desktop file tree toolbar contract', () => {
     const select = wrapper.find<HTMLSelectElement>('.file-pane-sort select');
     expect(select.exists()).toBe(true);
     expect(select.attributes('aria-label')).toBe('Sort files: Name A to Z');
-    expect(select.findAll('option').map((option) => option.attributes('value'))).toEqual(['name-asc', 'name-desc', 'modified-asc', 'modified-desc']);
+    expect(select.findAll('option').map((option) => option.attributes('value'))).toEqual([
+      'name-asc',
+      'name-desc',
+      'modified-asc',
+      'modified-desc',
+    ]);
     expect(wrapper.findAll('.file-tree .tree-label').map((label) => label.text())).toEqual(['FolderB', 'a.md', 'c.md']);
 
     await select.setValue('modified-desc');

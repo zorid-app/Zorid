@@ -13,16 +13,49 @@ describe('platform/plugin API contracts', () => {
     expect(apiInfoFixture.namespaces.fields.experimental).toBe(true);
     expect(apiInfoFixture.namespaces.dataViews.stability).toBe('public-experimental');
     expect(apiInfoFixture.namespaces.dataViews.experimental).toBe(true);
-    expect(Object.keys(apiInfoFixture.namespaces)).toEqual(expect.arrayContaining(['vault','workspace','editor','metadata','search','objects','commands','settings','events','storage','plugins','platform','register']));
+    expect(Object.keys(apiInfoFixture.namespaces)).toEqual(
+      expect.arrayContaining([
+        'vault',
+        'workspace',
+        'editor',
+        'metadata',
+        'search',
+        'objects',
+        'commands',
+        'settings',
+        'events',
+        'storage',
+        'plugins',
+        'platform',
+        'register',
+      ]),
+    );
   });
-
 
   it('documents every public namespace function in apiInfo metadata', () => {
     const expectedFunctions: Record<string, readonly string[]> = {
       app: ['apiInfo'],
       vault: ['readText', 'writeText', 'list', 'stat', 'createFolder', 'rename', 'delete', 'watch', 'read', 'write'],
-      workspace: ['openFile', 'openView', 'splitPane', 'closePane', 'getSnapshot', 'subscribe', 'registerView', 'activeFile', 'split'],
-      editor: ['openDocument', 'getActiveEditor', 'registerExtension', 'registerCommand', 'activeEditor', 'open', 'save'],
+      workspace: [
+        'openFile',
+        'openView',
+        'splitPane',
+        'closePane',
+        'getSnapshot',
+        'subscribe',
+        'registerView',
+        'activeFile',
+        'split',
+      ],
+      editor: [
+        'openDocument',
+        'getActiveEditor',
+        'registerExtension',
+        'registerCommand',
+        'activeEditor',
+        'open',
+        'save',
+      ],
       metadata: ['getFile', 'backlinks', 'tags'],
       search: ['search'],
       objects: ['readType', 'readBase', 'writeObject'],
@@ -34,14 +67,25 @@ describe('platform/plugin API contracts', () => {
       storage: ['get', 'set'],
       plugins: ['getApi', 'isActive', 'getStatus', 'listStatuses', 'activate'],
       platform: ['hasCapability', 'listCapabilities'],
-      register: ['disposable', 'command', 'setting', 'view', 'viewRenderer', 'statusItem', 'editorExtension', 'markdownProcessor', 'event', 'domEvent'],
+      register: [
+        'disposable',
+        'command',
+        'setting',
+        'view',
+        'viewRenderer',
+        'statusItem',
+        'editorExtension',
+        'markdownProcessor',
+        'event',
+        'domEvent',
+      ],
     };
     for (const [namespace, functions] of Object.entries(expectedFunctions)) {
-      expect(Object.keys(apiInfoFixture.namespaces[namespace]?.functions ?? {}).sort(), namespace).toEqual([...functions].sort());
+      expect(Object.keys(apiInfoFixture.namespaces[namespace]?.functions ?? {}).sort(), namespace).toEqual(
+        [...functions].sort(),
+      );
     }
   });
-
-
 
   it('keeps API metadata capability matrix aligned with the locked package design', () => {
     expect(apiInfoFixture.namespaces.vault.functions.watch?.capabilities).toEqual(['vault.read', 'nativeFs.watch']);
@@ -83,7 +127,9 @@ describe('platform/plugin API contracts', () => {
   });
 
   it('makes host-owned fields/dataViews direct context properties at type level', () => {
-    type HasDirectStructuredDataApis = ZoridPluginContext extends { fields: unknown; dataViews: unknown } ? true : false;
+    type HasDirectStructuredDataApis = ZoridPluginContext extends { fields: unknown; dataViews: unknown }
+      ? true
+      : false;
     const hasApis: HasDirectStructuredDataApis = true;
     expect(hasApis).toBe(true);
   });

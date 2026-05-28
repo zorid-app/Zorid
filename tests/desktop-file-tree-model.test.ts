@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
 import type { VaultEntry } from '@zorid/platform-api';
-import { FILE_TREE_SORT_MODES, entryName, entryTypeLabel, sortEntries, sortModeLabel } from '../apps/desktop/src/renderer/src/components/file-tree-model';
+import { describe, expect, it } from 'vitest';
+import {
+  entryName,
+  entryTypeLabel,
+  FILE_TREE_SORT_MODES,
+  sortEntries,
+  sortModeLabel,
+} from '../apps/desktop/src/renderer/src/components/file-tree-model';
 
 function entry(path: string, kind: VaultEntry['kind'], mtimeMs: number): VaultEntry {
   return { path, kind, mtimeMs, size: kind === 'directory' ? 0 : 10 } as VaultEntry;

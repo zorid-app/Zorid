@@ -4,21 +4,24 @@ import ZButton from './ZButton.vue';
 import ZDialogWindow from './ZDialogWindow.vue';
 import ZTextField from './ZTextField.vue';
 
-const props = withDefaults(defineProps<{
-  open: boolean;
-  title: string;
-  description?: string | undefined;
-  label?: string | undefined;
-  modelValue?: string;
-  placeholder?: string | undefined;
-  submitLabel?: string;
-  cancelLabel?: string;
-}>(), {
-  label: 'Value',
-  modelValue: '',
-  submitLabel: 'Submit',
-  cancelLabel: 'Cancel',
-});
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    title: string;
+    description?: string | undefined;
+    label?: string | undefined;
+    modelValue?: string;
+    placeholder?: string | undefined;
+    submitLabel?: string;
+    cancelLabel?: string;
+  }>(),
+  {
+    label: 'Value',
+    modelValue: '',
+    submitLabel: 'Submit',
+    cancelLabel: 'Cancel',
+  },
+);
 
 const emit = defineEmits<{
   'update:open': [value: boolean];
@@ -33,12 +36,18 @@ const model = computed({
   set: (value: boolean) => emit('update:open', value),
 });
 
-watch(() => props.open, (isOpen) => {
-  if (isOpen) draft.value = props.modelValue;
-});
-watch(() => props.modelValue, (value) => {
-  if (!props.open) draft.value = value;
-});
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (isOpen) draft.value = props.modelValue;
+  },
+);
+watch(
+  () => props.modelValue,
+  (value) => {
+    if (!props.open) draft.value = value;
+  },
+);
 
 function submit(): void {
   emit('update:modelValue', draft.value);

@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { asPluginId, DisposableStack, normalizeVaultPath } from '../packages/shared/src/index';
 import { CommandRegistry, createZoridKernel, EventBus, ServiceRegistry } from '../packages/app-kernel/src/index';
-import { createLazyTriggerIndex, createPluginRegistryAPI, PluginHost, resolvePluginOrder, validatePluginManifest } from '../packages/plugin-host/src/index';
 import type { PluginManifest, ZoridPluginContext } from '../packages/plugin-api/src/index';
+import {
+  createLazyTriggerIndex,
+  createPluginRegistryAPI,
+  PluginHost,
+  resolvePluginOrder,
+  validatePluginManifest,
+} from '../packages/plugin-host/src/index';
+import { asPluginId, type DisposableStack, normalizeVaultPath } from '../packages/shared/src/index';
 
 const fieldsManifest: PluginManifest = {
   schemaVersion: 1,
@@ -56,8 +62,13 @@ describe('kernel registries', () => {
     const kernel = createZoridKernel({ capabilities: ['metadata.read'] });
     expect(kernel.app.apiInfo().namespaces.app.functions).toHaveProperty('apiInfo');
     expect(JSON.stringify(kernel.app)).not.toContain('getService');
-    expect(kernel.capabilities.requireAll(['metadata.read', 'workspace.views'], 'zorid.core.data-views')).toEqual(['workspace.views']);
-    expect(kernel.capabilities.diagnostics()[0]).toMatchObject({ code: 'plugin.capability.missing', capability: 'workspace.views' });
+    expect(kernel.capabilities.requireAll(['metadata.read', 'workspace.views'], 'zorid.core.data-views')).toEqual([
+      'workspace.views',
+    ]);
+    expect(kernel.capabilities.diagnostics()[0]).toMatchObject({
+      code: 'plugin.capability.missing',
+      capability: 'workspace.views',
+    });
   });
 });
 
@@ -68,11 +79,14 @@ describe('plugin host', () => {
   });
 
   it('orders dependencies and rejects cycles', () => {
-    expect(resolvePluginOrder([dataViewsManifest, fieldsManifest])).toEqual(['zorid.core.fields', 'zorid.core.data-views']);
-    expect(() => resolvePluginOrder([{ ...fieldsManifest, dependsOn: { 'zorid.core.data-views': '^0.1.0' } }, dataViewsManifest])).toThrow(/cycle/i);
+    expect(resolvePluginOrder([dataViewsManifest, fieldsManifest])).toEqual([
+      'zorid.core.fields',
+      'zorid.core.data-views',
+    ]);
+    expect(() =>
+      resolvePluginOrder([{ ...fieldsManifest, dependsOn: { 'zorid.core.data-views': '^0.1.0' } }, dataViewsManifest]),
+    ).toThrow(/cycle/i);
   });
-
-
 
   it('exposes plugin load status through registry API without activation', () => {
     const host = new PluginHost({
@@ -80,7 +94,14 @@ describe('plugin host', () => {
       platform: 'desktop',
       capabilities: new Set(['metadata.read', 'commands.register']),
       load: () => ({ activate: () => undefined }),
-      createBaseContext: (manifest, stack: DisposableStack) => ({ pluginId: asPluginId(manifest.id), register: { command: (command) => stack.use({ dispose: () => undefined }), disposable: (disposable) => stack.use(disposable) } }) as ZoridPluginContext,
+      createBaseContext: (manifest, stack: DisposableStack) =>
+        ({
+          pluginId: asPluginId(manifest.id),
+          register: {
+            command: (command) => stack.use({ dispose: () => undefined }),
+            disposable: (disposable) => stack.use(disposable),
+          },
+        }) as ZoridPluginContext,
     });
     const registry = createPluginRegistryAPI(host);
     const status = registry.getStatus('zorid.core.fields');
@@ -96,9 +117,17 @@ describe('plugin host', () => {
       manifests: [fieldsManifest],
       platform: 'desktop',
       capabilities: new Set(['metadata.read', 'commands.register']),
-      events: { emit: (event) => { events.push(event); } },
+      events: {
+        emit: (event) => {
+          events.push(event);
+        },
+      },
       load: () => ({ activate: () => undefined }),
-      createBaseContext: (manifest, stack: DisposableStack) => ({ pluginId: asPluginId(manifest.id), register: { disposable: (disposable) => stack.use(disposable) } }) as ZoridPluginContext,
+      createBaseContext: (manifest, stack: DisposableStack) =>
+        ({
+          pluginId: asPluginId(manifest.id),
+          register: { disposable: (disposable) => stack.use(disposable) },
+        }) as ZoridPluginContext,
       now: () => 10,
     });
     expect(events).toContain('plugin:placeholder-registered');
@@ -120,35 +149,68 @@ describe('plugin host', () => {
       manifests: [fieldsManifest, dataViewsManifest],
       platform: 'desktop',
       capabilities: new Set(['metadata.read']),
-      load: () => { imported = true; return { activate: () => undefined }; },
+      load: () => {
+        imported = true;
+        return { activate: () => undefined };
+      },
       createBaseContext: () => ({ pluginId: asPluginId('zorid.core.data-views') }) as ZoridPluginContext,
     });
     expect(host.record('zorid.core.data-views')?.status).toBe('disabled');
     expect(imported).toBe(false);
   });
 
-
-
   it('wraps direct commands/settings/objects APIs and records optional missing capabilities without failing activation', async () => {
-    const optionalCommandsManifest = { ...fieldsManifest, capabilities: { required: ['metadata.read'], optional: ['commands.register', 'settings.register'] } } as PluginManifest;
+    const optionalCommandsManifest = {
+      ...fieldsManifest,
+      capabilities: { required: ['metadata.read'], optional: ['commands.register', 'settings.register'] },
+    } as PluginManifest;
     const calls: string[] = [];
     const host = new PluginHost({
       manifests: [optionalCommandsManifest],
       platform: 'desktop',
       capabilities: new Set(['metadata.read']),
-      load: () => ({ activate: (ctx) => { try { ctx.commands.register({ id: 'x', title: 'X' }); } catch (error) { calls.push((error as { code?: string }).code ?? 'command-error'); } try { ctx.settings.register({ id: 's', title: 'S', schema: {} }); } catch (error) { calls.push((error as { code?: string }).code ?? 'settings-error'); } calls.push('activated'); } }),
-      createBaseContext: () => ({
-        pluginId: asPluginId('zorid.core.fields'),
-        commands: { register: () => { calls.push('command-registered'); return { dispose: () => undefined }; }, execute: async () => undefined, list: () => [] },
-        settings: { register: () => { calls.push('setting-registered'); return { dispose: () => undefined }; } },
-      }) as ZoridPluginContext,
+      load: () => ({
+        activate: (ctx) => {
+          try {
+            ctx.commands.register({ id: 'x', title: 'X' });
+          } catch (error) {
+            calls.push((error as { code?: string }).code ?? 'command-error');
+          }
+          try {
+            ctx.settings.register({ id: 's', title: 'S', schema: {} });
+          } catch (error) {
+            calls.push((error as { code?: string }).code ?? 'settings-error');
+          }
+          calls.push('activated');
+        },
+      }),
+      createBaseContext: () =>
+        ({
+          pluginId: asPluginId('zorid.core.fields'),
+          commands: {
+            register: () => {
+              calls.push('command-registered');
+              return { dispose: () => undefined };
+            },
+            execute: async () => undefined,
+            list: () => [],
+          },
+          settings: {
+            register: () => {
+              calls.push('setting-registered');
+              return { dispose: () => undefined };
+            },
+          },
+        }) as ZoridPluginContext,
     });
     await expect(host.activate('zorid.core.fields')).resolves.toBeUndefined();
     expect(calls).toEqual(['plugin.capability.unavailable', 'plugin.capability.unavailable', 'activated']);
-    expect(host.record('zorid.core.fields')?.capabilityDiagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'plugin.capability.missing', capability: 'commands.register' }),
-      expect.objectContaining({ code: 'plugin.capability.missing', capability: 'settings.register' }),
-    ]));
+    expect(host.record('zorid.core.fields')?.capabilityDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'plugin.capability.missing', capability: 'commands.register' }),
+        expect.objectContaining({ code: 'plugin.capability.missing', capability: 'settings.register' }),
+      ]),
+    );
   });
 
   it('injects host-derived plugin identity into DataViews render contexts', async () => {
@@ -157,37 +219,63 @@ describe('plugin host', () => {
       manifests: [dataViewsManifest, fieldsManifest],
       platform: 'desktop',
       capabilities: new Set(['metadata.read', 'workspace.views', 'vault.read', 'commands.register']),
-      load: (manifest) => ({ activate: async (ctx) => { if (manifest.id === 'zorid.core.data-views') await ctx.dataViews.renderEmbed({ innerHTML: '' } as HTMLElement, normalizeVaultPath('.zorid/views/tasks.zbase')); } }),
-      createBaseContext: (manifest) => ({
-        pluginId: asPluginId(manifest.id),
-        dataViews: {
-          registerRenderer: () => ({ dispose: () => undefined }),
-          evaluateFilters: async () => [],
-          openBase: async () => undefined,
-          renderEmbed: async () => ({ dispose: () => undefined }),
-          renderEmbedForPlugin: async (_container: HTMLElement, _path: unknown, callerPluginId: ReturnType<typeof asPluginId>) => { caller = callerPluginId; return { dispose: () => undefined }; },
+      load: (manifest) => ({
+        activate: async (ctx) => {
+          if (manifest.id === 'zorid.core.data-views')
+            await ctx.dataViews.renderEmbed(
+              { innerHTML: '' } as HTMLElement,
+              normalizeVaultPath('.zorid/views/tasks.zbase'),
+            );
         },
-        register: { disposable: (disposable) => disposable },
-      }) as ZoridPluginContext,
+      }),
+      createBaseContext: (manifest) =>
+        ({
+          pluginId: asPluginId(manifest.id),
+          dataViews: {
+            registerRenderer: () => ({ dispose: () => undefined }),
+            evaluateFilters: async () => [],
+            openBase: async () => undefined,
+            renderEmbed: async () => ({ dispose: () => undefined }),
+            renderEmbedForPlugin: async (
+              _container: HTMLElement,
+              _path: unknown,
+              callerPluginId: ReturnType<typeof asPluginId>,
+            ) => {
+              caller = callerPluginId;
+              return { dispose: () => undefined };
+            },
+          },
+          register: { disposable: (disposable) => disposable },
+        }) as ZoridPluginContext,
     });
     await host.activate('zorid.core.data-views');
     expect(caller).toBe('zorid.core.data-views');
   });
 
   it('denies undeclared capability use through host-owned context wrappers', async () => {
-    const underDeclared = { ...fieldsManifest, capabilities: { required: ['metadata.read'], optional: [] } } as PluginManifest;
+    const underDeclared = {
+      ...fieldsManifest,
+      capabilities: { required: ['metadata.read'], optional: [] },
+    } as PluginManifest;
     const host = new PluginHost({
       manifests: [underDeclared],
       platform: 'desktop',
       capabilities: new Set(['metadata.read', 'commands.register']),
       load: () => ({ activate: (ctx) => ctx.register.command({ id: 'x', title: 'X' }) }),
-      createBaseContext: (manifest, stack: DisposableStack) => ({
-        pluginId: asPluginId(manifest.id),
-        register: { command: (command) => stack.use({ dispose: () => undefined }), disposable: (disposable) => stack.use(disposable) },
-      }) as ZoridPluginContext,
+      createBaseContext: (manifest, stack: DisposableStack) =>
+        ({
+          pluginId: asPluginId(manifest.id),
+          register: {
+            command: (command) => stack.use({ dispose: () => undefined }),
+            disposable: (disposable) => stack.use(disposable),
+          },
+        }) as ZoridPluginContext,
     });
     await expect(host.activate('zorid.core.fields')).rejects.toThrow(/did not declare/);
-    expect(host.record('zorid.core.fields')?.capabilityDiagnostics?.[0]).toMatchObject({ code: 'plugin.capability.undeclared', capability: 'commands.register' });
+    expect(host.record('zorid.core.fields')?.capabilityDiagnostics?.[0]).toMatchObject({
+      code: 'plugin.capability.undeclared',
+      capability: 'commands.register',
+    });
   });
 
   it('activates dependencies, records status, and disposes lifecycle resources', async () => {
@@ -198,12 +286,16 @@ describe('plugin host', () => {
       platform: 'desktop',
       capabilities: new Set(['metadata.read', 'workspace.views', 'vault.read', 'commands.register']),
       load: (manifest) => ({
-        activate: (ctx) => { activated.push(manifest.id); ctx.register.disposable(() => disposed.push(manifest.id)); },
+        activate: (ctx) => {
+          activated.push(manifest.id);
+          ctx.register.disposable(() => disposed.push(manifest.id));
+        },
       }),
-      createBaseContext: (manifest, stack: DisposableStack) => ({
-        pluginId: asPluginId(manifest.id),
-        register: { disposable: (disposable) => stack.use(disposable) },
-      }) as ZoridPluginContext,
+      createBaseContext: (manifest, stack: DisposableStack) =>
+        ({
+          pluginId: asPluginId(manifest.id),
+          register: { disposable: (disposable) => stack.use(disposable) },
+        }) as ZoridPluginContext,
       now: () => 100,
     });
     await host.activate('zorid.core.data-views', 'trigger', 'onMarkdownEmbed:.zbase');

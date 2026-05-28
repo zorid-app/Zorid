@@ -5,9 +5,9 @@ describe('desktop file tree scoped styles', () => {
   it('uses left-pane scoped toolbar styles without replacing the generic toolbar contract', () => {
     const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
 
-    expect(styles).toContain('[data-region="left-sidebar"] .file-pane-toolbar');
-    expect(styles).toContain('[data-region="left-sidebar"] .file-pane-action');
-    expect(styles).toContain('[data-region="left-sidebar"] .file-pane-sort');
+    expect(styles).toContain("[data-region='left-sidebar'] .file-pane-toolbar");
+    expect(styles).toContain("[data-region='left-sidebar'] .file-pane-action");
+    expect(styles).toContain("[data-region='left-sidebar'] .file-pane-sort");
     expect(styles).toContain('.toolbar.inline');
     expect(styles).toContain('.tree-type-label');
     expect(styles).toContain('.tree-disclosure');

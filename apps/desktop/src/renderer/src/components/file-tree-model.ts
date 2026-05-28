@@ -2,7 +2,12 @@ import type { VaultEntry } from '../types.js';
 
 export type FileTreeSortMode = 'name-asc' | 'name-desc' | 'modified-asc' | 'modified-desc';
 
-export const FILE_TREE_SORT_MODES = ['name-asc', 'name-desc', 'modified-asc', 'modified-desc'] as const satisfies readonly FileTreeSortMode[];
+export const FILE_TREE_SORT_MODES = [
+  'name-asc',
+  'name-desc',
+  'modified-asc',
+  'modified-desc',
+] as const satisfies readonly FileTreeSortMode[];
 
 export function entryName(entry: Pick<VaultEntry, 'path'>): string {
   return entry.path.split('/').filter(Boolean).at(-1) ?? entry.path;
@@ -44,9 +49,13 @@ export function sortEntries(entries: readonly VaultEntry[], mode: FileTreeSortMo
 
 export function sortModeLabel(mode: FileTreeSortMode): string {
   switch (mode) {
-    case 'name-asc': return 'Name A to Z';
-    case 'name-desc': return 'Name Z to A';
-    case 'modified-asc': return 'Modified oldest first';
-    case 'modified-desc': return 'Modified newest first';
+    case 'name-asc':
+      return 'Name A to Z';
+    case 'name-desc':
+      return 'Name Z to A';
+    case 'modified-asc':
+      return 'Modified oldest first';
+    case 'modified-desc':
+      return 'Modified newest first';
   }
 }

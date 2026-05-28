@@ -1,21 +1,55 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import type { Component, CSSProperties } from 'vue';
 import { ArrowDownUp, ChevronsDown, ChevronsUp, FilePlus, Files, FolderPlus, Link2, Search, Tag } from '@lucide/vue';
 import { createDesktopShellState } from '@zorid/desktop-shell';
+import type { Component, CSSProperties } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import ActivityRail from './components/ActivityRail.vue';
 import AppResizeHandle from './components/AppResizeHandle.vue';
 import AppStatusBar from './components/AppStatusBar.vue';
 import CommandPaletteWindow from './components/CommandPaletteWindow.vue';
 import FileTree from './components/FileTree.vue';
-import { FILE_TREE_SORT_MODES, sortEntries, sortModeLabel, type FileTreeSortMode } from './components/file-tree-model.js';
+import {
+  FILE_TREE_SORT_MODES,
+  type FileTreeSortMode,
+  sortEntries,
+  sortModeLabel,
+} from './components/file-tree-model.js';
 import MarkdownEditor from './components/MarkdownEditor.vue';
 import RightSidebarPanels from './components/RightSidebarPanels.vue';
 import SettingsWindow from './components/SettingsWindow.vue';
 import TopTabStrip from './components/TopTabStrip.vue';
-import { DEFAULT_PANE_LAYOUT, SHELL_LAYOUT, parsePaneLayout, resolveDraggedPaneWidth, safePaneLayoutStorageKey, resolvePaneLayout, serializePaneLayout } from './shell-layout.js';
 import type { PaneLayout } from './shell-layout.js';
-import type { BacklinkDto, BaseDto, CommandDto, DataViewResultDto, EditorSnapshotDto, FieldDto, FileFieldsDto, IndexStatusDto, MarkdownEmbedDto, OutlineItemDto, PluginStatus, RecentVaultDto, SearchResultDto, SettingsSectionDto, SettingProperty, TagDto, TypeDto, VaultEntry, VaultProfileDto, WindowRole } from './types.js';
+import {
+  DEFAULT_PANE_LAYOUT,
+  parsePaneLayout,
+  resolveDraggedPaneWidth,
+  resolvePaneLayout,
+  SHELL_LAYOUT,
+  safePaneLayoutStorageKey,
+  serializePaneLayout,
+} from './shell-layout.js';
+import type {
+  BacklinkDto,
+  BaseDto,
+  CommandDto,
+  DataViewResultDto,
+  EditorSnapshotDto,
+  FieldDto,
+  FileFieldsDto,
+  IndexStatusDto,
+  MarkdownEmbedDto,
+  OutlineItemDto,
+  PluginStatus,
+  RecentVaultDto,
+  SearchResultDto,
+  SettingProperty,
+  SettingsSectionDto,
+  TagDto,
+  TypeDto,
+  VaultEntry,
+  VaultProfileDto,
+  WindowRole,
+} from './types.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -98,7 +132,12 @@ const dataView = ref<DataViewResultDto>();
 const markdownEmbeds = ref<readonly MarkdownEmbedDto[]>([]);
 const paneLayout = ref<PaneLayout>({ ...DEFAULT_PANE_LAYOUT });
 type ResizeSide = 'left' | 'right';
-interface PaneResizeState { readonly side: ResizeSide; readonly startX: number; readonly startLeftWidth: number; readonly startRightWidth: number; }
+interface PaneResizeState {
+  readonly side: ResizeSide;
+  readonly startX: number;
+  readonly startLeftWidth: number;
+  readonly startRightWidth: number;
+}
 const paneResize = ref<PaneResizeState>();
 let unsubscribeIndexUpdates: (() => void) | undefined;
 let unsubscribeEditorSnapshot: (() => void) | undefined;
@@ -115,17 +154,24 @@ const shellStyle = computed<CSSProperties>(() => ({
   '--status-bar-min-height': `${SHELL_LAYOUT.statusBarMinHeight}px`,
   '--status-bar-max-height': `${SHELL_LAYOUT.statusBarMaxHeight}px`,
 }));
-const sortedEntriesByDirectory = computed<Record<string, readonly VaultEntry[]>>(() => Object.fromEntries(
-  Object.entries(entriesByDirectory.value).map(([directory, entries]) => [directory, sortEntries(entries, fileTreeSortMode.value)]),
-));
+const sortedEntriesByDirectory = computed<Record<string, readonly VaultEntry[]>>(() =>
+  Object.fromEntries(
+    Object.entries(entriesByDirectory.value).map(([directory, entries]) => [
+      directory,
+      sortEntries(entries, fileTreeSortMode.value),
+    ]),
+  ),
+);
 const rootEntries = computed(() => sortedEntriesByDirectory.value[''] ?? []);
 const fileTreeSortLabel = computed(() => sortModeLabel(fileTreeSortMode.value));
 const dirty = computed(() => selectedPath.value !== undefined && editorText.value !== savedText.value);
 const editorTitle = computed(() => selectedPath.value?.split('/').at(-1) ?? vaultLabel.value ?? 'Zorid');
 const editorStartupOnlyCommandIds = new Set(['vault.open', 'file-explorer.open-root']);
-const visibleCommands = computed(() => windowRole.value === 'editor'
-  ? commands.value.filter((command) => !editorStartupOnlyCommandIds.has(command.id))
-  : commands.value);
+const visibleCommands = computed(() =>
+  windowRole.value === 'editor'
+    ? commands.value.filter((command) => !editorStartupOnlyCommandIds.has(command.id))
+    : commands.value,
+);
 const filteredCommands = computed(() => {
   const query = commandQuery.value.trim().toLowerCase();
   const source = visibleCommands.value;
@@ -172,10 +218,18 @@ function handlePanePointerMove(event: PointerEvent): void {
   if (!resize) return;
   const delta = event.clientX - resize.startX;
   if (resize.side === 'left') {
-    const next = resolveDraggedPaneWidth(resize.startLeftWidth + delta, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth);
+    const next = resolveDraggedPaneWidth(
+      resize.startLeftWidth + delta,
+      SHELL_LAYOUT.leftMinWidth,
+      SHELL_LAYOUT.leftMaxWidth,
+    );
     updatePaneLayout({ leftWidth: next.width, leftCollapsed: next.collapsed }, 'left');
   } else {
-    const next = resolveDraggedPaneWidth(resize.startRightWidth - delta, SHELL_LAYOUT.rightMinWidth, SHELL_LAYOUT.rightMaxWidth);
+    const next = resolveDraggedPaneWidth(
+      resize.startRightWidth - delta,
+      SHELL_LAYOUT.rightMinWidth,
+      SHELL_LAYOUT.rightMaxWidth,
+    );
     updatePaneLayout({ rightWidth: next.width, rightCollapsed: next.collapsed }, 'right');
   }
 }
@@ -203,7 +257,9 @@ function startPaneResize(side: ResizeSide, event: PointerEvent): void {
 }
 
 function jsonRecord(value: unknown): JsonRecord {
-  return value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+  return value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : {};
 }
 
 function settingObject(section: SettingsSectionDto): JsonRecord {
@@ -237,7 +293,11 @@ async function refreshShellData(): Promise<void> {
 }
 
 async function refreshMetadataPanels(): Promise<void> {
-  [tags.value, types.value, bases.value] = await Promise.all([desktop.listTags(), desktop.listTypes(), desktop.listBases()]);
+  [tags.value, types.value, bases.value] = await Promise.all([
+    desktop.listTags(),
+    desktop.listTypes(),
+    desktop.listBases(),
+  ]);
   if (!activeBasePath.value && bases.value[0]) activeBasePath.value = bases.value[0].path;
   await refreshDataView();
   if (searchQuery.value.trim()) searchResults.value = await desktop.searchIndex(searchQuery.value);
@@ -266,15 +326,22 @@ async function runSearch(): Promise<void> {
 async function loadSettingValues(sections: readonly SettingsSectionDto[]): Promise<void> {
   const next: Record<string, unknown> = { ...settingValues.value };
   for (const section of sections) {
-    const setting = await desktop.getSettingValue(section.id, section.pluginId) as { value?: unknown };
+    const setting = (await desktop.getSettingValue(section.id, section.pluginId)) as { value?: unknown };
     next[settingsKey(section)] = setting.value;
   }
   settingValues.value = next;
 }
 
-async function updateSettingProperty(section: SettingsSectionDto, property: SettingProperty, raw: string | boolean): Promise<void> {
+async function updateSettingProperty(
+  section: SettingsSectionDto,
+  property: SettingProperty,
+  raw: string | boolean,
+): Promise<void> {
   const key = settingsKey(section);
-  const nextValue = { ...settingObject(section), [property.name]: coerceSettingValue(raw, property.type) } satisfies JsonRecord;
+  const nextValue = {
+    ...settingObject(section),
+    [property.name]: coerceSettingValue(raw, property.type),
+  } satisfies JsonRecord;
   settingValues.value = { ...settingValues.value, [key]: nextValue };
   await desktop.setSettingValue(section.id, nextValue, section.pluginId);
 }
@@ -339,17 +406,23 @@ async function openRecentFromLauncher(id: string): Promise<void> {
 function applyEditorSnapshot(snapshot: EditorSnapshotDto): void {
   if (snapshot.profile) applyVaultProfile(snapshot.profile);
   indexStatus.value = snapshot.indexStatus;
-  void loadDirectory('').then(() => refreshShellData()).catch((caught: unknown) => { error.value = caught instanceof Error ? caught.message : String(caught); });
+  void loadDirectory('')
+    .then(() => refreshShellData())
+    .catch((caught: unknown) => {
+      error.value = caught instanceof Error ? caught.message : String(caught);
+    });
 }
 
 async function initializeWindow(): Promise<void> {
-  const role = await desktop.getWindowRole() ?? 'editor';
+  const role = (await desktop.getWindowRole()) ?? 'editor';
   windowRole.value = role;
   if (role === 'launcher') {
     await loadRecentVaults();
     return;
   }
-  unsubscribeIndexUpdates = desktop.onIndexUpdated(() => { void refreshShellData(); });
+  unsubscribeIndexUpdates = desktop.onIndexUpdated(() => {
+    void refreshShellData();
+  });
   unsubscribeEditorSnapshot = desktop.onEditorSnapshot(applyEditorSnapshot);
   const profile = await desktop.getVaultProfile().catch(() => undefined);
   if (profile) {
@@ -396,7 +469,7 @@ async function renameSelected(): Promise<void> {
   const previous = selectedPath.value;
   await desktop.renameVaultPath(previous, next);
   selectedPath.value = next;
-  openTabs.value = openTabs.value.map((path) => path === previous ? next : path);
+  openTabs.value = openTabs.value.map((path) => (path === previous ? next : path));
   await loadDirectory('');
   await refreshShellData();
 }
@@ -420,7 +493,11 @@ async function deleteSelected(): Promise<void> {
   if (!selectedPath.value) return;
   const previous = selectedPath.value;
   const generalSettings = jsonRecord(settingValues.value['app:app.general']);
-  if (generalSettings.confirmDeletes !== false && !confirm(`Delete ${previous}? This permanently removes the file from the vault.`)) return;
+  if (
+    generalSettings.confirmDeletes !== false &&
+    !confirm(`Delete ${previous}? This permanently removes the file from the vault.`)
+  )
+    return;
   await desktop.deleteVaultPath(previous);
   selectedPath.value = undefined;
   editorText.value = '';
@@ -453,7 +530,11 @@ function coerceFieldValue(raw: string | boolean, type?: string): unknown {
   if (type === 'boolean') return Boolean(raw);
   if (type === 'int') return Number.parseInt(String(raw), 10) || 0;
   if (type === 'float') return Number.parseFloat(String(raw)) || 0;
-  if (type === 'list') return String(raw).split(',').map((part) => part.trim()).filter(Boolean);
+  if (type === 'list')
+    return String(raw)
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
   return raw;
 }
 
@@ -528,7 +609,9 @@ function handleKeydown(event: KeyboardEvent): void {
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
-  void initializeWindow().catch((caught: unknown) => { error.value = caught instanceof Error ? caught.message : String(caught); });
+  void initializeWindow().catch((caught: unknown) => {
+    error.value = caught instanceof Error ? caught.message : String(caught);
+  });
 });
 onBeforeUnmount(() => {
   stopPaneResize();

@@ -1,11 +1,25 @@
 import { createHash } from 'node:crypto';
-import { constants, watch as fsWatch, mkdirSync, realpathSync, type FSWatcher } from 'node:fs';
-import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, unlink } from 'node:fs/promises';
+import { constants, type FSWatcher, watch as fsWatch, mkdirSync, realpathSync } from 'node:fs';
+import {
+  type FileHandle,
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  unlink,
+} from 'node:fs/promises';
 import path from 'node:path';
-import { ZoridError, normalizeVaultPath, type Disposable, type VaultPath } from '@zorid/shared';
 import type { VaultAPI, VaultChangeEvent, VaultFileStat } from '@zorid/platform-api';
+import { type Disposable, normalizeVaultPath, type VaultPath, ZoridError } from '@zorid/shared';
 
-export interface FolderVaultOptions { readonly root: string; }
+export interface FolderVaultOptions {
+  readonly root: string;
+}
 
 export class FolderVault implements VaultAPI {
   readonly root: string;
@@ -38,7 +52,8 @@ export class FolderVault implements VaultAPI {
     await this.#ensureWritableParent(path.dirname(full), vaultPath);
     try {
       const info = await lstat(full);
-      if (info.isSymbolicLink()) throw new ZoridError('vault.path.escape', `Path escapes vault through symlink: ${vaultPath}`);
+      if (info.isSymbolicLink())
+        throw new ZoridError('vault.path.escape', `Path escapes vault through symlink: ${vaultPath}`);
       const existing = await realpath(full);
       this.#assertReallyInside(existing, vaultPath);
     } catch (error) {
@@ -56,10 +71,12 @@ export class FolderVault implements VaultAPI {
       current = path.join(current, part);
       try {
         const info = await lstat(current);
-        if (info.isSymbolicLink()) throw new ZoridError('vault.path.escape', `Path escapes vault through symlink: ${vaultPath}`);
+        if (info.isSymbolicLink())
+          throw new ZoridError('vault.path.escape', `Path escapes vault through symlink: ${vaultPath}`);
         const real = await realpath(current);
         this.#assertReallyInside(real, vaultPath);
-        if (!info.isDirectory()) throw new ZoridError('vault.path.not-directory', `Vault path parent is not a directory: ${vaultPath}`);
+        if (!info.isDirectory())
+          throw new ZoridError('vault.path.not-directory', `Vault path parent is not a directory: ${vaultPath}`);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         break;
@@ -70,30 +87,45 @@ export class FolderVault implements VaultAPI {
   }
 
   #assertLexicallyInside(full: string, vaultPath: VaultPath): void {
-    if (!full.startsWith(this.root + path.sep) && full !== this.root) throw new ZoridError('vault.path.escape', `Path escapes vault: ${vaultPath}`);
+    if (!full.startsWith(this.root + path.sep) && full !== this.root)
+      throw new ZoridError('vault.path.escape', `Path escapes vault: ${vaultPath}`);
   }
 
   #assertReallyInside(real: string, vaultPath: VaultPath): void {
-    if (!real.startsWith(this.#realRoot + path.sep) && real !== this.#realRoot) throw new ZoridError('vault.path.escape', `Path escapes vault through symlink: ${vaultPath}`);
+    if (!real.startsWith(this.#realRoot + path.sep) && real !== this.#realRoot)
+      throw new ZoridError('vault.path.escape', `Path escapes vault through symlink: ${vaultPath}`);
   }
 
-  async readText(vaultPath: VaultPath): Promise<string> { return readFile(await this.#resolveExisting(vaultPath), 'utf8'); }
-  async read(vaultPath: VaultPath): Promise<string> { return this.readText(vaultPath); }
+  async readText(vaultPath: VaultPath): Promise<string> {
+    return readFile(await this.#resolveExisting(vaultPath), 'utf8');
+  }
+  async read(vaultPath: VaultPath): Promise<string> {
+    return this.readText(vaultPath);
+  }
   async writeText(vaultPath: VaultPath, contents: string): Promise<void> {
     const full = await this.#resolveWritable(vaultPath);
-    let handle;
+    let handle: FileHandle | undefined;
     try {
-      handle = await open(full, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o666);
+      handle = await open(
+        full,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
+        0o666,
+      );
       await handle.writeFile(contents, 'utf8');
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ELOOP') throw new ZoridError('vault.path.escape', `Path escapes vault through symlink: ${vaultPath}`);
+      if ((error as NodeJS.ErrnoException).code === 'ELOOP')
+        throw new ZoridError('vault.path.escape', `Path escapes vault through symlink: ${vaultPath}`);
       throw error;
     } finally {
       await handle?.close();
     }
   }
-  async write(vaultPath: VaultPath, contents: string): Promise<void> { return this.writeText(vaultPath, contents); }
-  async createFolder(vaultPath: VaultPath): Promise<void> { await mkdir(await this.#resolveWritable(vaultPath), { recursive: true }); }
+  async write(vaultPath: VaultPath, contents: string): Promise<void> {
+    return this.writeText(vaultPath, contents);
+  }
+  async createFolder(vaultPath: VaultPath): Promise<void> {
+    await mkdir(await this.#resolveWritable(vaultPath), { recursive: true });
+  }
   async delete(vaultPath: VaultPath): Promise<void> {
     const full = this.resolve(vaultPath);
     const info = await lstat(full);
@@ -111,17 +143,29 @@ export class FolderVault implements VaultAPI {
   async list(vaultPath = normalizeVaultPath('')): Promise<readonly VaultFileStat[]> {
     const dir = await this.#resolveExisting(vaultPath);
     const entries = await readdir(dir, { withFileTypes: true });
-    return Promise.all(entries.map(async (entry) => {
-      const child = normalizeVaultPath(path.posix.join(vaultPath, entry.name));
-      const info = await stat(await this.#resolveExisting(child));
-      return { path: child, kind: info.isDirectory() ? 'directory' : 'file', mtimeMs: info.mtimeMs, size: info.size } satisfies VaultFileStat;
-    }));
+    return Promise.all(
+      entries.map(async (entry) => {
+        const child = normalizeVaultPath(path.posix.join(vaultPath, entry.name));
+        const info = await stat(await this.#resolveExisting(child));
+        return {
+          path: child,
+          kind: info.isDirectory() ? 'directory' : 'file',
+          mtimeMs: info.mtimeMs,
+          size: info.size,
+        } satisfies VaultFileStat;
+      }),
+    );
   }
 
   async stat(vaultPath: VaultPath): Promise<VaultFileStat | null> {
     try {
       const info = await stat(await this.#resolveExisting(vaultPath));
-      return { path: vaultPath, kind: info.isDirectory() ? 'directory' : 'file', mtimeMs: info.mtimeMs, size: info.size };
+      return {
+        path: vaultPath,
+        kind: info.isDirectory() ? 'directory' : 'file',
+        mtimeMs: info.mtimeMs,
+        size: info.size,
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
@@ -130,17 +174,23 @@ export class FolderVault implements VaultAPI {
 
   watch(listener: (event: VaultChangeEvent) => void): Disposable;
   watch(vaultPath: VaultPath, callback: (event: VaultChangeEvent) => void): Disposable;
-  watch(vaultPathOrListener: VaultPath | ((event: VaultChangeEvent) => void), callback?: (event: VaultChangeEvent) => void): Disposable {
+  watch(
+    vaultPathOrListener: VaultPath | ((event: VaultChangeEvent) => void),
+    callback?: (event: VaultChangeEvent) => void,
+  ): Disposable {
     const vaultPath = typeof vaultPathOrListener === 'function' ? normalizeVaultPath('') : vaultPathOrListener;
     const listener = typeof vaultPathOrListener === 'function' ? vaultPathOrListener : callback;
     if (!listener) throw new ZoridError('vault.watch.listener-missing', 'Vault watch listener is required.');
     const full = realpathSync(this.resolve(vaultPath));
     this.#assertReallyInside(full, vaultPath);
     const watcher: FSWatcher = fsWatch(full, { recursive: true }, (type, filename) => {
-      if (filename) listener({ path: normalizeVaultPath(String(filename)), type: type === 'rename' ? 'changed' : 'changed' });
+      if (filename)
+        listener({ path: normalizeVaultPath(String(filename)), type: type === 'rename' ? 'changed' : 'changed' });
     });
     return { dispose: () => watcher.close() };
   }
 }
 
-export function createVaultService(root: string): FolderVault { return new FolderVault({ root }); }
+export function createVaultService(root: string): FolderVault {
+  return new FolderVault({ root });
+}

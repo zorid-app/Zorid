@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { Component } from 'vue';
 import { Command, Settings } from '@lucide/vue';
+import type { Component } from 'vue';
 
 defineProps<{
   items: readonly string[];

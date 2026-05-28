@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue';
 import { ZDialogWindow } from '@zorid/ui-vue';
+import { computed } from 'vue';
 
-interface CommandDto { readonly id: string; readonly title: string; }
+interface CommandDto {
+  readonly id: string;
+  readonly title: string;
+}
 
 const props = defineProps<{
   open: boolean;

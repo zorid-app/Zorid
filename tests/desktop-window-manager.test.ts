@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
+import type {
+  DisposableLike,
+  ManagedRuntime,
+  ManagedWindow,
+  VaultWindowRole,
+} from '../apps/desktop/src/main/vault-window-manager';
 import type { VaultProfile } from '../packages/platform-api/src/index';
-import type { DisposableLike, ManagedRuntime, ManagedWindow, VaultWindowRole } from '../apps/desktop/src/main/vault-window-manager';
 
 class FakeEvents {
   readonly listeners = new Map<string, Set<(payload: unknown) => void>>();
 
-  on(event: 'metadata:index-updated' | 'metadata:index-status' | 'vault:opened', listener: (payload: unknown) => void): DisposableLike {
+  on(
+    event: 'metadata:index-updated' | 'metadata:index-status' | 'vault:opened',
+    listener: (payload: unknown) => void,
+  ): DisposableLike {
     const listeners = this.listeners.get(event) ?? new Set();
     listeners.add(listener);
     this.listeners.set(event, listeners);
@@ -16,7 +24,9 @@ class FakeEvents {
     for (const listener of this.listeners.get(event) ?? []) listener(payload);
   }
 
-  count(event: string): number { return this.listeners.get(event)?.size ?? 0; }
+  count(event: string): number {
+    return this.listeners.get(event)?.size ?? 0;
+  }
 }
 
 class FakeRuntime implements ManagedRuntime {
@@ -30,7 +40,9 @@ class FakeRuntime implements ManagedRuntime {
   readonly getIndexStatus = vi.fn(async () => ({ state: 'idle', fileCount: 0, diagnostics: [] }));
   readonly dispose = vi.fn(async () => undefined);
   profile?: VaultProfile;
-  vaultProfile(): VaultProfile | undefined { return this.profile; }
+  vaultProfile(): VaultProfile | undefined {
+    return this.profile;
+  }
 }
 
 let nextWindowId = 1;
@@ -41,18 +53,28 @@ class FakeWindow implements ManagedWindow {
   focused = false;
   readonly #webContents = {
     id: nextWindowId++,
-    send: (channel: string, payload: unknown) => { this.sent.push({ channel, payload }); },
+    send: (channel: string, payload: unknown) => {
+      this.sent.push({ channel, payload });
+    },
     isDestroyed: () => this.destroyed,
   };
 
-  get webContents(): ManagedWindow['webContents'] { return this.#webContents; }
-  once(event: 'ready-to-show', listener: () => void): void { this.on(event, listener); }
+  get webContents(): ManagedWindow['webContents'] {
+    return this.#webContents;
+  }
+  once(event: 'ready-to-show', listener: () => void): void {
+    this.on(event, listener);
+  }
   on(event: 'closed' | 'ready-to-show', listener: () => void): void {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), listener]);
   }
   show = vi.fn();
-  focus = vi.fn(() => { this.focused = true; });
-  isDestroyed(): boolean { return this.destroyed; }
+  focus = vi.fn(() => {
+    this.focused = true;
+  });
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
   loadURL = vi.fn(async () => undefined);
   loadFile = vi.fn(async () => undefined);
   close(): void {
@@ -77,9 +99,19 @@ function managerFixture() {
     async createManager() {
       const { VaultWindowManager } = await import('../apps/desktop/src/main/vault-window-manager');
       return new VaultWindowManager<FakeWindow, FakeRuntime>({
-        createWindow: (_role: VaultWindowRole) => { const win = new FakeWindow(); windows.push(win); return win; },
-        loadWindow: async (win, role) => { await win.loadURL(`app://zorid/?zoridWindow=${role}`); },
-        createRuntime: () => { const runtime = new FakeRuntime(); runtimes.push(runtime); return runtime; },
+        createWindow: (_role: VaultWindowRole) => {
+          const win = new FakeWindow();
+          windows.push(win);
+          return win;
+        },
+        loadWindow: async (win, role) => {
+          await win.loadURL(`app://zorid/?zoridWindow=${role}`);
+        },
+        createRuntime: () => {
+          const runtime = new FakeRuntime();
+          runtimes.push(runtime);
+          return runtime;
+        },
       });
     },
   };
@@ -128,10 +160,12 @@ describe('VaultWindowManager', () => {
     expect(fixture.windows[0]!.sent.map((message) => message.channel)).toContain('zorid:vault-opened');
     expect(fixture.windows[0]!.sent.map((message) => message.channel)).toContain('zorid:editor-snapshot');
     expect(fixture.windows[0]!.sent).toContainEqual({ channel: 'zorid:index-status', payload: { state: 'ready' } });
-    expect(fixture.windows[0]!.sent).not.toContainEqual({ channel: 'zorid:index-updated', payload: { path: 'Note.md' } });
+    expect(fixture.windows[0]!.sent).not.toContainEqual({
+      channel: 'zorid:index-updated',
+      payload: { path: 'Note.md' },
+    });
     expect(fixture.windows[1]!.sent).toContainEqual({ channel: 'zorid:index-updated', payload: { path: 'Note.md' } });
   });
-
 
   it('focuses and awaits an in-flight same-vault open instead of creating a duplicate runtime', async () => {
     const fixture = managerFixture();
@@ -141,9 +175,17 @@ describe('VaultWindowManager', () => {
     });
     const { VaultWindowManager } = await import('../apps/desktop/src/main/vault-window-manager');
     const manager = new VaultWindowManager<FakeWindow, FakeRuntime>({
-      createWindow: () => { const win = new FakeWindow(); fixture.windows.push(win); return win; },
+      createWindow: () => {
+        const win = new FakeWindow();
+        fixture.windows.push(win);
+        return win;
+      },
       loadWindow: async () => loadStarted,
-      createRuntime: () => { const runtime = new FakeRuntime(); fixture.runtimes.push(runtime); return runtime; },
+      createRuntime: () => {
+        const runtime = new FakeRuntime();
+        fixture.runtimes.push(runtime);
+        return runtime;
+      },
     });
 
     const firstOpen = manager.openVault('/tmp/PendingVault');
@@ -159,8 +201,6 @@ describe('VaultWindowManager', () => {
     expect(fixture.windows[0]!.focus).toHaveBeenCalled();
   });
 
-
-
   it('allSettles editor cleanup tasks when an event disposable throws synchronously', async () => {
     const { VaultWindowManager } = await import('../apps/desktop/src/main/vault-window-manager');
     const win = new FakeWindow();
@@ -169,7 +209,13 @@ describe('VaultWindowManager', () => {
     runtime.events.on = vi.fn((event, listener) => {
       FakeEvents.prototype.on.call(runtime.events, event, listener);
       registered += 1;
-      return registered === 1 ? { dispose: () => { throw new Error('sync disposable failed'); } } : { dispose: vi.fn() };
+      return registered === 1
+        ? {
+            dispose: () => {
+              throw new Error('sync disposable failed');
+            },
+          }
+        : { dispose: vi.fn() };
     }) as FakeEvents['on'];
     const manager = new VaultWindowManager<FakeWindow, FakeRuntime>({
       createWindow: () => win,
@@ -197,7 +243,10 @@ describe('VaultWindowManager', () => {
 
     await expect(manager.openVault('/tmp/FailingVault')).rejects.toMatchObject({
       message: 'Vault editor failed to open and cleanup failed.',
-      errors: [expect.objectContaining({ message: 'open failed' }), expect.objectContaining({ message: 'Editor runtime disposal failed.' })],
+      errors: [
+        expect.objectContaining({ message: 'open failed' }),
+        expect.objectContaining({ message: 'Editor runtime disposal failed.' }),
+      ],
     });
   });
 
@@ -206,20 +255,40 @@ describe('VaultWindowManager', () => {
     const windows: FakeWindow[] = [];
     const runtimes: FakeRuntime[] = [];
     const manager = new VaultWindowManager<FakeWindow, FakeRuntime>({
-      createWindow: () => { const win = new FakeWindow(); windows.push(win); return win; },
+      createWindow: () => {
+        const win = new FakeWindow();
+        windows.push(win);
+        return win;
+      },
       loadWindow: async () => undefined,
-      createRuntime: () => { const runtime = new FakeRuntime(); runtimes.push(runtime); return runtime; },
+      createRuntime: () => {
+        const runtime = new FakeRuntime();
+        runtimes.push(runtime);
+        return runtime;
+      },
     });
     await manager.openVault('/tmp/DisposeA');
     await manager.openVault('/tmp/DisposeB');
     let releaseSecond!: () => void;
-    const secondFinished = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const secondFinished = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
     runtimes[0]!.dispose.mockRejectedValueOnce(new Error('first failed'));
-    runtimes[1]!.dispose.mockImplementationOnce(async () => { await secondFinished; });
+    runtimes[1]!.dispose.mockImplementationOnce(async () => {
+      await secondFinished;
+    });
 
     const disposeAll = manager.disposeAll();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await expect(Promise.race([disposeAll.then(() => 'done', () => 'rejected'), Promise.resolve('pending')])).resolves.toBe('pending');
+    await expect(
+      Promise.race([
+        disposeAll.then(
+          () => 'done',
+          () => 'rejected',
+        ),
+        Promise.resolve('pending'),
+      ]),
+    ).resolves.toBe('pending');
     releaseSecond();
 
     await expect(disposeAll).rejects.toThrow('One or more editor runtimes failed to dispose.');
@@ -287,7 +356,10 @@ describe('VaultWindowManager', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(runtime.dispose).toHaveBeenCalledOnce();
-    expect(consoleError).toHaveBeenCalledWith('Failed to dispose Zorid editor runtime after window closed.', expect.any(AggregateError));
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to dispose Zorid editor runtime after window closed.',
+      expect.any(AggregateError),
+    );
     expect(unhandled).not.toHaveBeenCalled();
 
     process.removeListener('unhandledRejection', unhandled);

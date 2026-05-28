@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { computed, useId } from 'vue';
 
-const props = withDefaults(defineProps<{
-  modelValue: string;
-  label?: string | undefined;
-  description?: string | undefined;
-  hint?: string | undefined;
-  placeholder?: string | undefined;
-  type?: 'text' | 'search' | 'number' | 'password' | 'email' | 'url' | undefined;
-  autofocus?: boolean;
-}>(), {
-  type: 'text',
-  autofocus: false,
-});
+const props = withDefaults(
+  defineProps<{
+    modelValue: string;
+    label?: string | undefined;
+    description?: string | undefined;
+    hint?: string | undefined;
+    placeholder?: string | undefined;
+    type?: 'text' | 'search' | 'number' | 'password' | 'email' | 'url' | undefined;
+    autofocus?: boolean;
+  }>(),
+  {
+    type: 'text',
+    autofocus: false,
+  },
+);
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 const inputId = useId();

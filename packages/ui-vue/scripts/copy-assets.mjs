@@ -1,6 +1,6 @@
-import { cpSync, copyFileSync, mkdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { copyFileSync, cpSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const packageRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const sourceRoot = path.join(packageRoot, 'src');

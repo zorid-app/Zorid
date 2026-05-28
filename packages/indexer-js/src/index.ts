@@ -1,5 +1,5 @@
-import { normalizeVaultPath, type JsonValue } from '@zorid/shared';
-import type { IndexEngine, IndexFilesInput, IndexFilesOutput, IndexedFileRecord } from '@zorid/index-api';
+import type { IndexEngine, IndexedFileRecord, IndexFilesInput, IndexFilesOutput } from '@zorid/index-api';
+import { type JsonValue, normalizeVaultPath } from '@zorid/shared';
 
 function parseScalar(value: string): JsonValue {
   const trimmed = value.trim();
@@ -8,7 +8,12 @@ function parseScalar(value: string): JsonValue {
   if (trimmed === 'null') return null;
   if (/^-?\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10);
   if (/^-?\d+\.\d+$/.test(trimmed)) return Number.parseFloat(trimmed);
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return trimmed.slice(1, -1).split(',').map((part) => part.trim()).filter(Boolean);
+  if (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    return trimmed
+      .slice(1, -1)
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
   return trimmed.replace(/^['"]|['"]$/g, '');
 }
 
@@ -33,10 +38,17 @@ export function parseFrontmatter(contents: string): { frontmatter: Record<string
     }
     const nested = /^\s+(?<key>[A-Za-z0-9_.-]+):\s*(?<value>.*)$/.exec(line);
     if (nested?.groups?.key !== undefined && nested.groups.value !== undefined && currentMap) {
-      const obj = (typeof frontmatter[currentMap] === 'object' && !Array.isArray(frontmatter[currentMap]) && frontmatter[currentMap] !== null ? frontmatter[currentMap] : {}) as Record<string, JsonValue>;
+      const obj = (
+        typeof frontmatter[currentMap] === 'object' &&
+        !Array.isArray(frontmatter[currentMap]) &&
+        frontmatter[currentMap] !== null
+          ? frontmatter[currentMap]
+          : {}
+      ) as Record<string, JsonValue>;
       obj[nested.groups.key] = parseScalar(nested.groups.value);
       frontmatter[currentMap] = obj;
-      if (currentMap === 'zorid' && nested.groups.key === 'type') frontmatter['zorid.type'] = parseScalar(nested.groups.value);
+      if (currentMap === 'zorid' && nested.groups.key === 'type')
+        frontmatter['zorid.type'] = parseScalar(nested.groups.value);
     }
   }
   return { frontmatter, body: contents.slice(contents.indexOf('\n', end + 1) + 1) };
@@ -50,11 +62,25 @@ export class JsIndexEngine implements IndexEngine {
       const headings = [...body.matchAll(/^#{1,6}\s+(.+)$/gm)].map((m) => m[1] ?? '');
       const links = [...body.matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => normalizeVaultPath(m[1] ?? ''));
       const inlineTags = [...body.matchAll(/(^|\s)#([A-Za-z0-9_/-]+)/g)].map((m) => m[2] ?? '').filter(Boolean);
-      const fmTags = Array.isArray(frontmatter.tags) ? frontmatter.tags.map(String) : typeof frontmatter.tags === 'string' ? [frontmatter.tags] : [];
-      records.push({ path: file.path, text: body, frontmatter, fields: frontmatter, headings, links, tags: [...new Set([...fmTags, ...inlineTags])] });
+      const fmTags = Array.isArray(frontmatter.tags)
+        ? frontmatter.tags.map(String)
+        : typeof frontmatter.tags === 'string'
+          ? [frontmatter.tags]
+          : [];
+      records.push({
+        path: file.path,
+        text: body,
+        frontmatter,
+        fields: frontmatter,
+        headings,
+        links,
+        tags: [...new Set([...fmTags, ...inlineTags])],
+      });
     }
     return { records, diagnostics: [] };
   }
 }
 
-export function createJsIndexEngine(): JsIndexEngine { return new JsIndexEngine(); }
+export function createJsIndexEngine(): JsIndexEngine {
+  return new JsIndexEngine();
+}

@@ -7,8 +7,14 @@
   "entry": "./src/index.ts",
   "zoridApi": "^0.1.0",
   "platforms": ["desktop"],
-  "capabilities": { "required": ["metadata.read", "workspace.views", "vault.read", "commands.register"], "optional": [] },
+  "capabilities": {
+    "required": ["metadata.read", "workspace.views", "vault.read", "commands.register"],
+    "optional": []
+  },
   "dependsOn": { "zorid.core.fields": "^0.1.0" },
   "activation": ["onCommand:data-views.open", "onMarkdownEmbed:.zbase", "onFileExtension:.zbase"],
-  "contributes": { "commands": [{ "id": "data-views.open", "title": "Open Base" }], "viewRenderers": [{ "type": "table" }, { "type": "list" }] }
+  "contributes": {
+    "commands": [{ "id": "data-views.open", "title": "Open Base" }],
+    "viewRenderers": [{ "type": "table" }, { "type": "list" }]
+  }
 }

@@ -25,12 +25,14 @@ describe('desktop dev launcher', () => {
   });
 
   it('does not use invisible xvfb-run by default', () => {
-    expect(buildDesktopDevCommand({
-      platform: 'linux',
-      env: {},
-      args: [],
-      commandExists: (command) => command === 'xvfb-run',
-    })).toEqual({
+    expect(
+      buildDesktopDevCommand({
+        platform: 'linux',
+        env: {},
+        args: [],
+        commandExists: (command) => command === 'xvfb-run',
+      }),
+    ).toEqual({
       command: 'pnpm',
       args: ['exec', 'electron-vite', 'dev'],
       usedVirtualDisplay: false,
@@ -38,12 +40,14 @@ describe('desktop dev launcher', () => {
   });
 
   it('wraps electron-vite with xvfb-run only for explicit headless smoke tests', () => {
-    expect(buildDesktopDevCommand({
-      platform: 'linux',
-      env: { ZORID_DESKTOP_HEADLESS: '1' },
-      args: [],
-      commandExists: (command) => command === 'xvfb-run',
-    })).toEqual({
+    expect(
+      buildDesktopDevCommand({
+        platform: 'linux',
+        env: { ZORID_DESKTOP_HEADLESS: '1' },
+        args: [],
+        commandExists: (command) => command === 'xvfb-run',
+      }),
+    ).toEqual({
       command: 'xvfb-run',
       args: ['-a', 'pnpm', 'exec', 'electron-vite', 'dev'],
       usedVirtualDisplay: true,
@@ -51,12 +55,14 @@ describe('desktop dev launcher', () => {
   });
 
   it('runs electron-vite directly when a display exists and preserves extra args', () => {
-    expect(buildDesktopDevCommand({
-      platform: 'linux',
-      env: { DISPLAY: ':0' },
-      args: ['--watch'],
-      commandExists: noCommands,
-    })).toEqual({
+    expect(
+      buildDesktopDevCommand({
+        platform: 'linux',
+        env: { DISPLAY: ':0' },
+        args: ['--watch'],
+        commandExists: noCommands,
+      }),
+    ).toEqual({
       command: 'pnpm',
       args: ['exec', 'electron-vite', 'dev', '--watch'],
       usedVirtualDisplay: false,

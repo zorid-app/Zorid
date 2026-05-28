@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DisposableStack, asPluginId, normalizeVaultPath, ZoridError } from '../packages/shared/src/index';
+import { asPluginId, DisposableStack, normalizeVaultPath, ZoridError } from '../packages/shared/src/index';
 
 describe('shared utilities', () => {
   it('disposes in reverse order', async () => {

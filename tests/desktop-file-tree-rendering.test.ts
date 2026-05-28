@@ -42,6 +42,8 @@ describe('desktop file tree rendering source contract', () => {
     expect(wrapper.findAll('svg')).toHaveLength(0);
 
     await wrapper.findAll('button.tree-item')[2]!.trigger('click');
-    expect(wrapper.emitted('openEntry')?.at(-1)).toEqual([expect.objectContaining({ path: '.zorid/views/tasks.zbase' })]);
+    expect(wrapper.emitted('openEntry')?.at(-1)).toEqual([
+      expect.objectContaining({ path: '.zorid/views/tasks.zbase' }),
+    ]);
   });
 });

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, WebContents } from 'electron';
+import { describe, expect, it, vi } from 'vitest';
 import type { VaultProfile } from '../packages/platform-api/src/index';
 
 const electronMock = vi.hoisted(() => ({
@@ -27,7 +27,6 @@ describe('desktop open vault dialog flow', () => {
     expect(openVault).toHaveBeenCalledWith('/tmp/Vault');
   });
 
-
   it('records the selected root after a vault is opened', async () => {
     const { openVaultFromDialog } = await import('../apps/desktop/src/main/open-vault-dialog');
     const sender = {} as WebContents;
@@ -49,7 +48,9 @@ describe('desktop open vault dialog flow', () => {
     const showOpenDialog = vi.fn(async () => ({ canceled: true, filePaths: [] }));
     electronMock.fromWebContents.mockReturnValue(undefined);
 
-    await expect(openVaultFromDialog({ sender: {} as WebContents }, { openVault }, showOpenDialog)).resolves.toBeUndefined();
+    await expect(
+      openVaultFromDialog({ sender: {} as WebContents }, { openVault }, showOpenDialog),
+    ).resolves.toBeUndefined();
 
     expect(showOpenDialog).toHaveBeenCalledWith({ properties: ['openDirectory'] });
     expect(openVault).not.toHaveBeenCalled();

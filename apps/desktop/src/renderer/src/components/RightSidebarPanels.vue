@@ -1,7 +1,21 @@
 <script setup lang="ts">
 import { ZPanel, ZTag } from '@zorid/ui-vue';
 
-import type { BacklinkDto, BaseDto, DataViewResultDto, FieldDto, FileFieldsDto, IndexStatusDto, MarkdownEmbedDto, OutlineItemDto, SearchResultDto, SettingsSectionDto, TagDto, TypeDto, PluginStatus } from '../types.js';
+import type {
+  BacklinkDto,
+  BaseDto,
+  DataViewResultDto,
+  FieldDto,
+  FileFieldsDto,
+  IndexStatusDto,
+  MarkdownEmbedDto,
+  OutlineItemDto,
+  PluginStatus,
+  SearchResultDto,
+  SettingsSectionDto,
+  TagDto,
+  TypeDto,
+} from '../types.js';
 
 const props = defineProps<{
   searchQuery: string;

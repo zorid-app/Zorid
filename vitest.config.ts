@@ -24,7 +24,9 @@ export default defineConfig({
       '@zorid/plugin-backlinks': fileURLToPath(new URL('./plugins/core/backlinks/src/index.ts', import.meta.url)),
       '@zorid/plugin-data-views': fileURLToPath(new URL('./plugins/core/data-views/src/index.ts', import.meta.url)),
       '@zorid/plugin-fields': fileURLToPath(new URL('./plugins/core/fields/src/index.ts', import.meta.url)),
-      '@zorid/plugin-file-explorer': fileURLToPath(new URL('./plugins/core/file-explorer/src/index.ts', import.meta.url)),
+      '@zorid/plugin-file-explorer': fileURLToPath(
+        new URL('./plugins/core/file-explorer/src/index.ts', import.meta.url),
+      ),
       '@zorid/plugin-host': fileURLToPath(new URL('./packages/plugin-host/src/index.ts', import.meta.url)),
       '@zorid/plugin-outline': fileURLToPath(new URL('./plugins/core/outline/src/index.ts', import.meta.url)),
       '@zorid/plugin-search': fileURLToPath(new URL('./plugins/core/search/src/index.ts', import.meta.url)),
@@ -35,7 +37,7 @@ export default defineConfig({
       '@zorid/ui-vue/components.css': fileURLToPath(new URL('./packages/ui-vue/src/components.css', import.meta.url)),
       '@zorid/ui-vue': fileURLToPath(new URL('./packages/ui-vue/src/index.ts', import.meta.url)),
       '@zorid/vault': fileURLToPath(new URL('./packages/vault/src/index.ts', import.meta.url)),
-      '@zorid/workspace': fileURLToPath(new URL('./packages/workspace/src/index.ts', import.meta.url))
+      '@zorid/workspace': fileURLToPath(new URL('./packages/workspace/src/index.ts', import.meta.url)),
     },
   },
   test: {

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreExportsUsedInFile": true,
+  "rules": {
+    "exports": "warn",
+    "types": "warn",
+    "nsExports": "warn",
+    "nsTypes": "warn",
+    "enumMembers": "warn",
+    "namespaceMembers": "warn"
+  },
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs", "tests/**/*.test.{ts,mjs}"],
+      "project": ["scripts/*.mjs", "tests/**/*.{ts,mjs}"]
+    },
+    "apps/desktop": {
+      "entry": ["src/main/index.ts", "src/preload/index.ts", "src/renderer/src/main.ts"],
+      "project": ["src/**/*.{ts,vue}"],
+      "ignoreUnresolved": ["../../../index.js"],
+      "vite": ["electron.vite.config.ts"]
+    },
+    "packages/ui-vue": {
+      "project": ["src/**/*.{ts,vue}", "scripts/*.mjs"],
+      "ignoreDependencies": ["@vitejs/plugin-vue", "vite"]
+    }
+  }
+}

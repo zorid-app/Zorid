@@ -1,5 +1,5 @@
 :root,
-[data-z-theme="dark"] {
+[data-z-theme='dark'] {
   color-scheme: dark;
 
   /* Primitive neutral palette: Notion-like foundation, tuned for long editor sessions. */
@@ -104,8 +104,8 @@
   --z-shadow-overlay: 0 24px 80px rgba(0, 0, 0, 0.45);
 
   /* Shared non-color tokens that colors depend on visually. */
-  --z-font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --z-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --z-font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --z-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   --z-radius-sm: 8px;
   --z-radius-md: 10px;
   --z-radius-lg: 12px;
@@ -113,7 +113,7 @@
   --z-radius-pill: 999px;
 }
 
-[data-z-theme="light"] {
+[data-z-theme='light'] {
   color-scheme: light;
 
   --z-color-bg: #fbfbfa;

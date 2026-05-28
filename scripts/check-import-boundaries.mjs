@@ -17,13 +17,29 @@ const packageKinds = new Map([
 ]);
 
 const implementationPackages = new Set([
-  '@zorid/app-kernel','@zorid/vault','@zorid/workspace','@zorid/editor','@zorid/metadata','@zorid/object-store',
-  '@zorid/db','@zorid/index-api','@zorid/indexer-js','@zorid/index-worker','@zorid/plugin-host','@zorid/sync',
+  '@zorid/app-kernel',
+  '@zorid/vault',
+  '@zorid/workspace',
+  '@zorid/editor',
+  '@zorid/metadata',
+  '@zorid/object-store',
+  '@zorid/db',
+  '@zorid/index-api',
+  '@zorid/indexer-js',
+  '@zorid/index-worker',
+  '@zorid/plugin-host',
+  '@zorid/sync',
 ]);
 
 const pluginPackages = new Set([
-  '@zorid/plugin-file-explorer','@zorid/plugin-search','@zorid/plugin-backlinks','@zorid/plugin-outline','@zorid/plugin-tags',
-  '@zorid/plugin-status-bar','@zorid/plugin-fields','@zorid/plugin-data-views',
+  '@zorid/plugin-file-explorer',
+  '@zorid/plugin-search',
+  '@zorid/plugin-backlinks',
+  '@zorid/plugin-outline',
+  '@zorid/plugin-tags',
+  '@zorid/plugin-status-bar',
+  '@zorid/plugin-fields',
+  '@zorid/plugin-data-views',
 ]);
 
 for (const name of implementationPackages) packageKinds.set(name, 'implementation');
@@ -36,7 +52,17 @@ const lowerLevel = new Map([
   ['@zorid/metadata', new Set(['@zorid/index-api'])],
   ['@zorid/object-store', new Set(['@zorid/db'])],
   ['@zorid/plugin-host', new Set(['@zorid/plugin-api'])],
-  ['@zorid/app-kernel', new Set(['@zorid/plugin-host','@zorid/vault','@zorid/workspace','@zorid/editor','@zorid/metadata','@zorid/object-store'])],
+  [
+    '@zorid/app-kernel',
+    new Set([
+      '@zorid/plugin-host',
+      '@zorid/vault',
+      '@zorid/workspace',
+      '@zorid/editor',
+      '@zorid/metadata',
+      '@zorid/object-store',
+    ]),
+  ],
 ]);
 
 export function classifyPackage(packageName) {
@@ -57,13 +83,22 @@ export function isImportAllowed(ownerPackage, specifier) {
     return specifier === '@zorid/shared' || specifier === '@zorid/platform-api' || specifier === '@zorid/plugin-api';
   }
   if (ownerKind === 'shell') {
-    return specifier === '@zorid/shared' || specifier === '@zorid/platform-api' || targetKind === 'implementation' || targetKind === 'ui-vue';
+    return (
+      specifier === '@zorid/shared' ||
+      specifier === '@zorid/platform-api' ||
+      targetKind === 'implementation' ||
+      targetKind === 'ui-vue'
+    );
   }
   if (ownerKind === 'app') {
     return targetKind !== 'core-plugin';
   }
   if (ownerKind === 'implementation') {
-    return specifier === '@zorid/shared' || specifier === '@zorid/platform-api' || (lowerLevel.get(ownerPackage)?.has(specifier) ?? false);
+    return (
+      specifier === '@zorid/shared' ||
+      specifier === '@zorid/platform-api' ||
+      (lowerLevel.get(ownerPackage)?.has(specifier) ?? false)
+    );
   }
   return false;
 }
@@ -84,7 +119,8 @@ function readPackageName(packageJsonPath) {
   return JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')).name;
 }
 
-const importPattern = /(?:import|export)\s+(?:type\s+)?(?:[^'\"]*from\s+)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g;
+const importPattern =
+  /(?:import|export)\s+(?:type\s+)?(?:[^'"]*from\s+)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g;
 
 function collectFiles(dir, files = []) {
   if (!fs.existsSync(dir)) return files;

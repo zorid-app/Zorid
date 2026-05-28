@@ -13,7 +13,12 @@ const sections: readonly SettingsSectionDto[] = [
     schema: {
       type: 'object',
       properties: {
-        confirmDeletes: { type: 'boolean', title: 'Confirm deletes', description: 'Ask before deleting files.', default: true },
+        confirmDeletes: {
+          type: 'boolean',
+          title: 'Confirm deletes',
+          description: 'Ask before deleting files.',
+          default: true,
+        },
         displayName: { type: 'string', title: 'Display name', description: 'Name shown in the app.', default: 'Zorid' },
       },
     },
@@ -56,20 +61,26 @@ describe('desktop SettingsWindow structure', () => {
     expect(document.body.querySelector('.settings-header')).toBeNull();
     expect(document.body.querySelector('h2')?.textContent).not.toBe('App and plugin settings');
     expect([...document.body.querySelectorAll('button')].some((button) => button.textContent === 'Close')).toBe(false);
-    expect([...document.body.querySelectorAll('.settings-nav-group h3')].map((node) => node.textContent)).toEqual(['Options', 'Plugin settings']);
+    expect([...document.body.querySelectorAll('.settings-nav-group h3')].map((node) => node.textContent)).toEqual([
+      'Options',
+      'Plugin settings',
+    ]);
     expect(document.body.querySelector('.settings-nav-entry--active')?.textContent).toContain('General');
     expect(document.body.querySelector('.settings-content h3')?.textContent).toBe('General');
     expect(document.body.querySelector('.settings-content')?.textContent).toContain('Confirm deletes');
 
-    const statusButton = [...document.body.querySelectorAll<HTMLButtonElement>('.settings-nav-entry')]
-      .find((button) => button.textContent?.includes('Status Bar'));
+    const statusButton = [...document.body.querySelectorAll<HTMLButtonElement>('.settings-nav-entry')].find((button) =>
+      button.textContent?.includes('Status Bar'),
+    );
     expect(statusButton).toBeDefined();
     statusButton?.click();
     await nextTick();
 
     expect(document.body.querySelector('.settings-nav-entry--active')?.textContent).toContain('Status Bar');
     expect(document.body.querySelector('.settings-content h3')?.textContent).toBe('Status Bar');
-    expect(document.body.querySelector('.settings-content')?.textContent).toContain('zorid.core.status-bar · placeholder');
+    expect(document.body.querySelector('.settings-content')?.textContent).toContain(
+      'zorid.core.status-bar · placeholder',
+    );
     expect(document.body.querySelector('.settings-content')?.textContent).toContain('Show vault');
   });
 
@@ -93,8 +104,9 @@ describe('desktop SettingsWindow structure', () => {
       'Updated',
     ]);
 
-    const statusButton = [...document.body.querySelectorAll<HTMLButtonElement>('.settings-nav-entry')]
-      .find((button) => button.textContent?.includes('Status Bar'));
+    const statusButton = [...document.body.querySelectorAll<HTMLButtonElement>('.settings-nav-entry')].find((button) =>
+      button.textContent?.includes('Status Bar'),
+    );
     statusButton?.click();
     await nextTick();
 

@@ -1,14 +1,24 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { normalizeVaultPath, type VaultPath } from '@zorid/shared';
 import type { IndexedFileRecord } from '@zorid/index-api';
-import { indexMigrations, parseJsonRecord, serializeJson, type IndexStore } from './index.js';
+import { normalizeVaultPath, type VaultPath } from '@zorid/shared';
+import { type IndexStore, indexMigrations, parseJsonRecord, serializeJson } from './index.js';
 
-interface FileRow { path: string; text: string; frontmatter_json: string; fields_json: string; }
-interface ValueRow { value: string; }
+interface FileRow {
+  path: string;
+  text: string;
+  frontmatter_json: string;
+  fields_json: string;
+}
+interface ValueRow {
+  value: string;
+}
 
-export interface NodeSqliteIndexStoreOptions { readonly path: string; readonly pragmas?: boolean; }
+export interface NodeSqliteIndexStoreOptions {
+  readonly path: string;
+  readonly pragmas?: boolean;
+}
 
 export class NodeSqliteIndexStore implements IndexStore {
   readonly database: DatabaseSync;
@@ -25,7 +35,9 @@ export class NodeSqliteIndexStore implements IndexStore {
   migrate(): void {
     for (const migration of indexMigrations) {
       this.database.exec(migration.sql);
-      this.database.prepare('INSERT OR IGNORE INTO schema_migrations(id, applied_at_ms) VALUES (?, ?)').run(migration.id, Date.now());
+      this.database
+        .prepare('INSERT OR IGNORE INTO schema_migrations(id, applied_at_ms) VALUES (?, ?)')
+        .run(migration.id, Date.now());
     }
   }
 
@@ -44,7 +56,9 @@ export class NodeSqliteIndexStore implements IndexStore {
 
   replaceAll(records: readonly IndexedFileRecord[]): void {
     this.transaction(() => {
-      this.database.exec('DELETE FROM search_fts; DELETE FROM headings; DELETE FROM tags; DELETE FROM links; DELETE FROM files;');
+      this.database.exec(
+        'DELETE FROM search_fts; DELETE FROM headings; DELETE FROM tags; DELETE FROM links; DELETE FROM files;',
+      );
       for (const record of records) this.upsert(record);
     });
   }
@@ -52,7 +66,8 @@ export class NodeSqliteIndexStore implements IndexStore {
   upsert(record: IndexedFileRecord): void {
     this.transaction(() => {
       this.delete(record.path);
-      this.database.prepare('INSERT INTO files(path, text, frontmatter_json, fields_json) VALUES (?, ?, ?, ?)')
+      this.database
+        .prepare('INSERT INTO files(path, text, frontmatter_json, fields_json) VALUES (?, ?, ?, ?)')
         .run(record.path, record.text, serializeJson(record.frontmatter), serializeJson(record.fields));
       const insertLink = this.database.prepare('INSERT INTO links(from_path, to_path) VALUES (?, ?)');
       for (const link of record.links) insertLink.run(record.path, link);
@@ -73,16 +88,22 @@ export class NodeSqliteIndexStore implements IndexStore {
   }
 
   get(vaultPath: VaultPath): IndexedFileRecord | undefined {
-    const row = this.database.prepare('SELECT path, text, frontmatter_json, fields_json FROM files WHERE path = ?').get(vaultPath) as FileRow | undefined;
+    const row = this.database
+      .prepare('SELECT path, text, frontmatter_json, fields_json FROM files WHERE path = ?')
+      .get(vaultPath) as FileRow | undefined;
     return row ? this.hydrate(row) : undefined;
   }
 
   all(): readonly IndexedFileRecord[] {
-    const rows = [...this.database.prepare('SELECT path, text, frontmatter_json, fields_json FROM files ORDER BY path').iterate()] as unknown as FileRow[];
+    const rows = [
+      ...this.database.prepare('SELECT path, text, frontmatter_json, fields_json FROM files ORDER BY path').iterate(),
+    ] as unknown as FileRow[];
     return rows.map((row) => this.hydrate(row));
   }
 
-  dispose(): void { if (this.database.isOpen) this.database.close(); }
+  dispose(): void {
+    if (this.database.isOpen) this.database.close();
+  }
 
   hydrate(row: FileRow): IndexedFileRecord {
     return {
@@ -90,7 +111,9 @@ export class NodeSqliteIndexStore implements IndexStore {
       text: row.text,
       frontmatter: parseJsonRecord(row.frontmatter_json),
       fields: parseJsonRecord(row.fields_json),
-      links: this.values('SELECT to_path AS value FROM links WHERE from_path = ? ORDER BY to_path', row.path).map(normalizeVaultPath),
+      links: this.values('SELECT to_path AS value FROM links WHERE from_path = ? ORDER BY to_path', row.path).map(
+        normalizeVaultPath,
+      ),
       tags: this.values('SELECT tag AS value FROM tags WHERE path = ? ORDER BY tag', row.path),
       headings: this.values('SELECT heading AS value FROM headings WHERE path = ? ORDER BY rowid', row.path),
     };
@@ -101,6 +124,8 @@ export class NodeSqliteIndexStore implements IndexStore {
   }
 }
 
-export function createNodeSqliteIndexStore(options: NodeSqliteIndexStoreOptions | string = ':memory:'): NodeSqliteIndexStore {
+export function createNodeSqliteIndexStore(
+  options: NodeSqliteIndexStoreOptions | string = ':memory:',
+): NodeSqliteIndexStore {
   return new NodeSqliteIndexStore(options);
 }

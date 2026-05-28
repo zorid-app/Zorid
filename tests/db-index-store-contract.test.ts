@@ -2,10 +2,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { normalizeVaultPath } from '../packages/shared/src/index';
-import { InMemoryIndexStore, type IndexStore } from '../packages/db/src/index';
+import { type IndexStore, InMemoryIndexStore } from '../packages/db/src/index';
 import { NodeSqliteIndexStore } from '../packages/db/src/node-sqlite';
 import type { IndexedFileRecord } from '../packages/index-api/src/index';
+import { normalizeVaultPath } from '../packages/shared/src/index';
 
 const first: IndexedFileRecord = {
   path: normalizeVaultPath('Notes/A.md'),
@@ -32,7 +32,13 @@ function expectIndexStoreContract(create: () => IndexStore): void {
   try {
     store.replaceAll([second, first]);
     expect(store.all().map((record) => record.path)).toEqual(['Notes/A.md', 'Notes/B.md']);
-    expect(store.get(first.path)).toMatchObject({ path: first.path, headings: ['A'], links: ['Notes/B.md'], tags: ['tag'], fields: { title: 'A', done: false } });
+    expect(store.get(first.path)).toMatchObject({
+      path: first.path,
+      headings: ['A'],
+      links: ['Notes/B.md'],
+      tags: ['tag'],
+      fields: { title: 'A', done: false },
+    });
 
     store.upsert({ ...first, text: 'updated', tags: ['changed'] });
     expect(store.get(first.path)?.text).toBe('updated');
@@ -66,7 +72,9 @@ describe('IndexStore contract', () => {
       const reopened = new NodeSqliteIndexStore(dbPath);
       try {
         expect(reopened.get(first.path)?.frontmatter).toEqual({ title: 'A' });
-        expect(reopened.database.prepare("SELECT name FROM sqlite_master WHERE name = 'search_fts'").get()).toBeTruthy();
+        expect(
+          reopened.database.prepare("SELECT name FROM sqlite_master WHERE name = 'search_fts'").get(),
+        ).toBeTruthy();
       } finally {
         reopened.dispose();
       }

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed, useId } from 'vue';
 import {
   AlertDialogAction,
   AlertDialogCancel,
@@ -10,21 +9,25 @@ import {
   AlertDialogRoot,
   AlertDialogTitle,
 } from 'reka-ui';
+import { computed, useId } from 'vue';
 import ZButton from './ZButton.vue';
 import ZWindowFrame from './ZWindowFrame.vue';
 
-const props = withDefaults(defineProps<{
-  open: boolean;
-  title: string;
-  description?: string | undefined;
-  confirmLabel?: string | undefined;
-  cancelLabel?: string | undefined;
-  destructive?: boolean;
-}>(), {
-  confirmLabel: 'Confirm',
-  cancelLabel: 'Cancel',
-  destructive: false,
-});
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    title: string;
+    description?: string | undefined;
+    confirmLabel?: string | undefined;
+    cancelLabel?: string | undefined;
+    destructive?: boolean;
+  }>(),
+  {
+    confirmLabel: 'Confirm',
+    cancelLabel: 'Cancel',
+    destructive: false,
+  },
+);
 
 const emit = defineEmits<{
   'update:open': [value: boolean];

@@ -26,7 +26,10 @@ export interface ManagedWindow {
 }
 
 export interface ManagedRuntimeEvents {
-  on(event: 'metadata:index-updated' | 'metadata:index-status' | 'vault:opened', listener: (payload: unknown) => void): DisposableLike;
+  on(
+    event: 'metadata:index-updated' | 'metadata:index-status' | 'vault:opened',
+    listener: (payload: unknown) => void,
+  ): DisposableLike;
 }
 
 export interface ManagedRuntime {
@@ -37,7 +40,10 @@ export interface ManagedRuntime {
   dispose(): Promise<void> | void;
 }
 
-export interface VaultWindowManagerOptions<TWindow extends ManagedWindow = ManagedWindow, TRuntime extends ManagedRuntime = ManagedRuntime> {
+export interface VaultWindowManagerOptions<
+  TWindow extends ManagedWindow = ManagedWindow,
+  TRuntime extends ManagedRuntime = ManagedRuntime,
+> {
   readonly createWindow: (role: VaultWindowRole) => TWindow;
   readonly loadWindow: (window: TWindow, role: VaultWindowRole) => Promise<void>;
   readonly createRuntime: () => TRuntime;
@@ -71,7 +77,10 @@ function sendIfLive(window: ManagedWindow, channel: string, payload: unknown): v
   if (canSend(window)) window.webContents.send(channel, payload);
 }
 
-export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, TRuntime extends ManagedRuntime = ManagedRuntime> {
+export class VaultWindowManager<
+  TWindow extends ManagedWindow = ManagedWindow,
+  TRuntime extends ManagedRuntime = ManagedRuntime,
+> {
   readonly #createWindow: (role: VaultWindowRole) => TWindow;
   readonly #loadWindow: (window: TWindow, role: VaultWindowRole) => Promise<void>;
   readonly #createRuntime: () => TRuntime;
@@ -103,7 +112,7 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
     const existing = this.#editorsByRoot.get(normalizedRoot);
     if (existing && !existing.window.isDestroyed()) {
       existing.window.focus();
-      const profile = existing.profile ?? existing.runtime.vaultProfile() ?? await existing.opening;
+      const profile = existing.profile ?? existing.runtime.vaultProfile() ?? (await existing.opening);
       if (!profile) throw new Error('Existing editor runtime has no open vault profile.');
       await this.#sendSnapshot(existing);
       return profile;
@@ -112,7 +121,13 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
     const window = this.#createWindow('editor');
     const runtime = this.#createRuntime();
     const senderId = window.webContents.id;
-    const entry: EditorEntry<TRuntime, TWindow> = { root: normalizedRoot, senderId, window, runtime, eventDisposables: [] };
+    const entry: EditorEntry<TRuntime, TWindow> = {
+      root: normalizedRoot,
+      senderId,
+      window,
+      runtime,
+      eventDisposables: [],
+    };
     this.#editorsBySender.set(senderId, entry);
     this.#editorsByRoot.set(normalizedRoot, entry);
     this.#prepareWindow(window, 'editor');
@@ -150,10 +165,16 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
   }
 
   async disposeAll(): Promise<void> {
-    const results = await Promise.allSettled([...this.#editorsBySender.values()].map((entry) => this.#disposeEditor(entry)));
+    const results = await Promise.allSettled(
+      [...this.#editorsBySender.values()].map((entry) => this.#disposeEditor(entry)),
+    );
     this.#launchersBySender.clear();
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-    if (failures.length > 0) throw new AggregateError(failures.map((failure) => failure.reason), 'One or more editor runtimes failed to dispose.');
+    if (failures.length > 0)
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        'One or more editor runtimes failed to dispose.',
+      );
   }
 
   #prepareWindow(window: TWindow, role: VaultWindowRole): void {
@@ -164,8 +185,9 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
       else {
         const entry = this.#editorsBySender.get(senderId);
         if (entry) {
-          void this.#disposeEditor(entry)
-            .catch((error: unknown) => { console.error('Failed to dispose Zorid editor runtime after window closed.', error); });
+          void this.#disposeEditor(entry).catch((error: unknown) => {
+            console.error('Failed to dispose Zorid editor runtime after window closed.', error);
+          });
         }
       }
     });
@@ -173,7 +195,9 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
 
   #forwardRuntimeEvents(entry: EditorEntry<TRuntime, TWindow>): void {
     const forward = (channel: string) => (payload: unknown) => sendIfLive(entry.window, channel, payload);
-    entry.eventDisposables.push(entry.runtime.kernel.events.on('metadata:index-updated', forward('zorid:index-updated')));
+    entry.eventDisposables.push(
+      entry.runtime.kernel.events.on('metadata:index-updated', forward('zorid:index-updated')),
+    );
     entry.eventDisposables.push(entry.runtime.kernel.events.on('metadata:index-status', forward('zorid:index-status')));
     entry.eventDisposables.push(entry.runtime.kernel.events.on('vault:opened', forward('zorid:vault-opened')));
   }
@@ -195,7 +219,11 @@ export class VaultWindowManager<TWindow extends ManagedWindow = ManagedWindow, T
       this.#editorsBySender.delete(entry.senderId);
       if (this.#editorsByRoot.get(entry.root) === entry) this.#editorsByRoot.delete(entry.root);
       const failures = cleanupResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-      if (failures.length > 0) throw new AggregateError(failures.map((failure) => failure.reason), 'Editor runtime disposal failed.');
+      if (failures.length > 0)
+        throw new AggregateError(
+          failures.map((failure) => failure.reason),
+          'Editor runtime disposal failed.',
+        );
     })();
     return entry.disposing;
   }

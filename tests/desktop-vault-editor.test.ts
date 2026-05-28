@@ -2,13 +2,15 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { createDesktopShellState, withActiveTab } from '../packages/desktop-shell/src/index';
+import { EditorService } from '../packages/editor/src/index';
 import { normalizeVaultPath } from '../packages/shared/src/index';
 import { createVaultService } from '../packages/vault/src/index';
 import { createWorkspaceService } from '../packages/workspace/src/index';
-import { EditorService } from '../packages/editor/src/index';
-import { createDesktopShellState, withActiveTab } from '../packages/desktop-shell/src/index';
 
-async function tempVault() { return mkdtemp(path.join(tmpdir(), 'zorid-vault-')); }
+async function tempVault() {
+  return mkdtemp(path.join(tmpdir(), 'zorid-vault-'));
+}
 
 describe('desktop vault/editor/workspace slice', () => {
   it('creates, opens, edits, and saves markdown through vault/editor services', async () => {
@@ -26,7 +28,9 @@ describe('desktop vault/editor/workspace slice', () => {
       expect(handle.isDirty()).toBe(false);
       expect(await vault.read(note)).toContain('Edited');
       expect((await vault.list(normalizeVaultPath('Notes')))[0]?.path).toBe(note);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('opens files, splits panes, snapshots, and restores workspace state', async () => {

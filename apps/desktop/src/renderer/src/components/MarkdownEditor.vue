@@ -16,7 +16,16 @@ function createState(doc: string): EditorState {
     doc,
     extensions: [
       markdown(),
-      keymap.of([{ key: 'Mod-s', preventDefault: true, run: () => { emit('save'); return true; } }]),
+      keymap.of([
+        {
+          key: 'Mod-s',
+          preventDefault: true,
+          run: () => {
+            emit('save');
+            return true;
+          },
+        },
+      ]),
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !applyingExternalText) emit('change', update.state.doc.toString());
       }),
@@ -29,12 +38,15 @@ onMounted(() => {
   view = new EditorView({ state: createState(props.text), parent: host.value });
 });
 
-watch(() => props.text, (text) => {
-  if (!view || view.state.doc.toString() === text) return;
-  applyingExternalText = true;
-  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
-  applyingExternalText = false;
-});
+watch(
+  () => props.text,
+  (text) => {
+    if (!view || view.state.doc.toString() === text) return;
+    applyingExternalText = true;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+    applyingExternalText = false;
+  },
+);
 
 onBeforeUnmount(() => {
   view?.destroy();

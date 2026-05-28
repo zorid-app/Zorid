@@ -1,6 +1,28 @@
-import { DisposableStack, ZoridError, asPluginId, normalizeVaultPath, type Disposable, type JsonValue } from '@zorid/shared';
+import type {
+  CapabilityName,
+  CommandsAPI,
+  DataViewRenderOptions,
+  DataViewsAPI,
+  EditorAPI,
+  EventBusAPI,
+  FieldsAPI,
+  MetadataAPI,
+  ObjectStoreAPI,
+  PluginRegistryAPI,
+  SearchAPI,
+  SettingsAPI,
+  VaultAPI,
+  WorkspaceAPI,
+} from '@zorid/platform-api';
 import type { ActivationTrigger, PluginManifest, ZoridPlugin, ZoridPluginContext } from '@zorid/plugin-api';
-import type { CapabilityName, CommandsAPI, DataViewRenderOptions, DataViewsAPI, EditorAPI, EventBusAPI, FieldsAPI, MetadataAPI, ObjectStoreAPI, PluginRegistryAPI, SearchAPI, SettingsAPI, VaultAPI, WorkspaceAPI } from '@zorid/platform-api';
+import {
+  asPluginId,
+  type Disposable,
+  DisposableStack,
+  type JsonValue,
+  type normalizeVaultPath,
+  ZoridError,
+} from '@zorid/shared';
 
 export type PluginLoadStatus = 'discovered' | 'placeholder' | 'loading' | 'active' | 'failed' | 'disabled';
 
@@ -21,7 +43,6 @@ export interface PluginLoadRecord {
   capabilityDiagnostics?: readonly CapabilityDiagnostic[];
 }
 
-
 export interface StaticPluginSettingsContribution {
   readonly pluginId: string;
   readonly id: string;
@@ -30,7 +51,11 @@ export interface StaticPluginSettingsContribution {
   readonly pluginStatus: PluginLoadStatus;
 }
 
-export interface CapabilityDiagnostic { readonly code: 'plugin.capability.missing' | 'plugin.capability.undeclared'; readonly capability: CapabilityName; readonly pluginId: string; }
+export interface CapabilityDiagnostic {
+  readonly code: 'plugin.capability.missing' | 'plugin.capability.undeclared';
+  readonly capability: CapabilityName;
+  readonly pluginId: string;
+}
 
 export interface ManifestValidationResult {
   readonly ok: boolean;
@@ -45,13 +70,27 @@ export function validatePluginManifest(input: unknown): ManifestValidationResult
   if (!manifest || typeof manifest !== 'object') return { ok: false, errors: ['manifest must be an object'] };
   if (manifest.schemaVersion !== 1) errors.push('schemaVersion must be 1');
   if (typeof manifest.id !== 'string') errors.push('id is required');
-  else { try { asPluginId(manifest.id); } catch { errors.push(`invalid plugin id: ${manifest.id}`); } }
-  for (const key of ['name', 'version', 'entry', 'zoridApi'] as const) if (typeof manifest[key] !== 'string') errors.push(`${key} is required`);
+  else {
+    try {
+      asPluginId(manifest.id);
+    } catch {
+      errors.push(`invalid plugin id: ${manifest.id}`);
+    }
+  }
+  for (const key of ['name', 'version', 'entry', 'zoridApi'] as const)
+    if (typeof manifest[key] !== 'string') errors.push(`${key} is required`);
   if (manifest.kind !== 'core' && manifest.kind !== 'community') errors.push('kind must be core or community');
-  if (!Array.isArray(manifest.platforms) || manifest.platforms.some((p) => p !== 'desktop' && p !== 'mobile')) errors.push('platforms must contain desktop/mobile');
-  if (!manifest.capabilities || !Array.isArray(manifest.capabilities.required) || !Array.isArray(manifest.capabilities.optional)) errors.push('capabilities.required and capabilities.optional are required arrays');
+  if (!Array.isArray(manifest.platforms) || manifest.platforms.some((p) => p !== 'desktop' && p !== 'mobile'))
+    errors.push('platforms must contain desktop/mobile');
+  if (
+    !manifest.capabilities ||
+    !Array.isArray(manifest.capabilities.required) ||
+    !Array.isArray(manifest.capabilities.optional)
+  )
+    errors.push('capabilities.required and capabilities.optional are required arrays');
   for (const trigger of manifest.activation ?? []) {
-    if (trigger !== 'onStartup' && !validActivationPrefixes.some((prefix) => trigger.startsWith(prefix))) errors.push(`invalid activation trigger: ${trigger}`);
+    if (trigger !== 'onStartup' && !validActivationPrefixes.some((prefix) => trigger.startsWith(prefix)))
+      errors.push(`invalid activation trigger: ${trigger}`);
   }
   return { ok: errors.length === 0, errors };
 }
@@ -64,7 +103,8 @@ export function resolvePluginOrder(manifests: readonly PluginManifest[]): string
 
   function visit(id: string, chain: string[]): void {
     if (visited.has(id)) return;
-    if (visiting.has(id)) throw new ZoridError('plugin.dependency.cycle', `Plugin dependency cycle: ${[...chain, id].join(' -> ')}`);
+    if (visiting.has(id))
+      throw new ZoridError('plugin.dependency.cycle', `Plugin dependency cycle: ${[...chain, id].join(' -> ')}`);
     const manifest = byId.get(id);
     if (!manifest) throw new ZoridError('plugin.dependency.missing', `Missing plugin dependency: ${id}`);
     visiting.add(id);
@@ -103,8 +143,10 @@ export function createLazyTriggerIndex(manifests: readonly PluginManifest[]): La
       if (trigger === 'onStartup') onStartup.push(manifest.id);
       else if (trigger.startsWith('onCommand:')) add(onCommand, trigger.slice('onCommand:'.length), manifest.id);
       else if (trigger.startsWith('onView:')) add(onView, trigger.slice('onView:'.length), manifest.id);
-      else if (trigger.startsWith('onFileExtension:')) add(onFileExtension, trigger.slice('onFileExtension:'.length), manifest.id);
-      else if (trigger.startsWith('onMarkdownEmbed:')) add(onMarkdownEmbed, trigger.slice('onMarkdownEmbed:'.length), manifest.id);
+      else if (trigger.startsWith('onFileExtension:'))
+        add(onFileExtension, trigger.slice('onFileExtension:'.length), manifest.id);
+      else if (trigger.startsWith('onMarkdownEmbed:'))
+        add(onMarkdownEmbed, trigger.slice('onMarkdownEmbed:'.length), manifest.id);
     }
   }
   return { onCommand, onView, onFileExtension, onMarkdownEmbed, onStartup };
@@ -156,20 +198,40 @@ export class PluginHost {
     }
   }
 
-  records(): readonly PluginLoadRecord[] { return [...this.#records.values()].map((record) => ({ ...record })); }
+  records(): readonly PluginLoadRecord[] {
+    return [...this.#records.values()].map((record) => ({ ...record }));
+  }
 
   staticSettings(): readonly StaticPluginSettingsContribution[] {
     const settings: StaticPluginSettingsContribution[] = [];
     for (const manifest of this.manifests.values()) {
       const record = this.#records.get(manifest.id);
       for (const section of manifest.contributes?.settings ?? []) {
-        settings.push({ pluginId: manifest.id, id: section.id, title: section.title, schema: section.schema, pluginStatus: record?.status ?? 'discovered' });
+        settings.push({
+          pluginId: manifest.id,
+          id: section.id,
+          title: section.title,
+          schema: section.schema,
+          pluginStatus: record?.status ?? 'discovered',
+        });
       }
     }
     return settings;
   }
-  record(pluginId: string): PluginLoadRecord | undefined { const record = this.#records.get(pluginId); return record ? { ...record } : undefined; }
-  #emit(event: 'plugin:placeholder-registered' | 'plugin:load-started' | 'plugin:loaded' | 'plugin:failed' | 'plugin:disabled' | 'plugin:unloaded', record: PluginLoadRecord): void {
+  record(pluginId: string): PluginLoadRecord | undefined {
+    const record = this.#records.get(pluginId);
+    return record ? { ...record } : undefined;
+  }
+  #emit(
+    event:
+      | 'plugin:placeholder-registered'
+      | 'plugin:load-started'
+      | 'plugin:loaded'
+      | 'plugin:failed'
+      | 'plugin:disabled'
+      | 'plugin:unloaded',
+    record: PluginLoadRecord,
+  ): void {
     this.#options.events?.emit(event, { ...record });
   }
 
@@ -182,7 +244,10 @@ export class PluginHost {
     if (record.status === 'active') return;
 
     const loadedDeps: string[] = [];
-    for (const dep of Object.keys(manifest.dependsOn ?? {})) { await this.activate(dep, 'dependency'); loadedDeps.push(dep); }
+    for (const dep of Object.keys(manifest.dependsOn ?? {})) {
+      await this.activate(dep, 'dependency');
+      loadedDeps.push(dep);
+    }
     record.dependenciesLoaded = loadedDeps;
 
     const start = this.#options.now?.() ?? Date.now();
@@ -203,14 +268,15 @@ export class PluginHost {
       record.durationMs = record.loadedAtMs - start;
       this.#emit('plugin:loaded', record);
     } catch (error) {
-      await stack.dispose().catch((disposeError: unknown) => { record.lastError = `${error instanceof Error ? error.message : String(error)}; dispose failed: ${disposeError instanceof Error ? disposeError.message : String(disposeError)}`; });
+      await stack.dispose().catch((disposeError: unknown) => {
+        record.lastError = `${error instanceof Error ? error.message : String(error)}; dispose failed: ${disposeError instanceof Error ? disposeError.message : String(disposeError)}`;
+      });
       record.status = 'failed';
       record.lastError = error instanceof Error ? error.message : String(error);
       this.#emit('plugin:failed', record);
       throw error;
     }
   }
-
 
   #createPluginContext(manifest: PluginManifest, stack: DisposableStack): ZoridPluginContext {
     const base = this.#options.createBaseContext(manifest, stack) as ZoridPluginContext & Record<string, unknown>;
@@ -229,12 +295,17 @@ export class PluginHost {
       }
       if (!this.#options.capabilities.has(capability)) {
         recordDiagnostic('plugin.capability.missing', capability);
-        if (required.has(capability)) throw new ZoridError('plugin.capability.missing', `Capability unavailable for ${manifest.id}: ${capability}`);
+        if (required.has(capability))
+          throw new ZoridError('plugin.capability.missing', `Capability unavailable for ${manifest.id}: ${capability}`);
         return false;
       }
       return true;
     };
-    const unavailable = (capability: CapabilityName) => new ZoridError('plugin.capability.unavailable', `Optional capability unavailable for ${manifest.id}: ${capability}`);
+    const unavailable = (capability: CapabilityName) =>
+      new ZoridError(
+        'plugin.capability.unavailable',
+        `Optional capability unavailable for ${manifest.id}: ${capability}`,
+      );
     const writableObjectCapability = (path: unknown): CapabilityName => {
       const stringPath = String(path);
       if (stringPath.endsWith('.ztype')) return 'vault.write.ztype';
@@ -242,96 +313,203 @@ export class PluginHost {
       if (stringPath.endsWith('.md') || stringPath.endsWith('.markdown')) return 'vault.write.markdown';
       return 'vault.write';
     };
-    const wrapVault = (vault: VaultAPI | undefined): VaultAPI | undefined => vault && {
-      ...vault,
-      readText: (path) => ensure('vault.read') ? vault.readText(path) : Promise.reject(unavailable('vault.read')),
-      writeText: (path, contents) => ensure('vault.write') ? vault.writeText(path, contents) : Promise.reject(unavailable('vault.write')),
-      read: (path) => ensure('vault.read') ? vault.read(path) : Promise.reject(unavailable('vault.read')),
-      write: (path, contents) => ensure('vault.write') ? vault.write(path, contents) : Promise.reject(unavailable('vault.write')),
-      list: (path) => ensure('vault.read') ? vault.list(path) : Promise.reject(unavailable('vault.read')),
-      stat: (path) => ensure('vault.read') ? vault.stat(path) : Promise.reject(unavailable('vault.read')),
-      createFolder: (path) => ensure('vault.write') ? vault.createFolder(path) : Promise.reject(unavailable('vault.write')),
-      rename: (from, to) => ensure('vault.write') ? vault.rename(from, to) : Promise.reject(unavailable('vault.write')),
-      delete: (path) => ensure('vault.write') ? vault.delete(path) : Promise.reject(unavailable('vault.write')),
-      watch: ((pathOrListener: Parameters<VaultAPI['watch']>[0], maybeCallback?: (event: import('@zorid/platform-api').VaultChangeEvent) => void) => {
-        if (!(ensure('vault.read') && ensure('nativeFs.watch'))) throw unavailable('nativeFs.watch');
-        return typeof pathOrListener === 'function' ? vault.watch(pathOrListener) : vault.watch(pathOrListener, maybeCallback!);
-      }) as VaultAPI['watch'],
-    };
-    const wrapWorkspace = (workspace: WorkspaceAPI | undefined): WorkspaceAPI | undefined => workspace && {
-      ...workspace,
-      openFile: (path, options) => ensure('workspace.navigation') ? workspace.openFile(path, options) : Promise.reject(unavailable('workspace.navigation')),
-      openView: ((typeOrView: Parameters<WorkspaceAPI['openView']>[0], inputOrOptions?: unknown, maybeOptions?: import('@zorid/platform-api').OpenViewOptions) => ensure('workspace.views') ? workspace.openView(typeOrView as never, inputOrOptions as never, maybeOptions as never) : Promise.reject(unavailable('workspace.views'))) as WorkspaceAPI['openView'],
-      splitPane: (paneId, direction) => ensure('workspace.navigation') ? workspace.splitPane(paneId, direction) : Promise.reject(unavailable('workspace.navigation')),
-      closePane: (paneId) => ensure('workspace.navigation') ? workspace.closePane(paneId) : Promise.reject(unavailable('workspace.navigation')),
-      getSnapshot: () => workspace.getSnapshot(),
-      subscribe: (listener) => workspace.subscribe(listener),
-      registerView: (contribution) => ensure('workspace.views') ? workspace.registerView(contribution) : (() => { throw unavailable('workspace.views'); })(),
-      activeFile: () => workspace.activeFile(),
-      split: (direction) => ensure('workspace.navigation') ? workspace.split(direction) : Promise.reject(unavailable('workspace.navigation')),
-    };
-    const wrapEditor = (editor: EditorAPI | undefined): EditorAPI | undefined => editor && {
-      ...editor,
-      getActiveEditor: () => ensure('editor.read') ? editor.getActiveEditor() : (() => { throw unavailable('editor.read'); })(),
-      activeEditor: () => ensure('editor.read') ? editor.activeEditor() : (() => { throw unavailable('editor.read'); })(),
-      openDocument: (path, options) => ensure('editor.read') ? editor.openDocument(path, options) : Promise.reject(unavailable('editor.read')),
-      open: (path) => ensure('editor.read') ? editor.open(path) : Promise.reject(unavailable('editor.read')),
-      save: (handle) => ensure('editor.write') ? editor.save(handle) : Promise.reject(unavailable('editor.write')),
-      registerExtension: (extension) => ensure('editor.write') ? editor.registerExtension(extension) : (() => { throw unavailable('editor.write'); })(),
-      registerCommand: (command) => ensure('editor.write') ? editor.registerCommand(command) : (() => { throw unavailable('editor.write'); })(),
-    };
-    const wrapMetadata = (metadata: MetadataAPI | undefined): MetadataAPI | undefined => metadata && {
-      ...metadata,
-      getFile: (path) => ensure('metadata.read') ? metadata.getFile(path) : Promise.reject(unavailable('metadata.read')),
-      backlinks: (path) => ensure('metadata.read') ? metadata.backlinks(path) : Promise.reject(unavailable('metadata.read')),
-      tags: () => ensure('metadata.read') ? metadata.tags() : Promise.reject(unavailable('metadata.read')),
-    };
-    const wrapSearch = (search: SearchAPI | undefined): SearchAPI | undefined => search && {
-      ...search,
-      search: (query, options) => ensure('metadata.read') ? search.search(query, options) : Promise.reject(unavailable('metadata.read')),
-    };
-    const wrapObjects = (objects: ObjectStoreAPI | undefined): ObjectStoreAPI | undefined => objects && {
-      ...objects,
-      readType: (path) => ensure('vault.read') ? objects.readType(path) : Promise.reject(unavailable('vault.read')),
-      readBase: (path) => ensure('vault.read') ? objects.readBase(path) : Promise.reject(unavailable('vault.read')),
-      writeObject: (path, value) => ensure(writableObjectCapability(path)) ? objects.writeObject(path, value) : Promise.reject(unavailable(writableObjectCapability(path))),
-    };
-    const wrapFields = (fields: FieldsAPI | undefined): FieldsAPI | undefined => fields && {
-      ...fields,
-      getFields: (path) => ensure('metadata.read') ? fields.getFields(path) : Promise.reject(unavailable('metadata.read')),
-      getType: (path) => ensure('metadata.read') ? fields.getType(path) : Promise.reject(unavailable('metadata.read')),
-      updateField: (path, key, value) => ensure('vault.write.markdown') ? fields.updateField(path, key, value) : Promise.reject(unavailable('vault.write.markdown')),
-      setType: (path, typePath) => ensure('vault.write.ztype') ? fields.setType(path, typePath) : Promise.reject(unavailable('vault.write.ztype')),
-    };
-    const wrapDataViews = (dataViews: DataViewsAPI | undefined): DataViewsAPI | undefined => dataViews && {
-      ...dataViews,
-      registerRenderer: (renderer) => ensure('workspace.views') ? dataViews.registerRenderer(renderer) : (() => { throw unavailable('workspace.views'); })(),
-      evaluateFilters: (filters) => ensure('metadata.read') ? dataViews.evaluateFilters(filters) : Promise.reject(unavailable('metadata.read')),
-      openBase: (path) => (ensure('workspace.views') && ensure('vault.read')) ? dataViews.openBase(path) : Promise.reject(unavailable('vault.read')),
-      renderEmbed: (container, path, options) => {
-        if (!(ensure('workspace.views') && ensure('vault.read'))) return Promise.reject(unavailable('vault.read'));
-        const scoped = dataViews as DataViewsAPI & { renderEmbedForPlugin?: (container: HTMLElement, path: ReturnType<typeof normalizeVaultPath>, callerPluginId: ReturnType<typeof asPluginId>, options?: DataViewRenderOptions) => Promise<Disposable> };
-        return scoped.renderEmbedForPlugin ? scoped.renderEmbedForPlugin(container, path, asPluginId(manifest.id), options) : dataViews.renderEmbed(container, path, options);
-      },
-    };
-    const wrapCommands = (commands: CommandsAPI | undefined): CommandsAPI | undefined => commands && {
-      ...commands,
-      register: (command) => ensure('commands.register') ? commands.register(command) : (() => { throw unavailable('commands.register'); })(),
-      execute: (id, args) => commands.execute(id, args),
-      list: () => commands.list(),
-    };
-    const wrapSettings = (settings: SettingsAPI | undefined): SettingsAPI | undefined => settings && {
-      ...settings,
-      register: (section) => ensure('settings.register') ? settings.register(section) : (() => { throw unavailable('settings.register'); })(),
-    };
-    const wrapPlugins = (plugins: PluginRegistryAPI | undefined): PluginRegistryAPI | undefined => plugins && {
-      ...plugins,
-      getApi: (pluginId) => plugins.getApi(pluginId),
-      isActive: (pluginId) => plugins.isActive(pluginId),
-      getStatus: (pluginId) => plugins.getStatus(pluginId),
-      listStatuses: () => plugins.listStatuses(),
-      activate: (pluginId) => plugins.activate(pluginId),
-    };
+    const wrapVault = (vault: VaultAPI | undefined): VaultAPI | undefined =>
+      vault && {
+        ...vault,
+        readText: (path) => (ensure('vault.read') ? vault.readText(path) : Promise.reject(unavailable('vault.read'))),
+        writeText: (path, contents) =>
+          ensure('vault.write') ? vault.writeText(path, contents) : Promise.reject(unavailable('vault.write')),
+        read: (path) => (ensure('vault.read') ? vault.read(path) : Promise.reject(unavailable('vault.read'))),
+        write: (path, contents) =>
+          ensure('vault.write') ? vault.write(path, contents) : Promise.reject(unavailable('vault.write')),
+        list: (path) => (ensure('vault.read') ? vault.list(path) : Promise.reject(unavailable('vault.read'))),
+        stat: (path) => (ensure('vault.read') ? vault.stat(path) : Promise.reject(unavailable('vault.read'))),
+        createFolder: (path) =>
+          ensure('vault.write') ? vault.createFolder(path) : Promise.reject(unavailable('vault.write')),
+        rename: (from, to) =>
+          ensure('vault.write') ? vault.rename(from, to) : Promise.reject(unavailable('vault.write')),
+        delete: (path) => (ensure('vault.write') ? vault.delete(path) : Promise.reject(unavailable('vault.write'))),
+        watch: ((
+          pathOrListener: Parameters<VaultAPI['watch']>[0],
+          maybeCallback?: (event: import('@zorid/platform-api').VaultChangeEvent) => void,
+        ) => {
+          if (!(ensure('vault.read') && ensure('nativeFs.watch'))) throw unavailable('nativeFs.watch');
+          return typeof pathOrListener === 'function'
+            ? vault.watch(pathOrListener)
+            : vault.watch(pathOrListener, maybeCallback!);
+        }) as VaultAPI['watch'],
+      };
+    const wrapWorkspace = (workspace: WorkspaceAPI | undefined): WorkspaceAPI | undefined =>
+      workspace && {
+        ...workspace,
+        openFile: (path, options) =>
+          ensure('workspace.navigation')
+            ? workspace.openFile(path, options)
+            : Promise.reject(unavailable('workspace.navigation')),
+        openView: ((
+          typeOrView: Parameters<WorkspaceAPI['openView']>[0],
+          inputOrOptions?: unknown,
+          maybeOptions?: import('@zorid/platform-api').OpenViewOptions,
+        ) =>
+          ensure('workspace.views')
+            ? workspace.openView(typeOrView as never, inputOrOptions as never, maybeOptions as never)
+            : Promise.reject(unavailable('workspace.views'))) as WorkspaceAPI['openView'],
+        splitPane: (paneId, direction) =>
+          ensure('workspace.navigation')
+            ? workspace.splitPane(paneId, direction)
+            : Promise.reject(unavailable('workspace.navigation')),
+        closePane: (paneId) =>
+          ensure('workspace.navigation')
+            ? workspace.closePane(paneId)
+            : Promise.reject(unavailable('workspace.navigation')),
+        getSnapshot: () => workspace.getSnapshot(),
+        subscribe: (listener) => workspace.subscribe(listener),
+        registerView: (contribution) =>
+          ensure('workspace.views')
+            ? workspace.registerView(contribution)
+            : (() => {
+                throw unavailable('workspace.views');
+              })(),
+        activeFile: () => workspace.activeFile(),
+        split: (direction) =>
+          ensure('workspace.navigation')
+            ? workspace.split(direction)
+            : Promise.reject(unavailable('workspace.navigation')),
+      };
+    const wrapEditor = (editor: EditorAPI | undefined): EditorAPI | undefined =>
+      editor && {
+        ...editor,
+        getActiveEditor: () =>
+          ensure('editor.read')
+            ? editor.getActiveEditor()
+            : (() => {
+                throw unavailable('editor.read');
+              })(),
+        activeEditor: () =>
+          ensure('editor.read')
+            ? editor.activeEditor()
+            : (() => {
+                throw unavailable('editor.read');
+              })(),
+        openDocument: (path, options) =>
+          ensure('editor.read') ? editor.openDocument(path, options) : Promise.reject(unavailable('editor.read')),
+        open: (path) => (ensure('editor.read') ? editor.open(path) : Promise.reject(unavailable('editor.read'))),
+        save: (handle) => (ensure('editor.write') ? editor.save(handle) : Promise.reject(unavailable('editor.write'))),
+        registerExtension: (extension) =>
+          ensure('editor.write')
+            ? editor.registerExtension(extension)
+            : (() => {
+                throw unavailable('editor.write');
+              })(),
+        registerCommand: (command) =>
+          ensure('editor.write')
+            ? editor.registerCommand(command)
+            : (() => {
+                throw unavailable('editor.write');
+              })(),
+      };
+    const wrapMetadata = (metadata: MetadataAPI | undefined): MetadataAPI | undefined =>
+      metadata && {
+        ...metadata,
+        getFile: (path) =>
+          ensure('metadata.read') ? metadata.getFile(path) : Promise.reject(unavailable('metadata.read')),
+        backlinks: (path) =>
+          ensure('metadata.read') ? metadata.backlinks(path) : Promise.reject(unavailable('metadata.read')),
+        tags: () => (ensure('metadata.read') ? metadata.tags() : Promise.reject(unavailable('metadata.read'))),
+      };
+    const wrapSearch = (search: SearchAPI | undefined): SearchAPI | undefined =>
+      search && {
+        ...search,
+        search: (query, options) =>
+          ensure('metadata.read') ? search.search(query, options) : Promise.reject(unavailable('metadata.read')),
+      };
+    const wrapObjects = (objects: ObjectStoreAPI | undefined): ObjectStoreAPI | undefined =>
+      objects && {
+        ...objects,
+        readType: (path) => (ensure('vault.read') ? objects.readType(path) : Promise.reject(unavailable('vault.read'))),
+        readBase: (path) => (ensure('vault.read') ? objects.readBase(path) : Promise.reject(unavailable('vault.read'))),
+        writeObject: (path, value) =>
+          ensure(writableObjectCapability(path))
+            ? objects.writeObject(path, value)
+            : Promise.reject(unavailable(writableObjectCapability(path))),
+      };
+    const wrapFields = (fields: FieldsAPI | undefined): FieldsAPI | undefined =>
+      fields && {
+        ...fields,
+        getFields: (path) =>
+          ensure('metadata.read') ? fields.getFields(path) : Promise.reject(unavailable('metadata.read')),
+        getType: (path) =>
+          ensure('metadata.read') ? fields.getType(path) : Promise.reject(unavailable('metadata.read')),
+        updateField: (path, key, value) =>
+          ensure('vault.write.markdown')
+            ? fields.updateField(path, key, value)
+            : Promise.reject(unavailable('vault.write.markdown')),
+        setType: (path, typePath) =>
+          ensure('vault.write.ztype')
+            ? fields.setType(path, typePath)
+            : Promise.reject(unavailable('vault.write.ztype')),
+      };
+    const wrapDataViews = (dataViews: DataViewsAPI | undefined): DataViewsAPI | undefined =>
+      dataViews && {
+        ...dataViews,
+        registerRenderer: (renderer) =>
+          ensure('workspace.views')
+            ? dataViews.registerRenderer(renderer)
+            : (() => {
+                throw unavailable('workspace.views');
+              })(),
+        evaluateFilters: (filters) =>
+          ensure('metadata.read') ? dataViews.evaluateFilters(filters) : Promise.reject(unavailable('metadata.read')),
+        openBase: (path) =>
+          ensure('workspace.views') && ensure('vault.read')
+            ? dataViews.openBase(path)
+            : Promise.reject(unavailable('vault.read')),
+        renderEmbed: (container, path, options) => {
+          if (!(ensure('workspace.views') && ensure('vault.read'))) return Promise.reject(unavailable('vault.read'));
+          const scoped = dataViews as DataViewsAPI & {
+            renderEmbedForPlugin?: (
+              container: HTMLElement,
+              path: ReturnType<typeof normalizeVaultPath>,
+              callerPluginId: ReturnType<typeof asPluginId>,
+              options?: DataViewRenderOptions,
+            ) => Promise<Disposable>;
+          };
+          return scoped.renderEmbedForPlugin
+            ? scoped.renderEmbedForPlugin(container, path, asPluginId(manifest.id), options)
+            : dataViews.renderEmbed(container, path, options);
+        },
+      };
+    const wrapCommands = (commands: CommandsAPI | undefined): CommandsAPI | undefined =>
+      commands && {
+        ...commands,
+        register: (command) =>
+          ensure('commands.register')
+            ? commands.register(command)
+            : (() => {
+                throw unavailable('commands.register');
+              })(),
+        execute: (id, args) => commands.execute(id, args),
+        list: () => commands.list(),
+      };
+    const wrapSettings = (settings: SettingsAPI | undefined): SettingsAPI | undefined =>
+      settings && {
+        ...settings,
+        register: (section) =>
+          ensure('settings.register')
+            ? settings.register(section)
+            : (() => {
+                throw unavailable('settings.register');
+              })(),
+      };
+    const wrapPlugins = (plugins: PluginRegistryAPI | undefined): PluginRegistryAPI | undefined =>
+      plugins && {
+        ...plugins,
+        getApi: (pluginId) => plugins.getApi(pluginId),
+        isActive: (pluginId) => plugins.isActive(pluginId),
+        getStatus: (pluginId) => plugins.getStatus(pluginId),
+        listStatuses: () => plugins.listStatuses(),
+        activate: (pluginId) => plugins.activate(pluginId),
+      };
     return {
       ...base,
       vault: wrapVault(base.vault as VaultAPI | undefined) ?? base.vault,
@@ -347,13 +525,48 @@ export class PluginHost {
       plugins: wrapPlugins(base.plugins as PluginRegistryAPI | undefined) ?? base.plugins,
       register: base.register && {
         ...base.register,
-        command: (command) => ensure('commands.register') ? base.register.command(command) : (() => { throw unavailable('commands.register'); })(),
-        setting: (schema) => ensure('settings.register') ? base.register.setting(schema) : (() => { throw unavailable('settings.register'); })(),
-        view: (view) => ensure('workspace.views') ? base.register.view(view) : (() => { throw unavailable('workspace.views'); })(),
-        viewRenderer: (renderer) => ensure('workspace.views') ? base.register.viewRenderer(renderer) : (() => { throw unavailable('workspace.views'); })(),
-        statusItem: (item) => ensure('status.register') ? base.register.statusItem(item) : (() => { throw unavailable('status.register'); })(),
-        editorExtension: (extension) => ensure('editor.write') ? base.register.editorExtension(extension) : (() => { throw unavailable('editor.write'); })(),
-        markdownProcessor: (processor) => ensure('editor.write') ? base.register.markdownProcessor(processor) : (() => { throw unavailable('editor.write'); })(),
+        command: (command) =>
+          ensure('commands.register')
+            ? base.register.command(command)
+            : (() => {
+                throw unavailable('commands.register');
+              })(),
+        setting: (schema) =>
+          ensure('settings.register')
+            ? base.register.setting(schema)
+            : (() => {
+                throw unavailable('settings.register');
+              })(),
+        view: (view) =>
+          ensure('workspace.views')
+            ? base.register.view(view)
+            : (() => {
+                throw unavailable('workspace.views');
+              })(),
+        viewRenderer: (renderer) =>
+          ensure('workspace.views')
+            ? base.register.viewRenderer(renderer)
+            : (() => {
+                throw unavailable('workspace.views');
+              })(),
+        statusItem: (item) =>
+          ensure('status.register')
+            ? base.register.statusItem(item)
+            : (() => {
+                throw unavailable('status.register');
+              })(),
+        editorExtension: (extension) =>
+          ensure('editor.write')
+            ? base.register.editorExtension(extension)
+            : (() => {
+                throw unavailable('editor.write');
+              })(),
+        markdownProcessor: (processor) =>
+          ensure('editor.write')
+            ? base.register.markdownProcessor(processor)
+            : (() => {
+                throw unavailable('editor.write');
+              })(),
         disposable: (disposable) => base.register.disposable(disposable),
         event: (disposable) => base.register.event(disposable),
         domEvent: (target, type, listener) => base.register.domEvent(target, type, listener),
@@ -397,7 +610,9 @@ function toPluginStatus(record: PluginLoadRecord): import('@zorid/platform-api')
     missingCapabilities: record.missingCapabilities,
     capabilityDiagnostics: record.capabilityDiagnostics ?? [],
     ...(record.discoveredAtMs === undefined ? {} : { discoveredAtMs: record.discoveredAtMs }),
-    ...(record.activationRequestedAtMs === undefined ? {} : { activationRequestedAtMs: record.activationRequestedAtMs }),
+    ...(record.activationRequestedAtMs === undefined
+      ? {}
+      : { activationRequestedAtMs: record.activationRequestedAtMs }),
     ...(record.loadedAtMs === undefined ? {} : { loadedAtMs: record.loadedAtMs }),
     ...(record.activationReason === undefined ? {} : { activationReason: record.activationReason }),
     ...(record.trigger === undefined ? {} : { trigger: record.trigger }),

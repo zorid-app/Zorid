@@ -3,10 +3,7 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": [
-      "ES2022",
-      "DOM"
-    ],
+    "lib": ["ES2022", "DOM"],
     "strict": true,
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
@@ -18,103 +15,39 @@
     "rootDir": ".",
     "baseUrl": ".",
     "paths": {
-      "@zorid/desktop-app": [
-        "apps/desktop/src/index.ts"
-      ],
-      "@zorid/mobile-app": [
-        "apps/mobile/src/index.ts"
-      ],
-      "@zorid/shared": [
-        "packages/shared/src/index.ts"
-      ],
-      "@zorid/platform-api": [
-        "packages/platform-api/src/index.ts"
-      ],
-      "@zorid/plugin-api": [
-        "packages/plugin-api/src/index.ts"
-      ],
-      "@zorid/app-kernel": [
-        "packages/app-kernel/src/index.ts"
-      ],
-      "@zorid/vault": [
-        "packages/vault/src/index.ts"
-      ],
-      "@zorid/workspace": [
-        "packages/workspace/src/index.ts"
-      ],
-      "@zorid/editor": [
-        "packages/editor/src/index.ts"
-      ],
-      "@zorid/metadata": [
-        "packages/metadata/src/index.ts"
-      ],
-      "@zorid/object-store": [
-        "packages/object-store/src/index.ts"
-      ],
-      "@zorid/db": [
-        "packages/db/src/index.ts"
-      ],
-      "@zorid/index-api": [
-        "packages/index-api/src/index.ts"
-      ],
-      "@zorid/indexer-js": [
-        "packages/indexer-js/src/index.ts"
-      ],
-      "@zorid/index-worker": [
-        "packages/index-worker/src/index.ts"
-      ],
-      "@zorid/plugin-host": [
-        "packages/plugin-host/src/index.ts"
-      ],
-      "@zorid/sync": [
-        "packages/sync/src/index.ts"
-      ],
-      "@zorid/ui-vue": [
-        "packages/ui-vue/src/index.ts"
-      ],
-      "@zorid/desktop-shell": [
-        "packages/desktop-shell/src/index.ts"
-      ],
-      "@zorid/mobile-shell": [
-        "packages/mobile-shell/src/index.ts"
-      ],
-      "@zorid/plugin-file-explorer": [
-        "plugins/core/file-explorer/src/index.ts"
-      ],
-      "@zorid/plugin-search": [
-        "plugins/core/search/src/index.ts"
-      ],
-      "@zorid/plugin-backlinks": [
-        "plugins/core/backlinks/src/index.ts"
-      ],
-      "@zorid/plugin-outline": [
-        "plugins/core/outline/src/index.ts"
-      ],
-      "@zorid/plugin-tags": [
-        "plugins/core/tags/src/index.ts"
-      ],
-      "@zorid/plugin-status-bar": [
-        "plugins/core/status-bar/src/index.ts"
-      ],
-      "@zorid/plugin-fields": [
-        "plugins/core/fields/src/index.ts"
-      ],
-      "@zorid/plugin-data-views": [
-        "plugins/core/data-views/src/index.ts"
-      ],
-      "@zorid/db/node-sqlite": [
-        "packages/db/src/node-sqlite.ts"
-      ],
-      "@zorid/ui-vue/tokens.css": [
-        "packages/ui-vue/src/tokens.css"
-      ],
-      "@zorid/ui-vue/components.css": [
-        "packages/ui-vue/src/components.css"
-      ]
+      "@zorid/desktop-app": ["apps/desktop/src/index.ts"],
+      "@zorid/mobile-app": ["apps/mobile/src/index.ts"],
+      "@zorid/shared": ["packages/shared/src/index.ts"],
+      "@zorid/platform-api": ["packages/platform-api/src/index.ts"],
+      "@zorid/plugin-api": ["packages/plugin-api/src/index.ts"],
+      "@zorid/app-kernel": ["packages/app-kernel/src/index.ts"],
+      "@zorid/vault": ["packages/vault/src/index.ts"],
+      "@zorid/workspace": ["packages/workspace/src/index.ts"],
+      "@zorid/editor": ["packages/editor/src/index.ts"],
+      "@zorid/metadata": ["packages/metadata/src/index.ts"],
+      "@zorid/object-store": ["packages/object-store/src/index.ts"],
+      "@zorid/db": ["packages/db/src/index.ts"],
+      "@zorid/index-api": ["packages/index-api/src/index.ts"],
+      "@zorid/indexer-js": ["packages/indexer-js/src/index.ts"],
+      "@zorid/index-worker": ["packages/index-worker/src/index.ts"],
+      "@zorid/plugin-host": ["packages/plugin-host/src/index.ts"],
+      "@zorid/sync": ["packages/sync/src/index.ts"],
+      "@zorid/ui-vue": ["packages/ui-vue/src/index.ts"],
+      "@zorid/desktop-shell": ["packages/desktop-shell/src/index.ts"],
+      "@zorid/mobile-shell": ["packages/mobile-shell/src/index.ts"],
+      "@zorid/plugin-file-explorer": ["plugins/core/file-explorer/src/index.ts"],
+      "@zorid/plugin-search": ["plugins/core/search/src/index.ts"],
+      "@zorid/plugin-backlinks": ["plugins/core/backlinks/src/index.ts"],
+      "@zorid/plugin-outline": ["plugins/core/outline/src/index.ts"],
+      "@zorid/plugin-tags": ["plugins/core/tags/src/index.ts"],
+      "@zorid/plugin-status-bar": ["plugins/core/status-bar/src/index.ts"],
+      "@zorid/plugin-fields": ["plugins/core/fields/src/index.ts"],
+      "@zorid/plugin-data-views": ["plugins/core/data-views/src/index.ts"],
+      "@zorid/db/node-sqlite": ["packages/db/src/node-sqlite.ts"],
+      "@zorid/ui-vue/tokens.css": ["packages/ui-vue/src/tokens.css"],
+      "@zorid/ui-vue/components.css": ["packages/ui-vue/src/components.css"]
     },
-    "types": [
-      "node"
-    ],
+    "types": ["node"],
     "ignoreDeprecations": "6.0"
   }
 }

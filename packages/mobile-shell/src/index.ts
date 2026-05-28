@@ -3,5 +3,9 @@ export interface MobileShellState {
   readonly sheets: readonly string[];
   readonly hapticsAvailable: boolean;
 }
-export function createMobileShellState(): MobileShellState { return { primarySurface: 'notes', sheets: [], hapticsAvailable: false }; }
-export function openMobileSheet(state: MobileShellState, id: string): MobileShellState { return { ...state, sheets: state.sheets.includes(id) ? state.sheets : [...state.sheets, id] }; }
+export function createMobileShellState(): MobileShellState {
+  return { primarySurface: 'notes', sheets: [], hapticsAvailable: false };
+}
+export function openMobileSheet(state: MobileShellState, id: string): MobileShellState {
+  return { ...state, sheets: state.sheets.includes(id) ? state.sheets : [...state.sheets, id] };
+}

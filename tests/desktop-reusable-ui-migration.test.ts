@@ -40,15 +40,32 @@ describe('desktop renderer reusable UI migration', () => {
   });
 });
 
-
 describe('reusable UI inventory documentation', () => {
   it('documents every shared and desktop component added by the migration', () => {
     const doc = readFileSync('docs/development/reusable-ui-components.md', 'utf8');
     for (const component of [
-      'ZDialogWindow', 'ZModalWindow', 'ZDialogBackdrop', 'ZConfirmDialog', 'ZPromptDialog',
-      'ZWindowFrame', 'ZButton', 'ZTextField', 'ZCheckboxField', 'ZPanel', 'ZBadge', 'ZTag',
-      'ZStatusBar', 'ZResizeHandle', 'CommandPaletteWindow', 'SettingsWindow', 'TopTabStrip',
-      'ActivityRail', 'FileTree', 'RightSidebarPanels', 'AppResizeHandle', 'AppStatusBar',
+      'ZDialogWindow',
+      'ZModalWindow',
+      'ZDialogBackdrop',
+      'ZConfirmDialog',
+      'ZPromptDialog',
+      'ZWindowFrame',
+      'ZButton',
+      'ZTextField',
+      'ZCheckboxField',
+      'ZPanel',
+      'ZBadge',
+      'ZTag',
+      'ZStatusBar',
+      'ZResizeHandle',
+      'CommandPaletteWindow',
+      'SettingsWindow',
+      'TopTabStrip',
+      'ActivityRail',
+      'FileTree',
+      'RightSidebarPanels',
+      'AppResizeHandle',
+      'AppStatusBar',
     ]) {
       expect(doc).toContain(component);
     }
@@ -56,11 +73,10 @@ describe('reusable UI inventory documentation', () => {
   });
 });
 
-
 describe('desktop explicit shared style wiring', () => {
   it('imports shared UI styles explicitly before app styles', () => {
     const main = readFileSync('apps/desktop/src/renderer/src/main.ts', 'utf8');
-    expect(main.indexOf("@zorid/ui-vue/tokens.css")).toBeLessThan(main.indexOf("@zorid/ui-vue/components.css"));
-    expect(main.indexOf("@zorid/ui-vue/components.css")).toBeLessThan(main.indexOf("./styles.css"));
+    expect(main.indexOf('@zorid/ui-vue/tokens.css')).toBeLessThan(main.indexOf('@zorid/ui-vue/components.css'));
+    expect(main.indexOf('@zorid/ui-vue/components.css')).toBeLessThan(main.indexOf('./styles.css'));
   });
 });

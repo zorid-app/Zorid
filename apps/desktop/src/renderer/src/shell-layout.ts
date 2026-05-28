@@ -92,15 +92,21 @@ export function parsePaneLayout(value: string | null): PaneLayout | undefined {
 }
 
 export function resolvePaneLayout(input: PaneLayoutInput = {}, viewport: PaneLayoutViewport): PaneLayout {
-  const availableWidth = Number.isFinite(viewport.viewportWidth) ? Math.max(0, viewport.viewportWidth) : Number.POSITIVE_INFINITY;
-  const shellChromeWidth = SHELL_LAYOUT.railWidth + (SHELL_LAYOUT.resizeHandleWidth * 2) + SHELL_LAYOUT.editorMinWidth;
+  const availableWidth = Number.isFinite(viewport.viewportWidth)
+    ? Math.max(0, viewport.viewportWidth)
+    : Number.POSITIVE_INFINITY;
+  const shellChromeWidth = SHELL_LAYOUT.railWidth + SHELL_LAYOUT.resizeHandleWidth * 2 + SHELL_LAYOUT.editorMinWidth;
   const maxSideTotal = Math.max(0, availableWidth - shellChromeWidth);
   const rawLeftWidth = typeof input.leftWidth === 'number' ? input.leftWidth : DEFAULT_PANE_LAYOUT.leftWidth;
   const rawRightWidth = typeof input.rightWidth === 'number' ? input.rightWidth : DEFAULT_PANE_LAYOUT.rightWidth;
   let leftCollapsed = input.leftCollapsed === true || shouldCollapsePane(rawLeftWidth, SHELL_LAYOUT.leftMinWidth);
   let rightCollapsed = input.rightCollapsed === true || shouldCollapsePane(rawRightWidth, SHELL_LAYOUT.rightMinWidth);
-  let leftWidth = leftCollapsed ? SHELL_LAYOUT.collapsedWidth : clampPaneWidth(rawLeftWidth, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth);
-  let rightWidth = rightCollapsed ? SHELL_LAYOUT.collapsedWidth : clampPaneWidth(rawRightWidth, SHELL_LAYOUT.rightMinWidth, SHELL_LAYOUT.rightMaxWidth);
+  let leftWidth = leftCollapsed
+    ? SHELL_LAYOUT.collapsedWidth
+    : clampPaneWidth(rawLeftWidth, SHELL_LAYOUT.leftMinWidth, SHELL_LAYOUT.leftMaxWidth);
+  let rightWidth = rightCollapsed
+    ? SHELL_LAYOUT.collapsedWidth
+    : clampPaneWidth(rawRightWidth, SHELL_LAYOUT.rightMinWidth, SHELL_LAYOUT.rightMaxWidth);
 
   if (Number.isFinite(maxSideTotal) && leftWidth + rightWidth > maxSideTotal) {
     const reduce = (side: 'left' | 'right', min: number): void => {

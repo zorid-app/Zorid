@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
 import { ZDialogWindow } from '@zorid/ui-vue';
+import { computed, ref, watch } from 'vue';
 import type { SettingProperty, SettingsSectionDto } from '../types.js';
 
 type JsonRecord = Record<string, unknown>;
@@ -37,10 +37,12 @@ function settingsValueKey(section: SettingsSectionDto): string {
   return `${section.pluginId ?? 'app'}:${section.id}`;
 }
 function jsonRecord(value: unknown): JsonRecord {
-  return value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+  return value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : {};
 }
 function schemaRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 function settingProperties(section: SettingsSectionDto): readonly SettingProperty[] {
   const properties = schemaRecord(section.schema).properties;
@@ -59,7 +61,9 @@ function settingObject(section: SettingsSectionDto): JsonRecord {
 function settingDisplayValue(section: SettingsSectionDto, property: SettingProperty): string {
   const value = settingObject(section)[property.name] ?? property.defaultValue;
   if (value === undefined || value === null) return '';
-  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : JSON.stringify(value);
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? String(value)
+    : JSON.stringify(value);
 }
 function inputValue(event: Event): string {
   return event.target instanceof HTMLInputElement ? event.target.value : '';
@@ -69,7 +73,8 @@ function inputChecked(event: Event): boolean {
 }
 function sourceLabel(section: SettingsSectionDto): string {
   if (section.source === 'app') return 'App setting';
-  if (section.pluginId) return section.pluginStatus ? `${section.pluginId} · ${section.pluginStatus}` : section.pluginId;
+  if (section.pluginId)
+    return section.pluginStatus ? `${section.pluginId} · ${section.pluginStatus}` : section.pluginId;
   return section.source === 'plugin-runtime' ? 'Runtime plugin setting' : 'Plugin manifest setting';
 }
 function navGroupTitle(section: SettingsSectionDto): string {
@@ -89,13 +94,15 @@ function propertySubtitle(property: SettingProperty): string {
   return property.type;
 }
 
-const navEntries = computed<readonly SettingsNavEntry[]>(() => props.sections.map((section) => ({
-  key: navKey(section),
-  section,
-  title: section.title,
-  subtitle: sourceLabel(section),
-  icon: navIcon(section),
-})));
+const navEntries = computed<readonly SettingsNavEntry[]>(() =>
+  props.sections.map((section) => ({
+    key: navKey(section),
+    section,
+    title: section.title,
+    subtitle: sourceLabel(section),
+    icon: navIcon(section),
+  })),
+);
 
 const navGroups = computed<readonly SettingsNavGroup[]>(() => {
   const groups = new Map<string, SettingsNavEntry[]>();
@@ -113,15 +120,21 @@ const selectedSection = computed<SettingsSectionDto | undefined>(() => {
   return props.sections.find((section) => navKey(section) === active) ?? props.sections[0];
 });
 
-const selectedSectionProperties = computed<readonly SettingProperty[]>(() => selectedSection.value ? settingProperties(selectedSection.value) : []);
+const selectedSectionProperties = computed<readonly SettingProperty[]>(() =>
+  selectedSection.value ? settingProperties(selectedSection.value) : [],
+);
 
-watch(navEntries, (entries) => {
-  if (entries.length === 0) {
-    activeSettingsKey.value = undefined;
-    return;
-  }
-  if (!entries.some((entry) => entry.key === activeSettingsKey.value)) activeSettingsKey.value = entries[0]?.key;
-}, { immediate: true });
+watch(
+  navEntries,
+  (entries) => {
+    if (entries.length === 0) {
+      activeSettingsKey.value = undefined;
+      return;
+    }
+    if (!entries.some((entry) => entry.key === activeSettingsKey.value)) activeSettingsKey.value = entries[0]?.key;
+  },
+  { immediate: true },
+);
 </script>
 
 <template>

@@ -30,19 +30,23 @@ const defaultMaxEntries = 12;
 function isRecord(value: unknown): value is RecentVaultRecord {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.id === 'string'
-    && typeof candidate.name === 'string'
-    && typeof candidate.path === 'string'
-    && typeof candidate.normalizedPath === 'string'
-    && typeof candidate.lastOpenedAt === 'string';
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.path === 'string' &&
+    typeof candidate.normalizedPath === 'string' &&
+    typeof candidate.lastOpenedAt === 'string'
+  );
 }
 
 function isRecentVaultFile(value: unknown): value is RecentVaultFile {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
-  return candidate.version === recentVaultFileVersion
-    && Array.isArray(candidate.entries)
-    && candidate.entries.every(isRecord);
+  return (
+    candidate.version === recentVaultFileVersion &&
+    Array.isArray(candidate.entries) &&
+    candidate.entries.every(isRecord)
+  );
 }
 
 function recentVaultId(normalizedPath: string): string {
@@ -78,7 +82,12 @@ export class RecentVaultStore {
   async list(): Promise<readonly RecentVaultDto[]> {
     await this.#writeQueue.catch(() => undefined);
     const file = await this.#readFile();
-    return file.entries.map(({ id, name, path: displayPath, lastOpenedAt }) => ({ id, name, path: displayPath, lastOpenedAt }));
+    return file.entries.map(({ id, name, path: displayPath, lastOpenedAt }) => ({
+      id,
+      name,
+      path: displayPath,
+      lastOpenedAt,
+    }));
   }
 
   async record(root: string): Promise<RecentVaultDto> {
@@ -107,7 +116,10 @@ export class RecentVaultStore {
 
   async #enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
     const run = this.#writeQueue.catch(() => undefined).then(task);
-    this.#writeQueue = run.then(() => undefined, () => undefined);
+    this.#writeQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
     return run;
   }
 
@@ -133,7 +145,6 @@ export class RecentVaultStore {
 export function createRecentVaultStore(userDataPath: string): RecentVaultStore {
   return new RecentVaultStore(path.join(userDataPath, 'recent-vaults.json'));
 }
-
 
 export interface RecentVaultOpenRuntime {
   openVault(root: string): Promise<VaultProfile>;

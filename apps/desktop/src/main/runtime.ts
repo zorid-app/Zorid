@@ -1,18 +1,35 @@
 import path from 'node:path';
 import { createZoridKernel, type ZoridKernel } from '@zorid/app-kernel';
-import { createEditorService } from '@zorid/editor';
-import type { IndexedFileRecord } from '@zorid/index-api';
-import { createJsIndexEngine, parseFrontmatter } from '@zorid/indexer-js';
-import { InlineIndexScheduler } from '@zorid/index-worker';
-import { parseZbase, parseZtype } from '@zorid/object-store';
 import type { IndexStore } from '@zorid/db';
 import { NodeSqliteIndexStore } from '@zorid/db/node-sqlite';
-import { createPluginRegistryAPI, PluginHost } from '@zorid/plugin-host';
+import { createEditorService } from '@zorid/editor';
+import type { IndexedFileRecord } from '@zorid/index-api';
+import { InlineIndexScheduler } from '@zorid/index-worker';
+import { createJsIndexEngine, parseFrontmatter } from '@zorid/indexer-js';
+import { parseZbase, parseZtype } from '@zorid/object-store';
+import type {
+  CapabilityName,
+  CommandContribution,
+  PluginStatus,
+  SettingsContribution,
+  VaultEntry,
+  VaultProfile,
+  ZbaseFilters,
+  ZbaseView,
+  ZtypeField,
+} from '@zorid/platform-api';
 import type { PluginManifest, ZoridPlugin, ZoridPluginContext } from '@zorid/plugin-api';
-import { asPluginId, DisposableStack, normalizeVaultPath, type Disposable, type JsonValue, type VaultPath } from '@zorid/shared';
+import { createPluginRegistryAPI, PluginHost } from '@zorid/plugin-host';
+import {
+  asPluginId,
+  type Disposable,
+  type DisposableStack,
+  type JsonValue,
+  normalizeVaultPath,
+  type VaultPath,
+} from '@zorid/shared';
 import { createVaultService, type FolderVault } from '@zorid/vault';
 import { createWorkspaceService } from '@zorid/workspace';
-import type { CapabilityName, CommandContribution, PluginStatus, SettingsContribution, VaultEntry, VaultProfile, ZbaseFilters, ZbaseView, ZtypeField } from '@zorid/platform-api';
 
 export interface SettingsSectionDto {
   readonly id: string;
@@ -23,7 +40,10 @@ export interface SettingsSectionDto {
   readonly pluginStatus?: PluginStatus['status'];
 }
 
-export interface CommandDto { readonly id: string; readonly title: string; }
+export interface CommandDto {
+  readonly id: string;
+  readonly title: string;
+}
 
 export interface SettingValueDto {
   readonly sectionId: string;
@@ -149,9 +169,17 @@ export const corePluginManifests: readonly PluginManifest[] = [
     entry: './src/index.ts',
     zoridApi: '^0.1.0',
     platforms: ['desktop'],
-    capabilities: { required: ['vault.read', 'vault.write', 'workspace.views', 'workspace.navigation', 'commands.register'], optional: [] },
+    capabilities: {
+      required: ['vault.read', 'vault.write', 'workspace.views', 'workspace.navigation', 'commands.register'],
+      optional: [],
+    },
     activation: ['onCommand:file-explorer.open-root', 'onCommand:file-explorer.open-readme'],
-    contributes: { commands: [{ id: 'file-explorer.open-root', title: 'Open File Explorer' }, { id: 'file-explorer.open-readme', title: 'Open README' }] },
+    contributes: {
+      commands: [
+        { id: 'file-explorer.open-root', title: 'Open File Explorer' },
+        { id: 'file-explorer.open-readme', title: 'Open README' },
+      ],
+    },
   },
   {
     schemaVersion: 1,
@@ -219,7 +247,19 @@ export const corePluginManifests: readonly PluginManifest[] = [
     contributes: {
       commands: [{ id: 'status-bar.open', title: 'Open Status Bar' }],
       statusItems: [{ id: 'zorid.core.status-bar' }],
-      settings: [{ id: 'status-bar', title: 'Status Bar', schema: { type: 'object', properties: { showVault: { type: 'boolean', default: true }, showIndexStatus: { type: 'boolean', default: true } } } }],
+      settings: [
+        {
+          id: 'status-bar',
+          title: 'Status Bar',
+          schema: {
+            type: 'object',
+            properties: {
+              showVault: { type: 'boolean', default: true },
+              showIndexStatus: { type: 'boolean', default: true },
+            },
+          },
+        },
+      ],
     },
   },
   {
@@ -231,7 +271,10 @@ export const corePluginManifests: readonly PluginManifest[] = [
     entry: './src/index.ts',
     zoridApi: '^0.1.0',
     platforms: ['desktop'],
-    capabilities: { required: ['metadata.read', 'vault.write.markdown', 'vault.write.ztype', 'commands.register'], optional: [] },
+    capabilities: {
+      required: ['metadata.read', 'vault.write.markdown', 'vault.write.ztype', 'commands.register'],
+      optional: [],
+    },
     activation: ['onCommand:fields.inspect-active'],
     contributes: { commands: [{ id: 'fields.inspect-active', title: 'Inspect Active Fields' }] },
   },
@@ -247,7 +290,10 @@ export const corePluginManifests: readonly PluginManifest[] = [
     capabilities: { required: ['metadata.read', 'workspace.views', 'vault.read', 'commands.register'], optional: [] },
     dependsOn: { 'zorid.core.fields': '^0.1.0' },
     activation: ['onCommand:data-views.open', 'onMarkdownEmbed:.zbase', 'onFileExtension:.zbase'],
-    contributes: { commands: [{ id: 'data-views.open', title: 'Open Base' }], viewRenderers: [{ type: 'table' }, { type: 'list' }] },
+    contributes: {
+      commands: [{ id: 'data-views.open', title: 'Open Base' }],
+      viewRenderers: [{ type: 'table' }, { type: 'list' }],
+    },
   },
 ];
 
@@ -264,7 +310,10 @@ export class DesktopRuntime {
   readonly kernel: ZoridKernel;
   readonly pluginHost: PluginHost;
   readonly workspace = createWorkspaceService();
-  readonly editor = createEditorService({ read: (path) => this.requireVault().readText(path), write: (path, contents) => this.requireVault().writeText(path, contents) });
+  readonly editor = createEditorService({
+    read: (path) => this.requireVault().readText(path),
+    write: (path, contents) => this.requireVault().writeText(path, contents),
+  });
   #activeVault?: FolderVault;
   #indexStore?: IndexStore;
   #indexWatcher?: Disposable;
@@ -278,7 +327,11 @@ export class DesktopRuntime {
   constructor(options: DesktopRuntimeOptions = {}) {
     const manifests = options.manifests ?? corePluginManifests;
     this.kernel = createZoridKernel({ capabilities: desktopCapabilities });
-    this.kernel.settings.register({ id: 'app.general', title: 'General', schema: { type: 'object', properties: { confirmDeletes: { type: 'boolean', default: true } } } });
+    this.kernel.settings.register({
+      id: 'app.general',
+      title: 'General',
+      schema: { type: 'object', properties: { confirmDeletes: { type: 'boolean', default: true } } },
+    });
     this.registerAppCommands();
     this.kernel.services.register('workspace', this.workspace);
     this.kernel.services.register('editor', this.editor);
@@ -312,12 +365,27 @@ export class DesktopRuntime {
     return this.#activeVault.profile;
   }
 
-  vaultProfile(): VaultProfile | undefined { return this.#activeVault?.profile; }
-  requireVault(): FolderVault { if (!this.#activeVault) throw new Error('No vault is open.'); return this.#activeVault; }
-  async listVault(path = ''): Promise<readonly VaultEntry[]> { return this.requireVault().list(normalizeVaultPath(path)); }
-  async readVaultText(path: string): Promise<string> { return this.requireVault().readText(normalizeVaultPath(path)); }
-  async writeVaultText(path: string, contents: string): Promise<void> { const vaultPath = normalizeVaultPath(path); await this.requireVault().writeText(vaultPath, contents); await this.updateIndexedPath(vaultPath); }
-  async createVaultFolder(path: string): Promise<void> { await this.requireVault().createFolder(normalizeVaultPath(path)); }
+  vaultProfile(): VaultProfile | undefined {
+    return this.#activeVault?.profile;
+  }
+  requireVault(): FolderVault {
+    if (!this.#activeVault) throw new Error('No vault is open.');
+    return this.#activeVault;
+  }
+  async listVault(path = ''): Promise<readonly VaultEntry[]> {
+    return this.requireVault().list(normalizeVaultPath(path));
+  }
+  async readVaultText(path: string): Promise<string> {
+    return this.requireVault().readText(normalizeVaultPath(path));
+  }
+  async writeVaultText(path: string, contents: string): Promise<void> {
+    const vaultPath = normalizeVaultPath(path);
+    await this.requireVault().writeText(vaultPath, contents);
+    await this.updateIndexedPath(vaultPath);
+  }
+  async createVaultFolder(path: string): Promise<void> {
+    await this.requireVault().createFolder(normalizeVaultPath(path));
+  }
   async createMarkdownFile(path: string, contents = ''): Promise<void> {
     const vaultPath = normalizeVaultPath(path);
     if (await this.requireVault().stat(vaultPath)) throw new Error(`Vault path already exists: ${vaultPath}`);
@@ -344,14 +412,41 @@ export class DesktopRuntime {
     this.#indexStore?.delete(vaultPath);
     this.#emitIndexUpdated([vaultPath]);
   }
-  listCommands(): readonly CommandDto[] { return this.kernel.commands.list().map(({ id, title }) => ({ id, title })); }
-  async executeCommand(id: string, args?: JsonValue): Promise<unknown> { return this.kernel.commands.execute(id, args); }
-  listPluginStatuses(): readonly PluginStatus[] { return createPluginRegistryAPI(this.pluginHost).listStatuses(); }
+  listCommands(): readonly CommandDto[] {
+    return this.kernel.commands.list().map(({ id, title }) => ({ id, title }));
+  }
+  async executeCommand(id: string, args?: JsonValue): Promise<unknown> {
+    return this.kernel.commands.execute(id, args);
+  }
+  listPluginStatuses(): readonly PluginStatus[] {
+    return createPluginRegistryAPI(this.pluginHost).listStatuses();
+  }
   listSettingsSections(): readonly SettingsSectionDto[] {
-    const runtime = this.kernel.settings.list().map((section): SettingsSectionDto => ({ id: section.id, title: section.title, schema: section.schema, source: section.id.startsWith('app.') ? 'app' : 'plugin-runtime' }));
-    const staticSections = this.pluginHost.staticSettings().map((section): SettingsSectionDto => ({ id: section.id, title: section.title, schema: section.schema, source: 'plugin-manifest', pluginId: section.pluginId, pluginStatus: section.pluginStatus }));
+    const runtime = this.kernel.settings.list().map(
+      (section): SettingsSectionDto => ({
+        id: section.id,
+        title: section.title,
+        schema: section.schema,
+        source: section.id.startsWith('app.') ? 'app' : 'plugin-runtime',
+      }),
+    );
+    const staticSections = this.pluginHost.staticSettings().map(
+      (section): SettingsSectionDto => ({
+        id: section.id,
+        title: section.title,
+        schema: section.schema,
+        source: 'plugin-manifest',
+        pluginId: section.pluginId,
+        pluginStatus: section.pluginStatus,
+      }),
+    );
     const seen = new Set<string>();
-    return [...runtime, ...staticSections].filter((section) => { const key = this.settingsKey(section.id, section.pluginId); if (seen.has(key)) return false; seen.add(key); return true; });
+    return [...runtime, ...staticSections].filter((section) => {
+      const key = this.settingsKey(section.id, section.pluginId);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   getSettingValue(sectionId: string, pluginId?: string): SettingValueDto {
@@ -361,7 +456,9 @@ export class DesktopRuntime {
   }
 
   setSettingValue(sectionId: string, value: JsonValue, pluginId?: string): SettingValueDto {
-    const section = this.listSettingsSections().find((candidate) => candidate.id === sectionId && candidate.pluginId === pluginId);
+    const section = this.listSettingsSections().find(
+      (candidate) => candidate.id === sectionId && candidate.pluginId === pluginId,
+    );
     if (!section) throw new Error(`Unknown settings section: ${pluginId ? `${pluginId}:` : ''}${sectionId}`);
     this.#settingsValues.set(this.settingsKey(sectionId, pluginId), value);
     const dto = this.getSettingValue(sectionId, pluginId);
@@ -369,29 +466,45 @@ export class DesktopRuntime {
     return dto;
   }
 
-  settingsKey(sectionId: string, pluginId?: string): string { return `${pluginId ?? 'app'}:${sectionId}`; }
+  settingsKey(sectionId: string, pluginId?: string): string {
+    return `${pluginId ?? 'app'}:${sectionId}`;
+  }
 
-  getIndexStatus(): IndexStatusDto { return { ...this.#indexStatus, diagnostics: [...this.#indexStatus.diagnostics] }; }
-  getIndexedFile(path: string): IndexedFileRecord | undefined { return this.#indexStore?.get(normalizeVaultPath(path)); }
+  getIndexStatus(): IndexStatusDto {
+    return { ...this.#indexStatus, diagnostics: [...this.#indexStatus.diagnostics] };
+  }
+  getIndexedFile(path: string): IndexedFileRecord | undefined {
+    return this.#indexStore?.get(normalizeVaultPath(path));
+  }
   searchIndex(query: string): readonly SearchResultDto[] {
     const store = this.#indexStore;
     if (!store) return [];
     const needle = query.trim().replace(/^#/, '').toLowerCase();
     if (!needle) return [];
-    return store.all()
+    return store
+      .all()
       .filter((record) => {
-        const haystack = [record.path, record.text, ...record.headings, ...record.tags.map((tag) => `#${tag}`)].join('\n').toLowerCase();
+        const haystack = [record.path, record.text, ...record.headings, ...record.tags.map((tag) => `#${tag}`)]
+          .join('\n')
+          .toLowerCase();
         return haystack.includes(needle);
       })
-      .map((record) => ({ path: record.path, title: record.headings[0] ?? path.basename(String(record.path)), excerpt: this.excerpt(record, needle) }))
+      .map((record) => ({
+        path: record.path,
+        title: record.headings[0] ?? path.basename(String(record.path)),
+        excerpt: this.excerpt(record, needle),
+      }))
       .slice(0, 50);
   }
 
   getBacklinks(vaultPath: string): readonly BacklinkDto[] {
     if (!this.#indexStore) return [];
     const target = normalizeVaultPath(vaultPath);
-    return this.#indexStore.all()
-      .filter((record) => record.links.some((link) => link === target || path.basename(String(link)) === path.basename(String(target))))
+    return this.#indexStore
+      .all()
+      .filter((record) =>
+        record.links.some((link) => link === target || path.basename(String(link)) === path.basename(String(target))),
+      )
       .map((record) => ({ fromPath: record.path, excerpt: this.excerpt(record, String(target).toLowerCase()) }));
   }
 
@@ -420,7 +533,9 @@ export class DesktopRuntime {
       throw error;
     }
     const types: TypeDto[] = [];
-    for (const entry of entries.filter((candidate) => candidate.kind === 'file' && String(candidate.path).endsWith('.ztype'))) {
+    for (const entry of entries.filter(
+      (candidate) => candidate.kind === 'file' && String(candidate.path).endsWith('.ztype'),
+    )) {
       const diagnostics: string[] = [];
       let fields: readonly ZtypeField[] = [];
       try {
@@ -494,7 +609,9 @@ export class DesktopRuntime {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw error;
       }
-      for (const entry of entries.filter((candidate) => candidate.kind === 'file' && String(candidate.path).endsWith('.zbase'))) {
+      for (const entry of entries.filter(
+        (candidate) => candidate.kind === 'file' && String(candidate.path).endsWith('.zbase'),
+      )) {
         if (seen.has(String(entry.path))) continue;
         seen.add(String(entry.path));
         bases.push(await this.readBase(entry.path));
@@ -506,11 +623,20 @@ export class DesktopRuntime {
   async renderDataView(basePath: string, viewId?: string): Promise<DataViewResultDto> {
     const base = await this.readBase(normalizeVaultPath(basePath));
     const view = base.views.find((candidate) => candidate.id === viewId) ?? base.views[0];
-    if (!view) return { basePath: base.path, viewId: viewId ?? 'default', renderer: 'table', columns: ['path'], rows: [], groups: [] };
+    if (!view)
+      return {
+        basePath: base.path,
+        viewId: viewId ?? 'default',
+        renderer: 'table',
+        columns: ['path'],
+        rows: [],
+        groups: [],
+      };
     const viewOptions = view as ZbaseView & { sortBy?: string; sort?: string; groupBy?: string; group?: string };
     const sortKey = viewOptions.sortBy ?? viewOptions.sort;
     const groupKey = viewOptions.groupBy ?? viewOptions.group;
-    const rows = this.requireIndexStore().all()
+    const rows = this.requireIndexStore()
+      .all()
       .filter((record) => !String(record.path).endsWith('.zbase') && !String(record.path).endsWith('.ztype'))
       .filter((record) => this.matchesZbaseFilters(record.fields, view.filters))
       .map((record) => ({ path: record.path, fields: record.fields }));
@@ -539,16 +665,29 @@ export class DesktopRuntime {
       const files = await this.collectIndexableFiles();
       const output = await new InlineIndexScheduler(createJsIndexEngine()).rebuild(files);
       store.replaceAll(output.records);
-      this.#setIndexStatus({ state: 'watching', fileCount: store.all().length, lastIndexedAtMs: Date.now(), diagnostics: output.diagnostics.map((diagnostic) => `${diagnostic.path}: ${diagnostic.code}: ${diagnostic.message}`) });
+      this.#setIndexStatus({
+        state: 'watching',
+        fileCount: store.all().length,
+        lastIndexedAtMs: Date.now(),
+        diagnostics: output.diagnostics.map(
+          (diagnostic) => `${diagnostic.path}: ${diagnostic.code}: ${diagnostic.message}`,
+        ),
+      });
       this.#emitIndexUpdated(output.records.map((record) => record.path));
       return this.getIndexStatus();
     } catch (error) {
-      this.#setIndexStatus({ state: 'error', fileCount: store.all().length, error: error instanceof Error ? error.message : String(error) });
+      this.#setIndexStatus({
+        state: 'error',
+        fileCount: store.all().length,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }
 
-  async collectIndexableFiles(directory = ''): Promise<readonly { readonly path: VaultPath; readonly contents: string }[]> {
+  async collectIndexableFiles(
+    directory = '',
+  ): Promise<readonly { readonly path: VaultPath; readonly contents: string }[]> {
     const vault = this.requireVault();
     let entries: readonly VaultEntry[];
     try {
@@ -562,8 +701,9 @@ export class DesktopRuntime {
     for (const entry of entries) {
       if (this.#isIgnoredIndexPath(entry.path)) continue;
       try {
-        if (entry.kind === 'directory') files.push(...await this.collectIndexableFiles(entry.path));
-        else if (this.#isIndexableFile(entry.path)) files.push({ path: entry.path, contents: await vault.readText(entry.path) });
+        if (entry.kind === 'directory') files.push(...(await this.collectIndexableFiles(entry.path)));
+        else if (this.#isIndexableFile(entry.path))
+          files.push({ path: entry.path, contents: await vault.readText(entry.path) });
       } catch (error) {
         if (!this.#isMissingPathError(error)) throw error;
       }
@@ -588,9 +728,14 @@ export class DesktopRuntime {
     try {
       const info = await vault.stat(path);
       if (!info) store.delete(path);
-      else if (info.kind === 'directory') { await this.rebuildIndex(); return; }
-      else if (this.#isIndexableFile(path)) {
-        const output = await new InlineIndexScheduler(createJsIndexEngine()).update({ path, contents: await vault.readText(path) });
+      else if (info.kind === 'directory') {
+        await this.rebuildIndex();
+        return;
+      } else if (this.#isIndexableFile(path)) {
+        const output = await new InlineIndexScheduler(createJsIndexEngine()).update({
+          path,
+          contents: await vault.readText(path),
+        });
         const [record] = output.records;
         if (record) store.upsert(record);
       } else store.delete(path);
@@ -603,35 +748,73 @@ export class DesktopRuntime {
         this.#emitIndexUpdated([path]);
         return;
       }
-      this.#setIndexStatus({ state: 'error', fileCount: store.all().length, error: error instanceof Error ? error.message : String(error) });
+      this.#setIndexStatus({
+        state: 'error',
+        fileCount: store.all().length,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }
 
-  requireIndexStore(): IndexStore { if (!this.#indexStore) throw new Error('Index store is not initialized.'); return this.#indexStore; }
-  #setIndexStatus(next: Partial<IndexStatusDto> & Pick<IndexStatusDto, 'state' | 'fileCount'>): void { this.#indexStatus = { ...this.#indexStatus, diagnostics: [], ...next }; this.kernel.events.emit('metadata:index-status', this.#indexStatus); }
-  #emitIndexUpdated(paths: readonly VaultPath[]): void { this.kernel.events.emit('metadata:index-updated', { paths }); }
-  #isIndexableFile(path: VaultPath): boolean { return /\.(md|markdown|ztype|zbase)$/i.test(String(path)); }
-  #isIgnoredIndexPath(path: VaultPath): boolean { const value = String(path); return value.startsWith('.zorid/index/') || value === '.zorid/index' || /(?:^|\/)[^/]+\.sqlite(?:-(?:wal|shm))?$/i.test(value) || /(?:^|\/)[^/]+-(?:wal|shm)$/i.test(value); }
-  #isMissingPathError(error: unknown): boolean { return typeof error === 'object' && error !== null && 'code' in error && (error as { readonly code?: unknown }).code === 'ENOENT'; }
+  requireIndexStore(): IndexStore {
+    if (!this.#indexStore) throw new Error('Index store is not initialized.');
+    return this.#indexStore;
+  }
+  #setIndexStatus(next: Partial<IndexStatusDto> & Pick<IndexStatusDto, 'state' | 'fileCount'>): void {
+    this.#indexStatus = { ...this.#indexStatus, diagnostics: [], ...next };
+    this.kernel.events.emit('metadata:index-status', this.#indexStatus);
+  }
+  #emitIndexUpdated(paths: readonly VaultPath[]): void {
+    this.kernel.events.emit('metadata:index-updated', { paths });
+  }
+  #isIndexableFile(path: VaultPath): boolean {
+    return /\.(md|markdown|ztype|zbase)$/i.test(String(path));
+  }
+  #isIgnoredIndexPath(path: VaultPath): boolean {
+    const value = String(path);
+    return (
+      value.startsWith('.zorid/index/') ||
+      value === '.zorid/index' ||
+      /(?:^|\/)[^/]+\.sqlite(?:-(?:wal|shm))?$/i.test(value) ||
+      /(?:^|\/)[^/]+-(?:wal|shm)$/i.test(value)
+    );
+  }
+  #isMissingPathError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { readonly code?: unknown }).code === 'ENOENT'
+    );
+  }
   excerpt(record: IndexedFileRecord, needle: string): string {
     const normalized = needle.replace(/^#/, '').toLowerCase();
-    const line = record.text.split(/\r?\n/).find((candidate) => candidate.toLowerCase().includes(normalized)) ?? record.text.split(/\r?\n/)[0] ?? '';
+    const line =
+      record.text.split(/\r?\n/).find((candidate) => candidate.toLowerCase().includes(normalized)) ??
+      record.text.split(/\r?\n/)[0] ??
+      '';
     return line.slice(0, 180);
   }
 
-  validateFields(fields: Readonly<Record<string, JsonValue>>, schemaFields: readonly ZtypeField[]): readonly FieldValidationDiagnosticDto[] {
+  validateFields(
+    fields: Readonly<Record<string, JsonValue>>,
+    schemaFields: readonly ZtypeField[],
+  ): readonly FieldValidationDiagnosticDto[] {
     const diagnostics: FieldValidationDiagnosticDto[] = [];
     for (const field of schemaFields) {
       const value = fields[field.key] ?? field.default;
-      if (field.required && (value === undefined || value === null || value === '')) diagnostics.push({ key: field.key, message: 'Required field is missing.' });
-      if (value !== undefined && value !== null && !this.matchesFieldType(value, field.type)) diagnostics.push({ key: field.key, message: `Expected ${field.type}.` });
+      if (field.required && (value === undefined || value === null || value === ''))
+        diagnostics.push({ key: field.key, message: 'Required field is missing.' });
+      if (value !== undefined && value !== null && !this.matchesFieldType(value, field.type))
+        diagnostics.push({ key: field.key, message: `Expected ${field.type}.` });
     }
     return diagnostics;
   }
 
   matchesFieldType(value: JsonValue, type: ZtypeField['type']): boolean {
-    if (type === 'string' || type === 'date' || type === 'datetime' || type === 'multiselect') return typeof value === 'string';
+    if (type === 'string' || type === 'date' || type === 'datetime' || type === 'multiselect')
+      return typeof value === 'string';
     if (type === 'int') return typeof value === 'number' && Number.isInteger(value);
     if (type === 'float') return typeof value === 'number';
     if (type === 'boolean') return typeof value === 'boolean';
@@ -640,12 +823,13 @@ export class DesktopRuntime {
   }
 
   async writeMarkdownFrontmatter(vaultPath: VaultPath, fields: Readonly<Record<string, JsonValue>>): Promise<void> {
-    if (!/\.(md|markdown)$/i.test(String(vaultPath))) throw new Error(`Fields can only be written to Markdown files: ${vaultPath}`);
+    if (!/\.(md|markdown)$/i.test(String(vaultPath)))
+      throw new Error(`Fields can only be written to Markdown files: ${vaultPath}`);
     const contents = await this.requireVault().readText(vaultPath);
     const { body } = parseFrontmatter(contents);
     const lines = Object.entries(fields)
       .filter(([, value]) => value !== undefined)
-      .sort(([a], [b]) => a === 'zorid.type' ? -1 : b === 'zorid.type' ? 1 : a.localeCompare(b))
+      .sort(([a], [b]) => (a === 'zorid.type' ? -1 : b === 'zorid.type' ? 1 : a.localeCompare(b)))
       .map(([key, value]) => `${key}: ${this.serializeFrontmatterValue(value)}`);
     await this.requireVault().writeText(vaultPath, `---\n${lines.join('\n')}\n---\n${body}`);
   }
@@ -672,7 +856,8 @@ export class DesktopRuntime {
     const expression = filters?.expression;
     if (!expression || typeof expression !== 'object' || Array.isArray(expression)) return true;
     const equals = expression.equals;
-    if (Array.isArray(equals) && equals.length === 2 && typeof equals[0] === 'string') return fields[equals[0]] === equals[1];
+    if (Array.isArray(equals) && equals.length === 2 && typeof equals[0] === 'string')
+      return fields[equals[0]] === equals[1];
     return true;
   }
 
@@ -691,7 +876,10 @@ export class DesktopRuntime {
       this.#indexUpdateTimer = undefined;
     }
     const cleanupTasks = [
-      ...this.pluginHost.records().filter((record) => record.status === 'active').map((record) => () => this.pluginHost.deactivate(record.pluginId)),
+      ...this.pluginHost
+        .records()
+        .filter((record) => record.status === 'active')
+        .map((record) => () => this.pluginHost.deactivate(record.pluginId)),
       () => this.#indexWatcher?.dispose(),
       () => this.#vaultServiceRegistration?.dispose(),
       () => this.#indexServiceRegistration?.dispose(),
@@ -700,13 +888,38 @@ export class DesktopRuntime {
     ];
     const cleanupResults = await Promise.allSettled(cleanupTasks.map((task) => Promise.resolve().then(task)));
     const failures = cleanupResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-    if (failures.length > 0) throw new AggregateError(failures.map((failure) => failure.reason), 'Desktop runtime disposal failed.');
+    if (failures.length > 0)
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        'Desktop runtime disposal failed.',
+      );
   }
 
   registerAppCommands(): void {
-    this.kernel.disposables.use(this.kernel.commands.register({ id: 'vault.open', title: 'Open Vault', callback: async () => ({ action: 'vault.open' }) }));
-    this.kernel.disposables.use(this.kernel.commands.register({ id: 'command-palette.open', title: 'Command Palette: Open', callback: async () => ({ action: 'command-palette.open' }) }));
-    this.kernel.disposables.use(this.kernel.commands.register({ id: 'settings.open', title: 'Settings: Open', callback: async () => { this.kernel.events.emit('settings:open', {}); return { action: 'settings.open' }; } }));
+    this.kernel.disposables.use(
+      this.kernel.commands.register({
+        id: 'vault.open',
+        title: 'Open Vault',
+        callback: async () => ({ action: 'vault.open' }),
+      }),
+    );
+    this.kernel.disposables.use(
+      this.kernel.commands.register({
+        id: 'command-palette.open',
+        title: 'Command Palette: Open',
+        callback: async () => ({ action: 'command-palette.open' }),
+      }),
+    );
+    this.kernel.disposables.use(
+      this.kernel.commands.register({
+        id: 'settings.open',
+        title: 'Settings: Open',
+        callback: async () => {
+          this.kernel.events.emit('settings:open', {});
+          return { action: 'settings.open' };
+        },
+      }),
+    );
   }
 
   registerStaticPlaceholders(manifests: readonly PluginManifest[]): void {
@@ -760,9 +973,16 @@ export class DesktopRuntime {
         editorExtension: (extension) => stack.use(this.editor.registerExtension(extension)),
         markdownProcessor: () => registerDisposable({ dispose: () => undefined }),
         event: registerDisposable,
-        domEvent: (target, type, listener) => { target.addEventListener(type, listener); return registerDisposable(() => target.removeEventListener(type, listener)); },
+        domEvent: (target, type, listener) => {
+          target.addEventListener(type, listener);
+          return registerDisposable(() => target.removeEventListener(type, listener));
+        },
       },
-      platform: { kind: 'desktop', hasCapability: (capability) => desktopCapabilities.includes(capability), listCapabilities: () => desktopCapabilities },
+      platform: {
+        kind: 'desktop',
+        hasCapability: (capability) => desktopCapabilities.includes(capability),
+        listCapabilities: () => desktopCapabilities,
+      },
     };
   }
 

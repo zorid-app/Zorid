@@ -1,11 +1,14 @@
 <script setup lang="ts">
-withDefaults(defineProps<{
-  active?: boolean;
-  label?: string | undefined;
-}>(), {
-  active: false,
-  label: 'Resize panel',
-});
+withDefaults(
+  defineProps<{
+    active?: boolean;
+    label?: string | undefined;
+  }>(),
+  {
+    active: false,
+    label: 'Resize panel',
+  },
+);
 </script>
 
 <template>

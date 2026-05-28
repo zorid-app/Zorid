@@ -22,7 +22,9 @@ describe('RecentVaultStore', () => {
     const firstVault = await makeTempRoot();
     const secondVault = await makeTempRoot();
     let tick = 0;
-    const store = new RecentVaultStore(path.join(userData, 'recent-vaults.json'), { now: () => new Date(Date.UTC(2026, 4, 28, 0, tick++)) });
+    const store = new RecentVaultStore(path.join(userData, 'recent-vaults.json'), {
+      now: () => new Date(Date.UTC(2026, 4, 28, 0, tick++)),
+    });
 
     const first = await store.record(firstVault);
     const second = await store.record(secondVault);
@@ -37,8 +39,13 @@ describe('RecentVaultStore', () => {
       { id: second.id, path: await fs.realpath(secondVault), name: path.basename(secondVault) },
     ]);
 
-    const raw = JSON.parse(await fs.readFile(path.join(userData, 'recent-vaults.json'), 'utf8')) as { entries: Array<{ normalizedPath: string }> };
-    expect(raw.entries.map((entry) => entry.normalizedPath)).toEqual([await fs.realpath(firstVault), await fs.realpath(secondVault)]);
+    const raw = JSON.parse(await fs.readFile(path.join(userData, 'recent-vaults.json'), 'utf8')) as {
+      entries: Array<{ normalizedPath: string }>;
+    };
+    expect(raw.entries.map((entry) => entry.normalizedPath)).toEqual([
+      await fs.realpath(firstVault),
+      await fs.realpath(secondVault),
+    ]);
   });
 
   it('resolves only known opaque ids', async () => {
@@ -71,7 +78,6 @@ describe('RecentVaultStore', () => {
     expect(recent.map((entry) => entry.path)).toEqual([await fs.realpath(roots[2]!), await fs.realpath(roots[1]!)]);
   });
 
-
   it('serializes concurrent recent writes without temp-file collisions or lost entries', async () => {
     const { RecentVaultStore } = await import('../apps/desktop/src/main/recent-vaults');
     const userData = await makeTempRoot();
@@ -83,7 +89,9 @@ describe('RecentVaultStore', () => {
     const recent = await store.list();
     expect(recent).toHaveLength(4);
     expect(new Set(recent.map((entry) => entry.id)).size).toBe(4);
-    expect(new Set(recent.map((entry) => entry.path))).toEqual(new Set(await Promise.all(roots.map((root) => fs.realpath(root)))));
+    expect(new Set(recent.map((entry) => entry.path))).toEqual(
+      new Set(await Promise.all(roots.map((root) => fs.realpath(root)))),
+    );
   });
 
   it('opens recents through main-owned opaque id resolution only', async () => {
@@ -92,7 +100,12 @@ describe('RecentVaultStore', () => {
     const runtime = { openVault: vi.fn(async () => profile) };
     const store = {
       resolve: vi.fn(async (id: string) => (id === 'recent:known' ? '/resolved/Vault' : undefined)),
-      record: vi.fn(async () => ({ id: 'recent:known', name: 'Vault', path: '/resolved/Vault', lastOpenedAt: '2026-05-28T00:00:00.000Z' })),
+      record: vi.fn(async () => ({
+        id: 'recent:known',
+        name: 'Vault',
+        path: '/resolved/Vault',
+        lastOpenedAt: '2026-05-28T00:00:00.000Z',
+      })),
     };
 
     await expect(openRecentVault('recent:known', runtime, store)).resolves.toBe(profile);

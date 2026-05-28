@@ -36,7 +36,10 @@ select:focus-visible {
   --status-bar-min-height: 30px;
   --status-bar-max-height: 72px;
   display: grid;
-  grid-template-columns: var(--activity-rail-width) var(--left-sidebar-width) var(--resize-handle-width) minmax(420px, 1fr) var(--resize-handle-width) var(--right-sidebar-width);
+  grid-template-columns: var(--activity-rail-width) var(--left-sidebar-width) var(--resize-handle-width) minmax(
+      420px,
+      1fr
+    ) var(--resize-handle-width) var(--right-sidebar-width);
   grid-template-rows: var(--titlebar-height) minmax(0, 1fr) auto;
   height: 100vh;
   min-height: 100vh;
@@ -233,7 +236,7 @@ h2 {
   opacity: var(--z-opacity-disabled);
 }
 
-[data-region="left-sidebar"] .file-pane-toolbar {
+[data-region='left-sidebar'] .file-pane-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -241,8 +244,8 @@ h2 {
   padding: 0 2px;
 }
 
-[data-region="left-sidebar"] .file-pane-action,
-[data-region="left-sidebar"] .file-pane-sort {
+[data-region='left-sidebar'] .file-pane-action,
+[data-region='left-sidebar'] .file-pane-sort {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -255,31 +258,31 @@ h2 {
   cursor: pointer;
 }
 
-[data-region="left-sidebar"] .file-pane-action:hover,
-[data-region="left-sidebar"] .file-pane-sort:hover,
-[data-region="left-sidebar"] .file-pane-action:focus-visible,
-[data-region="left-sidebar"] .file-pane-sort:focus-within {
+[data-region='left-sidebar'] .file-pane-action:hover,
+[data-region='left-sidebar'] .file-pane-sort:hover,
+[data-region='left-sidebar'] .file-pane-action:focus-visible,
+[data-region='left-sidebar'] .file-pane-sort:focus-within {
   color: var(--z-color-text);
   background: color-mix(in srgb, var(--z-control-bg) 70%, transparent);
   outline: none;
 }
 
-[data-region="left-sidebar"] .file-pane-action:disabled {
+[data-region='left-sidebar'] .file-pane-action:disabled {
   cursor: not-allowed;
   opacity: var(--z-opacity-disabled);
 }
 
-[data-region="left-sidebar"] .file-pane-action-icon {
+[data-region='left-sidebar'] .file-pane-action-icon {
   width: 17px;
   height: 17px;
   stroke-width: 1.8;
 }
 
-[data-region="left-sidebar"] .file-pane-sort {
+[data-region='left-sidebar'] .file-pane-sort {
   position: relative;
 }
 
-[data-region="left-sidebar"] .file-pane-sort select {
+[data-region='left-sidebar'] .file-pane-sort select {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -436,12 +439,15 @@ h2 {
   bottom: 0;
   left: 50%;
   width: 1px;
-  content: "";
+  content: '';
   background: color-mix(in srgb, var(--z-color-border) 70%, transparent);
   border-radius: var(--z-radius-pill);
   opacity: 0.75;
   transform: translateX(-50%);
-  transition: width 120ms ease, background 120ms ease, opacity 120ms ease;
+  transition:
+    width 120ms ease,
+    background 120ms ease,
+    opacity 120ms ease;
 }
 
 .resize-handle:hover::before,
@@ -748,8 +754,8 @@ h2 {
   justify-content: flex-end;
 }
 
-.setting-item-control input[type="text"],
-.setting-item-control input[type="number"] {
+.setting-item-control input[type='text'],
+.setting-item-control input[type='number'] {
   width: min(240px, 100%);
   border: 1px solid var(--z-control-border);
   border-radius: var(--z-radius-md);
@@ -758,7 +764,7 @@ h2 {
   background: var(--z-control-bg-strong);
 }
 
-.setting-item-control input[type="checkbox"] {
+.setting-item-control input[type='checkbox'] {
   width: 18px;
   height: 18px;
   accent-color: var(--z-color-accent);
@@ -992,7 +998,7 @@ input::placeholder {
   margin-bottom: 22px;
 }
 
-.launcher-shell :is(button, a, input, select, textarea, [role="button"], [contenteditable="true"]) {
+.launcher-shell :is(button, a, input, select, textarea, [role='button'], [contenteditable='true']) {
   -webkit-app-region: no-drag;
 }
 
@@ -1048,7 +1054,9 @@ input::placeholder {
   margin-bottom: 28px;
   border-radius: 38% 62% 44% 56% / 28% 28% 72% 72%;
   background: linear-gradient(145deg, #c2a7ff 0 32%, #8c5bed 33% 62%, #5f2fc6 63% 100%);
-  box-shadow: inset 18px -12px 0 rgba(37, 12, 98, 0.24), 0 18px 34px rgba(0, 0, 0, 0.26);
+  box-shadow:
+    inset 18px -12px 0 rgba(37, 12, 98, 0.24),
+    0 18px 34px rgba(0, 0, 0, 0.26);
   transform: rotate(8deg);
 }
 

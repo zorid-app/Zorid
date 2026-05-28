@@ -5,11 +5,19 @@ describe('desktop shutdown runtime disposal', () => {
     const { installRuntimeShutdown } = await import('../apps/desktop/src/main/shutdown');
     const handlers = new Map<string, (...args: unknown[]) => void>();
     const app = {
-      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => { handlers.set(event, listener); return app; }),
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        handlers.set(event, listener);
+        return app;
+      }),
       quit: vi.fn(),
     };
     let releaseDispose!: () => void;
-    const disposeAll = vi.fn(() => new Promise<void>((resolve) => { releaseDispose = resolve; }));
+    const disposeAll = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseDispose = resolve;
+        }),
+    );
     installRuntimeShutdown(app, { disposeAll }, 'linux');
     const preventDefault = vi.fn();
 
@@ -31,7 +39,10 @@ describe('desktop shutdown runtime disposal', () => {
     const { installRuntimeShutdown } = await import('../apps/desktop/src/main/shutdown');
     const handlers = new Map<string, (...args: unknown[]) => void>();
     const app = {
-      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => { handlers.set(event, listener); return app; }),
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        handlers.set(event, listener);
+        return app;
+      }),
       quit: vi.fn(),
     };
     const disposeAll = vi.fn(async () => undefined);

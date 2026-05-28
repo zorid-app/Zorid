@@ -1,4 +1,3 @@
-import type { PluginId } from '@zorid/shared';
 import type {
   AppAPI,
   CapabilityName,
@@ -19,6 +18,7 @@ import type {
   VaultAPI,
   WorkspaceAPI,
 } from '@zorid/platform-api';
+import type { PluginId } from '@zorid/shared';
 
 export interface ZoridPluginContext {
   readonly pluginId: PluginId;
@@ -52,7 +52,12 @@ export function defineZoridPlugin(plugin: ZoridPlugin): ZoridPlugin {
 }
 
 export type PluginKind = 'core' | 'community';
-export type ActivationTrigger = `onCommand:${string}` | `onView:${string}` | `onFileExtension:${string}` | `onMarkdownEmbed:${string}` | 'onStartup';
+export type ActivationTrigger =
+  | `onCommand:${string}`
+  | `onView:${string}`
+  | `onFileExtension:${string}`
+  | `onMarkdownEmbed:${string}`
+  | 'onStartup';
 
 export interface PluginManifest {
   readonly schemaVersion: 1;
