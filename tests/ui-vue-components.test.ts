@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readFileSync } from 'node:fs';
 import { mount } from '@vue/test-utils';
 import { afterEach, describe, expect, it } from 'vitest';
 import { defineComponent, h, nextTick, ref } from 'vue';
@@ -22,6 +23,15 @@ afterEach(() => {
 });
 
 describe('shared ui-vue primitives', () => {
+  it('dims dialog backdrops without blurring the app background', () => {
+    const css = readFileSync('packages/ui-vue/src/components.css', 'utf8');
+    const backdropRule = css.match(/\.z-dialog-backdrop\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(backdropRule).toContain('background: var(--z-color-overlay);');
+    expect(backdropRule).not.toContain('backdrop-filter');
+    expect(backdropRule).not.toContain('filter: blur');
+  });
+
   it('exports plain frame/control/panel/status primitives with stable data hooks', () => {
     const wrapper = mount(defineComponent({
       components: { ZBadge, ZButton, ZCheckboxField, ZPanel, ZResizeHandle, ZStatusBar, ZTag, ZTextField, ZWindowFrame },

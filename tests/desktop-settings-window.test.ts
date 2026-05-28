@@ -53,6 +53,9 @@ describe('desktop SettingsWindow structure', () => {
     expect(document.body.querySelector('.settings-layout')).not.toBeNull();
     expect(document.body.querySelector('.settings-nav')).not.toBeNull();
     expect(document.body.querySelector('.settings-content')).not.toBeNull();
+    expect(document.body.querySelector('.settings-header')).toBeNull();
+    expect(document.body.querySelector('h2')?.textContent).not.toBe('App and plugin settings');
+    expect([...document.body.querySelectorAll('button')].some((button) => button.textContent === 'Close')).toBe(false);
     expect([...document.body.querySelectorAll('.settings-nav-group h3')].map((node) => node.textContent)).toEqual(['Options', 'Plugin settings']);
     expect(document.body.querySelector('.settings-nav-entry--active')?.textContent).toContain('General');
     expect(document.body.querySelector('.settings-content h3')?.textContent).toBe('General');
@@ -107,5 +110,19 @@ describe('desktop SettingsWindow structure', () => {
       expect.objectContaining({ name: 'showVault', type: 'boolean' }),
       true,
     ]);
+  });
+
+  it('keeps backdrop closing available instead of rendering an explicit close button', async () => {
+    const wrapper = mount(SettingsWindow, {
+      props: { open: true, sections, values },
+      attachTo: document.body,
+    });
+    await nextTick();
+
+    expect([...document.body.querySelectorAll('button')].some((button) => button.textContent === 'Close')).toBe(false);
+    document.body.querySelector<HTMLElement>('[data-z-dialog-backdrop]')?.click();
+    await nextTick();
+
+    expect(wrapper.emitted('update:open')?.at(-1)).toEqual([false]);
   });
 });

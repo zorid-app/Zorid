@@ -8,9 +8,9 @@ Shared components live under `packages/ui-vue/src/components/` and are exported 
 
 | Component | Implementation | Intended use | Reka usage |
 | --- | --- | --- | --- |
-| `ZDialogWindow` | Vue SFC wrapper around Reka Dialog | In-app floating dialog/window with modal focus behavior, Esc close, outside/backdrop close, and blurred backdrop | Yes: `DialogRoot`, `DialogPortal`, `DialogOverlay`, `DialogContent`, `DialogTitle`, `DialogDescription` |
+| `ZDialogWindow` | Vue SFC wrapper around Reka Dialog | In-app floating dialog/window with modal focus behavior, Esc close, outside/backdrop close, and dimmed backdrop | Yes: `DialogRoot`, `DialogPortal`, `DialogOverlay`, `DialogContent`, `DialogTitle`, `DialogDescription` |
 | `ZModalWindow` | Vue SFC wrapper over `ZDialogWindow` | Explicit modal alias for app windows that should always be modal | Indirect |
-| `ZDialogBackdrop` | Vue SFC wrapper around Reka `DialogOverlay` | Shared dialog overlay/backdrop with blur | Yes |
+| `ZDialogBackdrop` | Vue SFC wrapper around Reka `DialogOverlay` | Shared dialog overlay/backdrop with dimming | Yes |
 | `ZConfirmDialog` | Vue SFC wrapper around Reka Alert Dialog | Destructive/confirmation flows with cancel/confirm events | Yes: `AlertDialog*` primitives |
 | `ZPromptDialog` | Vue SFC composition over `ZDialogWindow` + `ZTextField` | Prompt dialogs that collect a string and close on submit/cancel | Indirect |
 | `ZWindowFrame` | Plain Vue/CSS | Reusable floating window chrome/header/body | No |

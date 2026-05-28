@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { ZButton, ZDialogWindow } from '@zorid/ui-vue';
+import { ZDialogWindow } from '@zorid/ui-vue';
 import type { SettingProperty, SettingsSectionDto } from '../types.js';
 
 type JsonRecord = Record<string, unknown>;
@@ -133,14 +133,6 @@ watch(navEntries, (entries) => {
     @update:open="emit('update:open', $event)"
   >
     <section class="settings-shell" data-app-settings-window>
-      <header class="settings-header">
-        <div>
-          <p class="eyebrow">Settings</p>
-          <h2>App and plugin settings</h2>
-        </div>
-        <ZButton @click="emit('update:open', false)">Close</ZButton>
-      </header>
-
       <div class="settings-layout">
         <nav class="settings-nav" aria-label="Settings navigation">
           <section v-for="group in navGroups" :key="group.title" class="settings-nav-group">
