@@ -1,56 +1,36 @@
 <script setup lang="ts">
-import { markdown } from '@codemirror/lang-markdown';
-import { EditorState } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
+import { createMountedMarkdownEditor, type MountedMarkdownEditor } from '@zorid/editor';
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 const props = defineProps<{ text: string }>();
 const emit = defineEmits<{ change: [text: string]; save: [] }>();
 
 const host = ref<HTMLElement>();
-let view: EditorView | undefined;
-let applyingExternalText = false;
-
-function createState(doc: string): EditorState {
-  return EditorState.create({
-    doc,
-    extensions: [
-      markdown(),
-      keymap.of([
-        {
-          key: 'Mod-s',
-          preventDefault: true,
-          run: () => {
-            emit('save');
-            return true;
-          },
-        },
-      ]),
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged && !applyingExternalText) emit('change', update.state.doc.toString());
-      }),
-    ],
-  });
-}
+let editor: MountedMarkdownEditor | undefined;
 
 onMounted(() => {
   if (!host.value) return;
-  view = new EditorView({ state: createState(props.text), parent: host.value });
+  editor = createMountedMarkdownEditor({
+    parent: host.value,
+    text: props.text,
+    onChange: (text) => emit('change', text),
+    onSave: () => emit('save'),
+  });
 });
 
 watch(
   () => props.text,
   (text) => {
-    if (!view || view.state.doc.toString() === text) return;
-    applyingExternalText = true;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
-    applyingExternalText = false;
+    // The shell's full-text prop is a compatibility autosave/display cache.
+    // CodeMirror remains the live source of truth; external replacements are
+    // silent by default so cache synchronization does not echo back as edits.
+    editor?.setText(text);
   },
 );
 
 onBeforeUnmount(() => {
-  view?.destroy();
-  view = undefined;
+  editor?.destroy();
+  editor = undefined;
 });
 </script>
 

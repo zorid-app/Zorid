@@ -1,0 +1,112 @@
+{
+  "ok": true,
+  "plan": {
+    "version": 1,
+    "createdAt": "2026-05-29T05:07:03.561Z",
+    "updatedAt": "2026-05-29T05:21:01.113Z",
+    "briefPath": ".omx/ultragoal/brief.md",
+    "goalsPath": ".omx/ultragoal/goals.json",
+    "ledgerPath": ".omx/ultragoal/ledger.jsonl",
+    "codexGoalMode": "aggregate",
+    "goals": [
+      {
+        "id": "G001-move-codemirror-mounted-editor-owner",
+        "title": "Move CodeMirror mounted-editor ownership into `@zorid/editor`: declar...",
+        "objective": "Move CodeMirror mounted-editor ownership into `@zorid/editor`: declare/own CodeMirror dependencies, expose a mounted editor factory, compose base Markdown/save/change extensions, decide and implement guarded handling for `EditorExtensionContribution.extension`, and add targeted package-boundary tests.",
+        "status": "complete",
+        "attempt": 1,
+        "createdAt": "2026-05-29T05:07:03.561Z",
+        "updatedAt": "2026-05-29T05:09:20.598Z",
+        "startedAt": "2026-05-29T05:07:07.244Z",
+        "completedAt": "2026-05-29T05:09:20.598Z",
+        "evidence": "Moved CodeMirror mounted-editor ownership into packages/editor: package dependencies declared in packages/editor/package.json/pnpm-lock.yaml; packages/editor/src/index.ts now exports mounted editor factory, state/extension composition, save/change wiring, and guarded plugin extension contribution handling. Added tests/editor-package-wiring.test.ts. Verified pnpm --filter @zorid/editor run typecheck and pnpm test -- tests/editor-package-wiring.test.ts."
+      },
+      {
+        "id": "G002-convert-the-desktop-vue-markdownedit",
+        "title": "Convert the desktop Vue `MarkdownEditor` into a thin host wrapper aro...",
+        "objective": "Convert the desktop Vue `MarkdownEditor` into a thin host wrapper around `@zorid/editor`, preserving edit/save/autosave semantics and making any remaining Vue full-text state explicitly cache-only.",
+        "status": "complete",
+        "attempt": 1,
+        "createdAt": "2026-05-29T05:07:03.561Z",
+        "updatedAt": "2026-05-29T05:10:07.603Z",
+        "startedAt": "2026-05-29T05:09:25.597Z",
+        "completedAt": "2026-05-29T05:10:07.603Z",
+        "evidence": "Converted apps/desktop/src/renderer/src/components/MarkdownEditor.vue into a thin @zorid/editor host wrapper. Removed direct CodeMirror imports/construction from the Vue component, kept save/change event contract, and documented the prop as compatibility autosave/display cache with silent external replacements. Verified pnpm --filter @zorid/desktop-app run typecheck and pnpm test -- tests/editor-package-wiring.test.ts tests/desktop-markdown-autosave.test.ts tests/desktop-vault-editor.test.ts."
+      },
+      {
+        "id": "G003-add-testable-live-preview-core-primi",
+        "title": "Add testable Live Preview core primitives in `@zorid/editor`: rendere...",
+        "objective": "Add testable Live Preview core primitives in `@zorid/editor`: renderer registry/composition types, visible-range aware matching context, focus/selection-aware active-source versus inactive-preview policy, deterministic range filtering, transaction-safe decoration mapping, and source-text invariants.",
+        "status": "complete",
+        "attempt": 1,
+        "createdAt": "2026-05-29T05:07:03.561Z",
+        "updatedAt": "2026-05-29T05:11:22.461Z",
+        "startedAt": "2026-05-29T05:10:11.188Z",
+        "completedAt": "2026-05-29T05:11:22.461Z",
+        "evidence": "Added Live Preview core primitives in packages/editor/src/index.ts: renderer/context/range types, visible-range context creation, deterministic range collection/filtering, focus+selection source reveal policy, and a CodeMirror ViewPlugin decoration extension that rebuilds on document/viewport/selection/focus changes without mutating source text. Added tests/editor-live-preview-primitives.test.ts. Verified pnpm --filter @zorid/editor run typecheck and pnpm test -- tests/editor-live-preview-primitives.test.ts tests/editor-package-wiring.test.ts."
+      },
+      {
+        "id": "G004-add-mvp-first-party-preview-renderer",
+        "title": "Add MVP first-party preview renderers for low-risk Markdown elements:...",
+        "objective": "Add MVP first-party preview renderers for low-risk Markdown elements: headings, inline code, Markdown links, wiki links, tags, and optionally task checkbox markers only if source-backed tests are solid; no complex widgets.",
+        "status": "complete",
+        "attempt": 1,
+        "createdAt": "2026-05-29T05:07:03.561Z",
+        "updatedAt": "2026-05-29T05:12:23.678Z",
+        "startedAt": "2026-05-29T05:11:28.654Z",
+        "completedAt": "2026-05-29T05:12:23.678Z",
+        "evidence": "Added first-party MVP Live Preview renderers in packages/editor/src/index.ts for headings, inline code, Markdown links, wiki links, tags, and task markers. Wired defaultLivePreviewRenderers into mounted editor extension creation by default. Tests cover renderer ids, no table renderer, source preservation, and mounted default decoration output. Verified pnpm --filter @zorid/editor run typecheck and pnpm test -- tests/editor-live-preview-primitives.test.ts tests/editor-package-wiring.test.ts."
+      },
+      {
+        "id": "G005-add-update-targeted-tests-for-render",
+        "title": "Add/update targeted tests for renderer matching, active-source reveal...",
+        "objective": "Add/update targeted tests for renderer matching, active-source reveal, inactive preview decoration behavior, source-text preservation, dependency/export wiring, and existing desktop autosave/open/save behavior.",
+        "status": "complete",
+        "attempt": 1,
+        "createdAt": "2026-05-29T05:07:03.561Z",
+        "updatedAt": "2026-05-29T05:13:37.217Z",
+        "startedAt": "2026-05-29T05:12:29.617Z",
+        "completedAt": "2026-05-29T05:13:37.217Z",
+        "evidence": "Added/updated targeted tests in tests/editor-live-preview-primitives.test.ts and tests/editor-package-wiring.test.ts covering renderer matching, visible-range filtering, inactive preview versus focused active-source reveal, source-text preservation, default mounted decoration output, save shortcut wiring, dependency/export wiring, extension guard diagnostics, and silent external replacements. Existing desktop autosave/open/save tests remain in the targeted suite. Verified pnpm --filter @zorid/editor run typecheck and pnpm test -- tests/editor-live-preview-primitives.test.ts tests/editor-package-wiring.test.ts tests/desktop-markdown-autosave.test.ts tests/desktop-vault-editor.test.ts."
+      },
+      {
+        "id": "G006-run-verification-pnpm-lint-boundarie",
+        "title": "Run verification: `pnpm lint:boundaries`, `pnpm --filter @zorid/edito...",
+        "objective": "Run verification: `pnpm lint:boundaries`, `pnpm --filter @zorid/editor run typecheck`, targeted Vitest tests for editor/desktop autosave, `pnpm typecheck`, and `pnpm lint` if available/feasible.",
+        "status": "complete",
+        "attempt": 1,
+        "createdAt": "2026-05-29T05:07:03.561Z",
+        "updatedAt": "2026-05-29T05:14:38.204Z",
+        "startedAt": "2026-05-29T05:13:42.929Z",
+        "completedAt": "2026-05-29T05:14:38.204Z",
+        "evidence": "Verification passed after formatting touched files: pnpm lint:boundaries; pnpm --filter @zorid/editor run typecheck; pnpm test -- tests/editor-live-preview-primitives.test.ts tests/editor-package-wiring.test.ts tests/desktop-markdown-autosave.test.ts tests/desktop-vault-editor.test.ts (4 files, 22 tests); pnpm typecheck; pnpm lint. Initial pnpm lint exposed formatting/import-order issues only; fixed with pnpm exec biome format/check --write and reran all commands successfully."
+      },
+      {
+        "id": "G007-run-the-mandatory-final-cleanup-and",
+        "title": "Run the mandatory final cleanup and independent code-review gate; onl...",
+        "objective": "Run the mandatory final cleanup and independent code-review gate; only complete the aggregate goal if cleaner, verification, code-reviewer, and architect review all pass.",
+        "status": "complete",
+        "attempt": 1,
+        "createdAt": "2026-05-29T05:07:03.561Z",
+        "updatedAt": "2026-05-29T05:21:01.113Z",
+        "startedAt": "2026-05-29T05:15:09.373Z",
+        "evidence": "Final ultragoal gate passed: ai-slop-cleaner no-op report recorded; post-cleaner verification passed (import boundaries, @zorid/editor typecheck, targeted 4-file/22-test Vitest suite, repo typecheck, repo lint); independent code-reviewer APPROVE and architect CLEAR evidence recorded in quality-gate-G007.json; aggregate Codex goal marked complete.",
+        "completedAt": "2026-05-29T05:21:01.113Z"
+      }
+    ],
+    "codexObjective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail."
+  },
+  "summary": {
+    "total": 7,
+    "pending": 0,
+    "inProgress": 0,
+    "complete": 7,
+    "failed": 0,
+    "reviewBlocked": 0,
+    "needsUserDecision": 0,
+    "superseded": 0,
+    "steeringBlocked": 0,
+    "aggregateComplete": false,
+    "artifactComplete": true
+  }
+}
