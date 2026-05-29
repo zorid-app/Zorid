@@ -1,3 +1,4 @@
+import { StateEffect } from '@codemirror/state';
 import type { WidgetType } from '@codemirror/view';
 import type { LivePreviewDecorationKind, LivePreviewRange, LivePreviewRenderer } from './types.js';
 
@@ -23,3 +24,5 @@ export function isLivePreviewWidgetRange(
 ): range is InternalLivePreviewRange & { readonly kind: 'widget'; readonly widget: WidgetType } {
   return range.kind === 'widget' && Boolean(range.widget);
 }
+
+export const setInternalLivePreviewFocused = StateEffect.define<boolean>();

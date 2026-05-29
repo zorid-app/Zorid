@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { readFile } from 'node:fs/promises';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 import {
@@ -33,6 +34,10 @@ function collectAllRanges(doc: string, selection = 0, focused = false) {
   return [...collectWidgetRanges(doc, selection, focused), ...collectPublicRanges(doc, selection, focused)].sort(
     (left, right) => left.from - right.from || left.to - right.to || left.rendererId.localeCompare(right.rendererId),
   );
+}
+
+async function waitForFocusEffect(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
 describe('editor Live Preview structured widgets', () => {
@@ -113,6 +118,24 @@ describe('editor Live Preview structured widgets', () => {
     expect(collectAllRanges(doc, doc.length, true).map((range) => range.rendererId)).toEqual(['code-block-widget']);
   });
 
+  it('freezes focused widget activation boundary semantics', () => {
+    const doc = ['```ts', 'const value = 1;', '```', '', 'paragraph'].join('\n');
+    const widgetRange = collectWidgetRanges(doc)[0]!;
+
+    expect(collectAllRanges(doc, widgetRange.from, true).map((range) => range.rendererId)).not.toContain(
+      'code-block-widget',
+    );
+    expect(collectAllRanges(doc, doc.indexOf('value'), true).map((range) => range.rendererId)).not.toContain(
+      'code-block-widget',
+    );
+    expect(collectAllRanges(doc, widgetRange.to, true).map((range) => range.rendererId)).not.toContain(
+      'code-block-widget',
+    );
+    expect(collectAllRanges(doc, widgetRange.to + 1, true).map((range) => range.rendererId)).toContain(
+      'code-block-widget',
+    );
+  });
+
   it('keeps mounted code-block widget hidden source when an unfocused selection transaction enters the block', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
@@ -123,6 +146,49 @@ describe('editor Live Preview structured widgets', () => {
 
     editor.view.dispatch({ selection: { anchor: text.indexOf('value') } });
     expect(parent.querySelector('.z-live-preview-code-block-widget')).toBeTruthy();
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('suppresses and restores mounted code-block widget when focused selection enters and leaves the source range', async () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['```ts', 'const value = 1;', '```', '', 'paragraph'].join('\n');
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    expect(parent.querySelector('.z-live-preview-code-block-widget')).toBeTruthy();
+    expect(editor.getText()).toBe(text);
+
+    editor.focus();
+    await waitForFocusEffect();
+    editor.view.dispatch({ selection: { anchor: text.indexOf('value') } });
+    expect(parent.querySelector('.z-live-preview-code-block-widget')).toBeNull();
+    expect(editor.getText()).toBe(text);
+
+    editor.view.dispatch({ selection: { anchor: text.indexOf('paragraph') } });
+    expect(parent.querySelector('.z-live-preview-code-block-widget')).toBeTruthy();
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('activates mounted code-block widget through pointer selection without changing source', async () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['```ts', 'const value = 1;', '```', '', 'paragraph'].join('\n');
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    const widget = parent.querySelector<HTMLElement>('.z-live-preview-code-block-widget');
+    expect(widget).toBeTruthy();
+
+    widget?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await waitForFocusEffect();
+
+    expect(editor.view.state.selection.main.head).toBe(text.indexOf('const value'));
+    expect(parent.querySelector('.z-live-preview-code-block-widget')).toBeNull();
     expect(editor.getText()).toBe(text);
 
     editor.destroy();
@@ -143,5 +209,11 @@ describe('editor Live Preview structured widgets', () => {
 
     editor.destroy();
     parent.remove();
+  });
+
+  it('documents the no-atomic-ranges policy with deterministic reveal and restoration coverage', async () => {
+    const extensionSource = await readFile('packages/editor/src/live-preview/extension.ts', 'utf8');
+
+    expect(extensionSource).not.toContain('atomicRanges');
   });
 });

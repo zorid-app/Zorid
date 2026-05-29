@@ -1,5 +1,9 @@
 import { type EditorView, WidgetType } from '@codemirror/view';
-import type { InternalLivePreviewRange, InternalLivePreviewRenderer } from './internal-types.js';
+import {
+  type InternalLivePreviewRange,
+  type InternalLivePreviewRenderer,
+  setInternalLivePreviewFocused,
+} from './internal-types.js';
 import { markdownCompleteFencedCodeBlockRanges, markdownSuppressedCodeRanges } from './markdown-code-context.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
 
@@ -123,6 +127,7 @@ class CodeBlockPreviewWidget extends WidgetType {
       event.preventDefault();
       view.focus();
       view.dispatch({
+        effects: setInternalLivePreviewFocused.of(true),
         selection: { anchor: this.activateAt },
         scrollIntoView: true,
       });

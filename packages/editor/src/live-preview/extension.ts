@@ -1,10 +1,11 @@
-import { type Extension, StateEffect, StateField } from '@codemirror/state';
+import { type Extension, StateField } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import {
   type InternalLivePreviewRange,
   type InternalLivePreviewRenderer,
   isLivePreviewLineRange,
   isLivePreviewWidgetRange,
+  setInternalLivePreviewFocused,
 } from './internal-types.js';
 import type {
   LivePreviewContext,
@@ -135,8 +136,6 @@ interface LivePreviewWidgetState {
   readonly decorations: DecorationSet;
 }
 
-const setLivePreviewFocused = StateEffect.define<boolean>();
-
 function livePreviewWidgetDecorationsForState(
   state: LivePreviewContext['state'],
   renderers: readonly InternalLivePreviewRenderer[],
@@ -169,7 +168,7 @@ function livePreviewWidgetField(renderers: readonly InternalLivePreviewRenderer[
     }),
     update: (value, transaction) => {
       const focusedFromEffect = transaction.effects.reduce<boolean | null>(
-        (current, effect) => (effect.is(setLivePreviewFocused) ? effect.value : current),
+        (current, effect) => (effect.is(setInternalLivePreviewFocused) ? effect.value : current),
         null,
       );
       const focused = focusedFromEffect ?? value.focused;
@@ -193,7 +192,7 @@ export function livePreviewExtensionWithWidgets(
 ): Extension {
   return [
     livePreviewWidgetField(widgetRenderers),
-    EditorView.focusChangeEffect.of((_state, focusing) => setLivePreviewFocused.of(focusing)),
+    EditorView.focusChangeEffect.of((_state, focusing) => setInternalLivePreviewFocused.of(focusing)),
     ViewPlugin.fromClass(
       class {
         decorations: DecorationSet;
