@@ -523,12 +523,12 @@ h2 {
 
 .status-bar {
   position: absolute;
-  right: 12px;
-  bottom: 10px;
+  right: 0;
+  bottom: 0;
   z-index: 30;
   display: inline-flex;
   width: max-content;
-  max-width: min(760px, calc(100% - 24px));
+  max-width: min(760px, 100%);
   min-width: 0;
   min-height: 0;
   max-height: none;
@@ -538,7 +538,9 @@ h2 {
   overflow: hidden;
   padding: 6px 10px;
   border: 1px solid color-mix(in srgb, var(--z-color-border) 80%, transparent);
-  border-radius: var(--z-radius-md);
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: var(--z-radius-md) 0 0 0;
   color: var(--z-color-muted);
   background: color-mix(in srgb, var(--z-statusbar-bg) 88%, transparent);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);

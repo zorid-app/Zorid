@@ -143,8 +143,12 @@ describe('desktop shell pane layout helpers', () => {
     expect(styles).toContain('position: relative;');
     expect(styles).toContain('grid-template-rows: var(--titlebar-height) minmax(0, 1fr);');
     expect(styles).toContain('position: absolute;');
-    expect(styles).toContain('bottom: 10px;');
+    expect(styles).toContain('right: 0;');
+    expect(styles).toContain('bottom: 0;');
     expect(styles).toContain('width: max-content;');
+    expect(styles).toContain('border-right: 0;');
+    expect(styles).toContain('border-bottom: 0;');
+    expect(styles).toContain('border-radius: var(--z-radius-md) 0 0 0;');
     expect(styles).toContain('.status-bar__item');
     expect(styles).toMatch(/\.launcher-shell\s*\{[^}]*-webkit-app-region:\s*drag;[^}]*\}/s);
     expect(styles).toMatch(
