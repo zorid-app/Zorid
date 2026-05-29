@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "createdAt": "2026-05-29T10:06:30.467Z",
+  "updatedAt": "2026-05-29T10:28:46.751Z",
+  "briefPath": ".omx/ultragoal/brief.md",
+  "goalsPath": ".omx/ultragoal/goals.json",
+  "ledgerPath": ".omx/ultragoal/ledger.jsonl",
+  "codexGoalMode": "aggregate",
+  "goals": [
+    {
+      "id": "G001-add-tests-first-coverage-for-fenced",
+      "title": "Add tests-first coverage for fenced-code widget matching, complete-vs...",
+      "objective": "Add tests-first coverage for fenced-code widget matching, complete-vs-open fence behavior, source preservation, active source reveal, pointer/selection activation, renderer suppression inside fenced code, mounted DOM behavior, and scoped desktop styles.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-29T10:06:30.467Z",
+      "updatedAt": "2026-05-29T10:07:39.482Z",
+      "startedAt": "2026-05-29T10:06:35.247Z",
+      "completedAt": "2026-05-29T10:07:39.482Z",
+      "evidence": "Added tests/editor-live-preview-widgets.test.ts for fenced-code widget matching, complete/open fence behavior, source preservation, focused reveal, renderer suppression, mounted DOM safe text behavior, and updated desktop style test expected class. Pre-implementation verification failed as expected: pnpm vitest run tests/editor-live-preview-widgets.test.ts tests/desktop-live-preview-styles.test.ts (6 failing tests) because widget implementation and scoped CSS are not implemented yet."
+    },
+    {
+      "id": "G002-implement-the-minimal-private-widget",
+      "title": "Implement the minimal private widget-capable Live Preview path using...",
+      "objective": "Implement the minimal private widget-capable Live Preview path using CodeMirror WidgetType / block Decoration.replace for complete fenced code blocks only.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-29T10:06:30.467Z",
+      "updatedAt": "2026-05-29T10:11:04.264Z",
+      "startedAt": "2026-05-29T10:07:44.900Z",
+      "completedAt": "2026-05-29T10:11:04.264Z",
+      "evidence": "Implemented minimal private widget-capable Live Preview path: added complete fenced-code range metadata helper, internal widget range kind, direct StateField-backed block Decoration.replace widget decorations, CodeBlockPreviewWidget with safe DOM construction and selection reveal, and default code-block-widget renderer for complete fenced code only. Verified pnpm vitest run tests/editor-live-preview-widgets.test.ts (5 tests passed)."
+    },
+    {
+      "id": "G003-add-scoped-desktop-styling-for-the-f",
+      "title": "Add scoped desktop styling for the fenced-code widget shell and updat...",
+      "objective": "Add scoped desktop styling for the fenced-code widget shell and update style-scope tests.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-29T10:06:30.467Z",
+      "updatedAt": "2026-05-29T10:12:54.764Z",
+      "startedAt": "2026-05-29T10:12:23.772Z",
+      "completedAt": "2026-05-29T10:12:54.764Z",
+      "evidence": "Added scoped .markdown-editor .z-live-preview-code-block-widget desktop styling and verified style contract with pnpm vitest run tests/editor-live-preview-widgets.test.ts tests/desktop-live-preview-styles.test.ts (2 files, 6 tests passed)."
+    },
+    {
+      "id": "G004-run-targeted-and-broad-verification",
+      "title": "Run targeted and broad verification required by the PRD/test spec.",
+      "objective": "Run targeted and broad verification required by the PRD/test spec.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-29T10:06:30.467Z",
+      "updatedAt": "2026-05-29T10:14:07.084Z",
+      "startedAt": "2026-05-29T10:12:54.923Z",
+      "completedAt": "2026-05-29T10:14:07.084Z",
+      "evidence": "Targeted suite passed: pnpm vitest run tests/editor-live-preview-widgets.test.ts tests/editor-live-preview-blocks.test.ts tests/editor-live-preview-primitives.test.ts tests/editor-task-toggle.test.ts tests/editor-markdown-keymap.test.ts tests/editor-package-wiring.test.ts tests/desktop-live-preview-styles.test.ts tests/desktop-markdown-autosave.test.ts tests/desktop-vault-editor.test.ts (9 files, 53 tests). Broad checks passed after import sorting: pnpm --filter @zorid/editor run typecheck; pnpm lint:boundaries; pnpm typecheck; pnpm lint; pnpm test (40 files, 192 tests)."
+    },
+    {
+      "id": "G005-run-final-cleanup-review-gate-resolv",
+      "title": "Run final cleanup/review gate, resolve blockers, and commit changed f...",
+      "objective": "Run final cleanup/review gate, resolve blockers, and commit changed files with a plain descriptive commit message.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-29T10:06:30.467Z",
+      "updatedAt": "2026-05-29T10:28:46.751Z",
+      "startedAt": "2026-05-29T10:14:07.233Z",
+      "evidence": "Final cleanup/review gate passed. AI slop cleanup report saved to .omx/ultragoal/ai-slop-cleanup-G005.md. Re-verification passed: targeted Live Preview suite (9 files, 55 tests), editor typecheck, import boundaries, root typecheck, pnpm lint, pnpm test (40 files, 194 tests). Independent code-reviewer agent 019e7341-6f44-7270-9566-25bbb71293aa returned APPROVE with 0 issues; independent architect agent 019e7344-7d0e-7731-a912-52859304779f returned CLEAR. Aggregate Codex goal marked complete: 295062 tokens, 1265 seconds.",
+      "completedAt": "2026-05-29T10:28:46.751Z"
+    }
+  ],
+  "codexObjective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail."
+}

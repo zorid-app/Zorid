@@ -1,13 +1,1 @@
-{
-  "goal": {
-    "threadId": "019e7326-75fa-7903-90f8-16e8f497e38b",
-    "objective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail.",
-    "status": "active",
-    "tokensUsed": 100966,
-    "timeUsedSeconds": 431,
-    "createdAt": 1780049201,
-    "updatedAt": 1780049632
-  },
-  "remainingTokens": null,
-  "completionBudgetReport": null
-}
+{"goal":{"threadId":"019e739a-87f7-7b81-b9e2-a1b5ab67583e","objective":"Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail.","status":"active","tokensUsed":42999,"timeUsedSeconds":237,"createdAt":1780058609,"updatedAt":1780058853},"remainingTokens":null,"completionBudgetReport":null}

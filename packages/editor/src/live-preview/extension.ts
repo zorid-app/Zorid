@@ -1,4 +1,4 @@
-import { type Extension, StateField } from '@codemirror/state';
+import { type Extension, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import {
   type InternalLivePreviewRange,
@@ -94,9 +94,86 @@ function collectInternalLivePreviewRanges(
   ) as InternalLivePreviewRange[];
 }
 
-function livePreviewDecorationsForView(view: EditorView, renderers: readonly LivePreviewRenderer[]): DecorationSet {
-  const ranges: InternalLivePreviewRange[] = view.visibleRanges.flatMap((visibleRange) =>
-    collectLivePreviewRanges(renderers, createLivePreviewContext(view.state, visibleRange, view.hasFocus)),
+const livePreviewWidgetScanMargin = 2000;
+const setLivePreviewWidgetVisibleRanges = StateEffect.define<readonly LivePreviewVisibleRange[]>();
+
+function lineStartBefore(docText: string, position: number): number {
+  return docText.lastIndexOf('\n', Math.max(0, position - 1)) + 1;
+}
+
+function lineEndAfter(docText: string, position: number): number {
+  const lineEnd = docText.indexOf('\n', position);
+  return lineEnd === -1 ? docText.length : lineEnd;
+}
+
+function livePreviewWidgetScanWindow(docText: string, visibleRange: LivePreviewVisibleRange): LivePreviewVisibleRange {
+  const boundedFrom = Math.max(0, visibleRange.from - livePreviewWidgetScanMargin);
+  const boundedTo = Math.min(docText.length, visibleRange.to + livePreviewWidgetScanMargin);
+  return {
+    from: lineStartBefore(docText, boundedFrom),
+    to: lineEndAfter(docText, boundedTo),
+  };
+}
+
+export function collectLivePreviewWidgetRangesForVisibleRanges(
+  renderers: readonly InternalLivePreviewRenderer[],
+  state: LivePreviewContext['state'],
+  visibleRanges: readonly LivePreviewVisibleRange[],
+  focused: boolean,
+): InternalLivePreviewRange[] {
+  const docText = state.doc.toString();
+  const ranges = visibleRanges.flatMap((visibleRange) =>
+    collectInternalLivePreviewRanges(
+      renderers,
+      createLivePreviewContext(state, livePreviewWidgetScanWindow(docText, visibleRange), focused),
+    ),
+  );
+  return [...new Map(ranges.map((range) => [`${range.rendererId}:${range.from}:${range.to}`, range])).values()];
+}
+
+function livePreviewRangeIsInsideAnyWidget(
+  range: Pick<LivePreviewRange, 'from' | 'to'>,
+  widgets: readonly InternalLivePreviewRange[],
+): boolean {
+  return widgets.some((widget) => range.from >= widget.from && range.to <= widget.to);
+}
+
+export function collectLivePreviewRangesWithWidgetSuppression(
+  renderers: readonly LivePreviewRenderer[],
+  widgetRenderers: readonly InternalLivePreviewRenderer[],
+  state: LivePreviewContext['state'],
+  visibleRanges: readonly LivePreviewVisibleRange[],
+  focused: boolean,
+): InternalLivePreviewRange[] {
+  const widgetRanges = collectLivePreviewWidgetRangesForVisibleRanges(
+    widgetRenderers,
+    state,
+    visibleRanges,
+    focused,
+  ).filter(isLivePreviewWidgetRange);
+  const publicRanges = visibleRanges.flatMap((visibleRange) =>
+    collectLivePreviewRanges(renderers, createLivePreviewContext(state, visibleRange, focused)),
+  );
+
+  return [
+    ...widgetRanges,
+    ...publicRanges.filter((range) => !livePreviewRangeIsInsideAnyWidget(range, widgetRanges)),
+  ].sort(
+    (left, right) => left.from - right.from || left.to - right.to || left.rendererId.localeCompare(right.rendererId),
+  );
+}
+
+function livePreviewDecorationsForView(
+  view: EditorView,
+  renderers: readonly LivePreviewRenderer[],
+  widgetRenderers: readonly InternalLivePreviewRenderer[],
+): DecorationSet {
+  const ranges: InternalLivePreviewRange[] = collectLivePreviewRangesWithWidgetSuppression(
+    renderers,
+    widgetRenderers,
+    view.state,
+    view.visibleRanges,
+    view.hasFocus,
   );
   return Decoration.set(
     ranges.flatMap((range) => {
@@ -133,6 +210,7 @@ function livePreviewDecorationsForView(view: EditorView, renderers: readonly Liv
 
 interface LivePreviewWidgetState {
   readonly focused: boolean;
+  readonly visibleRanges: readonly LivePreviewVisibleRange[];
   readonly decorations: DecorationSet;
 }
 
@@ -140,11 +218,9 @@ function livePreviewWidgetDecorationsForState(
   state: LivePreviewContext['state'],
   renderers: readonly InternalLivePreviewRenderer[],
   focused: boolean,
+  visibleRanges: readonly LivePreviewVisibleRange[],
 ): DecorationSet {
-  const ranges = collectInternalLivePreviewRanges(
-    renderers,
-    createLivePreviewContext(state, { from: 0, to: state.doc.length }, focused),
-  );
+  const ranges = collectLivePreviewWidgetRangesForVisibleRanges(renderers, state, visibleRanges, focused);
 
   return Decoration.set(
     ranges.flatMap((range) => {
@@ -160,26 +236,88 @@ function livePreviewWidgetDecorationsForState(
   );
 }
 
+function defaultLivePreviewWidgetVisibleRanges(state: LivePreviewContext['state']): readonly LivePreviewVisibleRange[] {
+  return [{ from: 0, to: state.doc.length }];
+}
+
+function livePreviewVisibleRangeKey(ranges: readonly LivePreviewVisibleRange[]): string {
+  return ranges.map((range) => `${range.from}:${range.to}`).join('|');
+}
+
 function livePreviewWidgetField(renderers: readonly InternalLivePreviewRenderer[]): Extension {
   return StateField.define<LivePreviewWidgetState>({
-    create: (state) => ({
-      focused: false,
-      decorations: livePreviewWidgetDecorationsForState(state, renderers, false),
-    }),
+    create: (state) => {
+      const focused = false;
+      const visibleRanges = defaultLivePreviewWidgetVisibleRanges(state);
+      return {
+        focused,
+        visibleRanges,
+        decorations: livePreviewWidgetDecorationsForState(state, renderers, focused, visibleRanges),
+      };
+    },
     update: (value, transaction) => {
       const focusedFromEffect = transaction.effects.reduce<boolean | null>(
         (current, effect) => (effect.is(setInternalLivePreviewFocused) ? effect.value : current),
         null,
       );
+      const visibleRangesFromEffect = transaction.effects.reduce<readonly LivePreviewVisibleRange[] | null>(
+        (current, effect) => (effect.is(setLivePreviewWidgetVisibleRanges) ? effect.value : current),
+        null,
+      );
       const focused = focusedFromEffect ?? value.focused;
-      if (!transaction.docChanged && !transaction.selection && focused === value.focused) return value;
+      const visibleRanges = visibleRangesFromEffect ?? value.visibleRanges;
+      if (
+        !transaction.docChanged &&
+        !transaction.selection &&
+        focused === value.focused &&
+        visibleRanges === value.visibleRanges
+      )
+        return value;
       return {
         focused,
-        decorations: livePreviewWidgetDecorationsForState(transaction.state, renderers, focused),
+        visibleRanges,
+        decorations: livePreviewWidgetDecorationsForState(transaction.state, renderers, focused, visibleRanges),
       };
     },
     provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
   });
+}
+
+function livePreviewWidgetVisibleRangeUpdater(): Extension {
+  return ViewPlugin.fromClass(
+    class {
+      private queued = false;
+      private rangeKey = '';
+      private pendingRanges: readonly LivePreviewVisibleRange[] | null = null;
+
+      constructor(readonly view: EditorView) {}
+
+      update(update: ViewUpdate): void {
+        if (!update.viewportChanged && !update.docChanged) return;
+        this.schedule(update.view.visibleRanges);
+      }
+
+      private schedule(visibleRanges: readonly LivePreviewVisibleRange[]): void {
+        const nextRanges = visibleRanges.map((range) => ({ from: range.from, to: range.to }));
+        const nextKey = livePreviewVisibleRangeKey(nextRanges);
+        if (nextKey === this.rangeKey) return;
+        this.rangeKey = nextKey;
+        this.pendingRanges = nextRanges;
+        if (this.queued) return;
+
+        this.queued = true;
+        queueMicrotask(() => {
+          this.queued = false;
+          const ranges = this.pendingRanges;
+          this.pendingRanges = null;
+          if (!ranges) return;
+          this.view.dispatch({
+            effects: setLivePreviewWidgetVisibleRanges.of(ranges),
+          });
+        });
+      }
+    },
+  );
 }
 
 export function livePreviewExtension(renderers: readonly LivePreviewRenderer[]): Extension {
@@ -192,18 +330,19 @@ export function livePreviewExtensionWithWidgets(
 ): Extension {
   return [
     livePreviewWidgetField(widgetRenderers),
+    livePreviewWidgetVisibleRangeUpdater(),
     EditorView.focusChangeEffect.of((_state, focusing) => setInternalLivePreviewFocused.of(focusing)),
     ViewPlugin.fromClass(
       class {
         decorations: DecorationSet;
 
         constructor(view: EditorView) {
-          this.decorations = livePreviewDecorationsForView(view, renderers);
+          this.decorations = livePreviewDecorationsForView(view, renderers, widgetRenderers);
         }
 
         update(update: ViewUpdate): void {
           if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged) {
-            this.decorations = livePreviewDecorationsForView(update.view, renderers);
+            this.decorations = livePreviewDecorationsForView(update.view, renderers, widgetRenderers);
           }
         }
       },

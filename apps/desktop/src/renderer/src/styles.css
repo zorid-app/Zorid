@@ -555,6 +555,29 @@ h2 {
   background: transparent;
 }
 
+.markdown-editor .z-live-preview-callout-widget {
+  margin: 4px 0;
+  padding: 8px 10px;
+  color: var(--z-color-text);
+  background: color-mix(in srgb, var(--z-color-accent) 8%, var(--z-control-bg-strong));
+  border: 1px solid color-mix(in srgb, var(--z-color-accent) 28%, var(--z-color-border));
+  border-left: 3px solid color-mix(in srgb, var(--z-color-accent) 72%, var(--z-color-border));
+  border-radius: var(--z-radius-md);
+  font-family: var(--z-font-ui);
+}
+
+.markdown-editor .z-live-preview-callout-widget__header {
+  color: var(--z-color-accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.markdown-editor .z-live-preview-callout-widget__body {
+  margin-top: 6px;
+  white-space: pre-wrap;
+}
+
 .resize-handle {
   position: relative;
   z-index: 2;

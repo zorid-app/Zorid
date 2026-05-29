@@ -1,19 +1,13 @@
-Execute the approved RALPLAN for Live Preview Pass 4.
+Implement Live Preview Pass 5.
 
-Planning sources:
-- PRD: .omx/plans/prd-live-preview-pass-4-structured-widget-activation-20260529T095644Z.md
-- Test spec: .omx/plans/test-spec-live-preview-pass-4-structured-widget-activation-20260529T095644Z.md
-- Handoff: .omx/plans/ralplan-handoff-live-preview-pass-4-structured-widget-activation-20260529T095644Z.json
+Goal 1: Add Phase 5A failing tests for bounded widget decoration collection and bounded scanner work/input windows. Cover visible/near-visible windows, semantic-container fixtures, distant-region non-consumption, and existing fenced-code widget regressions.
 
-Scope:
-Implement a private fenced-code block structured widget activation foundation for @zorid/editor Live Preview. Keep Markdown source canonical and keep new widget seams private to packages/editor/src/live-preview.
+Goal 2: Implement Phase 5A minimally in packages/editor/src/live-preview so widget decorations are built from visible/near-visible ranges instead of unconditional full-document context. Preserve private APIs and existing fenced-code behavior.
 
-Goals:
-1. Add tests-first coverage for fenced-code widget matching, complete-vs-open fence behavior, source preservation, active source reveal, pointer/selection activation, renderer suppression inside fenced code, mounted DOM behavior, and scoped desktop styles.
-2. Implement the minimal private widget-capable Live Preview path using CodeMirror WidgetType / block Decoration.replace for complete fenced code blocks only.
-3. Add scoped desktop styling for the fenced-code widget shell and update style-scope tests.
-4. Run targeted and broad verification required by the PRD/test spec.
-5. Run final cleanup/review gate, resolve blockers, and commit changed files with a plain descriptive commit message.
+Goal 3: Add tests for a private widget suppression/ordering seam and conservative callout matching. Cover simple/titled callouts, quoted blank lines, interruption by unquoted content, lazy continuation raw, nested blockquote raw, code suppression, and outside inline/task/link/tag behavior.
 
-Explicit non-goals:
-No tables, properties/frontmatter visual editor, callout widget, embeds/images/PDFs, math rendering, syntax highlighting, copy toolbar, Reading parity adapter, mobile behavior, broad Lezer rewrite, or public renderer/plugin API stabilization.
+Goal 4: Implement one private callout widget shell with safe DOM, source reveal, pointer activation, renderer suppression, and scoped desktop styles. Keep APIs private and do not add rich callout UI or dependencies.
+
+Goal 5: Run targeted and full verification, run final cleanup/review gate, resolve blockers, checkpoint completion, and commit changed files.
+
+Stop condition: if Goal 2 requires broad parser or extension architecture work, stop after Goal 2 and defer Goals 3-4. Constraints: canonical Markdown source only, private packages/editor/src/live-preview APIs only, no platform API changes, no tables/properties/embeds/math/syntax highlighting/Reading parity/public widget APIs/new dependencies.

@@ -91,6 +91,15 @@ function blockquoteLineRanges(
   });
 }
 
+function activateLivePreviewWidgetSource(view: EditorView, activateAt: number): void {
+  view.focus();
+  view.dispatch({
+    effects: setInternalLivePreviewFocused.of(true),
+    selection: { anchor: activateAt },
+    scrollIntoView: true,
+  });
+}
+
 class CodeBlockPreviewWidget extends WidgetType {
   constructor(
     readonly source: string,
@@ -125,12 +134,53 @@ class CodeBlockPreviewWidget extends WidgetType {
 
     wrapper.addEventListener('mousedown', (event) => {
       event.preventDefault();
-      view.focus();
-      view.dispatch({
-        effects: setInternalLivePreviewFocused.of(true),
-        selection: { anchor: this.activateAt },
-        scrollIntoView: true,
-      });
+      activateLivePreviewWidgetSource(view, this.activateAt);
+    });
+
+    return wrapper;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return event.type === 'mousedown';
+  }
+}
+
+class CalloutPreviewWidget extends WidgetType {
+  constructor(
+    readonly source: string,
+    readonly type: string,
+    readonly title: string,
+    readonly body: string,
+    readonly activateAt: number,
+  ) {
+    super();
+  }
+
+  eq(other: CalloutPreviewWidget): boolean {
+    return this.source === other.source && this.activateAt === other.activateAt;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'z-live-preview-callout-widget';
+    wrapper.dataset.livePreviewRenderer = 'callout-widget';
+    wrapper.setAttribute('role', 'group');
+
+    const header = document.createElement('div');
+    header.className = 'z-live-preview-callout-widget__header';
+    header.textContent = this.title || this.type;
+    wrapper.append(header);
+
+    if (this.body.trim().length > 0) {
+      const body = document.createElement('div');
+      body.className = 'z-live-preview-callout-widget__body';
+      body.textContent = this.body;
+      wrapper.append(body);
+    }
+
+    wrapper.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      activateLivePreviewWidgetSource(view, this.activateAt);
     });
 
     return wrapper;
@@ -160,6 +210,60 @@ function codeBlockWidgetRanges(
       widget: new CodeBlockPreviewWidget(source, range.info, code, activateAt),
     };
   });
+}
+
+function calloutWidgetRanges(
+  docText: string,
+  scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
+): InternalLivePreviewRange[] {
+  const ranges: InternalLivePreviewRange[] = [];
+  const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
+  const scanText = docText.slice(scanWindow.from, scanWindow.to);
+  const lines = [...scanText.matchAll(/^.*$/gm)]
+    .map((match) => ({ text: match[0], from: scanWindow.from + (match.index ?? 0) }))
+    .filter((line) => line.from <= scanWindow.to);
+  const markerPattern = /^( {0,3})> ?\[!([A-Za-z0-9_-]+)\](?:[ \t]+(.*))?$/;
+  const quotedLinePattern = /^ {0,3}> ?(.*)$/;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line) continue;
+    const marker = markerPattern.exec(line.text);
+    if (!marker) continue;
+
+    const from = line.from;
+    const type = (marker[2] ?? '').toLowerCase();
+    if (!type || suppressedRanges.some((container) => isInsideRange({ from, to: from + line.text.length }, container)))
+      continue;
+
+    let to = from + line.text.length;
+    const bodyLines: string[] = [];
+    let cursor = index + 1;
+    for (; cursor < lines.length; cursor += 1) {
+      const quoted = quotedLinePattern.exec(lines[cursor]?.text ?? '');
+      if (!quoted) break;
+      const quotedLine = lines[cursor]!;
+      const quotedRange = { from: quotedLine.from, to: quotedLine.from + quotedLine.text.length };
+      if (suppressedRanges.some((container) => isInsideRange(quotedRange, container))) break;
+      bodyLines.push(quoted[1] ?? '');
+      to = quotedRange.to;
+    }
+
+    const source = docText.slice(from, to);
+    ranges.push({
+      rendererId: 'callout-widget',
+      from,
+      to,
+      activationFrom: from,
+      activationTo: to,
+      className: 'z-live-preview-callout-widget',
+      kind: 'widget' as const,
+      widget: new CalloutPreviewWidget(source, type, marker[3]?.trim() || type, bodyLines.join('\n'), from),
+    });
+    index = Math.max(index, cursor - 1);
+  }
+
+  return ranges;
 }
 
 function isInsideRange(
@@ -262,6 +366,12 @@ const codeBlockWidgetLivePreviewRenderer: InternalLivePreviewRenderer = {
     codeBlockWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
 };
 
+const calloutWidgetLivePreviewRenderer: InternalLivePreviewRenderer = {
+  id: 'callout-widget',
+  match: ({ docText, visibleFrom, visibleTo }) =>
+    calloutWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+};
+
 export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
   blockquoteLivePreviewRenderer as LivePreviewRenderer,
   headingLivePreviewRenderer,
@@ -275,4 +385,5 @@ export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
 
 export const defaultLivePreviewWidgetRenderers: readonly InternalLivePreviewRenderer[] = [
   codeBlockWidgetLivePreviewRenderer,
+  calloutWidgetLivePreviewRenderer,
 ];

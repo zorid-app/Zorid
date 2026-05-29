@@ -2,14 +2,19 @@
 
 import { readFile } from 'node:fs/promises';
 import { EditorState } from '@codemirror/state';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { LivePreviewVisibleRange } from '../packages/editor/src';
 import {
   createLivePreviewContext,
   createMountedMarkdownEditor,
   defaultLivePreviewRenderers,
   filterLivePreviewRanges,
 } from '../packages/editor/src/index';
-import type { InternalLivePreviewRange } from '../packages/editor/src/live-preview/internal-types';
+import { collectLivePreviewWidgetRangesForVisibleRanges } from '../packages/editor/src/live-preview/extension';
+import type {
+  InternalLivePreviewRange,
+  InternalLivePreviewRenderer,
+} from '../packages/editor/src/live-preview/internal-types';
 import { defaultLivePreviewWidgetRenderers } from '../packages/editor/src/live-preview/renderers';
 
 function collectPublicRanges(doc: string, selection = 0, focused = false) {
@@ -40,7 +45,78 @@ async function waitForFocusEffect(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
+async function waitForWidgetVisibleRangeEffect(): Promise<void> {
+  await new Promise((resolve) => queueMicrotask(resolve));
+}
+
 describe('editor Live Preview structured widgets', () => {
+  it('collects widget ranges from bounded visible windows rather than full document context', () => {
+    const doc = [
+      'intro',
+      '```ts',
+      'const visible = true;',
+      '```',
+      ...Array.from({ length: 500 }, (_, index) => `filler ${index}`),
+      '```js',
+      'const distant = true;',
+      '```',
+    ].join('\n');
+    const state = EditorState.create({ doc });
+    const visibleRange = { from: doc.indexOf('visible'), to: doc.indexOf('visible') + 'visible'.length };
+    const contexts: LivePreviewVisibleRange[] = [];
+    const recordingRenderer: InternalLivePreviewRenderer = {
+      id: 'recording-widget',
+      match: (context) => {
+        contexts.push({ from: context.visibleFrom, to: context.visibleTo });
+        return [];
+      },
+    };
+
+    collectLivePreviewWidgetRangesForVisibleRanges([recordingRenderer], state, [visibleRange], false);
+
+    expect(contexts).not.toEqual([{ from: 0, to: doc.length }]);
+    expect(
+      contexts.every((context) => context.from < doc.indexOf('distant') && context.to < doc.indexOf('distant')),
+    ).toBe(true);
+  });
+
+  it('finds a fenced-code widget from bounded semantic-container context when the viewport is inside the block', () => {
+    const doc = ['intro', '```ts', 'const visible = true;', '```', '', 'paragraph'].join('\n');
+    const state = EditorState.create({ doc });
+    const visibleRange = { from: doc.indexOf('visible'), to: doc.indexOf('visible') + 'visible'.length };
+
+    const ranges = collectLivePreviewWidgetRangesForVisibleRanges(
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [visibleRange],
+      false,
+    );
+
+    expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to)])).toEqual([
+      ['code-block-widget', ['```ts', 'const visible = true;', '```'].join('\n')],
+    ]);
+  });
+
+  it('dedupes widgets collected from overlapping visible windows', () => {
+    const doc = ['```ts', 'const visible = true;', '```', '', 'paragraph'].join('\n');
+    const state = EditorState.create({ doc });
+    const visible = doc.indexOf('visible');
+
+    const ranges = collectLivePreviewWidgetRangesForVisibleRanges(
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [
+        { from: visible, to: visible + 3 },
+        { from: visible + 2, to: visible + 'visible'.length },
+      ],
+      false,
+    );
+
+    expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to)])).toEqual([
+      ['code-block-widget', ['```ts', 'const visible = true;', '```'].join('\n')],
+    ]);
+  });
+
   it('keeps the public renderer list free of private widget ranges', () => {
     const doc = ['```ts', 'const value = 1;', '```', '', '#tag'].join('\n');
 
@@ -172,6 +248,23 @@ describe('editor Live Preview structured widgets', () => {
     expect(editor.getText()).toBe(text);
 
     editor.destroy();
+    parent.remove();
+  });
+
+  it('updates widget viewport state after CodeMirror update cycle without plugin crashes', async () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['```ts', 'const value = 1;', '```', '', 'paragraph'].join('\n');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    editor.view.dispatch({ changes: { from: text.length, insert: '\nmore' } });
+    await waitForWidgetVisibleRangeEffect();
+
+    expect(consoleError.mock.calls.flat().join('\n')).not.toContain('CodeMirror plugin crashed');
+
+    editor.destroy();
+    consoleError.mockRestore();
     parent.remove();
   });
 
