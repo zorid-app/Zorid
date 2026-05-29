@@ -1,21 +1,19 @@
-Implement the approved RALPLAN plan for Live Preview Pass 3 from:
-- PRD: .omx/plans/prd-live-preview-pass-3-block-preview-foundation-20260529T091213Z.md
-- Test spec: .omx/plans/test-spec-live-preview-pass-3-block-preview-foundation-20260529T091213Z.md
-- Handoff: .omx/plans/ralplan-handoff-live-preview-pass-3-block-preview-foundation-20260529T091213Z.json
+Execute the approved RALPLAN for Live Preview Pass 4.
 
-Hard constraints:
-- Markdown source remains canonical; preview rendering must not mutate EditorState.doc.
-- Implement only line-level blockquote preview foundation using a Decoration.line-style internal capability.
-- Use one preview range per blockquote source line; focused selection suppresses only the active line decoration.
-- No StateField or EditorView.atomicRanges by default; document them as later structured-widget needs unless tests prove unavoidable.
-- Do not expose renderer registration through packages/platform-api or plugin APIs.
-- Do not add a new named package-root export for blockquoteLivePreviewRenderer unless unavoidable for in-repo compatibility.
-- Do not implement tables, properties/frontmatter UI, callout widgets, embeds/images/PDFs, math rendering, Reading view parity, broad Lezer/parser migration, or mobile/touch-specific behavior.
+Planning sources:
+- PRD: .omx/plans/prd-live-preview-pass-4-structured-widget-activation-20260529T095644Z.md
+- Test spec: .omx/plans/test-spec-live-preview-pass-4-structured-widget-activation-20260529T095644Z.md
+- Handoff: .omx/plans/ralplan-handoff-live-preview-pass-4-structured-widget-activation-20260529T095644Z.json
+
+Scope:
+Implement a private fenced-code block structured widget activation foundation for @zorid/editor Live Preview. Keep Markdown source canonical and keep new widget seams private to packages/editor/src/live-preview.
 
 Goals:
-1. Add tests-first coverage for blockquote Live Preview: line-level ranges, blank `>`/`> ` lines, indentation boundaries, code/table false positives, line.from/line.to activation boundaries, mounted DOM reveal/restore, and coexistence with inline renderers.
-2. Add internal line-decoration support in @zorid/editor Live Preview and implement a private blockquote line renderer included in defaultLivePreviewRenderers.
-3. Add scoped desktop styling for the blockquote line preview class and update style-scope tests.
-4. Run targeted verification: block/live-preview/task/keymap/package/style/autosave/vault tests, @zorid/editor typecheck, and import boundaries.
-5. Run broad verification: pnpm typecheck, pnpm lint, pnpm test, and any needed desktop build if host behavior changes.
-6. Run the mandatory final cleanup and independent code-review gate; resolve blockers; commit changed files with a plain descriptive commit message after final gate passes.
+1. Add tests-first coverage for fenced-code widget matching, complete-vs-open fence behavior, source preservation, active source reveal, pointer/selection activation, renderer suppression inside fenced code, mounted DOM behavior, and scoped desktop styles.
+2. Implement the minimal private widget-capable Live Preview path using CodeMirror WidgetType / block Decoration.replace for complete fenced code blocks only.
+3. Add scoped desktop styling for the fenced-code widget shell and update style-scope tests.
+4. Run targeted and broad verification required by the PRD/test spec.
+5. Run final cleanup/review gate, resolve blockers, and commit changed files with a plain descriptive commit message.
+
+Explicit non-goals:
+No tables, properties/frontmatter visual editor, callout widget, embeds/images/PDFs, math rendering, syntax highlighting, copy toolbar, Reading parity adapter, mobile behavior, broad Lezer rewrite, or public renderer/plugin API stabilization.

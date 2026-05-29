@@ -1,6 +1,11 @@
-import type { Extension } from '@codemirror/state';
-import { Decoration, type DecorationSet, type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
-import { type InternalLivePreviewRange, isLivePreviewLineRange } from './internal-types.js';
+import { type Extension, StateEffect, StateField } from '@codemirror/state';
+import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import {
+  type InternalLivePreviewRange,
+  type InternalLivePreviewRenderer,
+  isLivePreviewLineRange,
+  isLivePreviewWidgetRange,
+} from './internal-types.js';
 import type {
   LivePreviewContext,
   LivePreviewRange,
@@ -78,55 +83,134 @@ export function collectLivePreviewRanges(
   );
 }
 
+function collectInternalLivePreviewRanges(
+  renderers: readonly InternalLivePreviewRenderer[],
+  context: LivePreviewContext,
+): InternalLivePreviewRange[] {
+  return filterLivePreviewRanges(
+    renderers.flatMap((renderer) => renderer.match(context)) as LivePreviewRange[],
+    context,
+  ) as InternalLivePreviewRange[];
+}
+
 function livePreviewDecorationsForView(view: EditorView, renderers: readonly LivePreviewRenderer[]): DecorationSet {
   const ranges: InternalLivePreviewRange[] = view.visibleRanges.flatMap((visibleRange) =>
     collectLivePreviewRanges(renderers, createLivePreviewContext(view.state, visibleRange, view.hasFocus)),
   );
   return Decoration.set(
-    ranges.map((range) => {
+    ranges.flatMap((range) => {
+      if (isLivePreviewWidgetRange(range)) return [];
       if (isLivePreviewLineRange(range)) {
-        return Decoration.line({
+        return [
+          Decoration.line({
+            class: range.className,
+            attributes: {
+              'data-live-preview-renderer': range.rendererId,
+              ...range.attributes,
+            },
+          }).range(range.from),
+        ];
+      }
+
+      if (range.kind === 'replace') {
+        return [Decoration.replace({}).range(range.from, range.to)];
+      }
+
+      return [
+        Decoration.mark({
           class: range.className,
           attributes: {
             'data-live-preview-renderer': range.rendererId,
             ...range.attributes,
           },
-        }).range(range.from);
-      }
-
-      if (range.kind === 'replace') {
-        return Decoration.replace({}).range(range.from, range.to);
-      }
-
-      return Decoration.mark({
-        class: range.className,
-        attributes: {
-          'data-live-preview-renderer': range.rendererId,
-          ...range.attributes,
-        },
-      }).range(range.from, range.to);
+        }).range(range.from, range.to),
+      ];
     }),
     true,
   );
 }
 
-export function livePreviewExtension(renderers: readonly LivePreviewRenderer[]): Extension {
-  return ViewPlugin.fromClass(
-    class {
-      decorations: DecorationSet;
+interface LivePreviewWidgetState {
+  readonly focused: boolean;
+  readonly decorations: DecorationSet;
+}
 
-      constructor(view: EditorView) {
-        this.decorations = livePreviewDecorationsForView(view, renderers);
-      }
+const setLivePreviewFocused = StateEffect.define<boolean>();
 
-      update(update: ViewUpdate): void {
-        if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged) {
-          this.decorations = livePreviewDecorationsForView(update.view, renderers);
-        }
-      }
-    },
-    {
-      decorations: (plugin) => plugin.decorations,
-    },
+function livePreviewWidgetDecorationsForState(
+  state: LivePreviewContext['state'],
+  renderers: readonly InternalLivePreviewRenderer[],
+  focused: boolean,
+): DecorationSet {
+  const ranges = collectInternalLivePreviewRanges(
+    renderers,
+    createLivePreviewContext(state, { from: 0, to: state.doc.length }, focused),
   );
+
+  return Decoration.set(
+    ranges.flatMap((range) => {
+      if (!isLivePreviewWidgetRange(range)) return [];
+      return [
+        Decoration.replace({
+          block: true,
+          widget: range.widget,
+        }).range(range.from, range.to),
+      ];
+    }),
+    true,
+  );
+}
+
+function livePreviewWidgetField(renderers: readonly InternalLivePreviewRenderer[]): Extension {
+  return StateField.define<LivePreviewWidgetState>({
+    create: (state) => ({
+      focused: false,
+      decorations: livePreviewWidgetDecorationsForState(state, renderers, false),
+    }),
+    update: (value, transaction) => {
+      const focusedFromEffect = transaction.effects.reduce<boolean | null>(
+        (current, effect) => (effect.is(setLivePreviewFocused) ? effect.value : current),
+        null,
+      );
+      const focused = focusedFromEffect ?? value.focused;
+      if (!transaction.docChanged && !transaction.selection && focused === value.focused) return value;
+      return {
+        focused,
+        decorations: livePreviewWidgetDecorationsForState(transaction.state, renderers, focused),
+      };
+    },
+    provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
+  });
+}
+
+export function livePreviewExtension(renderers: readonly LivePreviewRenderer[]): Extension {
+  return livePreviewExtensionWithWidgets(renderers, []);
+}
+
+export function livePreviewExtensionWithWidgets(
+  renderers: readonly LivePreviewRenderer[],
+  widgetRenderers: readonly InternalLivePreviewRenderer[],
+): Extension {
+  return [
+    livePreviewWidgetField(widgetRenderers),
+    EditorView.focusChangeEffect.of((_state, focusing) => setLivePreviewFocused.of(focusing)),
+    ViewPlugin.fromClass(
+      class {
+        decorations: DecorationSet;
+
+        constructor(view: EditorView) {
+          this.decorations = livePreviewDecorationsForView(view, renderers);
+        }
+
+        update(update: ViewUpdate): void {
+          if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged) {
+            this.decorations = livePreviewDecorationsForView(update.view, renderers);
+          }
+        }
+      },
+      {
+        decorations: (plugin) => plugin.decorations,
+      },
+    ),
+  ];
 }

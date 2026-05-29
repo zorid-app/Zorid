@@ -12,7 +12,9 @@ import type {
   OpenDocumentOptions,
 } from '@zorid/platform-api';
 import { type Disposable, normalizeVaultPath, type VaultPath } from '@zorid/shared';
-import { defaultLivePreviewRenderers, type LivePreviewRenderer, livePreviewExtension } from './live-preview/index.js';
+import { livePreviewExtension, livePreviewExtensionWithWidgets } from './live-preview/extension.js';
+import { defaultLivePreviewRenderers, defaultLivePreviewWidgetRenderers } from './live-preview/renderers.js';
+import type { LivePreviewRenderer } from './live-preview/types.js';
 
 // Live Preview exports remain available from the package root for current
 // first-party integrations and tests. Treat them as experimental while the
@@ -114,7 +116,7 @@ export function composeEditorExtensions(
 
 export function createMarkdownEditorExtensions({
   extensionContributions = [],
-  livePreviewRenderers = defaultLivePreviewRenderers,
+  livePreviewRenderers,
   onChange,
   onSave,
   shouldEmitChange = () => true,
@@ -125,7 +127,11 @@ export function createMarkdownEditorExtensions({
   // duplicate custom keymap unless tests prove a concrete gap.
   const extensions: Extension[] = [markdown(), history(), keymap.of(historyKeymap), ...composed.extensions];
   if (livePreviewRenderers !== false) {
-    extensions.push(livePreviewExtension(livePreviewRenderers));
+    extensions.push(
+      livePreviewRenderers === undefined
+        ? livePreviewExtensionWithWidgets(defaultLivePreviewRenderers, defaultLivePreviewWidgetRenderers)
+        : livePreviewExtension(livePreviewRenderers),
+    );
   }
 
   if (onSave) {

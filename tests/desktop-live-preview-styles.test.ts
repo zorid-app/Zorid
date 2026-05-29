@@ -9,6 +9,7 @@ const livePreviewClasses = [
   'z-live-preview-tag',
   'z-live-preview-task-marker',
   'z-live-preview-blockquote-line',
+  'z-live-preview-code-block-widget',
 ];
 
 describe('desktop Live Preview styles', () => {

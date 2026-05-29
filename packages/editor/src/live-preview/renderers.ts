@@ -1,5 +1,6 @@
+import { type EditorView, WidgetType } from '@codemirror/view';
 import type { InternalLivePreviewRange, InternalLivePreviewRenderer } from './internal-types.js';
-import { markdownSuppressedCodeRanges } from './markdown-code-context.js';
+import { markdownCompleteFencedCodeBlockRanges, markdownSuppressedCodeRanges } from './markdown-code-context.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
 
 const inlineCodePattern = /`[^`\n]+`/g;
@@ -83,6 +84,76 @@ function blockquoteLineRanges(
         kind: 'line' as const,
       },
     ];
+  });
+}
+
+class CodeBlockPreviewWidget extends WidgetType {
+  constructor(
+    readonly source: string,
+    readonly info: string,
+    readonly code: string,
+    readonly activateAt: number,
+  ) {
+    super();
+  }
+
+  eq(other: CodeBlockPreviewWidget): boolean {
+    return this.source === other.source && this.activateAt === other.activateAt;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'z-live-preview-code-block-widget';
+    wrapper.dataset.livePreviewRenderer = 'code-block-widget';
+    wrapper.setAttribute('role', 'group');
+
+    const header = document.createElement('div');
+    header.className = 'z-live-preview-code-block-widget__header';
+    header.textContent = this.info || 'code';
+    wrapper.append(header);
+
+    const body = document.createElement('pre');
+    body.className = 'z-live-preview-code-block-widget__body';
+    const code = document.createElement('code');
+    code.textContent = this.code;
+    body.append(code);
+    wrapper.append(body);
+
+    wrapper.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      view.focus();
+      view.dispatch({
+        selection: { anchor: this.activateAt },
+        scrollIntoView: true,
+      });
+    });
+
+    return wrapper;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return event.type === 'mousedown';
+  }
+}
+
+function codeBlockWidgetRanges(
+  docText: string,
+  scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
+): InternalLivePreviewRange[] {
+  return markdownCompleteFencedCodeBlockRanges(docText, scanWindow).map((range) => {
+    const source = docText.slice(range.from, range.to);
+    const code = docText.slice(range.contentFrom, range.contentTo);
+    const activateAt = range.contentFrom < range.contentTo ? range.contentFrom : range.from;
+    return {
+      rendererId: 'code-block-widget',
+      from: range.from,
+      to: range.to,
+      activationFrom: range.from,
+      activationTo: range.to,
+      className: 'z-live-preview-code-block-widget',
+      kind: 'widget' as const,
+      widget: new CodeBlockPreviewWidget(source, range.info, code, activateAt),
+    };
   });
 }
 
@@ -180,6 +251,12 @@ const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
     blockquoteLineRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
 };
 
+const codeBlockWidgetLivePreviewRenderer: InternalLivePreviewRenderer = {
+  id: 'code-block-widget',
+  match: ({ docText, visibleFrom, visibleTo }) =>
+    codeBlockWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+};
+
 export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
   blockquoteLivePreviewRenderer as LivePreviewRenderer,
   headingLivePreviewRenderer,
@@ -189,4 +266,8 @@ export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
   wikiLinkLivePreviewRenderer,
   tagLivePreviewRenderer,
   taskMarkerLivePreviewRenderer,
+];
+
+export const defaultLivePreviewWidgetRenderers: readonly InternalLivePreviewRenderer[] = [
+  codeBlockWidgetLivePreviewRenderer,
 ];

@@ -521,6 +521,33 @@ h2 {
   border-left: 3px solid color-mix(in srgb, var(--z-color-border) 82%, transparent);
 }
 
+.markdown-editor .z-live-preview-code-block-widget {
+  overflow: hidden;
+  margin: 4px 0;
+  border: 1px solid color-mix(in srgb, var(--z-color-border) 72%, transparent);
+  border-radius: var(--z-radius-md);
+  background: color-mix(in srgb, var(--z-control-bg-strong) 86%, transparent);
+  font-family: var(--z-font-mono);
+}
+
+.markdown-editor .z-live-preview-code-block-widget__header {
+  padding: 5px 10px;
+  color: var(--z-color-subtle);
+  background: color-mix(in srgb, var(--z-control-bg-strong) 70%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--z-color-border) 62%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.markdown-editor .z-live-preview-code-block-widget__body {
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  color: var(--z-color-text);
+  background: transparent;
+}
+
 .resize-handle {
   position: relative;
   z-index: 2;

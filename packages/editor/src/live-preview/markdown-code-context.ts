@@ -5,6 +5,14 @@ export interface MarkdownCodeRange {
   readonly to: number;
 }
 
+export interface MarkdownFencedCodeBlockRange extends MarkdownCodeRange {
+  readonly marker: '`' | '~';
+  readonly markerLength: number;
+  readonly info: string;
+  readonly contentFrom: number;
+  readonly contentTo: number;
+}
+
 interface FenceState {
   readonly marker: '`' | '~';
   readonly length: number;
@@ -55,6 +63,47 @@ export function markdownFencedCodeRanges(docText: string, scanWindow: MarkdownCo
   }
 
   if (fence && scanWindow.to >= fence.from) ranges.push({ from: fence.from, to: scanWindow.to });
+  return ranges;
+}
+
+export function markdownCompleteFencedCodeBlockRanges(
+  docText: string,
+  scanWindow: MarkdownCodeRange,
+): MarkdownFencedCodeBlockRange[] {
+  const ranges: MarkdownFencedCodeBlockRange[] = [];
+  let fence: (OpenFence & { readonly info: string; readonly contentFrom: number }) | null = null;
+
+  for (const match of docText.matchAll(/^.*$/gm)) {
+    const index = match.index;
+    if (index === undefined) continue;
+    if (index > scanWindow.to) break;
+
+    const line = match[0];
+    const matchedFence = fencedCodeLine(line);
+    if (!fence && matchedFence) {
+      const lineBreak = docText.indexOf('\n', index);
+      fence = {
+        marker: matchedFence.marker,
+        length: matchedFence.length,
+        from: index,
+        info: matchedFence.rest.trim(),
+        contentFrom: lineBreak === -1 ? index + line.length : lineBreak + 1,
+      };
+    } else if (fence && closesFence(line, fence)) {
+      const range = {
+        from: fence.from,
+        to: index + line.length,
+        marker: fence.marker,
+        markerLength: fence.length,
+        info: fence.info,
+        contentFrom: fence.contentFrom,
+        contentTo: Math.max(fence.contentFrom, index === fence.contentFrom - 1 ? fence.contentFrom : index - 1),
+      };
+      if (range.to >= scanWindow.from && range.from <= scanWindow.to) ranges.push(range);
+      fence = null;
+    }
+  }
+
   return ranges;
 }
 
