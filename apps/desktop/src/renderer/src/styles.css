@@ -31,8 +31,18 @@ select:focus-visible {
   --left-sidebar-width: 280px;
   --right-sidebar-width: 260px;
   --resize-handle-width: 8px;
+  --resize-handle-half-width: 4px;
   --titlebar-height: 42px;
   --traffic-light-space: 84px;
+  --titlebar-pane-toggle-width: 48px;
+  --titlebar-left-width: max(
+    calc(var(--activity-rail-width) + var(--left-sidebar-width) + var(--resize-handle-width)),
+    calc(var(--traffic-light-space) + var(--titlebar-pane-toggle-width))
+  );
+  --titlebar-right-width: max(
+    calc(var(--right-sidebar-width) + var(--resize-handle-width)),
+    var(--titlebar-pane-toggle-width)
+  );
   position: relative;
   display: grid;
   grid-template-columns: var(--activity-rail-width) var(--left-sidebar-width) var(--resize-handle-width) minmax(
@@ -44,6 +54,7 @@ select:focus-visible {
   min-height: 100vh;
   overflow: hidden;
   background: linear-gradient(135deg, var(--z-color-bg) 0%, var(--z-color-surface-raised) 100%);
+  transition: grid-template-columns 180ms ease;
 }
 
 .activity-rail {
@@ -60,6 +71,9 @@ select:focus-visible {
   content: '';
   background: color-mix(in srgb, var(--z-color-border) 70%, transparent);
   pointer-events: none;
+  transition:
+    left 180ms ease,
+    right 180ms ease;
 }
 
 .zorid-shell::before {
@@ -74,10 +88,7 @@ select:focus-visible {
   grid-column: 1 / -1;
   grid-row: 1;
   display: grid;
-  grid-template-columns: var(--activity-rail-width) var(--left-sidebar-width) var(--resize-handle-width) minmax(
-      420px,
-      1fr
-    ) var(--resize-handle-width) var(--right-sidebar-width);
+  grid-template-columns: var(--titlebar-left-width) minmax(420px, 1fr) var(--titlebar-right-width);
   min-width: 0;
   align-items: stretch;
   gap: 0;
@@ -85,6 +96,7 @@ select:focus-visible {
   color: var(--z-color-muted);
   background: color-mix(in srgb, var(--z-sidebar-bg) 90%, var(--z-color-bg));
   border-bottom: 1px solid color-mix(in srgb, var(--z-color-border) 86%, transparent);
+  transition: grid-template-columns 180ms ease;
   -webkit-app-region: drag;
 }
 
@@ -104,17 +116,13 @@ select:focus-visible {
 }
 
 .titlebar-left-actions {
-  grid-column: 1 / 4;
+  grid-column: 1;
   padding-left: max(8px, calc(var(--traffic-light-space) + 8px));
   border-right: 0;
 }
 
-.editor-titlebar[data-left-collapsed='true'] .titlebar-left-actions {
-  padding-left: 8px;
-}
-
 .titlebar-right-actions {
-  grid-column: 5 / 7;
+  grid-column: 3;
   justify-content: flex-end;
   margin-left: 0;
   overflow: visible;
@@ -135,7 +143,7 @@ select:focus-visible {
 }
 
 .top-tab-strip {
-  grid-column: 4;
+  grid-column: 2;
   display: flex;
   min-width: 0;
   align-items: stretch;

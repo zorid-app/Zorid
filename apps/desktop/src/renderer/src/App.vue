@@ -176,6 +176,7 @@ const shellStyle = computed<CSSProperties>(() => ({
   '--resize-handle-half-width': `${SHELL_LAYOUT.resizeHandleWidth / 2}px`,
   '--titlebar-height': `${SHELL_LAYOUT.titlebarHeight}px`,
   '--traffic-light-space': `${SHELL_LAYOUT.trafficLightReservedWidth}px`,
+  '--titlebar-pane-toggle-width': `${SHELL_LAYOUT.titlebarPaneToggleWidth}px`,
 }));
 const sortedEntriesByDirectory = computed<Record<string, readonly VaultEntry[]>>(() =>
   Object.fromEntries(

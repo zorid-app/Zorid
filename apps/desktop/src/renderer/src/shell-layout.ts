@@ -29,6 +29,7 @@ export const SHELL_LAYOUT = {
   resizeHandleWidth: 8,
   titlebarHeight: EDITOR_TITLEBAR_HEIGHT,
   trafficLightReservedWidth: EDITOR_TRAFFIC_LIGHT_RESERVED_WIDTH,
+  titlebarPaneToggleWidth: 48,
   editorMinWidth: 420,
   leftDefaultWidth: 280,
   rightDefaultWidth: 260,

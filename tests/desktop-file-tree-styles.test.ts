@@ -39,16 +39,23 @@ describe('desktop file tree scoped styles', () => {
     const app = readFileSync('apps/desktop/src/renderer/src/App.vue', 'utf8');
 
     expect(app).toContain("'--resize-handle-half-width': `${SHELL_LAYOUT.resizeHandleWidth / 2}px`");
+    expect(app).toContain("'--titlebar-pane-toggle-width': `${SHELL_LAYOUT.titlebarPaneToggleWidth}px`");
     expect(styles).toMatch(
-      /\.editor-titlebar\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*var\(--activity-rail-width\) var\(--left-sidebar-width\) var\(--resize-handle-width\)/s,
+      /--titlebar-left-width:\s*max\([^;]*var\(--activity-rail-width\)[^;]*var\(--traffic-light-space\)[^;]*var\(--titlebar-pane-toggle-width\)[^;]*\);/s,
     );
     expect(styles).toMatch(
-      /\.titlebar-left-actions\s*\{[^}]*grid-column:\s*1\s*\/\s*4;[^}]*border-right:\s*0;[^}]*\}/s,
+      /--titlebar-right-width:\s*max\([^;]*var\(--right-sidebar-width\)[^;]*var\(--titlebar-pane-toggle-width\)[^;]*\);/s,
     );
-    expect(styles).toMatch(/\.top-tab-strip\s*\{[^}]*grid-column:\s*4;[^}]*\}/s);
     expect(styles).toMatch(
-      /\.titlebar-right-actions\s*\{[^}]*grid-column:\s*5\s*\/\s*7;[^}]*border-left:\s*0;[^}]*\}/s,
+      /\.editor-titlebar\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*var\(--titlebar-left-width\) minmax\(420px, 1fr\) var\(--titlebar-right-width\)/s,
     );
+    expect(styles).toMatch(/\.editor-titlebar\s*\{[^}]*transition:\s*grid-template-columns 180ms ease;[^}]*\}/s);
+    expect(styles).toMatch(
+      /\.titlebar-left-actions\s*\{[^}]*grid-column:\s*1;[^}]*padding-left:\s*max\(8px, calc\(var\(--traffic-light-space\) \+ 8px\)\);[^}]*border-right:\s*0;[^}]*\}/s,
+    );
+    expect(styles).not.toContain(".editor-titlebar[data-left-collapsed='true'] .titlebar-left-actions");
+    expect(styles).toMatch(/\.top-tab-strip\s*\{[^}]*grid-column:\s*2;[^}]*\}/s);
+    expect(styles).toMatch(/\.titlebar-right-actions\s*\{[^}]*grid-column:\s*3;[^}]*border-left:\s*0;[^}]*\}/s);
     expect(styles).toMatch(
       /\.zorid-shell::before\s*\{[^}]*left:\s*calc\(var\(--activity-rail-width\) \+ var\(--left-sidebar-width\) \+ var\(--resize-handle-half-width\)\);[^}]*\}/s,
     );
