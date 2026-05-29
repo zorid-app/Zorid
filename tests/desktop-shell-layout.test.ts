@@ -168,6 +168,10 @@ describe('desktop shell pane layout helpers', () => {
       /\.launcher-shell\s+:is\([^)]*button[^)]*a[^)]*input[^)]*select[^)]*textarea[^)]*\[role='button'\][^)]*\[contenteditable='true'\][^)]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag;[^}]*\}/s,
     );
     expect(styles).toContain('.resize-handle.active::before');
+    expect(styles).toMatch(/\.activity-rail\s*\{[^}]*border-right:\s*1px solid var\(--z-color-border\);[^}]*\}/s);
+    expect(styles).not.toMatch(/\.activity-rail,\s*\.sidebar,\s*\.editor\s*\{[^}]*border-right:/s);
+    expect(styles).not.toMatch(/\.sidebar\.right\s*\{[^}]*border-left:/s);
+    expect(styles).not.toMatch(/\.editor\s*\{[^}]*border-right:/s);
     expect(styles).toContain('.titlebar-left-actions');
     expect(styles).toContain('.titlebar-right-actions');
     expect(styles).toContain('.tab-add-button');

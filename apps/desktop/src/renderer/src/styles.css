@@ -46,9 +46,7 @@ select:focus-visible {
   background: linear-gradient(135deg, var(--z-color-bg) 0%, var(--z-color-surface-raised) 100%);
 }
 
-.activity-rail,
-.sidebar,
-.editor {
+.activity-rail {
   border-right: 1px solid var(--z-color-border);
 }
 
@@ -242,8 +240,6 @@ select:focus-visible {
 
 .sidebar.right {
   grid-column: 6;
-  border-right: 0;
-  border-left: 1px solid var(--z-color-border);
 }
 
 .editor {
