@@ -33,4 +33,27 @@ describe('desktop file tree scoped styles', () => {
     expect(styles).toContain('--activity-rail-width: 42px;');
     expect(styles).not.toContain('packages/ui-vue/src/components.css');
   });
+
+  it('keeps titlebar controls on the same grid as the pane resize columns', () => {
+    const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
+    const app = readFileSync('apps/desktop/src/renderer/src/App.vue', 'utf8');
+
+    expect(app).toContain("'--resize-handle-half-width': `${SHELL_LAYOUT.resizeHandleWidth / 2}px`");
+    expect(styles).toMatch(
+      /\.editor-titlebar\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*var\(--activity-rail-width\) var\(--left-sidebar-width\) var\(--resize-handle-width\)/s,
+    );
+    expect(styles).toMatch(
+      /\.titlebar-left-actions\s*\{[^}]*grid-column:\s*1\s*\/\s*4;[^}]*border-right:\s*0;[^}]*\}/s,
+    );
+    expect(styles).toMatch(/\.top-tab-strip\s*\{[^}]*grid-column:\s*4;[^}]*\}/s);
+    expect(styles).toMatch(
+      /\.titlebar-right-actions\s*\{[^}]*grid-column:\s*5\s*\/\s*7;[^}]*border-left:\s*0;[^}]*\}/s,
+    );
+    expect(styles).toMatch(
+      /\.zorid-shell::before\s*\{[^}]*left:\s*calc\(var\(--activity-rail-width\) \+ var\(--left-sidebar-width\) \+ var\(--resize-handle-half-width\)\);[^}]*\}/s,
+    );
+    expect(styles).toMatch(
+      /\.zorid-shell::after\s*\{[^}]*right:\s*calc\(var\(--right-sidebar-width\) \+ var\(--resize-handle-half-width\)\);[^}]*\}/s,
+    );
+  });
 });

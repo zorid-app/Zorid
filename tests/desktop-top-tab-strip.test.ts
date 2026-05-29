@@ -57,6 +57,8 @@ describe('desktop top tab strip', () => {
     expect(wrapper.find('[aria-label="Bookmarks"]').exists()).toBe(false);
     expect(wrapper.find('[aria-label="Show file tree pane"]').exists()).toBe(true);
     expect(wrapper.find('[aria-label="Show right pane"]').exists()).toBe(true);
+    expect(wrapper.find('[data-app-titlebar]').attributes('data-left-collapsed')).toBe('true');
+    expect(wrapper.find('[data-app-titlebar]').attributes('data-right-collapsed')).toBe('true');
   });
 });
 

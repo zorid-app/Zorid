@@ -50,14 +50,38 @@ select:focus-visible {
   border-right: 1px solid var(--z-color-border);
 }
 
+.zorid-shell::before,
+.zorid-shell::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 1px;
+  content: '';
+  background: color-mix(in srgb, var(--z-color-border) 70%, transparent);
+  pointer-events: none;
+}
+
+.zorid-shell::before {
+  left: calc(var(--activity-rail-width) + var(--left-sidebar-width) + var(--resize-handle-half-width));
+}
+
+.zorid-shell::after {
+  right: calc(var(--right-sidebar-width) + var(--resize-handle-half-width));
+}
+
 .editor-titlebar {
   grid-column: 1 / -1;
   grid-row: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--activity-rail-width) var(--left-sidebar-width) var(--resize-handle-width) minmax(
+      420px,
+      1fr
+    ) var(--resize-handle-width) var(--right-sidebar-width);
   min-width: 0;
   align-items: stretch;
   gap: 0;
-  padding: 0 8px 0 0;
+  padding: 0;
   color: var(--z-color-muted);
   background: color-mix(in srgb, var(--z-sidebar-bg) 90%, var(--z-color-bg));
   border-bottom: 1px solid color-mix(in srgb, var(--z-color-border) 86%, transparent);
@@ -65,26 +89,36 @@ select:focus-visible {
 }
 
 .traffic-light-spacer {
-  flex: 0 0 var(--traffic-light-space);
+  display: none;
 }
 
 .titlebar-left-actions,
 .titlebar-right-actions {
   display: inline-flex;
-  flex: 0 0 auto;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   padding: 7px 8px 6px;
+  overflow: hidden;
   -webkit-app-region: no-drag;
 }
 
 .titlebar-left-actions {
-  border-right: 1px solid color-mix(in srgb, var(--z-color-border) 72%, transparent);
+  grid-column: 1 / 4;
+  padding-left: max(8px, calc(var(--traffic-light-space) + 8px));
+  border-right: 0;
+}
+
+.editor-titlebar[data-left-collapsed='true'] .titlebar-left-actions {
+  padding-left: 8px;
 }
 
 .titlebar-right-actions {
-  margin-left: auto;
-  border-left: 1px solid color-mix(in srgb, var(--z-color-border) 72%, transparent);
+  grid-column: 5 / 7;
+  justify-content: flex-end;
+  margin-left: 0;
+  overflow: visible;
+  border-left: 0;
 }
 
 .titlebar-action.z-icon-button,
@@ -101,8 +135,8 @@ select:focus-visible {
 }
 
 .top-tab-strip {
+  grid-column: 4;
   display: flex;
-  flex: 1 1 auto;
   min-width: 0;
   align-items: stretch;
   overflow: hidden;
@@ -591,9 +625,9 @@ h2 {
   left: 50%;
   width: 1px;
   content: '';
-  background: color-mix(in srgb, var(--z-color-border) 70%, transparent);
+  background: transparent;
   border-radius: var(--z-radius-pill);
-  opacity: 0.75;
+  opacity: 0;
   transform: translateX(-50%);
   transition:
     width 120ms ease,
