@@ -108,5 +108,28 @@
     "aggregateComplete": false,
     "artifactComplete": true
   },
-  "reconciliation": null
+  "reconciliation": {
+    "ok": true,
+    "snapshot": {
+      "available": true,
+      "objective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail.",
+      "status": "complete",
+      "remainingTokens": null,
+      "raw": {
+        "goal": {
+          "threadId": "019e71e4-63f3-7093-95b1-a310de9f9c90",
+          "objective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail.",
+          "status": "complete",
+          "tokensUsed": 301147,
+          "timeUsedSeconds": 746,
+          "createdAt": 1780031233,
+          "updatedAt": 1780032047
+        },
+        "remainingTokens": null,
+        "completionBudgetReport": null
+      }
+    },
+    "warnings": [],
+    "errors": []
+  }
 }
