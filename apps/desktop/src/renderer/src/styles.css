@@ -33,14 +33,13 @@ select:focus-visible {
   --resize-handle-width: 8px;
   --titlebar-height: 42px;
   --traffic-light-space: 84px;
-  --status-bar-min-height: 30px;
-  --status-bar-max-height: 72px;
+  position: relative;
   display: grid;
   grid-template-columns: var(--activity-rail-width) var(--left-sidebar-width) var(--resize-handle-width) minmax(
       420px,
       1fr
     ) var(--resize-handle-width) var(--right-sidebar-width);
-  grid-template-rows: var(--titlebar-height) minmax(0, 1fr) auto;
+  grid-template-rows: var(--titlebar-height) minmax(0, 1fr);
   height: 100vh;
   min-height: 100vh;
   overflow: hidden;
@@ -523,32 +522,48 @@ h2 {
 }
 
 .status-bar {
-  grid-column: 4 / -1;
-  grid-row: 3;
-  z-index: 20;
-  display: flex;
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  z-index: 30;
+  display: inline-flex;
+  width: max-content;
+  max-width: min(760px, calc(100% - 24px));
   min-width: 0;
-  min-height: var(--status-bar-min-height);
-  max-height: var(--status-bar-max-height);
+  min-height: 0;
+  max-height: none;
   justify-content: flex-end;
-  gap: 4px 18px;
+  gap: 0;
   align-items: center;
-  align-content: center;
-  overflow: auto;
-  padding: 6px 12px;
+  overflow: hidden;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--z-color-border) 80%, transparent);
+  border-radius: var(--z-radius-md);
   color: var(--z-color-muted);
-  background: var(--z-statusbar-bg);
-  border-top: 1px solid var(--z-color-border);
-  border-left: 1px solid var(--z-color-border);
+  background: color-mix(in srgb, var(--z-statusbar-bg) 88%, transparent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
   font-size: 12px;
-  line-height: 1.35;
-  white-space: normal;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  backdrop-filter: blur(12px);
 }
 
-.status-bar span {
+.status-bar__item {
+  display: inline-flex;
   min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  max-width: 240px;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.status-bar__item + .status-bar__item {
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid color-mix(in srgb, var(--z-color-border) 68%, transparent);
 }
 
 .panel {

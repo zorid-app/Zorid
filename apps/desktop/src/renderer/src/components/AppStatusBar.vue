@@ -12,9 +12,13 @@ defineProps<{
 
 <template>
   <ZStatusBar class="status-bar" aria-label="Application status" data-app-status-bar>
-    <span>{{ status }}</span>
-    <span>{{ selectedPath ?? 'No file selected' }}</span>
-    <span>Index {{ indexState }} · {{ fileCount }} files</span>
-    <span>{{ pluginCount }} plugins</span>
+    <span class="status-bar__item" :title="status">{{ status }}</span>
+    <span class="status-bar__item" :title="selectedPath ?? 'No file selected'">
+      {{ selectedPath ?? 'No file selected' }}
+    </span>
+    <span class="status-bar__item" :title="`Index ${indexState} · ${fileCount} files`">
+      Index {{ indexState }} · {{ fileCount }} files
+    </span>
+    <span class="status-bar__item" :title="`${pluginCount} plugins`">{{ pluginCount }} plugins</span>
   </ZStatusBar>
 </template>

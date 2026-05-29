@@ -21,7 +21,7 @@ Shared components live under `packages/ui-vue/src/components/` and are exported 
 | `ZPanel` | Plain Vue/CSS | Sidebar/card panels | No |
 | `ZBadge` | Plain Vue/CSS | Small inline status/count badges | No |
 | `ZTag` | Plain Vue/CSS | Clickable tag pills with optional count | No |
-| `ZStatusBar` | Plain Vue/CSS | App status footer shell | No |
+| `ZStatusBar` | Plain Vue/CSS | App status shell primitive | No |
 | `ZResizeHandle` | Plain Vue/CSS | Accessible vertical resize separator | No |
 | `ZVisuallyHidden` | Plain Vue/CSS | Accessible hidden text utility used by dialog semantics | No |
 
@@ -38,7 +38,7 @@ Desktop app components live under `apps/desktop/src/renderer/src/components/`. T
 | `FileTree` | None yet | Root/nested file tree rendering and open-entry eventing |
 | `RightSidebarPanels` | `ZPanel`, `ZTag` | Search, outline, backlinks, tags, fields, types, bases/data views, embeds, status, plugin and settings panels |
 | `AppResizeHandle` | `ZResizeHandle` | Left/right pane resize handles preserving desktop grid classes |
-| `AppStatusBar` | `ZStatusBar` | Footer status summary preserving desktop status-bar classes |
+| `AppStatusBar` | `ZStatusBar` | Floating bottom-right status HUD preserving desktop status-bar classes |
 | `MarkdownEditor` | None | Existing editor wrapper; unchanged by this pass |
 
 ## Boundary rules

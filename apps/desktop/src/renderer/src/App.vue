@@ -156,8 +156,6 @@ const shellStyle = computed<CSSProperties>(() => ({
   '--resize-handle-width': `${SHELL_LAYOUT.resizeHandleWidth}px`,
   '--titlebar-height': `${SHELL_LAYOUT.titlebarHeight}px`,
   '--traffic-light-space': `${SHELL_LAYOUT.trafficLightReservedWidth}px`,
-  '--status-bar-min-height': `${SHELL_LAYOUT.statusBarMinHeight}px`,
-  '--status-bar-max-height': `${SHELL_LAYOUT.statusBarMaxHeight}px`,
 }));
 const sortedEntriesByDirectory = computed<Record<string, readonly VaultEntry[]>>(() =>
   Object.fromEntries(

@@ -88,8 +88,6 @@ describe('desktop shell pane layout helpers', () => {
       EDITOR_TRAFFIC_LIGHT_POSITION.x + MACOS_TRAFFIC_LIGHT_CONTROL_GROUP_WIDTH,
     );
     expect(SHELL_LAYOUT.resizeHandleWidth).toBeGreaterThanOrEqual(8);
-    expect(SHELL_LAYOUT.statusBarMinHeight).toBe(30);
-    expect(SHELL_LAYOUT.statusBarMaxHeight).toBeGreaterThan(SHELL_LAYOUT.statusBarMinHeight);
   });
 
   it('applies native titlebar chrome to launcher and editor windows', () => {
@@ -142,8 +140,12 @@ describe('desktop shell pane layout helpers', () => {
     expect(app).not.toContain('class="window-dots"');
     expect(titlebar).not.toContain('class="window-dots"');
     expect(resizeHandle).toContain('class="resize-handle"');
-    expect(styles).toContain('grid-template-rows: var(--titlebar-height) minmax(0, 1fr) auto;');
-    expect(styles).toContain('max-height: var(--status-bar-max-height);');
+    expect(styles).toContain('position: relative;');
+    expect(styles).toContain('grid-template-rows: var(--titlebar-height) minmax(0, 1fr);');
+    expect(styles).toContain('position: absolute;');
+    expect(styles).toContain('bottom: 10px;');
+    expect(styles).toContain('width: max-content;');
+    expect(styles).toContain('.status-bar__item');
     expect(styles).toMatch(/\.launcher-shell\s*\{[^}]*-webkit-app-region:\s*drag;[^}]*\}/s);
     expect(styles).toMatch(
       /\.launcher-shell\s+:is\([^)]*button[^)]*a[^)]*input[^)]*select[^)]*textarea[^)]*\[role='button'\][^)]*\[contenteditable='true'\][^)]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag;[^}]*\}/s,
@@ -154,8 +156,8 @@ describe('desktop shell pane layout helpers', () => {
     expect(styles).toContain('.tab-add-button');
     expect(styles).toContain('.top-tab:hover .top-tab-close');
     expect(styles).toContain('-webkit-app-region: no-drag;');
-    expect(styles).toContain('overflow-wrap: anywhere;');
-    expect(styles).toContain('white-space: normal;');
+    expect(styles).toContain('text-overflow: ellipsis;');
+    expect(styles).toContain('white-space: nowrap;');
     expect(styles).not.toContain('.tab-bar');
     expect(styles).not.toContain('.window-dots');
   });
