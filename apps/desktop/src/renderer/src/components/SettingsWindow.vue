@@ -53,6 +53,9 @@ function settingProperties(section: SettingsSectionDto): readonly SettingPropert
     type: typeof schema.type === 'string' ? schema.type : 'string',
     ...(typeof schema.description === 'string' ? { description: schema.description } : {}),
     ...(schema.default !== undefined ? { defaultValue: schema.default } : {}),
+    ...(Array.isArray(schema.enum) && schema.enum.every((value) => typeof value === 'string')
+      ? { enumValues: schema.enum as string[] }
+      : {}),
   }));
 }
 function settingObject(section: SettingsSectionDto): JsonRecord {
@@ -66,7 +69,9 @@ function settingDisplayValue(section: SettingsSectionDto, property: SettingPrope
     : JSON.stringify(value);
 }
 function inputValue(event: Event): string {
-  return event.target instanceof HTMLInputElement ? event.target.value : '';
+  return event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement
+    ? event.target.value
+    : '';
 }
 function inputChecked(event: Event): boolean {
   return event.target instanceof HTMLInputElement ? event.target.checked : false;
@@ -191,6 +196,13 @@ watch(
                     :checked="Boolean(settingObject(selectedSection)[property.name] ?? property.defaultValue)"
                     @change="emit('updateProperty', selectedSection, property, inputChecked($event))"
                   />
+                  <select
+                    v-else-if="property.enumValues?.length"
+                    :value="settingDisplayValue(selectedSection, property)"
+                    @change="emit('updateProperty', selectedSection, property, inputValue($event))"
+                  >
+                    <option v-for="option in property.enumValues" :key="option" :value="option">{{ option }}</option>
+                  </select>
                   <input
                     v-else
                     :type="propertyControlType(property)"

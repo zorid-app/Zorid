@@ -6,7 +6,14 @@ import type { IpcMainInvokeEvent } from 'electron';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { selectVaultRootFromDialog } from './open-vault-dialog.js';
 import { createRecentVaultStore, openRecentVault, type RecentVaultStore } from './recent-vaults.js';
-import { createDesktopRuntime, type DesktopRuntime } from './runtime.js';
+import {
+  appSettingsSections,
+  createDesktopRuntime,
+  type DesktopRuntime,
+  InMemoryAppSettingsStore,
+  type SettingsSectionDto,
+  type SettingValueDto,
+} from './runtime.js';
 import { installRuntimeShutdown } from './shutdown.js';
 import { VaultWindowManager, type VaultWindowRole } from './vault-window-manager.js';
 import { managedWindowOptions } from './window-options.js';
@@ -35,6 +42,7 @@ if (shouldDisableGpu()) {
 }
 
 let recentVaultStore: RecentVaultStore | undefined;
+const appSettingsStore = new InMemoryAppSettingsStore();
 
 function recents(): RecentVaultStore {
   recentVaultStore ??= createRecentVaultStore(app.getPath('userData'));
@@ -62,11 +70,41 @@ async function loadManagedWindow(win: BrowserWindow, role: VaultWindowRole): Pro
 const windows = new VaultWindowManager<BrowserWindow, DesktopRuntime>({
   createWindow: createManagedWindow,
   loadWindow: loadManagedWindow,
-  createRuntime: createDesktopRuntime,
+  createRuntime: () => createDesktopRuntime({ appSettings: appSettingsStore }),
 });
 
 function runtimeFor(event: IpcMainInvokeEvent): DesktopRuntime {
   return windows.runtimeForSender(event.sender.id);
+}
+
+function isAppSetting(sectionId: string, pluginId?: string): boolean {
+  return pluginId === undefined && sectionId.startsWith('app.');
+}
+
+function appSettingsSectionDtos(): readonly SettingsSectionDto[] {
+  return appSettingsSections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    schema: section.schema,
+    source: 'app',
+  }));
+}
+
+function getAppSettingValue(sectionId: string): SettingValueDto {
+  return { sectionId, value: appSettingsStore.get(sectionId) };
+}
+
+function broadcastSettingUpdated(dto: SettingValueDto): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('zorid:setting-updated', dto);
+  }
+}
+
+function setAppSettingValue(sectionId: string, value: JsonValue): SettingValueDto {
+  appSettingsStore.set(sectionId, value);
+  const dto = getAppSettingValue(sectionId);
+  broadcastSettingUpdated(dto);
+  return dto;
 }
 
 async function selectAndOpenVault(
@@ -130,12 +168,20 @@ ipcMain.handle('zorid:execute-command', async (event, id: string, args?: JsonVal
   runtimeFor(event).executeCommand(id, args),
 );
 ipcMain.handle('zorid:list-plugin-statuses', async (event) => runtimeFor(event).listPluginStatuses());
-ipcMain.handle('zorid:list-settings-sections', async (event) => runtimeFor(event).listSettingsSections());
+ipcMain.handle('zorid:list-settings-sections', async (event) =>
+  windows.roleForSender(event.sender.id) === 'launcher'
+    ? appSettingsSectionDtos()
+    : runtimeFor(event).listSettingsSections(),
+);
 ipcMain.handle('zorid:get-setting-value', async (event, sectionId: string, pluginId?: string) =>
-  runtimeFor(event).getSettingValue(sectionId, pluginId),
+  isAppSetting(sectionId, pluginId)
+    ? getAppSettingValue(sectionId)
+    : runtimeFor(event).getSettingValue(sectionId, pluginId),
 );
 ipcMain.handle('zorid:set-setting-value', async (event, sectionId: string, value: JsonValue, pluginId?: string) =>
-  runtimeFor(event).setSettingValue(sectionId, value, pluginId),
+  isAppSetting(sectionId, pluginId)
+    ? setAppSettingValue(sectionId, value)
+    : runtimeFor(event).setSettingValue(sectionId, value, pluginId),
 );
 
 app

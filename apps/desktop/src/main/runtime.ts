@@ -141,6 +141,50 @@ export interface MarkdownEmbedDto {
   readonly viewId?: string;
 }
 
+export const appSettingsSections: readonly SettingsContribution[] = [
+  {
+    id: 'app.general',
+    title: 'General',
+    schema: { type: 'object', properties: { confirmDeletes: { type: 'boolean', default: true } } },
+  },
+  {
+    id: 'app.appearance',
+    title: 'Appearance',
+    schema: {
+      type: 'object',
+      properties: {
+        theme: {
+          type: 'string',
+          title: 'Theme',
+          description: 'Choose how Zorid selects its color theme.',
+          default: 'system',
+          enum: ['system', 'light', 'dark'],
+        },
+      },
+    },
+  },
+];
+
+export interface AppSettingsStore {
+  get(sectionId: string): JsonValue | undefined;
+  set(sectionId: string, value: JsonValue): JsonValue | undefined;
+}
+
+export class InMemoryAppSettingsStore implements AppSettingsStore {
+  readonly #values = new Map<string, JsonValue>();
+
+  get(sectionId: string): JsonValue | undefined {
+    return this.#values.get(`app:${sectionId}`);
+  }
+
+  set(sectionId: string, value: JsonValue): JsonValue | undefined {
+    if (!appSettingsSections.some((section) => section.id === sectionId))
+      throw new Error(`Unknown app settings section: ${sectionId}`);
+    this.#values.set(`app:${sectionId}`, value);
+    return this.get(sectionId);
+  }
+}
+
 const desktopCapabilities: readonly CapabilityName[] = [
   'vault.read',
   'vault.write',
@@ -300,6 +344,7 @@ export const corePluginManifests: readonly PluginManifest[] = [
 export interface DesktopRuntimeOptions {
   readonly manifests?: readonly PluginManifest[];
   readonly load?: (manifest: PluginManifest) => Promise<ZoridPlugin> | ZoridPlugin;
+  readonly appSettings?: AppSettingsStore;
 }
 
 function missingRuntimeLoader(manifest: PluginManifest): never {
@@ -316,6 +361,7 @@ export class DesktopRuntime {
   });
   #activeVault?: FolderVault;
   #indexStore?: IndexStore;
+  #appSettings: AppSettingsStore;
   #indexWatcher?: Disposable;
   #vaultServiceRegistration?: Disposable;
   #indexServiceRegistration?: Disposable;
@@ -326,12 +372,9 @@ export class DesktopRuntime {
 
   constructor(options: DesktopRuntimeOptions = {}) {
     const manifests = options.manifests ?? corePluginManifests;
+    this.#appSettings = options.appSettings ?? new InMemoryAppSettingsStore();
     this.kernel = createZoridKernel({ capabilities: desktopCapabilities });
-    this.kernel.settings.register({
-      id: 'app.general',
-      title: 'General',
-      schema: { type: 'object', properties: { confirmDeletes: { type: 'boolean', default: true } } },
-    });
+    for (const section of appSettingsSections) this.kernel.settings.register(section);
     this.registerAppCommands();
     this.kernel.services.register('workspace', this.workspace);
     this.kernel.services.register('editor', this.editor);
@@ -450,6 +493,8 @@ export class DesktopRuntime {
   }
 
   getSettingValue(sectionId: string, pluginId?: string): SettingValueDto {
+    if (pluginId === undefined && sectionId.startsWith('app.'))
+      return { sectionId, value: this.#appSettings.get(sectionId) };
     return pluginId === undefined
       ? { sectionId, value: this.#settingsValues.get(this.settingsKey(sectionId)) }
       : { sectionId, pluginId, value: this.#settingsValues.get(this.settingsKey(sectionId, pluginId)) };
@@ -460,6 +505,12 @@ export class DesktopRuntime {
       (candidate) => candidate.id === sectionId && candidate.pluginId === pluginId,
     );
     if (!section) throw new Error(`Unknown settings section: ${pluginId ? `${pluginId}:` : ''}${sectionId}`);
+    if (pluginId === undefined && sectionId.startsWith('app.')) {
+      this.#appSettings.set(sectionId, value);
+      const dto = this.getSettingValue(sectionId);
+      this.kernel.events.emit('settings:updated', dto);
+      return dto;
+    }
     this.#settingsValues.set(this.settingsKey(sectionId, pluginId), value);
     const dto = this.getSettingValue(sectionId, pluginId);
     this.kernel.events.emit('settings:updated', dto);

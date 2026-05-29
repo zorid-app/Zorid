@@ -92,6 +92,7 @@ describe('desktop file tree toolbar contract', () => {
         setFileType: vi.fn().mockResolvedValue({ path: 'a.md', fields: [] }),
         onIndexUpdated: vi.fn().mockReturnValue(() => undefined),
         onEditorSnapshot: vi.fn().mockReturnValue(() => undefined),
+        onSettingUpdated: vi.fn().mockReturnValue(() => undefined),
         executeCommand: vi.fn().mockResolvedValue(undefined),
         createVault: vi.fn().mockResolvedValue(undefined),
         openVault: vi.fn().mockResolvedValue(undefined),

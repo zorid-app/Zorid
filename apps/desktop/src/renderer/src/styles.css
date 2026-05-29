@@ -831,7 +831,8 @@ h2 {
 }
 
 .setting-item-control input[type='text'],
-.setting-item-control input[type='number'] {
+.setting-item-control input[type='number'],
+.setting-item-control select {
   width: min(240px, 100%);
   border: 1px solid var(--z-control-border);
   border-radius: var(--z-radius-md);
@@ -1054,7 +1055,7 @@ input::placeholder {
   grid-template-columns: 360px minmax(480px, 1fr);
   min-height: 100vh;
   color: var(--z-color-text);
-  background: #1c1c1f;
+  background: var(--z-color-bg);
   -webkit-app-region: drag;
 }
 
@@ -1065,8 +1066,8 @@ input::placeholder {
 
 .launcher-recents {
   padding: 12px 26px 22px;
-  border-right: 1px solid rgba(255, 255, 255, 0.09);
-  background: #242426;
+  border-right: 1px solid var(--z-color-border);
+  background: var(--z-sidebar-bg);
 }
 
 .launcher-traffic-light-spacer {
@@ -1104,12 +1105,12 @@ input::placeholder {
 }
 
 .recent-list strong {
-  color: #f2f2f3;
+  color: var(--z-color-text);
   font-size: 20px;
 }
 
 .recent-list span {
-  color: #b9b9bc;
+  color: var(--z-color-muted);
   font-size: 16px;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -1121,7 +1122,7 @@ input::placeholder {
   align-items: center;
   justify-content: center;
   padding: 64px 72px;
-  background: #1b1b1d;
+  background: var(--z-color-bg-elevated);
 }
 
 .zorid-gem {
@@ -1129,23 +1130,28 @@ input::placeholder {
   height: 104px;
   margin-bottom: 28px;
   border-radius: 38% 62% 44% 56% / 28% 28% 72% 72%;
-  background: linear-gradient(145deg, #c2a7ff 0 32%, #8c5bed 33% 62%, #5f2fc6 63% 100%);
+  background: linear-gradient(
+    145deg,
+    var(--z-color-accent-soft) 0 32%,
+    var(--z-color-accent) 33% 62%,
+    var(--z-color-accent-hover) 63% 100%
+  );
   box-shadow:
-    inset 18px -12px 0 rgba(37, 12, 98, 0.24),
-    0 18px 34px rgba(0, 0, 0, 0.26);
+    inset 18px -12px 0 var(--z-color-accent-soft),
+    var(--z-shadow-overlay);
   transform: rotate(8deg);
 }
 
 .launcher-main h2 {
   margin: 0;
-  color: #fff;
+  color: var(--z-color-text);
   font-size: 44px;
   letter-spacing: -0.04em;
 }
 
 .launcher-version {
   margin: 12px 0 44px;
-  color: #b8b8bc;
+  color: var(--z-color-muted);
   font-size: 18px;
   font-weight: 650;
 }
@@ -1154,7 +1160,7 @@ input::placeholder {
   width: min(620px, 100%);
   padding: 26px 30px;
   border-radius: 18px;
-  background: #242426;
+  background: var(--z-color-surface);
 }
 
 .launcher-action {
@@ -1163,7 +1169,7 @@ input::placeholder {
   gap: 28px;
   align-items: center;
   padding: 18px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--z-color-border);
 }
 
 .launcher-action:last-of-type {
@@ -1172,30 +1178,30 @@ input::placeholder {
 
 .launcher-action h3 {
   margin: 0 0 8px;
-  color: #ececef;
+  color: var(--z-color-text);
   font-size: 22px;
 }
 
 .launcher-action p {
   margin: 0;
-  color: #b9b9bc;
+  color: var(--z-color-muted);
   font-size: 16px;
 }
 
 .launcher-action button {
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--z-control-border);
   border-radius: 8px;
   padding: 12px 20px;
-  color: #ededf0;
-  background: #363638;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.22);
+  color: var(--z-control-text);
+  background: var(--z-control-bg);
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--z-color-bg) 28%, transparent);
   cursor: pointer;
 }
 
 .launcher-action button.accent {
   border-color: transparent;
-  background: linear-gradient(135deg, #7c4df0, #9b63f4);
-  color: white;
+  background: var(--z-color-accent);
+  color: var(--z-color-inverse);
 }
 
 .launcher-action button:disabled {

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { createDesktopRuntime } from '../apps/desktop/src/main/runtime';
+import { appSettingsSections, createDesktopRuntime } from '../apps/desktop/src/main/runtime';
 import type { PluginManifest } from '../packages/plugin-api/src/index';
 import { normalizeVaultPath } from '../packages/shared/src/index';
 
@@ -39,6 +39,22 @@ const settingsPluginManifest: PluginManifest = {
 };
 
 describe('desktop runtime composition', () => {
+  it('keeps first-party app settings available as reusable app-owned schemas', () => {
+    expect(appSettingsSections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'app.general' }),
+        expect.objectContaining({
+          id: 'app.appearance',
+          schema: expect.objectContaining({
+            properties: expect.objectContaining({
+              theme: expect.objectContaining({ enum: ['system', 'light', 'dark'], default: 'system' }),
+            }),
+          }),
+        }),
+      ]),
+    );
+  });
+
   it('wires kernel, plugin host, core manifest placeholders, and static settings DTOs without activation', () => {
     const runtime = createDesktopRuntime();
     const statuses = runtime.listPluginStatuses();
@@ -56,6 +72,15 @@ describe('desktop runtime composition', () => {
       expect.arrayContaining([
         expect.objectContaining({ id: 'app.general', source: 'app' }),
         expect.objectContaining({
+          id: 'app.appearance',
+          source: 'app',
+          schema: expect.objectContaining({
+            properties: expect.objectContaining({
+              theme: expect.objectContaining({ enum: ['system', 'light', 'dark'], default: 'system' }),
+            }),
+          }),
+        }),
+        expect.objectContaining({
           id: 'status-bar',
           source: 'plugin-manifest',
           pluginId: 'zorid.core.status-bar',
@@ -72,6 +97,10 @@ describe('desktop runtime composition', () => {
       value: { confirmDeletes: false },
     });
     expect(runtime.getSettingValue('app.general').value).toEqual({ confirmDeletes: false });
+    expect(runtime.setSettingValue('app.appearance', { theme: 'light' })).toMatchObject({
+      sectionId: 'app.appearance',
+      value: { theme: 'light' },
+    });
     expect(runtime.setSettingValue('status-bar', { compact: true }, 'zorid.core.status-bar')).toMatchObject({
       sectionId: 'status-bar',
       pluginId: 'zorid.core.status-bar',

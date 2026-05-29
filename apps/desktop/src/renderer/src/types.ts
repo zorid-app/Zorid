@@ -52,4 +52,5 @@ export interface SettingProperty {
   readonly type: string;
   readonly description?: string;
   readonly defaultValue?: unknown;
+  readonly enumValues?: readonly string[];
 }

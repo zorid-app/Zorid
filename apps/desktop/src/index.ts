@@ -75,6 +75,7 @@ export interface DesktopEditorBridge {
   getMarkdownEmbeds(path: string): Promise<readonly MarkdownEmbedDto[]>;
   onIndexUpdated(callback: () => void): () => void;
   onEditorSnapshot(callback: (snapshot: EditorSnapshotDto) => void): () => void;
+  onSettingUpdated(callback: (setting: SettingValueDto) => void): () => void;
   listCommands(): Promise<readonly CommandDto[]>;
   executeCommand(id: string, args?: JsonValue): Promise<unknown>;
   listPluginStatuses(): Promise<readonly PluginStatus[]>;

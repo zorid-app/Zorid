@@ -20,6 +20,13 @@ const sections: readonly SettingsSectionDto[] = [
           default: true,
         },
         displayName: { type: 'string', title: 'Display name', description: 'Name shown in the app.', default: 'Zorid' },
+        theme: {
+          type: 'string',
+          title: 'Theme',
+          description: 'Choose how Zorid selects its color theme.',
+          default: 'system',
+          enum: ['system', 'light', 'dark'],
+        },
       },
     },
   },
@@ -39,7 +46,7 @@ const sections: readonly SettingsSectionDto[] = [
 ];
 
 const values = {
-  'app:app.general': { confirmDeletes: true, displayName: 'Current' },
+  'app:app.general': { confirmDeletes: true, displayName: 'Current', theme: 'system' },
   'zorid.core.status-bar:status-bar': { showVault: false },
 };
 
@@ -68,6 +75,9 @@ describe('desktop SettingsWindow structure', () => {
     expect(document.body.querySelector('.settings-nav-entry--active')?.textContent).toContain('General');
     expect(document.body.querySelector('.settings-content h3')?.textContent).toBe('General');
     expect(document.body.querySelector('.settings-content')?.textContent).toContain('Confirm deletes');
+    expect([...document.body.querySelectorAll<HTMLSelectElement>('.setting-item-control select')][0]?.value).toBe(
+      'system',
+    );
 
     const statusButton = [...document.body.querySelectorAll<HTMLButtonElement>('.settings-nav-entry')].find((button) =>
       button.textContent?.includes('Status Bar'),
@@ -102,6 +112,19 @@ describe('desktop SettingsWindow structure', () => {
       expect.objectContaining({ id: 'app.general' }),
       expect.objectContaining({ name: 'displayName', type: 'string' }),
       'Updated',
+    ]);
+
+    const select = document.body.querySelector<HTMLSelectElement>('.setting-item-control select');
+    expect(select).not.toBeNull();
+    expect([...select!.querySelectorAll('option')].map((option) => option.value)).toEqual(['system', 'light', 'dark']);
+    select!.value = 'dark';
+    select!.dispatchEvent(new Event('change', { bubbles: true }));
+    await nextTick();
+
+    expect(wrapper.emitted('updateProperty')?.at(-1)).toMatchObject([
+      expect.objectContaining({ id: 'app.general' }),
+      expect.objectContaining({ name: 'theme', type: 'string', enumValues: ['system', 'light', 'dark'] }),
+      'dark',
     ]);
 
     const statusButton = [...document.body.querySelectorAll<HTMLButtonElement>('.settings-nav-entry')].find((button) =>

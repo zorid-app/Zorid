@@ -3,7 +3,7 @@ import { ArrowDownUp, ChevronsDown, ChevronsUp, FilePlus, Files, FolderPlus, Lin
 import { createDesktopShellState } from '@zorid/desktop-shell';
 import { ZIconButton } from '@zorid/ui-vue';
 import type { Component, CSSProperties } from 'vue';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ActivityRail from './components/ActivityRail.vue';
 import AppResizeHandle from './components/AppResizeHandle.vue';
 import AppStatusBar from './components/AppStatusBar.vue';
@@ -56,6 +56,8 @@ import type {
 } from './types.js';
 
 type JsonRecord = Record<string, unknown>;
+type ThemePreference = 'system' | 'light' | 'dark';
+type ResolvedTheme = 'light' | 'dark';
 
 const desktop = window.zoridDesktop as unknown as {
   getWindowRole(): Promise<WindowRole | undefined>;
@@ -85,6 +87,7 @@ const desktop = window.zoridDesktop as unknown as {
   getMarkdownEmbeds(path: string): Promise<readonly MarkdownEmbedDto[]>;
   onIndexUpdated(callback: () => void): () => void;
   onEditorSnapshot(callback: (snapshot: EditorSnapshotDto) => void): () => void;
+  onSettingUpdated(callback: (setting: SettingValueUpdate) => void): () => void;
   listCommands(): Promise<readonly CommandDto[]>;
   executeCommand(id: string, args?: unknown): Promise<unknown>;
   listPluginStatuses(): Promise<readonly PluginStatus[]>;
@@ -137,6 +140,7 @@ const activeViewId = ref<string>();
 const dataView = ref<DataViewResultDto>();
 const markdownEmbeds = ref<readonly MarkdownEmbedDto[]>([]);
 const paneLayout = ref<PaneLayout>({ ...DEFAULT_PANE_LAYOUT });
+const systemTheme = ref<ResolvedTheme>(readSystemTheme());
 type ResizeSide = 'left' | 'right';
 interface PaneResizeState {
   readonly side: ResizeSide;
@@ -144,9 +148,17 @@ interface PaneResizeState {
   readonly startLeftWidth: number;
   readonly startRightWidth: number;
 }
+interface SettingValueUpdate {
+  readonly sectionId: string;
+  readonly pluginId?: string;
+  readonly value?: unknown;
+}
 const paneResize = ref<PaneResizeState>();
 let unsubscribeIndexUpdates: (() => void) | undefined;
 let unsubscribeEditorSnapshot: (() => void) | undefined;
+let unsubscribeSettingUpdates: (() => void) | undefined;
+let stopSystemThemeWatcher: (() => void) | undefined;
+let stopDocumentThemeBinding: (() => void) | undefined;
 const autosave = createMarkdownAutosave({
   write: writeAutosaveSnapshot,
   onError: (caught) => {
@@ -193,9 +205,45 @@ const filteredCommands = computed(() => {
   return source.filter((command: CommandDto) => `${command.title} ${command.id}`.toLowerCase().includes(query));
 });
 const activePlugins = computed(() => plugins.value.filter((plugin) => plugin.status === 'active').length);
+const appearanceSettings = computed(() => jsonRecord(settingValues.value['app:app.appearance']));
+const themePreference = computed<ThemePreference>(() => parseThemePreference(appearanceSettings.value.theme));
+const effectiveTheme = computed<ResolvedTheme>(() =>
+  themePreference.value === 'system' ? systemTheme.value : themePreference.value,
+);
 
 function settingsKey(section: SettingsSectionDto): string {
   return `${section.pluginId ?? 'app'}:${section.id}`;
+}
+
+function parseThemePreference(value: unknown): ThemePreference {
+  return value === 'light' || value === 'dark' || value === 'system' ? value : 'system';
+}
+
+function readSystemTheme(): ResolvedTheme {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'dark';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function startSystemThemeWatcher(): void {
+  if (typeof window.matchMedia !== 'function') return;
+  const query = window.matchMedia('(prefers-color-scheme: dark)');
+  const update = () => {
+    systemTheme.value = query.matches ? 'dark' : 'light';
+  };
+  update();
+  query.addEventListener?.('change', update);
+  stopSystemThemeWatcher = () => query.removeEventListener?.('change', update);
+}
+
+function applyDocumentTheme(theme: ResolvedTheme): void {
+  document.documentElement.dataset.zTheme = theme;
+}
+
+function applySettingUpdate(setting: SettingValueUpdate): void {
+  settingValues.value = {
+    ...settingValues.value,
+    [`${setting.pluginId ?? 'app'}:${setting.sectionId}`]: setting.value,
+  };
 }
 
 function activityIconFor(item: string): Component {
@@ -304,6 +352,12 @@ async function refreshShellData(): Promise<void> {
   indexStatus.value = nextIndexStatus;
   await loadSettingValues(nextSettings);
   await refreshMetadataPanels();
+}
+
+async function refreshSettingsData(): Promise<void> {
+  const nextSettings = await desktop.listSettingsSections();
+  settingsSections.value = nextSettings;
+  await loadSettingValues(nextSettings);
 }
 
 async function refreshMetadataPanels(): Promise<void> {
@@ -430,6 +484,7 @@ function applyEditorSnapshot(snapshot: EditorSnapshotDto): void {
 async function initializeWindow(): Promise<void> {
   const role = (await desktop.getWindowRole()) ?? 'editor';
   windowRole.value = role;
+  await refreshSettingsData();
   if (role === 'launcher') {
     await loadRecentVaults();
     return;
@@ -721,16 +776,23 @@ function handleKeydown(event: KeyboardEvent): void {
 }
 
 onMounted(() => {
+  startSystemThemeWatcher();
+  stopDocumentThemeBinding = watch(effectiveTheme, applyDocumentTheme, { immediate: true });
   window.addEventListener('keydown', handleKeydown);
+  unsubscribeSettingUpdates = desktop.onSettingUpdated(applySettingUpdate);
   void initializeWindow().catch((caught: unknown) => {
     error.value = caught instanceof Error ? caught.message : String(caught);
   });
 });
 onBeforeUnmount(() => {
   stopPaneResize();
+  stopSystemThemeWatcher?.();
+  stopDocumentThemeBinding?.();
+  delete document.documentElement.dataset.zTheme;
   window.removeEventListener('keydown', handleKeydown);
   unsubscribeIndexUpdates?.();
   unsubscribeEditorSnapshot?.();
+  unsubscribeSettingUpdates?.();
   void flushPendingAutosave().catch((caught: unknown) => {
     error.value = caught instanceof Error ? caught.message : String(caught);
   });
@@ -738,7 +800,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main v-if="windowRole === 'launcher'" class="launcher-shell" data-z-theme="dark">
+  <main v-if="windowRole === 'launcher'" class="launcher-shell" :data-z-theme="effectiveTheme">
     <aside class="launcher-recents" aria-label="Recent vaults">
       <div class="traffic-light-spacer launcher-traffic-light-spacer" aria-hidden="true"></div>
       <header>
@@ -780,7 +842,7 @@ onBeforeUnmount(() => {
     </section>
   </main>
 
-  <main v-else-if="windowRole === 'editor'" class="zorid-shell" :style="shellStyle" data-zorid-shell data-z-theme="dark">
+  <main v-else-if="windowRole === 'editor'" class="zorid-shell" :style="shellStyle" data-zorid-shell :data-z-theme="effectiveTheme">
     <TopTabStrip
       :open-tabs="openTabs"
       :selected-tab-id="selectedTabId"
@@ -905,7 +967,7 @@ onBeforeUnmount(() => {
     />
   </main>
 
-  <main v-else class="launcher-shell loading" data-z-theme="dark">
+  <main v-else class="launcher-shell loading" :data-z-theme="effectiveTheme">
     <p class="muted">Loading Zorid…</p>
   </main>
 </template>

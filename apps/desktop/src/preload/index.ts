@@ -47,6 +47,13 @@ const editor: DesktopEditorBridge = {
       ipcRenderer.removeListener('zorid:editor-snapshot', listener);
     };
   },
+  onSettingUpdated: (callback) => {
+    const listener = (_event: unknown, setting: Parameters<typeof callback>[0]) => callback(setting);
+    ipcRenderer.on('zorid:setting-updated', listener);
+    return () => {
+      ipcRenderer.removeListener('zorid:setting-updated', listener);
+    };
+  },
   listCommands: () => ipcRenderer.invoke('zorid:list-commands'),
   executeCommand: (id, args) => ipcRenderer.invoke('zorid:execute-command', id, args),
   listPluginStatuses: () => ipcRenderer.invoke('zorid:list-plugin-statuses'),
