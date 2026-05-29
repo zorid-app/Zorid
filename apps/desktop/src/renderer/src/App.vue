@@ -173,6 +173,7 @@ const shellStyle = computed<CSSProperties>(() => ({
   '--right-sidebar-width': `${paneLayout.value.rightWidth}px`,
   '--activity-rail-width': `${SHELL_LAYOUT.railWidth}px`,
   '--resize-handle-width': `${SHELL_LAYOUT.resizeHandleWidth}px`,
+  '--resize-handle-half-width': `${SHELL_LAYOUT.resizeHandleWidth / 2}px`,
   '--titlebar-height': `${SHELL_LAYOUT.titlebarHeight}px`,
   '--traffic-light-space': `${SHELL_LAYOUT.trafficLightReservedWidth}px`,
 }));

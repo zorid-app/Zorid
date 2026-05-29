@@ -44,7 +44,13 @@ async function updateTabOverflow(tabId: string): Promise<void> {
 </script>
 
 <template>
-  <header class="editor-titlebar" aria-label="Editor title bar" data-app-titlebar>
+  <header
+    class="editor-titlebar"
+    aria-label="Editor title bar"
+    data-app-titlebar
+    :data-left-collapsed="leftCollapsed ? 'true' : 'false'"
+    :data-right-collapsed="rightCollapsed ? 'true' : 'false'"
+  >
     <div class="traffic-light-spacer" aria-hidden="true"></div>
 
     <div class="titlebar-left-actions" aria-label="Primary navigation controls">
