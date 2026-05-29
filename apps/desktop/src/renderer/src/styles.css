@@ -515,6 +515,12 @@ h2 {
   font-weight: 700;
 }
 
+.markdown-editor .z-live-preview-blockquote-line {
+  color: var(--z-color-text);
+  background: color-mix(in srgb, var(--z-control-bg-strong) 42%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--z-color-border) 82%, transparent);
+}
+
 .resize-handle {
   position: relative;
   z-index: 2;

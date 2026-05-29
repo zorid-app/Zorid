@@ -1,20 +1,21 @@
-Implement the approved RALPLAN plan for Live Preview Pass 2 from:
-- PRD: .omx/plans/prd-live-preview-pass-2-20260529T061513Z.md
-- Test spec: .omx/plans/test-spec-live-preview-pass-2-20260529T061513Z.md
-- Handoff: .omx/plans/ralplan-handoff-live-preview-pass-2-20260529T061513Z.json
+Implement the approved RALPLAN plan for Live Preview Pass 3 from:
+- PRD: .omx/plans/prd-live-preview-pass-3-block-preview-foundation-20260529T091213Z.md
+- Test spec: .omx/plans/test-spec-live-preview-pass-3-block-preview-foundation-20260529T091213Z.md
+- Handoff: .omx/plans/ralplan-handoff-live-preview-pass-3-block-preview-foundation-20260529T091213Z.json
 
 Hard constraints:
-- Markdown source remains canonical; no rich-text document model.
-- All source mutations must go through CodeMirror transactions/history.
-- Keep renderer APIs internal/experimental; do not expose a public renderer API in packages/platform-api.
-- Do not implement tables, properties/frontmatter UI, embeds, images/PDFs, image resize, callout widgets, math rendering, Reading view parity, broad Lezer/parser migration, or mobile/touch-specific behavior.
-- Use CodeMirror contracts (extensions/decorations/transactions), not direct mutation of editor-managed content DOM.
-- Preserve desktop open/edit/save/autosave behavior and import-boundary rules.
+- Markdown source remains canonical; preview rendering must not mutate EditorState.doc.
+- Implement only line-level blockquote preview foundation using a Decoration.line-style internal capability.
+- Use one preview range per blockquote source line; focused selection suppresses only the active line decoration.
+- No StateField or EditorView.atomicRanges by default; document them as later structured-widget needs unless tests prove unavoidable.
+- Do not expose renderer registration through packages/platform-api or plugin APIs.
+- Do not add a new named package-root export for blockquoteLivePreviewRenderer unless unavoidable for in-repo compatibility.
+- Do not implement tables, properties/frontmatter UI, callout widgets, embeds/images/PDFs, math rendering, Reading view parity, broad Lezer/parser migration, or mobile/touch-specific behavior.
 
 Goals:
-1. Add internal task marker source helpers and a command-first source-backed checkbox toggle in @zorid/editor. Toggle current task lines between unchecked and checked via CodeMirror transactions; non-task lines no-op; click handling is deferred unless it stays tiny and fully tested.
-2. Add task toggle/source/history tests. Cover unchecked/checked toggles, uppercase checked policy, indented tasks, non-task no-ops, unrelated text preservation, mounted onChange behavior, undo/redo, source reveal around task markers, and silent external setText behavior.
-3. Verify Markdown list/task/blockquote keymap behavior before adding any custom input logic. Add mounted tests for current markdown() Enter/Backspace behavior; if behavior is sufficient, document no custom keymap was added. If not, use only official CodeMirror keymaps/extensions already in dependencies and test the gap.
-4. Add an internal replace-preview capability plus exactly one renderer slice: inactive inline-code backtick delimiter hiding. Use heading marker hiding only as documented fallback if inline-code delimiter tests prove brittle. Preserve source text and reveal raw source on focused selection intersection.
-5. Run targeted and broad verification: new editor tests, existing live-preview/package-wiring/style tests, desktop autosave/vault editor tests, @zorid/editor typecheck, import boundaries, repo typecheck, and repo lint.
-6. Run the mandatory final cleanup and independent code-review gate; resolve any blockers; commit changed files with a plain descriptive commit message after the final gate passes.
+1. Add tests-first coverage for blockquote Live Preview: line-level ranges, blank `>`/`> ` lines, indentation boundaries, code/table false positives, line.from/line.to activation boundaries, mounted DOM reveal/restore, and coexistence with inline renderers.
+2. Add internal line-decoration support in @zorid/editor Live Preview and implement a private blockquote line renderer included in defaultLivePreviewRenderers.
+3. Add scoped desktop styling for the blockquote line preview class and update style-scope tests.
+4. Run targeted verification: block/live-preview/task/keymap/package/style/autosave/vault tests, @zorid/editor typecheck, and import boundaries.
+5. Run broad verification: pnpm typecheck, pnpm lint, pnpm test, and any needed desktop build if host behavior changes.
+6. Run the mandatory final cleanup and independent code-review gate; resolve blockers; commit changed files with a plain descriptive commit message after final gate passes.

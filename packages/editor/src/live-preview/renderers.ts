@@ -1,3 +1,4 @@
+import type { InternalLivePreviewRange, InternalLivePreviewRenderer } from './internal-types.js';
 import { markdownSuppressedCodeRanges } from './markdown-code-context.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
 
@@ -54,6 +55,35 @@ function inlineCodeDelimiterRanges(
         kind: 'replace' as const,
       },
     ]);
+}
+
+function blockquoteLineRanges(
+  docText: string,
+  scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
+): InternalLivePreviewRange[] {
+  const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
+  const scanText = docText.slice(scanWindow.from, scanWindow.to);
+
+  return [...scanText.matchAll(/^ {0,3}> ?.*$/gm)].flatMap((match) => {
+    const index = match.index;
+    if (index === undefined) return [];
+
+    const from = scanWindow.from + index;
+    const to = from + match[0].length;
+    if (suppressedRanges.some((container) => isInsideRange({ from, to }, container))) return [];
+
+    return [
+      {
+        rendererId: 'blockquote',
+        from,
+        to,
+        activationFrom: from,
+        activationTo: to,
+        className: 'z-live-preview-blockquote-line',
+        kind: 'line' as const,
+      },
+    ];
+  });
 }
 
 function isInsideRange(
@@ -144,7 +174,14 @@ export const taskMarkerLivePreviewRenderer: LivePreviewRenderer = regexLivePrevi
   (match) => ({ fromOffset: 0, toOffset: match[1]?.length ?? match[0].length }),
 );
 
+const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
+  id: 'blockquote',
+  match: ({ docText, visibleFrom, visibleTo }) =>
+    blockquoteLineRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+};
+
 export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
+  blockquoteLivePreviewRenderer as LivePreviewRenderer,
   headingLivePreviewRenderer,
   inlineCodeLivePreviewRenderer,
   inlineCodeDelimiterLivePreviewRenderer,

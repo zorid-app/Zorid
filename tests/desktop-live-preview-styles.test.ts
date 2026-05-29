@@ -8,6 +8,7 @@ const livePreviewClasses = [
   'z-live-preview-wiki-link',
   'z-live-preview-tag',
   'z-live-preview-task-marker',
+  'z-live-preview-blockquote-line',
 ];
 
 describe('desktop Live Preview styles', () => {
@@ -27,5 +28,8 @@ describe('desktop Live Preview styles', () => {
     for (const selectorLine of selectorLines) {
       expect(selectorLine).toMatch(/^\.markdown-editor\s+\.z-live-preview-/);
     }
+
+    expect(styles).not.toMatch(/\.markdown-preview-view\s+\.z-live-preview-blockquote-line/);
+    expect(styles).not.toMatch(/^blockquote\s*\{/m);
   });
 });

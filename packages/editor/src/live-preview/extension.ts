@@ -1,5 +1,6 @@
 import type { Extension } from '@codemirror/state';
 import { Decoration, type DecorationSet, type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import { type InternalLivePreviewRange, isLivePreviewLineRange } from './internal-types.js';
 import type {
   LivePreviewContext,
   LivePreviewRange,
@@ -78,11 +79,21 @@ export function collectLivePreviewRanges(
 }
 
 function livePreviewDecorationsForView(view: EditorView, renderers: readonly LivePreviewRenderer[]): DecorationSet {
-  const ranges = view.visibleRanges.flatMap((visibleRange) =>
+  const ranges: InternalLivePreviewRange[] = view.visibleRanges.flatMap((visibleRange) =>
     collectLivePreviewRanges(renderers, createLivePreviewContext(view.state, visibleRange, view.hasFocus)),
   );
   return Decoration.set(
     ranges.map((range) => {
+      if (isLivePreviewLineRange(range)) {
+        return Decoration.line({
+          class: range.className,
+          attributes: {
+            'data-live-preview-renderer': range.rendererId,
+            ...range.attributes,
+          },
+        }).range(range.from);
+      }
+
       if (range.kind === 'replace') {
         return Decoration.replace({}).range(range.from, range.to);
       }
