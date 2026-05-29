@@ -27,7 +27,7 @@ select:focus-visible {
 }
 
 .zorid-shell {
-  --activity-rail-width: 56px;
+  --activity-rail-width: 42px;
   --left-sidebar-width: 280px;
   --right-sidebar-width: 260px;
   --resize-handle-width: 8px;
@@ -197,9 +197,9 @@ select:focus-visible {
   grid-row: 2;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   align-items: center;
-  padding: 18px 8px;
+  padding: 12px 5px;
   background: var(--z-rail-bg);
 }
 
@@ -212,15 +212,15 @@ select:focus-visible {
 
 .rail-button {
   display: inline-grid;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   place-items: center;
-  border-radius: var(--z-radius-md);
+  border-radius: var(--z-radius-sm);
 }
 
 .icon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   stroke-width: 1.9;
 }
 
@@ -236,6 +236,10 @@ select:focus-visible {
   padding: 24px;
   padding-bottom: 24px;
   background: var(--z-sidebar-bg);
+}
+
+[data-region='left-sidebar'] {
+  padding: 16px 18px 18px;
 }
 
 .sidebar.right {
@@ -309,17 +313,19 @@ h2 {
 [data-region='left-sidebar'] .file-pane-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 12px 0 18px;
-  padding: 0 2px;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin: 8px 0 14px;
+  padding: 0;
 }
 
 [data-region='left-sidebar'] .file-pane-sort {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border: 0;
   border-radius: var(--z-radius-sm);
   color: var(--z-color-muted);
@@ -335,9 +341,14 @@ h2 {
 }
 
 [data-region='left-sidebar'] .file-pane-action-icon {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
   stroke-width: 1.8;
+}
+
+[data-region='left-sidebar'] .file-pane-toolbar .z-icon-button {
+  width: 24px;
+  height: 24px;
 }
 
 [data-region='left-sidebar'] .file-pane-sort {

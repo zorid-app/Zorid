@@ -25,7 +25,7 @@ export interface PaneLayoutViewport {
 }
 
 export const SHELL_LAYOUT = {
-  railWidth: 56,
+  railWidth: 42,
   resizeHandleWidth: 8,
   titlebarHeight: EDITOR_TITLEBAR_HEIGHT,
   trafficLightReservedWidth: EDITOR_TRAFFIC_LIGHT_RESERVED_WIDTH,

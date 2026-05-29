@@ -82,6 +82,7 @@ describe('desktop shell pane layout helpers', () => {
   });
 
   it('reserves app chrome while keeping resize hit targets separate from visible highlights', () => {
+    expect(SHELL_LAYOUT.railWidth).toBe(42);
     expect(SHELL_LAYOUT.titlebarHeight).toBeGreaterThanOrEqual(36);
     expect(SHELL_LAYOUT.trafficLightReservedWidth).toBeGreaterThanOrEqual(72);
     expect(SHELL_LAYOUT.trafficLightReservedWidth).toBeGreaterThanOrEqual(
