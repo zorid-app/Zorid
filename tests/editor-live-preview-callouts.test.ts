@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
 import { EditorState } from '@codemirror/state';
-import { describe, expect, it } from 'vitest';
-import { defaultLivePreviewRenderers } from '../packages/editor/src/index';
+import { describe, expect, it, vi } from 'vitest';
+import { createMountedMarkdownEditor, defaultLivePreviewRenderers } from '../packages/editor/src/index';
 import {
   collectLivePreviewRangesWithWidgetSuppression,
   collectLivePreviewWidgetRangesForVisibleRanges,
@@ -29,6 +29,17 @@ function collectAllRanges(doc: string, selection = 0, focused = false): Internal
     [{ from: 0, to: doc.length }],
     focused,
   );
+}
+
+async function waitForCalloutWidget(parent: HTMLElement, expected: 'present' | 'absent'): Promise<void> {
+  await vi.waitFor(() => {
+    const widget = parent.querySelector('.z-live-preview-callout-widget');
+    if (expected === 'present') {
+      expect(widget).toBeTruthy();
+    } else {
+      expect(widget).toBeNull();
+    }
+  });
 }
 
 describe('editor Live Preview callout widgets', () => {
@@ -126,5 +137,83 @@ describe('editor Live Preview callout widgets', () => {
     expect(collectAllRanges(doc, range.to + 1, true).map((previewRange) => previewRange.rendererId)).toContain(
       'callout-widget',
     );
+  });
+
+  it('mounts callout widgets and reveals source on focused selection without changing source', async () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['> [!note] Title', '> Body', '', 'paragraph'].join('\n');
+    const calloutRange = collectWidgetRanges(text).find((range) => range.rendererId === 'callout-widget')!;
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    expect(parent.querySelector('.z-live-preview-callout-widget')).toBeTruthy();
+    expect(editor.getText()).toBe(text);
+
+    editor.focus();
+    for (const position of [calloutRange.from, text.indexOf('Title'), text.indexOf('Body'), calloutRange.to]) {
+      editor.view.dispatch({ selection: { anchor: position } });
+      await waitForCalloutWidget(parent, 'absent');
+      expect(editor.getText()).toBe(text);
+    }
+
+    editor.view.dispatch({ selection: { anchor: calloutRange.to + 1 } });
+    await waitForCalloutWidget(parent, 'present');
+    expect(editor.getText()).toBe(text);
+
+    editor.view.dispatch({ selection: { anchor: text.indexOf('paragraph') } });
+    await waitForCalloutWidget(parent, 'present');
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('activates mounted callout widgets through pointer selection without changing source', async () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['> [!warning] Custom title', '> Body', '', 'paragraph'].join('\n');
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    const widget = parent.querySelector<HTMLElement>('.z-live-preview-callout-widget');
+    expect(widget).toBeTruthy();
+
+    widget?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    expect(editor.view.state.selection.main.head).toBe(0);
+    await waitForCalloutWidget(parent, 'absent');
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('mounts callout widget DOM with safe source-preserving text', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['> [!note] <script>alert("safe title")</script>', '> <script>alert("safe body")</script>'].join('\n');
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    const widget = parent.querySelector('.z-live-preview-callout-widget');
+    expect(widget).toBeTruthy();
+    expect(widget?.textContent).toContain('<script>alert("safe title")</script>');
+    expect(widget?.textContent).toContain('<script>alert("safe body")</script>');
+    expect(widget?.querySelector('script')).toBeNull();
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('mounts ordinary blockquotes as line decorations instead of callout widgets', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['> ordinary quote', '', 'paragraph'].join('\n');
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    expect(parent.querySelector('.z-live-preview-callout-widget')).toBeNull();
+    expect(parent.querySelector('.cm-line.z-live-preview-blockquote-line')).toBeTruthy();
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
   });
 });
