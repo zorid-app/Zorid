@@ -21,6 +21,7 @@ import SettingsWindow from './components/SettingsWindow.vue';
 import TopTabStrip from './components/TopTabStrip.vue';
 import type { TopTabItem } from './components/top-tab-model.js';
 import { fileTab, fileTabId, nextTabIdAfterClose, placeholderTab } from './components/top-tab-model.js';
+import { createMarkdownAutosave, type MarkdownAutosaveSnapshot } from './markdown-autosave.js';
 import type { PaneLayout } from './shell-layout.js';
 import {
   DEFAULT_PANE_LAYOUT,
@@ -146,6 +147,12 @@ interface PaneResizeState {
 const paneResize = ref<PaneResizeState>();
 let unsubscribeIndexUpdates: (() => void) | undefined;
 let unsubscribeEditorSnapshot: (() => void) | undefined;
+const autosave = createMarkdownAutosave({
+  write: writeAutosaveSnapshot,
+  onError: (caught) => {
+    error.value = caught instanceof Error ? caught.message : String(caught);
+  },
+});
 
 const status = computed(() => vaultLabel.value ?? 'No vault open');
 const paneLayoutStorageKeyForActiveVault = computed(() => safePaneLayoutStorageKey(vaultProfile.value?.id));
@@ -167,9 +174,7 @@ const sortedEntriesByDirectory = computed<Record<string, readonly VaultEntry[]>>
 );
 const rootEntries = computed(() => sortedEntriesByDirectory.value[''] ?? []);
 const fileTreeSortLabel = computed(() => sortModeLabel(fileTreeSortMode.value));
-const dirty = computed(() => selectedPath.value !== undefined && editorText.value !== savedText.value);
 const activeTab = computed(() => openTabs.value.find((tab) => tab.id === selectedTabId.value));
-const editorHeading = computed(() => activeTab.value?.title ?? selectedPath.value ?? 'Open a Markdown file');
 const editorEmptyText = computed(() =>
   activeTab.value?.kind === 'placeholder'
     ? 'Create new note (⌘ N), go to file (⌘ O), or close this placeholder tab.'
@@ -441,6 +446,32 @@ async function initializeWindow(): Promise<void> {
   }
 }
 
+async function writeAutosaveSnapshot(snapshot: MarkdownAutosaveSnapshot): Promise<void> {
+  await desktop.writeVaultText(snapshot.path, snapshot.text);
+  if (selectedPath.value === snapshot.path && editorText.value === snapshot.text) savedText.value = snapshot.text;
+  await refreshShellData();
+}
+
+function scheduleAutosave(): void {
+  if (!selectedPath.value) return;
+  if (editorText.value === savedText.value) {
+    void autosave.saveNow({ path: selectedPath.value, text: savedText.value }).catch((caught: unknown) => {
+      error.value = caught instanceof Error ? caught.message : String(caught);
+    });
+    return;
+  }
+  autosave.schedule({ path: selectedPath.value, text: editorText.value });
+}
+
+function updateEditorText(text: string): void {
+  editorText.value = text;
+  scheduleAutosave();
+}
+
+async function flushPendingAutosave(): Promise<void> {
+  await autosave.flush();
+}
+
 function clearFileSelection(): void {
   selectedPath.value = undefined;
   editorText.value = '';
@@ -451,15 +482,20 @@ function clearFileSelection(): void {
   markdownEmbeds.value = [];
 }
 
-function activatePlaceholderTab(tabId: string): void {
+async function activatePlaceholderTab(tabId: string): Promise<void> {
+  await flushPendingAutosave();
   selectedTabId.value = tabId;
   clearFileSelection();
 }
 
 async function activateFilePath(path: string): Promise<void> {
-  selectedTabId.value = fileTabId(path);
-  selectedPath.value = path;
+  await flushPendingAutosave();
+  const nextTabId = fileTabId(path);
+  selectedTabId.value = nextTabId;
+  clearFileSelection();
   const text = await desktop.readVaultText(path);
+  if (selectedTabId.value !== nextTabId) return;
+  selectedPath.value = path;
   editorText.value = text;
   savedText.value = text;
   await refreshMetadataPanels();
@@ -471,18 +507,18 @@ async function openFileTab(path: string): Promise<void> {
   await activateFilePath(path);
 }
 
-function createPlaceholderTab(): void {
+async function createPlaceholderTab(): Promise<void> {
   placeholderTabCounter.value += 1;
   const tab = placeholderTab(placeholderTabCounter.value);
   openTabs.value = [...openTabs.value, tab];
-  activatePlaceholderTab(tab.id);
+  await activatePlaceholderTab(tab.id);
 }
 
 async function activateTab(tabId: string): Promise<void> {
   const tab = openTabs.value.find((candidate) => candidate.id === tabId);
   if (!tab) return;
   if (tab.kind === 'placeholder') {
-    activatePlaceholderTab(tab.id);
+    await activatePlaceholderTab(tab.id);
     return;
   }
   await activateFilePath(tab.path);
@@ -491,6 +527,7 @@ async function activateTab(tabId: string): Promise<void> {
 async function closeTab(tabId: string): Promise<void> {
   const nextId = nextTabIdAfterClose(openTabs.value, tabId);
   const closingActiveTab = selectedTabId.value === tabId;
+  if (closingActiveTab) await flushPendingAutosave();
   openTabs.value = openTabs.value.filter((tab) => tab.id !== tabId);
   if (!closingActiveTab) return;
   if (nextId) await activateTab(nextId);
@@ -553,6 +590,7 @@ async function renameSelected(): Promise<void> {
   if (!selectedPath.value) return;
   const next = prompt('Rename path', selectedPath.value);
   if (!next || next === selectedPath.value) return;
+  await flushPendingAutosave();
   const previous = selectedPath.value;
   await desktop.renameVaultPath(previous, next);
   selectedPath.value = next;
@@ -564,13 +602,12 @@ async function renameSelected(): Promise<void> {
 
 async function saveActive(): Promise<void> {
   if (!selectedPath.value) return;
-  await desktop.writeVaultText(selectedPath.value, editorText.value);
-  savedText.value = editorText.value;
-  await refreshShellData();
+  await autosave.saveNow({ path: selectedPath.value, text: editorText.value });
 }
 
 async function deleteSelected(): Promise<void> {
   if (!selectedPath.value) return;
+  await flushPendingAutosave();
   const previous = selectedPath.value;
   const generalSettings = jsonRecord(settingValues.value['app:app.general']);
   if (
@@ -694,6 +731,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown);
   unsubscribeIndexUpdates?.();
   unsubscribeEditorSnapshot?.();
+  void flushPendingAutosave().catch((caught: unknown) => {
+    error.value = caught instanceof Error ? caught.message : String(caught);
+  });
 });
 </script>
 
@@ -800,14 +840,7 @@ onBeforeUnmount(() => {
     />
 
     <section class="editor" data-region="editor">
-      <p class="eyebrow">Markdown editor</p>
-      <h2>{{ editorHeading }} <span v-if="dirty" class="dirty">• unsaved</span></h2>
-      <div class="toolbar inline" aria-label="Selected file actions">
-        <button type="button" :disabled="!selectedPath || !dirty" @click="saveActive">Save</button>
-        <button type="button" :disabled="!selectedPath" @click="renameSelected">Rename</button>
-        <button type="button" :disabled="!selectedPath" @click="deleteSelected">Delete</button>
-      </div>
-      <MarkdownEditor v-if="selectedPath" :text="editorText" @change="(text) => { editorText = text; }" @save="saveActive" />
+      <MarkdownEditor v-if="selectedPath" :text="editorText" @change="updateEditorText" @save="saveActive" />
       <p v-else class="muted new-tab-empty">{{ editorEmptyText }}</p>
     </section>
 

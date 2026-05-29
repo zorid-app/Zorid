@@ -130,8 +130,18 @@ describe('desktop shell pane layout helpers', () => {
       'openTabs.value = openTabs.value.map((tab) => (tab.id === fileTabId(previous) ? fileTab(next) : tab))',
     );
     expect(app).toContain('await closeTab(fileTabId(previous))');
+    expect(app).toContain('createMarkdownAutosave');
+    expect(app).toContain('function updateEditorText(text: string): void');
+    expect(app).toContain('await flushPendingAutosave();');
     expect(app).toMatch(
-      /function createPlaceholderTab\(\): void \{[\s\S]*placeholderTabCounter\.value \+= 1;[\s\S]*activatePlaceholderTab\(tab\.id\);[\s\S]*\}/,
+      /async function activateFilePath\(path: string\): Promise<void> \{[\s\S]*clearFileSelection\(\);[\s\S]*const text = await desktop\.readVaultText\(path\);[\s\S]*selectedPath\.value = path;[\s\S]*editorText\.value = text;[\s\S]*\}/,
+    );
+    expect(app).not.toContain('<p class="eyebrow">Markdown editor</p>');
+    expect(app).not.toContain('Open a Markdown file');
+    expect(app).not.toContain('aria-label="Selected file actions"');
+    expect(app).not.toContain('dirty');
+    expect(app).toMatch(
+      /async function createPlaceholderTab\(\): Promise<void> \{[\s\S]*placeholderTabCounter\.value \+= 1;[\s\S]*await activatePlaceholderTab\(tab\.id\);[\s\S]*\}/,
     );
     expect(app).toMatch(
       /function clearFileSelection\(\): void \{[\s\S]*selectedPath\.value = undefined;[\s\S]*editorText\.value = '';[\s\S]*savedText\.value = '';[\s\S]*\}/,
@@ -150,6 +160,9 @@ describe('desktop shell pane layout helpers', () => {
     expect(styles).toContain('border-bottom: 0;');
     expect(styles).toContain('border-radius: var(--z-radius-md) 0 0 0;');
     expect(styles).toContain('.status-bar__item');
+    expect(styles).toMatch(/\.editor\s*\{[^}]*justify-content:\s*stretch;[^}]*padding:\s*0;[^}]*\}/s);
+    expect(styles).toMatch(/\.markdown-editor\s*\{[^}]*min-height:\s*0;[^}]*\}/s);
+    expect(styles).not.toMatch(/\.editor\s*\{[^}]*justify-content:\s*center;[^}]*\}/s);
     expect(styles).toMatch(/\.launcher-shell\s*\{[^}]*-webkit-app-region:\s*drag;[^}]*\}/s);
     expect(styles).toMatch(
       /\.launcher-shell\s+:is\([^)]*button[^)]*a[^)]*input[^)]*select[^)]*textarea[^)]*\[role='button'\][^)]*\[contenteditable='true'\][^)]*\)\s*\{[^}]*-webkit-app-region:\s*no-drag;[^}]*\}/s,

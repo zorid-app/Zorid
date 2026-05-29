@@ -231,12 +231,12 @@ select:focus-visible {
   grid-row: 2;
   min-width: 0;
   overflow: auto;
-  padding: 24px;
-  padding-bottom: 24px;
 }
 
 .sidebar {
   grid-column: 2;
+  padding: 24px;
+  padding-bottom: 24px;
   background: var(--z-sidebar-bg);
 }
 
@@ -251,7 +251,10 @@ select:focus-visible {
   display: flex;
   min-width: 420px;
   flex-direction: column;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: stretch;
+  overflow: hidden;
+  padding: 0;
   background: var(--z-editor-bg);
 }
 
@@ -442,19 +445,11 @@ h2 {
   color: var(--z-color-danger);
 }
 
-.dirty {
-  color: var(--z-color-warning);
-  font-size: 14px;
-  font-weight: 600;
-}
-
 .markdown-editor {
   flex: 1;
-  min-height: 360px;
+  min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--z-control-border-subtle);
-  border-radius: var(--z-radius-lg);
-  background: var(--z-color-surface);
+  background: var(--z-editor-bg);
 }
 
 .markdown-editor .cm-editor {
@@ -464,12 +459,12 @@ h2 {
 }
 
 .markdown-editor .cm-scroller {
-  min-height: 360px;
+  min-height: 100%;
   font-family: var(--z-font-mono);
 }
 
 .markdown-editor .cm-content {
-  padding: 18px;
+  padding: 32px;
 }
 
 .markdown-editor .cm-gutters {
