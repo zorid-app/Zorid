@@ -12,18 +12,29 @@ export function livePreviewSelectionRanges(state: LivePreviewContext['state']): 
   return state.selection.ranges.map((range) => ({ from: range.from, to: range.to }));
 }
 
+function livePreviewActivationRange(
+  range: Pick<LivePreviewRange, 'from' | 'to' | 'activationFrom' | 'activationTo'>,
+): Pick<LivePreviewRange, 'from' | 'to'> {
+  return {
+    from: range.activationFrom ?? range.from,
+    to: range.activationTo ?? range.to,
+  };
+}
+
 export function livePreviewRangeIntersectsSelection(
-  range: Pick<LivePreviewRange, 'from' | 'to'>,
+  range: Pick<LivePreviewRange, 'from' | 'to' | 'activationFrom' | 'activationTo'>,
   selectionRanges: readonly LivePreviewSelectionRange[],
 ): boolean {
+  const activationRange = livePreviewActivationRange(range);
   return selectionRanges.some((selection) => {
-    if (selection.from === selection.to) return selection.from >= range.from && selection.from <= range.to;
-    return selection.from < range.to && selection.to > range.from;
+    if (selection.from === selection.to)
+      return selection.from >= activationRange.from && selection.from <= activationRange.to;
+    return selection.from < activationRange.to && selection.to > activationRange.from;
   });
 }
 
 export function shouldRenderLivePreviewRange(
-  range: Pick<LivePreviewRange, 'from' | 'to'>,
+  range: Pick<LivePreviewRange, 'from' | 'to' | 'activationFrom' | 'activationTo'>,
   context: Pick<LivePreviewContext, 'focused' | 'selectionRanges'>,
 ): boolean {
   return !context.focused || !livePreviewRangeIntersectsSelection(range, context.selectionRanges);
@@ -71,15 +82,19 @@ function livePreviewDecorationsForView(view: EditorView, renderers: readonly Liv
     collectLivePreviewRanges(renderers, createLivePreviewContext(view.state, visibleRange, view.hasFocus)),
   );
   return Decoration.set(
-    ranges.map((range) =>
-      Decoration.mark({
+    ranges.map((range) => {
+      if (range.kind === 'replace') {
+        return Decoration.replace({}).range(range.from, range.to);
+      }
+
+      return Decoration.mark({
         class: range.className,
         attributes: {
           'data-live-preview-renderer': range.rendererId,
           ...range.attributes,
         },
-      }).range(range.from, range.to),
-    ),
+      }).range(range.from, range.to);
+    }),
     true,
   );
 }

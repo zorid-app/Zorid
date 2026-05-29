@@ -1,20 +1,20 @@
-Implement the approved RALPLAN plan for Live Preview Pass 1.5 from:
-- PRD: .omx/plans/prd-live-preview-pass-1-5-20260529T053819Z.md
-- Test spec: .omx/plans/test-spec-live-preview-pass-1-5-20260529T053819Z.md
-- Handoff: .omx/plans/ralplan-handoff-live-preview-pass-1-5-20260529T053819Z.json
+Implement the approved RALPLAN plan for Live Preview Pass 2 from:
+- PRD: .omx/plans/prd-live-preview-pass-2-20260529T061513Z.md
+- Test spec: .omx/plans/test-spec-live-preview-pass-2-20260529T061513Z.md
+- Handoff: .omx/plans/ralplan-handoff-live-preview-pass-2-20260529T061513Z.json
 
 Hard constraints:
-- Markdown source remains canonical; preview rendering must not mutate source except explicit source-backed commands.
-- Do not implement tables, properties/frontmatter visual editor, embeds, image resize, math rendering, callout widgets, Reading view parity, mobile/touch behavior, or stable public third-party renderer API.
-- Keep renderer APIs internal/experimental; do not add renderer registration to packages/platform-api.
-- Preserve desktop open/edit/save/autosave behavior and import-boundary rules.
+- Markdown source remains canonical; no rich-text document model.
+- All source mutations must go through CodeMirror transactions/history.
+- Keep renderer APIs internal/experimental; do not expose a public renderer API in packages/platform-api.
+- Do not implement tables, properties/frontmatter UI, embeds, images/PDFs, image resize, callout widgets, math rendering, Reading view parity, broad Lezer/parser migration, or mobile/touch-specific behavior.
 - Use CodeMirror contracts (extensions/decorations/transactions), not direct mutation of editor-managed content DOM.
+- Preserve desktop open/edit/save/autosave behavior and import-boundary rules.
 
 Goals:
-1. Split current Live Preview types/helpers/renderers/extension out of packages/editor/src/index.ts into internal packages/editor/src/live-preview modules while preserving current in-repo compatibility exports.
-2. Add scoped, theme-aware visible CSS for current z-live-preview-* classes under the desktop .markdown-editor scope, plus a lightweight static test/source assertion rejecting unscoped z-live-preview selectors.
-3. Harden matcher fixtures and active/inactive mounted behavior tests for headings, inline code, Markdown links, wiki links, tags, task markers, false positives, deterministic ordering, and source preservation.
-4. Decide and implement the task marker path: command-first source-backed checkbox toggle with undo/history tests if small; otherwise explicit styling-only deferral with tests. Do not introduce a broad widget/event subsystem.
-5. Verify current markdown() keymap behavior before adding anything; avoid duplicate custom keymaps unless tests demonstrate a concrete gap.
-6. Run targeted and broad verification: editor live-preview tests, editor package wiring, desktop autosave/vault editor regressions, @zorid/editor typecheck, import boundaries, repo typecheck, repo lint.
-7. Run the mandatory final cleanup and independent code-review gate; commit changed files with a plain descriptive commit message only after the final gate passes.
+1. Add internal task marker source helpers and a command-first source-backed checkbox toggle in @zorid/editor. Toggle current task lines between unchecked and checked via CodeMirror transactions; non-task lines no-op; click handling is deferred unless it stays tiny and fully tested.
+2. Add task toggle/source/history tests. Cover unchecked/checked toggles, uppercase checked policy, indented tasks, non-task no-ops, unrelated text preservation, mounted onChange behavior, undo/redo, source reveal around task markers, and silent external setText behavior.
+3. Verify Markdown list/task/blockquote keymap behavior before adding any custom input logic. Add mounted tests for current markdown() Enter/Backspace behavior; if behavior is sufficient, document no custom keymap was added. If not, use only official CodeMirror keymaps/extensions already in dependencies and test the gap.
+4. Add an internal replace-preview capability plus exactly one renderer slice: inactive inline-code backtick delimiter hiding. Use heading marker hiding only as documented fallback if inline-code delimiter tests prove brittle. Preserve source text and reveal raw source on focused selection intersection.
+5. Run targeted and broad verification: new editor tests, existing live-preview/package-wiring/style tests, desktop autosave/vault editor tests, @zorid/editor typecheck, import boundaries, repo typecheck, and repo lint.
+6. Run the mandatory final cleanup and independent code-review gate; resolve any blockers; commit changed files with a plain descriptive commit message after the final gate passes.

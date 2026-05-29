@@ -1,3 +1,4 @@
+import { markdownSuppressedCodeRanges } from './markdown-code-context.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
 
 const inlineCodePattern = /`[^`\n]+`/g;
@@ -26,6 +27,35 @@ function inlineCodeRanges(
   });
 }
 
+function inlineCodeDelimiterRanges(
+  docText: string,
+  scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
+): LivePreviewRange[] {
+  const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
+  return inlineCodeRanges(docText, scanWindow)
+    .filter((range) => !suppressedRanges.some((container) => isInsideRange(range, container)))
+    .flatMap((range) => [
+      {
+        rendererId: 'inline-code-delimiter',
+        from: range.from,
+        to: range.from + 1,
+        activationFrom: range.from,
+        activationTo: range.to,
+        className: 'z-live-preview-inline-code-delimiter',
+        kind: 'replace' as const,
+      },
+      {
+        rendererId: 'inline-code-delimiter',
+        from: range.to - 1,
+        to: range.to,
+        activationFrom: range.from,
+        activationTo: range.to,
+        className: 'z-live-preview-inline-code-delimiter',
+        kind: 'replace' as const,
+      },
+    ]);
+}
+
 function isInsideRange(
   range: Pick<LivePreviewRange, 'from' | 'to'>,
   container: Pick<LivePreviewRange, 'from' | 'to'>,
@@ -47,6 +77,7 @@ function regexLivePreviewRenderer(
       const scanWindow = livePreviewScanWindow(docText, visibleFrom, visibleTo);
       const scanText = docText.slice(scanWindow.from, scanWindow.to);
       const excludedInlineCodeRanges = id === 'inline-code' ? [] : inlineCodeRanges(docText, scanWindow);
+      const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
       for (const match of scanText.matchAll(matcher)) {
         const index = match.index;
         if (index === undefined) continue;
@@ -54,6 +85,7 @@ function regexLivePreviewRenderer(
         const from = scanWindow.from + index + fromOffset;
         const to = scanWindow.from + index + toOffset;
         if (excludedInlineCodeRanges.some((container) => isInsideRange({ from, to }, container))) continue;
+        if (suppressedRanges.some((container) => isInsideRange({ from, to }, container))) continue;
         if (to > from) ranges.push({ rendererId: id, from, to, className });
       }
       return ranges;
@@ -74,6 +106,12 @@ export const inlineCodeLivePreviewRenderer: LivePreviewRenderer = regexLivePrevi
   inlineCodePattern,
   (match) => ({ fromOffset: 0, toOffset: match[0].length }),
 );
+
+export const inlineCodeDelimiterLivePreviewRenderer: LivePreviewRenderer = {
+  id: 'inline-code-delimiter',
+  match: ({ docText, visibleFrom, visibleTo }) =>
+    inlineCodeDelimiterRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+};
 
 export const markdownLinkLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
   'markdown-link',
@@ -102,13 +140,14 @@ export const tagLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRende
 export const taskMarkerLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
   'task-marker',
   'z-live-preview-task-marker',
-  /^(\s*[-*+]\s+\[[ xX]\])/gm,
+  /^(\s{0,3}[-*+]\s+\[[ xX]\])/gm,
   (match) => ({ fromOffset: 0, toOffset: match[1]?.length ?? match[0].length }),
 );
 
 export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
   headingLivePreviewRenderer,
   inlineCodeLivePreviewRenderer,
+  inlineCodeDelimiterLivePreviewRenderer,
   markdownLinkLivePreviewRenderer,
   wikiLinkLivePreviewRenderer,
   tagLivePreviewRenderer,

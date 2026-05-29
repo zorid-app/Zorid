@@ -1,3 +1,4 @@
+import { history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorState, type Extension } from '@codemirror/state';
 import { EditorView, keymap, type ViewUpdate } from '@codemirror/view';
@@ -19,25 +20,32 @@ import { defaultLivePreviewRenderers, type LivePreviewRenderer, livePreviewExten
 // without a dedicated API review.
 export type {
   LivePreviewContext,
+  LivePreviewDecorationKind,
   LivePreviewRange,
   LivePreviewRenderer,
   LivePreviewSelectionRange,
   LivePreviewVisibleRange,
+  TaskMarkerRange,
 } from './live-preview/index.js';
 export {
   collectLivePreviewRanges,
   createLivePreviewContext,
   defaultLivePreviewRenderers,
   filterLivePreviewRanges,
+  findTaskMarkerAtPosition,
   headingLivePreviewRenderer,
+  inlineCodeDelimiterLivePreviewRenderer,
   inlineCodeLivePreviewRenderer,
   livePreviewExtension,
   livePreviewRangeIntersectsSelection,
   livePreviewSelectionRanges,
   markdownLinkLivePreviewRenderer,
+  nextTaskMarkerCheckbox,
   shouldRenderLivePreviewRange,
   tagLivePreviewRenderer,
   taskMarkerLivePreviewRenderer,
+  toggleTaskMarkerAtPosition,
+  toggleTaskMarkerAtSelection,
   wikiLinkLivePreviewRenderer,
 } from './live-preview/index.js';
 
@@ -115,7 +123,7 @@ export function createMarkdownEditorExtensions({
   // `markdown()` keeps @codemirror/lang-markdown's default keymap enabled,
   // including Enter/Backspace Markdown continuation behavior. Do not add a
   // duplicate custom keymap unless tests prove a concrete gap.
-  const extensions: Extension[] = [markdown(), ...composed.extensions];
+  const extensions: Extension[] = [markdown(), history(), keymap.of(historyKeymap), ...composed.extensions];
   if (livePreviewRenderers !== false) {
     extensions.push(livePreviewExtension(livePreviewRenderers));
   }

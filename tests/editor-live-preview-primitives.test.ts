@@ -62,12 +62,12 @@ describe('editor Live Preview primitives', () => {
     const inactiveContext = createLivePreviewContext(state, { from: 0, to: doc.length }, false);
     expect(
       collectLivePreviewRanges(defaultLivePreviewRenderers, inactiveContext).map((range) => range.rendererId),
-    ).toEqual(['heading', 'inline-code']);
+    ).toEqual(['heading', 'inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
 
     const focusedContext = createLivePreviewContext(state, { from: 0, to: doc.length }, true);
     expect(
       collectLivePreviewRanges(defaultLivePreviewRenderers, focusedContext).map((range) => range.rendererId),
-    ).toEqual(['inline-code']);
+    ).toEqual(['inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
   });
 
   it('adds decorations without changing source text', () => {
@@ -91,6 +91,10 @@ describe('editor Live Preview primitives', () => {
       'Use `code` with [link](target.md), [[Wiki Link]], and #tag/sub.',
       '- [x] completed task',
       '| table | stays plain |',
+      '```',
+      '- [ ] fenced code sample stays plain',
+      '```',
+      '    - [ ] indented code sample stays plain',
     ].join('\n');
     const state = EditorState.create({ doc });
     const context = createLivePreviewContext(state, { from: 0, to: doc.length });
@@ -98,7 +102,16 @@ describe('editor Live Preview primitives', () => {
     const ranges = collectLivePreviewRanges(defaultLivePreviewRenderers, context);
     const rendererIds = ranges.map((range) => range.rendererId);
 
-    expect(rendererIds).toEqual(['heading', 'inline-code', 'markdown-link', 'wiki-link', 'tag', 'task-marker']);
+    expect(rendererIds).toEqual([
+      'heading',
+      'inline-code-delimiter',
+      'inline-code',
+      'inline-code-delimiter',
+      'markdown-link',
+      'wiki-link',
+      'tag',
+      'task-marker',
+    ]);
     expect(
       doc.slice(
         ranges.find((range) => range.rendererId === 'tag')?.from,
@@ -106,6 +119,22 @@ describe('editor Live Preview primitives', () => {
       ),
     ).toBe('#tag/sub');
     expect(rendererIds).not.toContain('table');
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).not.toContain('- [ ]');
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).not.toContain('    - [ ]');
+  });
+
+  it('keeps fenced-code task markers plain when the visible range starts inside the fence', () => {
+    const doc = ['intro', '```', '- [ ] fenced code sample stays plain', '```', '- [ ] real task'].join('\n');
+    const visibleFrom = doc.indexOf('fenced code sample');
+    const visibleTo = doc.indexOf('```', doc.indexOf('fenced code sample'));
+    const state = EditorState.create({ doc });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(state, { from: visibleFrom, to: visibleTo }),
+    );
+
+    expect(ranges.map((range) => range.rendererId)).not.toContain('task-marker');
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).not.toContain('- [ ]');
   });
 
   it('keeps matcher ranges deterministic and avoids simple inline-code false positives', () => {
@@ -124,7 +153,9 @@ describe('editor Live Preview primitives', () => {
 
     expect(ranges.map((range) => range.rendererId)).toEqual([
       'heading',
+      'inline-code-delimiter',
       'inline-code',
+      'inline-code-delimiter',
       'markdown-link',
       'wiki-link',
       'tag',
@@ -132,7 +163,9 @@ describe('editor Live Preview primitives', () => {
     ]);
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual([
       '# Heading',
+      '`',
       '`#not-a-tag [not](link.md) [[Nope]]`',
+      '`',
       '[link](target.md)',
       '[[Note|Alias]]',
       '#tag/sub',
@@ -164,7 +197,7 @@ describe('editor Live Preview primitives', () => {
     parent.remove();
   });
 
-  it('keeps task markers styling-only until a source-backed toggle command is added', () => {
+  it('keeps task marker preview source-preserving and styling-only', () => {
     const doc = '- [ ] pending task';
     const state = EditorState.create({ doc });
     const ranges = collectLivePreviewRanges(
@@ -195,6 +228,29 @@ describe('editor Live Preview primitives', () => {
     expect(editor.getText()).toBe('# Heading\n\nSee [[Note]] and #tag.');
 
     editor.destroy();
+  });
+
+  it('hides inactive inline-code delimiters but reveals them when the code span is active', () => {
+    const doc = 'Use `code` here';
+    const inactiveState = EditorState.create({ doc, selection: { anchor: 0 } });
+    const inactiveRanges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(inactiveState, { from: 0, to: doc.length }, true),
+    );
+    expect(inactiveRanges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['inline-code-delimiter', '`', 'replace'],
+      ['inline-code', '`code`', undefined],
+      ['inline-code-delimiter', '`', 'replace'],
+    ]);
+    expect(inactiveState.doc.toString()).toBe(doc);
+
+    const activeState = EditorState.create({ doc, selection: { anchor: doc.indexOf('code') } });
+    const activeRanges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(activeState, { from: 0, to: doc.length }, true),
+    );
+    expect(activeRanges.map((range) => range.rendererId)).toEqual([]);
+    expect(activeState.doc.toString()).toBe(doc);
   });
 
   it('keeps save shortcut wiring inside the mounted editor factory', () => {

@@ -19,12 +19,17 @@ export interface LivePreviewContext {
   readonly selectionRanges: readonly LivePreviewSelectionRange[];
 }
 
+export type LivePreviewDecorationKind = 'mark' | 'replace';
+
 export interface LivePreviewRange {
   readonly rendererId: string;
   readonly from: number;
   readonly to: number;
   readonly className: string;
   readonly attributes?: Readonly<Record<string, string>>;
+  readonly kind?: LivePreviewDecorationKind;
+  readonly activationFrom?: number;
+  readonly activationTo?: number;
 }
 
 /**

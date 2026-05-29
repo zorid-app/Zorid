@@ -7,17 +7,33 @@ export {
   livePreviewSelectionRanges,
   shouldRenderLivePreviewRange,
 } from './extension.js';
+export type { MarkdownCodeRange } from './markdown-code-context.js';
+export {
+  isMarkdownLineInsideFencedCodeBlock,
+  markdownFencedCodeRanges,
+  markdownIndentedCodeRanges,
+  markdownSuppressedCodeRanges,
+} from './markdown-code-context.js';
 export {
   defaultLivePreviewRenderers,
   headingLivePreviewRenderer,
+  inlineCodeDelimiterLivePreviewRenderer,
   inlineCodeLivePreviewRenderer,
   markdownLinkLivePreviewRenderer,
   tagLivePreviewRenderer,
   taskMarkerLivePreviewRenderer,
   wikiLinkLivePreviewRenderer,
 } from './renderers.js';
+export type { TaskMarkerRange } from './task-toggle.js';
+export {
+  findTaskMarkerAtPosition,
+  nextTaskMarkerCheckbox,
+  toggleTaskMarkerAtPosition,
+  toggleTaskMarkerAtSelection,
+} from './task-toggle.js';
 export type {
   LivePreviewContext,
+  LivePreviewDecorationKind,
   LivePreviewRange,
   LivePreviewRenderer,
   LivePreviewSelectionRange,
