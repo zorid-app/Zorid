@@ -5,6 +5,7 @@ import {
   setInternalLivePreviewFocused,
 } from './internal-types.js';
 import { markdownCompleteFencedCodeBlockRanges, markdownSuppressedCodeRanges } from './markdown-code-context.js';
+import { toggleTaskMarkerAtPosition } from './task-toggle.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
 
 const inlineCodePattern = /`[^`\n]+`/g;
@@ -138,6 +139,47 @@ class CodeBlockPreviewWidget extends WidgetType {
     });
 
     return wrapper;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return event.type === 'mousedown';
+  }
+}
+
+class TaskCheckboxPreviewWidget extends WidgetType {
+  constructor(
+    readonly checked: boolean,
+    readonly activateAt: number,
+  ) {
+    super();
+  }
+
+  eq(other: TaskCheckboxPreviewWidget): boolean {
+    return this.checked === other.checked && this.activateAt === other.activateAt;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const checkbox = document.createElement('span');
+    checkbox.className = this.checked
+      ? 'z-live-preview-task-checkbox z-live-preview-task-checkbox--checked'
+      : 'z-live-preview-task-checkbox';
+    checkbox.dataset.livePreviewRenderer = 'task-marker';
+    checkbox.setAttribute('role', 'checkbox');
+    checkbox.setAttribute('aria-checked', this.checked ? 'true' : 'false');
+    checkbox.textContent = this.checked ? '✓' : '';
+
+    checkbox.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      view.focus();
+      view.dispatch({
+        effects: setInternalLivePreviewFocused.of(true),
+        selection: { anchor: this.activateAt },
+        scrollIntoView: true,
+      });
+      toggleTaskMarkerAtPosition(view, this.activateAt);
+    });
+
+    return checkbox;
   }
 
   ignoreEvent(event: Event): boolean {
@@ -347,12 +389,42 @@ export const tagLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRende
   },
 );
 
-export const taskMarkerLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'task-marker',
-  'z-live-preview-task-marker',
-  /^(\s{0,3}[-*+]\s+\[[ xX]\])/gm,
-  (match) => ({ fromOffset: 0, toOffset: match[1]?.length ?? match[0].length }),
-);
+export const taskMarkerLivePreviewRenderer: InternalLivePreviewRenderer = {
+  id: 'task-marker',
+  match: ({ docText, visibleFrom, visibleTo }) => {
+    const ranges: InternalLivePreviewRange[] = [];
+    const scanWindow = livePreviewScanWindow(docText, visibleFrom, visibleTo);
+    const scanText = docText.slice(scanWindow.from, scanWindow.to);
+    const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
+    const pattern = /^(\s{0,3}[-*+]\s+\[)([ xX])(\])/gm;
+
+    for (const match of scanText.matchAll(pattern)) {
+      const index = match.index;
+      if (index === undefined) continue;
+      const marker = match[0];
+      const prefix = match[1] ?? '';
+      const checkbox = match[2] ?? ' ';
+      const from = scanWindow.from + index;
+      const to = from + marker.length;
+      if (suppressedRanges.some((container) => isInsideRange({ from, to }, container))) continue;
+
+      const checked = checkbox === 'x' || checkbox === 'X';
+      const checkboxFrom = from + prefix.length;
+      ranges.push({
+        rendererId: 'task-marker',
+        from,
+        to,
+        activationFrom: from,
+        activationTo: to,
+        className: 'z-live-preview-task-checkbox',
+        kind: 'replace',
+        widget: new TaskCheckboxPreviewWidget(checked, checkboxFrom),
+      });
+    }
+
+    return ranges;
+  },
+};
 
 const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
   id: 'blockquote',
@@ -380,7 +452,7 @@ export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
   markdownLinkLivePreviewRenderer,
   wikiLinkLivePreviewRenderer,
   tagLivePreviewRenderer,
-  taskMarkerLivePreviewRenderer,
+  taskMarkerLivePreviewRenderer as LivePreviewRenderer,
 ];
 
 export const defaultLivePreviewWidgetRenderers: readonly InternalLivePreviewRenderer[] = [

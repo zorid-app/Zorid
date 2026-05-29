@@ -197,7 +197,7 @@ describe('editor Live Preview primitives', () => {
     parent.remove();
   });
 
-  it('keeps task marker preview source-preserving and styling-only', () => {
+  it('keeps task marker preview source-preserving as a visual checkbox projection', () => {
     const doc = '- [ ] pending task';
     const state = EditorState.create({ doc });
     const ranges = collectLivePreviewRanges(
@@ -205,12 +205,15 @@ describe('editor Live Preview primitives', () => {
       createLivePreviewContext(state, { from: 0, to: doc.length }),
     );
 
-    expect(ranges).toContainEqual({
-      rendererId: 'task-marker',
-      from: 0,
-      to: 5,
-      className: 'z-live-preview-task-marker',
-    });
+    expect(ranges).toContainEqual(
+      expect.objectContaining({
+        rendererId: 'task-marker',
+        from: 0,
+        to: 5,
+        className: 'z-live-preview-task-checkbox',
+        kind: 'replace',
+      }),
+    );
     expect(state.doc.toString()).toBe(doc);
     expect(ranges.find((range) => range.rendererId === 'task-marker')?.attributes).toBeUndefined();
   });

@@ -8,6 +8,8 @@ const livePreviewClasses = [
   'z-live-preview-wiki-link',
   'z-live-preview-tag',
   'z-live-preview-task-marker',
+  'z-live-preview-task-checkbox',
+  'z-live-preview-task-checkbox--checked',
   'z-live-preview-blockquote-line',
   'z-live-preview-code-block-widget',
   'z-live-preview-code-block-widget__header',

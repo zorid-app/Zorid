@@ -567,6 +567,30 @@ h2 {
   font-weight: 700;
 }
 
+.markdown-editor .z-live-preview-task-checkbox {
+  display: inline-grid;
+  place-items: center;
+  width: 0.95em;
+  height: 0.95em;
+  margin-right: 0.35em;
+  color: var(--z-control-bg-strong);
+  background: color-mix(in srgb, var(--z-control-bg-strong) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--z-color-border) 82%, transparent);
+  border-radius: var(--z-radius-sm);
+  font-family: var(--z-font-ui);
+  font-size: 0.72em;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: -0.08em;
+  cursor: pointer;
+}
+
+.markdown-editor .z-live-preview-task-checkbox--checked {
+  color: var(--z-control-bg-strong);
+  background: var(--z-color-accent);
+  border-color: color-mix(in srgb, var(--z-color-accent) 86%, var(--z-color-border));
+}
+
 .markdown-editor .z-live-preview-blockquote-line {
   color: var(--z-color-text);
   background: color-mix(in srgb, var(--z-control-bg-strong) 42%, transparent);

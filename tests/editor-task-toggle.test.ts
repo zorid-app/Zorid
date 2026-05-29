@@ -113,6 +113,104 @@ describe('editor task marker toggle', () => {
     editor.destroy();
   });
 
+  it('mounts visual task checkboxes without changing Markdown source', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['- [ ] pending', '- [x] done', '- [X] loud'].join('\n');
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    const checkboxes = [...parent.querySelectorAll<HTMLElement>('.z-live-preview-task-checkbox')];
+
+    expect(checkboxes).toHaveLength(3);
+    expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-checked'))).toEqual(['false', 'true', 'true']);
+    expect(checkboxes.map((checkbox) => checkbox.textContent)).toEqual(['', '✓', '✓']);
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('reveals task marker source while focused selection intersects the checkbox marker', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = '- [ ] pending';
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeTruthy();
+    editor.focus();
+
+    for (const position of [0, 3, 5]) {
+      editor.view.dispatch({ selection: { anchor: position } });
+      expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeNull();
+      expect(editor.getText()).toBe(text);
+    }
+
+    editor.view.dispatch({ selection: { anchor: text.indexOf('pending') } });
+    expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeTruthy();
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('toggles mounted visual task checkboxes through undoable source transactions', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const userEvents: Array<string | undefined> = [];
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: '- [ ] pending',
+      onChange: (_text, update) => {
+        userEvents.push(update.transactions.at(-1)?.annotation(Transaction.userEvent));
+      },
+    });
+
+    const checkbox = parent.querySelector<HTMLElement>('.z-live-preview-task-checkbox');
+    expect(checkbox).toBeTruthy();
+
+    checkbox?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+
+    expect(editor.getText()).toBe('- [x] pending');
+    expect(editor.view.state.selection.main.head).toBe(3);
+    expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeNull();
+    expect(userEvents).toEqual(['input.task.toggle']);
+    expect(undoDepth(editor.view.state)).toBe(1);
+
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.getText()).toBe('- [ ] pending');
+    expect(redoDepth(editor.view.state)).toBe(1);
+
+    expect(redo(editor.view)).toBe(true);
+    expect(editor.getText()).toBe('- [x] pending');
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('does not mount visual task checkboxes for non-task, table, fenced-code, or indented-code samples', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = [
+      '- item',
+      '| - [ ] table |',
+      '[ ] loose',
+      '```',
+      '- [ ] fenced code sample',
+      '```',
+      '    - [ ] indented code sample',
+      '- [ ] real task',
+    ].join('\n');
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    const checkboxes = [...parent.querySelectorAll<HTMLElement>('.z-live-preview-task-checkbox')];
+
+    expect(checkboxes).toHaveLength(1);
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
+  });
+
   it('records toggle transactions in official undo and redo history', () => {
     const parent = document.createElement('div');
     const transactions: Transaction[] = [];

@@ -191,7 +191,12 @@ function livePreviewDecorationsForView(
       }
 
       if (range.kind === 'replace') {
-        return [Decoration.replace({}).range(range.from, range.to)];
+        return [
+          (range.widget ? Decoration.replace({ widget: range.widget }) : Decoration.replace({})).range(
+            range.from,
+            range.to,
+          ),
+        ];
       }
 
       return [
