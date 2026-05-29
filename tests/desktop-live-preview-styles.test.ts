@@ -13,6 +13,17 @@ const livePreviewClasses = [
 ];
 
 describe('desktop Live Preview styles', () => {
+  it('keeps the CodeMirror cursor visible on themed editor surfaces', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(/\.markdown-editor\s+\.cm-content\s*\{[^}]*caret-color:\s*var\(--z-color-accent\);[^}]*\}/s);
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.cm-cursor\s*\{[^}]*border-left-color:\s*var\(--z-color-accent\);[^}]*\}/s,
+    );
+    expect(styles).toContain('.markdown-editor .cm-selectionBackground');
+    expect(styles).toContain('.markdown-editor .cm-content ::selection');
+  });
+
   it('scopes all live-preview selectors to the markdown editor', async () => {
     const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
 

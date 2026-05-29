@@ -472,6 +472,17 @@ h2 {
 
 .markdown-editor .cm-content {
   padding: 32px;
+  caret-color: var(--z-color-accent);
+}
+
+/* Desktop owns host-level CodeMirror surface theming inside the Markdown editor. */
+.markdown-editor .cm-cursor {
+  border-left-color: var(--z-color-accent);
+}
+
+.markdown-editor .cm-selectionBackground,
+.markdown-editor .cm-content ::selection {
+  background: var(--z-selected-bg);
 }
 
 .markdown-editor .cm-gutters {
