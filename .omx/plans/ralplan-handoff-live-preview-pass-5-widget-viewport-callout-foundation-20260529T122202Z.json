@@ -1,0 +1,37 @@
+{
+  "task": "Live Preview Pass 5: Widget Viewport + Callout Foundation",
+  "created_at": "2026-05-29T12:22:02Z",
+  "updated_at": "2026-05-29T12:22:02Z",
+  "status": "consensus_approved",
+  "mode": "ralplan_consensus",
+  "planning_artifacts": {
+    "context_snapshot": ".omx/context/live-preview-pass-5-widget-viewport-callout-foundation-20260529T122202Z.md",
+    "prd": ".omx/plans/prd-live-preview-pass-5-widget-viewport-callout-foundation-20260529T122202Z.md",
+    "test_spec": ".omx/plans/test-spec-live-preview-pass-5-widget-viewport-callout-foundation-20260529T122202Z.md"
+  },
+  "ralplan_architect_review": {
+    "path": ".omx/plans/architect-review-live-preview-pass-5-widget-viewport-callout-foundation-20260529T122202Z.md",
+    "verdict": "APPROVE",
+    "order": 1,
+    "iterations": 2,
+    "summary": "Architect approved after revision separated bounded emitted ranges from bounded scanner work/input windows, added private suppression/ordering seam requirements, and froze callout grouping fixtures."
+  },
+  "ralplan_critic_review": {
+    "path": ".omx/plans/critic-review-live-preview-pass-5-widget-viewport-callout-foundation-20260529T122202Z.md",
+    "verdict": "APPROVE",
+    "order": 2,
+    "summary": "Critic approved principle-option consistency, fair alternatives, risk mitigation clarity, testable acceptance criteria, concrete verification steps, scope control, and application of Architect feedback."
+  },
+  "ralplan_consensus_gate": {
+    "complete": true,
+    "required_order": ["architect", "critic"],
+    "actual_order": ["architect", "critic"],
+    "approved": true
+  },
+  "recommended_follow_up": {
+    "default": "$ultragoal",
+    "parallel": "$team + $ultragoal",
+    "fallback": "$ralph only if explicitly selected for single-owner persistent verification"
+  },
+  "implementation_stop_condition": "Complete Phase 5A viewport/scanner boundedness first; defer callouts if Phase 5A requires broad architecture/parser work."
+}
