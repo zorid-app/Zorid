@@ -1,0 +1,46 @@
+{
+  "task_slug": "live-preview-first-pass",
+  "task": "Plan the first implementation pass for Zorid Obsidian-style Live Preview items 1-4: editor boundary, Live Preview core, MVP renderers, and Markdown dialect foundation.",
+  "created_at_utc": "2026-05-29T04:10:49Z",
+  "planning_artifacts": {
+    "context": ".omx/context/live-preview-first-pass-20260529T041049Z.md",
+    "prd": ".omx/plans/prd-live-preview-first-pass-20260529T041049Z.md",
+    "test_spec": ".omx/plans/test-spec-live-preview-first-pass-20260529T041049Z.md"
+  },
+  "ralplan_architect_review": {
+    "path": ".omx/plans/architect-review-live-preview-first-pass-20260529T041049Z.md",
+    "verdict": "APPROVE",
+    "order": 1
+  },
+  "ralplan_critic_review": {
+    "path": ".omx/plans/critic-review-live-preview-first-pass-20260529T041049Z.md",
+    "verdict": "APPROVE",
+    "order": 2
+  },
+  "ralplan_consensus_gate": {
+    "complete": true,
+    "required_order": "Architect -> Critic",
+    "verified_order": ["Architect", "Critic"]
+  },
+  "recommended_follow_up": {
+    "default": "$ultragoal",
+    "parallel": "$team + $ultragoal",
+    "ralph_fallback": "Use only if explicitly requested for persistent single-owner verification."
+  },
+  "scope_guardrails": {
+    "included": [
+      "editor ownership/boundary",
+      "Live Preview core primitives",
+      "MVP low-risk renderers",
+      "Markdown dialect matcher foundation"
+    ],
+    "excluded": [
+      "tables",
+      "Properties/frontmatter visual editor",
+      "embeds",
+      "callouts",
+      "Reading view parity",
+      "public third-party renderer API stability"
+    ]
+  }
+}
