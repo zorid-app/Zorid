@@ -21,7 +21,6 @@ export {
   inlineCodeLivePreviewRenderer,
   markdownLinkLivePreviewRenderer,
   tagLivePreviewRenderer,
-  taskMarkerLivePreviewRenderer,
   wikiLinkLivePreviewRenderer,
 } from './renderers.js';
 export type { TaskMarkerRange } from './task-toggle.js';

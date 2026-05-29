@@ -2,18 +2,22 @@
 
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
+import { createMountedMarkdownEditor, defaultLivePreviewRenderers } from '../packages/editor/src/index';
+import { collectLivePreviewRangesWithWidgetSuppression } from '../packages/editor/src/live-preview/extension';
 import {
-  collectLivePreviewRanges,
-  createLivePreviewContext,
-  createMountedMarkdownEditor,
-  defaultLivePreviewRenderers,
-} from '../packages/editor/src/index';
+  defaultLivePreviewInternalRenderers,
+  defaultLivePreviewWidgetRenderers,
+} from '../packages/editor/src/live-preview/renderers';
 
 function collectRanges(doc: string, selection = 0, focused = false) {
   const state = EditorState.create({ doc, selection: { anchor: selection } });
-  return collectLivePreviewRanges(
+  return collectLivePreviewRangesWithWidgetSuppression(
     defaultLivePreviewRenderers,
-    createLivePreviewContext(state, { from: 0, to: doc.length }, focused),
+    defaultLivePreviewInternalRenderers,
+    defaultLivePreviewWidgetRenderers,
+    state,
+    [{ from: 0, to: doc.length }],
+    focused,
   );
 }
 

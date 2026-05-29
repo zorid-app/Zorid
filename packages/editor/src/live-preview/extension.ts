@@ -140,6 +140,7 @@ function livePreviewRangeIsInsideAnyWidget(
 
 export function collectLivePreviewRangesWithWidgetSuppression(
   renderers: readonly LivePreviewRenderer[],
+  internalRenderers: readonly InternalLivePreviewRenderer[],
   widgetRenderers: readonly InternalLivePreviewRenderer[],
   state: LivePreviewContext['state'],
   visibleRanges: readonly LivePreviewVisibleRange[],
@@ -154,10 +155,13 @@ export function collectLivePreviewRangesWithWidgetSuppression(
   const publicRanges = visibleRanges.flatMap((visibleRange) =>
     collectLivePreviewRanges(renderers, createLivePreviewContext(state, visibleRange, focused)),
   );
+  const internalRanges = visibleRanges.flatMap((visibleRange) =>
+    collectInternalLivePreviewRanges(internalRenderers, createLivePreviewContext(state, visibleRange, focused)),
+  );
 
   return [
     ...widgetRanges,
-    ...publicRanges.filter((range) => !livePreviewRangeIsInsideAnyWidget(range, widgetRanges)),
+    ...[...publicRanges, ...internalRanges].filter((range) => !livePreviewRangeIsInsideAnyWidget(range, widgetRanges)),
   ].sort(
     (left, right) => left.from - right.from || left.to - right.to || left.rendererId.localeCompare(right.rendererId),
   );
@@ -166,10 +170,12 @@ export function collectLivePreviewRangesWithWidgetSuppression(
 function livePreviewDecorationsForView(
   view: EditorView,
   renderers: readonly LivePreviewRenderer[],
+  internalRenderers: readonly InternalLivePreviewRenderer[],
   widgetRenderers: readonly InternalLivePreviewRenderer[],
 ): DecorationSet {
   const ranges: InternalLivePreviewRange[] = collectLivePreviewRangesWithWidgetSuppression(
     renderers,
+    internalRenderers,
     widgetRenderers,
     view.state,
     view.visibleRanges,
@@ -326,11 +332,19 @@ function livePreviewWidgetVisibleRangeUpdater(): Extension {
 }
 
 export function livePreviewExtension(renderers: readonly LivePreviewRenderer[]): Extension {
-  return livePreviewExtensionWithWidgets(renderers, []);
+  return livePreviewExtensionWithInternalRenderers(renderers, [], []);
 }
 
 export function livePreviewExtensionWithWidgets(
   renderers: readonly LivePreviewRenderer[],
+  widgetRenderers: readonly InternalLivePreviewRenderer[],
+): Extension {
+  return livePreviewExtensionWithInternalRenderers(renderers, [], widgetRenderers);
+}
+
+export function livePreviewExtensionWithInternalRenderers(
+  renderers: readonly LivePreviewRenderer[],
+  internalRenderers: readonly InternalLivePreviewRenderer[],
   widgetRenderers: readonly InternalLivePreviewRenderer[],
 ): Extension {
   return [
@@ -342,12 +356,17 @@ export function livePreviewExtensionWithWidgets(
         decorations: DecorationSet;
 
         constructor(view: EditorView) {
-          this.decorations = livePreviewDecorationsForView(view, renderers, widgetRenderers);
+          this.decorations = livePreviewDecorationsForView(view, renderers, internalRenderers, widgetRenderers);
         }
 
         update(update: ViewUpdate): void {
           if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged) {
-            this.decorations = livePreviewDecorationsForView(update.view, renderers, widgetRenderers);
+            this.decorations = livePreviewDecorationsForView(
+              update.view,
+              renderers,
+              internalRenderers,
+              widgetRenderers,
+            );
           }
         }
       },

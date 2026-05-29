@@ -4,7 +4,6 @@ import { redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { EditorState, Transaction } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 import {
-  collectLivePreviewRanges,
   createLivePreviewContext,
   createMountedMarkdownEditor,
   defaultLivePreviewRenderers,
@@ -12,6 +11,11 @@ import {
   nextTaskMarkerCheckbox,
   toggleTaskMarkerAtSelection,
 } from '../packages/editor/src/index';
+import { collectLivePreviewRangesWithWidgetSuppression } from '../packages/editor/src/live-preview/extension';
+import {
+  defaultLivePreviewInternalRenderers,
+  defaultLivePreviewWidgetRenderers,
+} from '../packages/editor/src/live-preview/renderers';
 
 describe('editor task marker toggle', () => {
   it('finds task marker ranges without including unrelated line text', () => {
@@ -242,16 +246,24 @@ describe('editor task marker toggle', () => {
   it('keeps task preview source-preserving and reveals the active marker while focused', () => {
     const doc = '- [ ] task\n\n`code`';
     const inactiveState = EditorState.create({ doc, selection: { anchor: 2 } });
-    const inactiveRanges = collectLivePreviewRanges(
+    const inactiveRanges = collectLivePreviewRangesWithWidgetSuppression(
       defaultLivePreviewRenderers,
-      createLivePreviewContext(inactiveState, { from: 0, to: doc.length }, false),
+      defaultLivePreviewInternalRenderers,
+      defaultLivePreviewWidgetRenderers,
+      inactiveState,
+      [{ from: 0, to: doc.length }],
+      false,
     );
     expect(inactiveRanges.find((range) => range.rendererId === 'task-marker')).toMatchObject({ from: 0, to: 5 });
     expect(inactiveState.doc.toString()).toBe(doc);
 
-    const focusedRanges = collectLivePreviewRanges(
+    const focusedRanges = collectLivePreviewRangesWithWidgetSuppression(
       defaultLivePreviewRenderers,
-      createLivePreviewContext(inactiveState, { from: 0, to: doc.length }, true),
+      defaultLivePreviewInternalRenderers,
+      defaultLivePreviewWidgetRenderers,
+      inactiveState,
+      [{ from: 0, to: doc.length }],
+      true,
     );
     expect(focusedRanges.map((range) => range.rendererId)).toEqual([
       'inline-code-delimiter',

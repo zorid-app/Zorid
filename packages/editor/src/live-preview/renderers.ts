@@ -445,14 +445,17 @@ const calloutWidgetLivePreviewRenderer: InternalLivePreviewRenderer = {
 };
 
 export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
-  blockquoteLivePreviewRenderer as LivePreviewRenderer,
   headingLivePreviewRenderer,
   inlineCodeLivePreviewRenderer,
   inlineCodeDelimiterLivePreviewRenderer,
   markdownLinkLivePreviewRenderer,
   wikiLinkLivePreviewRenderer,
   tagLivePreviewRenderer,
-  taskMarkerLivePreviewRenderer as LivePreviewRenderer,
+];
+
+export const defaultLivePreviewInternalRenderers: readonly InternalLivePreviewRenderer[] = [
+  blockquoteLivePreviewRenderer,
+  taskMarkerLivePreviewRenderer,
 ];
 
 export const defaultLivePreviewWidgetRenderers: readonly InternalLivePreviewRenderer[] = [

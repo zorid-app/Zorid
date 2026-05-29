@@ -10,12 +10,18 @@ import {
   defaultLivePreviewRenderers,
   filterLivePreviewRanges,
 } from '../packages/editor/src/index';
-import { collectLivePreviewWidgetRangesForVisibleRanges } from '../packages/editor/src/live-preview/extension';
+import {
+  collectLivePreviewRangesWithWidgetSuppression,
+  collectLivePreviewWidgetRangesForVisibleRanges,
+} from '../packages/editor/src/live-preview/extension';
 import type {
   InternalLivePreviewRange,
   InternalLivePreviewRenderer,
 } from '../packages/editor/src/live-preview/internal-types';
-import { defaultLivePreviewWidgetRenderers } from '../packages/editor/src/live-preview/renderers';
+import {
+  defaultLivePreviewInternalRenderers,
+  defaultLivePreviewWidgetRenderers,
+} from '../packages/editor/src/live-preview/renderers';
 
 function collectPublicRanges(doc: string, selection = 0, focused = false) {
   const state = EditorState.create({ doc, selection: { anchor: selection } });
@@ -36,8 +42,14 @@ function collectWidgetRanges(doc: string, selection = 0, focused = false): Inter
 }
 
 function collectAllRanges(doc: string, selection = 0, focused = false) {
-  return [...collectWidgetRanges(doc, selection, focused), ...collectPublicRanges(doc, selection, focused)].sort(
-    (left, right) => left.from - right.from || left.to - right.to || left.rendererId.localeCompare(right.rendererId),
+  const state = EditorState.create({ doc, selection: { anchor: selection } });
+  return collectLivePreviewRangesWithWidgetSuppression(
+    defaultLivePreviewRenderers,
+    defaultLivePreviewInternalRenderers,
+    defaultLivePreviewWidgetRenderers,
+    state,
+    [{ from: 0, to: doc.length }],
+    focused,
   );
 }
 

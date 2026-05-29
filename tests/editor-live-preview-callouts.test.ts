@@ -8,7 +8,10 @@ import {
   collectLivePreviewWidgetRangesForVisibleRanges,
 } from '../packages/editor/src/live-preview/extension';
 import type { InternalLivePreviewRange } from '../packages/editor/src/live-preview/internal-types';
-import { defaultLivePreviewWidgetRenderers } from '../packages/editor/src/live-preview/renderers';
+import {
+  defaultLivePreviewInternalRenderers,
+  defaultLivePreviewWidgetRenderers,
+} from '../packages/editor/src/live-preview/renderers';
 
 function collectWidgetRanges(doc: string, selection = 0, focused = false): InternalLivePreviewRange[] {
   const state = EditorState.create({ doc, selection: { anchor: selection } });
@@ -24,6 +27,7 @@ function collectAllRanges(doc: string, selection = 0, focused = false): Internal
   const state = EditorState.create({ doc, selection: { anchor: selection } });
   return collectLivePreviewRangesWithWidgetSuppression(
     defaultLivePreviewRenderers,
+    defaultLivePreviewInternalRenderers,
     defaultLivePreviewWidgetRenderers,
     state,
     [{ from: 0, to: doc.length }],

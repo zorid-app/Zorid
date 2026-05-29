@@ -12,8 +12,12 @@ import type {
   OpenDocumentOptions,
 } from '@zorid/platform-api';
 import { type Disposable, normalizeVaultPath, type VaultPath } from '@zorid/shared';
-import { livePreviewExtension, livePreviewExtensionWithWidgets } from './live-preview/extension.js';
-import { defaultLivePreviewRenderers, defaultLivePreviewWidgetRenderers } from './live-preview/renderers.js';
+import { livePreviewExtension, livePreviewExtensionWithInternalRenderers } from './live-preview/extension.js';
+import {
+  defaultLivePreviewInternalRenderers,
+  defaultLivePreviewRenderers,
+  defaultLivePreviewWidgetRenderers,
+} from './live-preview/renderers.js';
 import type { LivePreviewRenderer } from './live-preview/types.js';
 
 // Live Preview exports remain available from the package root for current
@@ -45,7 +49,6 @@ export {
   nextTaskMarkerCheckbox,
   shouldRenderLivePreviewRange,
   tagLivePreviewRenderer,
-  taskMarkerLivePreviewRenderer,
   toggleTaskMarkerAtPosition,
   toggleTaskMarkerAtSelection,
   wikiLinkLivePreviewRenderer,
@@ -129,7 +132,11 @@ export function createMarkdownEditorExtensions({
   if (livePreviewRenderers !== false) {
     extensions.push(
       livePreviewRenderers === undefined
-        ? livePreviewExtensionWithWidgets(defaultLivePreviewRenderers, defaultLivePreviewWidgetRenderers)
+        ? livePreviewExtensionWithInternalRenderers(
+            defaultLivePreviewRenderers,
+            defaultLivePreviewInternalRenderers,
+            defaultLivePreviewWidgetRenderers,
+          )
         : livePreviewExtension(livePreviewRenderers),
     );
   }
