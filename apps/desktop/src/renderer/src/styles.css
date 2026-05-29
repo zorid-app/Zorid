@@ -541,6 +541,24 @@ h2 {
   border-radius: var(--z-radius-sm);
 }
 
+.markdown-editor .z-live-preview-strong {
+  font-weight: 700;
+}
+
+.markdown-editor .z-live-preview-emphasis {
+  font-style: italic;
+}
+
+.markdown-editor .z-live-preview-strikethrough {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--z-color-text) 64%, transparent);
+}
+
+.markdown-editor .z-live-preview-highlight {
+  background: color-mix(in srgb, var(--z-color-accent) 20%, transparent);
+  border-radius: var(--z-radius-sm);
+}
+
 .markdown-editor .z-live-preview-link,
 .markdown-editor .z-live-preview-wiki-link {
   color: var(--z-color-accent);

@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 const livePreviewClasses = [
   'z-live-preview-heading',
   'z-live-preview-inline-code',
+  'z-live-preview-strong',
+  'z-live-preview-emphasis',
+  'z-live-preview-strikethrough',
+  'z-live-preview-highlight',
   'z-live-preview-link',
   'z-live-preview-wiki-link',
   'z-live-preview-tag',

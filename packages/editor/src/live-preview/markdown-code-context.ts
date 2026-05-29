@@ -13,6 +13,8 @@ export interface MarkdownFencedCodeBlockRange extends MarkdownCodeRange {
   readonly contentTo: number;
 }
 
+export interface MarkdownFrontmatterRange extends MarkdownCodeRange {}
+
 interface FenceState {
   readonly marker: '`' | '~';
   readonly length: number;
@@ -119,6 +121,29 @@ export function markdownIndentedCodeRanges(docText: string, scanWindow: Markdown
 
 export function markdownSuppressedCodeRanges(docText: string, scanWindow: MarkdownCodeRange): MarkdownCodeRange[] {
   return [...markdownFencedCodeRanges(docText, scanWindow), ...markdownIndentedCodeRanges(docText, scanWindow)];
+}
+
+export function markdownFrontmatterRanges(docText: string, scanWindow: MarkdownCodeRange): MarkdownFrontmatterRange[] {
+  const firstLineEnd = docText.indexOf('\n');
+  const firstLine = firstLineEnd === -1 ? docText : docText.slice(0, firstLineEnd);
+  if (firstLine.trim() !== '---') return [];
+
+  let closingFrom = -1;
+  for (const match of docText.matchAll(/^---[ \t]*$/gm)) {
+    const index = match.index;
+    if (index === undefined || index === 0) continue;
+    closingFrom = index;
+    break;
+  }
+
+  if (closingFrom === -1) return [];
+  const closingLineEnd = docText.indexOf('\n', closingFrom);
+  const range = { from: 0, to: closingLineEnd === -1 ? docText.length : closingLineEnd };
+  return range.to >= scanWindow.from && range.from <= scanWindow.to ? [range] : [];
+}
+
+export function markdownSuppressedPreviewRanges(docText: string, scanWindow: MarkdownCodeRange): MarkdownCodeRange[] {
+  return [...markdownFrontmatterRanges(docText, scanWindow), ...markdownSuppressedCodeRanges(docText, scanWindow)];
 }
 
 export function isMarkdownLineInsideFencedCodeBlock(state: EditorState, lineFrom: number): boolean {

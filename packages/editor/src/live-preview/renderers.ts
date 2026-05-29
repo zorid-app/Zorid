@@ -4,11 +4,19 @@ import {
   type InternalLivePreviewRenderer,
   setInternalLivePreviewFocused,
 } from './internal-types.js';
-import { markdownCompleteFencedCodeBlockRanges, markdownSuppressedCodeRanges } from './markdown-code-context.js';
+import {
+  markdownCompleteFencedCodeBlockRanges,
+  markdownFrontmatterRanges,
+  markdownSuppressedPreviewRanges,
+} from './markdown-code-context.js';
 import { toggleTaskMarkerAtPosition } from './task-toggle.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
 
 const inlineCodePattern = /`[^`\n]+`/g;
+const strongPattern = /(\*\*[^*\s](?:[^*\n]*?[^*\s])?\*\*|__[^_\s](?:[^_\n]*?[^_\s])?__)/g;
+const emphasisPattern = /(^|[\s([{])((?:\*[^*\s](?:[^*\n]*?[^*\s])?\*)|(?:_[^_\s](?:[^_\n]*?[^_\s])?_))/gm;
+const strikethroughPattern = /~~[^~\s](?:[^~\n]*?[^~\s])?~~/g;
+const highlightPattern = /==[^=\s](?:[^=\n]*?[^=\s])?==/g;
 
 function livePreviewScanWindow(
   docText: string,
@@ -38,7 +46,7 @@ function inlineCodeDelimiterRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
 ): LivePreviewRange[] {
-  const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
+  const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
   return inlineCodeRanges(docText, scanWindow)
     .filter((range) => !suppressedRanges.some((container) => isInsideRange(range, container)))
     .flatMap((range) => [
@@ -67,7 +75,7 @@ function blockquoteLineRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
 ): InternalLivePreviewRange[] {
-  const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
+  const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
   const scanText = docText.slice(scanWindow.from, scanWindow.to);
 
   return [...scanText.matchAll(/^ {0,3}> ?.*$/gm)].flatMap((match) => {
@@ -237,21 +245,24 @@ function codeBlockWidgetRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
 ): InternalLivePreviewRange[] {
-  return markdownCompleteFencedCodeBlockRanges(docText, scanWindow).map((range) => {
-    const source = docText.slice(range.from, range.to);
-    const code = docText.slice(range.contentFrom, range.contentTo);
-    const activateAt = range.contentFrom < range.contentTo ? range.contentFrom : range.from;
-    return {
-      rendererId: 'code-block-widget',
-      from: range.from,
-      to: range.to,
-      activationFrom: range.from,
-      activationTo: range.to,
-      className: 'z-live-preview-code-block-widget',
-      kind: 'widget' as const,
-      widget: new CodeBlockPreviewWidget(source, range.info, code, activateAt),
-    };
-  });
+  const suppressedRanges = markdownFrontmatterRanges(docText, scanWindow);
+  return markdownCompleteFencedCodeBlockRanges(docText, scanWindow)
+    .filter((range) => !suppressedRanges.some((container) => isInsideRange(range, container)))
+    .map((range) => {
+      const source = docText.slice(range.from, range.to);
+      const code = docText.slice(range.contentFrom, range.contentTo);
+      const activateAt = range.contentFrom < range.contentTo ? range.contentFrom : range.from;
+      return {
+        rendererId: 'code-block-widget',
+        from: range.from,
+        to: range.to,
+        activationFrom: range.from,
+        activationTo: range.to,
+        className: 'z-live-preview-code-block-widget',
+        kind: 'widget' as const,
+        widget: new CodeBlockPreviewWidget(source, range.info, code, activateAt),
+      };
+    });
 }
 
 function calloutWidgetRanges(
@@ -259,7 +270,7 @@ function calloutWidgetRanges(
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
 ): InternalLivePreviewRange[] {
   const ranges: InternalLivePreviewRange[] = [];
-  const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
+  const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
   const scanText = docText.slice(scanWindow.from, scanWindow.to);
   const lines = [...scanText.matchAll(/^.*$/gm)]
     .map((match) => ({ text: match[0], from: scanWindow.from + (match.index ?? 0) }))
@@ -329,7 +340,7 @@ function regexLivePreviewRenderer(
       const scanWindow = livePreviewScanWindow(docText, visibleFrom, visibleTo);
       const scanText = docText.slice(scanWindow.from, scanWindow.to);
       const excludedInlineCodeRanges = id === 'inline-code' ? [] : inlineCodeRanges(docText, scanWindow);
-      const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
+      const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
       for (const match of scanText.matchAll(matcher)) {
         const index = match.index;
         if (index === undefined) continue;
@@ -365,6 +376,37 @@ export const inlineCodeDelimiterLivePreviewRenderer: LivePreviewRenderer = {
     inlineCodeDelimiterRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
 };
 
+export const strongLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
+  'strong',
+  'z-live-preview-strong',
+  strongPattern,
+  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
+);
+
+export const emphasisLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
+  'emphasis',
+  'z-live-preview-emphasis',
+  emphasisPattern,
+  (match) => {
+    const leading = match[1]?.length ?? 0;
+    return { fromOffset: leading, toOffset: match[0].length };
+  },
+);
+
+export const strikethroughLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
+  'strikethrough',
+  'z-live-preview-strikethrough',
+  strikethroughPattern,
+  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
+);
+
+export const highlightLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
+  'highlight',
+  'z-live-preview-highlight',
+  highlightPattern,
+  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
+);
+
 export const markdownLinkLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
   'markdown-link',
   'z-live-preview-link',
@@ -395,7 +437,7 @@ export const taskMarkerLivePreviewRenderer: InternalLivePreviewRenderer = {
     const ranges: InternalLivePreviewRange[] = [];
     const scanWindow = livePreviewScanWindow(docText, visibleFrom, visibleTo);
     const scanText = docText.slice(scanWindow.from, scanWindow.to);
-    const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow);
+    const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
     const pattern = /^(\s{0,3}[-*+]\s+\[)([ xX])(\])/gm;
 
     for (const match of scanText.matchAll(pattern)) {
@@ -448,6 +490,10 @@ export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
   headingLivePreviewRenderer,
   inlineCodeLivePreviewRenderer,
   inlineCodeDelimiterLivePreviewRenderer,
+  strongLivePreviewRenderer,
+  emphasisLivePreviewRenderer,
+  strikethroughLivePreviewRenderer,
+  highlightLivePreviewRenderer,
   markdownLinkLivePreviewRenderer,
   wikiLinkLivePreviewRenderer,
   tagLivePreviewRenderer,

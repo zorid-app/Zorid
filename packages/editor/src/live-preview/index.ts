@@ -11,15 +11,21 @@ export type { MarkdownCodeRange } from './markdown-code-context.js';
 export {
   isMarkdownLineInsideFencedCodeBlock,
   markdownFencedCodeRanges,
+  markdownFrontmatterRanges,
   markdownIndentedCodeRanges,
   markdownSuppressedCodeRanges,
+  markdownSuppressedPreviewRanges,
 } from './markdown-code-context.js';
 export {
   defaultLivePreviewRenderers,
+  emphasisLivePreviewRenderer,
   headingLivePreviewRenderer,
+  highlightLivePreviewRenderer,
   inlineCodeDelimiterLivePreviewRenderer,
   inlineCodeLivePreviewRenderer,
   markdownLinkLivePreviewRenderer,
+  strikethroughLivePreviewRenderer,
+  strongLivePreviewRenderer,
   tagLivePreviewRenderer,
   wikiLinkLivePreviewRenderer,
 } from './renderers.js';
