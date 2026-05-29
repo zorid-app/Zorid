@@ -1,18 +1,20 @@
-Implement the approved Live Preview first-pass plan from `.omx/plans/prd-live-preview-first-pass-20260529T041049Z.md` and `.omx/plans/test-spec-live-preview-first-pass-20260529T041049Z.md`.
+Implement the approved RALPLAN plan for Live Preview Pass 1.5 from:
+- PRD: .omx/plans/prd-live-preview-pass-1-5-20260529T053819Z.md
+- Test spec: .omx/plans/test-spec-live-preview-pass-1-5-20260529T053819Z.md
+- Handoff: .omx/plans/ralplan-handoff-live-preview-pass-1-5-20260529T053819Z.json
 
 Hard constraints:
-- Markdown source remains the only durable document model.
-- `packages/editor` owns CodeMirror dependency/export wiring and mounted editor lifecycle.
-- CodeMirror document state is source of truth; any Vue full-text state is temporary one-way autosave/display cache with guarded external replacement semantics.
-- Preserve current open/edit/save/autosave user behavior.
-- Do not implement tables, Properties/frontmatter visual editor, embeds/callouts, Reading view parity, mobile touch behavior, or stable public third-party renderer API in this pass.
-- Keep changes inside planned touchpoints and preserve import-boundary rules.
+- Markdown source remains canonical; preview rendering must not mutate source except explicit source-backed commands.
+- Do not implement tables, properties/frontmatter visual editor, embeds, image resize, math rendering, callout widgets, Reading view parity, mobile/touch behavior, or stable public third-party renderer API.
+- Keep renderer APIs internal/experimental; do not add renderer registration to packages/platform-api.
+- Preserve desktop open/edit/save/autosave behavior and import-boundary rules.
+- Use CodeMirror contracts (extensions/decorations/transactions), not direct mutation of editor-managed content DOM.
 
 Goals:
-1. Move CodeMirror mounted-editor ownership into `@zorid/editor`: declare/own CodeMirror dependencies, expose a mounted editor factory, compose base Markdown/save/change extensions, decide and implement guarded handling for `EditorExtensionContribution.extension`, and add targeted package-boundary tests.
-2. Convert the desktop Vue `MarkdownEditor` into a thin host wrapper around `@zorid/editor`, preserving edit/save/autosave semantics and making any remaining Vue full-text state explicitly cache-only.
-3. Add testable Live Preview core primitives in `@zorid/editor`: renderer registry/composition types, visible-range aware matching context, focus/selection-aware active-source versus inactive-preview policy, deterministic range filtering, transaction-safe decoration mapping, and source-text invariants.
-4. Add MVP first-party preview renderers for low-risk Markdown elements: headings, inline code, Markdown links, wiki links, tags, and optionally task checkbox markers only if source-backed tests are solid; no complex widgets.
-5. Add/update targeted tests for renderer matching, active-source reveal, inactive preview decoration behavior, source-text preservation, dependency/export wiring, and existing desktop autosave/open/save behavior.
-6. Run verification: `pnpm lint:boundaries`, `pnpm --filter @zorid/editor run typecheck`, targeted Vitest tests for editor/desktop autosave, `pnpm typecheck`, and `pnpm lint` if available/feasible.
-7. Run the mandatory final cleanup and independent code-review gate; only complete the aggregate goal if cleaner, verification, code-reviewer, and architect review all pass.
+1. Split current Live Preview types/helpers/renderers/extension out of packages/editor/src/index.ts into internal packages/editor/src/live-preview modules while preserving current in-repo compatibility exports.
+2. Add scoped, theme-aware visible CSS for current z-live-preview-* classes under the desktop .markdown-editor scope, plus a lightweight static test/source assertion rejecting unscoped z-live-preview selectors.
+3. Harden matcher fixtures and active/inactive mounted behavior tests for headings, inline code, Markdown links, wiki links, tags, task markers, false positives, deterministic ordering, and source preservation.
+4. Decide and implement the task marker path: command-first source-backed checkbox toggle with undo/history tests if small; otherwise explicit styling-only deferral with tests. Do not introduce a broad widget/event subsystem.
+5. Verify current markdown() keymap behavior before adding anything; avoid duplicate custom keymaps unless tests demonstrate a concrete gap.
+6. Run targeted and broad verification: editor live-preview tests, editor package wiring, desktop autosave/vault editor regressions, @zorid/editor typecheck, import boundaries, repo typecheck, repo lint.
+7. Run the mandatory final cleanup and independent code-review gate; commit changed files with a plain descriptive commit message only after the final gate passes.

@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 
+import { readFile } from 'node:fs/promises';
+import { markdownKeymap } from '@codemirror/lang-markdown';
 import { Prec } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +15,14 @@ describe('@zorid/editor CodeMirror ownership', () => {
     const state = createMarkdownEditorState('# Owned by editor');
 
     expect(state.doc.toString()).toBe('# Owned by editor');
+  });
+
+  it('relies on the default markdown keymap instead of duplicating list continuation commands', async () => {
+    const source = await readFile('packages/editor/src/index.ts', 'utf8');
+
+    expect(markdownKeymap.map((binding) => binding.key)).toEqual(expect.arrayContaining(['Enter', 'Backspace']));
+    expect(source).toContain('markdown()');
+    expect(source).not.toContain('addKeymap: false');
   });
 
   it('guards unknown plugin extension contributions before composing CodeMirror extensions', () => {

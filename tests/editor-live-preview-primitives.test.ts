@@ -108,6 +108,80 @@ describe('editor Live Preview primitives', () => {
     expect(rendererIds).not.toContain('table');
   });
 
+  it('keeps matcher ranges deterministic and avoids simple inline-code false positives', () => {
+    const doc = [
+      '# Heading',
+      'Use `#not-a-tag [not](link.md) [[Nope]]` beside [link](target.md), [[Note|Alias]], and #tag/sub.',
+      '- [ ] pending task',
+      'https://example.com/#fragment',
+      '| table | stays plain |',
+    ].join('\n');
+    const state = EditorState.create({ doc });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(state, { from: 0, to: doc.length }),
+    );
+
+    expect(ranges.map((range) => range.rendererId)).toEqual([
+      'heading',
+      'inline-code',
+      'markdown-link',
+      'wiki-link',
+      'tag',
+      'task-marker',
+    ]);
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual([
+      '# Heading',
+      '`#not-a-tag [not](link.md) [[Nope]]`',
+      '[link](target.md)',
+      '[[Note|Alias]]',
+      '#tag/sub',
+      '- [ ]',
+    ]);
+    expect(ranges.every((range, index) => index === 0 || ranges[index - 1]!.from <= range.from)).toBe(true);
+    expect(ranges.map((range) => range.rendererId)).not.toContain('table');
+  });
+
+  it('restores preview decorations after focused selection leaves the range', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: '# Heading\n\n`code`',
+    });
+
+    expect(parent.querySelector('[data-live-preview-renderer="heading"]')).toBeTruthy();
+
+    editor.focus();
+    editor.view.dispatch({ selection: { anchor: 2 } });
+    expect(parent.querySelector('[data-live-preview-renderer="heading"]')).toBeNull();
+    expect(parent.querySelector('[data-live-preview-renderer="inline-code"]')).toBeTruthy();
+
+    editor.view.dispatch({ selection: { anchor: editor.getText().length } });
+    expect(parent.querySelector('[data-live-preview-renderer="heading"]')).toBeTruthy();
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('keeps task markers styling-only until a source-backed toggle command is added', () => {
+    const doc = '- [ ] pending task';
+    const state = EditorState.create({ doc });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(state, { from: 0, to: doc.length }),
+    );
+
+    expect(ranges).toContainEqual({
+      rendererId: 'task-marker',
+      from: 0,
+      to: 5,
+      className: 'z-live-preview-task-marker',
+    });
+    expect(state.doc.toString()).toBe(doc);
+    expect(ranges.find((range) => range.rendererId === 'task-marker')?.attributes).toBeUndefined();
+  });
+
   it('wires default MVP preview renderers into mounted editors', () => {
     const parent = document.createElement('div');
     const editor = createMountedMarkdownEditor({

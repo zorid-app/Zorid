@@ -1,6 +1,6 @@
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorState, type Extension } from '@codemirror/state';
-import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import { EditorView, keymap, type ViewUpdate } from '@codemirror/view';
 import type {
   EditorAPI,
   EditorChange,
@@ -11,6 +11,35 @@ import type {
   OpenDocumentOptions,
 } from '@zorid/platform-api';
 import { type Disposable, normalizeVaultPath, type VaultPath } from '@zorid/shared';
+import { defaultLivePreviewRenderers, type LivePreviewRenderer, livePreviewExtension } from './live-preview/index.js';
+
+// Live Preview exports remain available from the package root for current
+// first-party integrations and tests. Treat them as experimental while the
+// package is private; do not publish them as a stable third-party plugin API
+// without a dedicated API review.
+export type {
+  LivePreviewContext,
+  LivePreviewRange,
+  LivePreviewRenderer,
+  LivePreviewSelectionRange,
+  LivePreviewVisibleRange,
+} from './live-preview/index.js';
+export {
+  collectLivePreviewRanges,
+  createLivePreviewContext,
+  defaultLivePreviewRenderers,
+  filterLivePreviewRanges,
+  headingLivePreviewRenderer,
+  inlineCodeLivePreviewRenderer,
+  livePreviewExtension,
+  livePreviewRangeIntersectsSelection,
+  livePreviewSelectionRanges,
+  markdownLinkLivePreviewRenderer,
+  shouldRenderLivePreviewRange,
+  tagLivePreviewRenderer,
+  taskMarkerLivePreviewRenderer,
+  wikiLinkLivePreviewRenderer,
+} from './live-preview/index.js';
 
 export interface EditorDocumentStore {
   read(path: VaultPath): Promise<string>;
@@ -43,213 +72,6 @@ export interface MountedMarkdownEditorOptions extends MarkdownEditorExtensionOpt
 export interface SetMountedMarkdownEditorTextOptions {
   emitChange?: boolean;
 }
-
-export interface LivePreviewSelectionRange {
-  readonly from: number;
-  readonly to: number;
-}
-
-export interface LivePreviewVisibleRange {
-  readonly from: number;
-  readonly to: number;
-}
-
-export interface LivePreviewContext {
-  readonly state: EditorState;
-  readonly docText: string;
-  readonly visibleFrom: number;
-  readonly visibleTo: number;
-  readonly focused: boolean;
-  readonly selectionRanges: readonly LivePreviewSelectionRange[];
-}
-
-export interface LivePreviewRange {
-  readonly rendererId: string;
-  readonly from: number;
-  readonly to: number;
-  readonly className: string;
-  readonly attributes?: Readonly<Record<string, string>>;
-}
-
-export interface LivePreviewRenderer {
-  readonly id: string;
-  match(context: LivePreviewContext): readonly LivePreviewRange[];
-}
-
-export function livePreviewSelectionRanges(state: EditorState): LivePreviewSelectionRange[] {
-  return state.selection.ranges.map((range) => ({ from: range.from, to: range.to }));
-}
-
-export function livePreviewRangeIntersectsSelection(
-  range: Pick<LivePreviewRange, 'from' | 'to'>,
-  selectionRanges: readonly LivePreviewSelectionRange[],
-): boolean {
-  return selectionRanges.some((selection) => {
-    if (selection.from === selection.to) return selection.from >= range.from && selection.from <= range.to;
-    return selection.from < range.to && selection.to > range.from;
-  });
-}
-
-export function shouldRenderLivePreviewRange(
-  range: Pick<LivePreviewRange, 'from' | 'to'>,
-  context: Pick<LivePreviewContext, 'focused' | 'selectionRanges'>,
-): boolean {
-  return !context.focused || !livePreviewRangeIntersectsSelection(range, context.selectionRanges);
-}
-
-export function filterLivePreviewRanges(
-  ranges: readonly LivePreviewRange[],
-  context: Pick<LivePreviewContext, 'visibleFrom' | 'visibleTo' | 'focused' | 'selectionRanges'>,
-): LivePreviewRange[] {
-  return ranges
-    .filter((range) => range.from < context.visibleTo && range.to > context.visibleFrom)
-    .filter((range) => shouldRenderLivePreviewRange(range, context))
-    .sort(
-      (left, right) => left.from - right.from || left.to - right.to || left.rendererId.localeCompare(right.rendererId),
-    );
-}
-
-export function createLivePreviewContext(
-  state: EditorState,
-  visibleRange: LivePreviewVisibleRange,
-  focused = false,
-): LivePreviewContext {
-  return {
-    state,
-    docText: state.doc.toString(),
-    visibleFrom: visibleRange.from,
-    visibleTo: visibleRange.to,
-    focused,
-    selectionRanges: livePreviewSelectionRanges(state),
-  };
-}
-
-export function collectLivePreviewRanges(
-  renderers: readonly LivePreviewRenderer[],
-  context: LivePreviewContext,
-): LivePreviewRange[] {
-  return filterLivePreviewRanges(
-    renderers.flatMap((renderer) => renderer.match(context)),
-    context,
-  );
-}
-
-function livePreviewDecorationsForView(view: EditorView, renderers: readonly LivePreviewRenderer[]): DecorationSet {
-  const ranges = view.visibleRanges.flatMap((visibleRange) =>
-    collectLivePreviewRanges(renderers, createLivePreviewContext(view.state, visibleRange, view.hasFocus)),
-  );
-  return Decoration.set(
-    ranges.map((range) =>
-      Decoration.mark({
-        class: range.className,
-        attributes: {
-          'data-live-preview-renderer': range.rendererId,
-          ...range.attributes,
-        },
-      }).range(range.from, range.to),
-    ),
-    true,
-  );
-}
-
-export function livePreviewExtension(renderers: readonly LivePreviewRenderer[]): Extension {
-  return ViewPlugin.fromClass(
-    class {
-      decorations: DecorationSet;
-
-      constructor(view: EditorView) {
-        this.decorations = livePreviewDecorationsForView(view, renderers);
-      }
-
-      update(update: ViewUpdate): void {
-        if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged) {
-          this.decorations = livePreviewDecorationsForView(update.view, renderers);
-        }
-      }
-    },
-    {
-      decorations: (plugin) => plugin.decorations,
-    },
-  );
-}
-
-function regexLivePreviewRenderer(
-  id: string,
-  className: string,
-  pattern: RegExp,
-  rangeForMatch: (match: RegExpExecArray) => { fromOffset: number; toOffset: number },
-): LivePreviewRenderer {
-  return {
-    id,
-    match: ({ docText }) => {
-      const ranges: LivePreviewRange[] = [];
-      const matcher = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
-      for (const match of docText.matchAll(matcher)) {
-        const index = match.index;
-        if (index === undefined) continue;
-        const { fromOffset, toOffset } = rangeForMatch(match);
-        const from = index + fromOffset;
-        const to = index + toOffset;
-        if (to > from) ranges.push({ rendererId: id, from, to, className });
-      }
-      return ranges;
-    },
-  };
-}
-
-export const headingLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'heading',
-  'z-live-preview-heading',
-  /^#{1,6}\s+.+$/gm,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
-
-export const inlineCodeLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'inline-code',
-  'z-live-preview-inline-code',
-  /`[^`\n]+`/g,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
-
-export const markdownLinkLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'markdown-link',
-  'z-live-preview-link',
-  /\[[^\]\n]+\]\([^) \n][^)\n]*\)/g,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
-
-export const wikiLinkLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'wiki-link',
-  'z-live-preview-wiki-link',
-  /\[\[[^\]\n]+\]\]/g,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
-
-export const tagLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'tag',
-  'z-live-preview-tag',
-  /(^|[\s([{])#[A-Za-z0-9_/-]+/gm,
-  (match) => {
-    const leading = match[1]?.length ?? 0;
-    return { fromOffset: leading, toOffset: match[0].length };
-  },
-);
-
-export const taskMarkerLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'task-marker',
-  'z-live-preview-task-marker',
-  /^(\s*[-*+]\s+\[[ xX]\])/gm,
-  (match) => ({ fromOffset: 0, toOffset: match[1]?.length ?? match[0].length }),
-);
-
-export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
-  headingLivePreviewRenderer,
-  inlineCodeLivePreviewRenderer,
-  markdownLinkLivePreviewRenderer,
-  wikiLinkLivePreviewRenderer,
-  tagLivePreviewRenderer,
-  taskMarkerLivePreviewRenderer,
-];
 
 export function coerceEditorExtensionContribution(
   contribution: EditorExtensionContribution,
@@ -290,6 +112,9 @@ export function createMarkdownEditorExtensions({
   shouldEmitChange = () => true,
 }: MarkdownEditorExtensionOptions = {}): Extension[] {
   const composed = composeEditorExtensions(extensionContributions);
+  // `markdown()` keeps @codemirror/lang-markdown's default keymap enabled,
+  // including Enter/Backspace Markdown continuation behavior. Do not add a
+  // duplicate custom keymap unless tests prove a concrete gap.
   const extensions: Extension[] = [markdown(), ...composed.extensions];
   if (livePreviewRenderers !== false) {
     extensions.push(livePreviewExtension(livePreviewRenderers));

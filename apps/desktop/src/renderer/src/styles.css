@@ -473,6 +473,48 @@ h2 {
   border-right-color: var(--z-color-border);
 }
 
+/* @zorid/editor emits z-live-preview-* classes; desktop owns the scoped host styling contract. */
+.markdown-editor .z-live-preview-heading {
+  color: var(--z-color-text);
+  font-family: var(--z-font-ui);
+  font-weight: 700;
+  letter-spacing: -0.018em;
+}
+
+.markdown-editor .z-live-preview-inline-code {
+  padding: 0 0.28em;
+  color: var(--z-color-accent);
+  background: color-mix(in srgb, var(--z-control-bg-strong) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--z-color-border) 72%, transparent);
+  border-radius: var(--z-radius-sm);
+}
+
+.markdown-editor .z-live-preview-link,
+.markdown-editor .z-live-preview-wiki-link {
+  color: var(--z-color-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--z-color-accent) 45%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.markdown-editor .z-live-preview-wiki-link {
+  background: color-mix(in srgb, var(--z-color-accent) 9%, transparent);
+  border-radius: var(--z-radius-sm);
+}
+
+.markdown-editor .z-live-preview-tag {
+  padding: 0 0.34em;
+  color: var(--z-color-accent);
+  background: color-mix(in srgb, var(--z-color-accent) 12%, transparent);
+  border-radius: var(--z-radius-pill);
+}
+
+.markdown-editor .z-live-preview-task-marker {
+  color: var(--z-color-subtle);
+  font-weight: 700;
+}
+
 .resize-handle {
   position: relative;
   z-index: 2;
