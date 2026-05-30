@@ -152,6 +152,12 @@ describe('editor task marker toggle', () => {
     expect(checkboxes).toHaveLength(3);
     expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-checked'))).toEqual(['false', 'true', 'true']);
     expect(checkboxes.map((checkbox) => checkbox.textContent)).toEqual(['', '✓', '✓']);
+    expect(checkboxes.map((checkbox) => checkbox.tabIndex)).toEqual([0, 0, 0]);
+    expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-label'))).toEqual([
+      'Mark task complete',
+      'Mark task incomplete',
+      'Mark task incomplete',
+    ]);
     expect(editor.getText()).toBe(text);
 
     editor.destroy();
@@ -210,6 +216,29 @@ describe('editor task marker toggle', () => {
 
     expect(redo(editor.view)).toBe(true);
     expect(editor.getText()).toBe('- [x] pending');
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('toggles focused visual task checkboxes from the keyboard', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const userEvents: Array<string | undefined> = [];
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: '- [ ] pending',
+      onChange: (_text, update) => {
+        userEvents.push(update.transactions.at(-1)?.annotation(Transaction.userEvent));
+      },
+    });
+
+    const checkbox = parent.querySelector<HTMLElement>('.z-live-preview-task-checkbox');
+    expect(checkbox).toBeTruthy();
+    checkbox?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+
+    expect(editor.getText()).toBe('- [x] pending');
+    expect(userEvents).toEqual(['input.task.toggle']);
 
     editor.destroy();
     parent.remove();
