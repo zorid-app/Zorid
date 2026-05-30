@@ -1430,3 +1430,81 @@ input::placeholder {
   cursor: progress;
   opacity: var(--z-opacity-disabled);
 }
+
+.markdown-editor-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--z-editor-bg);
+}
+
+.markdown-editor-window-contributions:empty {
+  display: none;
+}
+
+.markdown-editor-window-contributions .z-editor-window-contributions {
+  border-bottom: 1px solid var(--z-color-border);
+  background: var(--z-color-surface);
+}
+
+.markdown-editor-window-contributions [data-placement-key='document-header'] {
+  padding: 10px 18px;
+}
+
+.z-fields-properties-editor {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) minmax(160px, 220px) minmax(0, 1fr);
+  gap: 10px 14px;
+  align-items: end;
+  color: var(--z-color-text);
+}
+
+.z-fields-properties-editor__title {
+  margin: 0;
+  color: var(--z-color-muted);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.z-fields-properties-editor__fields {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.z-fields-properties-editor__field {
+  display: grid;
+  min-width: 140px;
+  gap: 4px;
+  color: var(--z-color-muted);
+  font-size: 12px;
+}
+
+.z-fields-properties-editor__field input,
+.z-fields-properties-editor__field select {
+  min-height: 30px;
+  border: 1px solid var(--z-control-border);
+  border-radius: var(--z-radius-md);
+  padding: 6px 8px;
+  color: var(--z-color-text);
+  background: var(--z-control-bg-strong);
+}
+
+.z-fields-properties-editor__field input[type='checkbox'] {
+  width: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  align-self: center;
+}
+
+.z-fields-properties-editor__diagnostics,
+.z-fields-properties-editor__empty {
+  margin: 0;
+  color: var(--z-color-warning);
+  font-size: 12px;
+}

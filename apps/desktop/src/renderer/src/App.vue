@@ -830,17 +830,24 @@ function coerceFieldValue(raw: string | boolean, type?: string): unknown {
   return raw;
 }
 
-async function updateActiveField(field: FieldDto, raw: string | boolean): Promise<void> {
+async function setActiveFieldValue(field: FieldDto, value: unknown): Promise<void> {
   if (!selectedPath.value) return;
-  fileFields.value = await desktop.updateFileField(selectedPath.value, field.key, coerceFieldValue(raw, field.type));
+  fileFields.value = await desktop.updateFileField(selectedPath.value, field.key, value);
+  await refreshShellData();
+}
+
+async function updateActiveField(field: FieldDto, raw: string | boolean): Promise<void> {
+  await setActiveFieldValue(field, coerceFieldValue(raw, field.type));
+}
+
+async function setActiveType(typeName: string | undefined): Promise<void> {
+  if (!selectedPath.value) return;
+  fileFields.value = await desktop.setFileType(selectedPath.value, typeName || undefined);
   await refreshShellData();
 }
 
 async function updateActiveType(event: Event): Promise<void> {
-  if (!selectedPath.value) return;
-  const value = inputValue(event);
-  fileFields.value = await desktop.setFileType(selectedPath.value, value || undefined);
-  await refreshShellData();
+  await setActiveType(inputValue(event) || undefined);
 }
 
 async function refreshDataView(): Promise<void> {
@@ -1041,9 +1048,14 @@ onBeforeUnmount(() => {
       <MarkdownEditor
         v-if="selectedPath"
         :text="editorText"
+        :document-path="selectedPath"
+        :file-fields="fileFields"
+        :types="types"
         @change="updateEditorText"
         @save="saveActive"
         @error="(message) => (error = message)"
+        @update-field="setActiveFieldValue"
+        @update-type="setActiveType"
       />
       <p v-else class="muted new-tab-empty">{{ editorEmptyText }}</p>
     </section>
