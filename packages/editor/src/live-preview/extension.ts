@@ -106,6 +106,13 @@ function lineEndAfter(docText: string, position: number): number {
   return lineEnd === -1 ? docText.length : lineEnd;
 }
 
+function livePreviewLineScanWindow(docText: string, visibleRange: LivePreviewVisibleRange): LivePreviewVisibleRange {
+  return {
+    from: lineStartBefore(docText, visibleRange.from),
+    to: lineEndAfter(docText, visibleRange.to),
+  };
+}
+
 function livePreviewWidgetScanWindow(docText: string, visibleRange: LivePreviewVisibleRange): LivePreviewVisibleRange {
   const boundedFrom = Math.max(0, visibleRange.from - livePreviewWidgetScanMargin);
   const boundedTo = Math.min(docText.length, visibleRange.to + livePreviewWidgetScanMargin);
@@ -113,6 +120,10 @@ function livePreviewWidgetScanWindow(docText: string, visibleRange: LivePreviewV
     from: lineStartBefore(docText, boundedFrom),
     to: lineEndAfter(docText, boundedTo),
   };
+}
+
+function livePreviewRangeDedupeKey(range: Pick<LivePreviewRange, 'rendererId' | 'from' | 'to'>): string {
+  return `${range.rendererId}:${range.from}:${range.to}`;
 }
 
 export function collectLivePreviewWidgetRangesForVisibleRanges(
@@ -128,7 +139,7 @@ export function collectLivePreviewWidgetRangesForVisibleRanges(
       createLivePreviewContext(state, livePreviewWidgetScanWindow(docText, visibleRange), focused),
     ),
   );
-  return [...new Map(ranges.map((range) => [`${range.rendererId}:${range.from}:${range.to}`, range])).values()];
+  return [...new Map(ranges.map((range) => [livePreviewRangeDedupeKey(range), range])).values()];
 }
 
 function livePreviewRangeIsInsideAnyWidget(
@@ -155,8 +166,12 @@ export function collectLivePreviewRangesWithWidgetSuppression(
   const publicRanges = visibleRanges.flatMap((visibleRange) =>
     collectLivePreviewRanges(renderers, createLivePreviewContext(state, visibleRange, focused)),
   );
+  const docText = state.doc.toString();
   const internalRanges = visibleRanges.flatMap((visibleRange) =>
-    collectInternalLivePreviewRanges(internalRenderers, createLivePreviewContext(state, visibleRange, focused)),
+    collectInternalLivePreviewRanges(
+      internalRenderers,
+      createLivePreviewContext(state, livePreviewLineScanWindow(docText, visibleRange), focused),
+    ),
   );
 
   return [

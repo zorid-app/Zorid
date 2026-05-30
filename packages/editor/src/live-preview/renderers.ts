@@ -1,4 +1,5 @@
 import { type EditorView, WidgetType } from '@codemirror/view';
+import { type LivePreviewBlockRenderer, livePreviewBlockRendererToInternalRenderer } from './block-renderers.js';
 import {
   type InternalLivePreviewRange,
   type InternalLivePreviewRenderer,
@@ -11,6 +12,31 @@ import {
 } from './markdown-code-context.js';
 import { toggleTaskMarkerAtPosition } from './task-toggle.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
+
+interface CodeBlockPreviewMatch {
+  readonly from: number;
+  readonly to: number;
+  readonly activationFrom: number;
+  readonly activationTo: number;
+  readonly className: string;
+  readonly source: string;
+  readonly info: string;
+  readonly code: string;
+  readonly activateAt: number;
+}
+
+interface CalloutPreviewMatch {
+  readonly from: number;
+  readonly to: number;
+  readonly activationFrom: number;
+  readonly activationTo: number;
+  readonly className: string;
+  readonly source: string;
+  readonly type: string;
+  readonly title: string;
+  readonly body: string;
+  readonly activateAt: number;
+}
 
 const inlineCodePattern = /`[^`\n]+`/g;
 const strongPattern = /(\*\*[^*\s](?:[^*\n]*?[^*\s])?\*\*|__[^_\s](?:[^_\n]*?[^_\s])?__)/g;
@@ -244,7 +270,7 @@ class CalloutPreviewWidget extends WidgetType {
 function codeBlockWidgetRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
-): InternalLivePreviewRange[] {
+): CodeBlockPreviewMatch[] {
   const suppressedRanges = markdownFrontmatterRanges(docText, scanWindow);
   return markdownCompleteFencedCodeBlockRanges(docText, scanWindow)
     .filter((range) => !suppressedRanges.some((container) => isInsideRange(range, container)))
@@ -253,14 +279,15 @@ function codeBlockWidgetRanges(
       const code = docText.slice(range.contentFrom, range.contentTo);
       const activateAt = range.contentFrom < range.contentTo ? range.contentFrom : range.from;
       return {
-        rendererId: 'code-block-widget',
         from: range.from,
         to: range.to,
         activationFrom: range.from,
         activationTo: range.to,
         className: 'z-live-preview-code-block-widget',
-        kind: 'widget' as const,
-        widget: new CodeBlockPreviewWidget(source, range.info, code, activateAt),
+        source,
+        info: range.info,
+        code,
+        activateAt,
       };
     });
 }
@@ -268,8 +295,8 @@ function codeBlockWidgetRanges(
 function calloutWidgetRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
-): InternalLivePreviewRange[] {
-  const ranges: InternalLivePreviewRange[] = [];
+): CalloutPreviewMatch[] {
+  const ranges: CalloutPreviewMatch[] = [];
   const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
   const scanText = docText.slice(scanWindow.from, scanWindow.to);
   const lines = [...scanText.matchAll(/^.*$/gm)]
@@ -304,14 +331,16 @@ function calloutWidgetRanges(
 
     const source = docText.slice(from, to);
     ranges.push({
-      rendererId: 'callout-widget',
       from,
       to,
       activationFrom: from,
       activationTo: to,
       className: 'z-live-preview-callout-widget',
-      kind: 'widget' as const,
-      widget: new CalloutPreviewWidget(source, type, marker[3]?.trim() || type, bodyLines.join('\n'), from),
+      source,
+      type,
+      title: marker[3]?.trim() || type,
+      body: bodyLines.join('\n'),
+      activateAt: from,
     });
     index = Math.max(index, cursor - 1);
   }
@@ -474,17 +503,25 @@ const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
     blockquoteLineRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
 };
 
-const codeBlockWidgetLivePreviewRenderer: InternalLivePreviewRenderer = {
+const codeBlockWidgetBlockRenderer: LivePreviewBlockRenderer<CodeBlockPreviewMatch> = {
   id: 'code-block-widget',
   match: ({ docText, visibleFrom, visibleTo }) =>
     codeBlockWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+  widget: (match) => new CodeBlockPreviewWidget(match.source, match.info, match.code, match.activateAt),
 };
 
-const calloutWidgetLivePreviewRenderer: InternalLivePreviewRenderer = {
+const codeBlockWidgetLivePreviewRenderer: InternalLivePreviewRenderer =
+  livePreviewBlockRendererToInternalRenderer(codeBlockWidgetBlockRenderer);
+
+const calloutWidgetBlockRenderer: LivePreviewBlockRenderer<CalloutPreviewMatch> = {
   id: 'callout-widget',
   match: ({ docText, visibleFrom, visibleTo }) =>
     calloutWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+  widget: (match) => new CalloutPreviewWidget(match.source, match.type, match.title, match.body, match.activateAt),
 };
+
+const calloutWidgetLivePreviewRenderer: InternalLivePreviewRenderer =
+  livePreviewBlockRendererToInternalRenderer(calloutWidgetBlockRenderer);
 
 export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
   headingLivePreviewRenderer,
