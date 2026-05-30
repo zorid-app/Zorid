@@ -114,6 +114,7 @@ const expandedDirectories = ref<Record<string, boolean>>({ '': true });
 const fileTreeSortMode = ref<FileTreeSortMode>('name-asc');
 const draggingSourcePath = ref<string>();
 const draggingOverPath = ref<string>();
+const dragHoverDepthByPath: Record<string, number> = {};
 const FILE_TREE_DRAG_EXPAND_DELAY_MS = 500;
 let dragExpandTimer: ReturnType<typeof setTimeout> | undefined;
 const selectedPath = ref<string>();
@@ -451,6 +452,7 @@ function collapseLoadedDirectories(): void {
 function clearFileTreeDragState(): void {
   draggingSourcePath.value = undefined;
   draggingOverPath.value = undefined;
+  for (const key of Object.keys(dragHoverDepthByPath)) delete dragHoverDepthByPath[key];
 }
 
 function clearDragExpandTimer(): void {
@@ -467,6 +469,20 @@ function isAncestorPath(ancestorPath: string, descendantPath: string): boolean {
 function resolveMovedPath(sourcePath: string, targetDirectoryPath: string): string {
   const name = sourcePath.split('/').filter(Boolean).at(-1) ?? sourcePath;
   return targetDirectoryPath ? `${targetDirectoryPath}/${name}` : name;
+}
+
+function incrementDragHoverDepth(path: string): void {
+  dragHoverDepthByPath[path] = (dragHoverDepthByPath[path] ?? 0) + 1;
+}
+
+function decrementDragHoverDepth(path: string): number {
+  const next = (dragHoverDepthByPath[path] ?? 0) - 1;
+  if (next <= 0) {
+    delete dragHoverDepthByPath[path];
+    return 0;
+  }
+  dragHoverDepthByPath[path] = next;
+  return next;
 }
 
 function scheduleDragExpandPath(path: string): void {
@@ -667,6 +683,7 @@ async function openEntry(entry: VaultEntry): Promise<void> {
 function handleTreeDragStart(entry: VaultEntry, event: DragEvent): void {
   draggingSourcePath.value = entry.path;
   draggingOverPath.value = undefined;
+  for (const key of Object.keys(dragHoverDepthByPath)) delete dragHoverDepthByPath[key];
   clearDragExpandTimer();
   if (!event.dataTransfer) return;
   event.dataTransfer.setData('text/plain', entry.path);
@@ -681,6 +698,7 @@ function handleTreeDragEnd(): void {
 function handleTreeDragEnter(entry: VaultEntry, event: DragEvent): void {
   if (!draggingSourcePath.value || entry.kind !== 'directory') return;
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  incrementDragHoverDepth(entry.path);
   draggingOverPath.value = entry.path;
   if (isAncestorPath(entry.path, draggingSourcePath.value)) return;
   scheduleDragExpandPath(entry.path);
@@ -689,6 +707,7 @@ function handleTreeDragEnter(entry: VaultEntry, event: DragEvent): void {
 function handleTreeDragOver(entry: VaultEntry, event: DragEvent): void {
   if (!draggingSourcePath.value || entry.kind !== 'directory') return;
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  dragHoverDepthByPath[entry.path] = Math.max(1, dragHoverDepthByPath[entry.path] ?? 0);
   if (draggingOverPath.value !== entry.path) {
     draggingOverPath.value = entry.path;
     clearDragExpandTimer();
@@ -696,28 +715,58 @@ function handleTreeDragOver(entry: VaultEntry, event: DragEvent): void {
   }
 }
 
-function handleTreeDragLeave(entry: VaultEntry, event: DragEvent): void {
+function handleTreeDragLeave(entry: VaultEntry): void {
   if (!draggingSourcePath.value || entry.kind !== 'directory') return;
+  if (decrementDragHoverDepth(entry.path) > 0) return;
   if (entry.path !== draggingOverPath.value) return;
-  const related = event.relatedTarget as Node | null;
-  const current = event.currentTarget as Node | null;
-  if (current && related && current.contains(related)) return;
   clearDragExpandTimer();
   draggingOverPath.value = undefined;
 }
 
-async function handleTreeDrop(entry: VaultEntry, event: DragEvent): Promise<void> {
+function handleTreeRootDragEnter(event: DragEvent): void {
+  if (!draggingSourcePath.value) return;
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  incrementDragHoverDepth('');
+  draggingOverPath.value = '';
+  clearDragExpandTimer();
+}
+
+function handleTreeRootDragOver(event: DragEvent): void {
+  if (!draggingSourcePath.value) return;
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  dragHoverDepthByPath[''] = Math.max(1, dragHoverDepthByPath[''] ?? 0);
+  if (draggingOverPath.value !== '') {
+    draggingOverPath.value = '';
+    clearDragExpandTimer();
+  }
+}
+
+function handleTreeRootDragLeave(event: DragEvent): void {
+  if (!draggingSourcePath.value) return;
+  const current = event.currentTarget as Node | null;
+  const related = event.relatedTarget as Node | null;
+  if (current && related && current.contains(related)) return;
+  if (decrementDragHoverDepth('') > 0) return;
+  if (draggingOverPath.value !== '') return;
+  clearDragExpandTimer();
+  draggingOverPath.value = undefined;
+}
+
+async function handleTreeDropTarget(targetDirectoryPath: string, event: DragEvent): Promise<void> {
   event.preventDefault();
-  if (!draggingSourcePath.value || entry.kind !== 'directory') {
+  if (!draggingSourcePath.value) {
     clearFileTreeDragState();
     return;
   }
-  if (isAncestorPath(entry.path, draggingSourcePath.value) || draggingSourcePath.value === entry.path) {
+  if (
+    isAncestorPath(targetDirectoryPath, draggingSourcePath.value) ||
+    draggingSourcePath.value === targetDirectoryPath
+  ) {
     clearFileTreeDragState();
     return;
   }
   const previous = draggingSourcePath.value;
-  const next = resolveMovedPath(previous, entry.path);
+  const next = resolveMovedPath(previous, targetDirectoryPath);
   if (next === previous) {
     clearFileTreeDragState();
     return;
@@ -730,7 +779,7 @@ async function handleTreeDrop(entry: VaultEntry, event: DragEvent): Promise<void
     if (selectedTabId.value === previousTabId) selectedTabId.value = fileTabId(next);
     openTabs.value = openTabs.value.map((tab) => (tab.id === previousTabId ? fileTab(next) : tab));
     await loadDirectory('');
-    await loadDirectory(entry.path);
+    if (targetDirectoryPath) await loadDirectory(targetDirectoryPath);
     await refreshShellData();
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : String(caught);
@@ -738,6 +787,18 @@ async function handleTreeDrop(entry: VaultEntry, event: DragEvent): Promise<void
     clearFileTreeDragState();
     clearDragExpandTimer();
   }
+}
+
+async function handleTreeDrop(entry: VaultEntry, event: DragEvent): Promise<void> {
+  if (entry.kind !== 'directory') {
+    clearFileTreeDragState();
+    return;
+  }
+  await handleTreeDropTarget(entry.path, event);
+}
+
+async function handleTreeRootDrop(event: DragEvent): Promise<void> {
+  await handleTreeDropTarget('', event);
 }
 
 async function createNote(): Promise<void> {
@@ -1033,7 +1094,11 @@ onBeforeUnmount(() => {
         @drag-over="handleTreeDragOver"
         @drag-enter="handleTreeDragEnter"
         @drag-leave="handleTreeDragLeave"
+        @drag-over-root="handleTreeRootDragOver"
+        @drag-enter-root="handleTreeRootDragEnter"
+        @drag-leave-root="handleTreeRootDragLeave"
         @drop-on-directory="handleTreeDrop"
+        @drop-on-root="handleTreeRootDrop"
       />
     </aside>
 
