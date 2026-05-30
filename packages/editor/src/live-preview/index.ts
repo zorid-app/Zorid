@@ -11,17 +11,22 @@ export type { MarkdownCodeRange } from './markdown-code-context.js';
 export {
   isMarkdownLineInsideFencedCodeBlock,
   markdownFencedCodeRanges,
+  markdownFrontmatterRanges,
   markdownIndentedCodeRanges,
   markdownSuppressedCodeRanges,
+  markdownSuppressedPreviewRanges,
 } from './markdown-code-context.js';
 export {
   defaultLivePreviewRenderers,
+  emphasisLivePreviewRenderer,
   headingLivePreviewRenderer,
+  highlightLivePreviewRenderer,
   inlineCodeDelimiterLivePreviewRenderer,
   inlineCodeLivePreviewRenderer,
   markdownLinkLivePreviewRenderer,
+  strikethroughLivePreviewRenderer,
+  strongLivePreviewRenderer,
   tagLivePreviewRenderer,
-  taskMarkerLivePreviewRenderer,
   wikiLinkLivePreviewRenderer,
 } from './renderers.js';
 export type { TaskMarkerRange } from './task-toggle.js';

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { readFile } from 'node:fs/promises';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +14,11 @@ import {
   livePreviewRangeIntersectsSelection,
   shouldRenderLivePreviewRange,
 } from '../packages/editor/src/index';
+import { collectLivePreviewRangesWithWidgetSuppression } from '../packages/editor/src/live-preview/extension';
+import {
+  defaultLivePreviewInternalRenderers,
+  defaultLivePreviewWidgetRenderers,
+} from '../packages/editor/src/live-preview/renderers';
 
 describe('editor Live Preview primitives', () => {
   const renderer: LivePreviewRenderer = {
@@ -110,7 +116,6 @@ describe('editor Live Preview primitives', () => {
       'markdown-link',
       'wiki-link',
       'tag',
-      'task-marker',
     ]);
     expect(
       doc.slice(
@@ -119,6 +124,7 @@ describe('editor Live Preview primitives', () => {
       ),
     ).toBe('#tag/sub');
     expect(rendererIds).not.toContain('table');
+    expect(rendererIds).not.toContain('task-marker');
     expect(ranges.map((range) => doc.slice(range.from, range.to))).not.toContain('- [ ]');
     expect(ranges.map((range) => doc.slice(range.from, range.to))).not.toContain('    - [ ]');
   });
@@ -159,7 +165,6 @@ describe('editor Live Preview primitives', () => {
       'markdown-link',
       'wiki-link',
       'tag',
-      'task-marker',
     ]);
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual([
       '# Heading',
@@ -169,7 +174,6 @@ describe('editor Live Preview primitives', () => {
       '[link](target.md)',
       '[[Note|Alias]]',
       '#tag/sub',
-      '- [ ]',
     ]);
     expect(ranges.every((range, index) => index === 0 || ranges[index - 1]!.from <= range.from)).toBe(true);
     expect(ranges.map((range) => range.rendererId)).not.toContain('table');
@@ -197,35 +201,82 @@ describe('editor Live Preview primitives', () => {
     parent.remove();
   });
 
-  it('keeps task marker preview source-preserving and styling-only', () => {
-    const doc = '- [ ] pending task';
+  it('keeps public defaults free of private line and widget projection ranges', async () => {
+    const doc = ['> quote', '- [ ] pending task', '```ts', 'code', '```'].join('\n');
     const state = EditorState.create({ doc });
     const ranges = collectLivePreviewRanges(
       defaultLivePreviewRenderers,
       createLivePreviewContext(state, { from: 0, to: doc.length }),
     );
+    const rendererSource = await readFile('packages/editor/src/live-preview/renderers.ts', 'utf8');
+    const rootBarrelSource = await readFile('packages/editor/src/index.ts', 'utf8');
+    const livePreviewBarrelSource = await readFile('packages/editor/src/live-preview/index.ts', 'utf8');
 
-    expect(ranges).toContainEqual({
-      rendererId: 'task-marker',
-      from: 0,
-      to: 5,
-      className: 'z-live-preview-task-marker',
-    });
+    expect(ranges.map((range) => range.rendererId)).toEqual([]);
+    expect(defaultLivePreviewRenderers.map((renderer) => renderer.id)).not.toEqual(
+      expect.arrayContaining(['blockquote', 'task-marker', 'code-block-widget', 'callout-widget']),
+    );
+    expect(rendererSource).not.toContain('as LivePreviewRenderer');
+    expect(rootBarrelSource).not.toContain('taskMarkerLivePreviewRenderer');
+    expect(livePreviewBarrelSource).not.toContain('taskMarkerLivePreviewRenderer');
+    expect(state.doc.toString()).toBe(doc);
+  });
+
+  it('keeps task marker preview source-preserving as a private visual checkbox projection', () => {
+    const doc = '- [ ] pending task';
+    const state = EditorState.create({ doc });
+    const ranges = collectLivePreviewRangesWithWidgetSuppression(
+      defaultLivePreviewRenderers,
+      defaultLivePreviewInternalRenderers,
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [{ from: 0, to: doc.length }],
+      false,
+    );
+
+    expect(ranges).toContainEqual(
+      expect.objectContaining({
+        rendererId: 'task-marker',
+        from: 0,
+        to: 5,
+        className: 'z-live-preview-task-checkbox',
+        kind: 'replace',
+      }),
+    );
     expect(state.doc.toString()).toBe(doc);
     expect(ranges.find((range) => range.rendererId === 'task-marker')?.attributes).toBeUndefined();
   });
 
-  it('wires default MVP preview renderers into mounted editors', () => {
+  it('wires public and private first-party preview renderers into mounted default editors', () => {
     const parent = document.createElement('div');
     const editor = createMountedMarkdownEditor({
       parent,
-      text: '# Heading\n\nSee [[Note]] and #tag.',
+      text: ['# Heading', '', 'See [[Note]] and #tag.', '', '> quote', '- [ ] task'].join('\n'),
     });
 
     expect(parent.querySelector('[data-live-preview-renderer="heading"]')).toBeTruthy();
     expect(parent.querySelector('[data-live-preview-renderer="wiki-link"]')).toBeTruthy();
     expect(parent.querySelector('[data-live-preview-renderer="tag"]')).toBeTruthy();
-    expect(editor.getText()).toBe('# Heading\n\nSee [[Note]] and #tag.');
+    expect(parent.querySelector('.cm-line.z-live-preview-blockquote-line')).toBeTruthy();
+    expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeTruthy();
+    expect(editor.getText()).toContain('- [ ] task');
+
+    editor.destroy();
+  });
+
+  it('keeps explicit livePreviewRenderers customization on the public renderer path only', () => {
+    const parent = document.createElement('div');
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['# Heading', '> quote', '- [ ] task'].join('\n'),
+      livePreviewRenderers: [renderer],
+    });
+
+    expect(parent.querySelector('[data-live-preview-renderer="test-emphasis"]')).toBeTruthy();
+    expect(parent.querySelector('[data-live-preview-renderer="heading"]')).toBeNull();
+    expect(parent.querySelector('.cm-line.z-live-preview-blockquote-line')).toBeNull();
+    expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeNull();
+    expect(editor.getText()).toBe(['# Heading', '> quote', '- [ ] task'].join('\n'));
 
     editor.destroy();
   });
