@@ -87,4 +87,27 @@ describe('desktop MarkdownEditor editor-window properties', () => {
 
     expect(wrapper.find('.z-fields-properties-editor').exists()).toBe(false);
   });
+
+  it('does not render properties when the fields plugin contribution is disabled', async () => {
+    const fileFields: FileFieldsDto = {
+      path: 'Task.md',
+      typeName: 'Task',
+      typePath: 'Types/Task.md',
+      fields: [{ key: 'status', value: 'open', source: 'frontmatter', type: 'text' }],
+      diagnostics: [],
+    };
+
+    const wrapper = mount(MarkdownEditor, {
+      attachTo: document.body,
+      props: {
+        text: '# Task',
+        documentPath: 'Task.md',
+        fileFields,
+        fieldsPropertiesEnabled: false,
+      },
+    });
+    await flush();
+
+    expect(wrapper.find('.z-fields-properties-editor').exists()).toBe(false);
+  });
 });

@@ -621,6 +621,18 @@ h2 {
   font-weight: 700;
 }
 
+.markdown-editor .z-live-preview-list-marker {
+  color: var(--z-color-subtle);
+  font-family: var(--z-font-ui);
+  font-size: 0.94em;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.markdown-editor .z-live-preview-list-marker--ordered {
+  color: color-mix(in srgb, var(--z-color-subtle) 86%, var(--z-color-text));
+}
+
 .markdown-editor .z-live-preview-task-checkbox {
   display: inline-grid;
   place-items: center;

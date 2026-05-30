@@ -5,6 +5,7 @@ import {
   type InternalLivePreviewRenderer,
   setInternalLivePreviewFocused,
 } from './internal-types.js';
+import { listMarkerRangesForState } from './list-marker-ranges.js';
 import {
   type MarkdownBlockMatch,
   type MarkdownBlockRegistration,
@@ -225,6 +226,31 @@ class TaskCheckboxPreviewWidget extends WidgetType {
   }
 }
 
+class ListMarkerPreviewWidget extends WidgetType {
+  constructor(
+    readonly marker: string,
+    readonly ordered: boolean,
+    readonly orderedIndex?: number,
+  ) {
+    super();
+  }
+
+  eq(other: ListMarkerPreviewWidget): boolean {
+    return this.marker === other.marker && this.ordered === other.ordered && this.orderedIndex === other.orderedIndex;
+  }
+
+  toDOM(): HTMLElement {
+    const marker = document.createElement('span');
+    marker.className = this.ordered
+      ? 'z-live-preview-list-marker z-live-preview-list-marker--ordered'
+      : 'z-live-preview-list-marker';
+    marker.dataset.livePreviewRenderer = 'list-marker';
+    marker.setAttribute('aria-hidden', 'true');
+    marker.textContent = this.ordered ? `${this.orderedIndex ?? ''}. ` : '• ';
+    return marker;
+  }
+}
+
 class CalloutPreviewWidget extends WidgetType {
   constructor(
     readonly source: string,
@@ -384,6 +410,21 @@ export const taskMarkerLivePreviewRenderer: InternalLivePreviewRenderer = {
     })),
 };
 
+const listMarkerLivePreviewRenderer: InternalLivePreviewRenderer = {
+  id: 'list-marker',
+  match: ({ state, visibleFrom, visibleTo }) =>
+    listMarkerRangesForState(state, visibleFrom, visibleTo).map((range) => ({
+      rendererId: 'list-marker',
+      from: range.markerFrom,
+      to: range.markerTo,
+      activationFrom: range.markerFrom,
+      activationTo: range.markerTo,
+      className: 'z-live-preview-list-marker',
+      kind: 'replace',
+      widget: new ListMarkerPreviewWidget(range.marker, range.ordered, range.orderedIndex),
+    })),
+};
+
 const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
   id: 'blockquote',
   match: ({ docText, visibleFrom, visibleTo }) =>
@@ -472,6 +513,7 @@ export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
 
 export const defaultLivePreviewInternalRenderers: readonly InternalLivePreviewRenderer[] = [
   blockquoteLivePreviewRenderer,
+  listMarkerLivePreviewRenderer,
   taskMarkerLivePreviewRenderer,
 ];
 

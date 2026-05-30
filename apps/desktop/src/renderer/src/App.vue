@@ -212,6 +212,10 @@ const filteredCommands = computed(() => {
   return source.filter((command: CommandDto) => `${command.title} ${command.id}`.toLowerCase().includes(query));
 });
 const activePlugins = computed(() => plugins.value.filter((plugin) => plugin.status === 'active').length);
+const fieldsPropertiesEnabled = computed(() => {
+  const status = plugins.value.find((plugin) => plugin.pluginId === 'zorid.core.fields');
+  return status ? status.status === 'active' : true;
+});
 const appearanceSettings = computed(() => jsonRecord(settingValues.value['app:app.appearance']));
 const themePreference = computed<ThemePreference>(() => parseThemePreference(appearanceSettings.value.theme));
 const effectiveTheme = computed<ResolvedTheme>(() =>
@@ -1116,6 +1120,7 @@ onBeforeUnmount(() => {
         :document-path="selectedPath"
         :file-fields="fileFields"
         :types="types"
+        :fields-properties-enabled="fieldsPropertiesEnabled"
         @change="updateEditorText"
         @save="saveActive"
         @error="(message) => (error = message)"

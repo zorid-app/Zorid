@@ -12,12 +12,18 @@ import { createRendererDebugLogger } from '../debug-log.js';
 import { createFieldsPropertiesEditorContribution } from '../editor-window-fields-properties.js';
 import type { FieldDto, FileFieldsDto, TypeDto } from '../types.js';
 
-const props = defineProps<{
-  text: string;
-  documentPath?: string | undefined;
-  fileFields?: FileFieldsDto | undefined;
-  types?: readonly TypeDto[] | undefined;
-}>();
+const props = withDefaults(
+  defineProps<{
+    text: string;
+    documentPath?: string | undefined;
+    fileFields?: FileFieldsDto | undefined;
+    types?: readonly TypeDto[] | undefined;
+    fieldsPropertiesEnabled?: boolean | undefined;
+  }>(),
+  {
+    fieldsPropertiesEnabled: true,
+  },
+);
 const emit = defineEmits<{
   change: [text: string];
   save: [];
@@ -42,7 +48,7 @@ function toDomRect(
 }
 
 const propertiesContribution = computed<EditorWindowContribution[]>(() => {
-  if (!props.documentPath || !props.fileFields) return [];
+  if (!props.documentPath || !props.fileFields || props.fieldsPropertiesEnabled === false) return [];
   return [
     createFieldsPropertiesEditorContribution({
       fileFields: props.fileFields,

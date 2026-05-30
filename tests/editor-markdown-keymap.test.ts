@@ -39,9 +39,28 @@ describe('editor Markdown keymap behavior', () => {
   });
 
   it('exposes a conservative task toggle keymap without replacing Markdown Enter or Backspace', () => {
-    expect(markdownTaskKeymap).toEqual([
-      expect.objectContaining({ key: 'Mod-Enter', run: toggleTaskMarkerAtSelection }),
-    ]);
+    expect(markdownTaskKeymap).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'Enter' }),
+        expect.objectContaining({ key: 'Mod-Enter', run: toggleTaskMarkerAtSelection }),
+      ]),
+    );
+  });
+
+  it('continues task markers when Enter is pressed at the marker boundary', () => {
+    const parent = document.createElement('div');
+    const editor = createMountedMarkdownEditor({ parent, text: '- [ ] task' });
+    editor.focus();
+    editor.view.dispatch({ selection: { anchor: '- [ ]'.length + 1 } });
+
+    editor.view.contentDOM.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+
+    const text = editor.getText();
+    expect(text).toContain('\n- [ ] ');
+    expect(text).not.toContain('\n- task');
+    editor.destroy();
   });
 
   it('continues unordered lists through the official Markdown Enter command', () => {

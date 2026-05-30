@@ -264,13 +264,14 @@ describe('editor Live Preview primitives', () => {
     const parent = document.createElement('div');
     const editor = createMountedMarkdownEditor({
       parent,
-      text: ['# Heading', '', 'See [[Note]] and #tag.', '', '> quote', '- [ ] task'].join('\n'),
+      text: ['# Heading', '', 'See [[Note]] and #tag.', '', '> quote', '- bullet', '- [ ] task'].join('\n'),
     });
 
     expect(parent.querySelector('[data-live-preview-renderer="heading"]')).toBeTruthy();
     expect(parent.querySelector('[data-live-preview-renderer="wiki-link"]')).toBeTruthy();
     expect(parent.querySelector('[data-live-preview-renderer="tag"]')).toBeTruthy();
     expect(parent.querySelector('.cm-line.z-live-preview-blockquote-line')).toBeTruthy();
+    expect(parent.querySelectorAll('.z-live-preview-list-marker')).toHaveLength(1);
     expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeTruthy();
     expect(editor.getText()).toContain('- [ ] task');
 

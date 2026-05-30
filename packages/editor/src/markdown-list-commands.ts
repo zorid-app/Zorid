@@ -107,6 +107,39 @@ function addTaskMarker(text: string): string {
   return `${text.slice(0, indent)}- [ ] ${text.slice(indent)}`;
 }
 
+function continuedTaskMarker(marker: string): string {
+  return `${marker.replace(/\[[^\]]\]/u, '[ ]')} `;
+}
+
+function taskMarkerEditBoundary(
+  view: EditorView,
+  range: NonNullable<ReturnType<typeof findTaskMarkerAtPosition>>,
+): number {
+  let boundary = range.markerTo;
+  while (boundary < range.lineTo && isSpaceOrTab(view.state.doc.sliceString(boundary, boundary + 1).charCodeAt(0))) {
+    boundary += 1;
+  }
+  return boundary;
+}
+
+export function continueTaskListAtSelection(view: EditorView): boolean {
+  const selection = view.state.selection;
+  if (selection.ranges.length !== 1 || !selection.main.empty) return false;
+
+  const position = selection.main.head;
+  const range = findTaskMarkerAtPosition(view.state, position);
+  if (!range) return false;
+  if (position > taskMarkerEditBoundary(view, range)) return false;
+
+  const insert = `\n${continuedTaskMarker(range.marker)}`;
+  view.dispatch({
+    changes: { from: position, to: position, insert },
+    selection: { anchor: position + insert.length },
+    annotations: Transaction.userEvent.of('input.list.continue.task'),
+  });
+  return true;
+}
+
 export function toggleBulletListAtSelection(view: EditorView): boolean {
   const lines = touchedLines(view);
   const eligible = lines.filter((line) => {
