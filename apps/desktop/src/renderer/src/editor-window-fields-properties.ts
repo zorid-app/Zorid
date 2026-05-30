@@ -1,42 +1,6 @@
-import type { FieldValue } from '@zorid/platform-api';
-import type { Disposable, JsonValue, VaultPath } from '@zorid/shared';
-
-export interface PropertiesEditorField {
-  readonly key: string;
-  readonly value: FieldValue['value'] | undefined;
-  readonly source: FieldValue['source'];
-  readonly type?: string;
-  readonly required?: boolean;
-}
-
-export interface PropertiesEditorTypeOption {
-  readonly name: string;
-  readonly path: VaultPath;
-}
-
-export interface PropertiesEditorDiagnostic {
-  readonly key: string;
-  readonly message: string;
-}
-
-export interface PropertiesEditorContext {
-  readonly documentPath: VaultPath;
-  readonly fields: readonly PropertiesEditorField[];
-  readonly rawFrontmatter?: string;
-  readonly typeName?: string;
-  readonly typeOptions?: readonly PropertiesEditorTypeOption[];
-  readonly diagnostics?: readonly PropertiesEditorDiagnostic[];
-  onUpdateField?(field: PropertiesEditorField, value: JsonValue): void | Promise<void>;
-  onSetType?(typeName: string | undefined): void | Promise<void>;
-}
-
-export interface PropertiesEditorRegistration {
-  readonly id: string;
-  readonly placement: 'document-header';
-  readonly priority?: number;
-  readonly enabledByDefault: boolean;
-  render(context: PropertiesEditorContext): HTMLElement | { readonly element: HTMLElement; dispose?(): void };
-}
+import type { EditorWindowContribution } from '@zorid/editor';
+import type { JsonValue } from '@zorid/shared';
+import type { FieldDto, FileFieldsDto, TypeDto } from './types.js';
 
 function valueToInputValue(value: JsonValue | undefined): string {
   if (value === undefined || value === null) return '';
@@ -45,7 +9,7 @@ function valueToInputValue(value: JsonValue | undefined): string {
   return String(value);
 }
 
-function coerceFieldInputValue(raw: string | boolean, field: PropertiesEditorField): JsonValue {
+function coerceFieldInputValue(raw: string | boolean, field: FieldDto): JsonValue {
   if (field.type === 'boolean') return Boolean(raw);
   if (field.type === 'int') return Number.parseInt(String(raw), 10) || 0;
   if (field.type === 'float') return Number.parseFloat(String(raw)) || 0;
@@ -58,7 +22,12 @@ function coerceFieldInputValue(raw: string | boolean, field: PropertiesEditorFie
   return String(raw);
 }
 
-function appendTypeSelector(section: HTMLElement, context: PropertiesEditorContext): void {
+function appendTypeSelector(
+  section: HTMLElement,
+  fileFields: FileFieldsDto,
+  types: readonly TypeDto[],
+  onSetType: (typeName: string | undefined) => void,
+): void {
   const label = document.createElement('label');
   label.className = 'z-fields-properties-editor__field';
 
@@ -74,26 +43,24 @@ function appendTypeSelector(section: HTMLElement, context: PropertiesEditorConte
   none.textContent = 'None';
   select.append(none);
 
-  for (const type of context.typeOptions ?? []) {
+  for (const type of types) {
     const option = document.createElement('option');
     option.value = type.name;
     option.textContent = type.name;
     select.append(option);
   }
-  select.value = context.typeName ?? '';
+  select.value = fileFields.typeName ?? '';
 
-  select.addEventListener('change', () => {
-    void context.onSetType?.(select.value || undefined);
-  });
+  select.addEventListener('change', () => onSetType(select.value || undefined));
   label.append(select);
   section.append(label);
 }
 
-function appendDiagnosticList(section: HTMLElement, diagnostics: readonly PropertiesEditorDiagnostic[]): void {
-  if (diagnostics.length === 0) return;
+function appendDiagnosticList(section: HTMLElement, fileFields: FileFieldsDto): void {
+  if (fileFields.diagnostics.length === 0) return;
   const list = document.createElement('div');
   list.className = 'z-fields-properties-editor__diagnostics';
-  for (const diagnostic of diagnostics) {
+  for (const diagnostic of fileFields.diagnostics) {
     const item = document.createElement('p');
     item.textContent = `${diagnostic.key}: ${diagnostic.message}`;
     list.append(item);
@@ -101,7 +68,11 @@ function appendDiagnosticList(section: HTMLElement, diagnostics: readonly Proper
   section.append(list);
 }
 
-function appendFieldInput(section: HTMLElement, field: PropertiesEditorField, context: PropertiesEditorContext): void {
+function appendFieldInput(
+  section: HTMLElement,
+  field: FieldDto,
+  onUpdateField: (field: FieldDto, value: JsonValue) => void,
+): void {
   const label = document.createElement('label');
   label.className = 'z-fields-properties-editor__field';
   label.dataset.fieldKey = field.key;
@@ -119,24 +90,32 @@ function appendFieldInput(section: HTMLElement, field: PropertiesEditorField, co
   input.dataset.fieldSource = field.source;
   input.addEventListener('change', () => {
     const raw = input.type === 'checkbox' ? input.checked : input.value;
-    void context.onUpdateField?.(field, coerceFieldInputValue(raw, field));
+    onUpdateField(field, coerceFieldInputValue(raw, field));
   });
 
   label.append(input);
   section.append(label);
 }
 
-export function createFieldsPropertiesEditorRegistration(): PropertiesEditorRegistration {
+export interface FieldsPropertiesEditorContributionOptions {
+  readonly fileFields: FileFieldsDto;
+  readonly types: readonly TypeDto[];
+  readonly onUpdateField: (field: FieldDto, value: JsonValue) => void;
+  readonly onSetType: (typeName: string | undefined) => void;
+}
+
+export function createFieldsPropertiesEditorContribution(
+  options: FieldsPropertiesEditorContributionOptions,
+): EditorWindowContribution {
   return {
     id: 'zorid.core.fields.properties-editor',
-    placement: 'document-header',
+    placement: { kind: 'document-header' },
     priority: 100,
-    enabledByDefault: true,
-    render(context) {
+    render() {
       const element = document.createElement('section');
       element.className = 'z-fields-properties-editor';
       element.dataset.propertiesEditorRegistration = 'zorid.core.fields.properties-editor';
-      element.dataset.documentPath = context.documentPath;
+      element.dataset.documentPath = options.fileFields.path;
       element.setAttribute('aria-label', 'Properties');
 
       const title = document.createElement('p');
@@ -144,15 +123,15 @@ export function createFieldsPropertiesEditorRegistration(): PropertiesEditorRegi
       title.textContent = 'Properties';
       element.append(title);
 
-      appendTypeSelector(element, context);
-      appendDiagnosticList(element, context.diagnostics ?? []);
+      appendTypeSelector(element, options.fileFields, options.types, options.onSetType);
+      appendDiagnosticList(element, options.fileFields);
 
       const fields = document.createElement('div');
       fields.className = 'z-fields-properties-editor__fields';
-      for (const field of context.fields) appendFieldInput(fields, field, context);
+      for (const field of options.fileFields.fields) appendFieldInput(fields, field, options.onUpdateField);
       element.append(fields);
 
-      if (context.fields.length === 0) {
+      if (options.fileFields.fields.length === 0) {
         const empty = document.createElement('p');
         empty.className = 'z-fields-properties-editor__empty';
         empty.textContent = 'No indexed fields for this file.';
@@ -162,12 +141,4 @@ export function createFieldsPropertiesEditorRegistration(): PropertiesEditorRegi
       return element;
     },
   };
-}
-
-export interface FieldsPluginApi {
-  readonly propertiesEditor: PropertiesEditorRegistration;
-}
-
-export function disposePropertiesEditorRegistration(disposable?: Disposable): void | Promise<void> {
-  return disposable?.dispose();
 }
