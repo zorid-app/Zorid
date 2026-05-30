@@ -75,6 +75,9 @@ describe('IndexStore contract', () => {
         expect(
           reopened.database.prepare("SELECT name FROM sqlite_master WHERE name = 'search_fts'").get(),
         ).toBeTruthy();
+        expect(reopened.searchFullText('Notes')).toEqual([expect.objectContaining({ path: 'Notes/A.md' })]);
+        expect(reopened.searchFullText('A')).toEqual([expect.objectContaining({ path: 'Notes/A.md' })]);
+        expect(reopened.searchFullText('tag')).toEqual([expect.objectContaining({ path: 'Notes/A.md' })]);
       } finally {
         reopened.dispose();
       }

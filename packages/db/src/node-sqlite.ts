@@ -14,6 +14,17 @@ interface FileRow {
 interface ValueRow {
   value: string;
 }
+interface FtsSearchRow {
+  path: string;
+  score: number;
+  snippet: string;
+}
+
+export interface FullTextSearchHit {
+  readonly path: VaultPath;
+  readonly score: number;
+  readonly snippet: string;
+}
 
 export interface NodeSqliteIndexStoreOptions {
   readonly path: string;
@@ -33,7 +44,12 @@ export class NodeSqliteIndexStore implements IndexStore {
   }
 
   migrate(): void {
+    this.database.exec(
+      'CREATE TABLE IF NOT EXISTS schema_migrations(id TEXT PRIMARY KEY, applied_at_ms INTEGER NOT NULL)',
+    );
     for (const migration of indexMigrations) {
+      const applied = this.database.prepare('SELECT 1 AS value FROM schema_migrations WHERE id = ?').get(migration.id);
+      if (applied) continue;
       this.database.exec(migration.sql);
       this.database
         .prepare('INSERT OR IGNORE INTO schema_migrations(id, applied_at_ms) VALUES (?, ?)')
@@ -75,7 +91,9 @@ export class NodeSqliteIndexStore implements IndexStore {
       for (const tag of record.tags) insertTag.run(record.path, tag);
       const insertHeading = this.database.prepare('INSERT INTO headings(path, heading) VALUES (?, ?)');
       for (const heading of record.headings) insertHeading.run(record.path, heading);
-      this.database.prepare('INSERT INTO search_fts(path, text) VALUES (?, ?)').run(record.path, record.text);
+      this.database
+        .prepare('INSERT INTO search_fts(path, text, headings, tags) VALUES (?, ?, ?, ?)')
+        .run(record.path, record.text, record.headings.join(' '), record.tags.join(' '));
     });
   }
 
@@ -122,10 +140,51 @@ export class NodeSqliteIndexStore implements IndexStore {
   values(sql: string, bind: string): string[] {
     return ([...this.database.prepare(sql).iterate(bind)] as unknown as ValueRow[]).map((row) => row.value);
   }
+
+  searchFullText(query: string, options: { readonly limit?: number } = {}): readonly FullTextSearchHit[] {
+    const ftsQuery = toFtsQuery(query);
+    if (!ftsQuery) return [];
+    const limit = clampLimit(options.limit ?? 50);
+    const rows = [
+      ...this.database
+        .prepare(
+          `SELECT
+             path,
+             bm25(search_fts, 1.2, 1.0, 0.8, 0.8) AS score,
+             snippet(search_fts, -1, '', '', ' … ', 24) AS snippet
+           FROM search_fts
+           WHERE search_fts MATCH ?
+           ORDER BY score
+           LIMIT ?`,
+        )
+        .iterate(ftsQuery, limit),
+    ] as unknown as FtsSearchRow[];
+    return rows.map((row) => ({
+      path: normalizeVaultPath(row.path),
+      score: row.score,
+      snippet: row.snippet,
+    }));
+  }
 }
 
 export function createNodeSqliteIndexStore(
   options: NodeSqliteIndexStoreOptions | string = ':memory:',
 ): NodeSqliteIndexStore {
   return new NodeSqliteIndexStore(options);
+}
+
+function clampLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return 50;
+  return Math.max(1, Math.min(200, Math.floor(limit)));
+}
+
+function toFtsQuery(rawQuery: string): string | null {
+  const normalized = rawQuery.trim().replace(/^#+/, '');
+  if (!normalized) return null;
+  const tokens = [...normalized.matchAll(/[\p{L}\p{N}_]+/gu)]
+    .map((match) => match[0] ?? '')
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (!tokens.length) return null;
+  return tokens.map((token) => `"${token.replaceAll('"', '""')}"*`).join(' AND ');
 }
