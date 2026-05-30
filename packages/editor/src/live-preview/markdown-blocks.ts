@@ -62,6 +62,11 @@ export interface MarkdownBlockInteractionContext extends MarkdownBlockRenderCont
   readonly view: EditorView;
 }
 
+export interface BlockActionHandlers {
+  openReference?(target: { readonly path: string; readonly fragment?: string }): void;
+  setEphemeralState?(entry: { readonly key: string; readonly value: unknown }): void;
+}
+
 export interface MarkdownBlockClipboardEvent {
   readonly nativeEvent: ClipboardEvent;
   readonly selection: { readonly from: number; readonly to: number };
@@ -105,19 +110,38 @@ export interface MarkdownBlockRegistration<Match extends MarkdownBlockMatch = Ma
 
 class HTMLElementBlockWidget extends WidgetType {
   constructor(
-    readonly registrationId: string,
+    readonly registration: MarkdownBlockRegistration,
+    readonly match: MarkdownBlockMatch,
     readonly element: HTMLElement,
+    readonly handlers: BlockActionHandlers = {},
   ) {
     super();
   }
 
   eq(other: HTMLElementBlockWidget): boolean {
-    return this.registrationId === other.registrationId && this.element.isEqualNode(other.element);
+    return this.registration.id === other.registration.id && this.element.isEqualNode(other.element);
   }
 
-  toDOM(): HTMLElement {
-    this.element.dataset.livePreviewRenderer ??= this.registrationId;
+  toDOM(view: EditorView): HTMLElement {
+    this.element.dataset.livePreviewRenderer ??= this.registration.id;
+    this.element.addEventListener('mousedown', (event) => {
+      if (!this.registration.onActivate) return;
+      event.preventDefault();
+      const context = allDocumentContext(view);
+      applyBlockAction(this.registration.onActivate(event, this.match, context), context, this.handlers);
+    });
+    this.element.addEventListener('dblclick', (event) => {
+      if (!this.registration.onEdit) return;
+      event.preventDefault();
+      const context = allDocumentContext(view);
+      applyBlockAction(this.registration.onEdit(event, this.match, context), context, this.handlers);
+    });
     return this.element;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return (event.type === 'mousedown' && Boolean(this.registration.onActivate)) ||
+      (event.type === 'dblclick' && Boolean(this.registration.onEdit));
   }
 }
 
@@ -132,8 +156,13 @@ function renderContext(context: LivePreviewContext): MarkdownBlockRenderContext 
   };
 }
 
-function widgetForRendered(registrationId: string, rendered: WidgetType | HTMLElement): WidgetType {
-  return rendered instanceof WidgetType ? rendered : new HTMLElementBlockWidget(registrationId, rendered);
+function widgetForRendered(
+  registration: MarkdownBlockRegistration,
+  match: MarkdownBlockMatch,
+  rendered: WidgetType | HTMLElement,
+  handlers: BlockActionHandlers,
+): WidgetType {
+  return rendered instanceof WidgetType ? rendered : new HTMLElementBlockWidget(registration, match, rendered, handlers);
 }
 
 function inlineDefinition(docText: string, from: number, to: number): MarkdownBlockDefinition {
@@ -295,6 +324,7 @@ export function matchMarkdownBlockRegistration<Match extends MarkdownBlockMatch 
 
 export function markdownBlockRegistrationsToInternalRenderers(
   registrations: readonly MarkdownBlockRegistration[],
+  handlers: BlockActionHandlers = {},
 ): InternalLivePreviewRenderer[] {
   return [...registrations]
     .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))
@@ -315,7 +345,7 @@ export function markdownBlockRegistrationsToInternalRenderers(
               atomic: match.atomic ?? ('none' as const),
               className: match.className,
               kind: 'widget' as const,
-              widget: widgetForRendered(registration.id, registration.render(match, renderContext(context))),
+              widget: widgetForRendered(registration, match, registration.render(match, renderContext(context)), handlers),
             };
             return match.attributes ? { ...range, attributes: match.attributes } : range;
           }),
@@ -374,9 +404,20 @@ function clipboardResultFromCut(result: BlockCutResult): { clipboard: BlockClipb
   return 'clipboard' in result ? result : { clipboard: result };
 }
 
-function applyBlockAction(action: BlockAction | undefined, context: MarkdownBlockInteractionContext): void {
-  if (!action || action.kind === 'none' || action.kind === 'open-reference' || action.kind === 'set-ephemeral-state')
+function applyBlockAction(
+  action: BlockAction | undefined,
+  context: MarkdownBlockInteractionContext,
+  handlers: BlockActionHandlers = {},
+): void {
+  if (!action || action.kind === 'none') return;
+  if (action.kind === 'open-reference') {
+    handlers.openReference?.(action.fragment ? { path: action.path, fragment: action.fragment } : { path: action.path });
     return;
+  }
+  if (action.kind === 'set-ephemeral-state') {
+    handlers.setEphemeralState?.({ key: action.key, value: action.value });
+    return;
+  }
   if (action.kind === 'dispatch') context.view.dispatch(action.transaction);
   if (action.kind === 'reveal-source') {
     const range = action.range ?? context.state.selection.main;
@@ -384,7 +425,23 @@ function applyBlockAction(action: BlockAction | undefined, context: MarkdownBloc
   }
 }
 
-export function markdownBlockInteractionExtension(registrations: readonly MarkdownBlockRegistration[]): Extension {
+function findBlockAtSelectionHead(
+  registrations: readonly MarkdownBlockRegistration[],
+  context: MarkdownBlockInteractionContext,
+): { registration: MarkdownBlockRegistration; match: MarkdownBlockMatch } | null {
+  const position = context.state.selection.main.head;
+  for (const registration of [...registrations].sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))) {
+    for (const match of matchMarkdownBlockRegistration(registration, context)) {
+      if (position >= match.activationFrom && position <= match.activationTo) return { registration, match };
+    }
+  }
+  return null;
+}
+
+export function markdownBlockInteractionExtension(
+  registrations: readonly MarkdownBlockRegistration[],
+  handlers: BlockActionHandlers = {},
+): Extension {
   if (registrations.length === 0) return [];
   return EditorView.domEventHandlers({
     copy(event, view) {
@@ -406,13 +463,21 @@ export function markdownBlockInteractionExtension(registrations: readonly Markdo
         found.registration.onCut({ nativeEvent: event, selection: found.selection }, found.match, context),
       );
       if (!writeClipboardData(event, clipboard)) return false;
-      applyBlockAction(action, context);
+      applyBlockAction(action, context, handlers);
       if (!action) {
         view.dispatch({
           changes: { from: found.selection.from, to: found.selection.to, insert: '' },
           annotations: Transaction.userEvent.of('delete.cut'),
         });
       }
+      return true;
+    },
+    paste(event, view) {
+      const context = allDocumentContext(view);
+      const found = findBlockAtSelectionHead(registrations, context);
+      if (!found?.registration.onPaste) return false;
+      applyBlockAction(found.registration.onPaste(event, found.match, context), context, handlers);
+      event.preventDefault();
       return true;
     },
   });

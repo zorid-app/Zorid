@@ -166,3 +166,99 @@ describe('editor Live Preview inline registration API', () => {
     parent.remove();
   });
 });
+
+function customInlineRegistration(): MarkdownInlineRegistration {
+  return {
+    id: 'custom-inline-pill',
+    priority: 50,
+    match(context) {
+      const from = context.docText.indexOf('[[Target|Alias]]');
+      if (from === -1) return [];
+      return [
+        {
+          id: 'custom-inline-pill:target',
+          type: 'wiki-pill',
+          from,
+          to: from + '[[Target|Alias]]'.length,
+          activationFrom: from,
+          activationTo: from + '[[Target|Alias]]'.length,
+          sourceFrom: from,
+          sourceTo: from + '[[Target|Alias]]'.length,
+          sourceText: '[[Target|Alias]]',
+          className: 'test-custom-inline-pill',
+          selectionPolicy: { kind: 'content', range: { from: from + '[[Target|'.length, to: from + '[[Target|Alias'.length } },
+        },
+      ];
+    },
+    render(match) {
+      return { kind: 'mark', className: match.className ?? 'test-custom-inline-pill' };
+    },
+  };
+}
+
+describe('editor Live Preview inline selection hooks', () => {
+  it('applies content selection policy through host-mediated selection changes', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const doc = 'See [[Target|Alias]] today';
+    const editor = createMountedMarkdownEditor({ parent, text: doc, markdownInlineRegistrations: [customInlineRegistration()] });
+    const marker = doc.indexOf('Target');
+
+    editor.view.dispatch({ selection: { anchor: marker } });
+    editor.view.contentDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+
+    expect(editor.view.state.sliceDoc(editor.view.state.selection.main.from, editor.view.state.selection.main.to)).toBe('Alias');
+    expect(editor.getText()).toBe(doc);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('delegates custom selection policy to onSelect actions', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const doc = 'Open [[Target]]';
+    const opened: Array<{ path: string; fragment?: string }> = [];
+    const from = doc.indexOf('[[Target]]');
+    const registration: MarkdownInlineRegistration = {
+      id: 'custom-select-link',
+      match() {
+        return [
+          {
+            id: 'custom-select-link:target',
+            type: 'wiki-link',
+            from,
+            to: from + '[[Target]]'.length,
+            activationFrom: from,
+            activationTo: from + '[[Target]]'.length,
+            sourceFrom: from,
+            sourceTo: from + '[[Target]]'.length,
+            sourceText: '[[Target]]',
+            selectionPolicy: { kind: 'custom' },
+          },
+        ];
+      },
+      render() {
+        return { kind: 'mark', className: 'test-custom-select-link' };
+      },
+      onSelect() {
+        return { kind: 'open-reference', path: 'Target.md' };
+      },
+    };
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: doc,
+      markdownInlineRegistrations: [registration],
+      onOpenReference: (target) => opened.push(target),
+    });
+
+    editor.view.dispatch({ selection: { anchor: from + 2 } });
+    editor.view.contentDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+
+    expect(opened).toEqual([{ path: 'Target.md' }]);
+    expect(editor.getText()).toBe(doc);
+
+    editor.destroy();
+    parent.remove();
+  });
+});

@@ -111,3 +111,145 @@ export function groupEditorWindowContributions(
     return { placementKey, mode, active: ordered, suppressed: [], diagnostics: [] };
   });
 }
+
+export interface EditorWindowContributionHostOptions {
+  readonly parent: HTMLElement;
+  readonly contributions: readonly EditorWindowContribution[];
+  readonly context: EditorWindowContext;
+}
+
+interface MountedContributionView {
+  readonly contribution: EditorWindowContribution;
+  readonly view: DisposableView;
+}
+
+function asDisposableView(rendered: HTMLElement | DisposableView): DisposableView {
+  return rendered instanceof HTMLElement ? { element: rendered } : rendered;
+}
+
+function appendContributionView(parent: HTMLElement, mounted: MountedContributionView): void {
+  mounted.view.element.dataset.editorWindowContribution = mounted.contribution.id;
+  parent.append(mounted.view.element);
+}
+
+function renderContribution(contribution: EditorWindowContribution, context: EditorWindowContext): MountedContributionView | null {
+  const rendered = contribution.render?.(context);
+  if (!rendered) return null;
+  return { contribution, view: asDisposableView(rendered) };
+}
+
+function contributionGroupClassName(group: GroupedEditorWindowContribution): string {
+  return `z-editor-window-contribution-group z-editor-window-contribution-group--${group.placementKey.replace(/[^a-z0-9_-]+/giu, '-')}`;
+}
+
+function groupUsesPopoverShell(group: GroupedEditorWindowContribution): boolean {
+  return group.placementKey === 'cursor-popover' || group.placementKey === 'selection-popover';
+}
+
+function mountContributionGroup(
+  parent: HTMLElement,
+  group: GroupedEditorWindowContribution,
+  context: EditorWindowContext,
+): MountedContributionView[] {
+  const groupElement = document.createElement('section');
+  groupElement.className = contributionGroupClassName(group);
+  groupElement.dataset.placementKey = group.placementKey;
+  groupElement.dataset.mode = group.mode;
+  parent.append(groupElement);
+
+  const mounted = group.active.flatMap((contribution) => {
+    const view = renderContribution(contribution, context);
+    return view ? [view] : [];
+  });
+
+  if (!groupUsesPopoverShell(group)) {
+    for (const view of mounted) appendContributionView(groupElement, view);
+    return mounted;
+  }
+
+  const shell = document.createElement('div');
+  shell.className = 'z-editor-window-popover';
+  shell.dataset.placementKey = group.placementKey;
+  shell.setAttribute('role', 'group');
+  groupElement.append(shell);
+
+  if (mounted.length > 1) {
+    const tabs = document.createElement('div');
+    tabs.className = 'z-editor-window-popover__tabs';
+    tabs.setAttribute('role', 'tablist');
+    shell.append(tabs);
+    for (const view of mounted) {
+      const tab = document.createElement('button');
+      tab.className = 'z-editor-window-popover__tab';
+      tab.type = 'button';
+      tab.textContent = view.contribution.id;
+      tab.dataset.editorWindowContributionTab = view.contribution.id;
+      tab.setAttribute('role', 'tab');
+      tabs.append(tab);
+    }
+  }
+
+  const sections = document.createElement('div');
+  sections.className = 'z-editor-window-popover__sections';
+  shell.append(sections);
+  for (const view of mounted) {
+    const section = document.createElement('section');
+    section.className = 'z-editor-window-popover__section';
+    section.dataset.editorWindowContributionSection = view.contribution.id;
+    section.setAttribute('role', 'tabpanel');
+    appendContributionView(section, view);
+    sections.append(section);
+  }
+
+  return mounted;
+}
+
+export class EditorWindowContributionHost {
+  readonly root: HTMLElement;
+  #parent: HTMLElement;
+  #contributions: readonly EditorWindowContribution[];
+  #context: EditorWindowContext;
+  #mounted: MountedContributionView[] = [];
+
+  constructor({ parent, contributions, context }: EditorWindowContributionHostOptions) {
+    this.#parent = parent;
+    this.#contributions = contributions;
+    this.#context = context;
+    this.root = document.createElement('div');
+    this.root.className = 'z-editor-window-contributions';
+    this.#parent.append(this.root);
+    this.#render();
+  }
+
+  update(context: EditorWindowContext, contributions: readonly EditorWindowContribution[] = this.#contributions): void {
+    this.#context = context;
+    this.#contributions = contributions;
+    this.#render();
+  }
+
+  dispose(): void {
+    for (const mounted of this.#mounted) {
+      mounted.contribution.dispose?.();
+      mounted.view.dispose?.();
+    }
+    this.#mounted = [];
+    this.root.remove();
+  }
+
+  #render(): void {
+    for (const mounted of this.#mounted) {
+      mounted.contribution.dispose?.();
+      mounted.view.dispose?.();
+    }
+    this.#mounted = [];
+    this.root.replaceChildren();
+    for (const group of groupEditorWindowContributions(this.#contributions, this.#context)) {
+      this.#mounted.push(...mountContributionGroup(this.root, group, this.#context));
+    }
+    for (const contribution of this.#contributions) contribution.update?.(this.#context);
+  }
+}
+
+export function renderEditorWindowContributions(options: EditorWindowContributionHostOptions): EditorWindowContributionHost {
+  return new EditorWindowContributionHost(options);
+}

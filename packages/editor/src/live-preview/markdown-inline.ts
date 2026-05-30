@@ -71,6 +71,11 @@ export interface MarkdownInlineInteractionContext extends MarkdownInlineRenderCo
   readonly view: EditorView;
 }
 
+export interface EditorProjectionActionHandlers {
+  openReference?(target: { readonly path: string; readonly fragment?: string }): void;
+  setEphemeralState?(entry: { readonly key: string; readonly value: unknown }): void;
+}
+
 export interface MarkdownProjectionClipboardEvent {
   readonly nativeEvent: ClipboardEvent;
   readonly selection: SourceRange;
@@ -116,8 +121,20 @@ function allDocumentContext(view: EditorView): MarkdownInlineInteractionContext 
   return { ...renderContext(base), view };
 }
 
-function applyProjectionAction(action: EditorProjectionAction | undefined, context: MarkdownInlineInteractionContext): void {
-  if (!action || action.kind === 'none' || action.kind === 'open-reference' || action.kind === 'set-ephemeral-state') return;
+function applyProjectionAction(
+  action: EditorProjectionAction | undefined,
+  context: MarkdownInlineInteractionContext,
+  handlers: EditorProjectionActionHandlers = {},
+): void {
+  if (!action || action.kind === 'none') return;
+  if (action.kind === 'open-reference') {
+    handlers.openReference?.(action.fragment ? { path: action.path, fragment: action.fragment } : { path: action.path });
+    return;
+  }
+  if (action.kind === 'set-ephemeral-state') {
+    handlers.setEphemeralState?.({ key: action.key, value: action.value });
+    return;
+  }
   if (action.kind === 'dispatch') context.view.dispatch(action.transaction);
   if (action.kind === 'reveal-source') {
     const range = action.range ?? context.state.selection.main;
@@ -260,6 +277,7 @@ class HTMLElementInlineWidget extends WidgetType {
     readonly registration: MarkdownInlineRegistration,
     readonly match: MarkdownInlineMatch,
     readonly element: HTMLElement,
+    readonly handlers: EditorProjectionActionHandlers = {},
   ) {
     super();
   }
@@ -274,7 +292,7 @@ class HTMLElementInlineWidget extends WidgetType {
       if (!this.registration.onActivate) return;
       event.preventDefault();
       const context = allDocumentContext(view);
-      applyProjectionAction(this.registration.onActivate(event, this.match, context), context);
+      applyProjectionAction(this.registration.onActivate(event, this.match, context), context, this.handlers);
     });
     return this.element;
   }
@@ -288,14 +306,16 @@ function widgetForRendered(
   registration: MarkdownInlineRegistration,
   match: MarkdownInlineMatch,
   rendered: WidgetType | HTMLElement,
+  handlers: EditorProjectionActionHandlers,
 ): WidgetType {
-  return rendered instanceof WidgetType ? rendered : new HTMLElementInlineWidget(registration, match, rendered);
+  return rendered instanceof WidgetType ? rendered : new HTMLElementInlineWidget(registration, match, rendered, handlers);
 }
 
 function internalRangeForRendered(
   registration: MarkdownInlineRegistration,
   match: MarkdownInlineMatch,
   rendered: InlineRenderResult,
+  handlers: EditorProjectionActionHandlers,
 ): InternalLivePreviewRange | null {
   if (rendered.kind === 'none') return null;
   if (rendered.kind === 'mark') {
@@ -315,7 +335,7 @@ function internalRangeForRendered(
       kind: 'mark',
     };
   }
-  const widget = rendered.widget ? widgetForRendered(registration, match, rendered.widget) : undefined;
+  const widget = rendered.widget ? widgetForRendered(registration, match, rendered.widget, handlers) : undefined;
   return {
     rendererId: registration.id,
     from: match.from,
@@ -335,6 +355,7 @@ function internalRangeForRendered(
 
 export function markdownInlineRegistrationsToInternalRenderers(
   registrations: readonly MarkdownInlineRegistration[],
+  handlers: EditorProjectionActionHandlers = {},
 ): InternalLivePreviewRenderer[] {
   return [...registrations]
     .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))
@@ -343,7 +364,7 @@ export function markdownInlineRegistrationsToInternalRenderers(
         id: registration.id,
         match: (context) =>
           matchMarkdownInlineRegistration(registration, context).flatMap((match) => {
-            const range = internalRangeForRendered(registration, match, registration.render(match, renderContext(context)));
+            const range = internalRangeForRendered(registration, match, registration.render(match, renderContext(context)), handlers);
             return range ? [range] : [];
           }),
       }),
@@ -368,6 +389,14 @@ function findWholeSelectedInline(
       }
     }
   }
+  return null;
+}
+
+function selectionForPolicy(match: MarkdownInlineMatch): SourceSelection | null {
+  const policy = match.selectionPolicy ?? { kind: 'source' as const };
+  if (policy.kind === 'source') return { from: match.sourceFrom, to: match.sourceTo };
+  if (policy.kind === 'token') return { from: match.from, to: match.to };
+  if (policy.kind === 'content') return { from: policy.range.from, to: policy.range.to };
   return null;
 }
 
@@ -401,7 +430,10 @@ function clipboardResultFromCut(result: InlineCutResult): { clipboard: EditorCli
   return 'clipboard' in result ? result : { clipboard: result };
 }
 
-export function markdownInlineInteractionExtension(registrations: readonly MarkdownInlineRegistration[]): Extension {
+export function markdownInlineInteractionExtension(
+  registrations: readonly MarkdownInlineRegistration[],
+  handlers: EditorProjectionActionHandlers = {},
+): Extension {
   if (registrations.length === 0) return [];
   return EditorView.domEventHandlers({
     copy(event, view) {
@@ -418,7 +450,7 @@ export function markdownInlineInteractionExtension(registrations: readonly Markd
         found.registration.onCut({ nativeEvent: event, selection: found.selection }, found.match, context),
       );
       if (!writeClipboardData(event, clipboard)) return false;
-      applyProjectionAction(action, context);
+      applyProjectionAction(action, context, handlers);
       if (!action) {
         view.dispatch({
           changes: { from: found.selection.from, to: found.selection.to, insert: '' },
@@ -427,11 +459,28 @@ export function markdownInlineInteractionExtension(registrations: readonly Markd
       }
       return true;
     },
+
+    mouseup(event, view) {
+      const context = allDocumentContext(view);
+      const found = findInlineAtSelectionHead(registrations, context);
+      if (!found) return false;
+      if (found.match.selectionPolicy?.kind === 'custom') {
+        if (!found.registration.onSelect) return false;
+        applyProjectionAction(found.registration.onSelect(event, found.match, context), context, handlers);
+        return true;
+      }
+      const selection = selectionForPolicy(found.match);
+      if (!selection) return false;
+      const current = view.state.selection.main;
+      if (current.from === selection.from && current.to === selection.to) return false;
+      applyProjectionAction({ kind: 'set-selection', selection }, context, handlers);
+      return true;
+    },
     paste(event, view) {
       const context = allDocumentContext(view);
       const found = findInlineAtSelectionHead(registrations, context);
       if (!found?.registration.onPaste) return false;
-      applyProjectionAction(found.registration.onPaste(event, found.match, context), context);
+      applyProjectionAction(found.registration.onPaste(event, found.match, context), context, handlers);
       event.preventDefault();
       return true;
     },

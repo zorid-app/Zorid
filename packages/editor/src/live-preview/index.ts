@@ -9,6 +9,7 @@ export {
 } from './extension.js';
 export type {
   BlockAction,
+  BlockActionHandlers,
   BlockClipboardResult,
   BlockCutResult,
   MarkdownBlockClipboardEvent,
@@ -24,6 +25,7 @@ export type {
 export type {
   EditorClipboardResult,
   EditorProjectionAction,
+  EditorProjectionActionHandlers,
   InlineCutResult,
   InlineRenderResult,
   InlineSelectionPolicy,

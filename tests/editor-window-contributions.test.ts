@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   editorWindowPlacementKey,
   groupEditorWindowContributions,
+  renderEditorWindowContributions,
   type EditorWindowContext,
   type EditorWindowContribution,
 } from '../packages/editor/src';
@@ -91,5 +92,67 @@ describe('editor window contribution grouping', () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0]?.active.map((item) => item.id)).toEqual(['enabled']);
+  });
+});
+
+describe('editor window contribution host', () => {
+  it('mounts document-header contributions and disposes rendered views', () => {
+    const parent = document.createElement('div');
+    let disposed = 0;
+    const host = renderEditorWindowContributions({
+      parent,
+      context,
+      contributions: [
+        {
+          id: 'properties',
+          placement: { kind: 'document-header' },
+          render() {
+            const element = document.createElement('div');
+            element.textContent = 'Properties';
+            return { element, dispose: () => void (disposed += 1) };
+          },
+        },
+      ],
+    });
+
+    expect(parent.querySelector('[data-placement-key="document-header"]')?.textContent).toBe('Properties');
+    expect(parent.querySelector('[data-editor-window-contribution="properties"]')).toBeTruthy();
+
+    host.dispose();
+    expect(disposed).toBe(1);
+    expect(parent.querySelector('.z-editor-window-contributions')).toBeNull();
+  });
+
+  it('renders grouped cursor popovers with tabs and sections', () => {
+    const parent = document.createElement('div');
+    const host = renderEditorWindowContributions({
+      parent,
+      context,
+      contributions: [
+        {
+          id: 'ai-help',
+          placement: { kind: 'cursor-popover' },
+          priority: 1,
+          render: () => Object.assign(document.createElement('div'), { textContent: 'AI' }),
+        },
+        {
+          id: 'link-preview',
+          placement: { kind: 'cursor-popover' },
+          priority: 2,
+          render: () => Object.assign(document.createElement('div'), { textContent: 'Link' }),
+        },
+      ],
+    });
+
+    expect([...parent.querySelectorAll('[data-editor-window-contribution-tab]')].map((node) => node.textContent)).toEqual([
+      'link-preview',
+      'ai-help',
+    ]);
+    expect([...parent.querySelectorAll('[data-editor-window-contribution-section]')].map((node) => node.textContent)).toEqual([
+      'Link',
+      'AI',
+    ]);
+
+    host.dispose();
   });
 });

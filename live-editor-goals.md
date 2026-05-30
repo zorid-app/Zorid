@@ -520,29 +520,44 @@ The first pass from this plan and the two deep research reports is now partially
 
 This pass intentionally did not finish every foundation item. The remaining foundation work is block-hook consolidation, built-in widget migration to the block registration path, real editor-window DOM mounting, Properties/frontmatter services, and Reading-view adapters.
 
+## Implementation status after the foundation-completion pass
+
+The next foundation pass added host behavior on top of the initial contracts:
+
+- Inline registrations now honor `selectionPolicy` for source/content/token selections and delegate `custom` selection to `onSelect` with host-mediated actions.
+- Inline and block projection actions can now report `open-reference` and `set-ephemeral-state` through editor-level handlers instead of being silently ignored.
+- HTMLElement-backed block registrations now receive host-mediated `onActivate` and `onEdit` event handling, and registered blocks can handle paste at the selection head.
+- The editor-window contribution API now has a DOM host (`EditorWindowContributionHost` / `renderEditorWindowContributions`) that mounts document-header contributions, grouped cursor/selection popovers, tab/section shells, updates, and disposal.
+- The Fields core plugin now exposes a narrow `PropertiesEditorRegistration` skeleton for a `document-header` Properties editor. This remains an editor-window contribution shape, not a Markdown block or inline registration.
+
+Still intentionally deferred:
+
+- Full Properties/frontmatter metadata editing and plugin enable/disable UI integration.
+- Porting built-in code-block and callout widgets fully onto first-party `MarkdownBlockRegistration` instances.
+- `.zbase` Live Preview rendering beyond the existing external embed match/open-reference foundation.
+- Reading-view adapters and table-specific behavior.
+
 ## Gaps to close
 
 The missing pieces are:
 
-1. Consolidate the experimental `MarkdownBlockRegistration` path by porting built-in code-block and callout widgets onto it.
-2. Finish host-mediated block hooks for activate/edit/paste/open-reference behavior, not only copy/cut.
-3. Add Live Preview rendering for external-reference blocks such as `.zbase` embeds.
-4. Complete inline selection behavior by wiring `selectionPolicy` and `onSelect`, then decide whether built-in task checkboxes should be implemented as a first-party inline registration rather than only suppressible built-in behavior.
-5. Build the actual editor-window host renderer for contribution DOM mounting, focus containment, lifecycle cleanup, grouped popover tabs/sections, collision handling, and keyboard/a11y behavior.
-6. Implement `PropertiesEditorRegistration` through the Fields core plugin and a metadata/frontmatter service; keep it out of the Markdown block/inline contracts.
-7. Add Reading-view adapters for inline/block registrations after the edit-mode contracts are stable.
-8. Add tests that prove source reveal or structured activation, custom selection, custom paste behavior, viewport bounds, fallback/raw behavior, real grouped popover UI, and Properties/frontmatter enable/disable behavior.
+1. Consolidate the experimental `MarkdownBlockRegistration` path by porting built-in code-block and callout widgets onto first-party registrations.
+2. Add Live Preview rendering for external-reference blocks such as `.zbase` embeds using the host-mediated open-reference foundation.
+3. Wire the editor-window host into the real desktop editor window and plugin lifecycle instead of only exposing the package-level host helper.
+4. Implement full `PropertiesEditorRegistration` behavior through the Fields core plugin and a metadata/frontmatter service; keep it out of the Markdown block/inline contracts.
+5. Decide whether built-in task checkboxes should become a first-party inline registration rather than only a suppressible built-in renderer.
+6. Add Reading-view adapters for inline/block registrations after the edit-mode contracts are stable.
+7. Add tests that prove viewport bounds during built-in block-registration migration, Properties/frontmatter enable/disable behavior, real desktop editor-window integration, and `.zbase` open/edit flows.
 
 ## Recommended next step
 
 The next implementation pass should complete the remaining editor foundation by making the new contracts usable in the real editor host:
 
-1. Wire `selectionPolicy` and `onSelect` for inline registrations so inline syntax can customize selection the same way it can customize activation/copy/cut/paste.
-2. Build the editor-window host renderer that mounts `EditorWindowContribution` output into managed lanes and renders grouped cursor/selection popovers with tabs or sections.
-3. Add the first `PropertiesEditorRegistration` skeleton in the Fields core plugin as a `document-header` editor-window contribution, backed by a narrow metadata/frontmatter service and enable/disable behavior.
-4. Finish block-hook parity for activate/edit/paste/open-reference and port built-in code-block/callout widgets onto the `MarkdownBlockRegistration` path.
-5. Add `.zbase` Live Preview external-reference rendering only after block hook/open-reference behavior is host-mediated.
-6. Keep Reading view parity, tables, broad Properties UI polish, generalized plugin marketplace concerns, and more block families out of the pass unless a test fixture needs a narrow example.
+1. Port built-in code-block and callout widgets fully onto first-party `MarkdownBlockRegistration` instances while preserving existing CSS/classes and viewport-bounded behavior.
+2. Wire the Fields `PropertiesEditorRegistration` skeleton into the real editor-window/plugin host with enable/disable behavior and a metadata/frontmatter service.
+3. Add `.zbase` Live Preview rendering using the host-mediated open-reference/external embed foundation.
+4. Add Reading-view adapters after edit-mode inline/block contracts stabilize.
+5. Keep tables, broad Properties UI polish, generalized plugin marketplace concerns, and more block families out of the pass unless a test fixture needs a narrow example.
 
 This moves Zorid from a block-only Live Preview plan to a three-surface editor architecture: Markdown block registrations for source-backed blocks, Markdown inline registrations for source-backed inline projections and interactions, and editor-window contributions for non-source UI around the document. The most important invariant stays the same: durable Markdown edits go through transactions, external durable edits go through explicit workspace/plugin APIs, and plugin DOM never owns the document model.
 

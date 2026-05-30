@@ -182,3 +182,70 @@ describe('editor Live Preview block registration API', () => {
     parent.remove();
   });
 });
+
+describe('editor Live Preview block interaction hooks', () => {
+  it('runs HTMLElement activate/edit hooks through host-mediated actions', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const opened: Array<{ path: string; fragment?: string }> = [];
+    const block = ['```columns', 'left', '```'].join('\n');
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: block,
+      markdownBlockRegistrations: [
+        {
+          ...columnsRegistration(),
+          onActivate() {
+            return { kind: 'open-reference', path: 'views/tasks.zbase', fragment: 'open' };
+          },
+          onEdit(_event, match) {
+            return { kind: 'reveal-source', range: { from: match.definition.sourceFrom, to: match.definition.sourceTo } };
+          },
+        },
+      ],
+      onOpenReference: (target) => opened.push(target),
+    });
+
+    const widget = parent.querySelector<HTMLElement>('.test-columns-widget');
+    expect(widget).toBeTruthy();
+    widget?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    expect(opened).toEqual([{ path: 'views/tasks.zbase', fragment: 'open' }]);
+
+    widget?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    expect(editor.view.state.selection.main.from).toBe(0);
+    expect(editor.view.state.selection.main.to).toBe(block.length);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('runs registered block paste hooks at the selection head', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const block = ['```columns', 'left', '```'].join('\n');
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: block,
+      markdownBlockRegistrations: [
+        {
+          ...columnsRegistration(),
+          onPaste() {
+            return {
+              kind: 'dispatch',
+              transaction: { changes: { from: block.length, to: block.length, insert: '\nPASTED' } },
+            };
+          },
+        },
+      ],
+    });
+
+    editor.view.dispatch({ selection: { anchor: block.indexOf('left') } });
+    const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+    expect(editor.view.contentDOM.dispatchEvent(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(editor.getText()).toBe(`${block}\nPASTED`);
+
+    editor.destroy();
+    parent.remove();
+  });
+});
