@@ -629,18 +629,32 @@ async function openEntry(entry: VaultEntry): Promise<void> {
 }
 
 async function createNote(): Promise<void> {
-  const name = prompt('Markdown file path', 'Untitled.md');
-  if (!name) return;
-  await desktop.createMarkdownFile(name, `# ${name.replace(/\.md$/i, '')}\n`);
-  await loadDirectory('');
-  await refreshShellData();
+  await runFileOperation(async () => {
+    const name = prompt('Markdown file path', 'Untitled.md');
+    if (!name) return;
+    await desktop.createMarkdownFile(name, `# ${name.replace(/\.md$/i, '')}\n`);
+    await loadDirectory('');
+    await refreshShellData();
+  });
 }
 
 async function createFolder(): Promise<void> {
-  const name = prompt('Folder path', 'Notes');
-  if (!name) return;
-  await desktop.createVaultFolder(name);
-  await loadDirectory('');
+  await runFileOperation(async () => {
+    const name = prompt('Folder path', 'Notes');
+    if (!name) return;
+    await desktop.createVaultFolder(name);
+    await loadDirectory('');
+    await refreshShellData();
+  });
+}
+
+async function runFileOperation(action: () => Promise<unknown>): Promise<void> {
+  error.value = undefined;
+  try {
+    await action();
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : String(caught);
+  }
 }
 
 async function renameSelected(): Promise<void> {
