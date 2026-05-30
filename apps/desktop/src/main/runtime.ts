@@ -347,6 +347,15 @@ export interface DesktopRuntimeOptions {
   readonly appSettings?: AppSettingsStore;
 }
 
+interface DebugVaultPathDescription {
+  readonly input: string;
+  readonly normalized?: VaultPath;
+  readonly resolved?: string;
+  readonly exists: boolean;
+  readonly kind?: 'file' | 'directory';
+  readonly error?: string;
+}
+
 function missingRuntimeLoader(manifest: PluginManifest): never {
   throw new Error(`No runtime loader installed for core plugin: ${manifest.id}`);
 }
@@ -387,6 +396,23 @@ export class DesktopRuntime {
       createBaseContext: (manifest, stack) => this.createPluginContext(manifest, stack),
     });
     this.registerStaticPlaceholders(manifests);
+  }
+
+  async debugDescribeVaultPath(vaultPath: string): Promise<DebugVaultPathDescription> {
+    const normalized = normalizeVaultPath(vaultPath);
+    const resolved = this.requireVault().resolve(normalized);
+    try {
+      const info = await this.requireVault().stat(normalized);
+      return { input: vaultPath, normalized, resolved, exists: true, kind: info?.kind };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        return { input: vaultPath, normalized, resolved, exists: false, error: 'ENOENT' };
+      throw error;
+    }
+  }
+
+  vaultRoot(): string | undefined {
+    return this.#activeVault?.root;
   }
 
   async openVault(root: string): Promise<VaultProfile> {

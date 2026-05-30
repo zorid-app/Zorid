@@ -45,6 +45,41 @@ if (shouldDisableGpu()) {
 let recentVaultStore: RecentVaultStore | undefined;
 const appSettingsStore = new InMemoryAppSettingsStore();
 
+type RenamePathDebugState = {
+  readonly input: string;
+  readonly normalized?: string;
+  readonly resolved?: string;
+  readonly exists: boolean;
+  readonly kind?: 'file' | 'directory';
+  readonly error?: string;
+};
+
+function serializeError(error: unknown): { name: string; message: string; code?: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      code: (error as NodeJS.ErrnoException).code,
+      ...(error.stack === undefined ? {} : { stack: error.stack }),
+    };
+  }
+  return { name: 'Error', message: String(error) };
+}
+
+async function describeRenamePath(runtime: DesktopRuntime, vaultPath: string): Promise<RenamePathDebugState> {
+  try {
+    return await runtime.debugDescribeVaultPath(vaultPath);
+  } catch (error) {
+    return {
+      input: vaultPath,
+      normalized: undefined,
+      resolved: undefined,
+      exists: false,
+      error: serializeError(error).message,
+    };
+  }
+}
+
 function logsRoot(): string {
   return app.getPath('logs');
 }
@@ -144,9 +179,55 @@ ipcMain.handle('zorid:create-vault-folder', async (event, vaultPath: string) =>
 ipcMain.handle('zorid:create-markdown-file', async (event, vaultPath: string, contents?: string) =>
   runtimeFor(event).createMarkdownFile(vaultPath, contents),
 );
-ipcMain.handle('zorid:rename-vault-path', async (event, from: string, to: string) =>
-  runtimeFor(event).renameVaultPath(from, to),
-);
+ipcMain.handle('zorid:rename-vault-path', async (event, from: string, to: string) => {
+  const runtime = runtimeFor(event);
+  const beforeFrom = await describeRenamePath(runtime, from);
+  const beforeTo = await describeRenamePath(runtime, to);
+  await appendDesktopDebugLog(logsRoot(), {
+    level: 'debug',
+    scope: 'desktop.ipc',
+    message: 'rename-vault-path requested',
+    data: {
+      windowId: event.sender.id,
+      vaultRoot: runtime.vaultRoot(),
+      profile: runtime.vaultProfile(),
+      input: { from, to },
+      before: { from: beforeFrom, to: beforeTo },
+    },
+  });
+
+  try {
+    await runtime.renameVaultPath(from, to);
+    const afterFrom = await describeRenamePath(runtime, from);
+    const afterTo = await describeRenamePath(runtime, to);
+    await appendDesktopDebugLog(logsRoot(), {
+      level: 'debug',
+      scope: 'desktop.ipc',
+      message: 'rename-vault-path succeeded',
+      data: {
+        windowId: event.sender.id,
+        vaultRoot: runtime.vaultRoot(),
+        input: { from, to },
+        before: { from: beforeFrom, to: beforeTo },
+        after: { from: afterFrom, to: afterTo },
+      },
+    });
+  } catch (error) {
+    await appendDesktopDebugLog(logsRoot(), {
+      level: 'error',
+      scope: 'desktop.ipc',
+      message: 'rename-vault-path failed',
+      data: {
+        windowId: event.sender.id,
+        vaultRoot: runtime.vaultRoot(),
+        input: { from, to },
+        before: { from: beforeFrom, to: beforeTo },
+        error: serializeError(error),
+      },
+    });
+    throw error;
+  }
+});
 ipcMain.handle('zorid:delete-vault-path', async (event, vaultPath: string) =>
   runtimeFor(event).deleteVaultPath(vaultPath),
 );
