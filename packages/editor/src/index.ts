@@ -1,6 +1,6 @@
 import { history, historyKeymap } from '@codemirror/commands';
 import { EditorState, type Extension } from '@codemirror/state';
-import { EditorView, keymap, type ViewUpdate } from '@codemirror/view';
+import { EditorView, type KeyBinding, keymap, type ViewUpdate } from '@codemirror/view';
 import type {
   EditorAPI,
   EditorChange,
@@ -34,6 +34,7 @@ import {
   defaultLivePreviewRenderers,
   defaultMarkdownBlockRegistrations,
 } from './live-preview/renderers.js';
+import { toggleTaskMarkerAtSelection } from './live-preview/task-toggle.js';
 import type { LivePreviewRenderer } from './live-preview/types.js';
 
 export type {
@@ -128,6 +129,12 @@ export {
   toggleTaskMarkerAtSelection,
   wikiLinkLivePreviewRenderer,
 } from './live-preview/index.js';
+export {
+  indentListItemsAtSelection,
+  outdentListItemsAtSelection,
+  toggleBulletListAtSelection,
+  toggleTaskListAtSelection,
+} from './markdown-list-commands.js';
 
 export interface EditorDocumentStore {
   read(path: VaultPath): Promise<string>;
@@ -197,6 +204,13 @@ export function composeEditorExtensions(
   return { extensions, diagnostics };
 }
 
+export const markdownTaskKeymap: readonly KeyBinding[] = [
+  {
+    key: 'Mod-Enter',
+    run: toggleTaskMarkerAtSelection,
+  },
+];
+
 export function createMarkdownEditorExtensions({
   extensionContributions = [],
   livePreviewRenderers,
@@ -229,6 +243,7 @@ export function createMarkdownEditorExtensions({
     zoridMarkdown(),
     history(),
     keymap.of(historyKeymap),
+    keymap.of(markdownTaskKeymap),
     ...markdownInlineRegistrationExtensions(activeMarkdownInlineRegistrations),
     ...markdownBlockRegistrationExtensions([
       ...activeDefaultMarkdownBlockRegistrations,

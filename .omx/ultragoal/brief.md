@@ -1,29 +1,47 @@
-Execute the approved RALPLAN handoff for Live Preview interaction + internal block architecture hardening.
-
-Authoritative planning artifacts:
-- PRD: .omx/plans/prd-live-preview-interaction-block-architecture-hardening-20260530T041814Z.md
-- Test spec: .omx/plans/test-spec-live-preview-interaction-block-architecture-hardening-20260530T041814Z.md
-- Handoff: .omx/plans/ralplan-handoff-live-preview-interaction-block-architecture-hardening-20260530T041814Z.json
-
-Constraints:
-- Markdown source remains canonical.
-- Selection and clipboard are primary acceptance criteria.
-- Keep block architecture private under packages/editor/src/live-preview.
-- Preserve Lezer/no-regex parser ownership.
-- Do not implement public plugin API, tables, Properties/frontmatter visual editor, Reading parity, embeds/images/math, or broad parser rewrite.
-- Verify and commit changed files.
-
-Story 1: Selection and mapping hardening.
-Add/strengthen tests and implementation for selections spanning mark, replace, line, and widget ranges. Cover cursor positions at start/end boundaries, activationTo, after widget/range end, mixed selections around inline code delimiters, task checkboxes, code-block widgets, and callout widgets. Preserve canonical source except explicit source-backed commands.
-
-Story 2: Clipboard/source preservation hardening.
-Upgrade clipboard coverage from helper-only source slicing to behavior-level coverage. Attempt mounted or filter-level copy/cut behavior using CodeMirror clipboard seams; if Happy DOM blocks that, document the limitation and prove an equivalent command/filter path. Cover inline code, task checkbox, fenced code widget, callout widget, mixed selections, ordinary text passthrough, cut undo/redo where implemented, and multi-selection if practical.
-
-Story 3: Activation and atomic-range policy decision.
-Make the atomic policy explicit and test-backed. Either keep no-atomic-ranges with stronger cursor/deletion/pointer evidence or introduce private EditorView.atomicRanges for selected widget ranges with cursor motion, deletion, and pointer activation tests.
-
-Story 4: Private internal block architecture refinement.
-Add a private contract checkpoint for source range, activation range, clipboard source policy, and optional atomic policy. Refine the private LivePreviewBlockRenderer path so code-block and callout widgets share match-to-widget-to-activation metadata without exporting public block APIs. Verify live-preview/index.ts, package root exports, and packages/editor/package.json do not leak private helpers.
-
-Story 5: Viewport/performance regression, final cleanup, review, and commit.
-Extend large mixed-document fixtures for headings, tasks, code blocks, and callouts. Run targeted Live Preview suites, no-regex gate, lint, typecheck, full tests, ai-slop-cleaner on changed files, independent code review, architect review, final commit, and Ultragoal final checkpoint.
+{
+  "task": "Editor usability improvements for checkbox/task and bullet/list editing only",
+  "scope": {
+    "include": [
+      "source-backed task checkbox toggle command/keymap exposure",
+      "checkbox projection polish",
+      "bullet/task list source-transform commands",
+      "indent/outdent for unordered/task list lines"
+    ],
+    "exclude": [
+      ".zbase/DataViews changes",
+      "full table widget/editor",
+      "public third-party plugin API changes",
+      "new dependencies"
+    ]
+  },
+  "planning_artifacts": {
+    "context_snapshot": ".omx/context/editor-usability-checkbox-bullets-20260530T132204Z.md",
+    "prd": ".omx/plans/prd-editor-usability-checkbox-bullets-20260530T132250Z.md",
+    "test_spec": ".omx/plans/test-spec-editor-usability-checkbox-bullets-20260530T132250Z.md"
+  },
+  "ralplan_architect_review": {
+    "agent_id": "019e7912-0970-70e0-a502-16b62cd42a91",
+    "verdict": "APPROVE",
+    "summary": "Architecture approved after fixing context reference, bullet-toggle task-line exclusion, rejected generalized abstraction, risk mitigations, table raw-source verification, and task-only/mixed bullet tests."
+  },
+  "ralplan_critic_review": {
+    "agent_id": "019e7913-1105-7ba2-ac76-84caa02eb42b",
+    "verdict": "APPROVE",
+    "summary": "Critic approved revised PRD/test spec as actionable, verifiable, aligned with source-backed CodeMirror commands and Live Preview projection boundaries."
+  },
+  "ralplan_consensus_gate": {
+    "complete": true,
+    "order": ["architect", "critic"],
+    "approved_at": "2026-05-30T13:22:50Z"
+  },
+  "recommended_execution": {
+    "default": "$ultragoal",
+    "parallel_option": "$team for disjoint implementation/test lanes if desired",
+    "ralph_fallback": "$ralph only if a single-owner persistent verification loop is explicitly selected"
+  },
+  "verification": [
+    "pnpm vitest run tests/editor-task-toggle.test.ts tests/editor-markdown-keymap.test.ts tests/editor-markdown-list-commands.test.ts tests/editor-live-preview-primitives.test.ts tests/desktop-live-preview-styles.test.ts",
+    "pnpm typecheck",
+    "pnpm lint"
+  ]
+}

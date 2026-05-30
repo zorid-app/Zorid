@@ -631,6 +631,25 @@ h2 {
   line-height: 1;
   vertical-align: -0.08em;
   cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.markdown-editor .z-live-preview-task-checkbox:hover {
+  border-color: color-mix(in srgb, var(--z-color-accent) 58%, var(--z-color-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--z-color-accent) 12%, transparent);
+}
+
+.markdown-editor .z-live-preview-task-checkbox:active {
+  transform: scale(0.94);
+}
+
+.markdown-editor .z-live-preview-task-checkbox:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--z-color-accent) 72%, transparent);
+  outline-offset: 2px;
 }
 
 .markdown-editor .z-live-preview-task-checkbox--checked {

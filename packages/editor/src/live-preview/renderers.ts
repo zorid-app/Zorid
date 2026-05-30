@@ -192,10 +192,11 @@ class TaskCheckboxPreviewWidget extends WidgetType {
     checkbox.dataset.livePreviewRenderer = 'task-marker';
     checkbox.setAttribute('role', 'checkbox');
     checkbox.setAttribute('aria-checked', this.checked ? 'true' : 'false');
+    checkbox.setAttribute('aria-label', this.checked ? 'Mark task incomplete' : 'Mark task complete');
+    checkbox.tabIndex = 0;
     checkbox.textContent = this.checked ? '✓' : '';
 
-    checkbox.addEventListener('mousedown', (event) => {
-      event.preventDefault();
+    const toggle = () => {
       view.focus();
       view.dispatch({
         effects: setInternalLivePreviewFocused.of(true),
@@ -203,6 +204,17 @@ class TaskCheckboxPreviewWidget extends WidgetType {
         scrollIntoView: true,
       });
       toggleTaskMarkerAtPosition(view, this.activateAt);
+    };
+
+    checkbox.addEventListener('keydown', (event) => {
+      if (event.key !== ' ' && event.key !== 'Enter') return;
+      event.preventDefault();
+      toggle();
+    });
+
+    checkbox.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      toggle();
     });
 
     return checkbox;

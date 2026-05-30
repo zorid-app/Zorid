@@ -2,7 +2,11 @@
 
 import { deleteMarkupBackward, insertNewlineContinueMarkup, markdownKeymap } from '@codemirror/lang-markdown';
 import { describe, expect, it } from 'vitest';
-import { createMountedMarkdownEditor } from '../packages/editor/src/index';
+import {
+  createMountedMarkdownEditor,
+  markdownTaskKeymap,
+  toggleTaskMarkerAtSelection,
+} from '../packages/editor/src/index';
 
 function runMarkdownEnter(text: string): string {
   const parent = document.createElement('div');
@@ -32,6 +36,12 @@ describe('editor Markdown keymap behavior', () => {
         expect.objectContaining({ key: 'Backspace', run: deleteMarkupBackward }),
       ]),
     );
+  });
+
+  it('exposes a conservative task toggle keymap without replacing Markdown Enter or Backspace', () => {
+    expect(markdownTaskKeymap).toEqual([
+      expect.objectContaining({ key: 'Mod-Enter', run: toggleTaskMarkerAtSelection }),
+    ]);
   });
 
   it('continues unordered lists through the official Markdown Enter command', () => {
