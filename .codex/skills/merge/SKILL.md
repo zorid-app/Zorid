@@ -15,7 +15,7 @@ Goal: merge a completed worktree branch into `main` safely and quickly.
 
 1. Confirm current branch is `main`.
 2. Pull latest `main` with `--ff-only`.
-3. Read the latest merge request from `.agent-context/merge-queue/` unless the user gave a branch.
+3. Read the latest merge request from `.agent-context/merge-requests/` unless the user gave a branch.
 4. Inspect:
    - `git log --oneline main..BRANCH`
    - `git diff --stat main..BRANCH`
@@ -30,7 +30,8 @@ Goal: merge a completed worktree branch into `main` safely and quickly.
 7. Run validation:
    - `pnpm typecheck`
    - `pnpm test` if relevant or configured
-8. If validation passes, finish with a short summary, push to GitHub, delete the branch, and move the worktree folder to `finished-worktrees/Zorid/`.
+8. If validation passes, finish with a short summary, push to GitHub, delete the already merged branch, and move the worktree folder to `finished-worktrees/Zorid/`. Then, delete the merge request file from the agent-context folder. This should be done automatically even without user's explicit request.
+
 9. If validation fails, either fix obvious issues or stop and explain.
 
 ## Hard Rules
