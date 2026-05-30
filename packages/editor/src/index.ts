@@ -36,6 +36,7 @@ import {
 } from './live-preview/renderers.js';
 import { toggleTaskMarkerAtSelection } from './live-preview/task-toggle.js';
 import type { LivePreviewRenderer } from './live-preview/types.js';
+import { continueTaskListAtSelection } from './markdown-list-commands.js';
 
 export type {
   DisposableView,
@@ -130,6 +131,7 @@ export {
   wikiLinkLivePreviewRenderer,
 } from './live-preview/index.js';
 export {
+  continueTaskListAtSelection,
   indentListItemsAtSelection,
   outdentListItemsAtSelection,
   toggleBulletListAtSelection,
@@ -205,6 +207,10 @@ export function composeEditorExtensions(
 }
 
 export const markdownTaskKeymap: readonly KeyBinding[] = [
+  {
+    key: 'Enter',
+    run: continueTaskListAtSelection,
+  },
   {
     key: 'Mod-Enter',
     run: toggleTaskMarkerAtSelection,

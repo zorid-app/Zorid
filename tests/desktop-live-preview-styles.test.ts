@@ -12,6 +12,8 @@ const livePreviewClasses = [
   'z-live-preview-wiki-link',
   'z-live-preview-tag',
   'z-live-preview-task-marker',
+  'z-live-preview-list-marker',
+  'z-live-preview-list-marker--ordered',
   'z-live-preview-task-checkbox',
   'z-live-preview-task-checkbox--checked',
   'z-live-preview-blockquote-line',
