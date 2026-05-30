@@ -1,0 +1,39 @@
+{
+  "workflow": "ralplan",
+  "task_slug": "live-preview-interaction-block-architecture-hardening",
+  "created_at": "2026-05-30T04:18:14Z",
+  "planning_artifacts": {
+    "context_snapshot": ".omx/context/live-preview-interaction-block-architecture-hardening-20260530T041814Z.md",
+    "prd": ".omx/plans/prd-live-preview-interaction-block-architecture-hardening-20260530T041814Z.md",
+    "test_spec": ".omx/plans/test-spec-live-preview-interaction-block-architecture-hardening-20260530T041814Z.md"
+  },
+  "ralplan_architect_review": {
+    "path": ".omx/plans/architect-review-live-preview-interaction-block-architecture-hardening-20260530T041814Z.md",
+    "verdict": "APPROVE",
+    "completed_before_critic": true,
+    "required_minor_improvements_applied": true
+  },
+  "ralplan_critic_review": {
+    "path": ".omx/plans/critic-review-live-preview-interaction-block-architecture-hardening-20260530T041814Z.md",
+    "verdict": "APPROVE",
+    "blocking_gaps": []
+  },
+  "ralplan_consensus_gate": {
+    "complete": true,
+    "order": ["architect", "critic"],
+    "ready_for_execution_handoff": true
+  },
+  "recommended_follow_up": {
+    "default": "$ultragoal",
+    "parallel_option": "$team + $ultragoal",
+    "ralph": "fallback only if explicitly selected"
+  },
+  "non_goals": [
+    "public third-party plugin/custom block API",
+    "table editor",
+    "properties/frontmatter visual editor",
+    "Reading-view parity adapter",
+    "embeds/images/math widgets",
+    "broad parser rewrite"
+  ]
+}
