@@ -162,7 +162,7 @@ describe('editor Live Preview private block renderer registry', () => {
     ]);
   });
 
-  it('keeps private block helpers out of public package and live-preview barrels', async () => {
+  it('exports only the experimental public block registration API, not private first-party helpers', async () => {
     const rootBarrel = await readFile('packages/editor/src/index.ts', 'utf8');
     const livePreviewBarrel = await readFile('packages/editor/src/live-preview/index.ts', 'utf8');
     const platformApi = await readFile('packages/platform-api/src/index.ts', 'utf8');
@@ -176,6 +176,8 @@ describe('editor Live Preview private block renderer registry', () => {
       expect(source).not.toContain('livePreviewBlockRendererToInternalRenderer');
       expect(source).not.toContain('block-renderers');
     }
+    expect(rootBarrel).toContain('MarkdownBlockRegistration');
+    expect(livePreviewBarrel).toContain('markdownBlockRegistrationsToInternalRenderers');
     expect(Object.keys(packageManifest.exports)).toEqual(['.']);
   });
 });

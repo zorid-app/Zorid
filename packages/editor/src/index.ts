@@ -16,6 +16,12 @@ import {
   livePreviewExtension,
   livePreviewExtensionWithInternalRenderers,
 } from './live-preview/extension.js';
+import {
+  type MarkdownBlockRegistration,
+  markdownBlockInteractionExtension,
+  markdownBlockRegistrationExtensions,
+  markdownBlockRegistrationsToInternalRenderers,
+} from './live-preview/markdown-blocks.js';
 import { zoridMarkdown } from './live-preview/markdown-language.js';
 import {
   defaultLivePreviewInternalRenderers,
@@ -29,12 +35,24 @@ import type { LivePreviewRenderer } from './live-preview/types.js';
 // package is private; do not publish them as a stable third-party plugin API
 // without a dedicated API review.
 export type {
+  BlockAction,
+  BlockClipboardResult,
+  BlockCutResult,
   LivePreviewContext,
   LivePreviewDecorationKind,
   LivePreviewRange,
   LivePreviewRenderer,
   LivePreviewSelectionRange,
   LivePreviewVisibleRange,
+  MarkdownBlockClipboardEvent,
+  MarkdownBlockDefinition,
+  MarkdownBlockInteractionContext,
+  MarkdownBlockMatch,
+  MarkdownBlockMatchContext,
+  MarkdownBlockReferenceSyntax,
+  MarkdownBlockRegistration,
+  MarkdownBlockRenderContext,
+  MarkdownBlockSyntax,
   TaskMarkerRange,
 } from './live-preview/index.js';
 export {
@@ -51,7 +69,11 @@ export {
   livePreviewExtension,
   livePreviewRangeIntersectsSelection,
   livePreviewSelectionRanges,
+  markdownBlockInteractionExtension,
+  markdownBlockRegistrationExtensions,
+  markdownBlockRegistrationsToInternalRenderers,
   markdownLinkLivePreviewRenderer,
+  matchMarkdownBlockRegistration,
   nextTaskMarkerCheckbox,
   shouldRenderLivePreviewRange,
   strikethroughLivePreviewRenderer,
@@ -84,6 +106,7 @@ export interface MarkdownEditorExtensionOptions {
   onError?: (error: unknown, context: string) => void;
   shouldEmitChange?: () => boolean;
   livePreviewRenderers?: readonly LivePreviewRenderer[] | false;
+  markdownBlockRegistrations?: readonly MarkdownBlockRegistration[] | false;
 }
 
 export interface MountedMarkdownEditorOptions extends MarkdownEditorExtensionOptions {
@@ -129,6 +152,7 @@ export function composeEditorExtensions(
 export function createMarkdownEditorExtensions({
   extensionContributions = [],
   livePreviewRenderers,
+  markdownBlockRegistrations,
   onChange,
   onSave,
   onError,
@@ -141,22 +165,37 @@ export function createMarkdownEditorExtensions({
   const reportLivePreviewError: LivePreviewErrorReporter | undefined = onError
     ? (error, context) => onError(error, `live-preview.${context.phase}.${context.rendererId}`)
     : undefined;
-  const extensions: Extension[] = [zoridMarkdown(), history(), keymap.of(historyKeymap), ...composed.extensions];
+  const activeMarkdownBlockRegistrations =
+    markdownBlockRegistrations === false ? [] : (markdownBlockRegistrations ?? []);
+  const extensions: Extension[] = [
+    zoridMarkdown(),
+    history(),
+    keymap.of(historyKeymap),
+    ...markdownBlockRegistrationExtensions(activeMarkdownBlockRegistrations),
+    ...composed.extensions,
+  ];
   if (onError) {
     extensions.push(EditorView.exceptionSink.of((exception) => onError(exception, 'codemirror.exceptionSink')));
   }
   if (livePreviewRenderers !== false) {
+    const registeredBlockRenderers = markdownBlockRegistrationsToInternalRenderers(activeMarkdownBlockRegistrations);
     extensions.push(
       livePreviewRenderers === undefined
         ? livePreviewExtensionWithInternalRenderers(
             defaultLivePreviewRenderers,
             defaultLivePreviewInternalRenderers,
-            defaultLivePreviewWidgetRenderers,
+            [...defaultLivePreviewWidgetRenderers, ...registeredBlockRenderers],
             reportLivePreviewError,
           )
-        : livePreviewExtension(livePreviewRenderers),
+        : livePreviewExtensionWithInternalRenderers(
+            livePreviewRenderers,
+            [],
+            registeredBlockRenderers,
+            reportLivePreviewError,
+          ),
     );
   }
+  extensions.push(markdownBlockInteractionExtension(activeMarkdownBlockRegistrations));
 
   if (onSave) {
     extensions.push(

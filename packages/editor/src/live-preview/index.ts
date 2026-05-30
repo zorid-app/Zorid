@@ -7,6 +7,26 @@ export {
   livePreviewSelectionRanges,
   shouldRenderLivePreviewRange,
 } from './extension.js';
+export type {
+  BlockAction,
+  BlockClipboardResult,
+  BlockCutResult,
+  MarkdownBlockClipboardEvent,
+  MarkdownBlockDefinition,
+  MarkdownBlockInteractionContext,
+  MarkdownBlockMatch,
+  MarkdownBlockMatchContext,
+  MarkdownBlockReferenceSyntax,
+  MarkdownBlockRegistration,
+  MarkdownBlockRenderContext,
+  MarkdownBlockSyntax,
+} from './markdown-blocks.js';
+export {
+  markdownBlockInteractionExtension,
+  markdownBlockRegistrationExtensions,
+  markdownBlockRegistrationsToInternalRenderers,
+  matchMarkdownBlockRegistration,
+} from './markdown-blocks.js';
 export {
   defaultLivePreviewRenderers,
   emphasisLivePreviewRenderer,
