@@ -22,6 +22,12 @@ import {
   markdownBlockRegistrationExtensions,
   markdownBlockRegistrationsToInternalRenderers,
 } from './live-preview/markdown-blocks.js';
+import {
+  type MarkdownInlineRegistration,
+  markdownInlineInteractionExtension,
+  markdownInlineRegistrationExtensions,
+  markdownInlineRegistrationsToInternalRenderers,
+} from './live-preview/markdown-inline.js';
 import { zoridMarkdown } from './live-preview/markdown-language.js';
 import {
   defaultLivePreviewInternalRenderers,
@@ -53,8 +59,35 @@ export type {
   MarkdownBlockRegistration,
   MarkdownBlockRenderContext,
   MarkdownBlockSyntax,
+  EditorClipboardResult,
+  EditorProjectionAction,
+  InlineCutResult,
+  InlineRenderResult,
+  InlineSelectionPolicy,
+  MarkdownInlineInteractionContext,
+  MarkdownInlineMatch,
+  MarkdownInlineMatchContext,
+  MarkdownInlineRegistration,
+  MarkdownInlineRenderContext,
+  MarkdownInlineSyntax,
+  MarkdownProjectionClipboardEvent,
+  SourceRange,
+  SourceSelection,
   TaskMarkerRange,
 } from './live-preview/index.js';
+
+export type {
+  DisposableView,
+  DynamicRangeProvider,
+  EditorWindowContext,
+  EditorWindowContribution,
+  EditorWindowPlacement,
+  EditorWindowSourceRange,
+  GroupedEditorWindowContribution,
+  PlacementPredicate,
+  ViewportPosition,
+} from './editor-window-contributions.js';
+export { editorWindowPlacementKey, groupEditorWindowContributions } from './editor-window-contributions.js';
 export {
   collectLivePreviewRanges,
   createLivePreviewContext,
@@ -72,6 +105,10 @@ export {
   markdownBlockInteractionExtension,
   markdownBlockRegistrationExtensions,
   markdownBlockRegistrationsToInternalRenderers,
+  markdownInlineInteractionExtension,
+  markdownInlineRegistrationExtensions,
+  markdownInlineRegistrationsToInternalRenderers,
+  matchMarkdownInlineRegistration,
   markdownLinkLivePreviewRenderer,
   matchMarkdownBlockRegistration,
   nextTaskMarkerCheckbox,
@@ -107,6 +144,7 @@ export interface MarkdownEditorExtensionOptions {
   shouldEmitChange?: () => boolean;
   livePreviewRenderers?: readonly LivePreviewRenderer[] | false;
   markdownBlockRegistrations?: readonly MarkdownBlockRegistration[] | false;
+  markdownInlineRegistrations?: readonly MarkdownInlineRegistration[] | false;
 }
 
 export interface MountedMarkdownEditorOptions extends MarkdownEditorExtensionOptions {
@@ -153,6 +191,7 @@ export function createMarkdownEditorExtensions({
   extensionContributions = [],
   livePreviewRenderers,
   markdownBlockRegistrations,
+  markdownInlineRegistrations,
   onChange,
   onSave,
   onError,
@@ -167,10 +206,13 @@ export function createMarkdownEditorExtensions({
     : undefined;
   const activeMarkdownBlockRegistrations =
     markdownBlockRegistrations === false ? [] : (markdownBlockRegistrations ?? []);
+  const activeMarkdownInlineRegistrations =
+    markdownInlineRegistrations === false ? [] : (markdownInlineRegistrations ?? []);
   const extensions: Extension[] = [
     zoridMarkdown(),
     history(),
     keymap.of(historyKeymap),
+    ...markdownInlineRegistrationExtensions(activeMarkdownInlineRegistrations),
     ...markdownBlockRegistrationExtensions(activeMarkdownBlockRegistrations),
     ...composed.extensions,
   ];
@@ -178,23 +220,30 @@ export function createMarkdownEditorExtensions({
     extensions.push(EditorView.exceptionSink.of((exception) => onError(exception, 'codemirror.exceptionSink')));
   }
   if (livePreviewRenderers !== false) {
+    const registeredInlineRenderers = markdownInlineRegistrationsToInternalRenderers(activeMarkdownInlineRegistrations);
     const registeredBlockRenderers = markdownBlockRegistrationsToInternalRenderers(activeMarkdownBlockRegistrations);
+    const defaultInternalRenderers = activeMarkdownInlineRegistrations.some((registration) =>
+      registration.syntax?.some((syntax) => syntax.kind === 'task-marker'),
+    )
+      ? defaultLivePreviewInternalRenderers.filter((renderer) => renderer.id !== 'task-marker')
+      : defaultLivePreviewInternalRenderers;
     extensions.push(
       livePreviewRenderers === undefined
         ? livePreviewExtensionWithInternalRenderers(
             defaultLivePreviewRenderers,
-            defaultLivePreviewInternalRenderers,
+            [...defaultInternalRenderers, ...registeredInlineRenderers],
             [...defaultLivePreviewWidgetRenderers, ...registeredBlockRenderers],
             reportLivePreviewError,
           )
         : livePreviewExtensionWithInternalRenderers(
             livePreviewRenderers,
-            [],
+            registeredInlineRenderers,
             registeredBlockRenderers,
             reportLivePreviewError,
           ),
     );
   }
+  extensions.push(markdownInlineInteractionExtension(activeMarkdownInlineRegistrations));
   extensions.push(markdownBlockInteractionExtension(activeMarkdownBlockRegistrations));
 
   if (onSave) {

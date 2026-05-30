@@ -21,12 +21,34 @@ export type {
   MarkdownBlockRenderContext,
   MarkdownBlockSyntax,
 } from './markdown-blocks.js';
+export type {
+  EditorClipboardResult,
+  EditorProjectionAction,
+  InlineCutResult,
+  InlineRenderResult,
+  InlineSelectionPolicy,
+  MarkdownInlineInteractionContext,
+  MarkdownInlineMatch,
+  MarkdownInlineMatchContext,
+  MarkdownInlineRegistration,
+  MarkdownInlineRenderContext,
+  MarkdownInlineSyntax,
+  MarkdownProjectionClipboardEvent,
+  SourceRange,
+  SourceSelection,
+} from './markdown-inline.js';
 export {
   markdownBlockInteractionExtension,
   markdownBlockRegistrationExtensions,
   markdownBlockRegistrationsToInternalRenderers,
   matchMarkdownBlockRegistration,
 } from './markdown-blocks.js';
+export {
+  markdownInlineInteractionExtension,
+  markdownInlineRegistrationExtensions,
+  markdownInlineRegistrationsToInternalRenderers,
+  matchMarkdownInlineRegistration,
+} from './markdown-inline.js';
 export {
   defaultLivePreviewRenderers,
   emphasisLivePreviewRenderer,
