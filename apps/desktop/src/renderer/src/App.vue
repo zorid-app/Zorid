@@ -865,7 +865,6 @@ onBeforeUnmount(() => {
     />
 
     <aside v-show="!paneLayout.leftCollapsed" class="sidebar" data-region="left-sidebar">
-      <p class="muted">{{ status }}</p>
       <div class="file-pane-toolbar" aria-label="File actions">
         <ZIconButton label="New file" @click="createNote" :disabled="!vaultLabel">
           <FilePlus class="file-pane-action-icon" aria-hidden="true" />
