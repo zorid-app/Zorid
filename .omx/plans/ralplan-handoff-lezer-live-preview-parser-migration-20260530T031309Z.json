@@ -1,0 +1,37 @@
+{
+  "task": "Lezer Live Preview Parser Migration",
+  "created_at": "2026-05-30T03:13:09Z",
+  "updated_at": "2026-05-30T03:13:09Z",
+  "status": "consensus_approved",
+  "mode": "ralplan_consensus",
+  "planning_artifacts": {
+    "context_snapshot": ".omx/context/lezer-live-preview-parsers-20260530T024321Z.md",
+    "deep_interview_spec": ".omx/specs/deep-interview-lezer-live-preview-parsers.md",
+    "prd": ".omx/plans/prd-lezer-live-preview-parser-migration-20260530T031309Z.md",
+    "test_spec": ".omx/plans/test-spec-lezer-live-preview-parser-migration-20260530T031309Z.md"
+  },
+  "ralplan_architect_review": {
+    "path": ".omx/plans/architect-review-lezer-live-preview-parser-migration-20260530T031309Z.md",
+    "verdict": "APPROVE",
+    "order": 1,
+    "summary": "Architect approved Option A: private Zorid Markdown facade plus centralized syntax-range collector, with hardening for static-gate scope, export compatibility, parser-order fixtures, and collector tests using the private language support."
+  },
+  "ralplan_critic_review": {
+    "path": ".omx/plans/critic-review-lezer-live-preview-parser-migration-20260530T031309Z.md",
+    "verdict": "APPROVE",
+    "order": 2,
+    "summary": "Critic approved principle-option consistency, fair alternatives, risk mitigation clarity, testable acceptance criteria, verification steps, no-regex gate, custom syntax via Lezer, performance/no-worse plan, user boundaries, and application of Architect improvements."
+  },
+  "ralplan_consensus_gate": {
+    "complete": true,
+    "required_order": ["architect", "critic"],
+    "actual_order": ["architect", "critic"],
+    "approved": true
+  },
+  "recommended_follow_up": {
+    "default": "$ultragoal",
+    "parallel": "$team + $ultragoal after parser facade boundaries land",
+    "fallback": "$ralph only if explicitly selected for single-owner persistent verification"
+  },
+  "implementation_stop_condition": "Final implementation has no live-preview regex parser paths, preserves existing previews, includes checkbox bug fixture, represents custom syntax via Lezer, passes lint/typecheck/tests, and has performance/no-worse evidence."
+}
