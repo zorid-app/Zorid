@@ -10,7 +10,8 @@ export type InternalLivePreviewRange = Omit<LivePreviewRange, 'kind'> & {
   readonly sourceFrom?: number;
   readonly sourceTo?: number;
   readonly clipboardSource?: 'document-source';
-  readonly atomic?: 'none';
+  readonly atomic?: 'none' | 'widget';
+  readonly priority?: number;
 };
 
 export interface InternalLivePreviewRenderer extends Omit<LivePreviewRenderer, 'match'> {

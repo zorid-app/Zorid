@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { deleteCharBackward, deleteCharForward, undo } from '@codemirror/commands';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it, vi } from 'vitest';
 import { createMountedMarkdownEditor, defaultLivePreviewRenderers } from '../packages/editor/src/index';
@@ -7,7 +8,10 @@ import {
   collectLivePreviewRangesWithWidgetSuppression,
   collectLivePreviewWidgetRangesForVisibleRanges,
 } from '../packages/editor/src/live-preview/extension';
-import type { InternalLivePreviewRange } from '../packages/editor/src/live-preview/internal-types';
+import {
+  type InternalLivePreviewRange,
+  setInternalLivePreviewFocused,
+} from '../packages/editor/src/live-preview/internal-types';
 import {
   defaultLivePreviewInternalRenderers,
   defaultLivePreviewWidgetRenderers,
@@ -184,6 +188,41 @@ describe('editor Live Preview callout widgets', () => {
     widget?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
     expect(editor.view.state.selection.main.head).toBe(0);
     await waitForCalloutWidget(parent, 'absent');
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('keeps callout edge deletion source-backed under the no-atomic-ranges policy', async () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['> [!note] Title', '> Body', '', 'paragraph'].join('\n');
+    const calloutRange = collectWidgetRanges(text).find((range) => range.rendererId === 'callout-widget')!;
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    editor.view.dispatch({ effects: setInternalLivePreviewFocused.of(true) });
+    await waitForCalloutWidget(parent, 'absent');
+
+    editor.view.dispatch({ selection: { anchor: calloutRange.from } });
+    await waitForCalloutWidget(parent, 'absent');
+    expect(deleteCharForward(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text.slice(0, calloutRange.from) + text.slice(calloutRange.from + 1));
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text);
+
+    editor.view.dispatch({ selection: { anchor: calloutRange.to } });
+    await waitForCalloutWidget(parent, 'absent');
+    expect(deleteCharBackward(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text.slice(0, calloutRange.to - 1) + text.slice(calloutRange.to));
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text);
+
+    editor.view.dispatch({ selection: { anchor: calloutRange.to + 1 } });
+    await waitForCalloutWidget(parent, 'present');
+    expect(deleteCharBackward(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text.slice(0, calloutRange.to) + text.slice(calloutRange.to + 1));
+    expect(undo(editor.view)).toBe(true);
     expect(editor.getText()).toBe(text);
 
     editor.destroy();

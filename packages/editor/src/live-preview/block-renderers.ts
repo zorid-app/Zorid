@@ -17,8 +17,40 @@ export interface LivePreviewBlockMatch {
 
 export interface LivePreviewBlockRenderer<Match extends LivePreviewBlockMatch = LivePreviewBlockMatch> {
   readonly id: string;
+  readonly priority?: number;
   match(context: LivePreviewContext): readonly Match[];
   widget(match: Match, context: LivePreviewContext): WidgetType;
+}
+
+export interface LivePreviewBlockWidgetMetadataOptions {
+  readonly docText: string;
+  readonly range: Pick<LivePreviewBlockMatch, 'from' | 'to'>;
+  readonly className: string;
+  readonly activateAt: number;
+}
+
+export function livePreviewBlockWidgetMetadata({
+  docText,
+  range,
+  className,
+  activateAt,
+}: LivePreviewBlockWidgetMetadataOptions): LivePreviewBlockMatch & {
+  readonly source: string;
+  readonly activateAt: number;
+} {
+  return {
+    from: range.from,
+    to: range.to,
+    activationFrom: range.from,
+    activationTo: range.to,
+    sourceFrom: range.from,
+    sourceTo: range.to,
+    clipboardSource: 'document-source',
+    atomic: 'none',
+    className,
+    source: docText.slice(range.from, range.to),
+    activateAt,
+  };
 }
 
 function livePreviewBlockMatchContract(
@@ -57,6 +89,7 @@ export function livePreviewBlockRendererToInternalRenderer<Match extends LivePre
           from: match.from,
           to: match.to,
           ...contract,
+          priority: renderer.priority ?? 0,
           className: match.className,
           kind: 'widget',
           widget: renderer.widget(match, context),

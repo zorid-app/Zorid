@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
 
 import { readFile } from 'node:fs/promises';
-import { cursorCharBackward, cursorCharForward, deleteCharForward, undo } from '@codemirror/commands';
+import {
+  cursorCharBackward,
+  cursorCharForward,
+  deleteCharBackward,
+  deleteCharForward,
+  undo,
+} from '@codemirror/commands';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it, vi } from 'vitest';
 import type { LivePreviewVisibleRange } from '../packages/editor/src';
@@ -322,6 +328,7 @@ describe('editor Live Preview structured widgets', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
     const text = ['```ts', 'const value = 1;', '```', '', 'paragraph'].join('\n');
+    const widgetRange = collectWidgetRanges(text)[0]!;
     const editor = createMountedMarkdownEditor({ parent, text });
 
     expect(extensionSource).not.toContain('atomicRanges');
@@ -340,6 +347,20 @@ describe('editor Live Preview structured widgets', () => {
 
     expect(deleteCharForward(editor.view)).toBe(true);
     expect(editor.getText()).toBe(text.slice(1));
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text);
+
+    editor.view.dispatch({ selection: { anchor: widgetRange.to } });
+    expect(parent.querySelector('.z-live-preview-code-block-widget')).toBeNull();
+    expect(deleteCharBackward(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text.slice(0, widgetRange.to - 1) + text.slice(widgetRange.to));
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text);
+
+    editor.view.dispatch({ selection: { anchor: widgetRange.to + 1 } });
+    expect(parent.querySelector('.z-live-preview-code-block-widget')).toBeTruthy();
+    expect(deleteCharBackward(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text.slice(0, widgetRange.to) + text.slice(widgetRange.to + 1));
     expect(undo(editor.view)).toBe(true);
     expect(editor.getText()).toBe(text);
 

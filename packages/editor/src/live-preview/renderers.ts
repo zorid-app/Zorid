@@ -1,15 +1,15 @@
 import type { EditorState } from '@codemirror/state';
 import { type EditorView, WidgetType } from '@codemirror/view';
 import {
-  type LivePreviewBlockMatch,
-  type LivePreviewBlockRenderer,
-  livePreviewBlockRendererToInternalRenderer,
-} from './block-renderers.js';
-import {
   type InternalLivePreviewRange,
   type InternalLivePreviewRenderer,
   setInternalLivePreviewFocused,
 } from './internal-types.js';
+import {
+  type MarkdownBlockMatch,
+  type MarkdownBlockRegistration,
+  markdownBlockRegistrationsToInternalRenderers,
+} from './markdown-blocks.js';
 import {
   markdownCalloutRanges,
   markdownCompleteFencedCodeBlockRanges,
@@ -21,20 +21,24 @@ import { taskMarkerRangesForState } from './task-marker-ranges.js';
 import { toggleTaskMarkerAtPosition } from './task-toggle.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
 
-interface CodeBlockPreviewMatch extends LivePreviewBlockMatch {
+interface CodeBlockPreviewMatch extends MarkdownBlockMatch {
   readonly source: string;
   readonly info: string;
   readonly code: string;
   readonly activateAt: number;
 }
 
-interface CalloutPreviewMatch extends LivePreviewBlockMatch {
+interface CalloutPreviewMatch extends MarkdownBlockMatch {
   readonly source: string;
   readonly type: string;
   readonly title: string;
   readonly body: string;
   readonly activateAt: number;
 }
+
+const codeBlockWidgetClassName = 'z-live-preview-code-block-widget';
+const calloutWidgetClassName = 'z-live-preview-callout-widget';
+const zbaseEmbedWidgetClassName = 'z-live-preview-zbase-embed-widget';
 
 function livePreviewScanWindow(
   docText: string,
@@ -46,27 +50,6 @@ function livePreviewScanWindow(
   return {
     from: Math.max(0, lineStart),
     to: nextLineBreak === -1 ? docText.length : nextLineBreak,
-  };
-}
-
-function livePreviewBlockWidgetMetadata(
-  docText: string,
-  range: Pick<LivePreviewRange, 'from' | 'to'>,
-  className: string,
-  activateAt: number,
-): LivePreviewBlockMatch & { readonly source: string; readonly activateAt: number } {
-  return {
-    from: range.from,
-    to: range.to,
-    activationFrom: range.from,
-    activationTo: range.to,
-    sourceFrom: range.from,
-    sourceTo: range.to,
-    clipboardSource: 'document-source',
-    atomic: 'none',
-    className,
-    source: docText.slice(range.from, range.to),
-    activateAt,
   };
 }
 
@@ -160,7 +143,7 @@ class CodeBlockPreviewWidget extends WidgetType {
 
   toDOM(view: EditorView): HTMLElement {
     const wrapper = document.createElement('div');
-    wrapper.className = 'z-live-preview-code-block-widget';
+    wrapper.className = codeBlockWidgetClassName;
     wrapper.dataset.livePreviewRenderer = 'code-block-widget';
     wrapper.setAttribute('role', 'group');
 
@@ -247,7 +230,7 @@ class CalloutPreviewWidget extends WidgetType {
 
   toDOM(view: EditorView): HTMLElement {
     const wrapper = document.createElement('div');
-    wrapper.className = 'z-live-preview-callout-widget';
+    wrapper.className = calloutWidgetClassName;
     wrapper.dataset.livePreviewRenderer = 'callout-widget';
     wrapper.setAttribute('role', 'group');
 
@@ -285,14 +268,35 @@ function codeBlockWidgetRanges(
   return markdownCompleteFencedCodeBlockRanges(docText, scanWindow, state)
     .filter((range) => !suppressedRanges.some((container) => isInsideRange(range, container)))
     .map((range) => {
-      const source = docText.slice(range.from, range.to);
       const code = docText.slice(range.contentFrom, range.contentTo);
       const activateAt = range.contentFrom < range.contentTo ? range.contentFrom : range.from;
       return {
-        ...livePreviewBlockWidgetMetadata(docText, range, 'z-live-preview-code-block-widget', activateAt),
+        id: `code-block-widget:${range.from}:${range.to}`,
+        type: `fenced-code:${range.info}`,
+        from: range.from,
+        to: range.to,
+        activationFrom: range.from,
+        activationTo: range.to,
+        definition: {
+          kind: 'inline' as const,
+          sourceFrom: range.from,
+          sourceTo: range.to,
+          sourceText: docText.slice(range.from, range.to),
+        },
+        className: codeBlockWidgetClassName,
+        atomic: 'none' as const,
+        source: docText.slice(range.from, range.to),
         info: range.info,
         code,
-        source,
+        activateAt,
+        meta: {
+          info: range.info,
+          marker: range.marker,
+          markerLength: range.markerLength,
+          code,
+          contentFrom: range.contentFrom,
+          contentTo: range.contentTo,
+        },
       };
     });
 }
@@ -303,10 +307,25 @@ function calloutWidgetRanges(
   state: EditorState,
 ): CalloutPreviewMatch[] {
   return markdownCalloutRanges(docText, scanWindow, state).map((range) => ({
-    ...livePreviewBlockWidgetMetadata(docText, range, 'z-live-preview-callout-widget', range.from),
+    id: `callout-widget:${range.from}:${range.to}`,
     type: range.type,
+    from: range.from,
+    to: range.to,
+    activationFrom: range.from,
+    activationTo: range.to,
+    definition: {
+      kind: 'inline' as const,
+      sourceFrom: range.from,
+      sourceTo: range.to,
+      sourceText: docText.slice(range.from, range.to),
+    },
+    className: calloutWidgetClassName,
+    atomic: 'none' as const,
+    source: docText.slice(range.from, range.to),
     title: range.title,
     body: range.body,
+    activateAt: range.from,
+    meta: { type: range.type, title: range.title, body: range.body },
   }));
 }
 
@@ -359,25 +378,72 @@ const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
     blockquoteLineRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
 };
 
-const codeBlockWidgetBlockRenderer: LivePreviewBlockRenderer<CodeBlockPreviewMatch> = {
+export const codeBlockMarkdownBlockRegistration: MarkdownBlockRegistration<CodeBlockPreviewMatch> = {
   id: 'code-block-widget',
+  priority: -100,
   match: ({ state, docText, visibleFrom, visibleTo }) =>
     codeBlockWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo), state),
-  widget: (match) => new CodeBlockPreviewWidget(match.source, match.info, match.code, match.activateAt),
+  render: (match) => new CodeBlockPreviewWidget(match.source, match.info, match.code, match.activateAt),
 };
 
-const codeBlockWidgetLivePreviewRenderer: InternalLivePreviewRenderer =
-  livePreviewBlockRendererToInternalRenderer(codeBlockWidgetBlockRenderer);
-
-const calloutWidgetBlockRenderer: LivePreviewBlockRenderer<CalloutPreviewMatch> = {
+export const calloutMarkdownBlockRegistration: MarkdownBlockRegistration<CalloutPreviewMatch> = {
   id: 'callout-widget',
+  priority: -100,
   match: ({ state, docText, visibleFrom, visibleTo }) =>
     calloutWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo), state),
-  widget: (match) => new CalloutPreviewWidget(match.source, match.type, match.title, match.body, match.activateAt),
+  render: (match) => new CalloutPreviewWidget(match.source, match.type, match.title, match.body, match.activateAt),
 };
 
-const calloutWidgetLivePreviewRenderer: InternalLivePreviewRenderer =
-  livePreviewBlockRendererToInternalRenderer(calloutWidgetBlockRenderer);
+export const zbaseEmbedMarkdownBlockRegistration: MarkdownBlockRegistration = {
+  id: 'zbase-embed-widget',
+  priority: -100,
+  syntax: [{ kind: 'embed-reference', extensions: ['.zbase'] }],
+  render(match) {
+    const wrapper = document.createElement('div');
+    wrapper.className = zbaseEmbedWidgetClassName;
+    wrapper.setAttribute('role', 'group');
+
+    const label = document.createElement('div');
+    label.className = 'z-live-preview-zbase-embed-widget__label';
+    label.textContent = 'Data view';
+    wrapper.append(label);
+
+    const target = document.createElement('div');
+    target.className = 'z-live-preview-zbase-embed-widget__target';
+    if (match.definition.kind === 'external') {
+      target.textContent = match.definition.fragment
+        ? `${match.definition.path}#${match.definition.fragment}`
+        : match.definition.path;
+    } else {
+      target.textContent = match.definition.sourceText;
+    }
+    wrapper.append(target);
+
+    return wrapper;
+  },
+  onActivate(_event, match) {
+    if (match.definition.kind !== 'external') {
+      return { kind: 'reveal-source', range: { from: match.from, to: match.to } };
+    }
+    return match.definition.fragment
+      ? { kind: 'open-reference', path: match.definition.path, fragment: match.definition.fragment }
+      : { kind: 'open-reference', path: match.definition.path };
+  },
+  onEdit(_event, match) {
+    if (match.definition.kind !== 'external') {
+      return { kind: 'reveal-source', range: { from: match.from, to: match.to } };
+    }
+    return match.definition.fragment
+      ? { kind: 'open-reference', path: match.definition.path, fragment: match.definition.fragment }
+      : { kind: 'open-reference', path: match.definition.path };
+  },
+};
+
+export const defaultMarkdownBlockRegistrations: readonly MarkdownBlockRegistration[] = [
+  codeBlockMarkdownBlockRegistration,
+  calloutMarkdownBlockRegistration,
+  zbaseEmbedMarkdownBlockRegistration,
+];
 
 export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
   headingLivePreviewRenderer,
@@ -398,6 +464,5 @@ export const defaultLivePreviewInternalRenderers: readonly InternalLivePreviewRe
 ];
 
 export const defaultLivePreviewWidgetRenderers: readonly InternalLivePreviewRenderer[] = [
-  codeBlockWidgetLivePreviewRenderer,
-  calloutWidgetLivePreviewRenderer,
+  ...markdownBlockRegistrationsToInternalRenderers(defaultMarkdownBlockRegistrations),
 ];

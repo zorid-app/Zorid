@@ -16,31 +16,90 @@ import {
   livePreviewExtension,
   livePreviewExtensionWithInternalRenderers,
 } from './live-preview/extension.js';
+import {
+  type MarkdownBlockRegistration,
+  markdownBlockInteractionExtension,
+  markdownBlockRegistrationExtensions,
+  markdownBlockRegistrationsToInternalRenderers,
+} from './live-preview/markdown-blocks.js';
+import {
+  type MarkdownInlineRegistration,
+  markdownInlineInteractionExtension,
+  markdownInlineRegistrationExtensions,
+  markdownInlineRegistrationsToInternalRenderers,
+} from './live-preview/markdown-inline.js';
 import { zoridMarkdown } from './live-preview/markdown-language.js';
 import {
   defaultLivePreviewInternalRenderers,
   defaultLivePreviewRenderers,
-  defaultLivePreviewWidgetRenderers,
+  defaultMarkdownBlockRegistrations,
 } from './live-preview/renderers.js';
 import type { LivePreviewRenderer } from './live-preview/types.js';
 
+export type {
+  DisposableView,
+  DynamicRangeProvider,
+  EditorWindowContext,
+  EditorWindowContribution,
+  EditorWindowContributionHostOptions,
+  EditorWindowPlacement,
+  EditorWindowSourceRange,
+  GroupedEditorWindowContribution,
+  PlacementPredicate,
+  ViewportPosition,
+} from './editor-window-contributions.js';
+export {
+  EditorWindowContributionHost,
+  editorWindowPlacementKey,
+  groupEditorWindowContributions,
+  renderEditorWindowContributions,
+} from './editor-window-contributions.js';
 // Live Preview exports remain available from the package root for current
 // first-party integrations and tests. Treat them as experimental while the
 // package is private; do not publish them as a stable third-party plugin API
 // without a dedicated API review.
 export type {
+  BlockAction,
+  BlockActionHandlers,
+  BlockClipboardResult,
+  BlockCutResult,
+  EditorClipboardResult,
+  EditorProjectionAction,
+  EditorProjectionActionHandlers,
+  InlineCutResult,
+  InlineRenderResult,
+  InlineSelectionPolicy,
   LivePreviewContext,
   LivePreviewDecorationKind,
   LivePreviewRange,
   LivePreviewRenderer,
   LivePreviewSelectionRange,
   LivePreviewVisibleRange,
+  MarkdownBlockClipboardEvent,
+  MarkdownBlockDefinition,
+  MarkdownBlockInteractionContext,
+  MarkdownBlockMatch,
+  MarkdownBlockMatchContext,
+  MarkdownBlockReferenceSyntax,
+  MarkdownBlockRegistration,
+  MarkdownBlockRenderContext,
+  MarkdownBlockSyntax,
+  MarkdownInlineInteractionContext,
+  MarkdownInlineMatch,
+  MarkdownInlineMatchContext,
+  MarkdownInlineRegistration,
+  MarkdownInlineRenderContext,
+  MarkdownInlineSyntax,
+  MarkdownProjectionClipboardEvent,
+  SourceRange,
+  SourceSelection,
   TaskMarkerRange,
 } from './live-preview/index.js';
 export {
   collectLivePreviewRanges,
   createLivePreviewContext,
   defaultLivePreviewRenderers,
+  defaultMarkdownBlockRegistrations,
   emphasisLivePreviewRenderer,
   filterLivePreviewRanges,
   findTaskMarkerAtPosition,
@@ -51,7 +110,15 @@ export {
   livePreviewExtension,
   livePreviewRangeIntersectsSelection,
   livePreviewSelectionRanges,
+  markdownBlockInteractionExtension,
+  markdownBlockRegistrationExtensions,
+  markdownBlockRegistrationsToInternalRenderers,
+  markdownInlineInteractionExtension,
+  markdownInlineRegistrationExtensions,
+  markdownInlineRegistrationsToInternalRenderers,
   markdownLinkLivePreviewRenderer,
+  matchMarkdownBlockRegistration,
+  matchMarkdownInlineRegistration,
   nextTaskMarkerCheckbox,
   shouldRenderLivePreviewRange,
   strikethroughLivePreviewRenderer,
@@ -84,6 +151,10 @@ export interface MarkdownEditorExtensionOptions {
   onError?: (error: unknown, context: string) => void;
   shouldEmitChange?: () => boolean;
   livePreviewRenderers?: readonly LivePreviewRenderer[] | false;
+  markdownBlockRegistrations?: readonly MarkdownBlockRegistration[] | false;
+  markdownInlineRegistrations?: readonly MarkdownInlineRegistration[] | false;
+  onOpenReference?: (target: { readonly path: string; readonly fragment?: string }) => void;
+  onSetEphemeralState?: (entry: { readonly key: string; readonly value: unknown }) => void;
 }
 
 export interface MountedMarkdownEditorOptions extends MarkdownEditorExtensionOptions {
@@ -129,6 +200,10 @@ export function composeEditorExtensions(
 export function createMarkdownEditorExtensions({
   extensionContributions = [],
   livePreviewRenderers,
+  markdownBlockRegistrations,
+  markdownInlineRegistrations,
+  onOpenReference,
+  onSetEphemeralState,
   onChange,
   onSave,
   onError,
@@ -141,22 +216,70 @@ export function createMarkdownEditorExtensions({
   const reportLivePreviewError: LivePreviewErrorReporter | undefined = onError
     ? (error, context) => onError(error, `live-preview.${context.phase}.${context.rendererId}`)
     : undefined;
-  const extensions: Extension[] = [zoridMarkdown(), history(), keymap.of(historyKeymap), ...composed.extensions];
+  const activeMarkdownBlockRegistrations =
+    markdownBlockRegistrations === false ? [] : (markdownBlockRegistrations ?? []);
+  const activeMarkdownInlineRegistrations =
+    markdownInlineRegistrations === false ? [] : (markdownInlineRegistrations ?? []);
+  const projectionActionHandlers = {
+    ...(onOpenReference ? { openReference: onOpenReference } : {}),
+    ...(onSetEphemeralState ? { setEphemeralState: onSetEphemeralState } : {}),
+  };
+  const activeDefaultMarkdownBlockRegistrations = defaultMarkdownBlockRegistrations;
+  const extensions: Extension[] = [
+    zoridMarkdown(),
+    history(),
+    keymap.of(historyKeymap),
+    ...markdownInlineRegistrationExtensions(activeMarkdownInlineRegistrations),
+    ...markdownBlockRegistrationExtensions([
+      ...activeDefaultMarkdownBlockRegistrations,
+      ...activeMarkdownBlockRegistrations,
+    ]),
+    ...composed.extensions,
+  ];
   if (onError) {
     extensions.push(EditorView.exceptionSink.of((exception) => onError(exception, 'codemirror.exceptionSink')));
   }
   if (livePreviewRenderers !== false) {
+    const registeredInlineRenderers = markdownInlineRegistrationsToInternalRenderers(
+      activeMarkdownInlineRegistrations,
+      projectionActionHandlers,
+    );
+    const registeredBlockRenderers = markdownBlockRegistrationsToInternalRenderers(
+      activeMarkdownBlockRegistrations,
+      projectionActionHandlers,
+    );
+    const defaultBlockRenderers = markdownBlockRegistrationsToInternalRenderers(
+      activeDefaultMarkdownBlockRegistrations,
+      projectionActionHandlers,
+    );
+    const defaultInternalRenderers = activeMarkdownInlineRegistrations.some((registration) =>
+      registration.syntax?.some((syntax) => syntax.kind === 'task-marker'),
+    )
+      ? defaultLivePreviewInternalRenderers.filter((renderer) => renderer.id !== 'task-marker')
+      : defaultLivePreviewInternalRenderers;
     extensions.push(
       livePreviewRenderers === undefined
         ? livePreviewExtensionWithInternalRenderers(
             defaultLivePreviewRenderers,
-            defaultLivePreviewInternalRenderers,
-            defaultLivePreviewWidgetRenderers,
+            [...defaultInternalRenderers, ...registeredInlineRenderers],
+            [...defaultBlockRenderers, ...registeredBlockRenderers],
             reportLivePreviewError,
           )
-        : livePreviewExtension(livePreviewRenderers),
+        : livePreviewExtensionWithInternalRenderers(
+            livePreviewRenderers,
+            registeredInlineRenderers,
+            registeredBlockRenderers,
+            reportLivePreviewError,
+          ),
     );
   }
+  extensions.push(markdownInlineInteractionExtension(activeMarkdownInlineRegistrations, projectionActionHandlers));
+  extensions.push(
+    markdownBlockInteractionExtension(
+      [...activeDefaultMarkdownBlockRegistrations, ...activeMarkdownBlockRegistrations],
+      projectionActionHandlers,
+    ),
+  );
 
   if (onSave) {
     extensions.push(

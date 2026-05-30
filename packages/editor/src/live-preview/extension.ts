@@ -146,6 +146,24 @@ function livePreviewRangeDedupeKey(range: Pick<LivePreviewRange, 'rendererId' | 
   return `${range.rendererId}:${range.from}:${range.to}`;
 }
 
+function livePreviewWidgetOwnershipKey(
+  range: Pick<InternalLivePreviewRange, 'from' | 'to' | 'sourceFrom' | 'sourceTo'>,
+): string {
+  return `${range.sourceFrom ?? range.from}:${range.sourceTo ?? range.to}`;
+}
+
+function resolveLivePreviewWidgetOwnership(ranges: readonly InternalLivePreviewRange[]): InternalLivePreviewRange[] {
+  const winners = new Map<string, InternalLivePreviewRange>();
+  for (const range of ranges) {
+    const key = livePreviewWidgetOwnershipKey(range);
+    const winner = winners.get(key);
+    if (!winner || (range.priority ?? 0) > (winner.priority ?? 0)) {
+      winners.set(key, range);
+    }
+  }
+  return [...winners.values()];
+}
+
 export function collectLivePreviewWidgetRangesForVisibleRanges(
   renderers: readonly InternalLivePreviewRenderer[],
   state: LivePreviewContext['state'],
@@ -161,7 +179,8 @@ export function collectLivePreviewWidgetRangesForVisibleRanges(
       reportError,
     ),
   );
-  return [...new Map(ranges.map((range) => [livePreviewRangeDedupeKey(range), range])).values()];
+  const deduped = [...new Map(ranges.map((range) => [livePreviewRangeDedupeKey(range), range])).values()];
+  return resolveLivePreviewWidgetOwnership(deduped);
 }
 
 function livePreviewRangeIsInsideAnyWidget(
