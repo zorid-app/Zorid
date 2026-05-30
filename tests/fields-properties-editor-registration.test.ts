@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it } from 'vitest';
+import { normalizeVaultPath } from '../packages/shared/src/index';
 import {
   createFieldsPropertiesEditorRegistration,
   fieldsPropertiesEditorRegistration,
 } from '../plugins/core/fields/src/index';
-import { normalizeVaultPath } from '../packages/shared/src/index';
 
 describe('Fields PropertiesEditorRegistration', () => {
   it('defines a document-header properties editor outside Markdown block registration', () => {

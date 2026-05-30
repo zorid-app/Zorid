@@ -6,6 +6,8 @@ import {
   type MarkdownCodeRange,
   markdownCalloutRanges,
   markdownCompleteFencedCodeBlockRanges,
+  markdownInlineCodeRanges,
+  markdownSuppressedPreviewRanges,
 } from './markdown-code-context.js';
 import { stateWithAvailableZoridSyntaxTree } from './syntax-tree-ranges.js';
 import type { LivePreviewContext, LivePreviewVisibleRange } from './types.js';
@@ -140,8 +142,10 @@ class HTMLElementBlockWidget extends WidgetType {
   }
 
   ignoreEvent(event: Event): boolean {
-    return (event.type === 'mousedown' && Boolean(this.registration.onActivate)) ||
-      (event.type === 'dblclick' && Boolean(this.registration.onEdit));
+    return (
+      (event.type === 'mousedown' && Boolean(this.registration.onActivate)) ||
+      (event.type === 'dblclick' && Boolean(this.registration.onEdit))
+    );
   }
 }
 
@@ -162,7 +166,9 @@ function widgetForRendered(
   rendered: WidgetType | HTMLElement,
   handlers: BlockActionHandlers,
 ): WidgetType {
-  return rendered instanceof WidgetType ? rendered : new HTMLElementBlockWidget(registration, match, rendered, handlers);
+  return rendered instanceof WidgetType
+    ? rendered
+    : new HTMLElementBlockWidget(registration, match, rendered, handlers);
 }
 
 function inlineDefinition(docText: string, from: number, to: number): MarkdownBlockDefinition {
@@ -254,6 +260,21 @@ function markdownWikiLinkRanges(context: LivePreviewContext): MarkdownCodeRange[
   return [...new Map(ranges.map((range) => [`${range.from}:${range.to}`, range])).values()];
 }
 
+function embedReferenceSuppressedRanges(context: LivePreviewContext): MarkdownCodeRange[] {
+  const scanWindow = {
+    from: Math.max(0, context.visibleFrom - 1),
+    to: context.visibleTo,
+  };
+  return [
+    ...markdownSuppressedPreviewRanges(context.docText, scanWindow, context.state),
+    ...markdownInlineCodeRanges(context.docText, scanWindow, context.state),
+  ];
+}
+
+function isInsideRange(range: MarkdownCodeRange, container: MarkdownCodeRange): boolean {
+  return range.from >= container.from && range.to <= container.to;
+}
+
 function parseWikilinkEmbedTarget(rawTarget: string): { path: string; fragment?: string } {
   const target = rawTarget.split('|', 1)[0] ?? rawTarget;
   const hashIndex = target.indexOf('#');
@@ -275,10 +296,12 @@ function matchEmbedReferenceSyntax(
   syntax: Extract<MarkdownBlockSyntax, { kind: 'embed-reference' }>,
   context: LivePreviewContext,
 ): MarkdownBlockMatch[] {
+  const suppressedRanges = embedReferenceSuppressedRanges(context);
   return markdownWikiLinkRanges(context).flatMap((wikiRange) => {
     if (wikiRange.from === 0 || context.docText.charAt(wikiRange.from - 1) !== '!') return [];
     const from = wikiRange.from - 1;
     const to = wikiRange.to;
+    if (suppressedRanges.some((range) => isInsideRange({ from, to }, range))) return [];
     const rawTarget = context.docText.slice(wikiRange.from + 2, wikiRange.to - 2).trim();
     if (!rawTarget) return [];
     const { path, fragment } = parseWikilinkEmbedTarget(rawTarget);
@@ -343,9 +366,15 @@ export function markdownBlockRegistrationsToInternalRenderers(
               sourceTo: match.definition.sourceTo,
               clipboardSource: 'document-source' as const,
               atomic: match.atomic ?? ('none' as const),
+              priority: registration.priority ?? 0,
               className: match.className,
               kind: 'widget' as const,
-              widget: widgetForRendered(registration, match, registration.render(match, renderContext(context)), handlers),
+              widget: widgetForRendered(
+                registration,
+                match,
+                registration.render(match, renderContext(context)),
+                handlers,
+              ),
             };
             return match.attributes ? { ...range, attributes: match.attributes } : range;
           }),
@@ -369,6 +398,7 @@ function allDocumentContext(view: EditorView): MarkdownBlockInteractionContext {
 function findWholeSelectedBlock(
   registrations: readonly MarkdownBlockRegistration[],
   context: MarkdownBlockInteractionContext,
+  hasHandler: (registration: MarkdownBlockRegistration) => boolean = () => true,
 ): {
   registration: MarkdownBlockRegistration;
   match: MarkdownBlockMatch;
@@ -378,6 +408,7 @@ function findWholeSelectedBlock(
   const selection = context.state.selection.main;
   if (selection.empty) return null;
   for (const registration of [...registrations].sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))) {
+    if (!hasHandler(registration)) continue;
     for (const match of matchMarkdownBlockRegistration(registration, context)) {
       if (selection.from === match.definition.sourceFrom && selection.to === match.definition.sourceTo) {
         return { registration, match, selection: { from: selection.from, to: selection.to } };
@@ -411,7 +442,9 @@ function applyBlockAction(
 ): void {
   if (!action || action.kind === 'none') return;
   if (action.kind === 'open-reference') {
-    handlers.openReference?.(action.fragment ? { path: action.path, fragment: action.fragment } : { path: action.path });
+    handlers.openReference?.(
+      action.fragment ? { path: action.path, fragment: action.fragment } : { path: action.path },
+    );
     return;
   }
   if (action.kind === 'set-ephemeral-state') {
@@ -428,9 +461,11 @@ function applyBlockAction(
 function findBlockAtSelectionHead(
   registrations: readonly MarkdownBlockRegistration[],
   context: MarkdownBlockInteractionContext,
+  hasHandler: (registration: MarkdownBlockRegistration) => boolean = () => true,
 ): { registration: MarkdownBlockRegistration; match: MarkdownBlockMatch } | null {
   const position = context.state.selection.main.head;
   for (const registration of [...registrations].sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))) {
+    if (!hasHandler(registration)) continue;
     for (const match of matchMarkdownBlockRegistration(registration, context)) {
       if (position >= match.activationFrom && position <= match.activationTo) return { registration, match };
     }
@@ -446,7 +481,7 @@ export function markdownBlockInteractionExtension(
   return EditorView.domEventHandlers({
     copy(event, view) {
       const context = allDocumentContext(view);
-      const found = findWholeSelectedBlock(registrations, context);
+      const found = findWholeSelectedBlock(registrations, context, (registration) => Boolean(registration.onCopy));
       if (!found?.registration.onCopy) return false;
       const result = found.registration.onCopy(
         { nativeEvent: event, selection: found.selection },
@@ -457,7 +492,7 @@ export function markdownBlockInteractionExtension(
     },
     cut(event, view) {
       const context = allDocumentContext(view);
-      const found = findWholeSelectedBlock(registrations, context);
+      const found = findWholeSelectedBlock(registrations, context, (registration) => Boolean(registration.onCut));
       if (!found?.registration.onCut) return false;
       const { clipboard, action } = clipboardResultFromCut(
         found.registration.onCut({ nativeEvent: event, selection: found.selection }, found.match, context),
@@ -474,7 +509,7 @@ export function markdownBlockInteractionExtension(
     },
     paste(event, view) {
       const context = allDocumentContext(view);
-      const found = findBlockAtSelectionHead(registrations, context);
+      const found = findBlockAtSelectionHead(registrations, context, (registration) => Boolean(registration.onPaste));
       if (!found?.registration.onPaste) return false;
       applyBlockAction(found.registration.onPaste(event, found.match, context), context, handlers);
       event.preventDefault();

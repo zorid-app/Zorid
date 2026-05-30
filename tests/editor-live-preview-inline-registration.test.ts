@@ -5,9 +5,9 @@ import { Transaction } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 import {
   createMountedMarkdownEditor,
+  type MarkdownInlineRegistration,
   markdownInlineRegistrationsToInternalRenderers,
   toggleTaskMarkerAtSelection,
-  type MarkdownInlineRegistration,
 } from '../packages/editor/src';
 
 class TestClipboardData {
@@ -186,7 +186,10 @@ function customInlineRegistration(): MarkdownInlineRegistration {
           sourceTo: from + '[[Target|Alias]]'.length,
           sourceText: '[[Target|Alias]]',
           className: 'test-custom-inline-pill',
-          selectionPolicy: { kind: 'content', range: { from: from + '[[Target|'.length, to: from + '[[Target|Alias'.length } },
+          selectionPolicy: {
+            kind: 'content',
+            range: { from: from + '[[Target|'.length, to: from + '[[Target|Alias'.length },
+          },
         },
       ];
     },
@@ -201,13 +204,19 @@ describe('editor Live Preview inline selection hooks', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
     const doc = 'See [[Target|Alias]] today';
-    const editor = createMountedMarkdownEditor({ parent, text: doc, markdownInlineRegistrations: [customInlineRegistration()] });
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: doc,
+      markdownInlineRegistrations: [customInlineRegistration()],
+    });
     const marker = doc.indexOf('Target');
 
     editor.view.dispatch({ selection: { anchor: marker } });
     editor.view.contentDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
 
-    expect(editor.view.state.sliceDoc(editor.view.state.selection.main.from, editor.view.state.selection.main.to)).toBe('Alias');
+    expect(editor.view.state.sliceDoc(editor.view.state.selection.main.from, editor.view.state.selection.main.to)).toBe(
+      'Alias',
+    );
     expect(editor.getText()).toBe(doc);
 
     editor.destroy();

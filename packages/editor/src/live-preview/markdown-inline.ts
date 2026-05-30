@@ -1,8 +1,8 @@
-import { Transaction, type Extension, type TransactionSpec } from '@codemirror/state';
+import { type Extension, Transaction, type TransactionSpec } from '@codemirror/state';
 import { EditorView, type KeyBinding, keymap, WidgetType } from '@codemirror/view';
 import type { InternalLivePreviewRange, InternalLivePreviewRenderer } from './internal-types.js';
 import { markdownSuppressedCodeRanges } from './markdown-code-context.js';
-import { taskMarkerRangesForState, type TaskMarkerRange } from './task-marker-ranges.js';
+import { type TaskMarkerRange, taskMarkerRangesForState } from './task-marker-ranges.js';
 import type { LivePreviewContext } from './types.js';
 
 export interface SourceRange {
@@ -93,14 +93,25 @@ export interface MarkdownInlineRegistration<Match extends MarkdownInlineMatch = 
   render(match: Match, context: MarkdownInlineRenderContext): InlineRenderResult;
   onActivate?(event: Event, match: Match, context: MarkdownInlineInteractionContext): EditorProjectionAction;
   onSelect?(event: Event, match: Match, context: MarkdownInlineInteractionContext): EditorProjectionAction;
-  onCopy?(event: MarkdownProjectionClipboardEvent, match: Match, context: MarkdownInlineInteractionContext): EditorClipboardResult;
-  onCut?(event: MarkdownProjectionClipboardEvent, match: Match, context: MarkdownInlineInteractionContext): InlineCutResult;
+  onCopy?(
+    event: MarkdownProjectionClipboardEvent,
+    match: Match,
+    context: MarkdownInlineInteractionContext,
+  ): EditorClipboardResult;
+  onCut?(
+    event: MarkdownProjectionClipboardEvent,
+    match: Match,
+    context: MarkdownInlineInteractionContext,
+  ): InlineCutResult;
   onPaste?(event: ClipboardEvent, match: Match, context: MarkdownInlineInteractionContext): EditorProjectionAction;
   extensions?(): readonly Extension[];
   keybindings?(): readonly KeyBinding[];
 }
 
-function inlineSourceText(context: LivePreviewContext, match: Pick<MarkdownInlineMatch, 'sourceFrom' | 'sourceTo'>): string {
+function inlineSourceText(
+  context: LivePreviewContext,
+  match: Pick<MarkdownInlineMatch, 'sourceFrom' | 'sourceTo'>,
+): string {
   return context.docText.slice(match.sourceFrom, match.sourceTo);
 }
 
@@ -128,7 +139,9 @@ function applyProjectionAction(
 ): void {
   if (!action || action.kind === 'none') return;
   if (action.kind === 'open-reference') {
-    handlers.openReference?.(action.fragment ? { path: action.path, fragment: action.fragment } : { path: action.path });
+    handlers.openReference?.(
+      action.fragment ? { path: action.path, fragment: action.fragment } : { path: action.path },
+    );
     return;
   }
   if (action.kind === 'set-ephemeral-state') {
@@ -147,7 +160,10 @@ function applyProjectionAction(
   }
 }
 
-function taskMarkerState(context: LivePreviewContext, range: Pick<TaskMarkerRange, 'checkboxFrom' | 'checkboxTo'>): string {
+function taskMarkerState(
+  context: LivePreviewContext,
+  range: Pick<TaskMarkerRange, 'checkboxFrom' | 'checkboxTo'>,
+): string {
   return context.docText.slice(range.checkboxFrom, range.checkboxTo) || ' ';
 }
 
@@ -185,7 +201,10 @@ function customTaskMarkerLength(lineText: string): number | null {
 }
 
 function fallbackTaskMarkerRangesForCustomStates(context: LivePreviewContext): TaskMarkerRange[] {
-  const suppressedCodeRanges = markdownSuppressedCodeRanges(context.docText, { from: context.visibleFrom, to: context.visibleTo });
+  const suppressedCodeRanges = markdownSuppressedCodeRanges(context.docText, {
+    from: context.visibleFrom,
+    to: context.visibleTo,
+  });
   const ranges: TaskMarkerRange[] = [];
   let line = context.state.doc.lineAt(context.visibleFrom);
   for (;;) {
@@ -211,10 +230,16 @@ function fallbackTaskMarkerRangesForCustomStates(context: LivePreviewContext): T
   return ranges;
 }
 
-function mergeTaskMarkerRanges(primary: readonly TaskMarkerRange[], fallback: readonly TaskMarkerRange[]): TaskMarkerRange[] {
+function mergeTaskMarkerRanges(
+  primary: readonly TaskMarkerRange[],
+  fallback: readonly TaskMarkerRange[],
+): TaskMarkerRange[] {
   const keyed = new Map(primary.map((range) => [`${range.markerFrom}:${range.markerTo}`, range]));
-  for (const range of fallback) keyed.set(`${range.markerFrom}:${range.markerTo}`, keyed.get(`${range.markerFrom}:${range.markerTo}`) ?? range);
-  return [...keyed.values()].sort((left, right) => left.markerFrom - right.markerFrom || left.markerTo - right.markerTo);
+  for (const range of fallback)
+    keyed.set(`${range.markerFrom}:${range.markerTo}`, keyed.get(`${range.markerFrom}:${range.markerTo}`) ?? range);
+  return [...keyed.values()].sort(
+    (left, right) => left.markerFrom - right.markerFrom || left.markerTo - right.markerTo,
+  );
 }
 
 function matchTaskMarkerSyntax(
@@ -308,7 +333,9 @@ function widgetForRendered(
   rendered: WidgetType | HTMLElement,
   handlers: EditorProjectionActionHandlers,
 ): WidgetType {
-  return rendered instanceof WidgetType ? rendered : new HTMLElementInlineWidget(registration, match, rendered, handlers);
+  return rendered instanceof WidgetType
+    ? rendered
+    : new HTMLElementInlineWidget(registration, match, rendered, handlers);
 }
 
 function internalRangeForRendered(
@@ -364,7 +391,12 @@ export function markdownInlineRegistrationsToInternalRenderers(
         id: registration.id,
         match: (context) =>
           matchMarkdownInlineRegistration(registration, context).flatMap((match) => {
-            const range = internalRangeForRendered(registration, match, registration.render(match, renderContext(context)), handlers);
+            const range = internalRangeForRendered(
+              registration,
+              match,
+              registration.render(match, renderContext(context)),
+              handlers,
+            );
             return range ? [range] : [];
           }),
       }),
@@ -426,7 +458,10 @@ function writeClipboardData(event: ClipboardEvent, result: EditorClipboardResult
   return true;
 }
 
-function clipboardResultFromCut(result: InlineCutResult): { clipboard: EditorClipboardResult; action?: EditorProjectionAction } {
+function clipboardResultFromCut(result: InlineCutResult): {
+  clipboard: EditorClipboardResult;
+  action?: EditorProjectionAction;
+} {
   return 'clipboard' in result ? result : { clipboard: result };
 }
 
@@ -440,7 +475,10 @@ export function markdownInlineInteractionExtension(
       const context = allDocumentContext(view);
       const found = findWholeSelectedInline(registrations, context);
       if (!found?.registration.onCopy) return false;
-      return writeClipboardData(event, found.registration.onCopy({ nativeEvent: event, selection: found.selection }, found.match, context));
+      return writeClipboardData(
+        event,
+        found.registration.onCopy({ nativeEvent: event, selection: found.selection }, found.match, context),
+      );
     },
     cut(event, view) {
       const context = allDocumentContext(view);
@@ -487,7 +525,9 @@ export function markdownInlineInteractionExtension(
   });
 }
 
-export function markdownInlineRegistrationExtensions(registrations: readonly MarkdownInlineRegistration[]): Extension[] {
+export function markdownInlineRegistrationExtensions(
+  registrations: readonly MarkdownInlineRegistration[],
+): Extension[] {
   return registrations.flatMap((registration) => {
     const keymaps = registration.keybindings?.() ?? [];
     return [...(registration.extensions?.() ?? []), ...(keymaps.length > 0 ? [keymap.of(keymaps)] : [])];

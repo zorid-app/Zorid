@@ -17,6 +17,7 @@ export interface LivePreviewBlockMatch {
 
 export interface LivePreviewBlockRenderer<Match extends LivePreviewBlockMatch = LivePreviewBlockMatch> {
   readonly id: string;
+  readonly priority?: number;
   match(context: LivePreviewContext): readonly Match[];
   widget(match: Match, context: LivePreviewContext): WidgetType;
 }
@@ -88,6 +89,7 @@ export function livePreviewBlockRendererToInternalRenderer<Match extends LivePre
           from: match.from,
           to: match.to,
           ...contract,
+          priority: renderer.priority ?? 0,
           className: match.className,
           kind: 'widget',
           widget: renderer.widget(match, context),

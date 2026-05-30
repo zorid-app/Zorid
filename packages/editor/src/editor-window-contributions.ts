@@ -132,7 +132,10 @@ function appendContributionView(parent: HTMLElement, mounted: MountedContributio
   parent.append(mounted.view.element);
 }
 
-function renderContribution(contribution: EditorWindowContribution, context: EditorWindowContext): MountedContributionView | null {
+function renderContribution(
+  contribution: EditorWindowContribution,
+  context: EditorWindowContext,
+): MountedContributionView | null {
   const rendered = contribution.render?.(context);
   if (!rendered) return null;
   return { contribution, view: asDisposableView(rendered) };
@@ -250,6 +253,8 @@ export class EditorWindowContributionHost {
   }
 }
 
-export function renderEditorWindowContributions(options: EditorWindowContributionHostOptions): EditorWindowContributionHost {
+export function renderEditorWindowContributions(
+  options: EditorWindowContributionHostOptions,
+): EditorWindowContributionHost {
   return new EditorWindowContributionHost(options);
 }

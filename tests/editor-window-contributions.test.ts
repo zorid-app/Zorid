@@ -2,11 +2,11 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  type EditorWindowContext,
+  type EditorWindowContribution,
   editorWindowPlacementKey,
   groupEditorWindowContributions,
   renderEditorWindowContributions,
-  type EditorWindowContext,
-  type EditorWindowContribution,
 } from '../packages/editor/src';
 
 const context: EditorWindowContext = {
@@ -32,10 +32,7 @@ function contribution(
 describe('editor window contribution grouping', () => {
   it('groups cursor popovers into a shared stacked placement ordered by priority', () => {
     const groups = groupEditorWindowContributions(
-      [
-        contribution('low', { kind: 'cursor-popover' }, 1),
-        contribution('high', { kind: 'cursor-popover' }, 10),
-      ],
+      [contribution('low', { kind: 'cursor-popover' }, 1), contribution('high', { kind: 'cursor-popover' }, 10)],
       context,
     );
 
@@ -109,7 +106,12 @@ describe('editor window contribution host', () => {
           render() {
             const element = document.createElement('div');
             element.textContent = 'Properties';
-            return { element, dispose: () => void (disposed += 1) };
+            return {
+              element,
+              dispose: () => {
+                disposed += 1;
+              },
+            };
           },
         },
       ],
@@ -144,14 +146,12 @@ describe('editor window contribution host', () => {
       ],
     });
 
-    expect([...parent.querySelectorAll('[data-editor-window-contribution-tab]')].map((node) => node.textContent)).toEqual([
-      'link-preview',
-      'ai-help',
-    ]);
-    expect([...parent.querySelectorAll('[data-editor-window-contribution-section]')].map((node) => node.textContent)).toEqual([
-      'Link',
-      'AI',
-    ]);
+    expect(
+      [...parent.querySelectorAll('[data-editor-window-contribution-tab]')].map((node) => node.textContent),
+    ).toEqual(['link-preview', 'ai-help']);
+    expect(
+      [...parent.querySelectorAll('[data-editor-window-contribution-section]')].map((node) => node.textContent),
+    ).toEqual(['Link', 'AI']);
 
     host.dispose();
   });

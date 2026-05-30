@@ -5,6 +5,7 @@ import { Transaction } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 import {
   createMountedMarkdownEditor,
+  defaultMarkdownBlockRegistrations,
   type MarkdownBlockMatch,
   type MarkdownBlockRegistration,
   markdownBlockRegistrationsToInternalRenderers,
@@ -79,6 +80,17 @@ describe('editor Live Preview block registration API', () => {
     expect(markdownBlockRegistrationsToInternalRenderers([columnsRegistration()])).toHaveLength(1);
   });
 
+  it('exposes first-party default block registrations for built-in widgets', () => {
+    expect(defaultMarkdownBlockRegistrations.map((registration) => registration.id)).toEqual([
+      'code-block-widget',
+      'callout-widget',
+      'zbase-embed-widget',
+    ]);
+    expect(
+      markdownBlockRegistrationsToInternalRenderers(defaultMarkdownBlockRegistrations).map((renderer) => renderer.id),
+    ).toEqual(['code-block-widget', 'callout-widget', 'zbase-embed-widget']);
+  });
+
   it('renders Markdown-defined fenced-code blocks through registered HTMLElement widgets', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
@@ -129,6 +141,152 @@ describe('editor Live Preview block registration API', () => {
       fragment: 'open',
       referenceSyntax: 'wikilink-embed',
     });
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('renders a default .zbase embed widget and opens references through host actions', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const opened: Array<{ path: string; fragment?: string }> = [];
+    const doc = 'Dashboard: ![[views/tasks.zbase#open]]';
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: doc,
+      onOpenReference: (target) => opened.push(target),
+    });
+
+    const widget = parent.querySelector<HTMLElement>('.z-live-preview-zbase-embed-widget');
+    expect(widget).toBeTruthy();
+    expect(widget?.textContent).toContain('Data view');
+    expect(widget?.textContent).toContain('views/tasks.zbase#open');
+    expect(editor.getText()).toBe(doc);
+
+    widget?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+
+    expect(opened).toEqual([{ path: 'views/tasks.zbase', fragment: 'open' }]);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('does not render .zbase embed widgets from inline code source', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const doc = 'Inline `![[views/tasks.zbase#open]]` code';
+    const editor = createMountedMarkdownEditor({ parent, text: doc });
+
+    expect(parent.querySelector('.z-live-preview-zbase-embed-widget')).toBeNull();
+    expect(parent.querySelector('[data-live-preview-renderer="inline-code"]')).toBeTruthy();
+    expect(parent.textContent).toContain('![[views/tasks.zbase#open]]');
+    expect(editor.getText()).toBe(doc);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('lets a custom .zbase block registration suppress the default .zbase widget', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const zbaseRegistration: MarkdownBlockRegistration = {
+      id: 'custom-zbase-embed',
+      syntax: [{ kind: 'embed-reference', extensions: ['.zbase'] }],
+      render(match) {
+        const element = document.createElement('div');
+        element.className = 'test-zbase-embed';
+        element.textContent = match.definition.kind === 'external' ? match.definition.path : '';
+        return element;
+      },
+    };
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: 'Dashboard: ![[views/tasks.zbase#open]]',
+      markdownBlockRegistrations: [zbaseRegistration],
+    });
+
+    expect(parent.querySelector('.test-zbase-embed')).toBeTruthy();
+    expect(parent.querySelector('.z-live-preview-zbase-embed-widget')).toBeNull();
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('keeps default .zbase rendering for paths outside a scoped custom registration', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const scopedZbaseRegistration: MarkdownBlockRegistration = {
+      id: 'scoped-zbase-embed',
+      syntax: [
+        { kind: 'embed-reference', extensions: ['.zbase'], pathMatches: (path) => path === 'views/special.zbase' },
+      ],
+      render(match) {
+        const element = document.createElement('div');
+        element.className = 'test-scoped-zbase-embed';
+        element.textContent = match.definition.kind === 'external' ? match.definition.path : '';
+        return element;
+      },
+    };
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['![[views/special.zbase#open]]', '![[views/general.zbase#open]]'].join('\n'),
+      markdownBlockRegistrations: [scopedZbaseRegistration],
+    });
+
+    expect(parent.querySelector('.test-scoped-zbase-embed')?.textContent).toBe('views/special.zbase');
+    expect(parent.querySelector('.z-live-preview-zbase-embed-widget')?.textContent).toContain(
+      'views/general.zbase#open',
+    );
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('lets exact custom matcher ownership suppress the default .zbase widget for the same source range', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const source = '![[views/custom.zbase#open]]';
+    const customMatcherRegistration: MarkdownBlockRegistration = {
+      id: 'custom-matcher-zbase-embed',
+      match({ docText }) {
+        const from = docText.indexOf(source);
+        if (from === -1) return [];
+        const to = from + source.length;
+        return [
+          {
+            id: `custom-matcher-zbase-embed:${from}:${to}`,
+            type: 'embed-reference',
+            from,
+            to,
+            activationFrom: from,
+            activationTo: to,
+            definition: {
+              kind: 'external',
+              sourceFrom: from,
+              sourceTo: to,
+              path: 'views/custom.zbase',
+              fragment: 'open',
+              referenceSyntax: 'wikilink-embed',
+            },
+            className: 'test-custom-matcher-zbase-embed',
+          },
+        ];
+      },
+      render() {
+        const element = document.createElement('div');
+        element.className = 'test-custom-matcher-zbase-embed';
+        element.textContent = 'custom matcher';
+        return element;
+      },
+    };
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: source,
+      markdownBlockRegistrations: [customMatcherRegistration],
+    });
+
+    expect(parent.querySelector('.test-custom-matcher-zbase-embed')?.textContent).toBe('custom matcher');
+    expect(parent.querySelector('.z-live-preview-zbase-embed-widget')).toBeNull();
 
     editor.destroy();
     parent.remove();
@@ -199,7 +357,10 @@ describe('editor Live Preview block interaction hooks', () => {
             return { kind: 'open-reference', path: 'views/tasks.zbase', fragment: 'open' };
           },
           onEdit(_event, match) {
-            return { kind: 'reveal-source', range: { from: match.definition.sourceFrom, to: match.definition.sourceTo } };
+            return {
+              kind: 'reveal-source',
+              range: { from: match.definition.sourceFrom, to: match.definition.sourceTo },
+            };
           },
         },
       ],

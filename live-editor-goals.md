@@ -533,30 +533,44 @@ The next foundation pass added host behavior on top of the initial contracts:
 Still intentionally deferred:
 
 - Full Properties/frontmatter metadata editing and plugin enable/disable UI integration.
-- Porting built-in code-block and callout widgets fully onto first-party `MarkdownBlockRegistration` instances.
-- `.zbase` Live Preview rendering beyond the existing external embed match/open-reference foundation.
+- Real DataViews-powered `.zbase` content rendering inside the editor host; the current foundation only renders a source-backed placeholder and opens the referenced view through host actions.
+- Reading-view adapters and table-specific behavior.
+
+## Implementation status after the block/zbase foundation pass
+
+The next foundation pass consolidated the block surface:
+
+- Built-in code-block and callout widgets are now represented as first-party `MarkdownBlockRegistration` instances.
+- `defaultLivePreviewWidgetRenderers` remains exported for existing internal/tests, but it is derived from the first-party block registrations rather than a separate private built-in path.
+- A default `.zbase` external-reference block registration now renders `![[path.zbase#fragment]]` as a source-backed Live Preview widget.
+- `.zbase` widget activation/editing delegates to the host-mediated `open-reference` action, preserving the source text and avoiding widget-owned durable state.
+- Plugin/user `.zbase` block registrations suppress the default `.zbase` widget so ownership stays deterministic and duplicate widgets are avoided.
+
+Still intentionally deferred:
+
+- Real DataViews rendering inside the editor-window/desktop host.
+- Full Properties/frontmatter metadata editing and plugin enable/disable UI integration.
 - Reading-view adapters and table-specific behavior.
 
 ## Gaps to close
 
 The missing pieces are:
 
-1. Consolidate the experimental `MarkdownBlockRegistration` path by porting built-in code-block and callout widgets onto first-party registrations.
-2. Add Live Preview rendering for external-reference blocks such as `.zbase` embeds using the host-mediated open-reference foundation.
-3. Wire the editor-window host into the real desktop editor window and plugin lifecycle instead of only exposing the package-level host helper.
-4. Implement full `PropertiesEditorRegistration` behavior through the Fields core plugin and a metadata/frontmatter service; keep it out of the Markdown block/inline contracts.
-5. Decide whether built-in task checkboxes should become a first-party inline registration rather than only a suppressible built-in renderer.
-6. Add Reading-view adapters for inline/block registrations after the edit-mode contracts are stable.
-7. Add tests that prove viewport bounds during built-in block-registration migration, Properties/frontmatter enable/disable behavior, real desktop editor-window integration, and `.zbase` open/edit flows.
+1. Wire the editor-window host into the real desktop editor window and plugin lifecycle instead of only exposing the package-level host helper.
+2. Implement full `PropertiesEditorRegistration` behavior through the Fields core plugin and a metadata/frontmatter service; keep it out of the Markdown block/inline contracts.
+3. Upgrade the default `.zbase` placeholder into a real DataViews-backed editor host integration while preserving the external-reference block contract.
+4. Decide whether built-in task checkboxes should become a first-party inline registration rather than only a suppressible built-in renderer.
+5. Add Reading-view adapters for inline/block registrations after the edit-mode contracts are stable.
+6. Add tests that prove Properties/frontmatter enable/disable behavior, real desktop editor-window integration, `.zbase` open/edit/DataViews flows, table-specific behavior, and viewport/performance stress.
 
 ## Recommended next step
 
-The next implementation pass should complete the remaining editor foundation by making the new contracts usable in the real editor host:
+The next implementation pass should make the non-source editor-window surface usable in the real app host:
 
-1. Port built-in code-block and callout widgets fully onto first-party `MarkdownBlockRegistration` instances while preserving existing CSS/classes and viewport-bounded behavior.
-2. Wire the Fields `PropertiesEditorRegistration` skeleton into the real editor-window/plugin host with enable/disable behavior and a metadata/frontmatter service.
-3. Add `.zbase` Live Preview rendering using the host-mediated open-reference/external embed foundation.
-4. Add Reading-view adapters after edit-mode inline/block contracts stabilize.
+1. Wire `EditorWindowContributionHost` into the desktop editor window/plugin lifecycle.
+2. Wire the Fields `PropertiesEditorRegistration` skeleton into that host with enable/disable behavior and a minimal metadata/frontmatter service.
+3. Connect `.zbase` embed activation/opening to the real DataViews/editor host path, keeping the block registration as the source-backed trigger.
+4. Add Reading-view adapters after edit-mode inline/block/editor-window contracts stabilize.
 5. Keep tables, broad Properties UI polish, generalized plugin marketplace concerns, and more block families out of the pass unless a test fixture needs a narrow example.
 
 This moves Zorid from a block-only Live Preview plan to a three-surface editor architecture: Markdown block registrations for source-backed blocks, Markdown inline registrations for source-backed inline projections and interactions, and editor-window contributions for non-source UI around the document. The most important invariant stays the same: durable Markdown edits go through transactions, external durable edits go through explicit workspace/plugin APIs, and plugin DOM never owns the document model.

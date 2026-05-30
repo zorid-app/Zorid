@@ -205,6 +205,14 @@ export function markdownIndentedCodeRanges(
   return rangesForNode(docText, 'CodeBlock', scanWindow, state);
 }
 
+export function markdownInlineCodeRanges(
+  docText: string,
+  scanWindow: MarkdownCodeRange,
+  state?: EditorState,
+): MarkdownCodeRange[] {
+  return rangesForNode(docText, 'InlineCode', scanWindow, state);
+}
+
 export function markdownSuppressedCodeRanges(
   docText: string,
   scanWindow: MarkdownCodeRange,
