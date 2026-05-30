@@ -204,6 +204,8 @@ status: done
       });
       expect(runtime.getIndexStatus().fileCount).toBe(4);
       expect(runtime.searchIndex('tag')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
+      expect(runtime.searchIndex('A.md')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
+      expect(runtime.searchIndex('A')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
       expect(runtime.listTags()).toEqual([{ tag: 'tag', count: 1 }]);
       expect(runtime.getOutline('A.md')).toEqual([{ path: 'A.md', heading: 'A', ordinal: 1 }]);
       expect(runtime.getBacklinks('B.md')).toEqual([expect.objectContaining({ fromPath: 'A.md' })]);

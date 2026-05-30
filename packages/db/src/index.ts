@@ -18,6 +18,18 @@ CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
 CREATE TABLE IF NOT EXISTS headings(path TEXT NOT NULL, heading TEXT NOT NULL);
 CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(path UNINDEXED, text);`,
   },
+  {
+    id: '002-search-fts-expanded-corpus',
+    sql: `DROP TABLE IF EXISTS search_fts;
+CREATE VIRTUAL TABLE search_fts USING fts5(path, text, headings, tags);
+INSERT INTO search_fts(path, text, headings, tags)
+SELECT
+  files.path,
+  files.text,
+  COALESCE((SELECT group_concat(heading, ' ') FROM headings WHERE headings.path = files.path), ''),
+  COALESCE((SELECT group_concat(tag, ' ') FROM tags WHERE tags.path = files.path), '')
+FROM files;`,
+  },
 ];
 
 export interface IndexReader {

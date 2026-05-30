@@ -564,20 +564,17 @@ export class DesktopRuntime {
     if (!store) return [];
     const needle = query.trim().replace(/^#/, '').toLowerCase();
     if (!needle) return [];
-    return store
-      .all()
-      .filter((record) => {
-        const haystack = [record.path, record.text, ...record.headings, ...record.tags.map((tag) => `#${tag}`)]
-          .join('\n')
-          .toLowerCase();
-        return haystack.includes(needle);
-      })
-      .map((record) => ({
-        path: record.path,
-        title: record.headings[0] ?? path.basename(String(record.path)),
-        excerpt: this.excerpt(record, needle),
-      }))
-      .slice(0, 50);
+    if (store instanceof NodeSqliteIndexStore) {
+      return store.searchFullText(query).map((hit) => {
+        const record = store.get(hit.path);
+        return {
+          path: hit.path,
+          title: record?.headings[0] ?? path.basename(String(hit.path)),
+          excerpt: hit.snippet || (record ? this.excerpt(record, needle) : ''),
+        };
+      });
+    }
+    return this.fallbackSearch(store, needle);
   }
 
   getBacklinks(vaultPath: string): readonly BacklinkDto[] {
@@ -878,6 +875,23 @@ export class DesktopRuntime {
       record.text.split(/\r?\n/)[0] ??
       '';
     return line.slice(0, 180);
+  }
+
+  fallbackSearch(store: IndexStore, needle: string): readonly SearchResultDto[] {
+    return store
+      .all()
+      .filter((record) => {
+        const haystack = [record.path, record.text, ...record.headings, ...record.tags.map((tag) => `#${tag}`)]
+          .join('\n')
+          .toLowerCase();
+        return haystack.includes(needle);
+      })
+      .map((record) => ({
+        path: record.path,
+        title: record.headings[0] ?? path.basename(String(record.path)),
+        excerpt: this.excerpt(record, needle),
+      }))
+      .slice(0, 50);
   }
 
   validateFields(
