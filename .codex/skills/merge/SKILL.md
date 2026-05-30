@@ -15,7 +15,7 @@ Goal: merge a completed worktree branch into `main` safely and quickly.
 
 1. Confirm current branch is `main`.
 2. Pull latest `main` with `--ff-only`.
-3. Read the latest merge request from `.agent-context/merge-requests/` unless the user gave a branch.
+3. Read the latest merge request from `.agent-context/Zorid/merge-requests/` unless the user gave a branch.
 4. Inspect:
    - `git log --oneline main..BRANCH`
    - `git diff --stat main..BRANCH`
