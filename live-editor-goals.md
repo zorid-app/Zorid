@@ -129,6 +129,21 @@ Examples:
 
 Local UI state may be ephemeral. Durable changes must be requested through host-mediated actions or transactions, not by mutating editor content DOM directly.
 
+### 7. Non-source editor-window UI
+
+Not every editor-adjacent feature is a Markdown Live Preview projection. Zorid should also support plugin-provided UI that belongs to the surrounding editor window rather than to a Markdown source range.
+
+Examples:
+
+- a Properties UI above the document body;
+- cursor or selection popovers;
+- hover inspectors;
+- command/context toolbars;
+- lint, AI, backlink, or field hints;
+- plugin status badges or lightweight document chrome.
+
+These contributions may observe the active document and read-only editor state, but they are not themselves Markdown renderers. They should not be forced into `MarkdownBlockRegistration` or `MarkdownInlineRegistration` just because they appear near the editor. The editor window host should own mounting, placement, collision handling, focus behavior, z-index, accessibility, and lifecycle cleanup.
+
 ## Recommended architecture
 
 ### One normalized block model
@@ -169,7 +184,7 @@ interface MarkdownBlockMatch {
 
 The match describes source ownership and positional behavior. It should not hard-code clipboard or editing policy as a small enum because complex widgets need programmatic control.
 
-### Public registration API
+### Block registration API
 
 Because the editor has no external consumers yet, Zorid can design the public editor API now and revise it while first-party blocks prove the shape.
 
@@ -221,6 +236,207 @@ type BlockClipboardResult =
 ```
 
 The key design choice is full behavioral customization through programmatic hooks, while keeping final editor mutations host-mediated.
+
+### Shared projection action and clipboard primitives
+
+Block and inline Live Preview registrations should share the same host-mediated action and clipboard vocabulary. This keeps source-backed projections predictable even when different plugins own different syntax families.
+
+```ts
+type EditorProjectionAction =
+  | { kind: 'dispatch'; transaction: TransactionSpec }
+  | { kind: 'reveal-source'; range?: SourceRange }
+  | { kind: 'set-selection'; selection: SourceSelection }
+  | { kind: 'open-reference'; path: string; fragment?: string }
+  | { kind: 'set-ephemeral-state'; key: string; value: unknown }
+  | { kind: 'none' };
+
+type EditorClipboardResult =
+  | { kind: 'text'; text: string }
+  | { kind: 'html'; html: string; text?: string }
+  | { kind: 'delegate' };
+
+interface SourceRange {
+  from: number;
+  to: number;
+}
+```
+
+The host, not plugin DOM, applies these results. Durable Markdown edits must become CodeMirror transactions. External durable edits must go through explicit workspace/plugin APIs. Plugin UI may keep ephemeral widget state, but undo/redo, selection mapping, clipboard, and document persistence stay host-mediated.
+
+### Inline registration API
+
+Inline syntax needs its own registration contract. It should not be squeezed into the block contract. This is needed for task checkboxes, tri-state checkboxes, tags, wikilinks, highlights, inline pills, inline references, and future plugin-defined inline syntax.
+
+A target API should let plugins declare inline syntax ownership, render a mark/replacement/widget, and customize activation, selection, copy, cut, and paste behavior:
+
+```ts
+interface MarkdownInlineRegistration<Match extends MarkdownInlineMatch = MarkdownInlineMatch> {
+  id: string;
+  priority?: number;
+
+  syntax:
+    | readonly MarkdownInlineSyntax[]
+    | { kind: 'custom'; match(context: MarkdownInlineMatchContext): readonly Match[] };
+
+  render(match: Match, context: MarkdownInlineRenderContext): InlineRenderResult;
+
+  onActivate?(event: Event, match: Match, context: MarkdownInlineInteractionContext): EditorProjectionAction;
+  onSelect?(event: Event, match: Match, context: MarkdownInlineInteractionContext): EditorProjectionAction;
+  onCopy?(event: MarkdownProjectionClipboardEvent, match: Match, context: MarkdownInlineInteractionContext): EditorClipboardResult;
+  onCut?(
+    event: MarkdownProjectionClipboardEvent,
+    match: Match,
+    context: MarkdownInlineInteractionContext,
+  ): EditorClipboardResult | { clipboard: EditorClipboardResult; action?: EditorProjectionAction };
+  onPaste?(event: ClipboardEvent, match: Match, context: MarkdownInlineInteractionContext): EditorProjectionAction;
+
+  extensions?(): readonly Extension[];
+  keybindings?(): readonly KeyBinding[];
+}
+
+interface MarkdownInlineMatch {
+  id: string;
+  type: string;
+  from: number;
+  to: number;
+  activationFrom: number;
+  activationTo: number;
+  sourceFrom: number;
+  sourceTo: number;
+  sourceText: string;
+  className?: string;
+  attributes?: Readonly<Record<string, string>>;
+  atomic?: 'none' | 'inline';
+  selectionPolicy?: InlineSelectionPolicy;
+  meta?: Readonly<Record<string, unknown>>;
+}
+
+type InlineSelectionPolicy =
+  | { kind: 'source' }
+  | { kind: 'content'; range: SourceRange }
+  | { kind: 'token' }
+  | { kind: 'custom' };
+
+type InlineRenderResult =
+  | { kind: 'mark'; className: string; attributes?: Readonly<Record<string, string>> }
+  | { kind: 'replace'; widget?: WidgetType | HTMLElement }
+  | { kind: 'widget'; widget: WidgetType | HTMLElement }
+  | { kind: 'none' };
+```
+
+The `selectionPolicy` is important because inline elements differ. A tag may want token selection, a wikilink may want alias/content selection, inline code may preserve Markdown delimiters on copy, and a custom checkbox may want activation over only the marker. If `selectionPolicy` is `custom`, the host calls `onSelect` and applies the returned host action.
+
+A tri-state task checkbox should be modeled as an inline/list-marker registration rather than as a block:
+
+```ts
+const triStateTaskRegistration: MarkdownInlineRegistration = {
+  id: 'tri-state-task-checkbox',
+  priority: 100,
+  syntax: [{ kind: 'task-marker', states: [' ', '/', 'x'] }],
+  render(match) {
+    return { kind: 'replace', widget: new TriStateCheckboxWidget(String(match.meta?.state)) };
+  },
+  onActivate(_event, match) {
+    const state = String(match.meta?.state ?? ' ');
+    const next = state === ' ' ? '/' : state === '/' ? 'x' : ' ';
+    return {
+      kind: 'dispatch',
+      transaction: {
+        changes: { from: match.sourceFrom + 3, to: match.sourceFrom + 4, insert: next },
+        userEvent: 'input.task.toggle',
+      },
+    };
+  },
+  onCopy(_event, match) {
+    return { kind: 'text', text: match.sourceText };
+  },
+};
+```
+
+This keeps the source marker canonical while allowing plugins to define richer inline behavior than the built-in two-state checkbox.
+
+### Markdown editor versus editor window
+
+The Markdown Live Editor and the surrounding editor window are different extension surfaces.
+
+The Markdown Live Editor owns source-backed Markdown projections:
+
+- inline registrations;
+- block registrations;
+- parser/matcher ownership for Markdown syntax;
+- source reveal and activation;
+- source-backed selection, copy, cut, paste, and transactions.
+
+The editor window owns non-source UI around or above the editor:
+
+- document properties UI;
+- cursor and selection popovers;
+- hover inspectors;
+- toolbars and status chrome;
+- panels, gutters, and overlays that observe editor state but do not represent a Markdown source range.
+
+Editor-window contributions may read a safe, read-only editor/window context and request host actions, but the host owns final mounting and placement. They should not mutate CodeMirror content DOM or claim Markdown ranges unless they also register through the Markdown inline/block APIs.
+
+### Editor window contribution API
+
+The editor window should provide predefined placement lanes instead of letting plugins attach arbitrary absolutely positioned DOM. Plugins declare intent and render content; the host computes final coordinates, stacking, collision handling, focus, z-index, and lifecycle.
+
+```ts
+interface EditorWindowContribution {
+  id: string;
+  placement: EditorWindowPlacement;
+  priority?: number;
+  render(context: EditorWindowContext): HTMLElement | DisposableView;
+  update?(context: EditorWindowContext): void;
+  dispose?(): void;
+}
+
+type EditorWindowPlacement =
+  | { kind: 'document-header' }
+  | { kind: 'document-footer' }
+  | { kind: 'side-panel'; side: 'left' | 'right' }
+  | { kind: 'status-area' }
+  | { kind: 'cursor-popover'; mode?: 'stacked' | 'exclusive'; when?: PlacementPredicate }
+  | { kind: 'selection-popover'; mode?: 'stacked' | 'exclusive'; when?: PlacementPredicate }
+  | { kind: 'range-overlay'; range: SourceRange | DynamicRangeProvider }
+  | { kind: 'viewport-overlay'; position: ViewportPosition };
+
+interface EditorWindowContext {
+  documentPath: string;
+  editor?: {
+    hasFocus: boolean;
+    selection: readonly SourceRange[];
+    mainCursor: number;
+    visibleRanges: readonly SourceRange[];
+    coordsAtPos(pos: number): DOMRect | null;
+    stateReadonly: unknown;
+  };
+  workspace: WorkspaceAPI;
+  commands: CommandRegistry;
+}
+```
+
+The placement list is a set of host-managed lanes, not fixed pixel anchors. A cursor popover contribution can decide when to appear from `EditorWindowContext`, but the host should still own coordinates and collision policy.
+
+When multiple plugins want the same cursor or selection position, the initial product behavior should be a grouped popover with tabs or sections. For example, if AI suggestions, link previews, and field hints all claim `cursor-popover`, the host should render one shell at the cursor and place each contribution in a tab/section ordered by priority. Passive popovers should stack/group by default. Exclusive popovers should be rare; if two exclusive contributions compete, the host picks the highest priority and records diagnostics for the suppressed contribution.
+
+This avoids z-index wars and unmanaged DOM while still letting plugins build contextual editor UI.
+
+### Properties UI is not a Markdown Live Preview block
+
+The Properties UI should be separate from the Markdown Live Editor. It may be visually mounted above the Markdown document, but it is structured document metadata UI, not a source-backed text projection.
+
+Properties/frontmatter differs from a normal Markdown block because it:
+
+- is valid only as the document metadata region at the top of a file;
+- represents typed fields rather than document body content;
+- needs validation, schema/type integration, and metadata indexing;
+- may be visible, hidden, or raw source depending on settings/plugin state;
+- should not inherit Live Preview's default source-slice copy/cut behavior.
+
+A Properties UI should therefore be contributed by the Fields core plugin through an editor-window contribution, likely `document-header`, and should talk to a document metadata/frontmatter service. If the Fields plugin is disabled, the editor falls back to raw frontmatter source. Copy inside the Properties UI should behave like structured UI: copying a value copies that value, copying a row may copy a label/value pair, and raw YAML copy should only happen when the user is explicitly in raw/source mode.
+
+Good candidate names for the non-Markdown surface are `DocumentPropertiesRegistration`, `PropertiesPanelRegistration`, or `MetadataEditorRegistration`. The important boundary is that this registration belongs to the editor window/workspace layer, not to `MarkdownBlockRegistration`.
 
 ### Why programmatic hooks instead of fixed policies
 
@@ -280,38 +496,42 @@ The repo already has much of the foundation:
 - A private Zorid Markdown parser facade.
 - Syntax-tree-backed inline renderers.
 - Source reveal based on focus and selection.
-- Source-backed task checkbox toggles.
+- Source-backed task checkbox toggles, currently as built-in inline/list-marker behavior rather than a plugin inline registration.
 - Code-block and callout widgets.
 - Viewport-bounded widget collection.
 - Source-preserving clipboard/cut tests.
 - A private block renderer adapter used by code-block and callout widgets.
 - App-level `.zbase` embed discovery and rendering outside Live Preview.
+- An experimental `MarkdownBlockRegistration` path for fenced-code blocks, external wikilink embeds, and custom block copy/cut behavior.
 
 ## Gaps to close
 
 The missing pieces are:
 
-1. A public/editor-facing `registerMarkdownBlock` style API.
-2. A normalized match model that supports both inline and external definitions.
-3. Programmatic block hooks for activate/edit/copy/cut/paste.
-4. Live Preview rendering for external-reference blocks such as `.zbase` embeds.
-5. A first-party custom inline block proof that is neither code block nor callout.
-6. Parser support for embed references and any chosen custom block syntax.
-7. Tests that prove source reveal or structured activation, custom clipboard behavior, undo/redo, viewport bounds, and fallback/raw behavior across both block definition models.
+1. Consolidate the experimental `MarkdownBlockRegistration` path by porting built-in code-block and callout widgets onto it.
+2. Finish host-mediated block hooks for activate/edit/paste/open-reference behavior, not only copy/cut.
+3. Add Live Preview rendering for external-reference blocks such as `.zbase` embeds.
+4. Add a separate `MarkdownInlineRegistration` contract for inline syntax, selection policy, custom activation, and custom copy/cut/paste behavior.
+5. Migrate or adapt built-in task checkboxes toward the inline registration model, then use a tri-state checkbox as the proving example.
+6. Add editor-window contribution points for non-source UI such as Properties, cursor popovers, selection popovers, document header/footer UI, panels, overlays, and status chrome.
+7. Keep Properties/frontmatter out of the Markdown block contract; route it through an editor-window contribution backed by a metadata/frontmatter service and the Fields core plugin.
+8. Add tests that prove source reveal or structured activation, custom selection, custom clipboard behavior, undo/redo, viewport bounds, fallback/raw behavior, and grouped popover arbitration.
 
 ## Recommended next step
 
-The next implementation pass should be a public-internal block API pass:
+The next implementation pass should be an inline registration and editor-window foundation pass, while keeping block work bounded to consolidation:
 
-1. Introduce the normalized `MarkdownBlockMatch` / `MarkdownBlockDefinition` model.
-2. Introduce `registerMarkdownBlock` or an equivalent block registration facet inside `@zorid/editor`.
-3. Add programmatic hooks for activate/edit/copy/cut/paste with host-mediated action results.
-4. Port existing code-block and callout widgets to that registration path.
-5. Add `.zbase` embed Live Preview as the first external-reference block.
-6. Add one tiny inline-defined proof block, likely `columns` or `timeline`, only after code-block/callout/.zbase are using the common path.
-7. Keep Reading view parity, tables, properties editor, images/embeds beyond `.zbase`, and generalized plugin marketplace concerns out of this pass.
+1. Define shared host-mediated action and clipboard primitives used by block and inline registrations.
+2. Introduce `MarkdownInlineRegistration` inside `@zorid/editor` with match, render, activation, selection, copy, cut, paste, extension, and keybinding hooks.
+3. Add selection policies for inline source/content/token/custom selection.
+4. Use task checkboxes as the first inline migration target, then prove extensibility with a tri-state checkbox fixture or registration.
+5. Keep current block registration work moving by porting code-block and callout widgets to the `MarkdownBlockRegistration` path, but do not expand to tables yet.
+6. Add the editor-window contribution lane API with at least `document-header`, `cursor-popover`, and `selection-popover` placements.
+7. Implement grouped cursor/selection popover arbitration with tabs or sections so multiple plugins can safely target the same cursor position.
+8. Define the Properties UI as an editor-window/document-metadata contribution owned by the Fields core plugin, not as a Markdown Live Preview block.
+9. Keep Reading view parity, tables, broad Properties UI implementation, images/embeds beyond `.zbase`, and generalized plugin marketplace concerns out of this pass unless the foundation requires a narrow fixture.
 
-This moves Zorid toward plugin-defined blocks while keeping the core invariant simple: Markdown text or the referenced external file is the source of truth; Live Preview is the projection layer. Blocks get full behavioral customization, while the host owns final editor mutations, ordering, history, and safety.
+This moves Zorid from a block-only Live Preview plan to a three-surface editor architecture: Markdown block registrations for source-backed blocks, Markdown inline registrations for source-backed inline projections and interactions, and editor-window contributions for non-source UI around the document. The most important invariant stays the same: durable Markdown edits go through transactions, external durable edits go through explicit workspace/plugin APIs, and plugin DOM never owns the document model.
 
 ## Relationship to deep research artifacts
 
@@ -323,4 +543,4 @@ These goals are consistent with the deep research direction:
 - The research separates Live Preview from Reading view and treats Reading parity as a later adapter layer.
 - The research identifies custom Markdown dialect support as a language-layer concern, not something vanilla Markdown can fully cover.
 
-The main extension beyond the research is stronger emphasis on block-level programmatic hooks for edit/copy/cut/paste and explicit support for both inline-defined and external-reference block definitions. This is not a conflict; it is a concrete API refinement of the research's renderer/lifecycle direction.
+The main extension beyond the research is stronger separation between three extension surfaces: source-backed block projections, source-backed inline projections, and non-source editor-window UI. This is not a conflict; it is a concrete API refinement of the research's renderer/lifecycle direction and keeps Properties/frontmatter UI from being mis-modeled as ordinary Markdown body content.
