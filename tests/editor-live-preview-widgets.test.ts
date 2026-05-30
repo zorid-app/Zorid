@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { readFile } from 'node:fs/promises';
+import { cursorCharBackward, cursorCharForward, deleteCharForward, undo } from '@codemirror/commands';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it, vi } from 'vitest';
 import type { LivePreviewVisibleRange } from '../packages/editor/src';
@@ -316,9 +317,33 @@ describe('editor Live Preview structured widgets', () => {
     parent.remove();
   });
 
-  it('documents the no-atomic-ranges policy with deterministic reveal and restoration coverage', async () => {
+  it('documents the no-atomic-ranges policy with cursor, deletion, and reveal coverage', async () => {
     const extensionSource = await readFile('packages/editor/src/live-preview/extension.ts', 'utf8');
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const text = ['```ts', 'const value = 1;', '```', '', 'paragraph'].join('\n');
+    const editor = createMountedMarkdownEditor({ parent, text });
 
     expect(extensionSource).not.toContain('atomicRanges');
+    expect(parent.querySelector('.z-live-preview-code-block-widget')).toBeTruthy();
+
+    editor.focus();
+    await waitForFocusEffect();
+    editor.view.dispatch({ selection: { anchor: 0 } });
+    expect(parent.querySelector('.z-live-preview-code-block-widget')).toBeNull();
+
+    expect(cursorCharForward(editor.view)).toBe(true);
+    expect(editor.view.state.selection.main.head).toBe(1);
+    expect(cursorCharBackward(editor.view)).toBe(true);
+    expect(editor.view.state.selection.main.head).toBe(0);
+    expect(editor.getText()).toBe(text);
+
+    expect(deleteCharForward(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text.slice(1));
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+    parent.remove();
   });
 });

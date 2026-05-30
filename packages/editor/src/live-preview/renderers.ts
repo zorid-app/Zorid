@@ -1,6 +1,10 @@
 import type { EditorState } from '@codemirror/state';
 import { type EditorView, WidgetType } from '@codemirror/view';
-import { type LivePreviewBlockRenderer, livePreviewBlockRendererToInternalRenderer } from './block-renderers.js';
+import {
+  type LivePreviewBlockMatch,
+  type LivePreviewBlockRenderer,
+  livePreviewBlockRendererToInternalRenderer,
+} from './block-renderers.js';
 import {
   type InternalLivePreviewRange,
   type InternalLivePreviewRenderer,
@@ -17,24 +21,14 @@ import { taskMarkerRangesForState } from './task-marker-ranges.js';
 import { toggleTaskMarkerAtPosition } from './task-toggle.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
 
-interface CodeBlockPreviewMatch {
-  readonly from: number;
-  readonly to: number;
-  readonly activationFrom: number;
-  readonly activationTo: number;
-  readonly className: string;
+interface CodeBlockPreviewMatch extends LivePreviewBlockMatch {
   readonly source: string;
   readonly info: string;
   readonly code: string;
   readonly activateAt: number;
 }
 
-interface CalloutPreviewMatch {
-  readonly from: number;
-  readonly to: number;
-  readonly activationFrom: number;
-  readonly activationTo: number;
-  readonly className: string;
+interface CalloutPreviewMatch extends LivePreviewBlockMatch {
   readonly source: string;
   readonly type: string;
   readonly title: string;
@@ -52,6 +46,27 @@ function livePreviewScanWindow(
   return {
     from: Math.max(0, lineStart),
     to: nextLineBreak === -1 ? docText.length : nextLineBreak,
+  };
+}
+
+function livePreviewBlockWidgetMetadata(
+  docText: string,
+  range: Pick<LivePreviewRange, 'from' | 'to'>,
+  className: string,
+  activateAt: number,
+): LivePreviewBlockMatch & { readonly source: string; readonly activateAt: number } {
+  return {
+    from: range.from,
+    to: range.to,
+    activationFrom: range.from,
+    activationTo: range.to,
+    sourceFrom: range.from,
+    sourceTo: range.to,
+    clipboardSource: 'document-source',
+    atomic: 'none',
+    className,
+    source: docText.slice(range.from, range.to),
+    activateAt,
   };
 }
 
@@ -274,15 +289,10 @@ function codeBlockWidgetRanges(
       const code = docText.slice(range.contentFrom, range.contentTo);
       const activateAt = range.contentFrom < range.contentTo ? range.contentFrom : range.from;
       return {
-        from: range.from,
-        to: range.to,
-        activationFrom: range.from,
-        activationTo: range.to,
-        className: 'z-live-preview-code-block-widget',
-        source,
+        ...livePreviewBlockWidgetMetadata(docText, range, 'z-live-preview-code-block-widget', activateAt),
         info: range.info,
         code,
-        activateAt,
+        source,
       };
     });
 }
@@ -293,16 +303,10 @@ function calloutWidgetRanges(
   state: EditorState,
 ): CalloutPreviewMatch[] {
   return markdownCalloutRanges(docText, scanWindow, state).map((range) => ({
-    from: range.from,
-    to: range.to,
-    activationFrom: range.from,
-    activationTo: range.to,
-    className: 'z-live-preview-callout-widget',
-    source: docText.slice(range.from, range.to),
+    ...livePreviewBlockWidgetMetadata(docText, range, 'z-live-preview-callout-widget', range.from),
     type: range.type,
     title: range.title,
     body: range.body,
-    activateAt: range.from,
   }));
 }
 

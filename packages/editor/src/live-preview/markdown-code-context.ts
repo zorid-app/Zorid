@@ -286,10 +286,3 @@ export function markdownSuppressedPreviewRanges(
     ...markdownSuppressedCodeRanges(docText, scanWindow, state),
   ];
 }
-
-export function isMarkdownLineInsideFencedCodeBlock(state: EditorState, lineFrom: number): boolean {
-  const docText = state.doc.toString();
-  return markdownFencedCodeRanges(docText, { from: lineFrom, to: lineFrom }).some(
-    (range) => lineFrom > range.from && lineFrom < range.to,
-  );
-}

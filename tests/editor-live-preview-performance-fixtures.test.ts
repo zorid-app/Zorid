@@ -70,6 +70,41 @@ describe('editor Live Preview viewport/performance fixtures', () => {
     ]);
   });
 
+  it('keeps a large mixed viewport complete for headings, tasks, code blocks, and callouts', () => {
+    const visibleCode = ['```ts', 'const visible = true;', '```'].join('\n');
+    const visibleCallout = ['> [!note] Visible', '> body'].join('\n');
+    const visibleCluster = ['# Visible heading', '- [ ] visible task', visibleCode, visibleCallout].join('\n');
+    const doc = [
+      visibleCluster,
+      ...Array.from({ length: 2400 }, (_, index) => `suffix filler ${index}`),
+      '# Distant heading',
+      '- [ ] distant task',
+      ['```js', 'const distant = true;', '```'].join('\n'),
+      ['> [!warning] Distant', '> body'].join('\n'),
+    ].join('\n');
+    const state = EditorState.create({ doc });
+    const visibleRange = {
+      from: doc.indexOf('# Visible heading'),
+      to: doc.indexOf(visibleCallout) + visibleCallout.length,
+    };
+
+    const ranges = collectLivePreviewRangesWithWidgetSuppression(
+      defaultLivePreviewRenderers,
+      defaultLivePreviewInternalRenderers,
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [visibleRange],
+      false,
+    );
+
+    expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to)])).toEqual([
+      ['heading', '# Visible heading'],
+      ['task-marker', '- [ ]'],
+      ['code-block-widget', visibleCode],
+      ['callout-widget', visibleCallout],
+    ]);
+  });
+
   it('keeps task projections limited to the requested visible range in large task lists', () => {
     const lines = Array.from({ length: 1000 }, (_, index) => `- [ ] task ${index}`);
     const doc = lines.join('\n');

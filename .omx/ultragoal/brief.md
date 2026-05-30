@@ -1,13 +1,29 @@
-Implement the approved Lezer Live Preview Parser Migration.
+Execute the approved RALPLAN handoff for Live Preview interaction + internal block architecture hardening.
 
-Planning artifacts are .omx/context/lezer-live-preview-parsers-20260530T024321Z.md, .omx/specs/deep-interview-lezer-live-preview-parsers.md, .omx/plans/prd-lezer-live-preview-parser-migration-20260530T031309Z.md, .omx/plans/test-spec-lezer-live-preview-parser-migration-20260530T031309Z.md, and .omx/plans/ralplan-handoff-lezer-live-preview-parser-migration-20260530T031309Z.json.
+Authoritative planning artifacts:
+- PRD: .omx/plans/prd-live-preview-interaction-block-architecture-hardening-20260530T041814Z.md
+- Test spec: .omx/plans/test-spec-live-preview-interaction-block-architecture-hardening-20260530T041814Z.md
+- Handoff: .omx/plans/ralplan-handoff-live-preview-interaction-block-architecture-hardening-20260530T041814Z.json
 
-Story 1: Add tests-first migration gates. Add failing static/no-regex parser gate covering live-preview production code and private parser-extension modules, checkbox malformed-adjacent fixture, parser-order/frontmatter/callout fixtures, barrel/export compatibility checks, and collector tests that install the private Markdown language support.
+Constraints:
+- Markdown source remains canonical.
+- Selection and clipboard are primary acceptance criteria.
+- Keep block architecture private under packages/editor/src/live-preview.
+- Preserve Lezer/no-regex parser ownership.
+- Do not implement public plugin API, tables, Properties/frontmatter visual editor, Reading parity, embeds/images/math, or broad parser rewrite.
+- Verify and commit changed files.
 
-Story 2: Introduce the private Zorid Markdown parser facade and dependency wiring. Replace raw markdown() editor setup with a private wrapper that composes CodeMirror Markdown/GFM plus private Lezer extensions for existing custom syntaxes, without adding public plugin APIs or changing visible product behavior.
+Story 1: Selection and mapping hardening.
+Add/strengthen tests and implementation for selections spanning mark, replace, line, and widget ranges. Cover cursor positions at start/end boundaries, activationTo, after widget/range end, mixed selections around inline code delimiters, task checkboxes, code-block widgets, and callout widgets. Preserve canonical source except explicit source-backed commands.
 
-Story 3: Add the syntax-tree Live Preview range collector and migrate public inline/mark renderers. Use CodeMirror/Lezer syntax trees with bounded ensureSyntaxTree/syntaxTreeAvailable policy, preserve LivePreviewRange output shape, and replace heading/inline-code/strong/emphasis/strikethrough/highlight/link/wiki-link/tag regex matching.
+Story 2: Clipboard/source preservation hardening.
+Upgrade clipboard coverage from helper-only source slicing to behavior-level coverage. Attempt mounted or filter-level copy/cut behavior using CodeMirror clipboard seams; if Happy DOM blocks that, document the limitation and prove an equivalent command/filter path. Cover inline code, task checkbox, fenced code widget, callout widget, mixed selections, ordinary text passthrough, cut undo/redo where implemented, and multi-selection if practical.
 
-Story 4: Migrate internal widgets, suppression, blockquote, fenced code, callouts, and task toggle to syntax-tree-derived ranges. Preserve source text, CSS classes, reveal/activation behavior, widget suppression, task transactions, and no-regex final state.
+Story 3: Activation and atomic-range policy decision.
+Make the atomic policy explicit and test-backed. Either keep no-atomic-ranges with stronger cursor/deletion/pointer evidence or introduce private EditorView.atomicRanges for selected widget ranges with cursor motion, deletion, and pointer activation tests.
 
-Story 5: Final verification, cleanup, independent review, and commit. Run targeted Live Preview suites, static no-regex gate, lint, typecheck, full tests, performance/no-worse evidence, ai-slop-cleaner, independent code review, architect review, and commit changed files with a plain descriptive message.
+Story 4: Private internal block architecture refinement.
+Add a private contract checkpoint for source range, activation range, clipboard source policy, and optional atomic policy. Refine the private LivePreviewBlockRenderer path so code-block and callout widgets share match-to-widget-to-activation metadata without exporting public block APIs. Verify live-preview/index.ts, package root exports, and packages/editor/package.json do not leak private helpers.
+
+Story 5: Viewport/performance regression, final cleanup, review, and commit.
+Extend large mixed-document fixtures for headings, tasks, code blocks, and callouts. Run targeted Live Preview suites, no-regex gate, lint, typecheck, full tests, ai-slop-cleaner on changed files, independent code review, architect review, final commit, and Ultragoal final checkpoint.

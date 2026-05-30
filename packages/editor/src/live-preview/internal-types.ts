@@ -7,6 +7,10 @@ export type InternalLivePreviewDecorationKind = LivePreviewDecorationKind | 'lin
 export type InternalLivePreviewRange = Omit<LivePreviewRange, 'kind'> & {
   readonly kind?: InternalLivePreviewDecorationKind;
   readonly widget?: WidgetType;
+  readonly sourceFrom?: number;
+  readonly sourceTo?: number;
+  readonly clipboardSource?: 'document-source';
+  readonly atomic?: 'none';
 };
 
 export interface InternalLivePreviewRenderer extends Omit<LivePreviewRenderer, 'match'> {

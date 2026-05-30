@@ -397,13 +397,6 @@ export function livePreviewExtension(renderers: readonly LivePreviewRenderer[]):
   return livePreviewExtensionWithInternalRenderers(renderers, [], []);
 }
 
-export function livePreviewExtensionWithWidgets(
-  renderers: readonly LivePreviewRenderer[],
-  widgetRenderers: readonly InternalLivePreviewRenderer[],
-): Extension {
-  return livePreviewExtensionWithInternalRenderers(renderers, [], widgetRenderers);
-}
-
 export function livePreviewExtensionWithInternalRenderers(
   renderers: readonly LivePreviewRenderer[],
   internalRenderers: readonly InternalLivePreviewRenderer[],

@@ -65,9 +65,53 @@ describe('editor Live Preview private block renderer registry', () => {
       rendererId: 'test-block-widget',
       from: doc.indexOf(':::test'),
       to: doc.indexOf('after') - 1,
+      activationFrom: doc.indexOf(':::test'),
+      activationTo: doc.indexOf('after') - 1,
+      sourceFrom: doc.indexOf(':::test'),
+      sourceTo: doc.indexOf('after') - 1,
+      clipboardSource: 'document-source',
+      atomic: 'none',
       className: 'z-live-preview-test-block-widget',
       kind: 'widget',
     });
+  });
+
+  it('keeps first-party block widgets on the same private source and activation contract', async () => {
+    const { defaultLivePreviewWidgetRenderers } = await import('../packages/editor/src/live-preview/renderers');
+    const doc = ['```ts', 'const value = 1;', '```', '', '> [!note] Title', '> Body', '', 'after'].join('\n');
+    const state = EditorState.create({ doc });
+
+    const ranges = collectLivePreviewWidgetRangesForVisibleRanges(
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [{ from: 0, to: doc.length }],
+      false,
+    );
+
+    expect(
+      ranges.map((range) => ({
+        id: range.rendererId,
+        source: doc.slice(range.sourceFrom ?? -1, range.sourceTo ?? -1),
+        activation: doc.slice(range.activationFrom ?? -1, range.activationTo ?? -1),
+        clipboardSource: range.clipboardSource,
+        atomic: range.atomic,
+      })),
+    ).toEqual([
+      {
+        id: 'code-block-widget',
+        source: ['```ts', 'const value = 1;', '```'].join('\n'),
+        activation: ['```ts', 'const value = 1;', '```'].join('\n'),
+        clipboardSource: 'document-source',
+        atomic: 'none',
+      },
+      {
+        id: 'callout-widget',
+        source: ['> [!note] Title', '> Body'].join('\n'),
+        activation: ['> [!note] Title', '> Body'].join('\n'),
+        clipboardSource: 'document-source',
+        atomic: 'none',
+      },
+    ]);
   });
 
   it('inherits visible scan-window collection and dedupe behavior from the existing widget pipeline', () => {
@@ -122,11 +166,15 @@ describe('editor Live Preview private block renderer registry', () => {
     const rootBarrel = await readFile('packages/editor/src/index.ts', 'utf8');
     const livePreviewBarrel = await readFile('packages/editor/src/live-preview/index.ts', 'utf8');
     const platformApi = await readFile('packages/platform-api/src/index.ts', 'utf8');
+    const packageManifest = JSON.parse(await readFile('packages/editor/package.json', 'utf8')) as {
+      exports: Record<string, unknown>;
+    };
 
     for (const source of [rootBarrel, livePreviewBarrel, platformApi]) {
       expect(source).not.toContain('LivePreviewBlockRenderer');
       expect(source).not.toContain('livePreviewBlockRendererToInternalRenderer');
       expect(source).not.toContain('block-renderers');
     }
+    expect(Object.keys(packageManifest.exports)).toEqual(['.']);
   });
 });
