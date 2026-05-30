@@ -403,7 +403,13 @@ export class DesktopRuntime {
     const resolved = this.requireVault().resolve(normalized);
     try {
       const info = await this.requireVault().stat(normalized);
-      return { input: vaultPath, normalized, resolved, exists: true, kind: info?.kind };
+      return {
+        input: vaultPath,
+        normalized,
+        resolved,
+        exists: true,
+        ...(info?.kind === undefined ? {} : { kind: info.kind }),
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT')
         return { input: vaultPath, normalized, resolved, exists: false, error: 'ENOENT' };

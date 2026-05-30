@@ -56,10 +56,11 @@ type RenamePathDebugState = {
 
 function serializeError(error: unknown): { name: string; message: string; code?: string; stack?: string } {
   if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
     return {
       name: error.name,
       message: error.message,
-      code: (error as NodeJS.ErrnoException).code,
+      ...(typeof code === 'string' ? { code } : {}),
       ...(error.stack === undefined ? {} : { stack: error.stack }),
     };
   }
@@ -72,8 +73,6 @@ async function describeRenamePath(runtime: DesktopRuntime, vaultPath: string): P
   } catch (error) {
     return {
       input: vaultPath,
-      normalized: undefined,
-      resolved: undefined,
       exists: false,
       error: serializeError(error).message,
     };
