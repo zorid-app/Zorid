@@ -30,14 +30,13 @@ Goal: merge a completed worktree branch into `main` safely and quickly.
 7. Run validation:
    - `pnpm typecheck`
    - `pnpm test` if relevant or configured
-8. If validation passes, finish with a short summary, push to GitHub, delete the already merged branch, and move the worktree folder to `finished-worktrees/Zorid/`. Then, delete the merge request file from the agent-context folder. This should be done automatically even without user's explicit request.
+8. If validation passes, finish with a short summary, push to GitHub, delete the already merged branch, and move the worktree folder to `finished-worktrees/Zorid/`. Then, delete the merge request file from the agent-context folder. This should always be done automatically unless user explicit request not to do so.
 
 9. If validation fails, either fix obvious issues or stop and explain.
 
 ## Hard Rules
 
 - Never force-push.
-- Never delete branches unless explicitly asked.
 - Never merge from `main` into an implementation branch unless asked.
 - Never resolve semantic conflicts by guessing product behavior.
 - Never hide failing tests.
