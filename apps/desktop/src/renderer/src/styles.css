@@ -447,6 +447,24 @@ h2 {
   outline: none;
 }
 
+.tree-item.dragging {
+  color: var(--z-color-text);
+  background: color-mix(in srgb, var(--z-color-accent) 28%, transparent);
+}
+
+.tree-item.drop-target {
+  background: color-mix(in srgb, var(--z-color-accent-muted) 58%, transparent);
+}
+
+.tree-node-drop-target > .nested {
+  background: color-mix(in srgb, var(--z-color-accent-muted) 18%, transparent);
+  border-left-color: color-mix(in srgb, var(--z-selected-border) 65%, transparent);
+}
+
+.tree-node-drop-target > .nested .tree-item {
+  background: transparent;
+}
+
 .tree-disclosure {
   flex: 0 0 14px;
   width: 14px;

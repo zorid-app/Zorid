@@ -112,6 +112,10 @@ const vaultLabel = ref<string>();
 const entriesByDirectory = ref<Record<string, readonly VaultEntry[]>>({});
 const expandedDirectories = ref<Record<string, boolean>>({ '': true });
 const fileTreeSortMode = ref<FileTreeSortMode>('name-asc');
+const draggingSourcePath = ref<string>();
+const draggingOverPath = ref<string>();
+const FILE_TREE_DRAG_EXPAND_DELAY_MS = 500;
+let dragExpandTimer: ReturnType<typeof setTimeout> | undefined;
 const selectedPath = ref<string>();
 const openTabs = ref<TopTabItem[]>([]);
 const selectedTabId = ref<string>();
@@ -444,6 +448,38 @@ function collapseLoadedDirectories(): void {
   expandedDirectories.value = { '': true };
 }
 
+function clearFileTreeDragState(): void {
+  draggingSourcePath.value = undefined;
+  draggingOverPath.value = undefined;
+}
+
+function clearDragExpandTimer(): void {
+  if (!dragExpandTimer) return;
+  clearTimeout(dragExpandTimer);
+  dragExpandTimer = undefined;
+}
+
+function isAncestorPath(ancestorPath: string, descendantPath: string): boolean {
+  if (!ancestorPath) return false;
+  return descendantPath === ancestorPath || descendantPath.startsWith(`${ancestorPath}/`);
+}
+
+function resolveMovedPath(sourcePath: string, targetDirectoryPath: string): string {
+  const name = sourcePath.split('/').filter(Boolean).at(-1) ?? sourcePath;
+  return targetDirectoryPath ? `${targetDirectoryPath}/${name}` : name;
+}
+
+function scheduleDragExpandPath(path: string): void {
+  if (expandedDirectories.value[path]) return;
+  clearDragExpandTimer();
+  dragExpandTimer = setTimeout(() => {
+    if (draggingSourcePath.value && draggingOverPath.value === path) {
+      expandedDirectories.value = { ...expandedDirectories.value, [path]: true };
+      void loadDirectory(path);
+    }
+  }, FILE_TREE_DRAG_EXPAND_DELAY_MS);
+}
+
 async function loadRecentVaults(): Promise<void> {
   recentVaults.value = await desktop.listRecentVaults();
 }
@@ -628,6 +664,82 @@ async function openEntry(entry: VaultEntry): Promise<void> {
   await openFileTab(entry.path);
 }
 
+function handleTreeDragStart(entry: VaultEntry, event: DragEvent): void {
+  draggingSourcePath.value = entry.path;
+  draggingOverPath.value = undefined;
+  clearDragExpandTimer();
+  if (!event.dataTransfer) return;
+  event.dataTransfer.setData('text/plain', entry.path);
+  event.dataTransfer.effectAllowed = 'move';
+}
+
+function handleTreeDragEnd(): void {
+  clearDragExpandTimer();
+  clearFileTreeDragState();
+}
+
+function handleTreeDragEnter(entry: VaultEntry, event: DragEvent): void {
+  if (!draggingSourcePath.value || entry.kind !== 'directory') return;
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  draggingOverPath.value = entry.path;
+  if (isAncestorPath(entry.path, draggingSourcePath.value)) return;
+  scheduleDragExpandPath(entry.path);
+}
+
+function handleTreeDragOver(entry: VaultEntry, event: DragEvent): void {
+  if (!draggingSourcePath.value || entry.kind !== 'directory') return;
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  if (draggingOverPath.value !== entry.path) {
+    draggingOverPath.value = entry.path;
+    clearDragExpandTimer();
+    scheduleDragExpandPath(entry.path);
+  }
+}
+
+function handleTreeDragLeave(entry: VaultEntry, event: DragEvent): void {
+  if (!draggingSourcePath.value || entry.kind !== 'directory') return;
+  if (entry.path !== draggingOverPath.value) return;
+  const related = event.relatedTarget as Node | null;
+  const current = event.currentTarget as Node | null;
+  if (current && related && current.contains(related)) return;
+  clearDragExpandTimer();
+  draggingOverPath.value = undefined;
+}
+
+async function handleTreeDrop(entry: VaultEntry, event: DragEvent): Promise<void> {
+  event.preventDefault();
+  if (!draggingSourcePath.value || entry.kind !== 'directory') {
+    clearFileTreeDragState();
+    return;
+  }
+  if (isAncestorPath(entry.path, draggingSourcePath.value) || draggingSourcePath.value === entry.path) {
+    clearFileTreeDragState();
+    return;
+  }
+  const previous = draggingSourcePath.value;
+  const next = resolveMovedPath(previous, entry.path);
+  if (next === previous) {
+    clearFileTreeDragState();
+    return;
+  }
+  error.value = undefined;
+  try {
+    await desktop.renameVaultPath(previous, next);
+    const previousTabId = fileTabId(previous);
+    if (selectedPath.value === previous) selectedPath.value = next;
+    if (selectedTabId.value === previousTabId) selectedTabId.value = fileTabId(next);
+    openTabs.value = openTabs.value.map((tab) => (tab.id === previousTabId ? fileTab(next) : tab));
+    await loadDirectory('');
+    await loadDirectory(entry.path);
+    await refreshShellData();
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : String(caught);
+  } finally {
+    clearFileTreeDragState();
+    clearDragExpandTimer();
+  }
+}
+
 async function createNote(): Promise<void> {
   await runFileOperation(async () => {
     const name = prompt('Markdown file path', 'Untitled.md');
@@ -805,6 +917,7 @@ onBeforeUnmount(() => {
   stopSystemThemeWatcher?.();
   stopDocumentThemeBinding?.();
   delete document.documentElement.dataset.zTheme;
+  clearDragExpandTimer();
   window.removeEventListener('keydown', handleKeydown);
   unsubscribeIndexUpdates?.();
   unsubscribeEditorSnapshot?.();
@@ -905,7 +1018,15 @@ onBeforeUnmount(() => {
         :entries-by-directory="sortedEntriesByDirectory"
         :expanded-directories="expandedDirectories"
         :selected-path="selectedPath"
+        :dragging-path="draggingSourcePath"
+        :drag-over-path="draggingOverPath"
         @open-entry="openEntry"
+        @drag-start="handleTreeDragStart"
+        @drag-end="handleTreeDragEnd"
+        @drag-over="handleTreeDragOver"
+        @drag-enter="handleTreeDragEnter"
+        @drag-leave="handleTreeDragLeave"
+        @drop-on-directory="handleTreeDrop"
       />
     </aside>
 
