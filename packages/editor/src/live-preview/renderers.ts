@@ -4,6 +4,7 @@ import {
   type LivePreviewBlockMatch,
   type LivePreviewBlockRenderer,
   livePreviewBlockRendererToInternalRenderer,
+  livePreviewBlockWidgetMetadata,
 } from './block-renderers.js';
 import {
   type InternalLivePreviewRange,
@@ -36,6 +37,9 @@ interface CalloutPreviewMatch extends LivePreviewBlockMatch {
   readonly activateAt: number;
 }
 
+const codeBlockWidgetClassName = 'z-live-preview-code-block-widget';
+const calloutWidgetClassName = 'z-live-preview-callout-widget';
+
 function livePreviewScanWindow(
   docText: string,
   visibleFrom: number,
@@ -46,27 +50,6 @@ function livePreviewScanWindow(
   return {
     from: Math.max(0, lineStart),
     to: nextLineBreak === -1 ? docText.length : nextLineBreak,
-  };
-}
-
-function livePreviewBlockWidgetMetadata(
-  docText: string,
-  range: Pick<LivePreviewRange, 'from' | 'to'>,
-  className: string,
-  activateAt: number,
-): LivePreviewBlockMatch & { readonly source: string; readonly activateAt: number } {
-  return {
-    from: range.from,
-    to: range.to,
-    activationFrom: range.from,
-    activationTo: range.to,
-    sourceFrom: range.from,
-    sourceTo: range.to,
-    clipboardSource: 'document-source',
-    atomic: 'none',
-    className,
-    source: docText.slice(range.from, range.to),
-    activateAt,
   };
 }
 
@@ -160,7 +143,7 @@ class CodeBlockPreviewWidget extends WidgetType {
 
   toDOM(view: EditorView): HTMLElement {
     const wrapper = document.createElement('div');
-    wrapper.className = 'z-live-preview-code-block-widget';
+    wrapper.className = codeBlockWidgetClassName;
     wrapper.dataset.livePreviewRenderer = 'code-block-widget';
     wrapper.setAttribute('role', 'group');
 
@@ -247,7 +230,7 @@ class CalloutPreviewWidget extends WidgetType {
 
   toDOM(view: EditorView): HTMLElement {
     const wrapper = document.createElement('div');
-    wrapper.className = 'z-live-preview-callout-widget';
+    wrapper.className = calloutWidgetClassName;
     wrapper.dataset.livePreviewRenderer = 'callout-widget';
     wrapper.setAttribute('role', 'group');
 
@@ -285,14 +268,17 @@ function codeBlockWidgetRanges(
   return markdownCompleteFencedCodeBlockRanges(docText, scanWindow, state)
     .filter((range) => !suppressedRanges.some((container) => isInsideRange(range, container)))
     .map((range) => {
-      const source = docText.slice(range.from, range.to);
       const code = docText.slice(range.contentFrom, range.contentTo);
       const activateAt = range.contentFrom < range.contentTo ? range.contentFrom : range.from;
       return {
-        ...livePreviewBlockWidgetMetadata(docText, range, 'z-live-preview-code-block-widget', activateAt),
+        ...livePreviewBlockWidgetMetadata({
+          docText,
+          range,
+          className: codeBlockWidgetClassName,
+          activateAt,
+        }),
         info: range.info,
         code,
-        source,
       };
     });
 }
@@ -303,7 +289,12 @@ function calloutWidgetRanges(
   state: EditorState,
 ): CalloutPreviewMatch[] {
   return markdownCalloutRanges(docText, scanWindow, state).map((range) => ({
-    ...livePreviewBlockWidgetMetadata(docText, range, 'z-live-preview-callout-widget', range.from),
+    ...livePreviewBlockWidgetMetadata({
+      docText,
+      range,
+      className: calloutWidgetClassName,
+      activateAt: range.from,
+    }),
     type: range.type,
     title: range.title,
     body: range.body,

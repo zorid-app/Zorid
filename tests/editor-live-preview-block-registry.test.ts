@@ -172,6 +172,7 @@ describe('editor Live Preview private block renderer registry', () => {
 
     for (const source of [rootBarrel, livePreviewBarrel, platformApi]) {
       expect(source).not.toContain('LivePreviewBlockRenderer');
+      expect(source).not.toContain('livePreviewBlockWidgetMetadata');
       expect(source).not.toContain('livePreviewBlockRendererToInternalRenderer');
       expect(source).not.toContain('block-renderers');
     }
