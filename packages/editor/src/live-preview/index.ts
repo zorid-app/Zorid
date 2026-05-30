@@ -7,15 +7,6 @@ export {
   livePreviewSelectionRanges,
   shouldRenderLivePreviewRange,
 } from './extension.js';
-export type { MarkdownCodeRange } from './markdown-code-context.js';
-export {
-  isMarkdownLineInsideFencedCodeBlock,
-  markdownFencedCodeRanges,
-  markdownFrontmatterRanges,
-  markdownIndentedCodeRanges,
-  markdownSuppressedCodeRanges,
-  markdownSuppressedPreviewRanges,
-} from './markdown-code-context.js';
 export {
   defaultLivePreviewRenderers,
   emphasisLivePreviewRenderer,

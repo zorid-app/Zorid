@@ -17,11 +17,20 @@ describe('@zorid/editor CodeMirror ownership', () => {
     expect(state.doc.toString()).toBe('# Owned by editor');
   });
 
+  it('installs Markdown through the private Zorid parser facade', async () => {
+    const source = await readFile('packages/editor/src/index.ts', 'utf8');
+    const barrel = await readFile('packages/editor/src/live-preview/index.ts', 'utf8');
+
+    expect(source).toContain('zoridMarkdown()');
+    expect(source).not.toContain('markdown()');
+    expect(barrel).not.toContain('markdown-code-context');
+  });
+
   it('relies on the default markdown keymap instead of duplicating list continuation commands', async () => {
     const source = await readFile('packages/editor/src/index.ts', 'utf8');
 
     expect(markdownKeymap.map((binding) => binding.key)).toEqual(expect.arrayContaining(['Enter', 'Backspace']));
-    expect(source).toContain('markdown()');
+    expect(source).toContain('zoridMarkdown()');
     expect(source).not.toContain('addKeymap: false');
   });
 

@@ -34,6 +34,30 @@ describe('editor task marker toggle', () => {
     });
   });
 
+  it('rejects malformed adjacent task marker text without spanning lines', () => {
+    const doc = ['intro', '- [ ]f- [ ]a 4- [ ]- [ ]', '- [ ] real task'].join('\n');
+    const state = EditorState.create({ doc });
+    const malformedLineStart = doc.indexOf('- [ ]f');
+    const realTaskStart = doc.indexOf('- [ ] real task');
+
+    for (const offset of [0, 3, 5, 8, 14, 20]) {
+      expect(findTaskMarkerAtPosition(state, malformedLineStart + offset)).toBeNull();
+    }
+
+    const ranges = collectLivePreviewRangesWithWidgetSuppression(
+      defaultLivePreviewRenderers,
+      defaultLivePreviewInternalRenderers,
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [{ from: malformedLineStart, to: realTaskStart + '- [ ] real task'.length }],
+      false,
+    ).filter((range) => range.rendererId === 'task-marker');
+
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['- [ ]']);
+    expect(ranges[0]).toMatchObject({ from: realTaskStart, to: realTaskStart + '- [ ]'.length });
+    expect(ranges.every((range) => !doc.slice(range.from, range.to).includes('\n'))).toBe(true);
+  });
+
   it('rejects non-task lines, table rows, and code examples', () => {
     const state = EditorState.create({
       doc: [

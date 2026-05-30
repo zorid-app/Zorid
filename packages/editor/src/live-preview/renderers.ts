@@ -1,3 +1,4 @@
+import type { EditorState } from '@codemirror/state';
 import { type EditorView, WidgetType } from '@codemirror/view';
 import { type LivePreviewBlockRenderer, livePreviewBlockRendererToInternalRenderer } from './block-renderers.js';
 import {
@@ -6,10 +7,13 @@ import {
   setInternalLivePreviewFocused,
 } from './internal-types.js';
 import {
+  markdownCalloutRanges,
   markdownCompleteFencedCodeBlockRanges,
   markdownFrontmatterRanges,
   markdownSuppressedPreviewRanges,
 } from './markdown-code-context.js';
+import { syntaxTreeLivePreviewRenderer } from './syntax-tree-ranges.js';
+import { taskMarkerRangesForState } from './task-marker-ranges.js';
 import { toggleTaskMarkerAtPosition } from './task-toggle.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
 
@@ -38,12 +42,6 @@ interface CalloutPreviewMatch {
   readonly activateAt: number;
 }
 
-const inlineCodePattern = /`[^`\n]+`/g;
-const strongPattern = /(\*\*[^*\s](?:[^*\n]*?[^*\s])?\*\*|__[^_\s](?:[^_\n]*?[^_\s])?__)/g;
-const emphasisPattern = /(^|[\s([{])((?:\*[^*\s](?:[^*\n]*?[^*\s])?\*)|(?:_[^_\s](?:[^_\n]*?[^_\s])?_))/gm;
-const strikethroughPattern = /~~[^~\s](?:[^~\n]*?[^~\s])?~~/g;
-const highlightPattern = /==[^=\s](?:[^=\n]*?[^=\s])?==/g;
-
 function livePreviewScanWindow(
   docText: string,
   visibleFrom: number,
@@ -57,73 +55,69 @@ function livePreviewScanWindow(
   };
 }
 
-function inlineCodeRanges(
-  docText: string,
-  scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
-): Array<Pick<LivePreviewRange, 'from' | 'to'>> {
-  const scanText = docText.slice(scanWindow.from, scanWindow.to);
-  return [...scanText.matchAll(inlineCodePattern)].flatMap((match) => {
-    if (match.index === undefined) return [];
-    return [{ from: scanWindow.from + match.index, to: scanWindow.from + match.index + match[0].length }];
-  });
+const spaceCode = ' '.charCodeAt(0);
+const tabCode = '\t'.charCodeAt(0);
+const greaterThanCode = '>'.charCodeAt(0);
+const lineFeed = '\n';
+
+interface SourceLine {
+  readonly from: number;
+  readonly to: number;
+  readonly text: string;
 }
 
-function inlineCodeDelimiterRanges(
-  docText: string,
-  scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
-): LivePreviewRange[] {
-  const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
-  return inlineCodeRanges(docText, scanWindow)
-    .filter((range) => !suppressedRanges.some((container) => isInsideRange(range, container)))
-    .flatMap((range) => [
-      {
-        rendererId: 'inline-code-delimiter',
-        from: range.from,
-        to: range.from + 1,
-        activationFrom: range.from,
-        activationTo: range.to,
-        className: 'z-live-preview-inline-code-delimiter',
-        kind: 'replace' as const,
-      },
-      {
-        rendererId: 'inline-code-delimiter',
-        from: range.to - 1,
-        to: range.to,
-        activationFrom: range.from,
-        activationTo: range.to,
-        className: 'z-live-preview-inline-code-delimiter',
-        kind: 'replace' as const,
-      },
-    ]);
+function lineStartBefore(docText: string, position: number): number {
+  return docText.lastIndexOf(lineFeed, Math.max(0, position - 1)) + 1;
+}
+
+function lineEndAfter(docText: string, position: number): number {
+  const lineEnd = docText.indexOf(lineFeed, position);
+  return lineEnd === -1 ? docText.length : lineEnd;
+}
+
+function sourceLines(docText: string, from: number, to: number): SourceLine[] {
+  const lines: SourceLine[] = [];
+  let lineFrom = lineStartBefore(docText, from);
+  while (lineFrom <= to && lineFrom < docText.length) {
+    const lineTo = lineEndAfter(docText, lineFrom);
+    lines.push({ from: lineFrom, to: lineTo, text: docText.slice(lineFrom, lineTo) });
+    if (lineTo >= docText.length) break;
+    lineFrom = lineTo + 1;
+  }
+  return lines;
+}
+
+function quotedContentOffset(line: string): number {
+  let index = 0;
+  while (index < line.length && index < 4) {
+    const code = line.charCodeAt(index);
+    if (code !== spaceCode && code !== tabCode) break;
+    index += 1;
+  }
+  if (index > 3 || line.charCodeAt(index) !== greaterThanCode) return -1;
+  index += 1;
+  if (line.charCodeAt(index) === spaceCode) index += 1;
+  return index;
 }
 
 function blockquoteLineRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
 ): InternalLivePreviewRange[] {
-  const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
-  const scanText = docText.slice(scanWindow.from, scanWindow.to);
-
-  return [...scanText.matchAll(/^ {0,3}> ?.*$/gm)].flatMap((match) => {
-    const index = match.index;
-    if (index === undefined) return [];
-
-    const from = scanWindow.from + index;
-    const to = from + match[0].length;
-    if (suppressedRanges.some((container) => isInsideRange({ from, to }, container))) return [];
-
-    return [
-      {
-        rendererId: 'blockquote',
-        from,
-        to,
-        activationFrom: from,
-        activationTo: to,
-        className: 'z-live-preview-blockquote-line',
-        kind: 'line' as const,
-      },
-    ];
-  });
+  const ranges: InternalLivePreviewRange[] = [];
+  for (const line of sourceLines(docText, scanWindow.from, scanWindow.to)) {
+    if (quotedContentOffset(line.text) < 0) continue;
+    ranges.push({
+      rendererId: 'blockquote',
+      from: line.from,
+      to: line.to,
+      activationFrom: line.from,
+      activationTo: line.to,
+      className: 'z-live-preview-blockquote-line',
+      kind: 'line',
+    });
+  }
+  return ranges;
 }
 
 function activateLivePreviewWidgetSource(view: EditorView, activateAt: number): void {
@@ -270,9 +264,10 @@ class CalloutPreviewWidget extends WidgetType {
 function codeBlockWidgetRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
+  state: EditorState,
 ): CodeBlockPreviewMatch[] {
-  const suppressedRanges = markdownFrontmatterRanges(docText, scanWindow);
-  return markdownCompleteFencedCodeBlockRanges(docText, scanWindow)
+  const suppressedRanges = markdownFrontmatterRanges(docText, scanWindow, state);
+  return markdownCompleteFencedCodeBlockRanges(docText, scanWindow, state)
     .filter((range) => !suppressedRanges.some((container) => isInsideRange(range, container)))
     .map((range) => {
       const source = docText.slice(range.from, range.to);
@@ -295,57 +290,20 @@ function codeBlockWidgetRanges(
 function calloutWidgetRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
+  state: EditorState,
 ): CalloutPreviewMatch[] {
-  const ranges: CalloutPreviewMatch[] = [];
-  const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
-  const scanText = docText.slice(scanWindow.from, scanWindow.to);
-  const lines = [...scanText.matchAll(/^.*$/gm)]
-    .map((match) => ({ text: match[0], from: scanWindow.from + (match.index ?? 0) }))
-    .filter((line) => line.from <= scanWindow.to);
-  const markerPattern = /^( {0,3})> ?\[!([A-Za-z0-9_-]+)\](?:[ \t]+(.*))?$/;
-  const quotedLinePattern = /^ {0,3}> ?(.*)$/;
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line) continue;
-    const marker = markerPattern.exec(line.text);
-    if (!marker) continue;
-
-    const from = line.from;
-    const type = (marker[2] ?? '').toLowerCase();
-    if (!type || suppressedRanges.some((container) => isInsideRange({ from, to: from + line.text.length }, container)))
-      continue;
-
-    let to = from + line.text.length;
-    const bodyLines: string[] = [];
-    let cursor = index + 1;
-    for (; cursor < lines.length; cursor += 1) {
-      const quoted = quotedLinePattern.exec(lines[cursor]?.text ?? '');
-      if (!quoted) break;
-      const quotedLine = lines[cursor]!;
-      const quotedRange = { from: quotedLine.from, to: quotedLine.from + quotedLine.text.length };
-      if (suppressedRanges.some((container) => isInsideRange(quotedRange, container))) break;
-      bodyLines.push(quoted[1] ?? '');
-      to = quotedRange.to;
-    }
-
-    const source = docText.slice(from, to);
-    ranges.push({
-      from,
-      to,
-      activationFrom: from,
-      activationTo: to,
-      className: 'z-live-preview-callout-widget',
-      source,
-      type,
-      title: marker[3]?.trim() || type,
-      body: bodyLines.join('\n'),
-      activateAt: from,
-    });
-    index = Math.max(index, cursor - 1);
-  }
-
-  return ranges;
+  return markdownCalloutRanges(docText, scanWindow, state).map((range) => ({
+    from: range.from,
+    to: range.to,
+    activationFrom: range.from,
+    activationTo: range.to,
+    className: 'z-live-preview-callout-widget',
+    source: docText.slice(range.from, range.to),
+    type: range.type,
+    title: range.title,
+    body: range.body,
+    activateAt: range.from,
+  }));
 }
 
 function isInsideRange(
@@ -355,146 +313,40 @@ function isInsideRange(
   return range.from >= container.from && range.to <= container.to;
 }
 
-function regexLivePreviewRenderer(
-  id: string,
-  className: string,
-  pattern: RegExp,
-  rangeForMatch: (match: RegExpExecArray) => { fromOffset: number; toOffset: number },
-): LivePreviewRenderer {
-  return {
-    id,
-    match: ({ docText, visibleFrom, visibleTo }) => {
-      const ranges: LivePreviewRange[] = [];
-      const matcher = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
-      const scanWindow = livePreviewScanWindow(docText, visibleFrom, visibleTo);
-      const scanText = docText.slice(scanWindow.from, scanWindow.to);
-      const excludedInlineCodeRanges = id === 'inline-code' ? [] : inlineCodeRanges(docText, scanWindow);
-      const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
-      for (const match of scanText.matchAll(matcher)) {
-        const index = match.index;
-        if (index === undefined) continue;
-        const { fromOffset, toOffset } = rangeForMatch(match);
-        const from = scanWindow.from + index + fromOffset;
-        const to = scanWindow.from + index + toOffset;
-        if (excludedInlineCodeRanges.some((container) => isInsideRange({ from, to }, container))) continue;
-        if (suppressedRanges.some((container) => isInsideRange({ from, to }, container))) continue;
-        if (to > from) ranges.push({ rendererId: id, from, to, className });
-      }
-      return ranges;
-    },
-  };
-}
+export const headingLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('heading');
 
-export const headingLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'heading',
-  'z-live-preview-heading',
-  /^#{1,6}\s+.+$/gm,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
+export const inlineCodeLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('inline-code');
 
-export const inlineCodeLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'inline-code',
-  'z-live-preview-inline-code',
-  inlineCodePattern,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
+export const inlineCodeDelimiterLivePreviewRenderer: LivePreviewRenderer =
+  syntaxTreeLivePreviewRenderer('inline-code-delimiter');
 
-export const inlineCodeDelimiterLivePreviewRenderer: LivePreviewRenderer = {
-  id: 'inline-code-delimiter',
-  match: ({ docText, visibleFrom, visibleTo }) =>
-    inlineCodeDelimiterRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
-};
+export const strongLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('strong');
 
-export const strongLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'strong',
-  'z-live-preview-strong',
-  strongPattern,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
+export const emphasisLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('emphasis');
 
-export const emphasisLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'emphasis',
-  'z-live-preview-emphasis',
-  emphasisPattern,
-  (match) => {
-    const leading = match[1]?.length ?? 0;
-    return { fromOffset: leading, toOffset: match[0].length };
-  },
-);
+export const strikethroughLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('strikethrough');
 
-export const strikethroughLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'strikethrough',
-  'z-live-preview-strikethrough',
-  strikethroughPattern,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
+export const highlightLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('highlight');
 
-export const highlightLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'highlight',
-  'z-live-preview-highlight',
-  highlightPattern,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
+export const markdownLinkLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('markdown-link');
 
-export const markdownLinkLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'markdown-link',
-  'z-live-preview-link',
-  /\[[^\]\n]+\]\([^) \n][^)\n]*\)/g,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
+export const wikiLinkLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('wiki-link');
 
-export const wikiLinkLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'wiki-link',
-  'z-live-preview-wiki-link',
-  /\[\[[^\]\n]+\]\]/g,
-  (match) => ({ fromOffset: 0, toOffset: match[0].length }),
-);
-
-export const tagLivePreviewRenderer: LivePreviewRenderer = regexLivePreviewRenderer(
-  'tag',
-  'z-live-preview-tag',
-  /(^|[\s([{])#[A-Za-z0-9_/-]+/gm,
-  (match) => {
-    const leading = match[1]?.length ?? 0;
-    return { fromOffset: leading, toOffset: match[0].length };
-  },
-);
+export const tagLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('tag');
 
 export const taskMarkerLivePreviewRenderer: InternalLivePreviewRenderer = {
   id: 'task-marker',
-  match: ({ docText, visibleFrom, visibleTo }) => {
-    const ranges: InternalLivePreviewRange[] = [];
-    const scanWindow = livePreviewScanWindow(docText, visibleFrom, visibleTo);
-    const scanText = docText.slice(scanWindow.from, scanWindow.to);
-    const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow);
-    const pattern = /^(\s{0,3}[-*+]\s+\[)([ xX])(\])/gm;
-
-    for (const match of scanText.matchAll(pattern)) {
-      const index = match.index;
-      if (index === undefined) continue;
-      const marker = match[0];
-      const prefix = match[1] ?? '';
-      const checkbox = match[2] ?? ' ';
-      const from = scanWindow.from + index;
-      const to = from + marker.length;
-      if (suppressedRanges.some((container) => isInsideRange({ from, to }, container))) continue;
-
-      const checked = checkbox === 'x' || checkbox === 'X';
-      const checkboxFrom = from + prefix.length;
-      ranges.push({
-        rendererId: 'task-marker',
-        from,
-        to,
-        activationFrom: from,
-        activationTo: to,
-        className: 'z-live-preview-task-checkbox',
-        kind: 'replace',
-        widget: new TaskCheckboxPreviewWidget(checked, checkboxFrom),
-      });
-    }
-
-    return ranges;
-  },
+  match: ({ state, visibleFrom, visibleTo }) =>
+    taskMarkerRangesForState(state, visibleFrom, visibleTo).map((range) => ({
+      rendererId: 'task-marker',
+      from: range.markerFrom,
+      to: range.markerTo,
+      activationFrom: range.markerFrom,
+      activationTo: range.markerTo,
+      className: 'z-live-preview-task-checkbox',
+      kind: 'replace',
+      widget: new TaskCheckboxPreviewWidget(range.checked, range.checkboxFrom),
+    })),
 };
 
 const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
@@ -505,8 +357,8 @@ const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
 
 const codeBlockWidgetBlockRenderer: LivePreviewBlockRenderer<CodeBlockPreviewMatch> = {
   id: 'code-block-widget',
-  match: ({ docText, visibleFrom, visibleTo }) =>
-    codeBlockWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+  match: ({ state, docText, visibleFrom, visibleTo }) =>
+    codeBlockWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo), state),
   widget: (match) => new CodeBlockPreviewWidget(match.source, match.info, match.code, match.activateAt),
 };
 
@@ -515,8 +367,8 @@ const codeBlockWidgetLivePreviewRenderer: InternalLivePreviewRenderer =
 
 const calloutWidgetBlockRenderer: LivePreviewBlockRenderer<CalloutPreviewMatch> = {
   id: 'callout-widget',
-  match: ({ docText, visibleFrom, visibleTo }) =>
-    calloutWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+  match: ({ state, docText, visibleFrom, visibleTo }) =>
+    calloutWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo), state),
   widget: (match) => new CalloutPreviewWidget(match.source, match.type, match.title, match.body, match.activateAt),
 };
 

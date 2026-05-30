@@ -60,6 +60,21 @@ describe('editor Live Preview semantic fixtures', () => {
     ]);
   });
 
+  it('requires closed frontmatter fences and preserves trailing-space delimiters', () => {
+    const spacedFenceDoc = ['---   ', 'title: "#not-a-heading"', '---\t', '# Heading #tag'].join('\n');
+    const unclosedDoc = ['---', '# Heading #tag'].join('\n');
+
+    expect(markdownFrontmatterRanges(spacedFenceDoc, { from: 0, to: spacedFenceDoc.length })).toEqual([
+      { from: 0, to: spacedFenceDoc.indexOf('\n# Heading') },
+    ]);
+    expect(collectAll(spacedFenceDoc).map((range) => spacedFenceDoc.slice(range.from, range.to))).toEqual([
+      '# Heading #tag',
+    ]);
+
+    expect(markdownFrontmatterRanges(unclosedDoc, { from: 0, to: unclosedDoc.length })).toEqual([]);
+    expect(collectAll(unclosedDoc).map((range) => unclosedDoc.slice(range.from, range.to))).toEqual(['# Heading #tag']);
+  });
+
   it('adds conservative inline formatting semantics while suppressing code false positives', () => {
     const doc = [
       '**bold** *em* ~~gone~~ ==mark== __strong__ _italic_',
@@ -86,6 +101,24 @@ describe('editor Live Preview semantic fixtures', () => {
       ['inline-code', '`**raw** *raw* ~~raw~~ ==raw== #raw [raw](x.md)`'],
       ['inline-code-delimiter', '`'],
     ]);
+  });
+
+  it('keeps frontmatter and callout parser order explicit for private Lezer extensions', () => {
+    const doc = [
+      '---',
+      'callout: > [!note] frontmatter only',
+      'tag: #not-previewed',
+      '---',
+      '> [!note] Outside',
+      '> Body #tag [[Wiki]] ==mark==',
+    ].join('\n');
+
+    const renderedSource = collectAll(doc).map((range) => doc.slice(range.from, range.to));
+
+    expect(markdownFrontmatterRanges(doc, { from: 0, to: doc.length })).toEqual([
+      { from: 0, to: doc.indexOf('\n> [!note] Outside') },
+    ]);
+    expect(renderedSource).toEqual([['> [!note] Outside', '> Body #tag [[Wiki]] ==mark=='].join('\n')]);
   });
 
   it('keeps task, blockquote, callout, and inline previews raw inside fenced code and frontmatter', () => {

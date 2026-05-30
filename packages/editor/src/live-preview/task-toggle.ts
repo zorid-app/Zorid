@@ -1,41 +1,11 @@
 import type { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
-import { isMarkdownLineInsideFencedCodeBlock } from './markdown-code-context.js';
+import { findTaskMarkerRangeAtPosition, type TaskMarkerRange } from './task-marker-ranges.js';
 
-export interface TaskMarkerRange {
-  readonly lineFrom: number;
-  readonly lineTo: number;
-  readonly markerFrom: number;
-  readonly markerTo: number;
-  readonly checkboxFrom: number;
-  readonly checkboxTo: number;
-  readonly checked: boolean;
-  readonly marker: string;
-}
+export type { TaskMarkerRange } from './task-marker-ranges.js';
 
-const taskMarkerPattern = /^(\s{0,3}[-*+]\s+\[)([ xX])(\])/;
 export function findTaskMarkerAtPosition(state: EditorState, position: number): TaskMarkerRange | null {
-  const line = state.doc.lineAt(position);
-  if (isMarkdownLineInsideFencedCodeBlock(state, line.from)) return null;
-
-  const match = taskMarkerPattern.exec(line.text);
-  if (!match?.[0] || match.index !== 0) return null;
-
-  const prefix = match[1] ?? '';
-  const marker = match[0];
-  const checkbox = match[2] ?? ' ';
-  const checkboxFrom = line.from + prefix.length;
-
-  return {
-    lineFrom: line.from,
-    lineTo: line.to,
-    markerFrom: line.from,
-    markerTo: line.from + marker.length,
-    checkboxFrom,
-    checkboxTo: checkboxFrom + checkbox.length,
-    checked: checkbox === 'x' || checkbox === 'X',
-    marker,
-  };
+  return findTaskMarkerRangeAtPosition(state, position);
 }
 
 export function nextTaskMarkerCheckbox(range: Pick<TaskMarkerRange, 'checked'>): string {

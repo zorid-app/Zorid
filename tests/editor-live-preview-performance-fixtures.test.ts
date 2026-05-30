@@ -89,6 +89,26 @@ describe('editor Live Preview viewport/performance fixtures', () => {
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['- [ ]']);
   });
 
+  it('keeps far multi-line task-list viewports complete when parser work is bounded', () => {
+    const lines = Array.from({ length: 200_000 }, (_, index) => `- [ ] task ${index}`);
+    const doc = lines.join('\n');
+    const firstTarget = 'task 199990';
+    const lastTarget = 'task 199999';
+    const visibleRange = { from: doc.indexOf(firstTarget), to: doc.indexOf(lastTarget) + lastTarget.length };
+    const state = EditorState.create({ doc });
+
+    const ranges = collectLivePreviewRangesWithWidgetSuppression(
+      defaultLivePreviewRenderers,
+      defaultLivePreviewInternalRenderers,
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [visibleRange],
+      false,
+    );
+
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(Array.from({ length: 10 }, () => '- [ ]'));
+  });
+
   it('does not use the whole document as the initial widget scan range', async () => {
     const source = await readFile('packages/editor/src/live-preview/extension.ts', 'utf8');
 

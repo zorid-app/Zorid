@@ -179,6 +179,19 @@ describe('editor Live Preview primitives', () => {
     expect(ranges.map((range) => range.rendererId)).not.toContain('table');
   });
 
+  it('renders inline markdown links only when the syntax tree includes a URL target', () => {
+    const doc = '[plain] [link](target.md)';
+    const state = EditorState.create({ doc });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(state, { from: 0, to: doc.length }),
+    );
+
+    expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to)])).toEqual([
+      ['markdown-link', '[link](target.md)'],
+    ]);
+  });
+
   it('restores preview decorations after focused selection leaves the range', () => {
     const parent = document.createElement('div');
     document.body.append(parent);

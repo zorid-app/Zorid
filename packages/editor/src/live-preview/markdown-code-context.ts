@@ -1,4 +1,7 @@
+import { syntaxTree } from '@codemirror/language';
 import type { EditorState } from '@codemirror/state';
+import { createZoridMarkdownEditorState } from './markdown-language.js';
+import { stateWithAvailableZoridSyntaxTree } from './syntax-tree-ranges.js';
 
 export interface MarkdownCodeRange {
   readonly from: number;
@@ -15,149 +18,278 @@ export interface MarkdownFencedCodeBlockRange extends MarkdownCodeRange {
 
 export interface MarkdownFrontmatterRange extends MarkdownCodeRange {}
 
-interface FenceState {
-  readonly marker: '`' | '~';
-  readonly length: number;
+export interface MarkdownCalloutRange extends MarkdownCodeRange {
+  readonly type: string;
+  readonly title: string;
+  readonly body: string;
 }
 
-interface OpenFence extends FenceState {
+const backtickMarker = '`';
+const tildeMarker = '~';
+const lineFeed = '\n';
+const spaceCode = ' '.charCodeAt(0);
+const tabCode = '\t'.charCodeAt(0);
+const greaterThanCode = '>'.charCodeAt(0);
+const rightBracketCode = ']'.charCodeAt(0);
+
+interface SyntaxNodeLike {
+  readonly name: string;
   readonly from: number;
+  readonly to: number;
+  readonly firstChild: SyntaxNodeLike | null;
+  readonly nextSibling: SyntaxNodeLike | null;
 }
 
-const fencedCodeBlockPattern = /^\s{0,3}(`{3,}|~{3,})/;
-
-function fencedCodeLine(line: string): (FenceState & { readonly rest: string }) | null {
-  const match = fencedCodeBlockPattern.exec(line);
-  if (!match?.[1]) return null;
-
-  return {
-    marker: match[1][0] as '`' | '~',
-    length: match[1].length,
-    rest: line.slice(match[0].length),
-  };
+function overlapsScanWindow(range: MarkdownCodeRange, scanWindow: MarkdownCodeRange): boolean {
+  return range.to >= scanWindow.from && range.from <= scanWindow.to;
 }
 
-function closesFence(line: string, fence: FenceState): boolean {
-  const matched = fencedCodeLine(line);
-  return Boolean(
-    matched && matched.marker === fence.marker && matched.length >= fence.length && matched.rest.trim() === '',
-  );
+function lineStartBefore(docText: string, position: number): number {
+  return docText.lastIndexOf(lineFeed, Math.max(0, position - 1)) + 1;
 }
 
-export function markdownFencedCodeRanges(docText: string, scanWindow: MarkdownCodeRange): MarkdownCodeRange[] {
+function lineEndAfter(docText: string, position: number): number {
+  const lineEnd = docText.indexOf(lineFeed, position);
+  return lineEnd === -1 ? docText.length : lineEnd;
+}
+
+function syntaxStateForDoc(docText: string, upto: number, state?: EditorState): EditorState {
+  return stateWithAvailableZoridSyntaxTree(state ?? createZoridMarkdownEditorState(docText), docText, upto);
+}
+
+function rangesForNode(
+  docText: string,
+  nodeName: string,
+  scanWindow: MarkdownCodeRange,
+  state?: EditorState,
+): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
-  let fence: OpenFence | null = null;
-
-  for (const match of docText.matchAll(/^.*$/gm)) {
-    const index = match.index;
-    if (index === undefined) continue;
-    if (index > scanWindow.to) break;
-
-    const line = match[0];
-    const matchedFence = fencedCodeLine(line);
-    if (!fence && matchedFence) {
-      fence = { marker: matchedFence.marker, length: matchedFence.length, from: index };
-    } else if (fence && closesFence(line, fence)) {
-      const range = { from: fence.from, to: index + line.length };
-      if (range.to >= scanWindow.from && range.from <= scanWindow.to) ranges.push(range);
-      fence = null;
-    }
-  }
-
-  if (fence && scanWindow.to >= fence.from) ranges.push({ from: fence.from, to: scanWindow.to });
+  syntaxTree(syntaxStateForDoc(docText, scanWindow.to, state)).iterate({
+    from: scanWindow.from,
+    to: scanWindow.to,
+    enter: (node) => {
+      if (node.name !== nodeName) return;
+      const range = { from: node.from, to: node.to };
+      if (overlapsScanWindow(range, scanWindow)) ranges.push(range);
+      return false;
+    },
+  });
   return ranges;
+}
+
+function childNamed(parent: { firstChild: SyntaxNodeLike | null }, name: string): SyntaxNodeLike | null {
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (child.name === name) return child;
+  }
+  return null;
+}
+
+function lastChildNamed(parent: { firstChild: SyntaxNodeLike | null }, name: string): SyntaxNodeLike | null {
+  let found: SyntaxNodeLike | null = null;
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (child.name === name) found = child;
+  }
+  return found;
+}
+
+function descendantNamed(parent: { firstChild: SyntaxNodeLike | null }, name: string): SyntaxNodeLike | null {
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (child.name === name) return child;
+    const descendant = descendantNamed(child, name);
+    if (descendant) return descendant;
+  }
+  return null;
+}
+
+function codeInfoText(docText: string, parent: { firstChild: SyntaxNodeLike | null }): string {
+  const info = childNamed(parent, 'CodeInfo');
+  return info ? docText.slice(info.from, info.to).trim() : '';
+}
+
+function markerForFence(docText: string, from: number): '`' | '~' {
+  return docText.startsWith(tildeMarker, from) ? tildeMarker : backtickMarker;
+}
+
+function sourceLines(docText: string, from: number, to: number): MarkdownCodeRange[] {
+  const lines: MarkdownCodeRange[] = [];
+  let lineFrom = lineStartBefore(docText, from);
+  while (lineFrom <= to && lineFrom < docText.length) {
+    const lineTo = lineEndAfter(docText, lineFrom);
+    lines.push({ from: lineFrom, to: lineTo });
+    if (lineTo >= docText.length) break;
+    lineFrom = lineTo + 1;
+  }
+  return lines;
+}
+
+function quotedContentOffset(lineText: string): number {
+  let index = 0;
+  while (index < lineText.length && index < 4) {
+    const code = lineText.charCodeAt(index);
+    if (code !== spaceCode && code !== tabCode) break;
+    index += 1;
+  }
+  if (index > 3 || lineText.charCodeAt(index) !== greaterThanCode) return -1;
+  index += 1;
+  if (lineText.charCodeAt(index) === spaceCode) index += 1;
+  return index;
+}
+
+function calloutTitle(docText: string, marker: SyntaxNodeLike, markerLine: MarkdownCodeRange): string {
+  const lineText = docText.slice(markerLine.from, markerLine.to);
+  const markerText = docText.slice(marker.from, marker.to);
+  const titleFrom = marker.from - markerLine.from + markerText.length;
+  let index = titleFrom;
+  while (index < lineText.length) {
+    const code = lineText.charCodeAt(index);
+    if (code !== spaceCode && code !== tabCode) break;
+    index += 1;
+  }
+  const type = markerText.slice(2, -1).toLowerCase();
+  return lineText.slice(index).trim() || type;
+}
+
+function calloutType(docText: string, marker: SyntaxNodeLike): string {
+  return docText.slice(marker.from + 2, Math.max(marker.from + 2, marker.to - 1)).toLowerCase();
+}
+
+export function markdownFencedCodeRanges(
+  docText: string,
+  scanWindow: MarkdownCodeRange,
+  state?: EditorState,
+): MarkdownCodeRange[] {
+  return rangesForNode(docText, 'FencedCode', scanWindow, state);
 }
 
 export function markdownCompleteFencedCodeBlockRanges(
   docText: string,
   scanWindow: MarkdownCodeRange,
+  state?: EditorState,
 ): MarkdownFencedCodeBlockRange[] {
   const ranges: MarkdownFencedCodeBlockRange[] = [];
-  let fence: (OpenFence & { readonly info: string; readonly contentFrom: number }) | null = null;
+  syntaxTree(syntaxStateForDoc(docText, scanWindow.to, state)).iterate({
+    from: scanWindow.from,
+    to: scanWindow.to,
+    enter: (node) => {
+      if (node.name !== 'FencedCode') return;
+      const firstMark = childNamed(node.node, 'CodeMark');
+      const closingMark = lastChildNamed(node.node, 'CodeMark');
+      if (!firstMark || !closingMark || firstMark.from === closingMark.from) return false;
 
-  for (const match of docText.matchAll(/^.*$/gm)) {
-    const index = match.index;
-    if (index === undefined) continue;
-    if (index > scanWindow.to) break;
-
-    const line = match[0];
-    const matchedFence = fencedCodeLine(line);
-    if (!fence && matchedFence) {
-      const lineBreak = docText.indexOf('\n', index);
-      fence = {
-        marker: matchedFence.marker,
-        length: matchedFence.length,
-        from: index,
-        info: matchedFence.rest.trim(),
-        contentFrom: lineBreak === -1 ? index + line.length : lineBreak + 1,
-      };
-    } else if (fence && closesFence(line, fence)) {
+      const openingLineEnd = lineEndAfter(docText, node.from);
+      const closingLineStart = lineStartBefore(docText, closingMark.from);
       const range = {
-        from: fence.from,
-        to: index + line.length,
-        marker: fence.marker,
-        markerLength: fence.length,
-        info: fence.info,
-        contentFrom: fence.contentFrom,
-        contentTo: Math.max(fence.contentFrom, index === fence.contentFrom - 1 ? fence.contentFrom : index - 1),
+        from: node.from,
+        to: node.to,
+        marker: markerForFence(docText, firstMark.from),
+        markerLength: firstMark.to - firstMark.from,
+        info: codeInfoText(docText, node.node),
+        contentFrom: Math.min(openingLineEnd + 1, node.to),
+        contentTo: Math.max(
+          Math.min(openingLineEnd + 1, node.to),
+          closingLineStart > node.from ? closingLineStart - 1 : closingLineStart,
+        ),
       };
-      if (range.to >= scanWindow.from && range.from <= scanWindow.to) ranges.push(range);
-      fence = null;
-    }
-  }
-
+      if (overlapsScanWindow(range, scanWindow)) ranges.push(range);
+      return false;
+    },
+  });
   return ranges;
 }
 
-export function markdownIndentedCodeRanges(docText: string, scanWindow: MarkdownCodeRange): MarkdownCodeRange[] {
-  const ranges: MarkdownCodeRange[] = [];
-  const scanText = docText.slice(scanWindow.from, scanWindow.to);
-  for (const match of scanText.matchAll(/^ {4,}.*$/gm)) {
-    if (match.index === undefined) continue;
-    ranges.push({ from: scanWindow.from + match.index, to: scanWindow.from + match.index + match[0].length });
-  }
+export function markdownIndentedCodeRanges(
+  docText: string,
+  scanWindow: MarkdownCodeRange,
+  state?: EditorState,
+): MarkdownCodeRange[] {
+  return rangesForNode(docText, 'CodeBlock', scanWindow, state);
+}
+
+export function markdownSuppressedCodeRanges(
+  docText: string,
+  scanWindow: MarkdownCodeRange,
+  state?: EditorState,
+): MarkdownCodeRange[] {
+  return [
+    ...markdownFencedCodeRanges(docText, scanWindow, state),
+    ...markdownIndentedCodeRanges(docText, scanWindow, state),
+  ];
+}
+
+export function markdownFrontmatterRanges(
+  docText: string,
+  scanWindow: MarkdownCodeRange,
+  state?: EditorState,
+): MarkdownFrontmatterRange[] {
+  return rangesForNode(docText, 'ZoridFrontmatter', scanWindow, state);
+}
+
+export function markdownCalloutRanges(
+  docText: string,
+  scanWindow: MarkdownCodeRange,
+  state?: EditorState,
+): MarkdownCalloutRange[] {
+  const ranges: MarkdownCalloutRange[] = [];
+  syntaxTree(syntaxStateForDoc(docText, scanWindow.to, state)).iterate({
+    from: scanWindow.from,
+    to: scanWindow.to,
+    enter: (node) => {
+      if (node.name !== 'Blockquote') return;
+      const marker = descendantNamed(node.node, 'ZoridCallout');
+      if (!marker) return false;
+
+      const blockLines = sourceLines(docText, node.from, node.to).filter(
+        (line) => line.to > node.from && line.from < node.to,
+      );
+      const firstLine = blockLines[0];
+      if (!firstLine) return false;
+
+      const firstLineText = docText.slice(firstLine.from, firstLine.to);
+      const firstContentOffset = quotedContentOffset(firstLineText);
+      if (firstContentOffset < 0 || marker.from !== firstLine.from + firstContentOffset) return false;
+
+      const quotedLines: MarkdownCodeRange[] = [firstLine];
+      for (const line of blockLines.slice(1)) {
+        if (quotedContentOffset(docText.slice(line.from, line.to)) < 0) break;
+        quotedLines.push(line);
+      }
+
+      const body = quotedLines
+        .slice(1)
+        .map((line) => {
+          const text = docText.slice(line.from, line.to);
+          return text.slice(quotedContentOffset(text));
+        })
+        .join(lineFeed);
+      const from = quotedLines[0]!.from;
+      const to = quotedLines.at(-1)!.to;
+      ranges.push({
+        from,
+        to,
+        type: calloutType(docText, marker),
+        title: calloutTitle(docText, marker, firstLine),
+        body,
+      });
+      return false;
+    },
+  });
   return ranges;
 }
 
-export function markdownSuppressedCodeRanges(docText: string, scanWindow: MarkdownCodeRange): MarkdownCodeRange[] {
-  return [...markdownFencedCodeRanges(docText, scanWindow), ...markdownIndentedCodeRanges(docText, scanWindow)];
-}
-
-export function markdownFrontmatterRanges(docText: string, scanWindow: MarkdownCodeRange): MarkdownFrontmatterRange[] {
-  const firstLineEnd = docText.indexOf('\n');
-  const firstLine = firstLineEnd === -1 ? docText : docText.slice(0, firstLineEnd);
-  if (firstLine.trim() !== '---') return [];
-
-  let closingFrom = -1;
-  for (const match of docText.matchAll(/^---[ \t]*$/gm)) {
-    const index = match.index;
-    if (index === undefined || index === 0) continue;
-    closingFrom = index;
-    break;
-  }
-
-  if (closingFrom === -1) return [];
-  const closingLineEnd = docText.indexOf('\n', closingFrom);
-  const range = { from: 0, to: closingLineEnd === -1 ? docText.length : closingLineEnd };
-  return range.to >= scanWindow.from && range.from <= scanWindow.to ? [range] : [];
-}
-
-export function markdownSuppressedPreviewRanges(docText: string, scanWindow: MarkdownCodeRange): MarkdownCodeRange[] {
-  return [...markdownFrontmatterRanges(docText, scanWindow), ...markdownSuppressedCodeRanges(docText, scanWindow)];
+export function markdownSuppressedPreviewRanges(
+  docText: string,
+  scanWindow: MarkdownCodeRange,
+  state?: EditorState,
+): MarkdownCodeRange[] {
+  return [
+    ...markdownFrontmatterRanges(docText, scanWindow, state),
+    ...markdownSuppressedCodeRanges(docText, scanWindow, state),
+  ];
 }
 
 export function isMarkdownLineInsideFencedCodeBlock(state: EditorState, lineFrom: number): boolean {
-  const priorLines = state.doc.sliceString(0, lineFrom).split('\n');
-  let fence: FenceState | null = null;
-
-  for (const priorLine of priorLines) {
-    const matchedFence = fencedCodeLine(priorLine);
-    if (!fence && matchedFence) {
-      fence = { marker: matchedFence.marker, length: matchedFence.length };
-    } else if (fence && closesFence(priorLine, fence)) {
-      fence = null;
-    }
-  }
-
-  return Boolean(fence);
+  const docText = state.doc.toString();
+  return markdownFencedCodeRanges(docText, { from: lineFrom, to: lineFrom }).some(
+    (range) => lineFrom > range.from && lineFrom < range.to,
+  );
 }

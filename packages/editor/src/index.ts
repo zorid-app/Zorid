@@ -1,5 +1,4 @@
 import { history, historyKeymap } from '@codemirror/commands';
-import { markdown } from '@codemirror/lang-markdown';
 import { EditorState, type Extension } from '@codemirror/state';
 import { EditorView, keymap, type ViewUpdate } from '@codemirror/view';
 import type {
@@ -17,6 +16,7 @@ import {
   livePreviewExtension,
   livePreviewExtensionWithInternalRenderers,
 } from './live-preview/extension.js';
+import { zoridMarkdown } from './live-preview/markdown-language.js';
 import {
   defaultLivePreviewInternalRenderers,
   defaultLivePreviewRenderers,
@@ -135,13 +135,13 @@ export function createMarkdownEditorExtensions({
   shouldEmitChange = () => true,
 }: MarkdownEditorExtensionOptions = {}): Extension[] {
   const composed = composeEditorExtensions(extensionContributions);
-  // `markdown()` keeps @codemirror/lang-markdown's default keymap enabled,
-  // including Enter/Backspace Markdown continuation behavior. Do not add a
-  // duplicate custom keymap unless tests prove a concrete gap.
+  // The private Zorid Markdown facade keeps CodeMirror's default Markdown keymap enabled,
+  // including Enter/Backspace continuation behavior. Do not add a duplicate
+  // custom keymap unless tests prove a concrete gap.
   const reportLivePreviewError: LivePreviewErrorReporter | undefined = onError
     ? (error, context) => onError(error, `live-preview.${context.phase}.${context.rendererId}`)
     : undefined;
-  const extensions: Extension[] = [markdown(), history(), keymap.of(historyKeymap), ...composed.extensions];
+  const extensions: Extension[] = [zoridMarkdown(), history(), keymap.of(historyKeymap), ...composed.extensions];
   if (onError) {
     extensions.push(EditorView.exceptionSink.of((exception) => onError(exception, 'codemirror.exceptionSink')));
   }
