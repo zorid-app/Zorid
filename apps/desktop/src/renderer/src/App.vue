@@ -904,7 +904,13 @@ onBeforeUnmount(() => {
     />
 
     <section class="editor" data-region="editor">
-      <MarkdownEditor v-if="selectedPath" :text="editorText" @change="updateEditorText" @save="saveActive" />
+      <MarkdownEditor
+        v-if="selectedPath"
+        :text="editorText"
+        @change="updateEditorText"
+        @save="saveActive"
+        @error="(message) => (error = message)"
+      />
       <p v-else class="muted new-tab-empty">{{ editorEmptyText }}</p>
     </section>
 

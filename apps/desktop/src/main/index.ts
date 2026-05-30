@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { JsonValue } from '@zorid/shared';
 import type { IpcMainInvokeEvent } from 'electron';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { appendDesktopDebugLog, type DesktopDebugLogEntry } from './debug-log.js';
 import { selectVaultRootFromDialog } from './open-vault-dialog.js';
 import { createRecentVaultStore, openRecentVault, type RecentVaultStore } from './recent-vaults.js';
 import {
@@ -43,6 +44,10 @@ if (shouldDisableGpu()) {
 
 let recentVaultStore: RecentVaultStore | undefined;
 const appSettingsStore = new InMemoryAppSettingsStore();
+
+function logsRoot(): string {
+  return app.getPath('logs');
+}
 
 function recents(): RecentVaultStore {
   recentVaultStore ??= createRecentVaultStore(app.getPath('userData'));
@@ -118,6 +123,9 @@ async function selectAndOpenVault(
 }
 
 ipcMain.handle('zorid:get-window-role', (event) => windows.roleForSender(event.sender.id));
+ipcMain.handle('zorid:save-debug-log', async (_event, entry: DesktopDebugLogEntry) =>
+  appendDesktopDebugLog(logsRoot(), entry),
+);
 ipcMain.handle('zorid:open-vault', async (event) => selectAndOpenVault(event));
 ipcMain.handle('zorid:create-vault', async (event) => selectAndOpenVault(event));
 ipcMain.handle('zorid:list-recent-vaults', async () => recents().list());

@@ -7,6 +7,7 @@ const launcher: DesktopLauncherBridge = {
   openVault: () => ipcRenderer.invoke('zorid:open-vault'),
   listRecentVaults: () => ipcRenderer.invoke('zorid:list-recent-vaults'),
   openRecentVault: (id) => ipcRenderer.invoke('zorid:open-recent-vault', id),
+  saveDebugLog: (entry) => ipcRenderer.invoke('zorid:save-debug-log', entry),
 };
 
 const editor: DesktopEditorBridge = {
@@ -61,6 +62,7 @@ const editor: DesktopEditorBridge = {
   getSettingValue: (sectionId, pluginId) => ipcRenderer.invoke('zorid:get-setting-value', sectionId, pluginId),
   setSettingValue: (sectionId, value, pluginId) =>
     ipcRenderer.invoke('zorid:set-setting-value', sectionId, value, pluginId),
+  saveDebugLog: (entry) => ipcRenderer.invoke('zorid:save-debug-log', entry),
 };
 
 const bridge: DesktopBridge = { ...launcher, ...editor, launcher, editor };

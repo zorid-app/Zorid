@@ -15,6 +15,11 @@ import type {
   LivePreviewVisibleRange,
 } from './types.js';
 
+export type LivePreviewErrorReporter = (
+  error: unknown,
+  context: { readonly rendererId: string; readonly phase: 'match' | 'decorations' },
+) => void;
+
 export function livePreviewSelectionRanges(state: LivePreviewContext['state']): LivePreviewSelectionRange[] {
   return state.selection.ranges.map((range) => ({ from: range.from, to: range.to }));
 }
@@ -74,12 +79,26 @@ export function createLivePreviewContext(
   };
 }
 
+function safeLivePreviewRendererMatch<T>(
+  renderer: { readonly id: string; match(context: LivePreviewContext): readonly T[] },
+  context: LivePreviewContext,
+  reportError?: LivePreviewErrorReporter,
+): readonly T[] {
+  try {
+    return renderer.match(context);
+  } catch (error) {
+    reportError?.(error, { rendererId: renderer.id, phase: 'match' });
+    return [];
+  }
+}
+
 export function collectLivePreviewRanges(
   renderers: readonly LivePreviewRenderer[],
   context: LivePreviewContext,
+  reportError?: LivePreviewErrorReporter,
 ): LivePreviewRange[] {
   return filterLivePreviewRanges(
-    renderers.flatMap((renderer) => renderer.match(context)),
+    renderers.flatMap((renderer) => safeLivePreviewRendererMatch(renderer, context, reportError)),
     context,
   );
 }
@@ -87,9 +106,10 @@ export function collectLivePreviewRanges(
 function collectInternalLivePreviewRanges(
   renderers: readonly InternalLivePreviewRenderer[],
   context: LivePreviewContext,
+  reportError?: LivePreviewErrorReporter,
 ): InternalLivePreviewRange[] {
   return filterLivePreviewRanges(
-    renderers.flatMap((renderer) => renderer.match(context)) as LivePreviewRange[],
+    renderers.flatMap((renderer) => safeLivePreviewRendererMatch(renderer, context, reportError)) as LivePreviewRange[],
     context,
   ) as InternalLivePreviewRange[];
 }
@@ -131,12 +151,14 @@ export function collectLivePreviewWidgetRangesForVisibleRanges(
   state: LivePreviewContext['state'],
   visibleRanges: readonly LivePreviewVisibleRange[],
   focused: boolean,
+  reportError?: LivePreviewErrorReporter,
 ): InternalLivePreviewRange[] {
   const docText = state.doc.toString();
   const ranges = visibleRanges.flatMap((visibleRange) =>
     collectInternalLivePreviewRanges(
       renderers,
       createLivePreviewContext(state, livePreviewWidgetScanWindow(docText, visibleRange), focused),
+      reportError,
     ),
   );
   return [...new Map(ranges.map((range) => [livePreviewRangeDedupeKey(range), range])).values()];
@@ -156,21 +178,24 @@ export function collectLivePreviewRangesWithWidgetSuppression(
   state: LivePreviewContext['state'],
   visibleRanges: readonly LivePreviewVisibleRange[],
   focused: boolean,
+  reportError?: LivePreviewErrorReporter,
 ): InternalLivePreviewRange[] {
   const widgetRanges = collectLivePreviewWidgetRangesForVisibleRanges(
     widgetRenderers,
     state,
     visibleRanges,
     focused,
+    reportError,
   ).filter(isLivePreviewWidgetRange);
   const publicRanges = visibleRanges.flatMap((visibleRange) =>
-    collectLivePreviewRanges(renderers, createLivePreviewContext(state, visibleRange, focused)),
+    collectLivePreviewRanges(renderers, createLivePreviewContext(state, visibleRange, focused), reportError),
   );
   const docText = state.doc.toString();
   const internalRanges = visibleRanges.flatMap((visibleRange) =>
     collectInternalLivePreviewRanges(
       internalRenderers,
       createLivePreviewContext(state, livePreviewLineScanWindow(docText, visibleRange), focused),
+      reportError,
     ),
   );
 
@@ -187,6 +212,7 @@ function livePreviewDecorationsForView(
   renderers: readonly LivePreviewRenderer[],
   internalRenderers: readonly InternalLivePreviewRenderer[],
   widgetRenderers: readonly InternalLivePreviewRenderer[],
+  reportError?: LivePreviewErrorReporter,
 ): DecorationSet {
   const ranges: InternalLivePreviewRange[] = collectLivePreviewRangesWithWidgetSuppression(
     renderers,
@@ -195,43 +221,49 @@ function livePreviewDecorationsForView(
     view.state,
     view.visibleRanges,
     view.hasFocus,
+    reportError,
   );
-  return Decoration.set(
-    ranges.flatMap((range) => {
-      if (isLivePreviewWidgetRange(range)) return [];
-      if (isLivePreviewLineRange(range)) {
+  try {
+    return Decoration.set(
+      ranges.flatMap((range) => {
+        if (isLivePreviewWidgetRange(range)) return [];
+        if (isLivePreviewLineRange(range)) {
+          return [
+            Decoration.line({
+              class: range.className,
+              attributes: {
+                'data-live-preview-renderer': range.rendererId,
+                ...range.attributes,
+              },
+            }).range(range.from),
+          ];
+        }
+
+        if (range.kind === 'replace') {
+          return [
+            (range.widget ? Decoration.replace({ widget: range.widget }) : Decoration.replace({})).range(
+              range.from,
+              range.to,
+            ),
+          ];
+        }
+
         return [
-          Decoration.line({
+          Decoration.mark({
             class: range.className,
             attributes: {
               'data-live-preview-renderer': range.rendererId,
               ...range.attributes,
             },
-          }).range(range.from),
+          }).range(range.from, range.to),
         ];
-      }
-
-      if (range.kind === 'replace') {
-        return [
-          (range.widget ? Decoration.replace({ widget: range.widget }) : Decoration.replace({})).range(
-            range.from,
-            range.to,
-          ),
-        ];
-      }
-
-      return [
-        Decoration.mark({
-          class: range.className,
-          attributes: {
-            'data-live-preview-renderer': range.rendererId,
-            ...range.attributes,
-          },
-        }).range(range.from, range.to),
-      ];
-    }),
-    true,
-  );
+      }),
+      true,
+    );
+  } catch (error) {
+    reportError?.(error, { rendererId: 'live-preview', phase: 'decorations' });
+    return Decoration.none;
+  }
 }
 
 interface LivePreviewWidgetState {
@@ -245,32 +277,41 @@ function livePreviewWidgetDecorationsForState(
   renderers: readonly InternalLivePreviewRenderer[],
   focused: boolean,
   visibleRanges: readonly LivePreviewVisibleRange[],
+  reportError?: LivePreviewErrorReporter,
 ): DecorationSet {
-  const ranges = collectLivePreviewWidgetRangesForVisibleRanges(renderers, state, visibleRanges, focused);
+  const ranges = collectLivePreviewWidgetRangesForVisibleRanges(renderers, state, visibleRanges, focused, reportError);
 
-  return Decoration.set(
-    ranges.flatMap((range) => {
-      if (!isLivePreviewWidgetRange(range)) return [];
-      return [
-        Decoration.replace({
-          block: true,
-          widget: range.widget,
-        }).range(range.from, range.to),
-      ];
-    }),
-    true,
-  );
+  try {
+    return Decoration.set(
+      ranges.flatMap((range) => {
+        if (!isLivePreviewWidgetRange(range)) return [];
+        return [
+          Decoration.replace({
+            block: true,
+            widget: range.widget,
+          }).range(range.from, range.to),
+        ];
+      }),
+      true,
+    );
+  } catch (error) {
+    reportError?.(error, { rendererId: 'live-preview-widget', phase: 'decorations' });
+    return Decoration.none;
+  }
 }
 
 function defaultLivePreviewWidgetVisibleRanges(state: LivePreviewContext['state']): readonly LivePreviewVisibleRange[] {
-  return [{ from: 0, to: state.doc.length }];
+  return [{ from: 0, to: Math.min(state.doc.length, livePreviewWidgetScanMargin) }];
 }
 
 function livePreviewVisibleRangeKey(ranges: readonly LivePreviewVisibleRange[]): string {
   return ranges.map((range) => `${range.from}:${range.to}`).join('|');
 }
 
-function livePreviewWidgetField(renderers: readonly InternalLivePreviewRenderer[]): Extension {
+function livePreviewWidgetField(
+  renderers: readonly InternalLivePreviewRenderer[],
+  reportError?: LivePreviewErrorReporter,
+): Extension {
   return StateField.define<LivePreviewWidgetState>({
     create: (state) => {
       const focused = false;
@@ -278,7 +319,7 @@ function livePreviewWidgetField(renderers: readonly InternalLivePreviewRenderer[
       return {
         focused,
         visibleRanges,
-        decorations: livePreviewWidgetDecorationsForState(state, renderers, focused, visibleRanges),
+        decorations: livePreviewWidgetDecorationsForState(state, renderers, focused, visibleRanges, reportError),
       };
     },
     update: (value, transaction) => {
@@ -302,7 +343,13 @@ function livePreviewWidgetField(renderers: readonly InternalLivePreviewRenderer[
       return {
         focused,
         visibleRanges,
-        decorations: livePreviewWidgetDecorationsForState(transaction.state, renderers, focused, visibleRanges),
+        decorations: livePreviewWidgetDecorationsForState(
+          transaction.state,
+          renderers,
+          focused,
+          visibleRanges,
+          reportError,
+        ),
       };
     },
     provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
@@ -361,9 +408,10 @@ export function livePreviewExtensionWithInternalRenderers(
   renderers: readonly LivePreviewRenderer[],
   internalRenderers: readonly InternalLivePreviewRenderer[],
   widgetRenderers: readonly InternalLivePreviewRenderer[],
+  reportError?: LivePreviewErrorReporter,
 ): Extension {
   return [
-    livePreviewWidgetField(widgetRenderers),
+    livePreviewWidgetField(widgetRenderers, reportError),
     livePreviewWidgetVisibleRangeUpdater(),
     EditorView.focusChangeEffect.of((_state, focusing) => setInternalLivePreviewFocused.of(focusing)),
     ViewPlugin.fromClass(
@@ -371,7 +419,13 @@ export function livePreviewExtensionWithInternalRenderers(
         decorations: DecorationSet;
 
         constructor(view: EditorView) {
-          this.decorations = livePreviewDecorationsForView(view, renderers, internalRenderers, widgetRenderers);
+          this.decorations = livePreviewDecorationsForView(
+            view,
+            renderers,
+            internalRenderers,
+            widgetRenderers,
+            reportError,
+          );
         }
 
         update(update: ViewUpdate): void {
@@ -381,6 +435,7 @@ export function livePreviewExtensionWithInternalRenderers(
               renderers,
               internalRenderers,
               widgetRenderers,
+              reportError,
             );
           }
         }

@@ -12,7 +12,11 @@ import type {
   OpenDocumentOptions,
 } from '@zorid/platform-api';
 import { type Disposable, normalizeVaultPath, type VaultPath } from '@zorid/shared';
-import { livePreviewExtension, livePreviewExtensionWithInternalRenderers } from './live-preview/extension.js';
+import {
+  type LivePreviewErrorReporter,
+  livePreviewExtension,
+  livePreviewExtensionWithInternalRenderers,
+} from './live-preview/extension.js';
 import {
   defaultLivePreviewInternalRenderers,
   defaultLivePreviewRenderers,
@@ -77,6 +81,7 @@ export interface MarkdownEditorExtensionOptions {
   extensionContributions?: readonly EditorExtensionContribution[];
   onChange?: (text: string, update: ViewUpdate) => void;
   onSave?: () => void;
+  onError?: (error: unknown, context: string) => void;
   shouldEmitChange?: () => boolean;
   livePreviewRenderers?: readonly LivePreviewRenderer[] | false;
 }
@@ -126,13 +131,20 @@ export function createMarkdownEditorExtensions({
   livePreviewRenderers,
   onChange,
   onSave,
+  onError,
   shouldEmitChange = () => true,
 }: MarkdownEditorExtensionOptions = {}): Extension[] {
   const composed = composeEditorExtensions(extensionContributions);
   // `markdown()` keeps @codemirror/lang-markdown's default keymap enabled,
   // including Enter/Backspace Markdown continuation behavior. Do not add a
   // duplicate custom keymap unless tests prove a concrete gap.
+  const reportLivePreviewError: LivePreviewErrorReporter | undefined = onError
+    ? (error, context) => onError(error, `live-preview.${context.phase}.${context.rendererId}`)
+    : undefined;
   const extensions: Extension[] = [markdown(), history(), keymap.of(historyKeymap), ...composed.extensions];
+  if (onError) {
+    extensions.push(EditorView.exceptionSink.of((exception) => onError(exception, 'codemirror.exceptionSink')));
+  }
   if (livePreviewRenderers !== false) {
     extensions.push(
       livePreviewRenderers === undefined
@@ -140,6 +152,7 @@ export function createMarkdownEditorExtensions({
             defaultLivePreviewRenderers,
             defaultLivePreviewInternalRenderers,
             defaultLivePreviewWidgetRenderers,
+            reportLivePreviewError,
           )
         : livePreviewExtension(livePreviewRenderers),
     );

@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 import type { LivePreviewVisibleRange } from '../packages/editor/src';
@@ -86,5 +87,12 @@ describe('editor Live Preview viewport/performance fixtures', () => {
     );
 
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['- [ ]']);
+  });
+
+  it('does not use the whole document as the initial widget scan range', async () => {
+    const source = await readFile('packages/editor/src/live-preview/extension.ts', 'utf8');
+
+    expect(source).toContain('Math.min(state.doc.length, livePreviewWidgetScanMargin)');
+    expect(source).not.toContain('return [{ from: 0, to: state.doc.length }]');
   });
 });

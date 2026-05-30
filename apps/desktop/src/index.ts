@@ -1,5 +1,6 @@
 import type { PluginStatus, VaultEntry, VaultProfile } from '@zorid/platform-api';
 import type { JsonValue } from '@zorid/shared';
+import type { DesktopDebugLogEntry } from './main/debug-log.js';
 import type { RecentVaultDto } from './main/recent-vaults.js';
 import type {
   BacklinkDto,
@@ -17,6 +18,8 @@ import type {
   TagDto,
   TypeDto,
 } from './main/runtime.js';
+
+export type { DesktopDebugLogEntry } from './main/debug-log.js';
 
 export type {
   BacklinkDto,
@@ -44,6 +47,7 @@ export interface DesktopLauncherBridge {
   openVault(): Promise<VaultProfile | undefined>;
   listRecentVaults(): Promise<readonly RecentVaultDto[]>;
   openRecentVault(id: string): Promise<VaultProfile>;
+  saveDebugLog(entry: DesktopDebugLogEntry): Promise<string>;
 }
 
 export interface EditorSnapshotDto {
@@ -82,6 +86,7 @@ export interface DesktopEditorBridge {
   listSettingsSections(): Promise<readonly SettingsSectionDto[]>;
   getSettingValue(sectionId: string, pluginId?: string): Promise<SettingValueDto>;
   setSettingValue(sectionId: string, value: JsonValue, pluginId?: string): Promise<SettingValueDto>;
+  saveDebugLog(entry: DesktopDebugLogEntry): Promise<string>;
 }
 
 export type DesktopBridge = DesktopLauncherBridge &
