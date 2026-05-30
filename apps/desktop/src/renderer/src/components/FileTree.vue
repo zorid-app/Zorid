@@ -18,11 +18,42 @@ const emit = defineEmits<{
   dragEnter: [entry: VaultEntry, event: DragEvent];
   dragLeave: [entry: VaultEntry, event: DragEvent];
   dropOnDirectory: [entry: VaultEntry, event: DragEvent];
+  dragOverRoot: [event: DragEvent];
+  dragEnterRoot: [event: DragEvent];
+  dragLeaveRoot: [event: DragEvent];
+  dropOnRoot: [event: DragEvent];
 }>();
+
+function onRootDragEnter(event: DragEvent): void {
+  if (event.defaultPrevented) return;
+  event.preventDefault();
+  emit('dragEnterRoot', event);
+}
+
+function onRootDragOver(event: DragEvent): void {
+  if (event.defaultPrevented) return;
+  event.preventDefault();
+  emit('dragOverRoot', event);
+}
+
+function onRootDrop(event: DragEvent): void {
+  if (event.defaultPrevented) return;
+  event.preventDefault();
+  emit('dropOnRoot', event);
+}
 </script>
 
 <template>
-  <ul class="file-tree" aria-label="Vault files" data-app-file-tree>
+  <ul
+    class="file-tree"
+    :class="{ 'file-tree-root-drop-target': dragOverPath === '' && !!draggingPath }"
+    aria-label="Vault files"
+    data-app-file-tree
+    @dragenter="onRootDragEnter"
+    @dragover="onRootDragOver"
+    @dragleave="(event) => emit('dragLeaveRoot', event)"
+    @drop="onRootDrop"
+  >
     <FileTreeNode
       v-for="entry in rootEntries"
       :key="entry.path"
