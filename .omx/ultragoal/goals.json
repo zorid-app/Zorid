@@ -1,23 +1,70 @@
 {
   "version": 1,
-  "createdAt": "2026-05-30T13:32:50.475Z",
-  "updatedAt": "2026-05-30T13:48:12.195Z",
+  "createdAt": "2026-05-31T00:40:05.663Z",
+  "updatedAt": "2026-05-31T01:18:22.791Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
   "codexGoalMode": "aggregate",
   "goals": [
     {
-      "id": "G001",
-      "title": "{",
-      "objective": "{\n  \"task\": \"Editor usability improvements for checkbox/task and bullet/list editing only\",\n  \"scope\": {\n    \"include\": [\n      \"source-backed task checkbox toggle command/keymap exposure\",\n      \"checkbox projection polish\",\n      \"bullet/task list source-transform commands\",\n      \"indent/outdent for unordered/task list lines\"\n    ],\n    \"exclude\": [\n      \".zbase/DataViews changes\",\n      \"full table widget/editor\",\n      \"public third-party plugin API changes\",\n      \"new dependencies\"\n    ]\n  },\n  \"planning_artifacts\": {\n    \"context_snapshot\": \".omx/context/editor-usability-checkbox-bullets-20260530T132204Z.md\",\n    \"prd\": \".omx/plans/prd-editor-usability-checkbox-bullets-20260530T132250Z.md\",\n    \"test_spec\": \".omx/plans/test-spec-editor-usability-checkbox-bullets-20260530T132250Z.md\"\n  },\n  \"ralplan_architect_review\": {\n    \"agent_id\": \"019e7912-0970-70e0-a502-16b62cd42a91\",\n    \"verdict\": \"APPROVE\",\n    \"summary\": \"Architecture approved after fixing context reference, bullet-toggle task-line exclusion, rejected generalized abstraction, risk mitigations, table raw-source verification, and task-only/mixed bullet tests.\"\n  },\n  \"ralplan_critic_review\": {\n    \"agent_id\": \"019e7913-1105-7ba2-ac76-84caa02eb42b\",\n    \"verdict\": \"APPROVE\",\n    \"summary\": \"Critic approved revised PRD/test spec as actionable, verifiable, aligned with source-backed CodeMirror commands and Live Preview projection boundaries.\"\n  },\n  \"ralplan_consensus_gate\": {\n    \"complete\": true,\n    \"order\": [\"architect\", \"critic\"],\n    \"approved_at\": \"2026-05-30T13:22:50Z\"\n  },\n  \"recommended_execution\": {\n    \"default\": \"$ultragoal\",\n    \"parallel_option\": \"$team for disjoint implementation/test lanes if desired\",\n    \"ralph_fallback\": \"$ralph only if a single-owner persistent verification loop is explicitly selected\"\n  },\n  \"verification\": [\n    \"pnpm vitest run tests/editor-task-toggle.test.ts tests/editor-markdown-keymap.test.ts tests/editor-markdown-list-commands.test.ts tests/editor-live-preview-primitives.test.ts tests/desktop-live-preview-styles.test.ts\",\n    \"pnpm typecheck\",\n    \"pnpm lint\"\n  ]\n}",
+      "id": "G001-left-pane-ui-migration-make-search-t",
+      "title": "Left-pane UI migration: make Search the primary left-sidebar tab surf...",
+      "objective": "Left-pane UI migration: make Search the primary left-sidebar tab surface, keep right-sidebar non-search panels intact, and move search input/results off the right panel.",
       "status": "complete",
       "attempt": 1,
-      "createdAt": "2026-05-30T13:32:50.475Z",
-      "updatedAt": "2026-05-30T13:48:12.195Z",
-      "startedAt": "2026-05-30T13:32:50.758Z",
-      "evidence": "Implemented source-backed checkbox/task and bullet/list usability pass; targeted vitest 5 files/47 tests passed; pnpm typecheck passed; pnpm lint passed; code-review APPROVE; architect CLEAR.",
-      "completedAt": "2026-05-30T13:48:12.195Z"
+      "createdAt": "2026-05-31T00:40:05.663Z",
+      "updatedAt": "2026-05-31T00:46:27.255Z",
+      "startedAt": "2026-05-31T00:40:09.719Z",
+      "completedAt": "2026-05-31T00:46:27.255Z",
+      "evidence": "Migrated search panel from right sidebar to left sidebar tab surface; TopTabStrip now controlled by App for files/search/bookmarks; added LeftSearchPane and removed search controls from RightSidebarPanels; preserved openSearchResult event path. Verification: pnpm run test -- tests/desktop-top-tab-strip.test.ts tests/desktop-shell-layout.test.ts tests/desktop-reusable-ui-migration.test.ts tests/desktop-file-tree-toolbar.test.ts (pass)."
+    },
+    {
+      "id": "G002-search-interaction-ux-autofocus-on-s",
+      "title": "Search interaction UX: autofocus on Search tab activation; operator m...",
+      "objective": "Search interaction UX: autofocus on Search tab activation; operator menu opens on focus; keyboard behavior exactly ArrowUp/ArrowDown navigate, Enter/Tab select, Esc defocus+close.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-31T00:40:05.663Z",
+      "updatedAt": "2026-05-31T00:50:34.519Z",
+      "startedAt": "2026-05-31T00:46:29.875Z",
+      "completedAt": "2026-05-31T00:50:34.519Z",
+      "evidence": "Implemented left search interaction UX: search input now autofocuses on search-pane mount (search tab activation), search options menu opens on focus, keyboard navigation supports ArrowUp/ArrowDown to move options, Enter/Tab to insert selected operator token, and Escape to defocus + close menu. Added toolbar/menu UI matching reference surface and empty-state text. Verification: pnpm run test -- tests/desktop-left-search-pane.test.ts tests/desktop-top-tab-strip.test.ts tests/desktop-shell-layout.test.ts tests/desktop-reusable-ui-migration.test.ts tests/desktop-file-tree-toolbar.test.ts (pass)."
+    },
+    {
+      "id": "G003-runtime-query-engine-keep-no-operato",
+      "title": "Runtime query engine: keep no-operator queries on existing full-text...",
+      "objective": "Runtime query engine: keep no-operator queries on existing full-text search path; add operator parsing/evaluation for path/file/tag/line/section/[property], with mixed-query AND semantics and malformed-operator fallback behavior.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-31T00:40:05.663Z",
+      "updatedAt": "2026-05-31T00:54:19.957Z",
+      "startedAt": "2026-05-31T00:50:38.903Z",
+      "completedAt": "2026-05-31T00:54:19.957Z",
+      "evidence": "Implemented runtime operator-aware search engine while preserving full-text default path: no operators uses existing FTS/fallback pipeline; operator clauses (path/file/tag/line/section/[property]/[property:value]) are parsed and evaluated centrally in runtime with mixed bare-term AND semantics and malformed-operator fallback when no valid clause exists. Added deterministic operator-mode excerpts and bounded sorted results. Added integration coverage in desktop runtime tests for each operator and mixed query behavior."
+    },
+    {
+      "id": "G004-candidate-sourcing-result-quality-ru",
+      "title": "Candidate sourcing + result quality: runtime-owned candidate data for...",
+      "objective": "Candidate sourcing + result quality: runtime-owned candidate data for path/file/tag/property; deterministic operator-mode excerpt fallback; maintain clickable result-open behavior.",
+      "status": "complete",
+      "attempt": 0,
+      "createdAt": "2026-05-31T00:40:05.663Z",
+      "updatedAt": "2026-05-31T01:00:25.669Z",
+      "completedAt": "2026-05-31T01:00:25.669Z",
+      "evidence": "Implemented runtime-owned search candidates and hooked renderer to consume them: added search-index-candidates IPC/bridge API; runtime derives index-based candidate sets for path/file/tag/property key/value contexts; left search menu now switches from operator list to candidate list for active operator composition and inserts selected values into query tokens. Preserved result open behavior and deterministic operator excerpts from runtime. Verification: targeted desktop runtime/component/layout tests pass."
+    },
+    {
+      "id": "G005-verification-and-hardening-implement",
+      "title": "Verification and hardening: implement tests per approved test spec (u...",
+      "objective": "Verification and hardening: implement tests per approved test spec (unit/integration/component/e2e), add observability/performance verification for stated p95 targets, and complete final cleaner + independent code-review gate.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-31T00:40:05.663Z",
+      "updatedAt": "2026-05-31T01:18:22.791Z",
+      "startedAt": "2026-05-31T01:00:30.750Z",
+      "evidence": "Final verification/hardening complete: desktop-app typecheck and targeted search/runtime tests pass; full quality:fast pass; ai-slop-cleaner report recorded; independent review gate clean with code-reviewer APPROVE and architect CLEAR.",
+      "completedAt": "2026-05-31T01:18:22.791Z"
     }
   ],
   "codexObjective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail."

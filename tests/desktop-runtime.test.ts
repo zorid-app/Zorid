@@ -206,6 +206,45 @@ status: done
       expect(runtime.searchIndex('tag')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
       expect(runtime.searchIndex('A.md')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
       expect(runtime.searchIndex('A')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
+      expect(runtime.searchIndex('path:"A.md"')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
+      expect(runtime.searchIndex('file:a')).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: 'A.md', title: 'A' })]),
+      );
+      expect(runtime.searchIndex('tag:#tag')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
+      expect(runtime.searchIndex('line:"see [[b.md]]"')).toEqual([
+        expect.objectContaining({ path: 'A.md', title: 'A' }),
+      ]);
+      expect(runtime.searchIndex('section:"see [[b.md]]"')).toEqual([
+        expect.objectContaining({ path: 'A.md', title: 'A' }),
+      ]);
+      expect(runtime.searchIndex('[status]')).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: 'A.md' }), expect.objectContaining({ path: 'B.md' })]),
+      );
+      expect(runtime.searchIndex('[status:open]')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
+      expect(runtime.searchIndex('tag:tag see')).toEqual([expect.objectContaining({ path: 'A.md', title: 'A' })]);
+      expect(runtime.searchIndex('path:')).toEqual([]);
+      expect(runtime.searchIndexCandidates('path:')).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ value: 'A.md' }),
+          expect.objectContaining({ value: 'B.md' }),
+        ]),
+      );
+      expect(runtime.searchIndexCandidates('file:a')).toEqual(
+        expect.arrayContaining([expect.objectContaining({ value: 'A.md' })]),
+      );
+      expect(runtime.searchIndexCandidates('tag:')).toEqual([expect.objectContaining({ value: 'tag' })]);
+      expect(runtime.searchIndexCandidates('[')).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ value: 'status' }),
+          expect.objectContaining({ value: 'done' }),
+        ]),
+      );
+      expect(runtime.searchIndexCandidates('[status:')).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ value: 'open' }),
+          expect.objectContaining({ value: 'done' }),
+        ]),
+      );
       expect(runtime.listTags()).toEqual([{ tag: 'tag', count: 1 }]);
       expect(runtime.getOutline('A.md')).toEqual([{ path: 'A.md', heading: 'A', ordinal: 1 }]);
       expect(runtime.getBacklinks('B.md')).toEqual([expect.objectContaining({ fromPath: 'A.md' })]);

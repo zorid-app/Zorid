@@ -16,6 +16,7 @@ import {
   sortEntries,
   sortModeLabel,
 } from './components/file-tree-model.js';
+import LeftSearchPane from './components/LeftSearchPane.vue';
 import MarkdownEditor from './components/MarkdownEditor.vue';
 import RightSidebarPanels from './components/RightSidebarPanels.vue';
 import SettingsWindow from './components/SettingsWindow.vue';
@@ -46,6 +47,7 @@ import type {
   OutlineItemDto,
   PluginStatus,
   RecentVaultDto,
+  SearchCandidateDto,
   SearchResultDto,
   SettingProperty,
   SettingsSectionDto,
@@ -82,6 +84,7 @@ const desktop = window.zoridDesktop as unknown as {
   deleteVaultPath(path: string): Promise<void>;
   getIndexStatus(): Promise<IndexStatusDto>;
   searchIndex(query: string): Promise<readonly SearchResultDto[]>;
+  searchIndexCandidates(query: string): Promise<readonly SearchCandidateDto[]>;
   getBacklinks(path: string): Promise<readonly BacklinkDto[]>;
   listTags(): Promise<readonly TagDto[]>;
   getOutline(path: string): Promise<readonly OutlineItemDto[]>;
@@ -142,6 +145,7 @@ const settingsOpen = ref(false);
 const indexStatus = ref<IndexStatusDto>({ state: 'idle', fileCount: 0, diagnostics: [] });
 const searchQuery = ref('');
 const searchResults = ref<readonly SearchResultDto[]>([]);
+const searchCandidates = ref<readonly SearchCandidateDto[]>([]);
 const backlinks = ref<readonly BacklinkDto[]>([]);
 const tags = ref<readonly TagDto[]>([]);
 const outline = ref<readonly OutlineItemDto[]>([]);
@@ -152,6 +156,7 @@ const activeBasePath = ref<string>();
 const activeViewId = ref<string>();
 const dataView = ref<DataViewResultDto>();
 const markdownEmbeds = ref<readonly MarkdownEmbedDto[]>([]);
+const selectedLeftPaneTab = ref<'files' | 'search' | 'bookmarks'>('files');
 const paneLayout = ref<PaneLayout>({ ...DEFAULT_PANE_LAYOUT });
 const systemTheme = ref<ResolvedTheme>(readSystemTheme());
 type ResizeSide = 'left' | 'right';
@@ -389,8 +394,7 @@ async function refreshMetadataPanels(): Promise<void> {
   ]);
   if (!activeBasePath.value && bases.value[0]) activeBasePath.value = bases.value[0].path;
   await refreshDataView();
-  if (searchQuery.value.trim()) searchResults.value = await desktop.searchIndex(searchQuery.value);
-  else searchResults.value = [];
+  await runSearch();
   if (selectedPath.value) {
     const [nextBacklinks, nextOutline] = await Promise.all([
       desktop.getBacklinks(selectedPath.value),
@@ -409,7 +413,17 @@ async function refreshMetadataPanels(): Promise<void> {
 }
 
 async function runSearch(): Promise<void> {
-  searchResults.value = searchQuery.value.trim() ? await desktop.searchIndex(searchQuery.value) : [];
+  if (!searchQuery.value.trim()) {
+    searchResults.value = [];
+    searchCandidates.value = [];
+    return;
+  }
+  const [nextSearchResults, nextSearchCandidates] = await Promise.all([
+    desktop.searchIndex(searchQuery.value),
+    desktop.searchIndexCandidates(searchQuery.value),
+  ]);
+  searchResults.value = nextSearchResults;
+  searchCandidates.value = nextSearchCandidates;
 }
 
 async function loadSettingValues(sections: readonly SettingsSectionDto[]): Promise<void> {
@@ -933,6 +947,7 @@ async function openSearchResult(path: string): Promise<void> {
 
 async function searchTag(tag: string): Promise<void> {
   searchQuery.value = `#${tag}`;
+  selectedLeftPaneTab.value = 'search';
   await runSearch();
 }
 
@@ -1102,11 +1117,13 @@ onBeforeUnmount(() => {
       :selected-tab-id="selectedTabId"
       :left-collapsed="paneLayout.leftCollapsed"
       :right-collapsed="paneLayout.rightCollapsed"
+      :left-pane-tab="selectedLeftPaneTab"
       @activate="activateTab"
       @close="closeTab"
       @new-tab="createPlaceholderTab"
       @toggle-left-pane="toggleLeftPane"
       @toggle-right-pane="toggleRightPane"
+      @update-left-pane-tab="selectedLeftPaneTab = $event"
     />
 
     <ActivityRail
@@ -1117,49 +1134,60 @@ onBeforeUnmount(() => {
     />
 
     <aside v-show="!paneLayout.leftCollapsed" class="sidebar" data-region="left-sidebar">
-      <div class="file-pane-toolbar" aria-label="File actions">
-        <ZIconButton label="New file" @click="createNote" :disabled="!vaultLabel">
-          <FilePlus class="file-pane-action-icon" aria-hidden="true" />
-        </ZIconButton>
-        <ZIconButton label="New folder" @click="createFolder" :disabled="!vaultLabel">
-          <FolderPlus class="file-pane-action-icon" aria-hidden="true" />
-        </ZIconButton>
-        <label class="file-pane-sort" :title="`Sort files: ${fileTreeSortLabel}`">
-          <ArrowDownUp class="file-pane-action-icon" aria-hidden="true" />
-          <select :value="fileTreeSortMode" :aria-label="`Sort files: ${fileTreeSortLabel}`" @change="updateFileTreeSortMode">
-            <option v-for="mode in FILE_TREE_SORT_MODES" :key="mode" :value="mode">{{ sortModeLabel(mode) }}</option>
-          </select>
-        </label>
-        <ZIconButton label="Expand loaded folders" @click="expandLoadedDirectories" :disabled="!vaultLabel">
-          <ChevronsDown class="file-pane-action-icon" aria-hidden="true" />
-        </ZIconButton>
-        <ZIconButton label="Collapse loaded folders" @click="collapseLoadedDirectories" :disabled="!vaultLabel">
-          <ChevronsUp class="file-pane-action-icon" aria-hidden="true" />
-        </ZIconButton>
-      </div>
-      <p v-if="error" class="error">{{ error }}</p>
-      <FileTree
-        :root-entries="rootEntries"
-        :entries-by-directory="sortedEntriesByDirectory"
-        :expanded-directories="expandedDirectories"
-        :selected-path="selectedPath"
-        :dragging-path="draggingSourcePath"
-        :drag-over-path="draggingOverPath"
-        :pending-creation="pendingTreeCreate"
-        @open-entry="openEntry"
-        @drag-start="handleTreeDragStart"
-        @drag-end="handleTreeDragEnd"
-        @drag-over="handleTreeDragOver"
-        @drag-enter="handleTreeDragEnter"
-        @drag-leave="handleTreeDragLeave"
-        @drag-over-root="handleTreeRootDragOver"
-        @drag-enter-root="handleTreeRootDragEnter"
-        @drag-leave-root="handleTreeRootDragLeave"
-        @drop-on-directory="handleTreeDrop"
-        @drop-on-root="handleTreeRootDrop"
-        @draft-commit="(kind, parentPath, name) => finalizeCreateEntry(kind, parentPath, name)"
-        @draft-cancel="cancelCreateEntry"
+      <template v-if="selectedLeftPaneTab === 'files'">
+        <div class="file-pane-toolbar" aria-label="File actions">
+          <ZIconButton label="New file" @click="createNote" :disabled="!vaultLabel">
+            <FilePlus class="file-pane-action-icon" aria-hidden="true" />
+          </ZIconButton>
+          <ZIconButton label="New folder" @click="createFolder" :disabled="!vaultLabel">
+            <FolderPlus class="file-pane-action-icon" aria-hidden="true" />
+          </ZIconButton>
+          <label class="file-pane-sort" :title="`Sort files: ${fileTreeSortLabel}`">
+            <ArrowDownUp class="file-pane-action-icon" aria-hidden="true" />
+            <select :value="fileTreeSortMode" :aria-label="`Sort files: ${fileTreeSortLabel}`" @change="updateFileTreeSortMode">
+              <option v-for="mode in FILE_TREE_SORT_MODES" :key="mode" :value="mode">{{ sortModeLabel(mode) }}</option>
+            </select>
+          </label>
+          <ZIconButton label="Expand loaded folders" @click="expandLoadedDirectories" :disabled="!vaultLabel">
+            <ChevronsDown class="file-pane-action-icon" aria-hidden="true" />
+          </ZIconButton>
+          <ZIconButton label="Collapse loaded folders" @click="collapseLoadedDirectories" :disabled="!vaultLabel">
+            <ChevronsUp class="file-pane-action-icon" aria-hidden="true" />
+          </ZIconButton>
+        </div>
+        <p v-if="error" class="error">{{ error }}</p>
+        <FileTree
+          :root-entries="rootEntries"
+          :entries-by-directory="sortedEntriesByDirectory"
+          :expanded-directories="expandedDirectories"
+          :selected-path="selectedPath"
+          :dragging-path="draggingSourcePath"
+          :drag-over-path="draggingOverPath"
+          :pending-creation="pendingTreeCreate"
+          @open-entry="openEntry"
+          @drag-start="handleTreeDragStart"
+          @drag-end="handleTreeDragEnd"
+          @drag-over="handleTreeDragOver"
+          @drag-enter="handleTreeDragEnter"
+          @drag-leave="handleTreeDragLeave"
+          @drag-over-root="handleTreeRootDragOver"
+          @drag-enter-root="handleTreeRootDragEnter"
+          @drag-leave-root="handleTreeRootDragLeave"
+          @drop-on-directory="handleTreeDrop"
+          @drop-on-root="handleTreeRootDrop"
+          @draft-commit="(kind, parentPath, name) => finalizeCreateEntry(kind, parentPath, name)"
+          @draft-cancel="cancelCreateEntry"
+        />
+      </template>
+      <LeftSearchPane
+        v-else-if="selectedLeftPaneTab === 'search'"
+        v-model:search-query="searchQuery"
+        :search-results="searchResults"
+        :search-candidates="searchCandidates"
+        @run-search="runSearch"
+        @open-search-result="openSearchResult"
       />
+      <p v-else class="muted">Bookmarks are not implemented yet.</p>
     </aside>
 
     <AppResizeHandle
@@ -1195,8 +1223,6 @@ onBeforeUnmount(() => {
 
     <RightSidebarPanels
       v-show="!paneLayout.rightCollapsed"
-      v-model:search-query="searchQuery"
-      :search-results="searchResults"
       :outline="outline"
       :backlinks="backlinks"
       :tags="tags"
@@ -1212,7 +1238,6 @@ onBeforeUnmount(() => {
       :active-plugins="activePlugins"
       :plugins="plugins"
       :settings-sections="settingsSections"
-      @run-search="runSearch"
       @open-search-result="openSearchResult"
       @search-tag="searchTag"
       @update-active-type="updateActiveType"

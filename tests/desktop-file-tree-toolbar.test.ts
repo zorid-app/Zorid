@@ -36,6 +36,7 @@ function createZoridDesktopMock({
     deleteVaultPath: vi.fn().mockResolvedValue(undefined),
     getIndexStatus: vi.fn().mockResolvedValue({ state: 'idle', fileCount: 3, diagnostics: [] }),
     searchIndex: vi.fn().mockResolvedValue([]),
+    searchIndexCandidates: vi.fn().mockResolvedValue([]),
     getBacklinks: vi.fn().mockResolvedValue([]),
     listTags: vi.fn().mockResolvedValue([]),
     getOutline: vi.fn().mockResolvedValue([]),

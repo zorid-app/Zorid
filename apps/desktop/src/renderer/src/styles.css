@@ -1206,6 +1206,104 @@ h2 {
   background: var(--z-control-bg-strong);
 }
 
+.left-search-pane-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.left-search-pane-input-wrap {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 10px;
+  border: 1px solid var(--z-control-border);
+  border-radius: var(--z-radius-md);
+  background: var(--z-control-bg-strong);
+  color: var(--z-color-muted);
+  padding: 0 10px;
+}
+
+.left-search-pane-input.side-input {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 9px 0;
+  background: transparent;
+}
+
+.left-search-pane-input.side-input:focus-visible {
+  outline: 0;
+}
+
+.left-search-pane-menu-button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--z-radius-md);
+  color: var(--z-color-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.left-search-pane-menu-button:hover {
+  background: var(--z-control-bg-strong);
+  color: var(--z-control-text);
+}
+
+.left-search-pane-menu-card {
+  margin-top: -2px;
+  border: 1px solid var(--z-color-border);
+  border-radius: var(--z-radius-lg);
+  background: var(--z-panel-bg);
+  box-shadow: var(--z-shadow-sm);
+  padding: 12px;
+}
+
+.left-search-pane-menu-title {
+  margin: 0 0 8px;
+  color: var(--z-color-text);
+  font-weight: 650;
+}
+
+.left-search-pane-menu-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.left-search-pane-menu-list li + li {
+  margin-top: 2px;
+}
+
+.left-search-pane-menu-list button {
+  width: 100%;
+  border: 0;
+  border-radius: var(--z-radius-sm);
+  background: transparent;
+  color: var(--z-control-text);
+  text-align: left;
+  padding: 6px 8px;
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+}
+
+.left-search-pane-menu-list button strong {
+  font-weight: 650;
+}
+
+.left-search-pane-menu-list button.active,
+.left-search-pane-menu-list button:hover {
+  background: var(--z-color-accent-muted);
+}
+
+.left-search-pane-empty {
+  margin-top: 12px;
+}
+
 .result-list,
 .outline-list {
   list-style: none;

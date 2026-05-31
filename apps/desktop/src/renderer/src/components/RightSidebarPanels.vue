@@ -11,15 +11,12 @@ import type {
   MarkdownEmbedDto,
   OutlineItemDto,
   PluginStatus,
-  SearchResultDto,
   SettingsSectionDto,
   TagDto,
   TypeDto,
 } from '../types.js';
 
 const props = defineProps<{
-  searchQuery: string;
-  searchResults: readonly SearchResultDto[];
   outline: readonly OutlineItemDto[];
   backlinks: readonly BacklinkDto[];
   tags: readonly TagDto[];
@@ -37,8 +34,6 @@ const props = defineProps<{
   settingsSections: readonly SettingsSectionDto[];
 }>();
 const emit = defineEmits<{
-  'update:searchQuery': [value: string];
-  runSearch: [];
   openSearchResult: [path: string];
   searchTag: [tag: string];
   updateActiveType: [event: Event];
@@ -66,19 +61,6 @@ function fieldInputValue(field: FieldDto): string {
 
 <template>
   <aside v-show="true" class="sidebar right" data-region="right-sidebar" data-app-right-sidebar>
-    <ZPanel class="panel">
-      <p class="eyebrow">Search</p>
-      <input :value="searchQuery" class="side-input" placeholder="Search files, tags, headings…" @input="emit('update:searchQuery', inputValue($event)); emit('runSearch')" />
-      <ul class="result-list" aria-label="Search results">
-        <li v-for="result in searchResults" :key="result.path">
-          <button type="button" @click="emit('openSearchResult', result.path)">
-            <strong>{{ result.title }}</strong>
-            <small>{{ result.path }}</small>
-            <span>{{ result.excerpt }}</span>
-          </button>
-        </li>
-      </ul>
-    </ZPanel>
     <ZPanel class="panel">
       <p class="eyebrow">Outline</p>
       <ol v-if="outline.length > 0" class="outline-list"><li v-for="item in outline" :key="`${item.path}:${item.ordinal}`">{{ item.heading }}</li></ol>
