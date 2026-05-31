@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { VaultEntry } from '@zorid/platform-api';
+import { computed, nextTick, ref, watch } from 'vue';
 import FileTreeNode from './FileTreeNode.vue';
 
 const props = defineProps<{
@@ -9,6 +10,10 @@ const props = defineProps<{
   selectedPath?: string | undefined;
   draggingPath?: string | undefined;
   dragOverPath?: string | undefined;
+  pendingCreation?: {
+    kind: 'file' | 'folder';
+    parentPath: string;
+  };
 }>();
 const emit = defineEmits<{
   openEntry: [entry: VaultEntry];
@@ -22,7 +27,64 @@ const emit = defineEmits<{
   dragEnterRoot: [event: DragEvent];
   dragLeaveRoot: [event: DragEvent];
   dropOnRoot: [event: DragEvent];
+  draftCommit: [kind: 'file' | 'folder', parentPath: string, name: string];
+  draftCancel: [];
 }>();
+
+const hasRootDraft = computed(
+  () =>
+    (props.pendingCreation?.kind === 'file' || props.pendingCreation?.kind === 'folder') &&
+    props.pendingCreation?.parentPath === '',
+);
+const draftName = ref('Untitled');
+const draftInput = ref<HTMLInputElement>();
+
+watch(
+  () => props.pendingCreation,
+  async (next) => {
+    if (!next) return;
+    draftName.value = 'Untitled';
+    await nextTick();
+    draftInput.value?.focus();
+    draftInput.value?.select();
+  },
+  { deep: true },
+);
+
+function commitRootDraft(name: string): void {
+  if (!props.pendingCreation) return;
+  emit('draftCommit', props.pendingCreation.kind, props.pendingCreation.parentPath, name);
+}
+
+function cancelRootDraft(): void {
+  emit('draftCancel');
+}
+
+function onDraftInput(event: Event): void {
+  draftName.value = (event.target as HTMLInputElement).value;
+}
+
+function onDraftInputKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const nextName = draftInput.value?.value ?? draftName.value;
+    if (nextName.trim()) {
+      commitRootDraft(nextName);
+      return;
+    }
+    draftInput.value?.focus();
+    draftInput.value?.select();
+    return;
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelRootDraft();
+  }
+}
+
+function onDraftInputBlur(): void {
+  commitRootDraft(draftName.value);
+}
 
 function onRootDragEnter(event: DragEvent): void {
   if (event.defaultPrevented) return;
@@ -53,7 +115,22 @@ function onRootDrop(event: DragEvent): void {
     @dragover="onRootDragOver"
     @dragleave="(event) => emit('dragLeaveRoot', event)"
     @drop="onRootDrop"
-  >
+>
+    <li v-if="hasRootDraft" class="tree-node-draft" role="none">
+      <label class="tree-item tree-node-draft-item" @mousedown="(event) => event.stopPropagation()">
+        <span class="tree-disclosure tree-disclosure-placeholder" aria-hidden="true"></span>
+        <input
+          ref="draftInput"
+          class="tree-draft-input"
+          type="text"
+          :value="draftName"
+          aria-label="New file or folder name"
+          @input="onDraftInput"
+          @blur="onDraftInputBlur"
+          @keydown="onDraftInputKeydown"
+        />
+      </label>
+    </li>
     <FileTreeNode
       v-for="entry in rootEntries"
       :key="entry.path"
