@@ -32,7 +32,9 @@ const emit = defineEmits<{
 }>();
 
 const hasRootDraft = computed(
-  () => (props.pendingCreation?.kind === 'file' || props.pendingCreation?.kind === 'folder') && props.pendingCreation?.parentPath === '',
+  () =>
+    (props.pendingCreation?.kind === 'file' || props.pendingCreation?.kind === 'folder') &&
+    props.pendingCreation?.parentPath === '',
 );
 const draftName = ref('Untitled');
 const draftInput = ref<HTMLInputElement>();
@@ -101,7 +103,6 @@ function onRootDrop(event: DragEvent): void {
   event.preventDefault();
   emit('dropOnRoot', event);
 }
-
 </script>
 
 <template>

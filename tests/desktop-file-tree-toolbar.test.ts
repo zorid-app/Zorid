@@ -100,21 +100,17 @@ describe('desktop file tree toolbar contract', () => {
 
   it('mounts with an accessible sort select that changes rendered file order', async () => {
     vi.stubGlobal('prompt', vi.fn());
-    Object.defineProperty(
-      window,
-      'zoridDesktop',
-      {
-        configurable: true,
-        value: createZoridDesktopMock({
-          listVault: (path = '') =>
-            Promise.resolve(
-              path === ''
-                ? [entry('FolderB', 'directory', 20), entry('c.md', 'file', 30), entry('a.md', 'file', 10)]
-                : [],
-            ),
-        }),
-      },
-    );
+    Object.defineProperty(window, 'zoridDesktop', {
+      configurable: true,
+      value: createZoridDesktopMock({
+        listVault: (path = '') =>
+          Promise.resolve(
+            path === ''
+              ? [entry('FolderB', 'directory', 20), entry('c.md', 'file', 30), entry('a.md', 'file', 10)]
+              : [],
+          ),
+      }),
+    });
 
     const { default: App } = await import('../apps/desktop/src/renderer/src/App.vue');
     const wrapper = mount(App, {
@@ -191,10 +187,7 @@ describe('desktop file tree toolbar contract', () => {
     await draftInput.trigger('blur');
     await flush();
 
-    expect((desk.createMarkdownFile as vi.Mock).mock.calls).toEqual([[
-      'Untitled2.md',
-      '# Untitled2\n',
-    ]]);
+    expect((desk.createMarkdownFile as vi.Mock).mock.calls).toEqual([['Untitled2.md', '# Untitled2\n']]);
   });
 
   it('keeps editing when Enter is pressed with an empty name and commits on Enter with content', async () => {
@@ -233,16 +226,13 @@ describe('desktop file tree toolbar contract', () => {
     await flush();
 
     expect(wrapper.find('.tree-draft-input').exists()).toBe(true);
-    expect((desk.createMarkdownFile as vi.Mock)).not.toHaveBeenCalled();
+    expect(desk.createMarkdownFile as vi.Mock).not.toHaveBeenCalled();
 
     await draftInput.setValue('  New Note  ');
     await draftInput.trigger('keydown', { key: 'Enter' });
     await flush();
 
-    expect((desk.createMarkdownFile as vi.Mock).mock.calls).toEqual([[
-      'New Note.md',
-      '# New Note\n',
-    ]]);
+    expect((desk.createMarkdownFile as vi.Mock).mock.calls).toEqual([['New Note.md', '# New Note\n']]);
   });
 
   it('applies the same inline flow for folders', async () => {

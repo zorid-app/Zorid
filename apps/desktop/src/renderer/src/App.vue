@@ -10,9 +10,9 @@ import AppStatusBar from './components/AppStatusBar.vue';
 import CommandPaletteWindow from './components/CommandPaletteWindow.vue';
 import FileTree from './components/FileTree.vue';
 import {
+  entryName,
   FILE_TREE_SORT_MODES,
   type FileTreeSortMode,
-  entryName,
   sortEntries,
   sortModeLabel,
 } from './components/file-tree-model.js';
@@ -856,7 +856,8 @@ function finalizeCreateEntry(kind: TreeCreateKind, parentPath: string, name: str
     const trimmed = name.trim();
     const rawName = trimmed || defaultDraftName;
     const normalizedBaseName = kind === 'file' ? normalizeCreateFileName(rawName) : rawName;
-    const nameToCreate = kind === 'file' || kind === 'folder' ? ensureUniqueEntryName(parentPath, normalizedBaseName) : rawName;
+    const nameToCreate =
+      kind === 'file' || kind === 'folder' ? ensureUniqueEntryName(parentPath, normalizedBaseName) : rawName;
     const path = parentPath ? `${parentPath}/${nameToCreate}` : nameToCreate;
 
     error.value = undefined;
