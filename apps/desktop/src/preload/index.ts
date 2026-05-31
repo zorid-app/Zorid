@@ -22,6 +22,7 @@ const editor: DesktopEditorBridge = {
   getIndexStatus: () => ipcRenderer.invoke('zorid:get-index-status'),
   rebuildIndex: () => ipcRenderer.invoke('zorid:rebuild-index'),
   searchIndex: (query) => ipcRenderer.invoke('zorid:search-index', query),
+  searchIndexCandidates: (query) => ipcRenderer.invoke('zorid:search-index-candidates', query),
   getBacklinks: (path) => ipcRenderer.invoke('zorid:get-backlinks', path),
   listTags: () => ipcRenderer.invoke('zorid:list-tags'),
   getOutline: (path) => ipcRenderer.invoke('zorid:get-outline', path),

@@ -65,6 +65,39 @@ export interface SearchResultDto {
   readonly excerpt: string;
 }
 
+export interface SearchCandidateDto {
+  readonly value: string;
+  readonly replacement: string;
+}
+
+type SearchOperatorKind = 'path' | 'file' | 'tag' | 'line' | 'section' | 'property-exists' | 'property-value';
+
+interface SearchOperatorClause {
+  readonly kind: SearchOperatorKind;
+  readonly key?: string;
+  readonly value?: string;
+}
+
+interface ParsedSearchQuery {
+  readonly bareTerms: readonly string[];
+  readonly operatorClauses: readonly SearchOperatorClause[];
+  readonly hasOperatorSyntax: boolean;
+}
+
+interface SearchCandidateContext {
+  readonly kind: 'path' | 'file' | 'tag' | 'property-key' | 'property-value';
+  readonly fragment: string;
+  readonly propertyKey?: string;
+}
+
+interface SearchCandidateCorpus {
+  readonly pathValues: readonly string[];
+  readonly fileValues: readonly string[];
+  readonly tagValues: readonly string[];
+  readonly propertyKeys: readonly string[];
+  readonly propertyValuesByKey: ReadonlyMap<string, readonly string[]>;
+}
+
 export interface BacklinkDto {
   readonly fromPath: VaultPath;
   readonly excerpt: string;
@@ -378,6 +411,8 @@ export class DesktopRuntime {
   #indexStatus: IndexStatusDto = { state: 'idle', fileCount: 0, diagnostics: [] };
   #settingsValues = new Map<string, JsonValue>();
   #placeholderCommands = new Map<string, Disposable>();
+  #searchCandidateCorpus: SearchCandidateCorpus | undefined;
+  #searchCandidateCorpusStore: IndexStore | undefined;
 
   constructor(options: DesktopRuntimeOptions = {}) {
     const manifests = options.manifests ?? corePluginManifests;
@@ -430,6 +465,8 @@ export class DesktopRuntime {
     this.#vaultServiceRegistration?.dispose();
     this.#indexServiceRegistration?.dispose();
     this.#indexStore?.dispose();
+    this.#searchCandidateCorpus = undefined;
+    this.#searchCandidateCorpusStore = undefined;
     this.#activeVault = createVaultService(root);
     this.#indexStore = new NodeSqliteIndexStore(path.join(this.#activeVault.root, '.zorid', 'index', 'index.sqlite'));
     this.#vaultServiceRegistration = this.kernel.services.register('vault', this.#activeVault);
@@ -562,6 +599,12 @@ export class DesktopRuntime {
   searchIndex(query: string): readonly SearchResultDto[] {
     const store = this.#indexStore;
     if (!store) return [];
+    const parsed = this.parseSearchQuery(query);
+    if (!parsed.hasOperatorSyntax || parsed.operatorClauses.length === 0) return this.searchIndexFullText(store, query);
+    return this.searchIndexWithOperators(store, parsed);
+  }
+
+  searchIndexFullText(store: IndexStore, query: string): readonly SearchResultDto[] {
     const needle = query.trim().replace(/^#/, '').toLowerCase();
     if (!needle) return [];
     if (store instanceof NodeSqliteIndexStore) {
@@ -575,6 +618,59 @@ export class DesktopRuntime {
       });
     }
     return this.fallbackSearch(store, needle);
+  }
+
+  searchIndexWithOperators(store: IndexStore, parsed: ParsedSearchQuery): readonly SearchResultDto[] {
+    return store
+      .all()
+      .filter((record) => this.recordMatchesOperatorQuery(record, parsed))
+      .map((record) => ({
+        path: record.path,
+        title: record.headings[0] ?? path.basename(String(record.path)),
+        excerpt: this.operatorExcerpt(record, parsed),
+      }))
+      .sort((a, b) => String(a.path).localeCompare(String(b.path)))
+      .slice(0, 50);
+  }
+
+  searchIndexCandidates(query: string): readonly SearchCandidateDto[] {
+    const store = this.#indexStore;
+    if (!store) return [];
+    const context = this.parseSearchCandidateContext(query);
+    if (!context) return [];
+    const corpus = this.searchCandidateCorpus(store);
+    const normalizedFragment = this.normalizeSearchValue(context.fragment);
+    const includesFragment = (value: string): boolean =>
+      normalizedFragment.length === 0 || value.toLowerCase().includes(normalizedFragment);
+    const toCandidate = (value: string): SearchCandidateDto => ({
+      value,
+      replacement: this.searchCandidateReplacement(context, value),
+    });
+    const select = (values: readonly string[]): readonly SearchCandidateDto[] =>
+      values
+        .filter((value) => includesFragment(value))
+        .slice(0, 200)
+        .map(toCandidate);
+
+    if (context.kind === 'path') {
+      return select(corpus.pathValues);
+    }
+    if (context.kind === 'file') {
+      return select(corpus.fileValues);
+    }
+    if (context.kind === 'tag') {
+      return select(corpus.tagValues);
+    }
+    if (context.kind === 'property-key') {
+      return select(corpus.propertyKeys);
+    }
+    if (context.kind === 'property-value') {
+      const propertyKey = this.normalizeSearchValue(context.propertyKey ?? '');
+      if (!propertyKey) return [];
+      const values = corpus.propertyValuesByKey.get(propertyKey) ?? [];
+      return select(values);
+    }
+    return [];
   }
 
   getBacklinks(vaultPath: string): readonly BacklinkDto[] {
@@ -846,6 +942,8 @@ export class DesktopRuntime {
     this.kernel.events.emit('metadata:index-status', this.#indexStatus);
   }
   #emitIndexUpdated(paths: readonly VaultPath[]): void {
+    this.#searchCandidateCorpus = undefined;
+    this.#searchCandidateCorpusStore = undefined;
     this.kernel.events.emit('metadata:index-updated', { paths });
   }
   #isIndexableFile(path: VaultPath): boolean {
@@ -877,6 +975,36 @@ export class DesktopRuntime {
     return line.slice(0, 180);
   }
 
+  operatorExcerpt(record: IndexedFileRecord, parsed: ParsedSearchQuery): string {
+    const lineClauses = parsed.operatorClauses.filter((clause) => clause.kind === 'line' && clause.value);
+    for (const clause of lineClauses) {
+      const match = this.findLineMatch(record, clause.value ?? '');
+      if (match) return match.slice(0, 180);
+    }
+    const sectionClauses = parsed.operatorClauses.filter((clause) => clause.kind === 'section' && clause.value);
+    for (const clause of sectionClauses) {
+      const section = this.findSectionMatch(record, clause.value ?? '');
+      if (!section) continue;
+      const heading = section.split(/\r?\n/).find((line) => /^#{1,6}\s+/.test(line.trim()));
+      if (heading) return heading.slice(0, 180);
+      const line = section.split(/\r?\n/).find((candidate) => candidate.trim().length > 0);
+      if (line) return line.slice(0, 180);
+    }
+    const terms = [
+      ...parsed.bareTerms,
+      ...parsed.operatorClauses
+        .map((clause) => clause.value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ];
+    for (const term of terms) {
+      const normalized = this.normalizeSearchValue(term);
+      if (!normalized) continue;
+      const line = record.text.split(/\r?\n/).find((candidate) => candidate.toLowerCase().includes(normalized));
+      if (line) return line.slice(0, 180);
+    }
+    return (record.text.split(/\r?\n/)[0] ?? '').slice(0, 180);
+  }
+
   fallbackSearch(store: IndexStore, needle: string): readonly SearchResultDto[] {
     return store
       .all()
@@ -892,6 +1020,312 @@ export class DesktopRuntime {
         excerpt: this.excerpt(record, needle),
       }))
       .slice(0, 50);
+  }
+
+  parseSearchQuery(query: string): ParsedSearchQuery {
+    const tokens = this.tokenizeSearchQuery(query);
+    const bareTerms: string[] = [];
+    const operatorClauses: SearchOperatorClause[] = [];
+    let hasOperatorSyntax = false;
+
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      if (!token) continue;
+      const propertyClause = this.parsePropertyClause(token);
+      if (propertyClause) {
+        operatorClauses.push(propertyClause);
+        hasOperatorSyntax = true;
+        continue;
+      }
+      if (this.isPropertyLikeToken(token)) {
+        hasOperatorSyntax = true;
+        continue;
+      }
+      const operatorMatch = token.match(/^(path|file|tag|line|section):(.*)$/i);
+      if (!operatorMatch) {
+        bareTerms.push(this.normalizeSearchValue(token));
+        continue;
+      }
+      hasOperatorSyntax = true;
+      const kind = operatorMatch[1]?.toLowerCase() as Exclude<SearchOperatorKind, 'property-exists' | 'property-value'>;
+      let rawValue = operatorMatch[2] ?? '';
+      const nextToken = tokens[index + 1];
+      if (!rawValue && typeof nextToken === 'string' && !this.tokenStartsOperator(nextToken)) {
+        rawValue = nextToken;
+        index += 1;
+      }
+      const value = this.normalizeSearchValue(rawValue);
+      if (!value) continue;
+      operatorClauses.push({ kind, value });
+    }
+
+    return {
+      bareTerms: bareTerms.filter((term) => term.length > 0),
+      operatorClauses,
+      hasOperatorSyntax,
+    };
+  }
+
+  tokenizeSearchQuery(query: string): readonly string[] {
+    const tokens: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    let escaped = false;
+    for (const char of query) {
+      if (escaped) {
+        current += char;
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        current += char;
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inQuotes = !inQuotes;
+        current += char;
+        continue;
+      }
+      if (!inQuotes && /\s/.test(char)) {
+        if (current.trim()) tokens.push(current.trim());
+        current = '';
+        continue;
+      }
+      current += char;
+    }
+    if (current.trim()) tokens.push(current.trim());
+    return tokens;
+  }
+
+  parseSearchCandidateContext(query: string): SearchCandidateContext | undefined {
+    if (!query.trim() || /\s$/.test(query)) return undefined;
+    const tokens = this.tokenizeSearchQuery(query);
+    const token = tokens.at(-1);
+    if (!token) return undefined;
+
+    const operatorMatch = token.match(/^(path|file|tag):(.*)$/i);
+    if (operatorMatch) {
+      const kindToken = operatorMatch[1];
+      if (!kindToken) return undefined;
+      const kind = kindToken.toLowerCase() as 'path' | 'file' | 'tag';
+      const fragment = this.normalizeCandidateFragment(operatorMatch[2] ?? '');
+      return { kind, fragment };
+    }
+
+    const propertyValueMatch = token.match(/^\[([^\]:]+):([^\]]*)$/);
+    if (propertyValueMatch) {
+      return {
+        kind: 'property-value',
+        propertyKey: this.normalizeSearchValue(propertyValueMatch[1] ?? ''),
+        fragment: this.normalizeCandidateFragment(propertyValueMatch[2] ?? ''),
+      };
+    }
+
+    const propertyKeyMatch = token.match(/^\[([^\]]*)$/);
+    if (propertyKeyMatch) {
+      return {
+        kind: 'property-key',
+        fragment: this.normalizeCandidateFragment(propertyKeyMatch[1] ?? ''),
+      };
+    }
+    return undefined;
+  }
+
+  parsePropertyClause(token: string): SearchOperatorClause | undefined {
+    const valueClause = token.match(/^\[([^\]\s:]+):(.+)\]$/);
+    if (valueClause) {
+      const key = this.normalizeSearchValue(valueClause[1] ?? '');
+      const value = this.normalizeSearchValue(valueClause[2] ?? '');
+      if (!key || !value) return undefined;
+      return { kind: 'property-value', key, value };
+    }
+    const existsClause = token.match(/^\[([^\]\s:]+)\]$/);
+    if (!existsClause) return undefined;
+    const key = this.normalizeSearchValue(existsClause[1] ?? '');
+    if (!key) return undefined;
+    return { kind: 'property-exists', key };
+  }
+
+  isPropertyLikeToken(token: string): boolean {
+    return token.startsWith('[') && (token.includes(':') || token.endsWith(']'));
+  }
+
+  tokenStartsOperator(token: string): boolean {
+    return /^(path|file|tag|line|section):/i.test(token) || token.startsWith('[');
+  }
+
+  normalizeSearchValue(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    const quoted = trimmed.match(/^"((?:\\.|[^"\\])*)"$/);
+    if (!quoted) return trimmed.toLowerCase();
+    const quotedValue = quoted[1];
+    if (quotedValue === undefined) return '';
+    return quotedValue.replace(/\\"/g, '"').replace(/\\\\/g, '\\').toLowerCase();
+  }
+
+  normalizeCandidateFragment(value: string): string {
+    return value.trim().replace(/^"/, '').replace(/\\"/g, '"').toLowerCase();
+  }
+
+  searchCandidateReplacement(context: SearchCandidateContext, value: string): string {
+    if (context.kind === 'path' || context.kind === 'file' || context.kind === 'tag') {
+      return `${context.kind}:${this.quoteSearchValueIfNeeded(value)}`;
+    }
+    if (context.kind === 'property-key') return `[${value}]`;
+    return `[${context.propertyKey ?? ''}:${this.quoteSearchValueIfNeeded(value)}]`;
+  }
+
+  quoteSearchValueIfNeeded(value: string): string {
+    if (!/\s/.test(value)) return value;
+    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+
+  searchCandidateCorpus(store: IndexStore): SearchCandidateCorpus {
+    if (this.#searchCandidateCorpus && this.#searchCandidateCorpusStore === store) return this.#searchCandidateCorpus;
+
+    const pathValues = new Set<string>();
+    const fileValues = new Set<string>();
+    const tagValues = new Set<string>();
+    const propertyKeys = new Set<string>();
+    const propertyValuesByKey = new Map<string, Set<string>>();
+
+    for (const record of store.all()) {
+      const recordPath = String(record.path);
+      if (!recordPath.startsWith('.zorid/')) {
+        pathValues.add(recordPath);
+        fileValues.add(path.basename(recordPath));
+      }
+      const segments = recordPath.split('/');
+      for (let index = 1; index < segments.length; index += 1) {
+        const prefix = segments.slice(0, index).join('/');
+        if (prefix && !prefix.startsWith('.zorid/')) pathValues.add(prefix);
+      }
+
+      for (const tag of record.tags) tagValues.add(tag);
+
+      for (const [key, rawValue] of Object.entries(record.fields)) {
+        propertyKeys.add(key);
+        const normalizedKey = key.toLowerCase();
+        const values = propertyValuesByKey.get(normalizedKey) ?? new Set<string>();
+        if (Array.isArray(rawValue)) {
+          for (const value of rawValue) values.add(String(value));
+        } else {
+          values.add(String(rawValue));
+        }
+        propertyValuesByKey.set(normalizedKey, values);
+      }
+    }
+
+    const sortedValuesByKey = new Map<string, readonly string[]>();
+    for (const [key, values] of propertyValuesByKey.entries()) {
+      sortedValuesByKey.set(
+        key,
+        [...values].sort((a, b) => a.localeCompare(b)),
+      );
+    }
+
+    this.#searchCandidateCorpusStore = store;
+    this.#searchCandidateCorpus = {
+      pathValues: [...pathValues].sort((a, b) => a.localeCompare(b)),
+      fileValues: [...fileValues].sort((a, b) => a.localeCompare(b)),
+      tagValues: [...tagValues].sort((a, b) => a.localeCompare(b)),
+      propertyKeys: [...propertyKeys].sort((a, b) => a.localeCompare(b)),
+      propertyValuesByKey: sortedValuesByKey,
+    };
+    return this.#searchCandidateCorpus;
+  }
+
+  recordMatchesOperatorQuery(record: IndexedFileRecord, parsed: ParsedSearchQuery): boolean {
+    const haystack = [record.path, record.text, ...record.headings, ...record.tags.map((tag) => `#${tag}`)]
+      .join('\n')
+      .toLowerCase();
+    for (const term of parsed.bareTerms) {
+      if (!haystack.includes(term)) return false;
+    }
+    return parsed.operatorClauses.every((clause) => this.matchesOperatorClause(record, clause));
+  }
+
+  matchesOperatorClause(record: IndexedFileRecord, clause: SearchOperatorClause): boolean {
+    if (clause.kind === 'path')
+      return String(record.path)
+        .toLowerCase()
+        .includes(this.normalizeSearchValue(clause.value ?? ''));
+    if (clause.kind === 'file')
+      return path
+        .basename(String(record.path))
+        .toLowerCase()
+        .includes(this.normalizeSearchValue(clause.value ?? ''));
+    if (clause.kind === 'tag') {
+      const expected = this.normalizeSearchValue(clause.value ?? '').replace(/^#/, '');
+      return record.tags.some((tag) => tag.toLowerCase() === expected);
+    }
+    if (clause.kind === 'line') return Boolean(this.findLineMatch(record, clause.value ?? ''));
+    if (clause.kind === 'section') return Boolean(this.findSectionMatch(record, clause.value ?? ''));
+    if (clause.kind === 'property-exists') return this.propertyExists(record, clause.key ?? '');
+    if (clause.kind === 'property-value') return this.propertyMatches(record, clause.key ?? '', clause.value ?? '');
+    return false;
+  }
+
+  findLineMatch(record: IndexedFileRecord, query: string): string | undefined {
+    const terms = this.normalizeSearchValue(query).split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return undefined;
+    return record.text.split(/\r?\n/).find((line) => terms.every((term) => line.toLowerCase().includes(term)));
+  }
+
+  findSectionMatch(record: IndexedFileRecord, query: string): string | undefined {
+    const terms = this.normalizeSearchValue(query).split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return undefined;
+    const sections = this.splitMarkdownSections(record.text);
+    return sections.find((section) => {
+      const normalized = section.toLowerCase();
+      return terms.every((term) => normalized.includes(term));
+    });
+  }
+
+  splitMarkdownSections(text: string): readonly string[] {
+    const lines = text.split(/\r?\n/);
+    const sections: string[] = [];
+    let current: string[] = [];
+    for (const line of lines) {
+      if (/^#{1,6}\s+/.test(line.trim()) && current.length > 0) {
+        sections.push(current.join('\n'));
+        current = [line];
+      } else {
+        current.push(line);
+      }
+    }
+    if (current.length > 0) sections.push(current.join('\n'));
+    return sections;
+  }
+
+  propertyExists(record: IndexedFileRecord, key: string): boolean {
+    const expected = this.normalizeSearchValue(key);
+    return Object.keys(record.fields).some((fieldKey) => fieldKey.toLowerCase() === expected);
+  }
+
+  propertyMatches(record: IndexedFileRecord, key: string, query: string): boolean {
+    const expectedKey = this.normalizeSearchValue(key);
+    const valueEntry = Object.entries(record.fields).find(([fieldKey]) => fieldKey.toLowerCase() === expectedKey);
+    if (!valueEntry) return false;
+    return this.matchesFieldValue(valueEntry[1], query);
+  }
+
+  matchesFieldValue(value: JsonValue, query: string): boolean {
+    const normalized = this.normalizeSearchValue(query);
+    if (normalized.length === 0) return false;
+    if (Array.isArray(value)) return value.some((item) => this.matchesFieldValue(item as JsonValue, query));
+    if (typeof value === 'string') return value.toLowerCase().includes(normalized);
+    if (typeof value === 'number') {
+      const expected = Number(normalized);
+      return Number.isFinite(expected) && value === expected;
+    }
+    if (typeof value === 'boolean') {
+      if (normalized !== 'true' && normalized !== 'false') return false;
+      return value === (normalized === 'true');
+    }
+    return false;
   }
 
   validateFields(

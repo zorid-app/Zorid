@@ -21,6 +21,7 @@ const props = defineProps<{
   selectedTabId?: string | undefined;
   leftCollapsed: boolean;
   rightCollapsed: boolean;
+  leftPaneTab: 'files' | 'search' | 'bookmarks';
 }>();
 const emit = defineEmits<{
   activate: [tabId: string];
@@ -28,11 +29,11 @@ const emit = defineEmits<{
   newTab: [];
   toggleLeftPane: [];
   toggleRightPane: [];
+  updateLeftPaneTab: [tab: 'files' | 'search' | 'bookmarks'];
 }>();
 
 const tabLabelEls = new Map<string, HTMLSpanElement>();
 const truncatedTabIds = reactive<Record<string, boolean>>({});
-const selectedLeftPaneTab = ref<'files' | 'search' | 'bookmarks'>('files');
 const selectedRightPaneTab = ref<'links' | 'outline'>('links');
 
 function setTabLabelRef(tabId: string, element: Element | null | unknown): void {
@@ -63,9 +64,9 @@ async function updateTabOverflow(tabId: string): Promise<void> {
           class="titlebar-action titlebar-pane-tab"
           label="Files"
           role="tab"
-          :aria-selected="selectedLeftPaneTab === 'files'"
-          :data-active="selectedLeftPaneTab === 'files' ? 'true' : 'false'"
-          @click="selectedLeftPaneTab = 'files'"
+          :aria-selected="leftPaneTab === 'files'"
+          :data-active="leftPaneTab === 'files' ? 'true' : 'false'"
+          @click="emit('updateLeftPaneTab', 'files')"
         >
           <FolderOpen class="titlebar-action-icon" aria-hidden="true" />
         </ZIconButton>
@@ -73,9 +74,9 @@ async function updateTabOverflow(tabId: string): Promise<void> {
           class="titlebar-action titlebar-pane-tab"
           label="Search"
           role="tab"
-          :aria-selected="selectedLeftPaneTab === 'search'"
-          :data-active="selectedLeftPaneTab === 'search' ? 'true' : 'false'"
-          @click="selectedLeftPaneTab = 'search'"
+          :aria-selected="leftPaneTab === 'search'"
+          :data-active="leftPaneTab === 'search' ? 'true' : 'false'"
+          @click="emit('updateLeftPaneTab', 'search')"
         >
           <Search class="titlebar-action-icon" aria-hidden="true" />
         </ZIconButton>
@@ -83,9 +84,9 @@ async function updateTabOverflow(tabId: string): Promise<void> {
           class="titlebar-action titlebar-pane-tab"
           label="Bookmarks"
           role="tab"
-          :aria-selected="selectedLeftPaneTab === 'bookmarks'"
-          :data-active="selectedLeftPaneTab === 'bookmarks' ? 'true' : 'false'"
-          @click="selectedLeftPaneTab = 'bookmarks'"
+          :aria-selected="leftPaneTab === 'bookmarks'"
+          :data-active="leftPaneTab === 'bookmarks' ? 'true' : 'false'"
+          @click="emit('updateLeftPaneTab', 'bookmarks')"
         >
           <Bookmark class="titlebar-action-icon" aria-hidden="true" />
         </ZIconButton>

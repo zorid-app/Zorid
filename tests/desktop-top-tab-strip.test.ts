@@ -21,6 +21,7 @@ describe('desktop top tab strip', () => {
         selectedTabId: file.id,
         leftCollapsed: false,
         rightCollapsed: false,
+        leftPaneTab: 'files',
       },
     });
 
@@ -34,12 +35,14 @@ describe('desktop top tab strip', () => {
     await wrapper.find('[aria-label="New tab"]').trigger('click');
     await wrapper.find('[aria-label="Hide file tree pane"]').trigger('click');
     await wrapper.find('[aria-label="Hide right pane"]').trigger('click');
+    await wrapper.find('[aria-label="Search"]').trigger('click');
 
     expect(wrapper.emitted('activate')?.[0]).toEqual([file.id]);
     expect(wrapper.emitted('close')?.[0]).toEqual([file.id]);
     expect(wrapper.emitted('newTab')).toHaveLength(1);
     expect(wrapper.emitted('toggleLeftPane')).toHaveLength(1);
     expect(wrapper.emitted('toggleRightPane')).toHaveLength(1);
+    expect(wrapper.emitted('updateLeftPaneTab')?.[0]).toEqual(['search']);
   });
 
   it('hides only the three nonfunctional left buttons when the file tree pane is collapsed', () => {
@@ -49,6 +52,7 @@ describe('desktop top tab strip', () => {
         selectedTabId: placeholder.id,
         leftCollapsed: true,
         rightCollapsed: true,
+        leftPaneTab: 'files',
       },
     });
 

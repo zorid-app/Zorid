@@ -12,6 +12,7 @@ import type {
   IndexStatusDto,
   MarkdownEmbedDto,
   OutlineItemDto,
+  SearchCandidateDto,
   SearchResultDto,
   SettingsSectionDto,
   SettingValueDto,
@@ -32,6 +33,7 @@ export type {
   IndexStatusDto,
   MarkdownEmbedDto,
   OutlineItemDto,
+  SearchCandidateDto,
   SearchResultDto,
   SettingsSectionDto,
   SettingValueDto,
@@ -67,6 +69,7 @@ export interface DesktopEditorBridge {
   getIndexStatus(): Promise<IndexStatusDto>;
   rebuildIndex(): Promise<IndexStatusDto>;
   searchIndex(query: string): Promise<readonly SearchResultDto[]>;
+  searchIndexCandidates(query: string): Promise<readonly SearchCandidateDto[]>;
   getBacklinks(path: string): Promise<readonly BacklinkDto[]>;
   listTags(): Promise<readonly TagDto[]>;
   getOutline(path: string): Promise<readonly OutlineItemDto[]>;

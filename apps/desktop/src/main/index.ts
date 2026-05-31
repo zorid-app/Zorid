@@ -233,6 +233,9 @@ ipcMain.handle('zorid:delete-vault-path', async (event, vaultPath: string) =>
 ipcMain.handle('zorid:get-index-status', async (event) => runtimeFor(event).getIndexStatus());
 ipcMain.handle('zorid:rebuild-index', async (event) => runtimeFor(event).rebuildIndex());
 ipcMain.handle('zorid:search-index', async (event, query: string) => runtimeFor(event).searchIndex(query));
+ipcMain.handle('zorid:search-index-candidates', async (event, query: string) =>
+  runtimeFor(event).searchIndexCandidates(query),
+);
 ipcMain.handle('zorid:get-backlinks', async (event, vaultPath: string) => runtimeFor(event).getBacklinks(vaultPath));
 ipcMain.handle('zorid:list-tags', async (event) => runtimeFor(event).listTags());
 ipcMain.handle('zorid:get-outline', async (event, vaultPath: string) => runtimeFor(event).getOutline(vaultPath));

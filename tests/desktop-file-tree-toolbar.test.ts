@@ -79,6 +79,7 @@ describe('desktop file tree toolbar contract', () => {
         listBases: vi.fn().mockResolvedValue([]),
         renderDataView: vi.fn().mockResolvedValue(undefined),
         searchIndex: vi.fn().mockResolvedValue([]),
+        searchIndexCandidates: vi.fn().mockResolvedValue([]),
         getBacklinks: vi.fn().mockResolvedValue([]),
         getOutline: vi.fn().mockResolvedValue([]),
         getFileFields: vi.fn().mockResolvedValue({ path: 'a.md', fields: [] }),
