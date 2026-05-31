@@ -12,6 +12,7 @@ import FileTree from './components/FileTree.vue';
 import {
   FILE_TREE_SORT_MODES,
   type FileTreeSortMode,
+  entryName,
   sortEntries,
   sortModeLabel,
 } from './components/file-tree-model.js';
@@ -58,6 +59,12 @@ import type {
 type JsonRecord = Record<string, unknown>;
 type ThemePreference = 'system' | 'light' | 'dark';
 type ResolvedTheme = 'light' | 'dark';
+type TreeCreateKind = 'file' | 'folder';
+
+interface PendingTreeCreate {
+  readonly kind: TreeCreateKind;
+  readonly parentPath: string;
+}
 
 const desktop = window.zoridDesktop as unknown as {
   getWindowRole(): Promise<WindowRole | undefined>;
@@ -118,6 +125,7 @@ const dragHoverDepthByPath: Record<string, number> = {};
 const FILE_TREE_DRAG_EXPAND_DELAY_MS = 500;
 let dragExpandTimer: ReturnType<typeof setTimeout> | undefined;
 const selectedPath = ref<string>();
+const pendingTreeCreate = ref<PendingTreeCreate>();
 const openTabs = ref<TopTabItem[]>([]);
 const selectedTabId = ref<string>();
 const placeholderTabCounter = ref(0);
@@ -183,6 +191,8 @@ const shellStyle = computed<CSSProperties>(() => ({
   '--traffic-light-space': `${SHELL_LAYOUT.trafficLightReservedWidth}px`,
   '--titlebar-pane-toggle-width': `${SHELL_LAYOUT.titlebarPaneToggleWidth}px`,
 }));
+const defaultDraftName = 'Untitled';
+const markdownExtension = '.md';
 const sortedEntriesByDirectory = computed<Record<string, readonly VaultEntry[]>>(() =>
   Object.fromEntries(
     Object.entries(entriesByDirectory.value).map(([directory, entries]) => [
@@ -805,33 +815,75 @@ async function handleTreeRootDrop(event: DragEvent): Promise<void> {
   await handleTreeDropTarget('', event);
 }
 
-async function createNote(): Promise<void> {
-  await runFileOperation(async () => {
-    const name = prompt('Markdown file path', 'Untitled.md');
-    if (!name) return;
-    await desktop.createMarkdownFile(name, `# ${name.replace(/\.md$/i, '')}\n`);
-    await loadDirectory('');
-    await refreshShellData();
-  });
+function resolveDirectoryEntries(path: string): readonly VaultEntry[] {
+  return sortedEntriesByDirectory.value[path] ?? [];
 }
 
-async function createFolder(): Promise<void> {
-  await runFileOperation(async () => {
-    const name = prompt('Folder path', 'Notes');
-    if (!name) return;
-    await desktop.createVaultFolder(name);
-    await loadDirectory('');
-    await refreshShellData();
-  });
+function normalizeCreateFileName(name: string): string {
+  if (name.toLowerCase().endsWith(markdownExtension)) return name;
+  return `${name}${markdownExtension}`;
 }
 
-async function runFileOperation(action: () => Promise<unknown>): Promise<void> {
-  error.value = undefined;
-  try {
-    await action();
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : String(caught);
+function splitNameAndSuffix(name: string): { base: string; suffix: string } {
+  const extensionIndex = name.lastIndexOf('.');
+  if (extensionIndex <= 0) return { base: name, suffix: '' };
+  return { base: name.slice(0, extensionIndex), suffix: name.slice(extensionIndex) };
+}
+
+function ensureUniqueEntryName(parentPath: string, rawName: string): string {
+  const existing = new Set(resolveDirectoryEntries(parentPath).map((entry) => entryName(entry).toLowerCase()));
+  if (!existing.has(rawName.toLowerCase())) return rawName;
+  const { base, suffix } = splitNameAndSuffix(rawName);
+  let attempt = 1;
+  let next = `${base}${attempt}${suffix}`;
+  while (existing.has(next.toLowerCase())) {
+    attempt += 1;
+    next = `${base}${attempt}${suffix}`;
   }
+  return next;
+}
+
+function beginCreateEntry(kind: TreeCreateKind): void {
+  pendingTreeCreate.value = { kind, parentPath: '' };
+}
+
+function cancelCreateEntry(): void {
+  pendingTreeCreate.value = undefined;
+}
+
+function finalizeCreateEntry(kind: TreeCreateKind, parentPath: string, name: string): void {
+  void (async () => {
+    const trimmed = name.trim();
+    const rawName = trimmed || defaultDraftName;
+    const normalizedBaseName = kind === 'file' ? normalizeCreateFileName(rawName) : rawName;
+    const nameToCreate = kind === 'file' || kind === 'folder' ? ensureUniqueEntryName(parentPath, normalizedBaseName) : rawName;
+    const path = parentPath ? `${parentPath}/${nameToCreate}` : nameToCreate;
+
+    error.value = undefined;
+    try {
+      if (kind === 'file') {
+        await desktop.createMarkdownFile(path, `# ${nameToCreate.replace(/\.md$/i, '')}\n`);
+      } else {
+        await desktop.createVaultFolder(path);
+      }
+      await loadDirectory('');
+      if (parentPath) await loadDirectory(parentPath);
+      await refreshShellData();
+      pendingTreeCreate.value = undefined;
+    } catch (caught) {
+      error.value = caught instanceof Error ? caught.message : String(caught);
+    }
+  })();
+}
+
+function createNote(): Promise<void> {
+  beginCreateEntry('file');
+  return Promise.resolve();
+}
+
+function createFolder(): Promise<void> {
+  beginCreateEntry('folder');
+  return Promise.resolve();
 }
 
 async function renameSelected(): Promise<void> {
@@ -1092,6 +1144,7 @@ onBeforeUnmount(() => {
         :selected-path="selectedPath"
         :dragging-path="draggingSourcePath"
         :drag-over-path="draggingOverPath"
+        :pending-creation="pendingTreeCreate"
         @open-entry="openEntry"
         @drag-start="handleTreeDragStart"
         @drag-end="handleTreeDragEnd"
@@ -1103,6 +1156,8 @@ onBeforeUnmount(() => {
         @drag-leave-root="handleTreeRootDragLeave"
         @drop-on-directory="handleTreeDrop"
         @drop-on-root="handleTreeRootDrop"
+        @draft-commit="(kind, parentPath, name) => finalizeCreateEntry(kind, parentPath, name)"
+        @draft-cancel="cancelCreateEntry"
       />
     </aside>
 

@@ -472,6 +472,41 @@ h2 {
   cursor: pointer;
 }
 
+.tree-node-draft {
+  margin: 1px 0;
+}
+
+.tree-node-draft-item {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: auto;
+}
+
+.tree-draft-input {
+  min-width: 0;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--z-color-text-soft);
+  font-size: 14px;
+  line-height: 1.32;
+  font-family: inherit;
+  outline: none;
+}
+
+.tree-node-draft-item:focus-within,
+.tree-node-draft-item:hover {
+  background: color-mix(in srgb, var(--z-control-bg) 62%, transparent);
+}
+
+.tree-node-draft-item:focus-within .tree-draft-input {
+  color: var(--z-color-text);
+}
+
 .tree-item:hover,
 .tree-item:focus-visible {
   color: var(--z-color-text);
