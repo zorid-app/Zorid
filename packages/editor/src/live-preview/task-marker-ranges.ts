@@ -69,9 +69,15 @@ function taskMarkerFromListPrefix(lineText: string, prefixEnd: number): boolean 
     index += 1;
 
   if (index >= lineText.length - 2) return false;
-  if (lineText.charCodeAt(index + 1) !== '['.charCodeAt(0)) return false;
-  if (lineText.charCodeAt(index + 3) !== ']'.charCodeAt(0)) return false;
-  if (lineText.charAt(index + 2) !== ' ' && lineText.charAt(index + 2) !== 'x' && lineText.charAt(index + 2) !== 'X')
+  if (lineText.charCodeAt(index) !== '['.charCodeAt(0)) return false;
+  if (lineText.charCodeAt(index + 2) !== ']'.charCodeAt(0)) return false;
+  if (lineText.charAt(index + 1) !== ' ' && lineText.charAt(index + 1) !== 'x' && lineText.charAt(index + 1) !== 'X')
+    return false;
+  if (
+    index + 3 < lineText.length &&
+    lineText.charCodeAt(index + 3) !== spaceCode &&
+    lineText.charCodeAt(index + 3) !== tabCode
+  )
     return false;
   return true;
 }
