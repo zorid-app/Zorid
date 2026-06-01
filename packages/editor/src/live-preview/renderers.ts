@@ -199,6 +199,11 @@ class TaskCheckboxPreviewWidget extends WidgetType {
 
     const toggle = () => {
       view.focus();
+      view.dispatch({
+        effects: setInternalLivePreviewFocused.of(true),
+        selection: { anchor: this.activateAt },
+        scrollIntoView: true,
+      });
       toggleTaskMarkerAtPosition(view, this.activateAt);
     };
 
