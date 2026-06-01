@@ -8,11 +8,22 @@ import {
   toggleTaskMarkerAtSelection,
 } from '../packages/editor/src/index';
 
-function runMarkdownEnter(text: string): string {
+function runMarkdownEnter(text: string, anchor = text.length): string {
   const parent = document.createElement('div');
   const editor = createMountedMarkdownEditor({ parent, text });
-  editor.view.dispatch({ selection: { anchor: text.length } });
+  editor.view.dispatch({ selection: { anchor } });
   expect(insertNewlineContinueMarkup(editor.view)).toBe(true);
+  const result = editor.getText();
+  editor.destroy();
+  return result;
+}
+
+function runKeyboardEnter(text: string, anchor = text.length): string {
+  const parent = document.createElement('div');
+  const editor = createMountedMarkdownEditor({ parent, text });
+  editor.focus();
+  editor.view.dispatch({ selection: { anchor } });
+  editor.view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
   const result = editor.getText();
   editor.destroy();
   return result;
@@ -39,12 +50,10 @@ describe('editor Markdown keymap behavior', () => {
   });
 
   it('exposes a conservative task toggle keymap without replacing Markdown Enter or Backspace', () => {
-    expect(markdownTaskKeymap).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ key: 'Enter' }),
-        expect.objectContaining({ key: 'Mod-Enter', run: toggleTaskMarkerAtSelection }),
-      ]),
-    );
+    expect(markdownTaskKeymap).toEqual([
+      expect.objectContaining({ key: 'Mod-Enter', run: toggleTaskMarkerAtSelection }),
+    ]);
+    expect(markdownTaskKeymap.map((binding) => binding.key)).not.toContain('Enter');
   });
 
   it('continues task markers when Enter is pressed at the marker boundary', () => {
@@ -69,6 +78,15 @@ describe('editor Markdown keymap behavior', () => {
 
   it('continues task lists through the official Markdown Enter command', () => {
     expect(runMarkdownEnter('- [ ] task')).toBe('- [ ] task\n- [ ] ');
+  });
+
+  it('continues task lists through keyboard Enter without inserting an extra blank line', () => {
+    expect(runKeyboardEnter('- [ ] asdfa')).toBe('- [ ] asdfa\n- [ ] ');
+  });
+
+  it('splits task list items through keyboard Enter without inserting an extra blank line', () => {
+    expect(runKeyboardEnter('- [ ] asdfa', '- [ ] a'.length)).toBe('- [ ] a\n- [ ] sdfa');
+    expect(runMarkdownEnter('- [ ] asdfa', '- [ ] a'.length)).toBe('- [ ] a\n- [ ] sdfa');
   });
 
   it('continues blockquotes through the official Markdown Enter command', () => {
