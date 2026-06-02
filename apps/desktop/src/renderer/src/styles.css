@@ -449,6 +449,34 @@ h2 {
   border-radius: var(--z-radius-sm);
 }
 
+.file-tree-context-menu {
+  position: fixed;
+  z-index: 60;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--z-color-border) 70%, transparent);
+  background: color-mix(in srgb, var(--z-background) 98%, transparent);
+  color: var(--z-color-text);
+  box-shadow: 0 12px 36px color-mix(in srgb, #000 12%, transparent);
+}
+
+.file-tree-context-menu button {
+  width: 100%;
+  border: 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+}
+
+.file-tree-context-menu button:hover {
+  color: var(--z-color-text);
+  background: color-mix(in srgb, var(--z-color-accent-muted) 46%, transparent);
+}
+
 .nested {
   margin: 1px 0 1px 20px;
   border-left: 1px solid color-mix(in srgb, var(--z-color-border) 60%, transparent);

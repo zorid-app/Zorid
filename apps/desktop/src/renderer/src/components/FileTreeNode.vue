@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import { entryName, entryTypeLabel } from '@zorid/file-explorer';
 import { computed } from 'vue';
 import type { VaultEntry } from '../types.js';
-import { entryName, entryTypeLabel } from './file-tree-model.js';
 
 const props = defineProps<{
   entry: VaultEntry;
@@ -19,6 +19,7 @@ const emit = defineEmits<{
   dragEnter: [entry: VaultEntry, event: DragEvent];
   dragLeave: [entry: VaultEntry, event: DragEvent];
   dropOnDirectory: [entry: VaultEntry, event: DragEvent];
+  contextMenu: [entry: VaultEntry, event: MouseEvent];
 }>();
 const displayName = computed(() => entryName(props.entry));
 const typeLabel = computed(() => entryTypeLabel(props.entry));
@@ -69,6 +70,11 @@ function onDrop(event: DragEvent): void {
   emit('dropOnDirectory', props.entry, event);
 }
 
+function onContextMenu(event: MouseEvent): void {
+  event.preventDefault();
+  emit('contextMenu', props.entry, event);
+}
+
 function isOutsideCurrentTarget(event: DragEvent): boolean {
   const current = event.currentTarget as Node | null;
   const related = event.relatedTarget as Node | null;
@@ -88,13 +94,14 @@ function isOutsideCurrentTarget(event: DragEvent): boolean {
     "
     @drop="onDrop"
   >
-    <button
+  <button
       type="button"
       class="tree-item"
       :class="{ selected: selectedPath === entry.path, dragging: isDragSource, 'drop-target': isDragTarget }"
       :draggable="true"
       :title="dropTooltip"
       @click="openEntry(entry)"
+      @contextmenu="onContextMenu"
       @dragstart="onDragStart"
       @dragend="onDragEnd"
     >
@@ -120,6 +127,7 @@ function isOutsideCurrentTarget(event: DragEvent): boolean {
         @drag-enter="(entry, event) => emit('dragEnter', entry, event)"
         @drag-leave="(entry, event) => emit('dragLeave', entry, event)"
         @drop-on-directory="(entry, event) => emit('dropOnDirectory', entry, event)"
+        @context-menu="(entry, event) => emit('contextMenu', entry, event)"
       />
     </ul>
   </li>

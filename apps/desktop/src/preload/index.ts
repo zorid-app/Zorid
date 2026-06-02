@@ -19,6 +19,7 @@ const editor: DesktopEditorBridge = {
   createMarkdownFile: (path, contents) => ipcRenderer.invoke('zorid:create-markdown-file', path, contents),
   renameVaultPath: (from, to) => ipcRenderer.invoke('zorid:rename-vault-path', from, to),
   deleteVaultPath: (path) => ipcRenderer.invoke('zorid:delete-vault-path', path),
+  revealVaultPath: (path) => ipcRenderer.invoke('zorid:reveal-vault-path', path),
   getIndexStatus: () => ipcRenderer.invoke('zorid:get-index-status'),
   rebuildIndex: () => ipcRenderer.invoke('zorid:rebuild-index'),
   searchIndex: (query) => ipcRenderer.invoke('zorid:search-index', query),

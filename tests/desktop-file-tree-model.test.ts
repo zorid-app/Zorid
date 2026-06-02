@@ -1,12 +1,6 @@
+import { entryName, entryTypeLabel, FILE_TREE_SORT_MODES, sortEntries, sortModeLabel } from '@zorid/file-explorer';
 import type { VaultEntry } from '@zorid/platform-api';
 import { describe, expect, it } from 'vitest';
-import {
-  entryName,
-  entryTypeLabel,
-  FILE_TREE_SORT_MODES,
-  sortEntries,
-  sortModeLabel,
-} from '../apps/desktop/src/renderer/src/components/file-tree-model';
 
 function entry(path: string, kind: VaultEntry['kind'], mtimeMs: number): VaultEntry {
   return { path, kind, mtimeMs, size: kind === 'directory' ? 0 : 10 } as VaultEntry;

@@ -23,6 +23,7 @@ const emit = defineEmits<{
   dragEnter: [entry: VaultEntry, event: DragEvent];
   dragLeave: [entry: VaultEntry, event: DragEvent];
   dropOnDirectory: [entry: VaultEntry, event: DragEvent];
+  contextMenu: [entry: VaultEntry, event: MouseEvent];
   dragOverRoot: [event: DragEvent];
   dragEnterRoot: [event: DragEvent];
   dragLeaveRoot: [event: DragEvent];
@@ -147,6 +148,7 @@ function onRootDrop(event: DragEvent): void {
       @drag-enter="(entry, event) => emit('dragEnter', entry, event)"
       @drag-leave="(entry, event) => emit('dragLeave', entry, event)"
       @drop-on-directory="(entry, event) => emit('dropOnDirectory', entry, event)"
+      @context-menu="(entry, event) => emit('contextMenu', entry, event)"
     />
   </ul>
 </template>

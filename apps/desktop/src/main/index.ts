@@ -238,6 +238,10 @@ ipcMain.handle('zorid:rename-vault-path', async (event, from: string, to: string
 ipcMain.handle('zorid:delete-vault-path', async (event, vaultPath: string) =>
   runtimeFor(event).deleteVaultPath(vaultPath),
 );
+ipcMain.handle('zorid:reveal-vault-path', async (event, vaultPath: string) => {
+  const resolved = runtimeFor(event).resolveVaultPath(vaultPath);
+  await shell.showItemInFolder(resolved);
+});
 ipcMain.handle('zorid:get-index-status', async (event) => runtimeFor(event).getIndexStatus());
 ipcMain.handle('zorid:rebuild-index', async (event) => runtimeFor(event).rebuildIndex());
 ipcMain.handle('zorid:search-index', async (event, query: string) => runtimeFor(event).searchIndex(query));

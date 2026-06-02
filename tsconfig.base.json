@@ -40,6 +40,7 @@
       "@zorid/plugin-backlinks": ["plugins/core/backlinks/src/index.ts"],
       "@zorid/plugin-outline": ["plugins/core/outline/src/index.ts"],
       "@zorid/plugin-tags": ["plugins/core/tags/src/index.ts"],
+      "@zorid/file-explorer": ["packages/file-explorer/src/index.ts"],
       "@zorid/plugin-status-bar": ["plugins/core/status-bar/src/index.ts"],
       "@zorid/plugin-fields": ["plugins/core/fields/src/index.ts"],
       "@zorid/plugin-data-views": ["plugins/core/data-views/src/index.ts"],

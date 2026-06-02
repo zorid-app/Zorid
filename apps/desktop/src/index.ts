@@ -66,6 +66,7 @@ export interface DesktopEditorBridge {
   createMarkdownFile(path: string, contents?: string): Promise<void>;
   renameVaultPath(from: string, to: string): Promise<void>;
   deleteVaultPath(path: string): Promise<void>;
+  revealVaultPath(path: string): Promise<void>;
   getIndexStatus(): Promise<IndexStatusDto>;
   rebuildIndex(): Promise<IndexStatusDto>;
   searchIndex(query: string): Promise<readonly SearchResultDto[]>;

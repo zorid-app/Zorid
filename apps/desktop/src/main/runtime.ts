@@ -484,6 +484,9 @@ export class DesktopRuntime {
     if (!this.#activeVault) throw new Error('No vault is open.');
     return this.#activeVault;
   }
+  resolveVaultPath(vaultPath: string): string {
+    return this.requireVault().resolve(normalizeVaultPath(vaultPath));
+  }
   async listVault(path = ''): Promise<readonly VaultEntry[]> {
     return this.requireVault().list(normalizeVaultPath(path));
   }

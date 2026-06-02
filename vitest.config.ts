@@ -27,6 +27,7 @@ export default defineConfig({
       '@zorid/plugin-file-explorer': fileURLToPath(
         new URL('./plugins/core/file-explorer/src/index.ts', import.meta.url),
       ),
+      '@zorid/file-explorer': fileURLToPath(new URL('./packages/file-explorer/src/index.ts', import.meta.url)),
       '@zorid/plugin-host': fileURLToPath(new URL('./packages/plugin-host/src/index.ts', import.meta.url)),
       '@zorid/plugin-outline': fileURLToPath(new URL('./plugins/core/outline/src/index.ts', import.meta.url)),
       '@zorid/plugin-search': fileURLToPath(new URL('./plugins/core/search/src/index.ts', import.meta.url)),

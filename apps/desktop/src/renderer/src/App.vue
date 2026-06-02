@@ -1,6 +1,18 @@
 <script setup lang="ts">
 import { ArrowDownUp, ChevronsDown, ChevronsUp, FilePlus, Files, FolderPlus, Link2, Search, Tag } from '@lucide/vue';
 import { createDesktopShellState } from '@zorid/desktop-shell';
+import {
+  entryName,
+  FILE_TREE_SORT_MODES,
+  type FileTreeContextAction,
+  type FileTreeSortMode,
+  fileTreeContextActions,
+  normalizeCreateFileName,
+  resolveUniqueEntryName,
+  sortEntries,
+  sortModeLabel,
+  splitNameAndSuffix,
+} from '@zorid/file-explorer';
 import { ZIconButton } from '@zorid/ui-vue';
 import type { Component, CSSProperties } from 'vue';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -9,13 +21,6 @@ import AppResizeHandle from './components/AppResizeHandle.vue';
 import AppStatusBar from './components/AppStatusBar.vue';
 import CommandPaletteWindow from './components/CommandPaletteWindow.vue';
 import FileTree from './components/FileTree.vue';
-import {
-  entryName,
-  FILE_TREE_SORT_MODES,
-  type FileTreeSortMode,
-  sortEntries,
-  sortModeLabel,
-} from './components/file-tree-model.js';
 import LeftSearchPane from './components/LeftSearchPane.vue';
 import MarkdownEditor from './components/MarkdownEditor.vue';
 import RightSidebarPanels from './components/RightSidebarPanels.vue';
@@ -129,6 +134,12 @@ const FILE_TREE_DRAG_EXPAND_DELAY_MS = 500;
 let dragExpandTimer: ReturnType<typeof setTimeout> | undefined;
 const selectedPath = ref<string>();
 const pendingTreeCreate = ref<PendingTreeCreate>();
+const treeContextMenu = ref<{
+  readonly entry: VaultEntry;
+  readonly actions: readonly FileTreeContextAction[];
+  x: number;
+  y: number;
+}>();
 const openTabs = ref<TopTabItem[]>([]);
 const selectedTabId = ref<string>();
 const placeholderTabCounter = ref(0);
@@ -177,6 +188,7 @@ let unsubscribeEditorSnapshot: (() => void) | undefined;
 let unsubscribeSettingUpdates: (() => void) | undefined;
 let stopSystemThemeWatcher: (() => void) | undefined;
 let stopDocumentThemeBinding: (() => void) | undefined;
+let stopTreeContextMenuDismiss: (() => void) | undefined;
 const autosave = createMarkdownAutosave({
   write: writeAutosaveSnapshot,
   onError: (caught) => {
@@ -197,7 +209,6 @@ const shellStyle = computed<CSSProperties>(() => ({
   '--titlebar-pane-toggle-width': `${SHELL_LAYOUT.titlebarPaneToggleWidth}px`,
 }));
 const defaultDraftName = 'Untitled';
-const markdownExtension = '.md';
 const sortedEntriesByDirectory = computed<Record<string, readonly VaultEntry[]>>(() =>
   Object.fromEntries(
     Object.entries(entriesByDirectory.value).map(([directory, entries]) => [
@@ -833,30 +844,6 @@ function resolveDirectoryEntries(path: string): readonly VaultEntry[] {
   return sortedEntriesByDirectory.value[path] ?? [];
 }
 
-function normalizeCreateFileName(name: string): string {
-  if (name.toLowerCase().endsWith(markdownExtension)) return name;
-  return `${name}${markdownExtension}`;
-}
-
-function splitNameAndSuffix(name: string): { base: string; suffix: string } {
-  const extensionIndex = name.lastIndexOf('.');
-  if (extensionIndex <= 0) return { base: name, suffix: '' };
-  return { base: name.slice(0, extensionIndex), suffix: name.slice(extensionIndex) };
-}
-
-function ensureUniqueEntryName(parentPath: string, rawName: string): string {
-  const existing = new Set(resolveDirectoryEntries(parentPath).map((entry) => entryName(entry).toLowerCase()));
-  if (!existing.has(rawName.toLowerCase())) return rawName;
-  const { base, suffix } = splitNameAndSuffix(rawName);
-  let attempt = 1;
-  let next = `${base}${attempt}${suffix}`;
-  while (existing.has(next.toLowerCase())) {
-    attempt += 1;
-    next = `${base}${attempt}${suffix}`;
-  }
-  return next;
-}
-
 function beginCreateEntry(kind: TreeCreateKind): void {
   pendingTreeCreate.value = { kind, parentPath: '' };
 }
@@ -871,20 +858,115 @@ function finalizeCreateEntry(kind: TreeCreateKind, parentPath: string, name: str
     const rawName = trimmed || defaultDraftName;
     const normalizedBaseName = kind === 'file' ? normalizeCreateFileName(rawName) : rawName;
     const nameToCreate =
-      kind === 'file' || kind === 'folder' ? ensureUniqueEntryName(parentPath, normalizedBaseName) : rawName;
-    const path = parentPath ? `${parentPath}/${nameToCreate}` : nameToCreate;
+      kind === 'file' || kind === 'folder'
+        ? resolveUniqueEntryName(resolveDirectoryEntries(parentPath), normalizedBaseName)
+        : rawName;
+    const newPath = parentPath ? `${parentPath}/${nameToCreate}` : nameToCreate;
 
     error.value = undefined;
     try {
       if (kind === 'file') {
-        await desktop.createMarkdownFile(path, `# ${nameToCreate.replace(/\.md$/i, '')}\n`);
+        await desktop.createMarkdownFile(newPath, `# ${nameToCreate.replace(/\.md$/i, '')}\n`);
       } else {
-        await desktop.createVaultFolder(path);
+        await desktop.createVaultFolder(newPath);
       }
       await loadDirectory('');
       if (parentPath) await loadDirectory(parentPath);
       await refreshShellData();
       pendingTreeCreate.value = undefined;
+    } catch (caught) {
+      error.value = caught instanceof Error ? caught.message : String(caught);
+    }
+  })();
+}
+
+function openTreeContextMenu(entry: VaultEntry, event: MouseEvent): void {
+  treeContextMenu.value = {
+    entry,
+    actions: fileTreeContextActions(entry),
+    x: event.clientX,
+    y: event.clientY,
+  };
+}
+
+function closeTreeContextMenu(): void {
+  treeContextMenu.value = undefined;
+}
+
+function shouldCloseTreeContextMenu(event: Event): void {
+  if (!treeContextMenu.value) return;
+  const target = event.target;
+  if (target instanceof Element && target.closest('.file-tree-context-menu')) return;
+  closeTreeContextMenu();
+}
+
+function parentDirectory(entry: VaultEntry): string {
+  if (!entry.path.includes('/')) return '';
+  const parts = entry.path.split('/');
+  parts.pop();
+  return parts.join('/');
+}
+
+async function duplicateEntry(entry: VaultEntry): Promise<void> {
+  if (entry.kind !== 'file') return;
+  const sourceText = await desktop.readVaultText(entry.path);
+  const entries = resolveDirectoryEntries(parentDirectory(entry));
+  const nextPath = `${parentDirectory(entry) ? `${parentDirectory(entry)}/` : ''}${resolveUniqueEntryName(
+    entries,
+    entryName(entry),
+  )}`;
+  await desktop.createMarkdownFile(nextPath, sourceText);
+  await loadDirectory('');
+  if (parentDirectory(entry)) await loadDirectory(parentDirectory(entry));
+}
+
+function updateTabsAfterRename(from: string, to: string): void {
+  selectedTabId.value = selectedTabId.value === fileTabId(from) ? fileTabId(to) : selectedTabId.value;
+  selectedPath.value = selectedPath.value === from ? to : selectedPath.value;
+  openTabs.value = openTabs.value.map((tab) => (tab.id === fileTabId(from) ? fileTab(to) : tab));
+}
+
+async function renameEntry(entry: VaultEntry): Promise<void> {
+  const next = prompt('Rename path', entry.path);
+  if (!next || next === entry.path) return;
+  await flushPendingAutosave();
+  await desktop.renameVaultPath(entry.path, next);
+  await loadDirectory('');
+  if (parentDirectory(entry)) await loadDirectory(parentDirectory(entry));
+  updateTabsAfterRename(entry.path, next);
+  await refreshShellData();
+}
+
+function revealEntry(entry: VaultEntry): Promise<void> {
+  return desktop.revealVaultPath(entry.path);
+}
+
+async function deleteEntry(entry: VaultEntry): Promise<void> {
+  await flushPendingAutosave();
+  const previous = entry.path;
+  const generalSettings = jsonRecord(settingValues.value['app:app.general']);
+  if (
+    generalSettings.confirmDeletes !== false &&
+    !confirm(`Delete ${previous}? This permanently removes the file from the vault.`)
+  )
+    return;
+  await desktop.deleteVaultPath(previous);
+  if (selectedPath.value === previous) {
+    await closeTab(fileTabId(previous));
+  }
+  await loadDirectory('');
+  await refreshShellData();
+}
+
+function handleTreeContextAction(entry: VaultEntry, action: FileTreeContextAction['id']): void {
+  closeTreeContextMenu();
+  void (async () => {
+    try {
+      if (action === 'rename') await renameEntry(entry);
+      if (action === 'reveal') await revealEntry(entry);
+      if (action === 'duplicate') await duplicateEntry(entry);
+      if (action === 'delete') await deleteEntry(entry);
+      error.value = undefined;
     } catch (caught) {
       error.value = caught instanceof Error ? caught.message : String(caught);
     }
@@ -1043,6 +1125,8 @@ onMounted(() => {
   startSystemThemeWatcher();
   stopDocumentThemeBinding = watch(effectiveTheme, applyDocumentTheme, { immediate: true });
   window.addEventListener('keydown', handleKeydown);
+  stopTreeContextMenuDismiss = () => window.removeEventListener('mousedown', shouldCloseTreeContextMenu);
+  window.addEventListener('mousedown', shouldCloseTreeContextMenu);
   unsubscribeSettingUpdates = desktop.onSettingUpdated(applySettingUpdate);
   void initializeWindow().catch((caught: unknown) => {
     error.value = caught instanceof Error ? caught.message : String(caught);
@@ -1058,6 +1142,7 @@ onBeforeUnmount(() => {
   unsubscribeIndexUpdates?.();
   unsubscribeEditorSnapshot?.();
   unsubscribeSettingUpdates?.();
+  stopTreeContextMenuDismiss?.();
   void flushPendingAutosave().catch((caught: unknown) => {
     error.value = caught instanceof Error ? caught.message : String(caught);
   });
@@ -1129,7 +1214,12 @@ onBeforeUnmount(() => {
       @open-settings="settingsOpen = true"
     />
 
-    <aside v-show="!paneLayout.leftCollapsed" class="sidebar" data-region="left-sidebar">
+    <aside
+      v-show="!paneLayout.leftCollapsed"
+      class="sidebar"
+      data-region="left-sidebar"
+      @click="closeTreeContextMenu"
+    >
       <template v-if="selectedLeftPaneTab === 'files'">
         <div class="file-pane-toolbar" aria-label="File actions">
           <ZIconButton label="New file" @click="createNote" :disabled="!vaultLabel">
@@ -1173,7 +1263,23 @@ onBeforeUnmount(() => {
           @drop-on-root="handleTreeRootDrop"
           @draft-commit="(kind, parentPath, name) => finalizeCreateEntry(kind, parentPath, name)"
           @draft-cancel="cancelCreateEntry"
+          @context-menu="openTreeContextMenu"
         />
+        <ul
+          v-if="treeContextMenu"
+          class="file-tree-context-menu"
+          :style="{ left: `${treeContextMenu.x}px`, top: `${treeContextMenu.y}px` }"
+          role="menu"
+          @click.stop
+          @mousedown.stop
+          @contextmenu.prevent
+        >
+          <li v-for="action in treeContextMenu.actions" :key="action.id" role="none">
+            <button type="button" role="menuitem" @click="handleTreeContextAction(treeContextMenu.entry, action.id)">
+              {{ action.label }}
+            </button>
+          </li>
+        </ul>
       </template>
       <LeftSearchPane
         v-else-if="selectedLeftPaneTab === 'search'"

@@ -114,6 +114,8 @@ importers:
         specifier: ^1.6.3
         version: 1.6.3
 
+  packages/file-explorer: {}
+
   packages/index-api: {}
 
   packages/index-worker: {}

@@ -1,4 +1,4 @@
-import type { VaultEntry } from '../types.js';
+import type { VaultEntry } from '@zorid/platform-api';
 
 export type FileTreeSortMode = 'name-asc' | 'name-desc' | 'modified-asc' | 'modified-desc';
 
@@ -8,6 +8,13 @@ export const FILE_TREE_SORT_MODES = [
   'modified-asc',
   'modified-desc',
 ] as const satisfies readonly FileTreeSortMode[];
+
+export type FileTreeContextActionKind = 'rename' | 'reveal' | 'duplicate' | 'delete';
+
+export interface FileTreeContextAction {
+  readonly id: FileTreeContextActionKind;
+  readonly label: string;
+}
 
 export function entryName(entry: Pick<VaultEntry, 'path'>): string {
   return entry.path.split('/').filter(Boolean).at(-1) ?? entry.path;
@@ -58,4 +65,43 @@ export function sortModeLabel(mode: FileTreeSortMode): string {
     case 'modified-desc':
       return 'Modified newest first';
   }
+}
+
+export function normalizeCreateFileName(name: string): string {
+  if (name.toLowerCase().endsWith('.md')) return name;
+  return `${name}.md`;
+}
+
+export function splitNameAndSuffix(name: string): { base: string; suffix: string } {
+  const extensionIndex = name.lastIndexOf('.');
+  if (extensionIndex <= 0) return { base: name, suffix: '' };
+  return { base: name.slice(0, extensionIndex), suffix: name.slice(extensionIndex) };
+}
+
+export function resolveUniqueEntryName(entries: readonly VaultEntry[], rawName: string): string {
+  const existing = new Set(entries.map((entry) => entryName(entry).toLowerCase()));
+  if (!existing.has(rawName.toLowerCase())) return rawName;
+
+  const { base, suffix } = splitNameAndSuffix(rawName);
+  let attempt = 1;
+  let next = `${base}${attempt}${suffix}`;
+  while (existing.has(next.toLowerCase())) {
+    attempt += 1;
+    next = `${base}${attempt}${suffix}`;
+  }
+
+  return next;
+}
+
+export function fileTreeContextActions(entry: Pick<VaultEntry, 'kind'>): readonly FileTreeContextAction[] {
+  const actions: FileTreeContextAction[] = [
+    { id: 'rename', label: 'Rename' },
+    { id: 'reveal', label: 'Reveal in file manager' },
+  ];
+
+  if (entry.kind === 'file') {
+    actions.splice(1, 0, { id: 'duplicate', label: 'Duplicate' });
+  }
+
+  return [...actions, { id: 'delete', label: 'Delete' }];
 }

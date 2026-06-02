@@ -14,6 +14,7 @@ const packageKinds = new Map([
   ['@zorid/mobile-shell', 'shell'],
   ['@zorid/desktop-app', 'app'],
   ['@zorid/mobile-app', 'app'],
+  ['@zorid/file-explorer', 'implementation'],
 ]);
 
 const implementationPackages = new Set([
