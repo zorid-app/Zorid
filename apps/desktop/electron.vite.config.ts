@@ -15,6 +15,7 @@ const workspaceAliases = {
   '@zorid/vault': path.resolve(repoRoot, 'packages/vault/src/index.ts'),
   '@zorid/workspace': path.resolve(repoRoot, 'packages/workspace/src/index.ts'),
   '@zorid/editor': path.resolve(repoRoot, 'packages/editor/src/index.ts'),
+  '@zorid/file-explorer': path.resolve(repoRoot, 'packages/file-explorer/src/index.ts'),
   '@zorid/db/node-sqlite': path.resolve(repoRoot, 'packages/db/src/node-sqlite.ts'),
   '@zorid/db': path.resolve(repoRoot, 'packages/db/src/index.ts'),
   '@zorid/index-api': path.resolve(repoRoot, 'packages/index-api/src/index.ts'),

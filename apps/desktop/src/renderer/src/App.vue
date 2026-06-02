@@ -87,6 +87,7 @@ const desktop = window.zoridDesktop as unknown as {
   createMarkdownFile(path: string, contents?: string): Promise<void>;
   renameVaultPath(from: string, to: string): Promise<void>;
   deleteVaultPath(path: string): Promise<void>;
+  revealVaultPath(path: string): Promise<void>;
   getIndexStatus(): Promise<IndexStatusDto>;
   searchIndex(query: string): Promise<readonly SearchResultDto[]>;
   searchIndexCandidates(query: string): Promise<readonly SearchCandidateDto[]>;

@@ -10,10 +10,12 @@ const props = defineProps<{
   selectedPath?: string | undefined;
   draggingPath?: string | undefined;
   dragOverPath?: string | undefined;
-  pendingCreation?: {
-    kind: 'file' | 'folder';
-    parentPath: string;
-  };
+  pendingCreation?:
+    | {
+        kind: 'file' | 'folder';
+        parentPath: string;
+      }
+    | undefined;
 }>();
 const emit = defineEmits<{
   openEntry: [entry: VaultEntry];
