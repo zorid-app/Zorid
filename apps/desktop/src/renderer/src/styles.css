@@ -1009,7 +1009,8 @@ h2 {
   text-align: left;
 }
 
-.command-list button:hover {
+.command-list button:hover,
+.command-list button.active {
   background: var(--z-color-accent-hover-bg);
 }
 

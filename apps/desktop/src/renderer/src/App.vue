@@ -1013,10 +1013,6 @@ async function runCommand(command: CommandDto): Promise<void> {
       await refreshShellData();
       return;
     }
-    if (command.id === 'command-palette.open') {
-      openCommandPalette();
-      return;
-    }
     await desktop.executeCommand(command.id);
     await refreshShellData();
   } catch (caught) {
@@ -1033,7 +1029,7 @@ function handleKeydown(event: KeyboardEvent): void {
     event.preventDefault();
     if (selectedTabId.value) void closeTab(selectedTabId.value);
   }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'p') {
     event.preventDefault();
     openCommandPalette();
   }
