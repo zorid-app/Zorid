@@ -96,6 +96,16 @@ function renderEditorWindowHost(): void {
   });
 }
 
+function openReference(target: { readonly path: string; readonly fragment?: string }): void {
+  try {
+    const url = new URL(target.path);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+    void window.zoridDesktop.openExternalUrl(url.toString());
+  } catch {
+    return;
+  }
+}
+
 onMounted(() => {
   if (!editorHost.value) return;
   try {
@@ -107,6 +117,7 @@ onMounted(() => {
         renderEditorWindowHost();
       },
       onSave: () => emit('save'),
+      onOpenReference: openReference,
       onError: (error, context) => {
         log({ level: 'error', message: `Markdown editor runtime error: ${context}`, data: error });
       },

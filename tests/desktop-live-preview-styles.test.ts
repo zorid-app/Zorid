@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest';
 
 const livePreviewClasses = [
   'z-live-preview-heading',
+  'z-live-preview-heading--h1',
+  'z-live-preview-heading--h2',
+  'z-live-preview-heading--h3',
+  'z-live-preview-heading--h4',
+  'z-live-preview-heading--h5',
+  'z-live-preview-heading--h6',
   'z-live-preview-inline-code',
   'z-live-preview-strong',
   'z-live-preview-emphasis',

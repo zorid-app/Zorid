@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { JsonValue } from '@zorid/shared';
 import type { IpcMainInvokeEvent } from 'electron';
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { appendDesktopDebugLog, type DesktopDebugLogEntry } from './debug-log.js';
 import { selectVaultRootFromDialog } from './open-vault-dialog.js';
 import { createRecentVaultStore, openRecentVault, type RecentVaultStore } from './recent-vaults.js';
@@ -146,6 +146,14 @@ function setAppSettingValue(sectionId: string, value: JsonValue): SettingValueDt
   return dto;
 }
 
+async function openExternalUrl(url: string): Promise<void> {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http and https external URLs can be opened.');
+  }
+  await shell.openExternal(parsed.toString());
+}
+
 async function selectAndOpenVault(
   event: IpcMainInvokeEvent,
 ): Promise<Awaited<ReturnType<DesktopRuntime['openVault']>> | undefined> {
@@ -254,6 +262,7 @@ ipcMain.handle('zorid:render-data-view', async (event, basePath: string, viewId?
 ipcMain.handle('zorid:get-markdown-embeds', async (event, vaultPath: string) =>
   runtimeFor(event).getMarkdownEmbeds(vaultPath),
 );
+ipcMain.handle('zorid:open-external-url', async (_event, url: string) => openExternalUrl(url));
 ipcMain.handle('zorid:list-commands', async (event) => runtimeFor(event).listCommands());
 ipcMain.handle('zorid:execute-command', async (event, id: string, args?: JsonValue) =>
   runtimeFor(event).executeCommand(id, args),

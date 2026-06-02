@@ -1,3 +1,4 @@
+export type { LivePreviewActionHandlers } from './extension.js';
 export {
   collectLivePreviewRanges,
   createLivePreviewContext,

@@ -98,7 +98,8 @@ describe('editor Live Preview viewport/performance fixtures', () => {
     );
 
     expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to)])).toEqual([
-      ['heading', '# Visible heading'],
+      ['heading', '# '],
+      ['heading', 'Visible heading'],
       ['task-marker', '- [ ]'],
       ['code-block-widget', visibleCode],
       ['callout-widget', visibleCallout],

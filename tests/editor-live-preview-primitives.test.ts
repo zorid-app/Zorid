@@ -68,7 +68,7 @@ describe('editor Live Preview primitives', () => {
     const inactiveContext = createLivePreviewContext(state, { from: 0, to: doc.length }, false);
     expect(
       collectLivePreviewRanges(defaultLivePreviewRenderers, inactiveContext).map((range) => range.rendererId),
-    ).toEqual(['heading', 'inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
+    ).toEqual(['heading', 'heading', 'inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
 
     const focusedContext = createLivePreviewContext(state, { from: 0, to: doc.length }, true);
     expect(
@@ -110,9 +110,12 @@ describe('editor Live Preview primitives', () => {
 
     expect(rendererIds).toEqual([
       'heading',
+      'heading',
       'inline-code-delimiter',
       'inline-code',
       'inline-code-delimiter',
+      'markdown-link',
+      'markdown-link',
       'markdown-link',
       'wiki-link',
       'tag',
@@ -159,19 +162,25 @@ describe('editor Live Preview primitives', () => {
 
     expect(ranges.map((range) => range.rendererId)).toEqual([
       'heading',
+      'heading',
       'inline-code-delimiter',
       'inline-code',
       'inline-code-delimiter',
+      'markdown-link',
+      'markdown-link',
       'markdown-link',
       'wiki-link',
       'tag',
     ]);
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual([
-      '# Heading',
+      '# ',
+      'Heading',
       '`',
       '`#not-a-tag [not](link.md) [[Nope]]`',
       '`',
-      '[link](target.md)',
+      '[',
+      'link',
+      '](target.md)',
       '[[Note|Alias]]',
       '#tag/sub',
     ]);
@@ -187,9 +196,72 @@ describe('editor Live Preview primitives', () => {
       createLivePreviewContext(state, { from: 0, to: doc.length }),
     );
 
-    expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to)])).toEqual([
-      ['markdown-link', '[link](target.md)'],
+    expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['markdown-link', '[', 'replace'],
+      ['markdown-link', 'link', undefined],
+      ['markdown-link', '](target.md)', 'replace'],
     ]);
+  });
+
+  it('hides inactive heading markers and marks heading content by level', () => {
+    const doc = ['# Title', '### Section'].join('\n');
+    const state = EditorState.create({ doc });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(state, { from: 0, to: doc.length }),
+    );
+
+    expect(ranges.map((range) => [doc.slice(range.from, range.to), range.kind, range.className])).toEqual([
+      ['# ', 'replace', 'z-live-preview-heading'],
+      ['Title', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
+      ['### ', 'replace', 'z-live-preview-heading'],
+      ['Section', undefined, 'z-live-preview-heading z-live-preview-heading--h3'],
+    ]);
+  });
+
+  it('hides inactive inline style delimiters while keeping styled content marks', () => {
+    const doc = '**bold** *em* ~~gone~~ ==mark==';
+    const state = EditorState.create({ doc });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(state, { from: 0, to: doc.length }),
+    );
+
+    expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['strong', '**', 'replace'],
+      ['strong', 'bold', undefined],
+      ['strong', '**', 'replace'],
+      ['emphasis', '*', 'replace'],
+      ['emphasis', 'em', undefined],
+      ['emphasis', '*', 'replace'],
+      ['strikethrough', '~~', 'replace'],
+      ['strikethrough', 'gone', undefined],
+      ['strikethrough', '~~', 'replace'],
+      ['highlight', '==', 'replace'],
+      ['highlight', 'mark', undefined],
+      ['highlight', '==', 'replace'],
+    ]);
+  });
+
+  it('opens inactive rendered web links through the editor reference handler', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const opened: Array<{ path: string; fragment?: string }> = [];
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: '[Course Requirement](https://google.com)',
+      onOpenReference: (target) => opened.push(target),
+    });
+    const link = parent.querySelector<HTMLElement>('.z-live-preview-link[data-live-preview-url]');
+
+    expect(link?.textContent).toBe('Course Requirement');
+    link?.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+
+    expect(opened).toEqual([{ path: 'https://google.com' }]);
+    expect(editor.getText()).toBe('[Course Requirement](https://google.com)');
+
+    editor.destroy();
+    parent.remove();
   });
 
   it('restores preview decorations after focused selection leaves the range', () => {

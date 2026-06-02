@@ -80,6 +80,7 @@ export interface DesktopEditorBridge {
   listBases(): Promise<readonly BaseDto[]>;
   renderDataView(basePath: string, viewId?: string): Promise<DataViewResultDto>;
   getMarkdownEmbeds(path: string): Promise<readonly MarkdownEmbedDto[]>;
+  openExternalUrl(url: string): Promise<void>;
   onIndexUpdated(callback: () => void): () => void;
   onEditorSnapshot(callback: (snapshot: EditorSnapshotDto) => void): () => void;
   onSettingUpdated(callback: (setting: SettingValueDto) => void): () => void;

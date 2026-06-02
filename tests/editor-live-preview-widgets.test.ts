@@ -198,6 +198,8 @@ describe('editor Live Preview structured widgets', () => {
       'code-block-widget',
       'tag',
       'markdown-link',
+      'markdown-link',
+      'markdown-link',
       'wiki-link',
       'task-marker',
       'blockquote',

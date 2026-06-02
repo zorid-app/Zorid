@@ -76,13 +76,17 @@ describe('editor Live Preview block renderers', () => {
       'inline-code',
       'inline-code-delimiter',
       'markdown-link',
+      'markdown-link',
+      'markdown-link',
       'inline-code-delimiter',
       'inline-code',
       'inline-code-delimiter',
       'tag',
     ]);
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toContain('`code`');
-    expect(ranges.map((range) => doc.slice(range.from, range.to))).toContain('[link](target.md)');
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(
+      expect.arrayContaining(['[', 'link', '](target.md)']),
+    );
   });
 
   it('mounts blockquote line decorations and restores them after source reveal', () => {

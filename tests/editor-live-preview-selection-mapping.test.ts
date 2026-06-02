@@ -71,6 +71,7 @@ describe('editor Live Preview selection and mapping hardening', () => {
 
     expect(ranges.map((range) => range.rendererId)).toEqual([
       'heading',
+      'heading',
       'inline-code-delimiter',
       'inline-code',
       'inline-code-delimiter',
@@ -89,6 +90,7 @@ describe('editor Live Preview selection and mapping hardening', () => {
 
     expect(ranges.map((range) => range.rendererId)).toEqual([
       'heading',
+      'heading',
       'inline-code-delimiter',
       'inline-code',
       'inline-code-delimiter',
@@ -104,7 +106,7 @@ describe('editor Live Preview selection and mapping hardening', () => {
 
     const ranges = collectAllRanges(doc, selection, true);
 
-    expect(ranges.map((range) => range.rendererId)).toEqual(['heading', 'task-marker']);
+    expect(ranges.map((range) => range.rendererId)).toEqual(['heading', 'heading', 'task-marker']);
     expect(ranges.map((range) => range.rendererId)).not.toContain('inline-code');
     expect(ranges.map((range) => range.rendererId)).not.toContain('inline-code-delimiter');
     expect(ranges.map((range) => range.rendererId)).not.toContain('blockquote');

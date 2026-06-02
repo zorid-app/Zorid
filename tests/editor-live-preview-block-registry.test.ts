@@ -158,7 +158,9 @@ describe('editor Live Preview private block renderer registry', () => {
     expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to)])).toEqual([
       ['test-block-widget', [':::test', '#inside [inside](target.md)', ':::'].join('\n')],
       ['tag', '#outside'],
-      ['markdown-link', '[outside](target.md)'],
+      ['markdown-link', '['],
+      ['markdown-link', 'outside'],
+      ['markdown-link', '](target.md)'],
     ]);
   });
 

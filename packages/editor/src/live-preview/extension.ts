@@ -20,6 +20,10 @@ export type LivePreviewErrorReporter = (
   context: { readonly rendererId: string; readonly phase: 'match' | 'decorations' },
 ) => void;
 
+export interface LivePreviewActionHandlers {
+  openReference?(target: { readonly path: string; readonly fragment?: string }): void;
+}
+
 export function livePreviewSelectionRanges(state: LivePreviewContext['state']): LivePreviewSelectionRange[] {
   return state.selection.ranges.map((range) => ({ from: range.from, to: range.to }));
 }
@@ -421,11 +425,23 @@ export function livePreviewExtensionWithInternalRenderers(
   internalRenderers: readonly InternalLivePreviewRenderer[],
   widgetRenderers: readonly InternalLivePreviewRenderer[],
   reportError?: LivePreviewErrorReporter,
+  handlers: LivePreviewActionHandlers = {},
 ): Extension {
   return [
     livePreviewWidgetField(widgetRenderers, reportError),
     livePreviewWidgetVisibleRangeUpdater(),
     EditorView.focusChangeEffect.of((_state, focusing) => setInternalLivePreviewFocused.of(focusing)),
+    EditorView.domEventHandlers({
+      mousedown(event) {
+        if (event.button !== 0) return false;
+        const target = event.target instanceof Element ? event.target.closest('[data-live-preview-url]') : null;
+        const url = target?.getAttribute('data-live-preview-url');
+        if (!url) return false;
+        event.preventDefault();
+        handlers.openReference?.({ path: url });
+        return true;
+      },
+    }),
     ViewPlugin.fromClass(
       class {
         decorations: DecorationSet;

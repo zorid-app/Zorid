@@ -630,6 +630,36 @@ h2 {
   letter-spacing: -0.018em;
 }
 
+.markdown-editor .z-live-preview-heading--h1 {
+  font-size: 2em;
+  line-height: 1.18;
+}
+
+.markdown-editor .z-live-preview-heading--h2 {
+  font-size: 1.5em;
+  line-height: 1.22;
+}
+
+.markdown-editor .z-live-preview-heading--h3 {
+  font-size: 1.17em;
+  line-height: 1.28;
+}
+
+.markdown-editor .z-live-preview-heading--h4 {
+  font-size: 1em;
+  line-height: 1.35;
+}
+
+.markdown-editor .z-live-preview-heading--h5 {
+  font-size: 0.83em;
+  line-height: 1.45;
+}
+
+.markdown-editor .z-live-preview-heading--h6 {
+  font-size: 0.67em;
+  line-height: 1.55;
+}
+
 .markdown-editor .z-live-preview-inline-code {
   padding: 0 0.28em;
   color: var(--z-color-accent);
@@ -663,6 +693,10 @@ h2 {
   text-decoration-color: color-mix(in srgb, var(--z-color-accent) 45%, transparent);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
+}
+
+.markdown-editor .z-live-preview-link[data-live-preview-url] {
+  cursor: pointer;
 }
 
 .markdown-editor .z-live-preview-wiki-link {

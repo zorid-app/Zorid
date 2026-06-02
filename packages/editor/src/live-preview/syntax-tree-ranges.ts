@@ -20,6 +20,15 @@ const rendererClassNames: Readonly<Record<string, string>> = {
   tag: 'z-live-preview-tag',
 };
 
+const headingLevelClassNames: Readonly<Record<number, string>> = {
+  1: 'z-live-preview-heading z-live-preview-heading--h1',
+  2: 'z-live-preview-heading z-live-preview-heading--h2',
+  3: 'z-live-preview-heading z-live-preview-heading--h3',
+  4: 'z-live-preview-heading z-live-preview-heading--h4',
+  5: 'z-live-preview-heading z-live-preview-heading--h5',
+  6: 'z-live-preview-heading z-live-preview-heading--h6',
+};
+
 const nodeRendererIds: Readonly<Record<string, string>> = {
   StrongEmphasis: 'strong',
   Emphasis: 'emphasis',
@@ -41,11 +50,14 @@ function previewRange(
   rendererId: string,
   from: number,
   to: number,
-  extra?: Pick<LivePreviewRange, 'kind' | 'activationFrom' | 'activationTo'>,
+  extra?: Pick<LivePreviewRange, 'kind' | 'activationFrom' | 'activationTo' | 'attributes'> & {
+    readonly className?: string;
+  },
 ): LivePreviewRange | null {
-  const className = rendererClassNames[rendererId];
+  const className = extra?.className ?? rendererClassNames[rendererId];
   if (!className || to <= from) return null;
-  return { rendererId, from, to, className, ...extra };
+  const { className: _className, ...rest } = extra ?? {};
+  return { rendererId, from, to, className, ...rest };
 }
 
 function pushRange(ranges: LivePreviewRange[], range: LivePreviewRange | null): void {
@@ -95,6 +107,91 @@ function inlineCodeRanges(docText: string, from: number, to: number): LivePrevie
   ].filter((range): range is LivePreviewRange => range !== null);
 }
 
+function headingRanges(docText: string, from: number, to: number): LivePreviewRange[] {
+  let markerLength = 0;
+  while (markerLength < 6 && docText.charAt(from + markerLength) === '#') markerLength += 1;
+  if (markerLength === 0) return [];
+
+  let contentFrom = from + markerLength;
+  while (contentFrom < to && docText.charAt(contentFrom) === ' ') contentFrom += 1;
+  const className = headingLevelClassNames[markerLength] ?? 'z-live-preview-heading';
+
+  return [
+    previewRange('heading', from, contentFrom, {
+      activationFrom: from,
+      activationTo: to,
+      kind: 'replace',
+    }),
+    previewRange('heading', contentFrom, to, {
+      activationFrom: from,
+      activationTo: to,
+      className,
+    }),
+  ].filter((range): range is LivePreviewRange => range !== null);
+}
+
+function delimiterRanges(
+  rendererId: string,
+  from: number,
+  to: number,
+  openingLength: number,
+  closingLength = openingLength,
+): LivePreviewRange[] {
+  return [
+    previewRange(rendererId, from, from + openingLength, {
+      activationFrom: from,
+      activationTo: to,
+      kind: 'replace',
+    }),
+    previewRange(rendererId, from + openingLength, to - closingLength, {
+      activationFrom: from,
+      activationTo: to,
+    }),
+    previewRange(rendererId, to - closingLength, to, {
+      activationFrom: from,
+      activationTo: to,
+      kind: 'replace',
+    }),
+  ].filter((range): range is LivePreviewRange => range !== null);
+}
+
+function markdownLinkRanges(docText: string, from: number, to: number): LivePreviewRange[] {
+  const source = docText.slice(from, to);
+  const labelEnd = source.indexOf('](');
+  if (!source.startsWith('[') || labelEnd < 0 || !source.endsWith(')')) return [];
+
+  const labelFrom = from + 1;
+  const labelTo = from + labelEnd;
+  const url = source.slice(labelEnd + 2, -1);
+  const webUrl = isWebUrl(url) ? url : undefined;
+  return [
+    previewRange('markdown-link', from, labelFrom, {
+      activationFrom: from,
+      activationTo: to,
+      kind: 'replace',
+    }),
+    previewRange('markdown-link', labelFrom, labelTo, {
+      activationFrom: from,
+      activationTo: to,
+      ...(webUrl ? { attributes: { 'data-live-preview-url': webUrl } } : {}),
+    }),
+    previewRange('markdown-link', labelTo, to, {
+      activationFrom: from,
+      activationTo: to,
+      kind: 'replace',
+    }),
+  ].filter((range): range is LivePreviewRange => range !== null);
+}
+
+function isWebUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export function collectSyntaxTreeLivePreviewRanges(context: LivePreviewContext): readonly LivePreviewRange[] {
   const cached = syntaxRangeCache.get(context);
   if (cached) return cached;
@@ -111,7 +208,7 @@ export function collectSyntaxTreeLivePreviewRanges(context: LivePreviewContext):
       if (node.to <= context.visibleFrom || node.from >= context.visibleTo) return;
 
       if (node.name.startsWith('ATXHeading')) {
-        pushRange(ranges, previewRange('heading', node.from, node.to));
+        ranges.push(...headingRanges(context.docText, node.from, node.to));
         return false;
       }
 
@@ -122,14 +219,19 @@ export function collectSyntaxTreeLivePreviewRanges(context: LivePreviewContext):
 
       if (node.name === 'Link') {
         if (hasChildNamed(node.node, 'URL')) {
-          pushRange(ranges, previewRange('markdown-link', node.from, node.to));
+          ranges.push(...markdownLinkRanges(context.docText, node.from, node.to));
         }
         return false;
       }
 
       const rendererId = nodeRendererIds[node.name];
       if (rendererId) {
-        pushRange(ranges, previewRange(rendererId, node.from, node.to));
+        if (rendererId === 'strong') ranges.push(...delimiterRanges(rendererId, node.from, node.to, 2));
+        else if (rendererId === 'strikethrough' || rendererId === 'highlight') {
+          ranges.push(...delimiterRanges(rendererId, node.from, node.to, 2));
+        } else if (rendererId === 'emphasis') {
+          ranges.push(...delimiterRanges(rendererId, node.from, node.to, 1));
+        } else pushRange(ranges, previewRange(rendererId, node.from, node.to));
         return false;
       }
     },

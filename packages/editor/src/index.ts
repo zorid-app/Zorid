@@ -12,6 +12,7 @@ import type {
 } from '@zorid/platform-api';
 import { type Disposable, normalizeVaultPath, type VaultPath } from '@zorid/shared';
 import {
+  type LivePreviewActionHandlers,
   type LivePreviewErrorReporter,
   livePreviewExtension,
   livePreviewExtensionWithInternalRenderers,
@@ -23,6 +24,7 @@ import {
   markdownBlockRegistrationsToInternalRenderers,
 } from './live-preview/markdown-blocks.js';
 import {
+  type EditorProjectionActionHandlers,
   type MarkdownInlineRegistration,
   markdownInlineInteractionExtension,
   markdownInlineRegistrationExtensions,
@@ -71,6 +73,7 @@ export type {
   InlineCutResult,
   InlineRenderResult,
   InlineSelectionPolicy,
+  LivePreviewActionHandlers,
   LivePreviewContext,
   LivePreviewDecorationKind,
   LivePreviewRange,
@@ -243,7 +246,7 @@ export function createMarkdownEditorExtensions({
   const projectionActionHandlers = {
     ...(onOpenReference ? { openReference: onOpenReference } : {}),
     ...(onSetEphemeralState ? { setEphemeralState: onSetEphemeralState } : {}),
-  };
+  } satisfies EditorProjectionActionHandlers & LivePreviewActionHandlers;
   const activeDefaultMarkdownBlockRegistrations = defaultMarkdownBlockRegistrations;
   const extensions: Extension[] = [
     zoridMarkdown(),
@@ -285,12 +288,14 @@ export function createMarkdownEditorExtensions({
             [...defaultInternalRenderers, ...registeredInlineRenderers],
             [...defaultBlockRenderers, ...registeredBlockRenderers],
             reportLivePreviewError,
+            projectionActionHandlers,
           )
         : livePreviewExtensionWithInternalRenderers(
             livePreviewRenderers,
             registeredInlineRenderers,
             registeredBlockRenderers,
             reportLivePreviewError,
+            projectionActionHandlers,
           ),
     );
   }
