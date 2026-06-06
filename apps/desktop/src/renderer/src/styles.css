@@ -627,11 +627,13 @@ h2 {
 .markdown-editor .cm-scroller {
   min-height: 100%;
   font-family: var(--z-font-mono);
+  overflow-x: hidden;
 }
 
 .markdown-editor .cm-content {
   padding: 32px;
   caret-color: var(--z-color-accent);
+  overflow-wrap: anywhere;
 }
 
 /* Desktop owns host-level CodeMirror surface theming inside the Markdown editor. */

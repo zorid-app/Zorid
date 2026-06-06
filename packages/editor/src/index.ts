@@ -250,6 +250,7 @@ export function createMarkdownEditorExtensions({
   const activeDefaultMarkdownBlockRegistrations = defaultMarkdownBlockRegistrations;
   const extensions: Extension[] = [
     zoridMarkdown(),
+    EditorView.lineWrapping,
     history(),
     keymap.of(historyKeymap),
     keymap.of(markdownTaskKeymap),

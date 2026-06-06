@@ -34,6 +34,12 @@ describe('@zorid/editor CodeMirror ownership', () => {
     expect(source).not.toContain('addKeymap: false');
   });
 
+  it('wraps Markdown editor lines instead of allowing horizontal scrolling', async () => {
+    const source = await readFile('packages/editor/src/index.ts', 'utf8');
+
+    expect(source).toContain('EditorView.lineWrapping');
+  });
+
   it('guards unknown plugin extension contributions before composing CodeMirror extensions', () => {
     const valid = Prec.highest([]);
     const composition = composeEditorExtensions([

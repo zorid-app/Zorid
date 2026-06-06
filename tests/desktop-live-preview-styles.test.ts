@@ -43,6 +43,13 @@ describe('desktop Live Preview styles', () => {
     expect(styles).toContain('.markdown-editor .cm-content ::selection');
   });
 
+  it('prevents horizontal Markdown editor scrolling and breaks long words', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(/\.markdown-editor\s+\.cm-scroller\s*\{[^}]*overflow-x:\s*hidden;[^}]*\}/s);
+    expect(styles).toMatch(/\.markdown-editor\s+\.cm-content\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*\}/s);
+  });
+
   it('scopes all live-preview selectors to the markdown editor', async () => {
     const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
 
