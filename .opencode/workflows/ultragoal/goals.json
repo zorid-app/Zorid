@@ -38,7 +38,7 @@
     {
       "id": "G005",
       "objective": "Verify, commit, push, tag v0.1, and trigger the all-platform build.",
-      "status": "pending",
+      "status": "completed",
       "dependencies": ["G001", "G002", "G003", "G004"],
       "verification": [
         "local quality gate passes",
