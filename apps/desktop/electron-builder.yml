@@ -32,6 +32,7 @@ win:
         - x64
 linux:
   category: Utility
+  maintainer: Zorid <hello@zorid.app>
   target:
     - target: AppImage
       arch:

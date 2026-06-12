@@ -35,5 +35,9 @@
     "vue-tsc": "^3.3.2"
   },
   "description": "Zorid desktop app",
-  "author": "Zorid"
+  "homepage": "https://zorid.app",
+  "author": {
+    "name": "Zorid",
+    "email": "hello@zorid.app"
+  }
 }
