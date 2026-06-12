@@ -1,0 +1,51 @@
+{
+  "aggregateObjective": "Set up and trigger a tagged v0.1 all-platform desktop release build for Zorid.",
+  "goals": [
+    {
+      "id": "G001",
+      "objective": "Configure desktop package metadata and cross-platform Electron Builder targets.",
+      "status": "completed",
+      "dependencies": [],
+      "verification": [
+        "electron-builder config includes macOS, Windows, and Linux targets",
+        "package versions are 0.1.0"
+      ]
+    },
+    {
+      "id": "G002",
+      "objective": "Add GitHub Actions workflow for quality-gated desktop release artifacts and draft GitHub Releases.",
+      "status": "completed",
+      "dependencies": ["G001"],
+      "verification": [
+        "workflow has quality, platform build, and draft release jobs",
+        "workflow triggers on v* tags and manual dispatch"
+      ]
+    },
+    {
+      "id": "G003",
+      "objective": "Document release behavior and required secrets.",
+      "status": "completed",
+      "dependencies": ["G001", "G002"],
+      "verification": ["desktop development documentation describes CI release builds and artifact targets"]
+    },
+    {
+      "id": "G004",
+      "objective": "Set GitHub secrets from local Apple signing and notarization files.",
+      "status": "completed",
+      "dependencies": ["G002"],
+      "verification": ["gh secret list shows required secret names"]
+    },
+    {
+      "id": "G005",
+      "objective": "Verify, commit, push, tag v0.1, and trigger the all-platform build.",
+      "status": "pending",
+      "dependencies": ["G001", "G002", "G003", "G004"],
+      "verification": [
+        "local quality gate passes",
+        "commit is pushed",
+        "tag v0.1 is pushed",
+        "GitHub Actions run starts"
+      ]
+    }
+  ]
+}

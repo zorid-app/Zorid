@@ -52,9 +52,12 @@ describe('editor Live Preview semantic fixtures', () => {
     const renderedSource = collectAll(doc).map((range) => doc.slice(range.from, range.to));
     expect(renderedSource).not.toContain(['  ```ts', '  #not-a-widget', '  ```'].join('\n'));
     expect(renderedSource).toEqual([
-      '# Heading',
+      '# ',
+      'Heading',
       '#tag',
-      '[link](target.md)',
+      '[',
+      'link',
+      '](target.md)',
       '- [ ]',
       ['> [!note] Title', '> body'].join('\n'),
     ]);
@@ -68,11 +71,15 @@ describe('editor Live Preview semantic fixtures', () => {
       { from: 0, to: spacedFenceDoc.indexOf('\n# Heading') },
     ]);
     expect(collectAll(spacedFenceDoc).map((range) => spacedFenceDoc.slice(range.from, range.to))).toEqual([
-      '# Heading #tag',
+      '# ',
+      'Heading #tag',
     ]);
 
     expect(markdownFrontmatterRanges(unclosedDoc, { from: 0, to: unclosedDoc.length })).toEqual([]);
-    expect(collectAll(unclosedDoc).map((range) => unclosedDoc.slice(range.from, range.to))).toEqual(['# Heading #tag']);
+    expect(collectAll(unclosedDoc).map((range) => unclosedDoc.slice(range.from, range.to))).toEqual([
+      '# ',
+      'Heading #tag',
+    ]);
   });
 
   it('adds conservative inline formatting semantics while suppressing code false positives', () => {
@@ -91,12 +98,24 @@ describe('editor Live Preview semantic fixtures', () => {
     );
 
     expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to)])).toEqual([
-      ['strong', '**bold**'],
-      ['emphasis', '*em*'],
-      ['strikethrough', '~~gone~~'],
-      ['highlight', '==mark=='],
-      ['strong', '__strong__'],
-      ['emphasis', '_italic_'],
+      ['strong', '**'],
+      ['strong', 'bold'],
+      ['strong', '**'],
+      ['emphasis', '*'],
+      ['emphasis', 'em'],
+      ['emphasis', '*'],
+      ['strikethrough', '~~'],
+      ['strikethrough', 'gone'],
+      ['strikethrough', '~~'],
+      ['highlight', '=='],
+      ['highlight', 'mark'],
+      ['highlight', '=='],
+      ['strong', '__'],
+      ['strong', 'strong'],
+      ['strong', '__'],
+      ['emphasis', '_'],
+      ['emphasis', 'italic'],
+      ['emphasis', '_'],
       ['inline-code-delimiter', '`'],
       ['inline-code', '`**raw** *raw* ~~raw~~ ==raw== #raw [raw](x.md)`'],
       ['inline-code-delimiter', '`'],
