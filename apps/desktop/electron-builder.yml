@@ -33,6 +33,7 @@ win:
         - x64
 linux:
   category: Utility
+  icon: build/icon.png
   maintainer: Zorid <hello@zorid.app>
   target:
     - target: AppImage
