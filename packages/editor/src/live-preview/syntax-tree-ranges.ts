@@ -124,6 +124,12 @@ function headingRanges(docText: string, from: number, to: number): LivePreviewRa
       kind: 'replace',
       revealPolicy: 'caret',
     }),
+    previewRange('heading', from, contentFrom, {
+      activationFrom: from,
+      activationTo: to,
+      className,
+      revealPolicy: 'never',
+    }),
     previewRange('heading', contentFrom, to, {
       activationFrom: from,
       activationTo: to,

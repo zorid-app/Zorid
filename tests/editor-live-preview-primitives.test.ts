@@ -83,12 +83,12 @@ describe('editor Live Preview primitives', () => {
     const inactiveContext = createLivePreviewContext(state, { from: 0, to: doc.length }, false);
     expect(
       collectLivePreviewRanges(defaultLivePreviewRenderers, inactiveContext).map((range) => range.rendererId),
-    ).toEqual(['heading', 'heading', 'inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
+    ).toEqual(['heading', 'heading', 'heading', 'inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
 
     const focusedContext = createLivePreviewContext(state, { from: 0, to: doc.length }, true);
     expect(
       collectLivePreviewRanges(defaultLivePreviewRenderers, focusedContext).map((range) => range.rendererId),
-    ).toEqual(['heading', 'inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
+    ).toEqual(['heading', 'heading', 'inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
   });
 
   it('adds decorations without changing source text', () => {
@@ -124,6 +124,7 @@ describe('editor Live Preview primitives', () => {
     const rendererIds = ranges.map((range) => range.rendererId);
 
     expect(rendererIds).toEqual([
+      'heading',
       'heading',
       'heading',
       'inline-code-delimiter',
@@ -178,6 +179,7 @@ describe('editor Live Preview primitives', () => {
     expect(ranges.map((range) => range.rendererId)).toEqual([
       'heading',
       'heading',
+      'heading',
       'inline-code-delimiter',
       'inline-code',
       'inline-code-delimiter',
@@ -188,6 +190,7 @@ describe('editor Live Preview primitives', () => {
       'tag',
     ]);
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual([
+      '# ',
       '# ',
       'Heading',
       '`',
@@ -228,8 +231,10 @@ describe('editor Live Preview primitives', () => {
 
     expect(ranges.map((range) => [doc.slice(range.from, range.to), range.kind, range.className])).toEqual([
       ['# ', 'replace', 'z-live-preview-heading'],
+      ['# ', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
       ['Title', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
       ['### ', 'replace', 'z-live-preview-heading'],
+      ['### ', undefined, 'z-live-preview-heading z-live-preview-heading--h3'],
       ['Section', undefined, 'z-live-preview-heading z-live-preview-heading--h3'],
     ]);
   });
@@ -253,10 +258,11 @@ describe('editor Live Preview primitives', () => {
 
     expect(ranges.map((range) => [headingDoc.slice(range.from, range.to), range.kind, range.className])).toEqual([
       ['# ', 'replace', 'z-live-preview-heading'],
+      ['# ', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
     ]);
   });
 
-  it('reveals only the marker for caret editing while keeping heading content styled', () => {
+  it('reveals the marker with heading styling for caret editing while keeping heading content styled', () => {
     const doc = '# Title';
     const state = EditorState.create({ doc, selection: { anchor: doc.indexOf('Title') } });
     const ranges = collectLivePreviewRanges(
@@ -265,6 +271,7 @@ describe('editor Live Preview primitives', () => {
     );
 
     expect(ranges.map((range) => [doc.slice(range.from, range.to), range.kind, range.className])).toEqual([
+      ['# ', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
       ['Title', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
     ]);
   });
@@ -279,6 +286,7 @@ describe('editor Live Preview primitives', () => {
 
     expect(ranges.map((range) => [doc.slice(range.from, range.to), range.kind, range.className])).toEqual([
       ['# ', 'replace', 'z-live-preview-heading'],
+      ['# ', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
       ['Title', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
     ]);
     expect(state.sliceDoc(0, doc.length)).toBe('# Title');
@@ -341,7 +349,9 @@ describe('editor Live Preview primitives', () => {
 
     editor.focus();
     editor.view.dispatch({ selection: { anchor: 2 } });
-    expect(parent.querySelector('[data-live-preview-renderer="heading"]')?.textContent).toBe('Heading');
+    expect(
+      [...parent.querySelectorAll('[data-live-preview-renderer="heading"]')].map((node) => node.textContent),
+    ).toEqual(['# ', 'Heading']);
     expect(parent.querySelector('[data-live-preview-renderer="inline-code"]')).toBeTruthy();
 
     editor.view.dispatch({ selection: { anchor: editor.getText().length } });
