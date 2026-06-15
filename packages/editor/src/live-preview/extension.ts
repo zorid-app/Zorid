@@ -29,7 +29,7 @@ export function livePreviewSelectionRanges(state: LivePreviewContext['state']): 
 }
 
 function livePreviewActivationRange(
-  range: Pick<LivePreviewRange, 'from' | 'to' | 'activationFrom' | 'activationTo'>,
+  range: Pick<LivePreviewRange, 'from' | 'to' | 'activationFrom' | 'activationTo' | 'revealPolicy'>,
 ): Pick<LivePreviewRange, 'from' | 'to'> {
   return {
     from: range.activationFrom ?? range.from,
@@ -38,19 +38,21 @@ function livePreviewActivationRange(
 }
 
 export function livePreviewRangeIntersectsSelection(
-  range: Pick<LivePreviewRange, 'from' | 'to' | 'activationFrom' | 'activationTo'>,
+  range: Pick<LivePreviewRange, 'from' | 'to' | 'activationFrom' | 'activationTo' | 'revealPolicy'>,
   selectionRanges: readonly LivePreviewSelectionRange[],
 ): boolean {
+  if (range.revealPolicy === 'never') return false;
   const activationRange = livePreviewActivationRange(range);
   return selectionRanges.some((selection) => {
     if (selection.from === selection.to)
       return selection.from >= activationRange.from && selection.from <= activationRange.to;
+    if (range.revealPolicy === 'caret') return false;
     return selection.from < activationRange.to && selection.to > activationRange.from;
   });
 }
 
 export function shouldRenderLivePreviewRange(
-  range: Pick<LivePreviewRange, 'from' | 'to' | 'activationFrom' | 'activationTo'>,
+  range: Pick<LivePreviewRange, 'from' | 'to' | 'activationFrom' | 'activationTo' | 'revealPolicy'>,
   context: Pick<LivePreviewContext, 'focused' | 'selectionRanges'>,
 ): boolean {
   return !context.focused || !livePreviewRangeIntersectsSelection(range, context.selectionRanges);

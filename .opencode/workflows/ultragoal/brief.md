@@ -1,41 +1,39 @@
-# Desktop Release And Auto-Update Infrastructure
+# Markdown Heading Live Preview Behavior
 
-Maintain Zorid desktop release infrastructure, including the completed tagged `v0.1` all-platform release setup and the next accepted story: GitHub Releases based desktop auto-update.
+Implement the approved markdown editor heading live-preview behavior.
+
+## Goal
+
+Headings should behave like editable markdown source with rendered live preview:
+
+- `#` alone remains plain text.
+- `# ` activates heading rendering.
+- Heading content uses existing heading sizing and bold styling.
+- When the caret leaves the heading line, the leading marker such as `# ` disappears visually.
+- When the caret returns to the heading line, the marker reappears for editing.
+- When a heading line is selected or copied, it remains visually rendered while copied text remains markdown source including the `#` marker.
 
 ## Constraints
 
-- Keep desktop app ID as `app.zorid.desktop` because the owned domain is `zorid.app`.
-- Update package versions to `0.1.0` before tagging `v0.1`.
-- Use a real pushed Git tag `v0.1`.
-- Create a draft GitHub Release for tagged builds.
-- Release desktop artifacts only.
-- macOS target is universal `dmg` and `zip`, with split-architecture fallback only if CI requires it.
-- Windows target is unsigned `msi` and `zip`.
-- Linux target is `AppImage`, `deb`, and `tar.gz`.
-- Run `pnpm quality:fast` before packaging in CI.
-- Set or update Apple signing and notarization GitHub secrets from local certificate files with `gh secret set`.
+- Preserve document source; live preview must not mutate markdown text.
+- Preserve native/source clipboard semantics for selected markdown.
+- Avoid renderer-id special cases in generic live-preview filtering.
+- Add only optional/default-preserving public range metadata.
+- Keep existing live-preview behavior for inline code, links, widgets, task markers, and block previews unless explicitly required by this feature.
+- Treat the requested heading trigger as literal `# ` with an ASCII space after 1-6 heading marker characters.
 
-## Accepted Story: GitHub Releases Auto-Update
+## Approved Ralplan Decision
 
-Add desktop auto-update support using GitHub Releases for `zorid-app/Zorid`, `electron-builder`, and `electron-updater`.
+Add optional `LivePreviewRange.revealPolicy?: 'caret-or-selection' | 'caret' | 'never'`.
 
-### Auto-Update Constraints
+- Default `undefined` preserves current behavior, equivalent to `caret-or-selection`.
+- Heading marker replacement ranges use `revealPolicy: 'caret'`.
+- Heading content mark ranges use `revealPolicy: 'never'`.
+- Generic filtering uses the per-range policy rather than hard-coded renderer names.
 
-- Stable GitHub Releases only; prereleases are ignored.
-- Automatically check for updates and automatically download available updates.
-- Never restart or install without explicit user confirmation.
-- Auto-check is enabled by default, can be disabled, and manual checks remain available.
-- Automatic checks run shortly after startup and at most once every 24 hours while the app is open.
-- The 24-hour throttle must persist across app restarts using updater metadata under `app.getPath('userData')`.
-- Background failures are passive; manual failures show inline Settings errors with retry.
-- Supported in-app updater packages are macOS, Windows NSIS, and Linux AppImage.
-- Linux `deb`, Linux `tar.gz`, and any retained Windows MSI are manual/package-managed artifacts, not in-app updater paths.
-- Production macOS updates require signed and notarized artifacts.
-- Public Windows auto-update requires signed NSIS artifacts; unsigned NSIS is internal testing only.
-- Keep updater logic in the Electron main process and expose only narrow serializable preload bridge APIs.
-- Do not expose raw Electron, Node, or `electron-updater` to renderer or plugins.
-- Keep the public plugin `AppAPI` metadata-only.
-- Modify the existing desktop release workflow rather than adding a parallel release workflow.
-- Keep draft GitHub Releases as the safety gate; updater sees a release only after a maintainer verifies assets and publishes a non-prerelease stable release.
-- Release assets must include generated updater metadata such as `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, and `*.blockmap` as generated.
-- Coordinate updater install/restart with runtime shutdown so runtimes dispose once and `quitAndInstall` is not blocked by `before-quit` handling.
+## Quality Gate
+
+- Targeted primitive live-preview tests pass.
+- Selection/widget regression tests pass.
+- Typecheck and lint are run, or blockers are recorded.
+- Independent code review approves or findings are resolved before marking final completion.

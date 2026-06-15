@@ -50,7 +50,7 @@ function previewRange(
   rendererId: string,
   from: number,
   to: number,
-  extra?: Pick<LivePreviewRange, 'kind' | 'activationFrom' | 'activationTo' | 'attributes'> & {
+  extra?: Pick<LivePreviewRange, 'kind' | 'activationFrom' | 'activationTo' | 'attributes' | 'revealPolicy'> & {
     readonly className?: string;
   },
 ): LivePreviewRange | null {
@@ -111,6 +111,7 @@ function headingRanges(docText: string, from: number, to: number): LivePreviewRa
   let markerLength = 0;
   while (markerLength < 6 && docText.charAt(from + markerLength) === '#') markerLength += 1;
   if (markerLength === 0) return [];
+  if (from + markerLength >= to || docText.charAt(from + markerLength) !== ' ') return [];
 
   let contentFrom = from + markerLength;
   while (contentFrom < to && docText.charAt(contentFrom) === ' ') contentFrom += 1;
@@ -121,11 +122,13 @@ function headingRanges(docText: string, from: number, to: number): LivePreviewRa
       activationFrom: from,
       activationTo: to,
       kind: 'replace',
+      revealPolicy: 'caret',
     }),
     previewRange('heading', contentFrom, to, {
       activationFrom: from,
       activationTo: to,
       className,
+      revealPolicy: 'never',
     }),
   ].filter((range): range is LivePreviewRange => range !== null);
 }

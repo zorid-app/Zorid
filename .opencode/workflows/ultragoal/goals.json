@@ -1,161 +1,49 @@
 {
-  "aggregateObjective": "Maintain Zorid desktop release infrastructure, including tagged all-platform release builds and GitHub Releases based desktop auto-update.",
+  "aggregateObjective": "Implement markdown heading live-preview behavior where '# ' activates headings, inactive markers hide, caret editing reveals markers, and selected/copying headings remain rendered while source markdown is preserved.",
   "goals": [
     {
       "id": "G001",
-      "objective": "Configure desktop package metadata and cross-platform Electron Builder targets.",
+      "objective": "Add default-preserving per-range reveal policy support to live-preview filtering.",
       "status": "completed",
       "dependencies": [],
+      "constraints": [
+        "Extend LivePreviewRange only with optional metadata",
+        "Default undefined behavior must match existing caret-or-selection source reveal behavior",
+        "Do not special-case heading renderer ids in generic filtering"
+      ],
       "verification": [
-        "electron-builder config includes macOS, Windows, and Linux targets",
-        "package versions are 0.1.0"
+        "Unit tests prove caret-only and never-reveal policies behave as expected",
+        "Existing focused source reveal behavior remains covered for default policy"
       ]
     },
     {
       "id": "G002",
-      "objective": "Add GitHub Actions workflow for quality-gated desktop release artifacts and draft GitHub Releases.",
+      "objective": "Update heading range generation to require '# ' and apply marker/content reveal policies.",
       "status": "completed",
       "dependencies": ["G001"],
-      "verification": [
-        "workflow has quality, platform build, and draft release jobs",
-        "workflow triggers on v* tags and manual dispatch"
-      ]
+      "constraints": [
+        "'#' alone must produce no heading live-preview ranges",
+        "'# ' must be accepted as heading syntax",
+        "Heading marker replacement ranges reveal only for a collapsed caret",
+        "Heading content ranges remain rendered for caret and non-collapsed selection"
+      ],
+      "verification": ["Tests cover '#', '# ', inactive headings, caret reveal, and selected heading rendering"]
     },
     {
       "id": "G003",
-      "objective": "Document release behavior and required secrets.",
+      "objective": "Run verification, cleanup, independent review, and finalize the durable goal ledger.",
       "status": "completed",
       "dependencies": ["G001", "G002"],
-      "verification": ["desktop development documentation describes CI release builds and artifact targets"]
-    },
-    {
-      "id": "G004",
-      "objective": "Set GitHub secrets from local Apple signing and notarization files.",
-      "status": "completed",
-      "dependencies": ["G002"],
-      "verification": ["gh secret list shows required secret names"]
-    },
-    {
-      "id": "G005",
-      "objective": "Verify, commit, push, tag v0.1, and trigger the all-platform build.",
-      "status": "completed",
-      "dependencies": ["G001", "G002", "G003", "G004"],
-      "verification": [
-        "local quality gate passes",
-        "commit is pushed",
-        "tag v0.1 is pushed",
-        "GitHub Actions run starts"
-      ]
-    },
-    {
-      "id": "G006",
-      "objective": "Add durable app settings and updater metadata persistence for auto-update preferences and 24-hour throttling.",
-      "status": "pending",
-      "dependencies": ["G005"],
       "constraints": [
-        "Persist full app settings section objects under app.getPath('userData') without dropping existing or future keys",
-        "Add app.general.automaticallyCheckForUpdates defaulting to true alongside confirmDeletes",
-        "Persist updater metadata separately, including lastAutomaticCheckAttemptAtMs",
-        "Base the 24-hour automatic throttle on automatic check attempt start time",
-        "Manual checks do not consume or reset the automatic throttle"
+        "Do not mark complete until targeted tests have evidence",
+        "Run independent code-review and resolve high-severity findings",
+        "Record final quality-gate evidence in ledger.jsonl"
       ],
       "verification": [
-        "tests cover full app settings persistence and default merging",
-        "tests cover persisted lastAutomaticCheckAttemptAtMs across restart-like reloads",
-        "targeted typecheck/tests pass for changed settings/updater metadata code"
-      ]
-    },
-    {
-      "id": "G007",
-      "objective": "Implement the main-process updater service and narrow desktop bridge contract.",
-      "status": "pending",
-      "dependencies": ["G006"],
-      "constraints": [
-        "Only main-process code imports electron-updater",
-        "Expose serializable DTOs through preload methods/events only",
-        "Keep updater state app-global and broadcast to all BrowserWindow instances",
-        "Provide getUpdateState for late windows",
-        "Support stable releases only, autoDownload true, overlap prevention, and manual/background error distinction",
-        "Gate unsupported, unpackaged, and non-AppImage Linux builds without checking for updates"
-      ],
-      "verification": [
-        "tests cover updater state transitions with a mocked updater",
-        "tests cover platform/package gating including app.isPackaged and Linux AppImage detection",
-        "tests cover overlap prevention, manual/background errors, and late-window hydration",
-        "preload contract tests or type checks confirm no raw Electron/updater exposure"
-      ]
-    },
-    {
-      "id": "G008",
-      "objective": "Coordinate user-confirmed restart/install with runtime shutdown.",
-      "status": "pending",
-      "dependencies": ["G007"],
-      "constraints": [
-        "Restart/install runs only after explicit user confirmation",
-        "Runtime disposal runs once before installer quit",
-        "Existing before-quit shutdown handling must not loop or block quitAndInstall"
-      ],
-      "verification": [
-        "tests cover updater install mode with runtime disposal and before-quit behavior",
-        "manual verification confirms Later keeps update ready and Restart and update invokes install path"
-      ]
-    },
-    {
-      "id": "G009",
-      "objective": "Add Settings update controls, status display, non-blocking update-ready notification, and restart confirmation UI.",
-      "status": "pending",
-      "dependencies": ["G007", "G008"],
-      "constraints": [
-        "Settings shows current version, update support/status, auto-check toggle, manual check, restart action, and inline manual errors",
-        "Background failures do not interrupt the user",
-        "Update-ready notification is non-blocking and offers Restart to update and Later",
-        "Restart confirmation uses the approved copy and does not install automatically",
-        "Unsupported/manual package types show explanatory status"
-      ],
-      "verification": [
-        "renderer tests or targeted manual verification cover Settings states and notification behavior",
-        "accessibility basics are covered for status text, buttons, and confirmation flow",
-        "desktop renderer typecheck passes"
-      ]
-    },
-    {
-      "id": "G010",
-      "objective": "Update Electron Builder and the existing desktop release workflow for updater metadata, NSIS, and draft-release publishing safety.",
-      "status": "pending",
-      "dependencies": ["G007"],
-      "constraints": [
-        "Add GitHub publish provider metadata for zorid-app/Zorid",
-        "Use Windows NSIS as the Windows updater target; MSI may remain manual only",
-        "Keep macOS zip and Linux AppImage updater-compatible artifacts",
-        "Modify .github/workflows/desktop-release.yml instead of creating a parallel workflow",
-        "Keep draft releases as the default safety gate",
-        "Upload generated updater metadata assets including latest.yml, latest-mac.yml, latest-linux.yml, and *.blockmap as generated",
-        "Fail CI if required updater metadata is missing for macOS zip, Windows NSIS, or Linux AppImage",
-        "Public Windows auto-update remains incomplete until signed NSIS artifacts are configured"
-      ],
-      "verification": [
-        "workflow syntax and asset patterns are reviewed",
-        "release asset assertion script/test covers required metadata names",
-        "desktop pack/build commands still pass where feasible"
-      ]
-    },
-    {
-      "id": "G011",
-      "objective": "Document release/update operations and complete the final cleanup, verification, and independent review gate.",
-      "status": "pending",
-      "dependencies": ["G006", "G007", "G008", "G009", "G010"],
-      "constraints": [
-        "Document supported updater platforms and manual artifacts",
-        "Document draft-to-published stable release checklist",
-        "Document signing/notarization and Windows signing requirements",
-        "Document internal unsigned testing limits",
-        "Do not mark aggregate work complete until final quality gate and independent code-review/architect review are clean"
-      ],
-      "verification": [
-        "pnpm quality:fast passes after cleanup",
-        "targeted desktop build/package verification is recorded or explicit blockers are documented",
-        "independent code-review returns APPROVE or all findings are resolved",
-        "architecture review returns CLEAR for updater/release changes"
+        "pnpm test tests/editor-live-preview-primitives.test.ts",
+        "pnpm test tests/editor-live-preview-selection-mapping.test.ts",
+        "pnpm typecheck and pnpm lint if feasible",
+        "independent code-review returns APPROVE or findings are resolved"
       ]
     }
   ]

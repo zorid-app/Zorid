@@ -46,6 +46,21 @@ describe('editor Live Preview primitives', () => {
     expect(shouldRenderLivePreviewRange(range, { focused: false, selectionRanges: [{ from: 7, to: 7 }] })).toBe(true);
   });
 
+  it('supports caret-only and never reveal policies for focused selections', () => {
+    const caretOnlyRange = { from: 5, to: 10, revealPolicy: 'caret' as const };
+    const neverRevealRange = { from: 5, to: 10, revealPolicy: 'never' as const };
+
+    expect(livePreviewRangeIntersectsSelection(caretOnlyRange, [{ from: 7, to: 7 }])).toBe(true);
+    expect(livePreviewRangeIntersectsSelection(caretOnlyRange, [{ from: 6, to: 9 }])).toBe(false);
+    expect(shouldRenderLivePreviewRange(caretOnlyRange, { focused: true, selectionRanges: [{ from: 6, to: 9 }] })).toBe(
+      true,
+    );
+    expect(livePreviewRangeIntersectsSelection(neverRevealRange, [{ from: 7, to: 7 }])).toBe(false);
+    expect(
+      shouldRenderLivePreviewRange(neverRevealRange, { focused: true, selectionRanges: [{ from: 7, to: 7 }] }),
+    ).toBe(true);
+  });
+
   it('keeps non-intersecting focused ranges previewable', () => {
     expect(
       filterLivePreviewRanges(
@@ -73,7 +88,7 @@ describe('editor Live Preview primitives', () => {
     const focusedContext = createLivePreviewContext(state, { from: 0, to: doc.length }, true);
     expect(
       collectLivePreviewRanges(defaultLivePreviewRenderers, focusedContext).map((range) => range.rendererId),
-    ).toEqual(['inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
+    ).toEqual(['heading', 'inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
   });
 
   it('adds decorations without changing source text', () => {
@@ -219,6 +234,56 @@ describe('editor Live Preview primitives', () => {
     ]);
   });
 
+  it('keeps # alone plain and activates headings only after a following space', () => {
+    const plainDoc = '#';
+    const plainState = EditorState.create({ doc: plainDoc });
+    expect(
+      collectLivePreviewRanges(
+        defaultLivePreviewRenderers,
+        createLivePreviewContext(plainState, { from: 0, to: plainDoc.length }),
+      ).filter((range) => range.rendererId === 'heading'),
+    ).toEqual([]);
+
+    const headingDoc = '# ';
+    const headingState = EditorState.create({ doc: headingDoc });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(headingState, { from: 0, to: headingDoc.length }),
+    );
+
+    expect(ranges.map((range) => [headingDoc.slice(range.from, range.to), range.kind, range.className])).toEqual([
+      ['# ', 'replace', 'z-live-preview-heading'],
+    ]);
+  });
+
+  it('reveals only the marker for caret editing while keeping heading content styled', () => {
+    const doc = '# Title';
+    const state = EditorState.create({ doc, selection: { anchor: doc.indexOf('Title') } });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(state, { from: 0, to: doc.length }, true),
+    );
+
+    expect(ranges.map((range) => [doc.slice(range.from, range.to), range.kind, range.className])).toEqual([
+      ['Title', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
+    ]);
+  });
+
+  it('keeps selected headings rendered while preserving source text', () => {
+    const doc = '# Title';
+    const state = EditorState.create({ doc, selection: { anchor: 0, head: doc.length } });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(state, { from: 0, to: doc.length }, true),
+    );
+
+    expect(ranges.map((range) => [doc.slice(range.from, range.to), range.kind, range.className])).toEqual([
+      ['# ', 'replace', 'z-live-preview-heading'],
+      ['Title', undefined, 'z-live-preview-heading z-live-preview-heading--h1'],
+    ]);
+    expect(state.sliceDoc(0, doc.length)).toBe('# Title');
+  });
+
   it('hides inactive inline style delimiters while keeping styled content marks', () => {
     const doc = '**bold** *em* ~~gone~~ ==mark==';
     const state = EditorState.create({ doc });
@@ -264,7 +329,7 @@ describe('editor Live Preview primitives', () => {
     parent.remove();
   });
 
-  it('restores preview decorations after focused selection leaves the range', () => {
+  it('keeps heading content rendered while focused caret reveals heading source marker', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
     const editor = createMountedMarkdownEditor({
@@ -276,7 +341,7 @@ describe('editor Live Preview primitives', () => {
 
     editor.focus();
     editor.view.dispatch({ selection: { anchor: 2 } });
-    expect(parent.querySelector('[data-live-preview-renderer="heading"]')).toBeNull();
+    expect(parent.querySelector('[data-live-preview-renderer="heading"]')?.textContent).toBe('Heading');
     expect(parent.querySelector('[data-live-preview-renderer="inline-code"]')).toBeTruthy();
 
     editor.view.dispatch({ selection: { anchor: editor.getText().length } });

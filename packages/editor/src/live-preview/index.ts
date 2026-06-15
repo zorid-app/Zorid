@@ -78,6 +78,7 @@ export type {
   LivePreviewDecorationKind,
   LivePreviewRange,
   LivePreviewRenderer,
+  LivePreviewRevealPolicy,
   LivePreviewSelectionRange,
   LivePreviewVisibleRange,
 } from './types.js';

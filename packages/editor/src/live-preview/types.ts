@@ -21,6 +21,8 @@ export interface LivePreviewContext {
 
 export type LivePreviewDecorationKind = 'mark' | 'replace';
 
+export type LivePreviewRevealPolicy = 'caret-or-selection' | 'caret' | 'never';
+
 export interface LivePreviewRange {
   readonly rendererId: string;
   readonly from: number;
@@ -30,6 +32,7 @@ export interface LivePreviewRange {
   readonly kind?: LivePreviewDecorationKind;
   readonly activationFrom?: number;
   readonly activationTo?: number;
+  readonly revealPolicy?: LivePreviewRevealPolicy;
 }
 
 /**
