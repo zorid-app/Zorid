@@ -1,3 +1,4 @@
+import { insertNewlineContinueMarkup } from '@codemirror/lang-markdown';
 import type { EditorState } from '@codemirror/state';
 import { type EditorView, WidgetType } from '@codemirror/view';
 import { continueTaskListAtLineEndSelection } from '../markdown-list-commands.js';
@@ -206,20 +207,21 @@ class TaskCheckboxPreviewWidget extends WidgetType {
       toggleTaskMarkerAtPosition(view, this.activateAt);
     };
 
-    const continueTask = () => {
+    const continueTask = (): boolean => {
       view.focus();
       view.dispatch({
         effects: setInternalLivePreviewFocused.of(true),
         selection: { anchor: this.activateAt },
         scrollIntoView: true,
       });
-      continueTaskListAtLineEndSelection(view);
+      if (continueTaskListAtLineEndSelection(view)) return true;
+      view.dispatch({ selection: { anchor: view.state.doc.lineAt(this.activateAt).to }, scrollIntoView: true });
+      return insertNewlineContinueMarkup(view);
     };
 
     checkbox.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
-        event.preventDefault();
-        continueTask();
+        if (continueTask()) event.preventDefault();
         return;
       }
       if (event.key !== ' ') return;

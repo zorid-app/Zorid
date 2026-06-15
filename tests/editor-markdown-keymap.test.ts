@@ -7,6 +7,10 @@ import {
   markdownTaskKeymap,
   toggleTaskMarkerAtSelection,
 } from '../packages/editor/src/index';
+import {
+  deleteEmptyTaskListAtSelection,
+  handleTaskListEnterAtSelection,
+} from '../packages/editor/src/markdown-list-commands';
 
 function runMarkdownEnter(text: string): string {
   const parent = document.createElement('div');
@@ -28,6 +32,23 @@ function runMarkdownBackspace(text: string): string {
   return result;
 }
 
+function pressEditorKey(
+  text: string,
+  key: 'Enter' | 'Backspace',
+  anchor = text.length,
+): { text: string; selectionHead: number } {
+  const parent = document.createElement('div');
+  const editor = createMountedMarkdownEditor({ parent, text });
+  editor.focus();
+  editor.view.dispatch({ selection: { anchor } });
+
+  editor.view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+
+  const result = { text: editor.getText(), selectionHead: editor.view.state.selection.main.head };
+  editor.destroy();
+  return result;
+}
+
 describe('editor Markdown keymap behavior', () => {
   it('keeps the official Markdown Enter and Backspace commands available', () => {
     expect(markdownKeymap).toEqual(
@@ -38,13 +59,56 @@ describe('editor Markdown keymap behavior', () => {
     );
   });
 
-  it('exposes a conservative task toggle keymap without replacing Markdown Enter or Backspace', () => {
+  it('exposes conservative task commands before Markdown fallback behavior', () => {
     expect(markdownTaskKeymap).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ key: 'Enter' }),
+        expect.objectContaining({ key: 'Enter', run: handleTaskListEnterAtSelection }),
+        expect.objectContaining({ key: 'Backspace', run: deleteEmptyTaskListAtSelection }),
         expect.objectContaining({ key: 'Mod-Enter', run: toggleTaskMarkerAtSelection }),
       ]),
     );
+  });
+
+  it('exits empty task lines with Enter and leaves the cursor at the line start', () => {
+    const text = ['before', '- [ ] ', 'after'].join('\n');
+    const lineStart = text.indexOf('- [ ] ');
+
+    expect(pressEditorKey(text, 'Enter', lineStart + '- [ ] '.length)).toEqual({
+      text: ['before', '', 'after'].join('\n'),
+      selectionHead: lineStart,
+    });
+    expect(pressEditorKey(['before', '1. [ ] ', 'after'].join('\n'), 'Enter', lineStart + '1. [ ] '.length)).toEqual({
+      text: ['before', '', 'after'].join('\n'),
+      selectionHead: lineStart,
+    });
+  });
+
+  it('exits empty task lines with Backspace and leaves the cursor at the line start', () => {
+    const text = ['before', '- [x] ', 'after'].join('\n');
+    const lineStart = text.indexOf('- [x] ');
+
+    expect(pressEditorKey(text, 'Backspace', lineStart + '- [x] '.length)).toEqual({
+      text: ['before', '', 'after'].join('\n'),
+      selectionHead: lineStart,
+    });
+    expect(
+      pressEditorKey(['before', '1) [X] ', 'after'].join('\n'), 'Backspace', lineStart + '1) [X] '.length),
+    ).toEqual({
+      text: ['before', '', 'after'].join('\n'),
+      selectionHead: lineStart,
+    });
+  });
+
+  it('preserves non-empty task Enter continuation through Markdown fallback', () => {
+    expect(pressEditorKey('- [ ] task', 'Enter')).toEqual({
+      text: '- [ ] task\n- [ ] ',
+      selectionHead: '- [ ] task\n- [ ] '.length,
+    });
+  });
+
+  it('falls through for non-task Markdown Enter and Backspace cases', () => {
+    expect(pressEditorKey('- item', 'Enter')).toEqual({ text: '- item\n- ', selectionHead: '- item\n- '.length });
+    expect(pressEditorKey('- ', 'Backspace')).toEqual({ text: '', selectionHead: 0 });
   });
 
   it('continues task markers at the caret when Enter is pressed at the marker boundary', () => {

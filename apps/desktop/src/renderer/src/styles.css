@@ -770,7 +770,7 @@ h2 {
   margin-right: 0.2em;
   color: color-mix(in srgb, var(--z-color-subtle) 82%, var(--z-color-text));
   font-family: var(--z-font-ui);
-  font-size: 0.72em;
+  font-size: 0.936em;
   font-weight: 600;
   line-height: 1;
   transform: translateY(-0.05em);
@@ -783,8 +783,8 @@ h2 {
 .markdown-editor .z-live-preview-task-checkbox {
   display: inline-grid;
   place-items: center;
-  width: 0.95em;
-  height: 0.95em;
+  width: 1.235em;
+  height: 1.235em;
   margin-right: 0.35em;
   color: #fff;
   background: transparent;

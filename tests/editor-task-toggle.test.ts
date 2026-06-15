@@ -295,6 +295,40 @@ describe('editor task marker toggle', () => {
     parent.remove();
   });
 
+  it('falls back to Markdown Enter for focused non-empty ordered visual task checkboxes', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({ parent, text: '1. [ ] pending' });
+
+    const checkbox = parent.querySelector<HTMLElement>('.z-live-preview-task-checkbox');
+    expect(checkbox).toBeTruthy();
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    checkbox?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(editor.getText()).toBe('1. [ ] pending\n2. ');
+    expect(editor.view.state.selection.main.head).toBe('1. [ ] pending\n2. '.length);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('exits focused empty visual task checkboxes with Enter', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({ parent, text: ['before', '- [ ] ', 'after'].join('\n') });
+
+    const checkbox = parent.querySelector<HTMLElement>('.z-live-preview-task-checkbox');
+    expect(checkbox).toBeTruthy();
+    checkbox?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+
+    expect(editor.getText()).toBe(['before', '', 'after'].join('\n'));
+    expect(editor.view.state.selection.main.head).toBe('before\n'.length);
+
+    editor.destroy();
+    parent.remove();
+  });
+
   it('does not mount visual task checkboxes for non-task, table, fenced-code, or indented-code samples', () => {
     const parent = document.createElement('div');
     document.body.append(parent);

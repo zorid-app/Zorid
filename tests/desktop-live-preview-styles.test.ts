@@ -102,11 +102,14 @@ describe('desktop Live Preview styles', () => {
     );
   });
 
-  it('keeps live-preview list markers compact and muted', async () => {
+  it('keeps live-preview list markers compact, muted, and scaled to 1.3x', async () => {
     const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
 
     expect(styles).toMatch(
-      /\.markdown-editor\s+\.z-live-preview-list-marker\s*\{[^}]*margin-right:\s*0\.2em;[^}]*color:\s*color-mix\([^}]*font-size:\s*0\.72em;[^}]*font-weight:\s*600;[^}]*\}/s,
+      /\.markdown-editor\s+\.z-live-preview-list-marker\s*\{[^}]*margin-right:\s*0\.2em;[^}]*color:\s*color-mix\([^}]*font-size:\s*0\.936em;[^}]*font-weight:\s*600;[^}]*\}/s,
+    );
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-task-checkbox\s*\{[^}]*width:\s*1\.235em;[^}]*height:\s*1\.235em;[^}]*font-size:\s*0\.72em;[^}]*\}/s,
     );
   });
 });

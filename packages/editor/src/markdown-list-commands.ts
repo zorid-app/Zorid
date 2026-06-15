@@ -122,6 +122,33 @@ function taskMarkerEditBoundary(
   return boundary;
 }
 
+function isUnorderedTaskMarker(marker: string): boolean {
+  const markerStart = firstNonSpace(marker);
+  const code = marker.charCodeAt(markerStart);
+  return code === 45 || code === 42 || code === 43;
+}
+
+function exitEmptyTaskListAtSelection(view: EditorView, userEvent: string): boolean {
+  const selection = view.state.selection;
+  if (selection.ranges.length !== 1 || !selection.main.empty) return false;
+
+  const position = selection.main.head;
+  const range = findTaskMarkerAtPosition(view.state, position);
+  if (!range) return false;
+  if (position < range.lineFrom || position > taskMarkerEditBoundary(view, range)) return false;
+
+  const boundary = taskMarkerEditBoundary(view, range);
+  const trailingContent = view.state.doc.sliceString(boundary, range.lineTo);
+  if (trailingContent.trim().length > 0) return false;
+
+  view.dispatch({
+    changes: { from: range.lineFrom, to: range.lineTo, insert: '' },
+    selection: { anchor: range.lineFrom },
+    annotations: Transaction.userEvent.of(userEvent),
+  });
+  return true;
+}
+
 function continueTaskListAtSelectionPosition(view: EditorView, insertAtLineEnd: boolean): boolean {
   const selection = view.state.selection;
   if (selection.ranges.length !== 1 || !selection.main.empty) return false;
@@ -129,6 +156,7 @@ function continueTaskListAtSelectionPosition(view: EditorView, insertAtLineEnd: 
   const position = selection.main.head;
   const range = findTaskMarkerAtPosition(view.state, position);
   if (!range) return false;
+  if (!isUnorderedTaskMarker(range.marker)) return false;
   if (position > taskMarkerEditBoundary(view, range)) return false;
 
   const insertAt = insertAtLineEnd ? range.lineTo : position;
@@ -145,7 +173,16 @@ export function continueTaskListAtSelection(view: EditorView): boolean {
   return continueTaskListAtSelectionPosition(view, false);
 }
 
+export function handleTaskListEnterAtSelection(view: EditorView): boolean {
+  return exitEmptyTaskListAtSelection(view, 'delete.list.task.empty') || continueTaskListAtSelection(view);
+}
+
+export function deleteEmptyTaskListAtSelection(view: EditorView): boolean {
+  return exitEmptyTaskListAtSelection(view, 'delete.list.task.empty');
+}
+
 export function continueTaskListAtLineEndSelection(view: EditorView): boolean {
+  if (exitEmptyTaskListAtSelection(view, 'delete.list.task.empty')) return true;
   return continueTaskListAtSelectionPosition(view, true);
 }
 

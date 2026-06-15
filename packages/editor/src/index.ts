@@ -38,7 +38,7 @@ import {
 } from './live-preview/renderers.js';
 import { toggleTaskMarkerAtSelection } from './live-preview/task-toggle.js';
 import type { LivePreviewRenderer } from './live-preview/types.js';
-import { continueTaskListAtSelection } from './markdown-list-commands.js';
+import { deleteEmptyTaskListAtSelection, handleTaskListEnterAtSelection } from './markdown-list-commands.js';
 
 export type {
   DisposableView,
@@ -214,7 +214,11 @@ export function composeEditorExtensions(
 export const markdownTaskKeymap: readonly KeyBinding[] = [
   {
     key: 'Enter',
-    run: continueTaskListAtSelection,
+    run: handleTaskListEnterAtSelection,
+  },
+  {
+    key: 'Backspace',
+    run: deleteEmptyTaskListAtSelection,
   },
   {
     key: 'Mod-Enter',
