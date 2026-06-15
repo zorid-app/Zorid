@@ -47,7 +47,7 @@ describe('editor Markdown keymap behavior', () => {
     );
   });
 
-  it('continues task markers when Enter is pressed at the marker boundary', () => {
+  it('continues task markers at the caret when Enter is pressed at the marker boundary', () => {
     const parent = document.createElement('div');
     const editor = createMountedMarkdownEditor({ parent, text: '- [ ] task' });
     editor.focus();
@@ -58,8 +58,7 @@ describe('editor Markdown keymap behavior', () => {
     );
 
     const text = editor.getText();
-    expect(text).toContain('\n- [ ] ');
-    expect(text).not.toContain('\n- task');
+    expect(text).toBe('- [ ] \n- [ ] task');
     editor.destroy();
   });
 

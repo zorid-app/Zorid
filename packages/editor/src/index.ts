@@ -1,5 +1,5 @@
 import { history, historyKeymap } from '@codemirror/commands';
-import { EditorState, type Extension } from '@codemirror/state';
+import { EditorState, type Extension, Prec } from '@codemirror/state';
 import { EditorView, type KeyBinding, keymap, type ViewUpdate } from '@codemirror/view';
 import type {
   EditorAPI,
@@ -254,7 +254,7 @@ export function createMarkdownEditorExtensions({
     EditorView.lineWrapping,
     history(),
     keymap.of(historyKeymap),
-    keymap.of(markdownTaskKeymap),
+    Prec.highest(keymap.of(markdownTaskKeymap)),
     ...markdownInlineRegistrationExtensions(activeMarkdownInlineRegistrations),
     ...markdownBlockRegistrationExtensions([
       ...activeDefaultMarkdownBlockRegistrations,

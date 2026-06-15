@@ -1,5 +1,6 @@
 import type { EditorState } from '@codemirror/state';
 import { type EditorView, WidgetType } from '@codemirror/view';
+import { continueTaskListAtLineEndSelection } from '../markdown-list-commands.js';
 import {
   type InternalLivePreviewRange,
   type InternalLivePreviewRenderer,
@@ -194,6 +195,9 @@ class TaskCheckboxPreviewWidget extends WidgetType {
     checkbox.setAttribute('role', 'checkbox');
     checkbox.setAttribute('aria-checked', this.checked ? 'true' : 'false');
     checkbox.setAttribute('aria-label', this.checked ? 'Mark task incomplete' : 'Mark task complete');
+    checkbox.setAttribute('aria-keyshortcuts', 'Space Enter');
+    checkbox.setAttribute('aria-description', 'Press Space to toggle the task or Enter to continue the task list.');
+    checkbox.title = 'Space toggles task; Enter continues task list';
     checkbox.tabIndex = 0;
     checkbox.textContent = this.checked ? '✓' : '';
 
@@ -207,8 +211,23 @@ class TaskCheckboxPreviewWidget extends WidgetType {
       toggleTaskMarkerAtPosition(view, this.activateAt);
     };
 
+    const continueTask = () => {
+      view.focus();
+      view.dispatch({
+        effects: setInternalLivePreviewFocused.of(true),
+        selection: { anchor: this.activateAt },
+        scrollIntoView: true,
+      });
+      continueTaskListAtLineEndSelection(view);
+    };
+
     checkbox.addEventListener('keydown', (event) => {
-      if (event.key !== ' ' && event.key !== 'Enter') return;
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        continueTask();
+        return;
+      }
+      if (event.key !== ' ') return;
       event.preventDefault();
       toggle();
     });
@@ -246,7 +265,7 @@ class ListMarkerPreviewWidget extends WidgetType {
       : 'z-live-preview-list-marker';
     marker.dataset.livePreviewRenderer = 'list-marker';
     marker.setAttribute('aria-hidden', 'true');
-    marker.textContent = this.ordered ? `${this.orderedIndex ?? ''}. ` : '• ';
+    marker.textContent = this.ordered ? `${this.orderedIndex ?? ''}.` : '•';
     return marker;
   }
 }

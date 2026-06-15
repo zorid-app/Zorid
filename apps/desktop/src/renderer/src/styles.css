@@ -729,6 +729,18 @@ h2 {
   cursor: pointer;
 }
 
+.markdown-editor .z-live-preview-link[data-live-preview-url]::after {
+  display: inline-block;
+  margin-left: 0.18em;
+  color: var(--z-color-subtle);
+  content: '↗';
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+  transform: translateY(-0.18em);
+}
+
 .markdown-editor .z-live-preview-wiki-link {
   background: color-mix(in srgb, var(--z-color-accent) 9%, transparent);
   border-radius: var(--z-radius-sm);
@@ -747,11 +759,14 @@ h2 {
 }
 
 .markdown-editor .z-live-preview-list-marker {
-  color: var(--z-color-subtle);
+  display: inline-block;
+  margin-right: 0.2em;
+  color: color-mix(in srgb, var(--z-color-subtle) 82%, var(--z-color-text));
   font-family: var(--z-font-ui);
-  font-size: 0.94em;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1;
+  transform: translateY(-0.05em);
 }
 
 .markdown-editor .z-live-preview-list-marker--ordered {

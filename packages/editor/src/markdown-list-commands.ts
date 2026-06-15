@@ -122,7 +122,7 @@ function taskMarkerEditBoundary(
   return boundary;
 }
 
-export function continueTaskListAtSelection(view: EditorView): boolean {
+function continueTaskListAtSelectionPosition(view: EditorView, insertAtLineEnd: boolean): boolean {
   const selection = view.state.selection;
   if (selection.ranges.length !== 1 || !selection.main.empty) return false;
 
@@ -131,13 +131,22 @@ export function continueTaskListAtSelection(view: EditorView): boolean {
   if (!range) return false;
   if (position > taskMarkerEditBoundary(view, range)) return false;
 
+  const insertAt = insertAtLineEnd ? range.lineTo : position;
   const insert = `\n${continuedTaskMarker(range.marker)}`;
   view.dispatch({
-    changes: { from: position, to: position, insert },
-    selection: { anchor: position + insert.length },
+    changes: { from: insertAt, to: insertAt, insert },
+    selection: { anchor: insertAt + insert.length },
     annotations: Transaction.userEvent.of('input.list.continue.task'),
   });
   return true;
+}
+
+export function continueTaskListAtSelection(view: EditorView): boolean {
+  return continueTaskListAtSelectionPosition(view, false);
+}
+
+export function continueTaskListAtLineEndSelection(view: EditorView): boolean {
+  return continueTaskListAtSelectionPosition(view, true);
 }
 
 export function toggleBulletListAtSelection(view: EditorView): boolean {

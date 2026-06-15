@@ -70,4 +70,20 @@ describe('desktop Live Preview styles', () => {
     expect(styles).not.toMatch(/\.markdown-preview-view\s+\.z-live-preview-blockquote-line/);
     expect(styles).not.toMatch(/^blockquote\s*\{/m);
   });
+
+  it('styles external live-preview links with a small outgoing indicator', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-link\[data-live-preview-url\]::after\s*\{[^}]*content:\s*'↗';[^}]*font-size:\s*0\.72em;[^}]*\}/s,
+    );
+  });
+
+  it('keeps live-preview list markers compact and muted', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-list-marker\s*\{[^}]*margin-right:\s*0\.2em;[^}]*color:\s*color-mix\([^}]*font-size:\s*0\.72em;[^}]*font-weight:\s*600;[^}]*\}/s,
+    );
+  });
 });
