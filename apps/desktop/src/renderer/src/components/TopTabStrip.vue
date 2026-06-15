@@ -2,8 +2,6 @@
 import {
   Bookmark,
   FolderOpen,
-  Link2,
-  ListTree,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -13,7 +11,7 @@ import {
   X,
 } from '@lucide/vue';
 import { ZIconButton } from '@zorid/ui-vue';
-import { nextTick, reactive, ref } from 'vue';
+import { nextTick, reactive } from 'vue';
 import type { TopTabItem } from './top-tab-model.js';
 
 const props = defineProps<{
@@ -34,7 +32,6 @@ const emit = defineEmits<{
 
 const tabLabelEls = new Map<string, HTMLSpanElement>();
 const truncatedTabIds = reactive<Record<string, boolean>>({});
-const selectedRightPaneTab = ref<'links' | 'outline'>('links');
 
 function setTabLabelRef(tabId: string, element: Element | null | unknown): void {
   if (element instanceof HTMLSpanElement) tabLabelEls.set(tabId, element);
@@ -133,28 +130,6 @@ async function updateTabOverflow(tabId: string): Promise<void> {
       >
         <component :is="rightCollapsed ? PanelRightOpen : PanelRightClose" class="titlebar-action-icon" aria-hidden="true" />
       </ZIconButton>
-      <div v-if="!rightCollapsed" class="titlebar-pane-tabs titlebar-pane-tabs-right" role="tablist" aria-label="Right sidebar tabs">
-        <ZIconButton
-          class="titlebar-action titlebar-pane-tab"
-          label="Links tab"
-          role="tab"
-          :aria-selected="selectedRightPaneTab === 'links'"
-          :data-active="selectedRightPaneTab === 'links' ? 'true' : 'false'"
-          @click="selectedRightPaneTab = 'links'"
-        >
-          <Link2 class="titlebar-action-icon" aria-hidden="true" />
-        </ZIconButton>
-        <ZIconButton
-          class="titlebar-action titlebar-pane-tab"
-          label="Outline tab"
-          role="tab"
-          :aria-selected="selectedRightPaneTab === 'outline'"
-          :data-active="selectedRightPaneTab === 'outline' ? 'true' : 'false'"
-          @click="selectedRightPaneTab = 'outline'"
-        >
-          <ListTree class="titlebar-action-icon" aria-hidden="true" />
-        </ZIconButton>
-      </div>
     </div>
   </header>
 </template>

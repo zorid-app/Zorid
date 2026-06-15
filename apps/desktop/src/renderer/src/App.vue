@@ -29,6 +29,7 @@ import TopTabStrip from './components/TopTabStrip.vue';
 import type { TopTabItem } from './components/top-tab-model.js';
 import { fileTab, fileTabId, nextTabIdAfterClose, placeholderTab } from './components/top-tab-model.js';
 import { createMarkdownAutosave, type MarkdownAutosaveSnapshot } from './markdown-autosave.js';
+import { buildOutlineTree, findCurrentOutlineId } from './outline-tree.js';
 import type { PaneLayout } from './shell-layout.js';
 import {
   DEFAULT_PANE_LAYOUT,
@@ -145,6 +146,7 @@ const openTabs = ref<TopTabItem[]>([]);
 const selectedTabId = ref<string>();
 const placeholderTabCounter = ref(0);
 const editorText = ref('');
+const editorCursorPosition = ref(0);
 const savedText = ref('');
 const error = ref<string>();
 const commands = ref<readonly CommandDto[]>([]);
@@ -239,6 +241,8 @@ const filteredCommands = computed(() => {
   return source.filter((command: CommandDto) => `${command.title} ${command.id}`.toLowerCase().includes(query));
 });
 const activePlugins = computed(() => plugins.value.filter((plugin) => plugin.status === 'active').length);
+const outlineTree = computed(() => buildOutlineTree(editorText.value, selectedPath.value, outline.value));
+const currentOutlineId = computed(() => findCurrentOutlineId(outlineTree.value, editorCursorPosition.value));
 const fieldsPropertiesEnabled = computed(() => {
   const status = plugins.value.find((plugin) => plugin.pluginId === 'zorid.core.fields');
   return status ? status.status === 'active' : true;
@@ -617,6 +621,10 @@ function updateEditorText(text: string): void {
   scheduleAutosave();
 }
 
+function updateEditorCursorPosition(position: number): void {
+  editorCursorPosition.value = position;
+}
+
 async function flushPendingAutosave(): Promise<void> {
   await autosave.flush();
 }
@@ -624,6 +632,7 @@ async function flushPendingAutosave(): Promise<void> {
 function clearFileSelection(): void {
   selectedPath.value = undefined;
   editorText.value = '';
+  editorCursorPosition.value = 0;
   savedText.value = '';
   backlinks.value = [];
   outline.value = [];
@@ -646,6 +655,7 @@ async function activateFilePath(path: string): Promise<void> {
   if (selectedTabId.value !== nextTabId) return;
   selectedPath.value = path;
   editorText.value = text;
+  editorCursorPosition.value = 0;
   savedText.value = text;
   await refreshMetadataPanels();
 }
@@ -1309,6 +1319,7 @@ onBeforeUnmount(() => {
         :types="types"
         :fields-properties-enabled="fieldsPropertiesEnabled"
         @change="updateEditorText"
+        @cursor-change="updateEditorCursorPosition"
         @save="saveActive"
         @error="(message) => (error = message)"
         @update-field="setActiveFieldValue"
@@ -1327,6 +1338,8 @@ onBeforeUnmount(() => {
     <RightSidebarPanels
       v-show="!paneLayout.rightCollapsed"
       :outline="outline"
+      :outline-tree="outlineTree"
+      :current-outline-id="currentOutlineId"
       :backlinks="backlinks"
       :tags="tags"
       :selected-path="selectedPath"

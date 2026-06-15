@@ -26,6 +26,7 @@ const props = withDefaults(
 );
 const emit = defineEmits<{
   change: [text: string];
+  cursorChange: [position: number];
   save: [];
   error: [message: string];
   updateField: [field: FieldDto, value: unknown];
@@ -96,6 +97,10 @@ function renderEditorWindowHost(): void {
   });
 }
 
+function emitCursorChange(): void {
+  emit('cursorChange', editor?.view.state.selection.main.head ?? 0);
+}
+
 function openReference(target: { readonly path: string; readonly fragment?: string }): void {
   try {
     const url = new URL(target.path);
@@ -116,6 +121,9 @@ onMounted(() => {
         emit('change', text);
         renderEditorWindowHost();
       },
+      onUpdate: (update) => {
+        if (update.docChanged || update.selectionSet) emitCursorChange();
+      },
       onSave: () => emit('save'),
       onOpenReference: openReference,
       onError: (error, context) => {
@@ -123,6 +131,7 @@ onMounted(() => {
       },
     });
     renderEditorWindowHost();
+    emitCursorChange();
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     log({ level: 'error', message: 'Markdown editor failed to mount.', data: caught });
@@ -139,6 +148,7 @@ watch(
     try {
       editor?.setText(text);
       renderEditorWindowHost();
+      emitCursorChange();
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       log({ level: 'error', message: 'Markdown editor failed to apply external text.', data: caught });

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ZPanel, ZTag } from '@zorid/ui-vue';
+import { computed, ref, watch } from 'vue';
 
+import type { OutlineTreeItem } from '../outline-tree.js';
 import type {
   BacklinkDto,
   BaseDto,
@@ -18,6 +20,8 @@ import type {
 
 const props = defineProps<{
   outline: readonly OutlineItemDto[];
+  outlineTree: readonly OutlineTreeItem[];
+  currentOutlineId?: string | undefined;
   backlinks: readonly BacklinkDto[];
   tags: readonly TagDto[];
   selectedPath?: string | undefined;
@@ -46,6 +50,59 @@ const emit = defineEmits<{
 }>();
 
 const activeBase = () => props.bases.find((base) => base.path === props.activeBasePath);
+const collapsedOutlineIds = ref<ReadonlySet<string>>(new Set());
+const outlineBranchIds = computed(() => collectBranchIds(props.outlineTree));
+const allOutlineBranchesCollapsed = computed(
+  () => outlineBranchIds.value.length > 0 && outlineBranchIds.value.every((id) => collapsedOutlineIds.value.has(id)),
+);
+const visibleOutlineItems = computed(() => flattenVisibleOutlineItems(props.outlineTree, collapsedOutlineIds.value));
+
+function collectBranchIds(items: readonly OutlineTreeItem[]): string[] {
+  const ids: string[] = [];
+  for (const item of items) {
+    if (item.children.length > 0) ids.push(item.id);
+    ids.push(...collectBranchIds(item.children));
+  }
+  return ids;
+}
+
+function flattenVisibleOutlineItems(
+  items: readonly OutlineTreeItem[],
+  collapsedIds: ReadonlySet<string>,
+  depth = 0,
+): Array<{ readonly item: OutlineTreeItem; readonly depth: number }> {
+  const visible: Array<{ readonly item: OutlineTreeItem; readonly depth: number }> = [];
+  for (const item of items) {
+    visible.push({ item, depth });
+    if (item.children.length > 0 && !collapsedIds.has(item.id)) {
+      visible.push(...flattenVisibleOutlineItems(item.children, collapsedIds, depth + 1));
+    }
+  }
+  return visible;
+}
+
+function toggleOutlineItem(item: OutlineTreeItem): void {
+  if (item.children.length === 0) return;
+  const next = new Set(collapsedOutlineIds.value);
+  if (next.has(item.id)) next.delete(item.id);
+  else next.add(item.id);
+  collapsedOutlineIds.value = next;
+}
+
+function toggleAllOutlineBranches(): void {
+  collapsedOutlineIds.value = allOutlineBranchesCollapsed.value ? new Set() : new Set(outlineBranchIds.value);
+}
+
+watch(
+  outlineBranchIds,
+  (ids) => {
+    const valid = new Set(ids);
+    const next = new Set([...collapsedOutlineIds.value].filter((id) => valid.has(id)));
+    if (next.size !== collapsedOutlineIds.value.size) collapsedOutlineIds.value = next;
+  },
+  { immediate: true },
+);
+
 function inputValue(event: Event): string {
   return event.target instanceof HTMLInputElement ? event.target.value : '';
 }
@@ -62,8 +119,42 @@ function fieldInputValue(field: FieldDto): string {
 <template>
   <aside v-show="true" class="sidebar right" data-region="right-sidebar" data-app-right-sidebar>
     <ZPanel class="panel">
-      <p class="eyebrow">Outline</p>
-      <ol v-if="outline.length > 0" class="outline-list"><li v-for="item in outline" :key="`${item.path}:${item.ordinal}`">{{ item.heading }}</li></ol>
+      <div class="panel-header outline-panel-header">
+        <p class="eyebrow">Outline</p>
+        <button
+          type="button"
+          class="outline-toggle-all"
+          :disabled="outlineBranchIds.length === 0"
+          :aria-pressed="allOutlineBranchesCollapsed"
+          :aria-label="allOutlineBranchesCollapsed ? 'Expand all outline headings' : 'Collapse all outline headings'"
+          @click="toggleAllOutlineBranches"
+        >
+          {{ allOutlineBranchesCollapsed ? 'Expand' : 'Collapse' }}
+        </button>
+      </div>
+      <ol v-if="outlineTree.length > 0" class="outline-list outline-tree" aria-label="Document outline">
+        <li
+          v-for="{ item, depth } in visibleOutlineItems"
+          :key="item.id"
+          class="outline-tree-item"
+          :class="{ current: item.id === currentOutlineId }"
+          :style="{ '--outline-depth': depth }"
+          :aria-current="item.id === currentOutlineId ? 'location' : undefined"
+        >
+          <button
+            v-if="item.children.length > 0"
+            type="button"
+            class="outline-row-chevron"
+            :aria-expanded="!collapsedOutlineIds.has(item.id)"
+            :aria-label="collapsedOutlineIds.has(item.id) ? `Expand ${item.heading}` : `Collapse ${item.heading}`"
+            @click="toggleOutlineItem(item)"
+          >
+            {{ collapsedOutlineIds.has(item.id) ? '›' : '⌄' }}
+          </button>
+          <span v-else class="outline-row-chevron outline-row-chevron-spacer" aria-hidden="true"></span>
+          <span class="outline-row-text">{{ item.heading }}</span>
+        </li>
+      </ol>
       <p v-else class="muted">No indexed headings for this file.</p>
     </ZPanel>
     <ZPanel class="panel">

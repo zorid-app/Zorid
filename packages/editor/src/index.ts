@@ -160,6 +160,7 @@ export interface EditorExtensionComposition {
 export interface MarkdownEditorExtensionOptions {
   extensionContributions?: readonly EditorExtensionContribution[];
   onChange?: (text: string, update: ViewUpdate) => void;
+  onUpdate?: (update: ViewUpdate) => void;
   onSave?: () => void;
   onError?: (error: unknown, context: string) => void;
   shouldEmitChange?: () => boolean;
@@ -229,6 +230,7 @@ export function createMarkdownEditorExtensions({
   onOpenReference,
   onSetEphemeralState,
   onChange,
+  onUpdate,
   onSave,
   onError,
   shouldEmitChange = () => true,
@@ -324,11 +326,12 @@ export function createMarkdownEditorExtensions({
     );
   }
 
-  if (onChange) {
+  if (onChange || onUpdate) {
     extensions.push(
       EditorView.updateListener.of((update) => {
+        onUpdate?.(update);
         if (update.docChanged && shouldEmitChange()) {
-          onChange(update.state.doc.toString(), update);
+          onChange?.(update.state.doc.toString(), update);
         }
       }),
     );

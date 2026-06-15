@@ -28,6 +28,8 @@ describe('desktop top tab strip', () => {
     expect(wrapper.find('[aria-label="Files"]').exists()).toBe(true);
     expect(wrapper.find('[aria-label="Search"]').exists()).toBe(true);
     expect(wrapper.find('[aria-label="Bookmarks"]').exists()).toBe(true);
+    expect(wrapper.find('[aria-label="Links tab"]').exists()).toBe(false);
+    expect(wrapper.find('[aria-label="Outline tab"]').exists()).toBe(false);
     expect(wrapper.findAll('button button')).toHaveLength(0);
 
     await wrapper.find('.top-tab-activate').trigger('click');

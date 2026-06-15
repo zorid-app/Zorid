@@ -1421,12 +1421,95 @@ h2 {
   font-size: 12px;
 }
 
-.outline-list li {
-  margin: 4px 0;
-  padding: 6px 8px;
-  border-left: 2px solid var(--z-color-accent-border);
+.outline-panel-header {
+  align-items: center;
+}
+
+.outline-toggle-all {
+  border: 1px solid var(--z-control-border);
+  border-radius: var(--z-radius-sm);
+  padding: 3px 7px;
   color: var(--z-control-text);
-  background: var(--z-panel-bg);
+  background: var(--z-control-bg);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.outline-toggle-all:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.outline-tree {
+  display: grid;
+  gap: 2px;
+}
+
+.outline-tree-item {
+  --outline-depth: 0;
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 4px 8px 4px calc(8px + var(--outline-depth) * 14px);
+  border-radius: var(--z-radius-sm);
+  color: var(--z-control-text);
+  background:
+    linear-gradient(
+      to right,
+      transparent calc(8px + var(--outline-depth) * 14px - 8px),
+      color-mix(in srgb, var(--z-color-border) 70%, transparent) calc(8px + var(--outline-depth) * 14px - 8px),
+      color-mix(in srgb, var(--z-color-border) 70%, transparent) calc(8px + var(--outline-depth) * 14px - 7px),
+      transparent calc(8px + var(--outline-depth) * 14px - 7px)
+    ),
+    var(--z-panel-bg);
+}
+
+.outline-tree-item.current {
+  background:
+    linear-gradient(
+      to right,
+      transparent calc(8px + var(--outline-depth) * 14px - 8px),
+      color-mix(in srgb, var(--z-color-accent) 36%, transparent) calc(8px + var(--outline-depth) * 14px - 8px),
+      color-mix(in srgb, var(--z-color-accent) 36%, transparent) calc(8px + var(--outline-depth) * 14px - 7px),
+      transparent calc(8px + var(--outline-depth) * 14px - 7px)
+    ),
+    color-mix(in srgb, var(--z-color-accent) 14%, transparent);
+}
+
+.outline-row-chevron {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--z-radius-sm);
+  color: var(--z-color-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.outline-row-chevron:hover {
+  color: var(--z-control-text);
+  background: var(--z-control-bg-hover);
+}
+
+.outline-row-chevron-spacer,
+.outline-row-chevron-spacer:hover {
+  background: transparent;
+  cursor: default;
+}
+
+.outline-row-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tag-cloud {
