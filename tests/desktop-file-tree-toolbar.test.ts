@@ -149,6 +149,47 @@ describe('desktop file tree toolbar contract', () => {
     expect(wrapper.findAll('.file-tree .tree-label').map((label) => label.text())).toEqual(['FolderB', 'c.md', 'a.md']);
   });
 
+  it('routes local markdown editor references through file tab opening', async () => {
+    const desk = createZoridDesktopMock({
+      listVault: (path = '') =>
+        Promise.resolve(path === '' ? [entry('Current.md', 'file', 1), entry('test.md', 'file', 2)] : []),
+    });
+    (desk.readVaultText as vi.Mock).mockImplementation((path: string) => Promise.resolve(`# ${path}`));
+    Object.defineProperty(window, 'zoridDesktop', {
+      configurable: true,
+      value: desk,
+    });
+
+    const { default: App } = await import('../apps/desktop/src/renderer/src/App.vue');
+    const wrapper = mount(App, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          ActivityRail: true,
+          AppResizeHandle: true,
+          AppStatusBar: true,
+          CommandPaletteWindow: true,
+          MarkdownEditor: {
+            template:
+              '<button class="mock-markdown-editor" @click="$emit(\'openReference\', { path: \'test.md\' })">editor</button>',
+            emits: ['openReference'],
+          },
+          RightSidebarPanels: true,
+          SettingsWindow: true,
+          TopTabStrip: true,
+        },
+      },
+    });
+    await flush();
+
+    await wrapper.findAll('.file-tree .tree-item')[0]!.trigger('click');
+    await flush();
+    await wrapper.find('.mock-markdown-editor').trigger('click');
+    await flush();
+
+    expect((desk.readVaultText as vi.Mock).mock.calls.map((call) => call[0])).toEqual(['Current.md', 'test.md']);
+  });
+
   it('opens an inline Untitled row for new file and commits on blur with unique fallback naming', async () => {
     const desk = createZoridDesktopMock({
       listVault: (path = '') =>

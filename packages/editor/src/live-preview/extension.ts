@@ -329,6 +329,21 @@ function defaultLivePreviewWidgetVisibleRanges(state: LivePreviewContext['state'
   return [{ from: 0, to: Math.min(state.doc.length, livePreviewWidgetScanMargin) }];
 }
 
+function livePreviewReferenceTarget(element: Element): { readonly path: string; readonly fragment?: string } | null {
+  const reference = element.closest('[data-live-preview-reference]');
+  if (!reference) return null;
+  const path = reference.getAttribute('data-live-preview-reference');
+  if (!path) return null;
+  const fragment = reference.getAttribute('data-live-preview-reference-fragment') ?? undefined;
+  return fragment ? { path, fragment } : { path };
+}
+
+function livePreviewUrlTarget(element: Element): { readonly path: string } | null {
+  const link = element.closest('[data-live-preview-url]');
+  const url = link?.getAttribute('data-live-preview-url');
+  return url ? { path: url } : null;
+}
+
 function livePreviewVisibleRangeKey(ranges: readonly LivePreviewVisibleRange[]): string {
   return ranges.map((range) => `${range.from}:${range.to}`).join('|');
 }
@@ -436,11 +451,11 @@ export function livePreviewExtensionWithInternalRenderers(
     EditorView.domEventHandlers({
       mousedown(event) {
         if (event.button !== 0) return false;
-        const target = event.target instanceof Element ? event.target.closest('[data-live-preview-url]') : null;
-        const url = target?.getAttribute('data-live-preview-url');
-        if (!url) return false;
+        if (!(event.target instanceof Element)) return false;
+        const target = livePreviewUrlTarget(event.target) ?? livePreviewReferenceTarget(event.target);
+        if (!target) return false;
         event.preventDefault();
-        handlers.openReference?.({ path: url });
+        handlers.openReference?.(target);
         return true;
       },
     }),

@@ -31,6 +31,7 @@ const emit = defineEmits<{
   error: [message: string];
   updateField: [field: FieldDto, value: unknown];
   updateType: [typeName: string | undefined];
+  openReference: [target: { readonly path: string; readonly fragment?: string }];
 }>();
 const log = createRendererDebugLogger(window.zoridDesktop.saveDebugLog.bind(window.zoridDesktop), {
   scope: 'renderer.markdown-editor',
@@ -107,7 +108,7 @@ function openReference(target: { readonly path: string; readonly fragment?: stri
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
     void window.zoridDesktop.openExternalUrl(url.toString());
   } catch {
-    return;
+    emit('openReference', target);
   }
 }
 

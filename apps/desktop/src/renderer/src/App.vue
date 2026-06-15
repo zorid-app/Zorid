@@ -666,6 +666,10 @@ async function openFileTab(path: string): Promise<void> {
   await activateFilePath(path);
 }
 
+async function openEditorReference(target: { readonly path: string; readonly fragment?: string }): Promise<void> {
+  await openFileTab(target.path);
+}
+
 async function createPlaceholderTab(): Promise<void> {
   placeholderTabCounter.value += 1;
   const tab = placeholderTab(placeholderTabCounter.value);
@@ -1324,6 +1328,7 @@ onBeforeUnmount(() => {
         @error="(message) => (error = message)"
         @update-field="setActiveFieldValue"
         @update-type="setActiveType"
+        @open-reference="openEditorReference"
       />
       <p v-else class="muted new-tab-empty">{{ editorEmptyText }}</p>
     </section>

@@ -134,6 +134,8 @@ describe('editor Live Preview primitives', () => {
       'markdown-link',
       'markdown-link',
       'wiki-link',
+      'wiki-link',
+      'wiki-link',
       'tag',
     ]);
     expect(
@@ -187,6 +189,8 @@ describe('editor Live Preview primitives', () => {
       'markdown-link',
       'markdown-link',
       'wiki-link',
+      'wiki-link',
+      'wiki-link',
       'tag',
     ]);
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual([
@@ -199,7 +203,9 @@ describe('editor Live Preview primitives', () => {
       '[',
       'link',
       '](target.md)',
-      '[[Note|Alias]]',
+      '[[Note|',
+      'Alias',
+      ']]',
       '#tag/sub',
     ]);
     expect(ranges.every((range, index) => index === 0 || ranges[index - 1]!.from <= range.from)).toBe(true);
@@ -332,6 +338,33 @@ describe('editor Live Preview primitives', () => {
 
     expect(opened).toEqual([{ path: 'https://google.com' }]);
     expect(editor.getText()).toBe('[Course Requirement](https://google.com)');
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('renders wiki links as regular link labels and opens local references through the editor handler', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const opened: Array<{ path: string; fragment?: string }> = [];
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: 'See [[test.md]] and [[folder/note.md#section|Note Section]]',
+      onOpenReference: (target) => opened.push(target),
+    });
+    const links = [...parent.querySelectorAll<HTMLElement>('.z-live-preview-wiki-link[data-live-preview-reference]')];
+
+    expect(links.map((link) => link.textContent)).toEqual(['test.md', 'Note Section']);
+    expect(parent.textContent).not.toContain('[[test.md]]');
+    expect(links[0]?.getAttribute('data-live-preview-reference')).toBe('test.md');
+    expect(links[1]?.getAttribute('data-live-preview-reference')).toBe('folder/note.md');
+    expect(links[1]?.getAttribute('data-live-preview-reference-fragment')).toBe('section');
+
+    links[0]?.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+    links[1]?.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+
+    expect(opened).toEqual([{ path: 'test.md' }, { path: 'folder/note.md', fragment: 'section' }]);
+    expect(editor.getText()).toBe('See [[test.md]] and [[folder/note.md#section|Note Section]]');
 
     editor.destroy();
     parent.remove();

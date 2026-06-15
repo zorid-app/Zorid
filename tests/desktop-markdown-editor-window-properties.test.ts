@@ -11,6 +11,7 @@ function installDesktopStub(): void {
     configurable: true,
     value: {
       saveDebugLog: vi.fn().mockResolvedValue(undefined),
+      openExternalUrl: vi.fn().mockResolvedValue(undefined),
     },
   });
 }
@@ -109,5 +110,25 @@ describe('desktop MarkdownEditor editor-window properties', () => {
     await flush();
 
     expect(wrapper.find('.z-fields-properties-editor').exists()).toBe(false);
+  });
+
+  it('emits local wiki-link references and keeps web links on the external bridge', async () => {
+    const wrapper = mount(MarkdownEditor, {
+      attachTo: document.body,
+      props: { text: '[[test.md]] [site](https://example.com)', documentPath: 'Current.md' },
+    });
+    await flush();
+
+    const wikiLink = wrapper.element.querySelector<HTMLElement>(
+      '.z-live-preview-wiki-link[data-live-preview-reference]',
+    );
+    const webLink = wrapper.element.querySelector<HTMLElement>('.z-live-preview-link[data-live-preview-url]');
+    expect(wikiLink?.textContent).toBe('test.md');
+    wikiLink?.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+    webLink?.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+    await flush();
+
+    expect(wrapper.emitted('openReference')).toEqual([[{ path: 'test.md' }]]);
+    expect(window.zoridDesktop.openExternalUrl).toHaveBeenCalledWith('https://example.com/');
   });
 });

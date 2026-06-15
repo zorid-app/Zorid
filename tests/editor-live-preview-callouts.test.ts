@@ -118,6 +118,8 @@ describe('editor Live Preview callout widgets', () => {
       'markdown-link',
       'markdown-link',
       'wiki-link',
+      'wiki-link',
+      'wiki-link',
       'task-marker',
       'blockquote',
     ]);
@@ -127,7 +129,9 @@ describe('editor Live Preview callout widgets', () => {
       '[',
       'outside',
       '](target.md)',
-      '[[Outside]]',
+      '[[',
+      'Outside',
+      ']]',
       '- [ ]',
       '> outside quote',
     ]);

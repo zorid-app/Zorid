@@ -41,6 +41,7 @@ interface CalloutPreviewMatch extends MarkdownBlockMatch {
 const codeBlockWidgetClassName = 'z-live-preview-code-block-widget';
 const calloutWidgetClassName = 'z-live-preview-callout-widget';
 const zbaseEmbedWidgetClassName = 'z-live-preview-zbase-embed-widget';
+const horizontalRuleWidgetClassName = 'z-live-preview-horizontal-rule';
 
 function livePreviewScanWindow(
   docText: string,
@@ -202,12 +203,6 @@ class TaskCheckboxPreviewWidget extends WidgetType {
     checkbox.textContent = this.checked ? '✓' : '';
 
     const toggle = () => {
-      view.focus();
-      view.dispatch({
-        effects: setInternalLivePreviewFocused.of(true),
-        selection: { anchor: this.activateAt },
-        scrollIntoView: true,
-      });
       toggleTaskMarkerAtPosition(view, this.activateAt);
     };
 
@@ -242,6 +237,21 @@ class TaskCheckboxPreviewWidget extends WidgetType {
 
   ignoreEvent(event: Event): boolean {
     return event.type === 'mousedown';
+  }
+}
+
+class HorizontalRulePreviewWidget extends WidgetType {
+  eq(): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    const rule = document.createElement('span');
+    rule.className = horizontalRuleWidgetClassName;
+    rule.dataset.livePreviewRenderer = 'horizontal-rule';
+    rule.setAttribute('role', 'separator');
+    rule.setAttribute('aria-orientation', 'horizontal');
+    return rule;
   }
 }
 
@@ -393,6 +403,27 @@ function isInsideRange(
   return range.from >= container.from && range.to <= container.to;
 }
 
+function horizontalRuleRanges(
+  docText: string,
+  scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
+  state: EditorState,
+): InternalLivePreviewRange[] {
+  const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow, state);
+  return sourceLines(docText, scanWindow.from, scanWindow.to)
+    .filter((line) => !suppressedRanges.some((container) => isInsideRange(line, container)))
+    .filter((line) => /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line.text))
+    .map((line) => ({
+      rendererId: 'horizontal-rule',
+      from: line.from,
+      to: line.to,
+      activationFrom: line.from,
+      activationTo: line.to,
+      className: horizontalRuleWidgetClassName,
+      kind: 'replace',
+      widget: new HorizontalRulePreviewWidget(),
+    }));
+}
+
 export const headingLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('heading');
 
 export const inlineCodeLivePreviewRenderer: LivePreviewRenderer = syntaxTreeLivePreviewRenderer('inline-code');
@@ -448,6 +479,12 @@ const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
   id: 'blockquote',
   match: ({ docText, visibleFrom, visibleTo }) =>
     blockquoteLineRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+};
+
+const horizontalRuleLivePreviewRenderer: InternalLivePreviewRenderer = {
+  id: 'horizontal-rule',
+  match: ({ state, docText, visibleFrom, visibleTo }) =>
+    horizontalRuleRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo), state),
 };
 
 export const codeBlockMarkdownBlockRegistration: MarkdownBlockRegistration<CodeBlockPreviewMatch> = {
@@ -531,6 +568,7 @@ export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
 ];
 
 export const defaultLivePreviewInternalRenderers: readonly InternalLivePreviewRenderer[] = [
+  horizontalRuleLivePreviewRenderer,
   blockquoteLivePreviewRenderer,
   listMarkerLivePreviewRenderer,
   taskMarkerLivePreviewRenderer,

@@ -201,6 +201,8 @@ describe('editor Live Preview structured widgets', () => {
       'markdown-link',
       'markdown-link',
       'wiki-link',
+      'wiki-link',
+      'wiki-link',
       'task-marker',
       'blockquote',
     ]);

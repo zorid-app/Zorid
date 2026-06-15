@@ -22,6 +22,45 @@ function collectRanges(doc: string, selection = 0, focused = false) {
 }
 
 describe('editor Live Preview block renderers', () => {
+  it('renders inactive horizontal rules as source-preserving separators outside frontmatter', () => {
+    const doc = ['intro', '---', '', 'content', '', '---'].join('\n');
+    const ranges = collectRanges(doc).filter((range) => range.rendererId === 'horizontal-rule');
+
+    expect(ranges.map((range) => [doc.slice(range.from, range.to), range.kind, range.className])).toEqual([
+      ['---', 'replace', 'z-live-preview-horizontal-rule'],
+      ['---', 'replace', 'z-live-preview-horizontal-rule'],
+    ]);
+  });
+
+  it('does not render frontmatter fences as horizontal rules', () => {
+    const doc = ['---', 'title: Test', '---', '', '---'].join('\n');
+    const ranges = collectRanges(doc).filter((range) => range.rendererId === 'horizontal-rule');
+
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['---']);
+  });
+
+  it('does not render fenced code markers as horizontal rules', () => {
+    const doc = ['intro', '```md', '---', '```', '', '---'].join('\n');
+    const ranges = collectRanges(doc).filter((range) => range.rendererId === 'horizontal-rule');
+
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['---']);
+    expect(ranges[0]?.from).toBe(doc.lastIndexOf('---'));
+  });
+
+  it('does not render incomplete fenced code markers as horizontal rules', () => {
+    const doc = ['intro', '```md', '---'].join('\n');
+    const ranges = collectRanges(doc).filter((range) => range.rendererId === 'horizontal-rule');
+
+    expect(ranges).toEqual([]);
+  });
+
+  it('requires horizontal rule marker lines to use one marker character', () => {
+    const doc = ['---', '-_*', '***', '* * *', '_ _ _'].join('\n');
+    const ranges = collectRanges(doc).filter((range) => range.rendererId === 'horizontal-rule');
+
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['---', '***', '* * *', '_ _ _']);
+  });
+
   it('emits line-level blockquote ranges for normal, blank, and indented blockquote lines', () => {
     const doc = ['> quote', '   > indented quote', '>', '> ', 'paragraph'].join('\n');
     const ranges = collectRanges(doc).filter((range) => range.rendererId === 'blockquote');
@@ -107,6 +146,29 @@ describe('editor Live Preview block renderers', () => {
 
     editor.view.dispatch({ selection: { anchor: editor.getText().indexOf('paragraph') } });
     expect(parent.querySelector('.cm-line.z-live-preview-blockquote-line')).toBeTruthy();
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('mounts horizontal rule widgets and restores source when active', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: '---\n\nparagraph',
+    });
+
+    expect(parent.querySelector('.z-live-preview-horizontal-rule')).toBeTruthy();
+    expect(editor.getText()).toBe('---\n\nparagraph');
+
+    editor.focus();
+    editor.view.dispatch({ selection: { anchor: 1 } });
+    expect(parent.querySelector('.z-live-preview-horizontal-rule')).toBeNull();
+    expect(editor.getText()).toBe('---\n\nparagraph');
+
+    editor.view.dispatch({ selection: { anchor: editor.getText().indexOf('paragraph') } });
+    expect(parent.querySelector('.z-live-preview-horizontal-rule')).toBeTruthy();
 
     editor.destroy();
     parent.remove();

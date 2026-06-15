@@ -220,8 +220,8 @@ describe('editor task marker toggle', () => {
     checkbox?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
 
     expect(editor.getText()).toBe('- [x] pending');
-    expect(editor.view.state.selection.main.head).toBe(3);
-    expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeNull();
+    expect(editor.view.state.selection.main.head).toBe(0);
+    expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeTruthy();
     expect(userEvents).toEqual(['input.task.toggle']);
     expect(undoDepth(editor.view.state)).toBe(1);
 
@@ -231,6 +231,26 @@ describe('editor task marker toggle', () => {
 
     expect(redo(editor.view)).toBe(true);
     expect(editor.getText()).toBe('- [x] pending');
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('preserves current text selection when mouse-toggling mounted task checkboxes', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({ parent, text: '- [ ] pending\nnext line' });
+    const anchor = editor.getText().indexOf('next');
+    editor.view.dispatch({ selection: { anchor, head: anchor + 'next'.length } });
+
+    const checkbox = parent.querySelector<HTMLElement>('.z-live-preview-task-checkbox');
+    expect(checkbox).toBeTruthy();
+    checkbox?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+
+    expect(editor.getText()).toBe('- [x] pending\nnext line');
+    expect(editor.view.state.selection.main.from).toBe(anchor);
+    expect(editor.view.state.selection.main.to).toBe(anchor + 'next'.length);
+    expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeTruthy();
 
     editor.destroy();
     parent.remove();

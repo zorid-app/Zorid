@@ -192,6 +192,53 @@ function markdownLinkRanges(docText: string, from: number, to: number): LivePrev
   ].filter((range): range is LivePreviewRange => range !== null);
 }
 
+function wikiLinkTarget(source: string): { readonly path: string; readonly fragment?: string } {
+  const fragmentStart = source.indexOf('#');
+  if (fragmentStart < 0) return { path: source };
+  const path = source.slice(0, fragmentStart);
+  const fragment = source.slice(fragmentStart + 1);
+  return fragment ? { path, fragment } : { path };
+}
+
+function wikiLinkAttributes(source: string): Readonly<Record<string, string>> {
+  const target = wikiLinkTarget(source);
+  return {
+    'data-live-preview-reference': target.path,
+    ...(target.fragment ? { 'data-live-preview-reference-fragment': target.fragment } : {}),
+  };
+}
+
+function wikiLinkRanges(docText: string, from: number, to: number): LivePreviewRange[] {
+  const source = docText.slice(from, to);
+  if (!source.startsWith('[[') || !source.endsWith(']]')) return [];
+
+  const body = source.slice(2, -2);
+  if (!body) return [];
+  const aliasSeparator = body.indexOf('|');
+  const targetSource = aliasSeparator < 0 ? body : body.slice(0, aliasSeparator);
+  const labelFrom = aliasSeparator < 0 ? from + 2 : from + 2 + aliasSeparator + 1;
+  const labelTo = to - 2;
+  if (!targetSource || labelTo <= labelFrom) return [];
+
+  return [
+    previewRange('wiki-link', from, labelFrom, {
+      activationFrom: from,
+      activationTo: to,
+      kind: 'replace',
+    }),
+    previewRange('wiki-link', labelFrom, labelTo, {
+      activationFrom: from,
+      activationTo: to,
+      attributes: wikiLinkAttributes(targetSource),
+    }),
+    previewRange('wiki-link', labelTo, to, {
+      activationFrom: from,
+      activationTo: to,
+      kind: 'replace',
+    }),
+  ].filter((range): range is LivePreviewRange => range !== null);
+}
+
 function isWebUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -230,6 +277,11 @@ export function collectSyntaxTreeLivePreviewRanges(context: LivePreviewContext):
         if (hasChildNamed(node.node, 'URL')) {
           ranges.push(...markdownLinkRanges(context.docText, node.from, node.to));
         }
+        return false;
+      }
+
+      if (node.name === 'WikiLink') {
+        ranges.push(...wikiLinkRanges(context.docText, node.from, node.to));
         return false;
       }
 

@@ -22,6 +22,7 @@ const livePreviewClasses = [
   'z-live-preview-list-marker--ordered',
   'z-live-preview-task-checkbox',
   'z-live-preview-task-checkbox--checked',
+  'z-live-preview-horizontal-rule',
   'z-live-preview-blockquote-line',
   'z-live-preview-code-block-widget',
   'z-live-preview-code-block-widget__header',
@@ -76,6 +77,28 @@ describe('desktop Live Preview styles', () => {
 
     expect(styles).toMatch(
       /\.markdown-editor\s+\.z-live-preview-link\[data-live-preview-url\]::after\s*\{[^}]*content:\s*'↗';[^}]*font-size:\s*0\.72em;[^}]*\}/s,
+    );
+  });
+
+  it('styles wiki links like regular links and task checkboxes like blue checked squares', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-link,\s*\.markdown-editor\s+\.z-live-preview-wiki-link\s*\{/s,
+    );
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-wiki-link\s*\{[^}]*background:\s*transparent;[^}]*border-radius:\s*0;[^}]*\}/s,
+    );
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-task-checkbox--checked\s*\{[^}]*color:\s*#fff;[^}]*background:\s*var\(--z-color-accent\);[^}]*\}/s,
+    );
+  });
+
+  it('styles horizontal rules as scoped separator bars', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-horizontal-rule\s*\{[^}]*display:\s*block;[^}]*height:\s*1px;[^}]*background:\s*color-mix\(/s,
     );
   });
 

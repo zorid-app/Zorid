@@ -53,6 +53,7 @@ describe('editor Live Preview semantic fixtures', () => {
     expect(renderedSource).not.toContain(['  ```ts', '  #not-a-widget', '  ```'].join('\n'));
     expect(renderedSource).toEqual([
       '# ',
+      '# ',
       'Heading',
       '#tag',
       '[',
@@ -72,11 +73,14 @@ describe('editor Live Preview semantic fixtures', () => {
     ]);
     expect(collectAll(spacedFenceDoc).map((range) => spacedFenceDoc.slice(range.from, range.to))).toEqual([
       '# ',
+      '# ',
       'Heading #tag',
     ]);
 
     expect(markdownFrontmatterRanges(unclosedDoc, { from: 0, to: unclosedDoc.length })).toEqual([]);
     expect(collectAll(unclosedDoc).map((range) => unclosedDoc.slice(range.from, range.to))).toEqual([
+      '---',
+      '# ',
       '# ',
       'Heading #tag',
     ]);
