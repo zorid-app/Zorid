@@ -22,7 +22,7 @@ describe('desktop file tree rendering source contract', () => {
     expect(node).toContain('entryTypeLabel(props.entry)');
   });
 
-  it('renders recursive text rows with disclosure glyphs and right-side type labels', async () => {
+  it('renders recursive text rows with rotating right disclosure glyphs and right-side type labels', async () => {
     const wrapper = mount(FileTree, {
       props: {
         rootEntries: [entry('Folder', 'directory'), entry('.zorid/views/tasks.zbase', 'file')],
@@ -37,7 +37,9 @@ describe('desktop file tree rendering source contract', () => {
 
     const labels = wrapper.findAll('.tree-label').map((label) => label.text());
     expect(labels).toEqual(['Folder', 'child.md', 'tasks.zbase']);
-    expect(wrapper.find('.tree-disclosure').text()).toBe('⌄');
+    const disclosure = wrapper.find('.tree-disclosure');
+    expect(disclosure.text()).toBe('›');
+    expect(disclosure.classes()).toContain('tree-disclosure-expanded');
     expect(wrapper.find('.tree-type-label').text()).toBe('BASE');
     expect(wrapper.findAll('svg')).toHaveLength(0);
 
@@ -45,5 +47,23 @@ describe('desktop file tree rendering source contract', () => {
     expect(wrapper.emitted('openEntry')?.at(-1)).toEqual([
       expect.objectContaining({ path: '.zorid/views/tasks.zbase' }),
     ]);
+  });
+
+  it('uses the same right disclosure glyph when folders are collapsed', () => {
+    const wrapper = mount(FileTree, {
+      props: {
+        rootEntries: [entry('Folder', 'directory')],
+        entriesByDirectory: {
+          Folder: [entry('Folder/child.md', 'file')],
+        },
+        expandedDirectories: { Folder: false },
+      },
+      attachTo: document.body,
+    });
+
+    const disclosure = wrapper.find('.tree-disclosure');
+    expect(disclosure.text()).toBe('›');
+    expect(disclosure.classes()).not.toContain('tree-disclosure-expanded');
+    expect(wrapper.text()).not.toContain('⌄');
   });
 });

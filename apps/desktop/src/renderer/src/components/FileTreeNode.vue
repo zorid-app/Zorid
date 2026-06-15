@@ -94,7 +94,7 @@ function isOutsideCurrentTarget(event: DragEvent): boolean {
     "
     @drop="onDrop"
   >
-  <button
+    <button
       type="button"
       class="tree-item"
       :class="{ selected: selectedPath === entry.path, dragging: isDragSource, 'drop-target': isDragTarget }"
@@ -105,7 +105,14 @@ function isOutsideCurrentTarget(event: DragEvent): boolean {
       @dragstart="onDragStart"
       @dragend="onDragEnd"
     >
-      <span v-if="entry.kind === 'directory'" class="tree-disclosure" aria-hidden="true">{{ expandedDirectories[entry.path] ? '⌄' : '›' }}</span>
+      <span
+        v-if="entry.kind === 'directory'"
+        class="tree-disclosure"
+        :class="{ 'tree-disclosure-expanded': expandedDirectories[entry.path] }"
+        aria-hidden="true"
+      >
+        ›
+      </span>
       <span v-else class="tree-disclosure tree-disclosure-placeholder" aria-hidden="true"></span>
       <span class="tree-label">{{ displayName }}</span>
       <span v-if="typeLabel" class="tree-type-label">{{ typeLabel }}</span>
