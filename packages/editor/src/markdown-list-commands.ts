@@ -178,7 +178,26 @@ export function handleTaskListEnterAtSelection(view: EditorView): boolean {
 }
 
 export function deleteEmptyTaskListAtSelection(view: EditorView): boolean {
-  return exitEmptyTaskListAtSelection(view, 'delete.list.task.empty');
+  const selection = view.state.selection;
+  if (selection.ranges.length !== 1 || !selection.main.empty) return false;
+
+  const position = selection.main.head;
+  const range = findTaskMarkerAtPosition(view.state, position);
+  if (!range) return false;
+
+  const boundary = taskMarkerEditBoundary(view, range);
+  if (position !== boundary) return false;
+  if (boundary <= range.markerTo) return false;
+
+  const trailingContent = view.state.doc.sliceString(boundary, range.lineTo);
+  if (trailingContent.trim().length > 0) return false;
+
+  view.dispatch({
+    changes: { from: range.lineFrom, to: range.lineTo, insert: '' },
+    selection: { anchor: range.lineFrom },
+    annotations: Transaction.userEvent.of('delete.list.task.empty'),
+  });
+  return true;
 }
 
 export function continueTaskListAtLineEndSelection(view: EditorView): boolean {

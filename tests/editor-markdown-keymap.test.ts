@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { deleteCharBackward, deleteCharForward } from '@codemirror/commands';
 import { deleteMarkupBackward, insertNewlineContinueMarkup, markdownKeymap } from '@codemirror/lang-markdown';
 import { describe, expect, it } from 'vitest';
 import {
@@ -34,7 +35,7 @@ function runMarkdownBackspace(text: string): string {
 
 function pressEditorKey(
   text: string,
-  key: 'Enter' | 'Backspace',
+  key: 'Enter' | 'Backspace' | 'Delete',
   anchor = text.length,
 ): { text: string; selectionHead: number } {
   const parent = document.createElement('div');
@@ -43,6 +44,25 @@ function pressEditorKey(
   editor.view.dispatch({ selection: { anchor } });
 
   editor.view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+
+  const result = { text: editor.getText(), selectionHead: editor.view.state.selection.main.head };
+  editor.destroy();
+  return result;
+}
+
+function runDeletionWithSourceFallback(
+  text: string,
+  key: 'Backspace' | 'Delete',
+  anchor = text.length,
+): { text: string; selectionHead: number } {
+  const parent = document.createElement('div');
+  const editor = createMountedMarkdownEditor({ parent, text });
+  editor.view.dispatch({ selection: { anchor } });
+
+  if (!deleteEmptyTaskListAtSelection(editor.view)) {
+    const sourceDeleted = (key === 'Backspace' ? deleteCharBackward : deleteCharForward)(editor.view);
+    if (key === 'Backspace' || anchor < text.length) expect(sourceDeleted).toBe(true);
+  }
 
   const result = { text: editor.getText(), selectionHead: editor.view.state.selection.main.head };
   editor.destroy();
@@ -64,6 +84,7 @@ describe('editor Markdown keymap behavior', () => {
       expect.arrayContaining([
         expect.objectContaining({ key: 'Enter', run: handleTaskListEnterAtSelection }),
         expect.objectContaining({ key: 'Backspace', run: deleteEmptyTaskListAtSelection }),
+        expect.objectContaining({ key: 'Delete', run: deleteEmptyTaskListAtSelection }),
         expect.objectContaining({ key: 'Mod-Enter', run: toggleTaskMarkerAtSelection }),
       ]),
     );
@@ -83,11 +104,15 @@ describe('editor Markdown keymap behavior', () => {
     });
   });
 
-  it('exits empty task lines with Backspace and leaves the cursor at the line start', () => {
+  it('exits empty task lines with Backspace or Delete at the right marker whitespace boundary', () => {
     const text = ['before', '- [x] ', 'after'].join('\n');
     const lineStart = text.indexOf('- [x] ');
 
     expect(pressEditorKey(text, 'Backspace', lineStart + '- [x] '.length)).toEqual({
+      text: ['before', '', 'after'].join('\n'),
+      selectionHead: lineStart,
+    });
+    expect(pressEditorKey(text, 'Delete', lineStart + '- [x] '.length)).toEqual({
       text: ['before', '', 'after'].join('\n'),
       selectionHead: lineStart,
     });
@@ -96,6 +121,56 @@ describe('editor Markdown keymap behavior', () => {
     ).toEqual({
       text: ['before', '', 'after'].join('\n'),
       selectionHead: lineStart,
+    });
+    expect(
+      pressEditorKey(['before', '1. [ ]   ', 'after'].join('\n'), 'Delete', lineStart + '1. [ ]   '.length),
+    ).toEqual({
+      text: ['before', '', 'after'].join('\n'),
+      selectionHead: lineStart,
+    });
+  });
+
+  it('falls through to exact source deletion inside task marker syntax', () => {
+    expect(runDeletionWithSourceFallback('- [ ] ', 'Backspace', '- [ '.length)).toEqual({
+      text: '- [] ',
+      selectionHead: '- ['.length,
+    });
+    expect(runDeletionWithSourceFallback('- [ ] ', 'Delete', '- ['.length)).toEqual({
+      text: '- [] ',
+      selectionHead: '- ['.length,
+    });
+  });
+
+  it('falls through to exact source deletion for raw task markers without marker-following whitespace', () => {
+    expect(runDeletionWithSourceFallback('- [ ]', 'Backspace')).toEqual({
+      text: '- [ ',
+      selectionHead: '- [ '.length,
+    });
+    expect(runDeletionWithSourceFallback('- [ ]', 'Delete')).toEqual({
+      text: '- [ ]',
+      selectionHead: '- [ ]'.length,
+    });
+  });
+
+  it('falls through to exact source deletion before the final marker whitespace boundary', () => {
+    expect(runDeletionWithSourceFallback('- [ ]   ', 'Backspace', '- [ ] '.length)).toEqual({
+      text: '- [ ]  ',
+      selectionHead: '- [ ]'.length,
+    });
+    expect(runDeletionWithSourceFallback('- [ ]   ', 'Delete', '- [ ] '.length)).toEqual({
+      text: '- [ ]  ',
+      selectionHead: '- [ ] '.length,
+    });
+  });
+
+  it('does not exit non-empty task lines with Backspace or Delete', () => {
+    expect(runDeletionWithSourceFallback('- [ ] task', 'Backspace')).toEqual({
+      text: '- [ ] tas',
+      selectionHead: '- [ ] tas'.length,
+    });
+    expect(runDeletionWithSourceFallback('- [ ] task', 'Delete', '- [ ] '.length)).toEqual({
+      text: '- [ ] ask',
+      selectionHead: '- [ ] '.length,
     });
   });
 

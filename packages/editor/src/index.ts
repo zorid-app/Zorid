@@ -221,6 +221,10 @@ export const markdownTaskKeymap: readonly KeyBinding[] = [
     run: deleteEmptyTaskListAtSelection,
   },
   {
+    key: 'Delete',
+    run: deleteEmptyTaskListAtSelection,
+  },
+  {
     key: 'Mod-Enter',
     run: toggleTaskMarkerAtSelection,
   },
