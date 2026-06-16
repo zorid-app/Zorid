@@ -313,7 +313,8 @@ class MarkdownTableWidget extends WidgetType {
     const bottomPlus = document.createElement('button');
     bottomPlus.type = 'button';
     bottomPlus.className = 'z-live-preview-table-plus z-live-preview-table-plus--row';
-    bottomPlus.textContent = '+ row';
+    bottomPlus.setAttribute('aria-label', 'Add row');
+    bottomPlus.title = 'Add row';
     bottomPlus.addEventListener('click', () => {
       const table = currentTable(view, this.table);
       if (table) replaceTable(view, table, addMarkdownTableRow(table, rows.length));
@@ -321,7 +322,8 @@ class MarkdownTableWidget extends WidgetType {
     const rightPlus = document.createElement('button');
     rightPlus.type = 'button';
     rightPlus.className = 'z-live-preview-table-plus z-live-preview-table-plus--column';
-    rightPlus.textContent = '+ column';
+    rightPlus.setAttribute('aria-label', 'Add column');
+    rightPlus.title = 'Add column';
     rightPlus.addEventListener('click', () => {
       const table = currentTable(view, this.table);
       if (table) replaceTable(view, table, addMarkdownTableColumn(table, table.columnCount));

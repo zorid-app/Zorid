@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { readFileSync } from 'node:fs';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 import { createMountedMarkdownEditor } from '../packages/editor/src/index';
@@ -52,6 +53,15 @@ describe('Markdown table live preview', () => {
     expect(deleteMarkdownTableRows(table, 1, 1)).toBe(['| A | B |', '| --- | --- |'].join('\n'));
     expect(deleteMarkdownTableRows(table, 0, 0)).toBeNull();
     expect(deleteMarkdownTableColumns(table, 0, 1)).toBeNull();
+  });
+
+  it('discovers canonical blank table rows and cells as editable cells', () => {
+    const doc = ['| A | B |', '| - | - |', '|  |  |'].join('\n');
+    const table = collectMarkdownTables(tableState(doc), 0, doc.length)[0]!;
+
+    expect(table.rows).toHaveLength(1);
+    expect(table.rows[0]?.cells.map((cell) => cell.value)).toEqual(['', '']);
+    expect(table.rows[0]?.cells).toHaveLength(2);
   });
 
   it('collects only visible-window table widgets for long documents', () => {
@@ -119,6 +129,83 @@ describe('Markdown table live preview', () => {
 
     editor.destroy();
     parent.remove();
+  });
+
+  it('renders subtle accessible edge add controls without visible row or column labels', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'),
+    });
+    const addRow = parent.querySelector<HTMLButtonElement>('.z-live-preview-table-plus--row');
+    const addColumn = parent.querySelector<HTMLButtonElement>('.z-live-preview-table-plus--column');
+
+    expect(addRow?.textContent).toBe('');
+    expect(addColumn?.textContent).toBe('');
+    expect(addRow?.getAttribute('aria-label')).toBe('Add row');
+    expect(addColumn?.getAttribute('aria-label')).toBe('Add column');
+    expect(addRow?.title).toBe('Add row');
+    expect(addColumn?.title).toBe('Add column');
+    expect(parent.textContent).not.toContain('+ row');
+    expect(parent.textContent).not.toContain('+ column');
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('adds a bottom-row blank row that remains rendered and editable', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'),
+    });
+
+    parent.querySelector<HTMLButtonElement>('.z-live-preview-table-plus--row')!.click();
+    const blankCell = parent.querySelector<HTMLTextAreaElement>(
+      '[data-live-preview-table-cell][data-row="2"][data-column="0"]',
+    );
+
+    expect(editor.getText()).toBe(['| A | B |', '| --- | --- |', '| 1 | 2 |', '|  |  |'].join('\n'));
+    expect(blankCell).toBeTruthy();
+    expect(blankCell?.value).toBe('');
+    blankCell!.value = 'new';
+    blankCell!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(editor.getText()).toBe(['| A | B |', '| --- | --- |', '| 1 | 2 |', '| new |  |'].join('\n'));
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('adds a right-edge blank column that remains rendered and editable', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'),
+    });
+
+    parent.querySelector<HTMLButtonElement>('.z-live-preview-table-plus--column')!.click();
+    const blankCell = parent.querySelector<HTMLTextAreaElement>(
+      '[data-live-preview-table-cell][data-row="1"][data-column="2"]',
+    );
+
+    expect(editor.getText()).toBe(['| A | B |  |', '| --- | --- | --- |', '| 1 | 2 |  |'].join('\n'));
+    expect(blankCell).toBeTruthy();
+    expect(blankCell?.value).toBe('');
+    blankCell!.value = 'new';
+    blankCell!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(editor.getText()).toBe(['| A | B |  |', '| --- | --- | --- |', '| 1 | 2 | new |'].join('\n'));
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('disables browser resizing for live-preview table cells', () => {
+    const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(/\.z-live-preview-table-cell\s*\{[^}]*resize:\s*none;/s);
   });
 
   it('refreshes mounted widget DOM after same-bounds table source changes', () => {

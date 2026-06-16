@@ -59,9 +59,31 @@ function lineBounds(state: EditorState, from: number, to: number): { readonly fr
   return { from: state.doc.lineAt(from).from, to: state.doc.lineAt(Math.max(from, to - 1)).to };
 }
 
+function readCellsFromSource(
+  state: EditorState,
+  bounds: { readonly from: number; readonly to: number },
+): MarkdownTableCell[] {
+  const line = state.doc.sliceString(bounds.from, bounds.to);
+  const separators: number[] = [];
+  for (let index = 0; index < line.length; index += 1) {
+    if (line[index] === '|' && line[index - 1] !== '\\') separators.push(index);
+  }
+  if (separators.length < 2) return [];
+
+  const cells: MarkdownTableCell[] = [];
+  for (let index = 0; index < separators.length - 1; index += 1) {
+    const from = bounds.from + separators[index]! + 1;
+    const to = bounds.from + separators[index + 1]!;
+    const source = state.doc.sliceString(from, to);
+    cells.push({ from, to, source, value: unescapeMarkdownTableCell(source) });
+  }
+  return cells;
+}
+
 function readCells(
   state: EditorState,
   rowNode: { readonly from: number; readonly to: number; readonly firstChild: unknown },
+  bounds: { readonly from: number; readonly to: number },
 ): MarkdownTableCell[] {
   const cells: MarkdownTableCell[] = [];
   for (let child = rowNode.firstChild as SyntaxNodeLike | null; child; child = child.nextSibling) {
@@ -69,7 +91,8 @@ function readCells(
     const source = state.doc.sliceString(child.from, child.to);
     cells.push({ from: child.from, to: child.to, source, value: unescapeMarkdownTableCell(source) });
   }
-  return cells;
+  const sourceCells = readCellsFromSource(state, bounds);
+  return sourceCells.length > cells.length ? sourceCells : cells;
 }
 
 interface SyntaxNodeLike {
@@ -90,7 +113,7 @@ function tableModelFromNode(state: EditorState, node: SyntaxNodeLike, maxRows: n
   for (let child = node.firstChild; child; child = child.nextSibling) {
     if (child.name === tableHeaderNodeName) {
       const bounds = lineBounds(state, child.from, child.to);
-      header = { ...bounds, cells: readCells(state, child) };
+      header = { ...bounds, cells: readCells(state, child, bounds) };
       continue;
     }
     if (child.name === tableDelimiterNodeName && delimiterFrom < 0) {
@@ -106,7 +129,7 @@ function tableModelFromNode(state: EditorState, node: SyntaxNodeLike, maxRows: n
         stoppedRows = true;
         continue;
       }
-      const cells = readCells(state, child);
+      const cells = readCells(state, child, bounds);
       if (cells.length > 0) rows.push({ ...bounds, cells });
     }
   }
