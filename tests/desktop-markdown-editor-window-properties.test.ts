@@ -13,6 +13,7 @@ function installDesktopStub(): void {
       saveDebugLog: vi.fn().mockResolvedValue(undefined),
       openExternalUrl: vi.fn().mockResolvedValue(undefined),
       readVaultText: vi.fn().mockResolvedValue('{"views":[]}'),
+      readFileRendererImageResource: vi.fn().mockResolvedValue({ bytes: new Uint8Array(), mimeType: 'image/png' }),
     },
   });
 }

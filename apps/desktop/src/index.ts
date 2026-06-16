@@ -63,6 +63,7 @@ export interface DesktopEditorBridge {
   getVaultProfile(): Promise<VaultProfile | undefined>;
   listVault(path?: string): Promise<readonly VaultEntry[]>;
   readVaultText(path: string): Promise<string>;
+  readFileRendererImageResource(match: FileRendererMatchDto): Promise<{ bytes: Uint8Array; mimeType: string }>;
   writeVaultText(path: string, contents: string): Promise<void>;
   createVaultFolder(path: string): Promise<void>;
   createMarkdownFile(path: string, contents?: string): Promise<void>;

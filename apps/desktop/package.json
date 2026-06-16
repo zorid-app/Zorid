@@ -24,6 +24,7 @@
     "@lucide/vue": "^1.16.0",
     "@zorid/file-explorer": "workspace:*",
     "@zorid/plugin-data-views": "workspace:*",
+    "@zorid/plugin-images": "workspace:*",
     "@zorid/ui-vue": "workspace:*",
     "vue": "^3.5.34"
   },

@@ -21,6 +21,7 @@ function render(): void {
     match: props.match,
     ...(props.fragment ? { fragment: props.fragment } : {}),
     readText: window.zoridDesktop.readVaultText.bind(window.zoridDesktop),
+    readImageResource: window.zoridDesktop.readFileRendererImageResource.bind(window.zoridDesktop),
     onError: (message) => emit('error', message),
   });
 }

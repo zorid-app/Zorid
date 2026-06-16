@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it, vi } from 'vitest';
-import { mountTrustedFileRenderer } from '../apps/desktop/src/renderer/src/trusted-file-renderers';
+import {
+  FileRendererResourceDisposedError,
+  mountTrustedFileRenderer,
+} from '../apps/desktop/src/renderer/src/trusted-file-renderers';
 import type { FileRendererMatchDto } from '../apps/desktop/src/renderer/src/types';
 
 async function waitFor(assertion: () => void): Promise<void> {
@@ -35,6 +38,7 @@ describe('desktop trusted file renderer loader', () => {
       container,
       match: zbaseMatch,
       readText: vi.fn().mockResolvedValue('{"views":[]}'),
+      readImageResource: vi.fn(),
     });
 
     await host.ready;
@@ -52,9 +56,76 @@ describe('desktop trusted file renderer loader', () => {
       container,
       match: { ...zbaseMatch, rendererExport: 'otherExport' },
       readText: vi.fn().mockResolvedValue(''),
+      readImageResource: vi.fn(),
     });
 
     await expect(host.ready).rejects.toThrow(/not allowlisted/);
     expect(container.textContent).toContain('not allowlisted');
+  });
+
+  it('mounts the allowlisted image renderer and revokes object URLs exactly once on dispose', async () => {
+    const container = document.createElement('main');
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:zorid-image');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const host = mountTrustedFileRenderer({
+      container,
+      match: {
+        pluginId: 'zorid.core.images',
+        rendererId: 'zorid.core.images.image',
+        title: 'Image Viewer',
+        surface: 'markdown-embed',
+        path: 'image.png',
+        rendererEntry: './src/file-renderers.ts',
+        rendererExport: 'imageFileRenderer',
+      },
+      readText: vi.fn(),
+      readImageResource: vi.fn().mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/png' }),
+    });
+
+    await host.ready;
+    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:zorid-image'));
+    host.dispose();
+    host.dispose();
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1);
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
+  });
+
+  it('rejects imageSource if disposed while the async resource read is in flight and revokes late URLs', async () => {
+    const container = document.createElement('main');
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:late-image');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let release!: (value: { bytes: Uint8Array; mimeType: string }) => void;
+    const readImageResource = vi.fn(
+      () => new Promise<{ bytes: Uint8Array; mimeType: string }>((resolve) => (release = resolve)),
+    );
+    const host = mountTrustedFileRenderer({
+      container,
+      match: {
+        pluginId: 'zorid.core.images',
+        rendererId: 'zorid.core.images.image',
+        title: 'Image Viewer',
+        surface: 'full-page',
+        path: 'image.png',
+        rendererEntry: './src/file-renderers.ts',
+        rendererExport: 'imageFileRenderer',
+      },
+      readText: vi.fn(),
+      readImageResource,
+    });
+
+    await host.ready;
+    host.dispose();
+    release({ bytes: new Uint8Array([1]), mimeType: 'image/png' });
+
+    await waitFor(() => expect(readImageResource).toHaveBeenCalledTimes(1));
+    await expect(host.ready).resolves.toBeUndefined();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(new FileRendererResourceDisposedError().code).toBe('resource.disposed');
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
   });
 });

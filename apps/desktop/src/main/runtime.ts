@@ -187,6 +187,21 @@ export interface FileRendererMatchDto {
   readonly rendererExport: string;
 }
 
+export interface FileRendererImageResourceDto {
+  readonly bytes: Uint8Array;
+  readonly mimeType: string;
+}
+
+const imageRendererMimeTypes = new Map([
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.gif', 'image/gif'],
+  ['.webp', 'image/webp'],
+]);
+
+const maxFileRendererImageBytes = 25 * 1024 * 1024;
+
 export const trustedCoreFileRendererLoaders: ReadonlyMap<
   string,
   { readonly pluginId: string; readonly rendererEntry: string; readonly rendererExport: string }
@@ -197,6 +212,14 @@ export const trustedCoreFileRendererLoaders: ReadonlyMap<
       pluginId: 'zorid.core.data-views',
       rendererEntry: './src/file-renderers.ts',
       rendererExport: 'zbaseFileRenderer',
+    },
+  ],
+  [
+    'zorid.core.images.image',
+    {
+      pluginId: 'zorid.core.images',
+      rendererEntry: './src/file-renderers.ts',
+      rendererExport: 'imageFileRenderer',
     },
   ],
 ]);
@@ -385,6 +408,42 @@ export const corePluginManifests: readonly PluginManifest[] = [
   },
   {
     schemaVersion: 1,
+    id: 'zorid.core.images',
+    name: 'Images',
+    version: '0.1.0',
+    kind: 'core',
+    entry: './src/index.ts',
+    rendererEntry: './src/file-renderers.ts',
+    zoridApi: '^0.1.0',
+    platforms: ['desktop'],
+    capabilities: { required: ['workspace.fileRenderers'], optional: [] },
+    activation: [
+      'onMarkdownEmbed:.png',
+      'onMarkdownEmbed:.jpg',
+      'onMarkdownEmbed:.jpeg',
+      'onMarkdownEmbed:.gif',
+      'onMarkdownEmbed:.webp',
+      'onFileRenderer:.png',
+      'onFileRenderer:.jpg',
+      'onFileRenderer:.jpeg',
+      'onFileRenderer:.gif',
+      'onFileRenderer:.webp',
+    ],
+    contributes: {
+      fileRenderers: [
+        {
+          id: 'zorid.core.images.image',
+          title: 'Image Viewer',
+          extensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp'],
+          surfaces: ['full-page', 'markdown-embed'],
+          priority: 100,
+          rendererExport: 'imageFileRenderer',
+        },
+      ],
+    },
+  },
+  {
+    schemaVersion: 1,
     id: 'zorid.core.data-views',
     name: 'Data Views',
     version: '0.1.0',
@@ -539,6 +598,33 @@ export class DesktopRuntime {
   }
   async readVaultText(path: string): Promise<string> {
     return this.requireVault().readText(normalizeVaultPath(path));
+  }
+  async readFileRendererImageResource(match: FileRendererMatchDto): Promise<FileRendererImageResourceDto> {
+    const normalized = normalizeVaultPath(match.path);
+    const revalidated = this.resolveFileRenderer(normalized, match.surface);
+    if (
+      !revalidated ||
+      revalidated.pluginId !== match.pluginId ||
+      revalidated.rendererId !== match.rendererId ||
+      revalidated.rendererEntry !== match.rendererEntry ||
+      revalidated.rendererExport !== match.rendererExport ||
+      revalidated.surface !== match.surface ||
+      revalidated.path !== normalized
+    ) {
+      throw new Error(`File renderer image resource failed revalidation: ${match.path}`);
+    }
+    if (revalidated.pluginId !== 'zorid.core.images' || revalidated.rendererId !== 'zorid.core.images.image') {
+      throw new Error(`File renderer is not an image renderer: ${match.rendererId}`);
+    }
+    const extension = path.posix.extname(normalized).toLowerCase();
+    const mimeType = imageRendererMimeTypes.get(extension);
+    if (!mimeType) throw new Error(`Unsupported image resource type: ${extension || '(none)'}`);
+    const info = await this.requireVault().stat(normalized);
+    if (info?.kind !== 'file') throw new Error(`Image resource not found: ${normalized}`);
+    if (info.size > maxFileRendererImageBytes) throw new Error(`Image resource exceeds 25 MiB: ${normalized}`);
+    const bytes = new Uint8Array(await this.requireVault().readBytes(normalized));
+    if (bytes.byteLength > maxFileRendererImageBytes) throw new Error(`Image resource exceeds 25 MiB: ${normalized}`);
+    return { bytes, mimeType };
   }
   async writeVaultText(path: string, contents: string): Promise<void> {
     const vaultPath = normalizeVaultPath(path);

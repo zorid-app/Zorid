@@ -42,6 +42,7 @@ const pluginPackages = new Set([
   '@zorid/plugin-status-bar',
   '@zorid/plugin-fields',
   '@zorid/plugin-data-views',
+  '@zorid/plugin-images',
 ]);
 
 for (const name of implementationPackages) packageKinds.set(name, 'implementation');
@@ -102,6 +103,7 @@ export function isImportAllowed(ownerPackage, specifier) {
   }
   if (ownerKind === 'app') {
     if (ownerPackage === '@zorid/desktop-app' && specifier === '@zorid/plugin-data-views/file-renderers') return true;
+    if (ownerPackage === '@zorid/desktop-app' && specifier === '@zorid/plugin-images/file-renderers') return true;
     return targetKind !== 'core-plugin';
   }
   if (ownerKind === 'implementation') {

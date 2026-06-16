@@ -135,7 +135,7 @@ describe('desktop shell pane layout helpers', () => {
     expect(app).toContain('function updateEditorText(text: string): void');
     expect(app).toContain('await flushPendingAutosave();');
     expect(app).toMatch(
-      /async function activateFilePath\(path: string\): Promise<void> \{[\s\S]*clearFileSelection\(\);[\s\S]*const text = await desktop\.readVaultText\(path\);[\s\S]*selectedPath\.value = path;[\s\S]*editorText\.value = text;[\s\S]*\}/,
+      /async function activateFilePath\(path: string\): Promise<void> \{[\s\S]*clearFileSelection\(\);[\s\S]*const fileRenderer = await desktop\.resolveFileRenderer\(path, 'full-page'\);[\s\S]*fileRenderer[\s\S]*\? \['', \[\]\][\s\S]*: await Promise\.all\(\[desktop\.readVaultText\(path\), desktop\.getMarkdownEmbeds\(path\)\]\);[\s\S]*selectedPath\.value = path;[\s\S]*editorText\.value = text;[\s\S]*\}/,
     );
     expect(app).not.toContain('<p class="eyebrow">Markdown editor</p>');
     expect(app).not.toContain('Open a Markdown file');

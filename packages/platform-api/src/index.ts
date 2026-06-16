@@ -301,6 +301,9 @@ export interface ViewContribution {
   readonly view: DomPluginView;
 }
 export type FileRendererSurface = 'full-page' | 'markdown-embed';
+export interface FileRendererResourceContext {
+  readonly imageSource: () => Promise<string>;
+}
 export interface FileRendererMountContext {
   readonly pluginId: PluginId;
   readonly rendererId: string;
@@ -309,6 +312,7 @@ export interface FileRendererMountContext {
   readonly path: VaultPath;
   readonly fragment?: string;
   readonly readText: () => Promise<string>;
+  readonly resource: FileRendererResourceContext;
   readonly dispose: (disposable: Disposable | (() => void | Promise<void>)) => void;
 }
 export interface FileRendererContribution {

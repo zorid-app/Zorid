@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -63,6 +63,34 @@ function coreDataViewsManifestForTest(): PluginManifest {
           surfaces: ['full-page', 'markdown-embed'],
           priority: 100,
           rendererExport: 'zbaseFileRenderer',
+        },
+      ],
+    },
+  };
+}
+
+function coreImagesManifestForTest(): PluginManifest {
+  return {
+    schemaVersion: 1,
+    id: 'zorid.core.images',
+    name: 'Images',
+    version: '0.1.0',
+    kind: 'core',
+    entry: './src/index.ts',
+    rendererEntry: './src/file-renderers.ts',
+    zoridApi: '^0.1.0',
+    platforms: ['desktop'],
+    capabilities: { required: ['workspace.fileRenderers'], optional: [] },
+    activation: ['onFileRenderer:.png'],
+    contributes: {
+      fileRenderers: [
+        {
+          id: 'zorid.core.images.image',
+          title: 'Image Viewer',
+          extensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp'],
+          surfaces: ['full-page', 'markdown-embed'],
+          priority: 100,
+          rendererExport: 'imageFileRenderer',
         },
       ],
     },
@@ -356,6 +384,47 @@ status: done
     };
     const runtimeWithWrongExport = createDesktopRuntime({ manifests: [wrongExport] });
     expect(runtimeWithWrongExport.resolveFileRenderer('tasks.zbase', 'markdown-embed')).toBeUndefined();
+  });
+
+  it('resolves image renderers, rejects SVG, and revalidates image resource requests before reading bytes', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'zorid-runtime-images-'));
+    let runtime: ReturnType<typeof createDesktopRuntime> | undefined;
+    try {
+      runtime = createDesktopRuntime({ manifests: [coreImagesManifestForTest()] });
+      await runtime.openVault(root);
+      await writeFile(path.join(root, 'image.png'), new Uint8Array([137, 80, 78, 71]));
+      await writeFile(path.join(root, 'stale.png'), new Uint8Array([137, 80, 78, 71]));
+      await writeFile(path.join(root, 'vector.svg'), '<svg />');
+      await writeFile(path.join(root, 'large.webp'), new Uint8Array());
+      await truncate(path.join(root, 'large.webp'), 25 * 1024 * 1024 + 1);
+
+      const match = runtime.resolveFileRenderer('image.png', 'full-page');
+      expect(match).toMatchObject({
+        pluginId: 'zorid.core.images',
+        rendererId: 'zorid.core.images.image',
+        rendererExport: 'imageFileRenderer',
+      });
+      expect(runtime.resolveFileRenderer('vector.svg', 'full-page')).toBeUndefined();
+      await expect(runtime.readFileRendererImageResource(match!)).resolves.toEqual({
+        bytes: new Uint8Array([137, 80, 78, 71]),
+        mimeType: 'image/png',
+      });
+      await expect(runtime.readFileRendererImageResource({ ...match!, rendererExport: 'otherExport' })).rejects.toThrow(
+        /revalidation/,
+      );
+      await expect(
+        runtime.readFileRendererImageResource(runtime.resolveFileRenderer('large.webp', 'full-page')!),
+      ).rejects.toThrow(/exceeds 25 MiB/);
+
+      const staleMatch = runtime.resolveFileRenderer('stale.png', 'full-page')!;
+      const staleInfo = await runtime.requireVault().stat('stale.png');
+      vi.spyOn(runtime.requireVault(), 'stat').mockResolvedValueOnce({ ...staleInfo!, size: 4 });
+      vi.spyOn(runtime.requireVault(), 'readBytes').mockResolvedValueOnce(new Uint8Array(25 * 1024 * 1024 + 1));
+      await expect(runtime.readFileRendererImageResource(staleMatch)).rejects.toThrow(/exceeds 25 MiB/);
+    } finally {
+      await runtime?.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('uses renderer resolution as markdown embed source of truth and keeps .zbase legacy fallback only unresolved', async () => {

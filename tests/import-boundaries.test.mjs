@@ -19,9 +19,12 @@ describe('import boundary rules', () => {
 
   it('allows only the desktop trusted renderer loader to import the first-party data-views renderer', () => {
     expect(isImportAllowed('@zorid/desktop-app', '@zorid/plugin-data-views/file-renderers')).toBe(true);
+    expect(isImportAllowed('@zorid/desktop-app', '@zorid/plugin-images/file-renderers')).toBe(true);
     expect(isImportAllowed('@zorid/desktop-app', '@zorid/plugin-data-views')).toBe(false);
+    expect(isImportAllowed('@zorid/desktop-app', '@zorid/plugin-images')).toBe(false);
     expect(isImportAllowed('@zorid/mobile-app', '@zorid/plugin-data-views')).toBe(false);
     expect(isImportAllowed('@zorid/mobile-app', '@zorid/plugin-data-views/file-renderers')).toBe(false);
+    expect(isImportAllowed('@zorid/mobile-app', '@zorid/plugin-images/file-renderers')).toBe(false);
   });
 
   it('keeps current workspace boundary-clean', () => {

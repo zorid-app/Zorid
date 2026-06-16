@@ -177,6 +177,9 @@ ipcMain.handle('zorid:open-recent-vault', async (_event, id: string) =>
 ipcMain.handle('zorid:get-vault-profile', async (event) => runtimeFor(event).vaultProfile());
 ipcMain.handle('zorid:list-vault', async (event, vaultPath?: string) => runtimeFor(event).listVault(vaultPath));
 ipcMain.handle('zorid:read-vault-text', async (event, vaultPath: string) => runtimeFor(event).readVaultText(vaultPath));
+ipcMain.handle('zorid:read-file-renderer-image-resource', async (event, match) =>
+  runtimeFor(event).readFileRendererImageResource(match),
+);
 ipcMain.handle('zorid:write-vault-text', async (event, vaultPath: string, contents: string) =>
   runtimeFor(event).writeVaultText(vaultPath, contents),
 );

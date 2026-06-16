@@ -99,6 +99,9 @@ export class FolderVault implements VaultAPI {
   async readText(vaultPath: VaultPath): Promise<string> {
     return readFile(await this.#resolveExisting(vaultPath), 'utf8');
   }
+  async readBytes(vaultPath: VaultPath): Promise<Uint8Array> {
+    return readFile(await this.#resolveExisting(vaultPath));
+  }
   async read(vaultPath: VaultPath): Promise<string> {
     return this.readText(vaultPath);
   }

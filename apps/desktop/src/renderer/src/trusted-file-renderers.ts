@@ -1,5 +1,6 @@
 import type { FileRendererContribution, FileRendererMountContext } from '@zorid/platform-api';
 import { zbaseFileRenderer } from '@zorid/plugin-data-views/file-renderers';
+import { imageFileRenderer } from '@zorid/plugin-images/file-renderers';
 import type { Disposable } from '@zorid/shared';
 import type { FileRendererMatchDto } from './types.js';
 
@@ -20,13 +21,32 @@ export const trustedFileRendererLoaders: ReadonlyMap<string, TrustedFileRenderer
       contribution: zbaseFileRenderer,
     },
   ],
+  [
+    'zorid.core.images.image',
+    {
+      pluginId: 'zorid.core.images',
+      rendererEntry: './src/file-renderers.ts',
+      rendererExport: 'imageFileRenderer',
+      contribution: imageFileRenderer,
+    },
+  ],
 ]);
+
+export class FileRendererResourceDisposedError extends Error {
+  readonly code = 'resource.disposed';
+
+  constructor() {
+    super('File renderer resource is disposed.');
+    this.name = 'FileRendererResourceDisposedError';
+  }
+}
 
 export interface TrustedFileRendererMountOptions {
   readonly container: HTMLElement;
   readonly match: FileRendererMatchDto;
   readonly fragment?: string;
   readonly readText: (path: string) => Promise<string>;
+  readonly readImageResource: (match: FileRendererMatchDto) => Promise<{ bytes: Uint8Array; mimeType: string }>;
   readonly onError?: (message: string) => void;
 }
 
@@ -39,17 +59,46 @@ export function mountTrustedFileRenderer({
   match,
   fragment,
   readText,
+  readImageResource,
   onError,
 }: TrustedFileRendererMountOptions): TrustedFileRendererHost {
   const loader = trustedFileRendererLoaders.get(match.rendererId);
   const disposables: Disposable[] = [];
+  const objectUrls = new Set<string>();
   let disposed = false;
   container.replaceChildren();
+
+  const registerDisposable = (disposable: Disposable): void => {
+    if (disposed) void disposable.dispose();
+    else disposables.push(disposable);
+  };
+
+  const revokeObjectUrl = (url: string): void => {
+    if (!objectUrls.delete(url)) return;
+    URL.revokeObjectURL(url);
+  };
+
+  const imageSource = async (): Promise<string> => {
+    if (disposed) throw new FileRendererResourceDisposedError();
+    const resource = await readImageResource(match);
+    if (disposed) throw new FileRendererResourceDisposedError();
+    const bytes = new Uint8Array(resource.bytes);
+    const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const url = URL.createObjectURL(new Blob([data], { type: resource.mimeType }));
+    objectUrls.add(url);
+    registerDisposable({ dispose: () => revokeObjectUrl(url) });
+    if (disposed) {
+      revokeObjectUrl(url);
+      throw new FileRendererResourceDisposedError();
+    }
+    return url;
+  };
 
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
     for (const disposable of disposables.splice(0).reverse()) void disposable.dispose();
+    for (const url of [...objectUrls]) revokeObjectUrl(url);
     container.replaceChildren();
   };
 
@@ -71,8 +120,9 @@ export function mountTrustedFileRenderer({
       path: match.path as FileRendererMountContext['path'],
       ...(fragment ? { fragment } : {}),
       readText: () => readText(match.path),
+      resource: { imageSource },
       dispose(disposable) {
-        disposables.push(typeof disposable === 'function' ? { dispose: disposable } : disposable);
+        registerDisposable(typeof disposable === 'function' ? { dispose: disposable } : disposable);
       },
     };
     await loader.contribution.mount(context);

@@ -32,8 +32,10 @@ describe('core plugin manifests', () => {
     expect(index.onCommand.get('data-views.open')).toEqual(['zorid.core.data-views']);
     expect(index.onCommand.get('file-explorer.open-readme')).toEqual(['zorid.core.file-explorer']);
     expect(index.onMarkdownEmbed.get('.zbase')).toEqual(['zorid.core.data-views']);
+    expect(index.onMarkdownEmbed.get('.png')).toEqual(['zorid.core.images']);
     expect(index.onFileExtension.get('.zbase')).toEqual(['zorid.core.data-views']);
     expect(index.onFileRenderer.get('.zbase')).toEqual(['zorid.core.data-views']);
+    expect(index.onFileRenderer.get('.webp')).toEqual(['zorid.core.images']);
   });
 
   it('can expose static settings schemas from manifests without runtime activation', async () => {

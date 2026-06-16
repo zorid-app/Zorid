@@ -14,6 +14,7 @@ const editor: DesktopEditorBridge = {
   getVaultProfile: () => ipcRenderer.invoke('zorid:get-vault-profile'),
   listVault: (path) => ipcRenderer.invoke('zorid:list-vault', path),
   readVaultText: (path) => ipcRenderer.invoke('zorid:read-vault-text', path),
+  readFileRendererImageResource: (match) => ipcRenderer.invoke('zorid:read-file-renderer-image-resource', match),
   writeVaultText: (path, contents) => ipcRenderer.invoke('zorid:write-vault-text', path, contents),
   createVaultFolder: (path) => ipcRenderer.invoke('zorid:create-vault-folder', path),
   createMarkdownFile: (path, contents) => ipcRenderer.invoke('zorid:create-markdown-file', path, contents),

@@ -85,6 +85,7 @@ const desktop = window.zoridDesktop as unknown as {
   getVaultProfile(): Promise<VaultProfileDto | undefined>;
   listVault(path?: string): Promise<readonly VaultEntry[]>;
   readVaultText(path: string): Promise<string>;
+  readFileRendererImageResource(match: FileRendererMatchDto): Promise<{ bytes: Uint8Array; mimeType: string }>;
   writeVaultText(path: string, contents: string): Promise<void>;
   createVaultFolder(path: string): Promise<void>;
   createMarkdownFile(path: string, contents?: string): Promise<void>;
@@ -656,11 +657,10 @@ async function activateFilePath(path: string): Promise<void> {
   const nextTabId = fileTabId(path);
   selectedTabId.value = nextTabId;
   clearFileSelection();
-  const text = await desktop.readVaultText(path);
-  const [fileRenderer, embeds] = await Promise.all([
-    desktop.resolveFileRenderer(path, 'full-page'),
-    desktop.getMarkdownEmbeds(path),
-  ]);
+  const fileRenderer = await desktop.resolveFileRenderer(path, 'full-page');
+  const [text, embeds] = fileRenderer
+    ? ['', []]
+    : await Promise.all([desktop.readVaultText(path), desktop.getMarkdownEmbeds(path)]);
   if (selectedTabId.value !== nextTabId) return;
   selectedPath.value = path;
   editorText.value = text;

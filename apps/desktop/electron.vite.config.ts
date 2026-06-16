@@ -12,6 +12,7 @@ const workspaceAliases = {
   '@zorid/plugin-api': path.resolve(repoRoot, 'packages/plugin-api/src/index.ts'),
   '@zorid/plugin-ui': path.resolve(repoRoot, 'packages/plugin-ui/src/index.ts'),
   '@zorid/plugin-data-views/file-renderers': path.resolve(repoRoot, 'plugins/core/data-views/src/file-renderers.ts'),
+  '@zorid/plugin-images/file-renderers': path.resolve(repoRoot, 'plugins/core/images/src/file-renderers.ts'),
   '@zorid/app-kernel': path.resolve(repoRoot, 'packages/app-kernel/src/index.ts'),
   '@zorid/plugin-host': path.resolve(repoRoot, 'packages/plugin-host/src/index.ts'),
   '@zorid/vault': path.resolve(repoRoot, 'packages/vault/src/index.ts'),

@@ -57,6 +57,9 @@
     },
     {
       "path": "../../plugins/core/data-views"
+    },
+    {
+      "path": "../../plugins/core/images"
     }
   ]
 }

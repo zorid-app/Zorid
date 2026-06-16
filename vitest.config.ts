@@ -29,6 +29,10 @@ export default defineConfig({
       ),
       '@zorid/plugin-data-views': fileURLToPath(new URL('./plugins/core/data-views/src/index.ts', import.meta.url)),
       '@zorid/plugin-fields': fileURLToPath(new URL('./plugins/core/fields/src/index.ts', import.meta.url)),
+      '@zorid/plugin-images/file-renderers': fileURLToPath(
+        new URL('./plugins/core/images/src/file-renderers.ts', import.meta.url),
+      ),
+      '@zorid/plugin-images': fileURLToPath(new URL('./plugins/core/images/src/index.ts', import.meta.url)),
       '@zorid/plugin-file-explorer': fileURLToPath(
         new URL('./plugins/core/file-explorer/src/index.ts', import.meta.url),
       ),

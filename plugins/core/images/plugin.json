@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "zorid.core.images",
+  "name": "Images",
+  "version": "0.1.0",
+  "kind": "core",
+  "entry": "./src/index.ts",
+  "rendererEntry": "./src/file-renderers.ts",
+  "zoridApi": "^0.1.0",
+  "platforms": ["desktop"],
+  "capabilities": {
+    "required": ["workspace.fileRenderers"],
+    "optional": []
+  },
+  "activation": [
+    "onMarkdownEmbed:.png",
+    "onMarkdownEmbed:.jpg",
+    "onMarkdownEmbed:.jpeg",
+    "onMarkdownEmbed:.gif",
+    "onMarkdownEmbed:.webp",
+    "onFileRenderer:.png",
+    "onFileRenderer:.jpg",
+    "onFileRenderer:.jpeg",
+    "onFileRenderer:.gif",
+    "onFileRenderer:.webp"
+  ],
+  "contributes": {
+    "fileRenderers": [
+      {
+        "id": "zorid.core.images.image",
+        "title": "Image Viewer",
+        "extensions": [".png", ".jpg", ".jpeg", ".gif", ".webp"],
+        "surfaces": ["full-page", "markdown-embed"],
+        "priority": 100,
+        "rendererExport": "imageFileRenderer"
+      }
+    ]
+  }
+}

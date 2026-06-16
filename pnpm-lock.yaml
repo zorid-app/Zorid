@@ -66,6 +66,12 @@ importers:
       '@zorid/file-explorer':
         specifier: workspace:*
         version: link:../../packages/file-explorer
+      '@zorid/plugin-data-views':
+        specifier: workspace:*
+        version: link:../../plugins/core/data-views
+      '@zorid/plugin-images':
+        specifier: workspace:*
+        version: link:../../plugins/core/images
       '@zorid/ui-vue':
         specifier: workspace:*
         version: link:../../packages/ui-vue
@@ -181,6 +187,8 @@ importers:
   plugins/core/fields: {}
 
   plugins/core/file-explorer: {}
+
+  plugins/core/images: {}
 
   plugins/core/outline: {}
 

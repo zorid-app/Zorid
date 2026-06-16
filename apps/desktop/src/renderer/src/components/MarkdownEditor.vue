@@ -97,6 +97,7 @@ const fileRendererEmbedRegistrations = computed<MarkdownBlockRegistration[]>(() 
             ? { fragment: match.definition.fragment }
             : {}),
           readText: window.zoridDesktop.readVaultText.bind(window.zoridDesktop),
+          readImageResource: window.zoridDesktop.readFileRendererImageResource.bind(window.zoridDesktop),
           onError: (message) => emit('error', message),
         });
         const observer = new MutationObserver(() => {
