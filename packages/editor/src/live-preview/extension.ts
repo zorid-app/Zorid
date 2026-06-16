@@ -1,5 +1,5 @@
 import { type Extension, StateEffect, StateField } from '@codemirror/state';
-import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from '@codemirror/view';
 import {
   type InternalLivePreviewRange,
   type InternalLivePreviewRenderer,
@@ -127,6 +127,175 @@ function collectInternalLivePreviewRanges(
 
 const livePreviewWidgetScanMargin = 2000;
 const setLivePreviewWidgetVisibleRanges = StateEffect.define<readonly LivePreviewVisibleRange[]>();
+
+class BlockWidgetResizeMeasure {
+  private readonly observer: ResizeObserver | undefined;
+  private pendingAnimationFrame: number | undefined;
+  private pendingTimeout: ReturnType<typeof setTimeout> | undefined;
+  private element: HTMLElement;
+  private view: EditorView;
+  private destroyed = false;
+
+  constructor(element: HTMLElement, view: EditorView) {
+    this.element = element;
+    this.view = view;
+    const ResizeObserverConstructor = element.ownerDocument.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
+    if (!ResizeObserverConstructor) return;
+
+    this.observer = new ResizeObserverConstructor(() => {
+      if (this.destroyed) return;
+      this.scheduleMeasure();
+    });
+    this.observer.observe(element);
+  }
+
+  refresh(element: HTMLElement, view: EditorView): void {
+    if (this.destroyed) return;
+    this.view = view;
+    if (this.element === element) return;
+    this.observer?.unobserve(this.element);
+    this.element = element;
+    this.observer?.observe(element);
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.observer?.disconnect();
+    if (this.pendingAnimationFrame !== undefined) {
+      this.element.ownerDocument.defaultView?.cancelAnimationFrame(this.pendingAnimationFrame);
+      this.pendingAnimationFrame = undefined;
+    }
+    if (this.pendingTimeout !== undefined) {
+      clearTimeout(this.pendingTimeout);
+      this.pendingTimeout = undefined;
+    }
+  }
+
+  private scheduleMeasure(): void {
+    if (this.destroyed) return;
+    if (this.pendingAnimationFrame !== undefined || this.pendingTimeout !== undefined) return;
+
+    const viewWindow = this.element.ownerDocument.defaultView;
+    if (viewWindow) {
+      this.pendingAnimationFrame = viewWindow.requestAnimationFrame(() => {
+        this.pendingAnimationFrame = undefined;
+        if (this.destroyed) return;
+        this.view.requestMeasure();
+      });
+      return;
+    }
+
+    this.pendingTimeout = setTimeout(() => {
+      this.pendingTimeout = undefined;
+      if (this.destroyed) return;
+      this.view.requestMeasure();
+    }, 0);
+  }
+}
+
+const blockWidgetResizeMeasuresByDom = new WeakMap<HTMLElement, BlockWidgetResizeMeasure>();
+
+class LivePreviewBlockWidgetWrapper extends WidgetType {
+  private resizeMeasure: BlockWidgetResizeMeasure | undefined;
+
+  constructor(
+    private readonly inner: WidgetType,
+    private readonly metadata: {
+      readonly rendererId: string;
+      readonly from: number;
+      readonly to: number;
+      readonly sourceFrom?: number;
+      readonly sourceTo?: number;
+    },
+  ) {
+    super();
+  }
+
+  eq(other: WidgetType): boolean {
+    if (!(other instanceof LivePreviewBlockWidgetWrapper)) return false;
+    if (!this.compatibleWith(other)) return false;
+    return this.inner.constructor === other.inner.constructor && this.inner.eq(other.inner);
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const dom = this.inner.toDOM(view);
+    this.attachMeasure(dom, view);
+    return dom;
+  }
+
+  updateDOM(dom: HTMLElement, view: EditorView, from: WidgetType): boolean {
+    if (!(from instanceof LivePreviewBlockWidgetWrapper)) return false;
+    if (!this.compatibleWith(from)) return false;
+    if (this.inner.constructor !== from.inner.constructor) return false;
+    if (!this.inner.updateDOM(dom, view, from.inner)) return false;
+
+    this.resizeMeasure = from.resizeMeasure;
+    from.resizeMeasure = undefined;
+    if (this.resizeMeasure) {
+      this.resizeMeasure.refresh(dom, view);
+      blockWidgetResizeMeasuresByDom.set(dom, this.resizeMeasure);
+    } else {
+      this.attachMeasure(dom, view);
+    }
+    return true;
+  }
+
+  destroy(dom: HTMLElement): void {
+    if (this.resizeMeasure && blockWidgetResizeMeasuresByDom.get(dom) === this.resizeMeasure) {
+      blockWidgetResizeMeasuresByDom.delete(dom);
+      this.resizeMeasure.destroy();
+    }
+    this.resizeMeasure = undefined;
+    this.inner.destroy(dom);
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return this.inner.ignoreEvent(event);
+  }
+
+  coordsAt(dom: HTMLElement, pos: number, side: number): ReturnType<WidgetType['coordsAt']> {
+    return this.inner.coordsAt(dom, pos, side);
+  }
+
+  get estimatedHeight(): number {
+    return this.inner.estimatedHeight;
+  }
+
+  get lineBreaks(): number {
+    return this.inner.lineBreaks;
+  }
+
+  private compatibleWith(other: LivePreviewBlockWidgetWrapper): boolean {
+    return (
+      this.metadata.rendererId === other.metadata.rendererId &&
+      this.metadata.from === other.metadata.from &&
+      this.metadata.to === other.metadata.to &&
+      this.metadata.sourceFrom === other.metadata.sourceFrom &&
+      this.metadata.sourceTo === other.metadata.sourceTo
+    );
+  }
+
+  private attachMeasure(dom: HTMLElement, view: EditorView): void {
+    this.resizeMeasure?.destroy();
+    const existingMeasure = blockWidgetResizeMeasuresByDom.get(dom);
+    existingMeasure?.destroy();
+    this.resizeMeasure = new BlockWidgetResizeMeasure(dom, view);
+    blockWidgetResizeMeasuresByDom.set(dom, this.resizeMeasure);
+  }
+}
+
+function livePreviewMeasuredBlockWidget(
+  range: InternalLivePreviewRange & { readonly kind: 'widget'; readonly widget: WidgetType },
+): WidgetType {
+  const metadata = {
+    rendererId: range.rendererId,
+    from: range.from,
+    to: range.to,
+    ...(range.sourceFrom === undefined ? {} : { sourceFrom: range.sourceFrom }),
+    ...(range.sourceTo === undefined ? {} : { sourceTo: range.sourceTo }),
+  };
+  return new LivePreviewBlockWidgetWrapper(range.widget, metadata);
+}
 
 function lineStartBefore(docText: string, position: number): number {
   return docText.lastIndexOf('\n', Math.max(0, position - 1)) + 1;
@@ -336,7 +505,7 @@ function livePreviewWidgetDecorationsForState(
         return [
           Decoration.replace({
             block: true,
-            widget: range.widget,
+            widget: livePreviewMeasuredBlockWidget(range),
           }).range(range.from, range.to),
         ];
       }),

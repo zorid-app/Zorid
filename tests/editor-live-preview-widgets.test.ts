@@ -9,6 +9,7 @@ import {
   undo,
 } from '@codemirror/commands';
 import { EditorState } from '@codemirror/state';
+import { type EditorView, WidgetType } from '@codemirror/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LivePreviewVisibleRange } from '../packages/editor/src';
 import {
@@ -107,25 +108,80 @@ function testHTMLElementBlockRegistration(className = 'z-live-preview-resizing-w
   };
 }
 
+class UpdatingBlockWidget extends WidgetType {
+  constructor(readonly label: string) {
+    super();
+  }
+
+  eq(): boolean {
+    return false;
+  }
+
+  toDOM(): HTMLElement {
+    const element = document.createElement('div');
+    element.className = 'z-live-preview-updating-widget';
+    element.textContent = this.label;
+    return element;
+  }
+
+  updateDOM(dom: HTMLElement, _view: EditorView, from: WidgetType): boolean {
+    if (!(from instanceof UpdatingBlockWidget)) return false;
+    dom.textContent = this.label;
+    return true;
+  }
+}
+
+function testUpdatingWidgetRegistration(): MarkdownBlockRegistration {
+  return {
+    id: 'test-updating-widget',
+    match: (context) => {
+      const to = context.docText.indexOf('\n');
+      const blockTo = to < 0 ? context.docText.length : to;
+      return [
+        {
+          id: 'test-updating-widget:0',
+          type: 'test-updating-widget',
+          from: 0,
+          to: blockTo,
+          activationFrom: 0,
+          activationTo: blockTo,
+          definition: {
+            kind: 'inline',
+            sourceFrom: 0,
+            sourceTo: blockTo,
+            sourceText: context.docText.slice(0, blockTo),
+          },
+          className: 'z-live-preview-updating-widget',
+        },
+      ];
+    },
+    render: (match, context) => new UpdatingBlockWidget(context.sourceText(match)),
+  };
+}
+
 function installResizeObserverHarness() {
   const originalResizeObserver = window.ResizeObserver;
   const originalRequestAnimationFrame = window.requestAnimationFrame;
   const originalCancelAnimationFrame = window.cancelAnimationFrame;
   const observerCallbacks: ResizeObserverCallback[] = [];
   const disconnects: Array<ReturnType<typeof vi.fn>> = [];
+  const observerInstances: TestResizeObserver[] = [];
   const animationFrameCallbacks = new Map<number, FrameRequestCallback>();
   let nextAnimationFrame = 1;
 
   class TestResizeObserver implements ResizeObserver {
     readonly disconnect = vi.fn();
+    readonly observedElements: Element[] = [];
+    readonly observe = vi.fn((element: Element) => {
+      this.observedElements.push(element);
+    });
+    readonly unobserve = vi.fn();
 
-    constructor(callback: ResizeObserverCallback) {
+    constructor(readonly callback: ResizeObserverCallback) {
       observerCallbacks.push(callback);
       disconnects.push(this.disconnect);
+      observerInstances.push(this);
     }
-
-    observe = vi.fn();
-    unobserve = vi.fn();
   }
 
   Object.defineProperty(window, 'ResizeObserver', {
@@ -168,6 +224,17 @@ function installResizeObserverHarness() {
     triggerResize(index = 0) {
       observerCallbacks[index]?.([], {} as ResizeObserver);
     },
+    triggerObservedResize(selector: string) {
+      for (const observer of observerInstances) {
+        if (
+          observer.disconnect.mock.calls.length === 0 &&
+          observer.observedElements.some((element) => element.matches(selector))
+        ) {
+          observer.callback([], observer);
+          return;
+        }
+      }
+    },
     flushAnimationFrames() {
       const callbacks = [...animationFrameCallbacks.values()];
       animationFrameCallbacks.clear();
@@ -175,6 +242,13 @@ function installResizeObserverHarness() {
     },
     get scheduledAnimationFrameCount() {
       return animationFrameCallbacks.size;
+    },
+    activeObservedElementCount(selector: string) {
+      return observerInstances.filter(
+        (observer) =>
+          observer.disconnect.mock.calls.length === 0 &&
+          observer.observedElements.some((element) => element.matches(selector)),
+      ).length;
     },
     disconnects,
     restore,
@@ -196,9 +270,13 @@ describe('editor Live Preview structured widgets', () => {
       const dispatch = vi.spyOn(editor.view, 'dispatch');
 
       expect(parent.querySelector('.z-live-preview-resizing-widget')).toBeTruthy();
+      expect(resizeHarness.activeObservedElementCount('.z-live-preview-resizing-widget')).toBe(1);
+      resizeHarness.flushAnimationFrames();
+      requestMeasure.mockClear();
+      dispatch.mockClear();
 
-      resizeHarness.triggerResize();
-      resizeHarness.triggerResize();
+      resizeHarness.triggerObservedResize('.z-live-preview-resizing-widget');
+      resizeHarness.triggerObservedResize('.z-live-preview-resizing-widget');
 
       expect(resizeHarness.scheduledAnimationFrameCount).toBe(1);
       expect(requestMeasure).not.toHaveBeenCalled();
@@ -227,7 +305,11 @@ describe('editor Live Preview structured widgets', () => {
     try {
       const requestMeasure = vi.spyOn(editor.view, 'requestMeasure');
 
-      resizeHarness.triggerResize();
+      expect(resizeHarness.activeObservedElementCount('.z-live-preview-resizing-widget')).toBe(1);
+      resizeHarness.flushAnimationFrames();
+      requestMeasure.mockClear();
+
+      resizeHarness.triggerObservedResize('.z-live-preview-resizing-widget');
       expect(resizeHarness.scheduledAnimationFrameCount).toBe(1);
 
       editor.destroy();
@@ -235,7 +317,7 @@ describe('editor Live Preview structured widgets', () => {
       expect(resizeHarness.disconnects[0]).toHaveBeenCalledTimes(1);
       expect(resizeHarness.scheduledAnimationFrameCount).toBe(0);
 
-      resizeHarness.triggerResize();
+      resizeHarness.triggerObservedResize('.z-live-preview-resizing-widget');
 
       expect(resizeHarness.scheduledAnimationFrameCount).toBe(0);
       expect(requestMeasure).not.toHaveBeenCalled();
@@ -274,6 +356,97 @@ describe('editor Live Preview structured widgets', () => {
       editor.destroy();
       parent.remove();
       restoreResizeObserver();
+    }
+  });
+
+  it.each([
+    ['table', ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'), '.z-live-preview-table-widget'],
+    ['code block', ['```ts', 'const value = 1;', '```'].join('\n'), '.z-live-preview-code-block-widget'],
+    ['callout', ['> [!note] Title', '> Body'].join('\n'), '.z-live-preview-callout-widget'],
+  ])('measures first-party %s block widget resizes at the block decoration boundary', (_name, text, selector) => {
+    const resizeHarness = installResizeObserverHarness();
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({ parent, text });
+    try {
+      const requestMeasure = vi.spyOn(editor.view, 'requestMeasure');
+      const dispatch = vi.spyOn(editor.view, 'dispatch');
+
+      expect(parent.querySelector(selector)).toBeTruthy();
+      expect(resizeHarness.activeObservedElementCount(selector)).toBe(1);
+      resizeHarness.flushAnimationFrames();
+      requestMeasure.mockClear();
+      dispatch.mockClear();
+
+      resizeHarness.triggerObservedResize(selector);
+      resizeHarness.flushAnimationFrames();
+
+      expect(requestMeasure).toHaveBeenCalledTimes(1);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      editor.destroy();
+      parent.remove();
+      resizeHarness.restore();
+    }
+  });
+
+  it('keeps resize measurement through successful block widget updateDOM reuse without duplicating observers', () => {
+    const resizeHarness = installResizeObserverHarness();
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: 'stable one\n\nparagraph',
+      markdownBlockRegistrations: [testUpdatingWidgetRegistration()],
+    });
+    try {
+      const requestMeasure = vi.spyOn(editor.view, 'requestMeasure');
+      const dispatch = vi.spyOn(editor.view, 'dispatch');
+      const widget = parent.querySelector<HTMLElement>('.z-live-preview-updating-widget');
+
+      expect(widget?.textContent).toBe('stable one');
+      expect(resizeHarness.activeObservedElementCount('.z-live-preview-updating-widget')).toBe(1);
+
+      editor.view.dispatch({ changes: { from: 'stable '.length, to: 'stable one'.length, insert: 'two' } });
+
+      expect(parent.querySelector<HTMLElement>('.z-live-preview-updating-widget')).toBe(widget);
+      expect(widget?.textContent).toBe('stable two');
+      expect(resizeHarness.activeObservedElementCount('.z-live-preview-updating-widget')).toBe(1);
+      resizeHarness.flushAnimationFrames();
+      requestMeasure.mockClear();
+      dispatch.mockClear();
+
+      resizeHarness.triggerObservedResize('.z-live-preview-updating-widget');
+      resizeHarness.flushAnimationFrames();
+
+      expect(requestMeasure).toHaveBeenCalledTimes(1);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      editor.destroy();
+      parent.remove();
+      resizeHarness.restore();
+    }
+  });
+
+  it('does not measure non-block replace widgets for horizontal rules, lists, or tasks', () => {
+    const resizeHarness = installResizeObserverHarness();
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['---', '', '- plain item', '- [ ] task'].join('\n'),
+    });
+    try {
+      expect(parent.querySelector('.z-live-preview-horizontal-rule')).toBeTruthy();
+      expect(parent.querySelector('.z-live-preview-list-marker')).toBeTruthy();
+      expect(parent.querySelector('.z-live-preview-task-checkbox')).toBeTruthy();
+      expect(resizeHarness.activeObservedElementCount('.z-live-preview-horizontal-rule')).toBe(0);
+      expect(resizeHarness.activeObservedElementCount('.z-live-preview-list-marker')).toBe(0);
+      expect(resizeHarness.activeObservedElementCount('.z-live-preview-task-checkbox')).toBe(0);
+    } finally {
+      editor.destroy();
+      parent.remove();
+      resizeHarness.restore();
     }
   });
 

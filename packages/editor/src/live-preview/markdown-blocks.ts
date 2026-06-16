@@ -111,8 +111,6 @@ export interface MarkdownBlockRegistration<Match extends MarkdownBlockMatch = Ma
 }
 
 class HTMLElementBlockWidget extends WidgetType {
-  private resizeMeasure: HTMLElementBlockResizeMeasure | undefined;
-
   constructor(
     readonly registration: MarkdownBlockRegistration,
     readonly match: MarkdownBlockMatch,
@@ -127,8 +125,6 @@ class HTMLElementBlockWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    this.resizeMeasure?.destroy();
-    this.resizeMeasure = new HTMLElementBlockResizeMeasure(this.element, view);
     this.element.dataset.livePreviewRenderer ??= this.registration.id;
     this.element.addEventListener('mousedown', (event) => {
       if (!this.registration.onActivate) return;
@@ -145,71 +141,11 @@ class HTMLElementBlockWidget extends WidgetType {
     return this.element;
   }
 
-  destroy(_dom: HTMLElement): void {
-    this.resizeMeasure?.destroy();
-    this.resizeMeasure = undefined;
-  }
-
   ignoreEvent(event: Event): boolean {
     return (
       (event.type === 'mousedown' && Boolean(this.registration.onActivate)) ||
       (event.type === 'dblclick' && Boolean(this.registration.onEdit))
     );
-  }
-}
-
-class HTMLElementBlockResizeMeasure {
-  private readonly observer: ResizeObserver | undefined;
-  private pendingAnimationFrame: number | undefined;
-  private pendingTimeout: ReturnType<typeof setTimeout> | undefined;
-  private destroyed = false;
-
-  constructor(
-    private readonly element: HTMLElement,
-    private readonly view: EditorView,
-  ) {
-    const ResizeObserverConstructor = element.ownerDocument.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
-    if (!ResizeObserverConstructor) return;
-
-    this.observer = new ResizeObserverConstructor(() => {
-      if (this.destroyed) return;
-      this.scheduleMeasure();
-    });
-    this.observer.observe(element);
-  }
-
-  destroy(): void {
-    this.destroyed = true;
-    this.observer?.disconnect();
-    if (this.pendingAnimationFrame !== undefined) {
-      this.element.ownerDocument.defaultView?.cancelAnimationFrame(this.pendingAnimationFrame);
-      this.pendingAnimationFrame = undefined;
-    }
-    if (this.pendingTimeout !== undefined) {
-      clearTimeout(this.pendingTimeout);
-      this.pendingTimeout = undefined;
-    }
-  }
-
-  private scheduleMeasure(): void {
-    if (this.destroyed) return;
-    if (this.pendingAnimationFrame !== undefined || this.pendingTimeout !== undefined) return;
-
-    const viewWindow = this.element.ownerDocument.defaultView;
-    if (viewWindow) {
-      this.pendingAnimationFrame = viewWindow.requestAnimationFrame(() => {
-        this.pendingAnimationFrame = undefined;
-        if (this.destroyed) return;
-        this.view.requestMeasure();
-      });
-      return;
-    }
-
-    this.pendingTimeout = setTimeout(() => {
-      this.pendingTimeout = undefined;
-      if (this.destroyed) return;
-      this.view.requestMeasure();
-    }, 0);
   }
 }
 
