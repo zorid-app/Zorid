@@ -33,14 +33,116 @@ interface CellSelectionRange {
   readonly end: number;
 }
 
-function appendDotHandle(element: HTMLElement, label: string): void {
+function appendDotHandle(element: HTMLElement, label: string, kind: MarkdownTableSelectionKind): void {
   element.setAttribute('aria-label', label);
   element.title = label;
   const dots = document.createElement('span');
-  dots.className = 'z-live-preview-table-handle-dots';
+  dots.className = `z-live-preview-table-handle-dots z-live-preview-table-handle-dots--${kind}`;
+  dots.dataset.handleDots = kind;
   dots.setAttribute('aria-hidden', 'true');
   for (let index = 0; index < 6; index += 1) dots.append(document.createElement('span'));
   element.append(dots);
+}
+
+function blurActiveTableCell(root: HTMLElement): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLTextAreaElement && root.contains(active)) active.blur();
+}
+
+function setActiveHandle(root: HTMLElement, kind: MarkdownTableSelectionKind, index: number | null): void {
+  const dataKey = kind === 'row' ? 'activeRow' : 'activeColumn';
+  if (index === null) delete root.dataset[dataKey];
+  else root.dataset[dataKey] = String(index);
+  root
+    .querySelectorAll<HTMLElement>(`.z-live-preview-table-${kind}-handle, .z-live-preview-table-${kind}-hover-band`)
+    .forEach((element) => {
+      const active = index !== null && element.dataset[kind] === String(index);
+      element.classList.toggle('z-live-preview-table-handle--active', active);
+      if (active) element.dataset.activeHandle = 'true';
+      else delete element.dataset.activeHandle;
+    });
+}
+
+function handleStateKey(kind: MarkdownTableSelectionKind, source: 'focus' | 'hover'): string {
+  if (kind === 'row') return source === 'focus' ? 'focusedRow' : 'hoveredRow';
+  return source === 'focus' ? 'focusedColumn' : 'hoveredColumn';
+}
+
+function syncActiveHandle(root: HTMLElement, kind: MarkdownTableSelectionKind): void {
+  const hover = root.dataset[handleStateKey(kind, 'hover')];
+  const focus = root.dataset[handleStateKey(kind, 'focus')];
+  setActiveHandle(root, kind, hover === undefined ? (focus === undefined ? null : Number(focus)) : Number(hover));
+}
+
+function setHandleState(
+  root: HTMLElement,
+  kind: MarkdownTableSelectionKind,
+  source: 'focus' | 'hover',
+  index: number | null,
+): void {
+  const key = handleStateKey(kind, source);
+  if (index === null) delete root.dataset[key];
+  else root.dataset[key] = String(index);
+  syncActiveHandle(root, kind);
+}
+
+function focusMatchesHandle(root: HTMLElement, kind: MarkdownTableSelectionKind, index: number): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root.contains(active)) return false;
+  if (active.matches('[data-live-preview-table-cell], .z-live-preview-table-handle')) {
+    return active.dataset[kind] === String(index);
+  }
+  return false;
+}
+
+function clearHoverHandle(root: HTMLElement, kind: MarkdownTableSelectionKind, index: number): void {
+  if (root.dataset[handleStateKey(kind, 'hover')] !== String(index)) return;
+  setHandleState(root, kind, 'hover', null);
+}
+
+function clearFocusHandleUnlessStillFocused(root: HTMLElement, kind: MarkdownTableSelectionKind, index: number): void {
+  queueMicrotask(() => {
+    if (focusMatchesHandle(root, kind, index)) return;
+    if (root.dataset[handleStateKey(kind, 'focus')] !== String(index)) return;
+    setHandleState(root, kind, 'focus', null);
+  });
+}
+
+function syncHandleOverlay(root: HTMLElement): void {
+  const table = root.querySelector<HTMLElement>('.z-live-preview-table-grid');
+  const overlay = root.querySelector<HTMLElement>('.z-live-preview-table-overlay');
+  if (!table || !overlay) return;
+  const tableRect = table.getBoundingClientRect();
+  const rootRect = root.getBoundingClientRect();
+  overlay.style.left = '0px';
+  overlay.style.top = '0px';
+  overlay.style.width = `${Math.max(rootRect.width, tableRect.right - rootRect.left)}px`;
+  overlay.style.height = `${Math.max(rootRect.height, tableRect.bottom - rootRect.top)}px`;
+  root.querySelectorAll<HTMLElement>('[data-live-preview-table-cell-box]').forEach((cell) => {
+    const rect = cell.getBoundingClientRect();
+    const row = cell.dataset.row;
+    const column = cell.dataset.column;
+    if (column === '0') {
+      root
+        .querySelectorAll<HTMLElement>(
+          `[data-row="${row}"].z-live-preview-table-row-handle, [data-row="${row}"].z-live-preview-table-row-hover-band`,
+        )
+        .forEach((element) => {
+          element.style.top = `${rect.top - rootRect.top}px`;
+          element.style.height = `${rect.height}px`;
+        });
+    }
+    if (row === '0') {
+      root
+        .querySelectorAll<HTMLElement>(
+          `[data-column="${column}"].z-live-preview-table-column-handle, [data-column="${column}"].z-live-preview-table-column-hover-band`,
+        )
+        .forEach((element) => {
+          element.style.left = `${rect.left - rootRect.left}px`;
+          element.style.width = `${rect.width}px`;
+        });
+    }
+  });
 }
 
 function selectedRange(view: EditorView, table: MarkdownTableModel, kind: MarkdownTableSelectionKind, index: number) {
@@ -144,8 +246,10 @@ function tableContextMenuAction(
   target: TableContextMenuTarget,
   action: string,
 ): string | null {
-  if (action === 'add-row') return addMarkdownTableRow(table, target.row.to + 1);
-  if (action === 'add-column') return addMarkdownTableColumn(table, target.column.to + 1);
+  if (action === 'add-row-above') return addMarkdownTableRow(table, target.row.from);
+  if (action === 'add-row-below') return addMarkdownTableRow(table, target.row.to + 1);
+  if (action === 'add-column-left') return addMarkdownTableColumn(table, target.column.from);
+  if (action === 'add-column-right') return addMarkdownTableColumn(table, target.column.to + 1);
   if (action === 'duplicate-row') return rowOperation(table, target.row, 'duplicate');
   if (action === 'duplicate-column') return columnOperation(table, target.column, 'duplicate');
   if (action === 'delete-row') return deleteMarkdownTableRows(table, target.row.from, target.row.to);
@@ -210,6 +314,7 @@ class MarkdownTableWidget extends WidgetType {
 
     const select = (kind: MarkdownTableSelectionKind, index: number, extend: boolean) => {
       const range = extend ? selectedRange(view, this.table, kind, index) : { from: index, to: index };
+      blurActiveTableCell(root);
       const selection = { tableFrom: this.table.from, kind, ...range };
       view.dispatch({ effects: setMarkdownTableSelection.of(selection) });
       renderMarkdownTableSelection(root, selection);
@@ -222,18 +327,6 @@ class MarkdownTableWidget extends WidgetType {
 
     rows.forEach((row, rowIndex) => {
       const tr = document.createElement('tr');
-      const handle = document.createElement(rowIndex === 0 ? 'th' : 'td');
-      handle.className = 'z-live-preview-table-handle z-live-preview-table-row-handle';
-      handle.dataset.row = String(rowIndex);
-      handle.setAttribute('role', 'button');
-      handle.tabIndex = 0;
-      appendDotHandle(handle, rowIndex === 0 ? 'Select header row' : `Select row ${rowIndex}`);
-      handle.addEventListener('mousedown', (event) => {
-        event.preventDefault();
-        select('row', rowIndex, event.shiftKey);
-      });
-      tr.append(handle);
-
       row.forEach((value, columnIndex) => {
         const cell = document.createElement(rowIndex === 0 ? 'th' : 'td');
         cell.className = 'z-live-preview-table-cell-box';
@@ -250,7 +343,23 @@ class MarkdownTableWidget extends WidgetType {
         input.addEventListener('mousedown', (event) => {
           if (event.button === 0) clearSelection();
         });
-        input.addEventListener('focus', clearSelection);
+        input.addEventListener('mouseenter', () => {
+          setHandleState(root, 'row', 'hover', rowIndex);
+          setHandleState(root, 'column', 'hover', columnIndex);
+        });
+        input.addEventListener('mouseleave', () => {
+          clearHoverHandle(root, 'row', rowIndex);
+          clearHoverHandle(root, 'column', columnIndex);
+        });
+        input.addEventListener('focus', () => {
+          clearSelection();
+          setHandleState(root, 'row', 'focus', rowIndex);
+          setHandleState(root, 'column', 'focus', columnIndex);
+        });
+        input.addEventListener('blur', () => {
+          clearFocusHandleUnlessStillFocused(root, 'row', rowIndex);
+          clearFocusHandleUnlessStillFocused(root, 'column', columnIndex);
+        });
         input.addEventListener('input', () => {
           const table = currentTable(view, this.table);
           if (!table) return;
@@ -309,26 +418,69 @@ class MarkdownTableWidget extends WidgetType {
       body.append(tr);
     });
 
-    const columnHandleRow = document.createElement('tr');
-    columnHandleRow.className = 'z-live-preview-table-column-handles';
-    columnHandleRow.append(document.createElement('td'));
+    tableElement.append(body);
+    const scroller = document.createElement('div');
+    scroller.className = 'z-live-preview-table-scroll';
+    scroller.append(tableElement);
+    scroller.addEventListener('scroll', () => syncHandleOverlay(root));
+    root.append(scroller);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'z-live-preview-table-overlay';
+    const handleLayer = document.createElement('div');
+    handleLayer.className = 'z-live-preview-table-handle-layer';
+    const bandLayer = document.createElement('div');
+    bandLayer.className = 'z-live-preview-table-hover-band-layer';
+    rows.forEach((_row, rowIndex) => {
+      const band = document.createElement('div');
+      band.className = 'z-live-preview-table-hover-band z-live-preview-table-row-hover-band';
+      band.dataset.row = String(rowIndex);
+      band.addEventListener('mouseenter', () => setHandleState(root, 'row', 'hover', rowIndex));
+      band.addEventListener('mouseleave', () => clearHoverHandle(root, 'row', rowIndex));
+      bandLayer.append(band);
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'z-live-preview-table-handle z-live-preview-table-row-handle';
+      button.dataset.row = String(rowIndex);
+      button.tabIndex = 0;
+      appendDotHandle(button, rowIndex === 0 ? 'Select header row' : `Select row ${rowIndex}`, 'row');
+      button.addEventListener('mouseenter', () => setHandleState(root, 'row', 'hover', rowIndex));
+      button.addEventListener('mouseleave', () => clearHoverHandle(root, 'row', rowIndex));
+      button.addEventListener('focus', () => setHandleState(root, 'row', 'focus', rowIndex));
+      button.addEventListener('blur', () => clearFocusHandleUnlessStillFocused(root, 'row', rowIndex));
+      button.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        select('row', rowIndex, event.shiftKey);
+      });
+      handleLayer.append(button);
+    });
     for (let columnIndex = 0; columnIndex < this.table.columnCount; columnIndex += 1) {
-      const cell = document.createElement('td');
+      const band = document.createElement('div');
+      band.className = 'z-live-preview-table-hover-band z-live-preview-table-column-hover-band';
+      band.dataset.column = String(columnIndex);
+      band.addEventListener('mouseenter', () => setHandleState(root, 'column', 'hover', columnIndex));
+      band.addEventListener('mouseleave', () => clearHoverHandle(root, 'column', columnIndex));
+      bandLayer.append(band);
+
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'z-live-preview-table-handle z-live-preview-table-column-handle';
       button.dataset.column = String(columnIndex);
-      appendDotHandle(button, `Select column ${columnIndex + 1}`);
+      appendDotHandle(button, `Select column ${columnIndex + 1}`, 'column');
+      button.addEventListener('mouseenter', () => setHandleState(root, 'column', 'hover', columnIndex));
+      button.addEventListener('mouseleave', () => clearHoverHandle(root, 'column', columnIndex));
+      button.addEventListener('focus', () => setHandleState(root, 'column', 'focus', columnIndex));
+      button.addEventListener('blur', () => clearFocusHandleUnlessStillFocused(root, 'column', columnIndex));
       button.addEventListener('mousedown', (event) => {
         event.preventDefault();
         select('column', columnIndex, event.shiftKey);
       });
-      cell.append(button);
-      columnHandleRow.append(cell);
+      handleLayer.append(button);
     }
-    body.prepend(columnHandleRow);
-    tableElement.append(body);
-    root.append(tableElement);
+    overlay.append(bandLayer, handleLayer);
+    root.append(overlay);
+    queueMicrotask(() => syncHandleOverlay(root));
 
     const bottomPlus = document.createElement('button');
     bottomPlus.type = 'button';
@@ -350,13 +502,27 @@ class MarkdownTableWidget extends WidgetType {
     });
     root.append(bottomPlus, rightPlus);
 
+    root.addEventListener('mouseleave', () => {
+      setHandleState(root, 'row', 'hover', null);
+      setHandleState(root, 'column', 'hover', null);
+    });
+    root.addEventListener('focusout', () => {
+      queueMicrotask(() => {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && root.contains(active)) return;
+        setHandleState(root, 'row', 'focus', null);
+        setHandleState(root, 'column', 'focus', null);
+      });
+    });
+
     root.addEventListener('contextmenu', (event) => {
       const target = event.target instanceof Element ? event.target : null;
       const cell = target?.closest<HTMLTextAreaElement>('[data-live-preview-table-cell]');
-      if (!cell) return;
+      const handle = target?.closest<HTMLElement>('.z-live-preview-table-handle');
+      if (!cell && !handle) return;
       event.preventDefault();
-      const row = Number(cell.dataset.row);
-      const column = Number(cell.dataset.column);
+      const row = Number(cell?.dataset.row ?? handle?.dataset.row ?? 1);
+      const column = Number(cell?.dataset.column ?? handle?.dataset.column ?? 0);
       const selectedRows = selectedContextRange(view, this.table, 'row', row);
       const selectedColumns = selectedContextRange(view, this.table, 'column', column);
       const contextTarget = {
@@ -373,8 +539,10 @@ class MarkdownTableWidget extends WidgetType {
       menu.style.left = `${event.clientX}px`;
       menu.style.top = `${event.clientY}px`;
       const actions = [
-        ['add-row', 'Add row'],
-        ['add-column', 'Add column'],
+        ['add-row-above', 'Add row above'],
+        ['add-row-below', 'Add row below'],
+        ['add-column-left', 'Add column left'],
+        ['add-column-right', 'Add column right'],
         ['move-row-up', 'Move row up'],
         ['move-row-down', 'Move row down'],
         ['move-column-left', 'Move column left'],

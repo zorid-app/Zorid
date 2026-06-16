@@ -30,6 +30,14 @@ function expectNoTableSelectionMarkers(parent: HTMLElement): void {
   expect(parent.querySelectorAll('.z-live-preview-table-cell-box--selected')).toHaveLength(0);
   expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-row="true"]')).toHaveLength(0);
   expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-column="true"]')).toHaveLength(0);
+  expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-top="true"]')).toHaveLength(0);
+  expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-right="true"]')).toHaveLength(
+    0,
+  );
+  expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-bottom="true"]')).toHaveLength(
+    0,
+  );
+  expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-left="true"]')).toHaveLength(0);
 }
 
 describe('Markdown table live preview', () => {
@@ -139,6 +147,26 @@ describe('Markdown table live preview', () => {
     parent.remove();
   });
 
+  it('keeps table scrolling inside a guttered non-clipping wrapper for overlay handles', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'),
+    });
+    const root = parent.querySelector<HTMLElement>('.z-live-preview-table-widget')!;
+    const scroller = root.querySelector<HTMLElement>(':scope > .z-live-preview-table-scroll');
+    const table = scroller?.querySelector(':scope > .z-live-preview-table-grid');
+    const overlay = root.querySelector<HTMLElement>(':scope > .z-live-preview-table-overlay');
+
+    expect(scroller).toBeTruthy();
+    expect(table).toBeTruthy();
+    expect(overlay).toBeTruthy();
+
+    editor.destroy();
+    parent.remove();
+  });
+
   it('renders subtle accessible edge add controls without visible row or column labels', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
@@ -174,6 +202,13 @@ describe('Markdown table live preview', () => {
 
     expect(rowHandles).toHaveLength(2);
     expect(columnHandles).toHaveLength(2);
+    expect(
+      parent.querySelectorAll('th.z-live-preview-table-row-handle, td.z-live-preview-table-row-handle'),
+    ).toHaveLength(0);
+    expect(parent.querySelector('.z-live-preview-table-column-handles')).toBeNull();
+    expect(parent.querySelectorAll('.z-live-preview-table-grid tr')).toHaveLength(2);
+    expect(parent.querySelectorAll('.z-live-preview-table-grid tr:first-child th')).toHaveLength(2);
+    expect(parent.querySelectorAll('.z-live-preview-table-grid tr:last-child td')).toHaveLength(2);
     expect(rowHandles[0]?.textContent).toBe('');
     expect(rowHandles[1]?.textContent).toBe('');
     expect(columnHandles[0]?.textContent).toBe('');
@@ -181,6 +216,10 @@ describe('Markdown table live preview', () => {
     expect(parent.textContent).not.toContain('▾');
     expect(rowHandles[0]?.querySelectorAll('.z-live-preview-table-handle-dots span')).toHaveLength(6);
     expect(columnHandles[0]?.querySelectorAll('.z-live-preview-table-handle-dots span')).toHaveLength(6);
+    expect(rowHandles[0]?.querySelector('[data-handle-dots="row"]')).toBeTruthy();
+    expect(columnHandles[0]?.querySelector('[data-handle-dots="column"]')).toBeTruthy();
+    expect(rowHandles[0]?.querySelector('.z-live-preview-table-handle-dots--row')).toBeTruthy();
+    expect(columnHandles[0]?.querySelector('.z-live-preview-table-handle-dots--column')).toBeTruthy();
     expect(rowHandles[1]?.getAttribute('aria-label')).toBe('Select row 1');
     expect(columnHandles[1]?.getAttribute('aria-label')).toBe('Select column 2');
     expect(rowHandles[1]?.title).toBe('Select row 1');
@@ -188,6 +227,119 @@ describe('Markdown table live preview', () => {
 
     editor.destroy();
     parent.remove();
+  });
+
+  it('activates only hovered or focused row and column handles, including outside hover bands', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'),
+    });
+    const root = parent.querySelector<HTMLElement>('.z-live-preview-table-widget')!;
+    const cell = parent.querySelector<HTMLTextAreaElement>(
+      '[data-live-preview-table-cell][data-row="1"][data-column="1"]',
+    )!;
+    const rowBand = parent.querySelector<HTMLElement>('.z-live-preview-table-row-hover-band[data-row="0"]')!;
+
+    expect(parent.querySelectorAll('[data-active-handle="true"]')).toHaveLength(0);
+
+    cell.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    expect(root.dataset.activeRow).toBe('1');
+    expect(root.dataset.activeColumn).toBe('1');
+    expect(parent.querySelectorAll('.z-live-preview-table-row-handle[data-active-handle="true"]')).toHaveLength(1);
+    expect(
+      parent.querySelector('.z-live-preview-table-row-handle[data-active-handle="true"]')?.getAttribute('data-row'),
+    ).toBe('1');
+    expect(parent.querySelectorAll('.z-live-preview-table-column-handle[data-active-handle="true"]')).toHaveLength(1);
+
+    rowBand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    expect(root.dataset.activeRow).toBe('0');
+    expect(
+      parent.querySelector('.z-live-preview-table-row-handle[data-active-handle="true"]')?.getAttribute('data-row'),
+    ).toBe('0');
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('deactivates hovered table handles after mouseleave from cells, bands, handles, and root', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'),
+    });
+    const root = parent.querySelector<HTMLElement>('.z-live-preview-table-widget')!;
+    const cell = parent.querySelector<HTMLTextAreaElement>(
+      '[data-live-preview-table-cell][data-row="1"][data-column="1"]',
+    )!;
+    const rowBand = parent.querySelector<HTMLElement>('.z-live-preview-table-row-hover-band[data-row="0"]')!;
+    const rowHandle = parent.querySelector<HTMLElement>('.z-live-preview-table-row-handle[data-row="1"]')!;
+
+    cell.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    expect(parent.querySelectorAll('.z-live-preview-table-handle[data-active-handle="true"]')).toHaveLength(2);
+    cell.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    expect(parent.querySelectorAll('[data-active-handle="true"]')).toHaveLength(0);
+
+    rowBand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    expect(parent.querySelectorAll('.z-live-preview-table-row-handle[data-active-handle="true"]')).toHaveLength(1);
+    rowBand.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    expect(parent.querySelectorAll('[data-active-handle="true"]')).toHaveLength(0);
+
+    rowHandle.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    expect(parent.querySelectorAll('.z-live-preview-table-row-handle[data-active-handle="true"]')).toHaveLength(1);
+    rowHandle.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    expect(parent.querySelectorAll('[data-active-handle="true"]')).toHaveLength(0);
+
+    cell.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    expect(parent.querySelectorAll('.z-live-preview-table-handle[data-active-handle="true"]')).toHaveLength(2);
+    root.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    expect(parent.querySelectorAll('[data-active-handle="true"]')).toHaveLength(0);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('deactivates focused table handles after blur while selected handles remain marked visible', async () => {
+    const parent = document.createElement('div');
+    const outsideFocusTarget = document.createElement('button');
+    outsideFocusTarget.type = 'button';
+    document.body.append(parent, outsideFocusTarget);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B | C |', '| - | - | - |', '| 1 | 2 | 3 |'].join('\n'),
+    });
+    const focusedCell = parent.querySelector<HTMLTextAreaElement>(
+      '[data-live-preview-table-cell][data-row="1"][data-column="1"]',
+    )!;
+    const rowHandle = parent.querySelector<HTMLButtonElement>('.z-live-preview-table-row-handle[data-row="1"]')!;
+    const columnHandle = parent.querySelector<HTMLButtonElement>(
+      '.z-live-preview-table-column-handle[data-column="1"]',
+    )!;
+
+    focusedCell.focus();
+    expect(parent.querySelectorAll('.z-live-preview-table-handle[data-active-handle="true"]')).toHaveLength(2);
+    outsideFocusTarget.focus();
+    await flushMicrotasks();
+    expect(parent.querySelectorAll('[data-active-handle="true"]')).toHaveLength(0);
+
+    columnHandle.focus();
+    expect(parent.querySelectorAll('.z-live-preview-table-column-handle[data-active-handle="true"]')).toHaveLength(1);
+    outsideFocusTarget.focus();
+    await flushMicrotasks();
+    expect(parent.querySelectorAll('[data-active-handle="true"]')).toHaveLength(0);
+
+    rowHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(rowHandle.classList.contains('z-live-preview-table-handle--selected')).toBe(true);
+    rowHandle.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    rowHandle.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    expect(parent.querySelectorAll('[data-active-handle="true"]')).toHaveLength(0);
+    expect(rowHandle.classList.contains('z-live-preview-table-handle--selected')).toBe(true);
+
+    editor.destroy();
+    parent.remove();
+    outsideFocusTarget.remove();
   });
 
   it('selects row and column cell boxes from handles without applying selected styling to textareas', () => {
@@ -205,6 +357,23 @@ describe('Markdown table live preview', () => {
     lastRowHandle!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, shiftKey: true }));
 
     expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-row="true"]')).toHaveLength(6);
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-top="true"]')).toHaveLength(
+      3,
+    );
+    expect(
+      parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-bottom="true"]'),
+    ).toHaveLength(3);
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-left="true"]')).toHaveLength(
+      2,
+    );
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-right="true"]')).toHaveLength(
+      2,
+    );
+    expect(
+      parent
+        .querySelector('[data-live-preview-table-cell-box][data-row="1"][data-column="1"]')
+        ?.hasAttribute('data-selected-edge-bottom'),
+    ).toBe(false);
     expect(
       parent
         .querySelector('[data-live-preview-table-cell-box][data-row="1"][data-column="0"]')
@@ -220,6 +389,18 @@ describe('Markdown table live preview', () => {
 
     expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-row="true"]')).toHaveLength(0);
     expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-column="true"]')).toHaveLength(3);
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-top="true"]')).toHaveLength(
+      1,
+    );
+    expect(
+      parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-bottom="true"]'),
+    ).toHaveLength(1);
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-left="true"]')).toHaveLength(
+      3,
+    );
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-edge-right="true"]')).toHaveLength(
+      3,
+    );
     expect(
       parent
         .querySelector('[data-live-preview-table-cell-box][data-row="0"][data-column="1"]')
@@ -230,6 +411,30 @@ describe('Markdown table live preview', () => {
         .querySelector('[data-live-preview-table-cell][data-row="0"][data-column="1"]')
         ?.classList.contains('z-live-preview-table-cell-box--selected'),
     ).toBe(false);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('blurs focused cells and removes cell focus visual state when a structural handle selects', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'),
+    });
+    const focusedCell = parent.querySelector<HTMLTextAreaElement>(
+      '[data-live-preview-table-cell][data-row="1"][data-column="0"]',
+    )!;
+    const rowHandle = parent.querySelector<HTMLElement>('[data-row="1"].z-live-preview-table-row-handle')!;
+
+    focusedCell.focus();
+    expect(document.activeElement).toBe(focusedCell);
+
+    rowHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+    expect(document.activeElement).not.toBe(focusedCell);
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-row="true"]')).toHaveLength(2);
 
     editor.destroy();
     parent.remove();
@@ -330,11 +535,24 @@ describe('Markdown table live preview', () => {
     expect(styles).toMatch(/\.z-live-preview-table-cell\s*\{[^}]*resize:\s*none;/s);
   });
 
-  it('keeps table overflow horizontal on the widget wrapper', () => {
+  it('keeps table overflow horizontal on an inner scroller with visible reserved handle gutters', () => {
     const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
 
-    expect(styles).toMatch(/\.z-live-preview-table-widget\s*\{[^}]*overflow-x:\s*auto;/s);
+    expect(styles).toMatch(/\.z-live-preview-table-widget\s*\{[^}]*--z-live-preview-table-gutter:\s*18px;/s);
+    expect(styles).toMatch(/\.z-live-preview-table-widget\s*\{[^}]*overflow:\s*visible;/s);
+    expect(styles).toMatch(
+      /\.z-live-preview-table-scroll\s*\{[^}]*margin-top:\s*var\(--z-live-preview-table-gutter\);/s,
+    );
+    expect(styles).toMatch(
+      /\.z-live-preview-table-scroll\s*\{[^}]*margin-left:\s*var\(--z-live-preview-table-gutter\);/s,
+    );
+    expect(styles).toMatch(/\.z-live-preview-table-scroll\s*\{[^}]*overflow-x:\s*auto;/s);
     expect(styles).toMatch(/\.z-live-preview-table-grid\s*\{[^}]*width:\s*max-content;/s);
+    expect(styles).toMatch(/\.z-live-preview-table-row-handle\s*\{[^}]*left:\s*0;/s);
+    expect(styles).toMatch(/\.z-live-preview-table-column-handle\s*\{[^}]*top:\s*0;/s);
+    expect(styles).not.toMatch(
+      /\.z-live-preview-table-(?:row|column)-(?:handle|hover-band)\s*\{[^}]*(?:calc\(100% \+ 2px\)|left:\s*-|top:\s*-|right:\s*100%|bottom:\s*100%)/s,
+    );
   });
 
   it('refreshes mounted widget DOM after same-bounds table source changes', () => {
@@ -427,6 +645,62 @@ describe('Markdown table live preview', () => {
     duplicateColumn!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
     expect(editor.getText()).toBe(['| A | B | B |', '| --- | --- | --- |', '| 1 | 2 | 2 |'].join('\n'));
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('offers directional row and column context-menu insert actions through the custom menu', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'),
+    });
+    const openMenu = () => {
+      const cell = parent.querySelector<HTMLTextAreaElement>(
+        '[data-live-preview-table-cell][data-row="1"][data-column="1"]',
+      );
+      cell!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 12, clientY: 20 }));
+    };
+
+    openMenu();
+    expect(parent.querySelector('[data-table-context-action="add-row"]')).toBeNull();
+    expect(parent.querySelector('[data-table-context-action="add-column"]')).toBeNull();
+    expect(parent.querySelector('[data-table-context-action="add-row-above"]')).toBeTruthy();
+    expect(parent.querySelector('[data-table-context-action="add-row-below"]')).toBeTruthy();
+    expect(parent.querySelector('[data-table-context-action="add-column-left"]')).toBeTruthy();
+    expect(parent.querySelector('[data-table-context-action="add-column-right"]')).toBeTruthy();
+    parent.querySelector('.z-live-preview-table-context-menu')?.remove();
+    const handleContextMenu = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 12,
+      clientY: 20,
+    });
+    parent
+      .querySelector<HTMLElement>('[data-column="1"].z-live-preview-table-column-handle')!
+      .dispatchEvent(handleContextMenu);
+    expect(handleContextMenu.defaultPrevented).toBe(true);
+    expect(parent.querySelector('.z-live-preview-table-context-menu')).toBeTruthy();
+    parent.querySelector<HTMLButtonElement>('[data-table-context-action="add-row-above"]')!.click();
+    expect(editor.getText()).toBe(['| A | B |', '| --- | --- |', '|  |  |', '| 1 | 2 |'].join('\n'));
+
+    openMenu();
+    parent.querySelector<HTMLButtonElement>('[data-table-context-action="add-row-below"]')!.click();
+    expect(editor.getText()).toBe(['| A | B |', '| --- | --- |', '|  |  |', '|  |  |', '| 1 | 2 |'].join('\n'));
+
+    openMenu();
+    parent.querySelector<HTMLButtonElement>('[data-table-context-action="add-column-left"]')!.click();
+    expect(editor.getText()).toBe(
+      ['| A |  | B |', '| --- | --- | --- |', '|  |  |  |', '|  |  |  |', '| 1 |  | 2 |'].join('\n'),
+    );
+
+    openMenu();
+    parent.querySelector<HTMLButtonElement>('[data-table-context-action="add-column-right"]')!.click();
+    expect(editor.getText()).toBe(
+      ['| A |  |  | B |', '| --- | --- | --- | --- |', '|  |  |  |  |', '|  |  |  |  |', '| 1 |  |  | 2 |'].join('\n'),
+    );
 
     editor.destroy();
     parent.remove();
