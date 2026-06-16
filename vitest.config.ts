@@ -6,6 +6,8 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
+      'solid-js/web': fileURLToPath(new URL('./node_modules/solid-js/web/dist/web.js', import.meta.url)),
+      'solid-js': fileURLToPath(new URL('./node_modules/solid-js/dist/solid.js', import.meta.url)),
       '@zorid/app-kernel': fileURLToPath(new URL('./packages/app-kernel/src/index.ts', import.meta.url)),
       '@zorid/db/node-sqlite': fileURLToPath(new URL('./packages/db/src/node-sqlite.ts', import.meta.url)),
       '@zorid/db': fileURLToPath(new URL('./packages/db/src/index.ts', import.meta.url)),
@@ -22,6 +24,9 @@ export default defineConfig({
       '@zorid/platform-api': fileURLToPath(new URL('./packages/platform-api/src/index.ts', import.meta.url)),
       '@zorid/plugin-api': fileURLToPath(new URL('./packages/plugin-api/src/index.ts', import.meta.url)),
       '@zorid/plugin-backlinks': fileURLToPath(new URL('./plugins/core/backlinks/src/index.ts', import.meta.url)),
+      '@zorid/plugin-data-views/file-renderers': fileURLToPath(
+        new URL('./plugins/core/data-views/src/file-renderers.ts', import.meta.url),
+      ),
       '@zorid/plugin-data-views': fileURLToPath(new URL('./plugins/core/data-views/src/index.ts', import.meta.url)),
       '@zorid/plugin-fields': fileURLToPath(new URL('./plugins/core/fields/src/index.ts', import.meta.url)),
       '@zorid/plugin-file-explorer': fileURLToPath(
@@ -29,6 +34,7 @@ export default defineConfig({
       ),
       '@zorid/file-explorer': fileURLToPath(new URL('./packages/file-explorer/src/index.ts', import.meta.url)),
       '@zorid/plugin-host': fileURLToPath(new URL('./packages/plugin-host/src/index.ts', import.meta.url)),
+      '@zorid/plugin-ui': fileURLToPath(new URL('./packages/plugin-ui/src/index.ts', import.meta.url)),
       '@zorid/plugin-outline': fileURLToPath(new URL('./plugins/core/outline/src/index.ts', import.meta.url)),
       '@zorid/plugin-search': fileURLToPath(new URL('./plugins/core/search/src/index.ts', import.meta.url)),
       '@zorid/plugin-status-bar': fileURLToPath(new URL('./plugins/core/status-bar/src/index.ts', import.meta.url)),

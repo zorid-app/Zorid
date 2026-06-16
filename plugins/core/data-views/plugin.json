@@ -5,16 +5,32 @@
   "version": "0.1.0",
   "kind": "core",
   "entry": "./src/index.ts",
+  "rendererEntry": "./src/file-renderers.ts",
   "zoridApi": "^0.1.0",
   "platforms": ["desktop"],
   "capabilities": {
-    "required": ["metadata.read", "workspace.views", "vault.read", "commands.register"],
+    "required": ["metadata.read", "workspace.views", "workspace.fileRenderers", "vault.read", "commands.register"],
     "optional": []
   },
   "dependsOn": { "zorid.core.fields": "^0.1.0" },
-  "activation": ["onCommand:data-views.open", "onMarkdownEmbed:.zbase", "onFileExtension:.zbase"],
+  "activation": [
+    "onCommand:data-views.open",
+    "onMarkdownEmbed:.zbase",
+    "onFileExtension:.zbase",
+    "onFileRenderer:.zbase"
+  ],
   "contributes": {
     "commands": [{ "id": "data-views.open", "title": "Open Base" }],
-    "viewRenderers": [{ "type": "table" }, { "type": "list" }]
+    "viewRenderers": [{ "type": "table" }, { "type": "list" }],
+    "fileRenderers": [
+      {
+        "id": "zorid.core.data-views.zbase",
+        "title": "Zbase Data View",
+        "extensions": [".zbase"],
+        "surfaces": ["full-page", "markdown-embed"],
+        "priority": 100,
+        "rendererExport": "zbaseFileRenderer"
+      }
+    ]
   }
 }

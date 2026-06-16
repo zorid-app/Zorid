@@ -9,6 +9,7 @@ const packageKinds = new Map([
   ['@zorid/shared', 'shared'],
   ['@zorid/platform-api', 'platform-api'],
   ['@zorid/plugin-api', 'plugin-api'],
+  ['@zorid/plugin-ui', 'plugin-ui'],
   ['@zorid/ui-vue', 'ui-vue'],
   ['@zorid/desktop-shell', 'shell'],
   ['@zorid/mobile-shell', 'shell'],
@@ -72,16 +73,24 @@ export function classifyPackage(packageName) {
 
 export function isImportAllowed(ownerPackage, specifier) {
   if (!specifier.startsWith('@zorid/')) return true;
-  if (ownerPackage === specifier) return true;
+  const specifierParts = specifier.split('/');
+  const targetPackage = specifierParts.length >= 2 ? `${specifierParts[0]}/${specifierParts[1]}` : specifier;
+  if (ownerPackage === targetPackage) return true;
   const ownerKind = classifyPackage(ownerPackage);
-  const targetKind = classifyPackage(specifier);
+  const targetKind = classifyPackage(targetPackage);
 
   if (ownerKind === 'shared') return false;
   if (ownerKind === 'platform-api') return specifier === '@zorid/shared';
   if (ownerKind === 'plugin-api') return specifier === '@zorid/shared' || specifier === '@zorid/platform-api';
+  if (ownerKind === 'plugin-ui') return specifier === '@zorid/shared' || specifier === '@zorid/platform-api';
   if (ownerKind === 'ui-vue') return specifier === '@zorid/shared' || specifier === '@zorid/platform-api';
   if (ownerKind === 'core-plugin') {
-    return specifier === '@zorid/shared' || specifier === '@zorid/platform-api' || specifier === '@zorid/plugin-api';
+    return (
+      specifier === '@zorid/shared' ||
+      specifier === '@zorid/platform-api' ||
+      specifier === '@zorid/plugin-api' ||
+      specifier === '@zorid/plugin-ui'
+    );
   }
   if (ownerKind === 'shell') {
     return (
@@ -92,6 +101,7 @@ export function isImportAllowed(ownerPackage, specifier) {
     );
   }
   if (ownerKind === 'app') {
+    if (ownerPackage === '@zorid/desktop-app' && specifier === '@zorid/plugin-data-views/file-renderers') return true;
     return targetKind !== 'core-plugin';
   }
   if (ownerKind === 'implementation') {

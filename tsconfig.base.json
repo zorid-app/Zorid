@@ -20,6 +20,7 @@
       "@zorid/shared": ["packages/shared/src/index.ts"],
       "@zorid/platform-api": ["packages/platform-api/src/index.ts"],
       "@zorid/plugin-api": ["packages/plugin-api/src/index.ts"],
+      "@zorid/plugin-ui": ["packages/plugin-ui/src/index.ts"],
       "@zorid/app-kernel": ["packages/app-kernel/src/index.ts"],
       "@zorid/vault": ["packages/vault/src/index.ts"],
       "@zorid/workspace": ["packages/workspace/src/index.ts"],
@@ -44,6 +45,7 @@
       "@zorid/plugin-status-bar": ["plugins/core/status-bar/src/index.ts"],
       "@zorid/plugin-fields": ["plugins/core/fields/src/index.ts"],
       "@zorid/plugin-data-views": ["plugins/core/data-views/src/index.ts"],
+      "@zorid/plugin-data-views/file-renderers": ["plugins/core/data-views/src/file-renderers.ts"],
       "@zorid/db/node-sqlite": ["packages/db/src/node-sqlite.ts"],
       "@zorid/ui-vue/tokens.css": ["packages/ui-vue/src/tokens.css"],
       "@zorid/ui-vue/components.css": ["packages/ui-vue/src/components.css"]

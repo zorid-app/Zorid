@@ -9,6 +9,7 @@ import type {
   DataViewResultDto,
   FieldValidationDiagnosticDto,
   FileFieldsDto,
+  FileRendererMatchDto,
   IndexStatusDto,
   MarkdownEmbedDto,
   OutlineItemDto,
@@ -30,6 +31,7 @@ export type {
   FieldDto,
   FieldValidationDiagnosticDto,
   FileFieldsDto,
+  FileRendererMatchDto,
   IndexStatusDto,
   MarkdownEmbedDto,
   OutlineItemDto,
@@ -81,6 +83,7 @@ export interface DesktopEditorBridge {
   listBases(): Promise<readonly BaseDto[]>;
   renderDataView(basePath: string, viewId?: string): Promise<DataViewResultDto>;
   getMarkdownEmbeds(path: string): Promise<readonly MarkdownEmbedDto[]>;
+  resolveFileRenderer(path: string, surface: 'full-page' | 'markdown-embed'): Promise<FileRendererMatchDto | undefined>;
   openExternalUrl(url: string): Promise<void>;
   onIndexUpdated(callback: () => void): () => void;
   onEditorSnapshot(callback: (snapshot: EditorSnapshotDto) => void): () => void;

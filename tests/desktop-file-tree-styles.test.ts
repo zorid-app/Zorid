@@ -30,7 +30,9 @@ describe('desktop file tree scoped styles', () => {
     expect(styles).toContain('.toolbar.inline');
     expect(styles).toContain('.tree-type-label');
     expect(styles).toContain('.tree-disclosure');
-    expect(styles).toMatch(/\.tree-disclosure\s*\{[^}]*transform:\s*rotate\(0deg\);[^}]*transition:\s*transform 140ms ease;[^}]*\}/s);
+    expect(styles).toMatch(
+      /\.tree-disclosure\s*\{[^}]*transform:\s*rotate\(0deg\);[^}]*transition:\s*transform 140ms ease;[^}]*\}/s,
+    );
     expect(styles).toMatch(/\.tree-disclosure-expanded\s*\{[^}]*transform:\s*rotate\(90deg\);[^}]*\}/s);
     expect(styles).toContain('--activity-rail-width: 42px;');
     expect(styles).not.toContain('packages/ui-vue/src/components.css');

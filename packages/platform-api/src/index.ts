@@ -12,6 +12,7 @@ export type CapabilityName =
   | 'metadata.read'
   | 'workspace.views'
   | 'workspace.navigation'
+  | 'workspace.fileRenderers'
   | 'editor.read'
   | 'editor.write'
   | 'commands.register'
@@ -258,6 +259,7 @@ export interface PluginRegistrationAPI {
   command(command: CommandContribution): Disposable;
   setting(schema: SettingsContribution): Disposable;
   view(view: ViewContribution): Disposable;
+  fileRenderer(renderer: FileRendererContribution): Disposable;
   viewRenderer(renderer: ViewRendererContribution): Disposable;
   statusItem(item: StatusItemContribution): Disposable;
   editorExtension(extension: EditorExtensionContribution): Disposable;
@@ -297,6 +299,23 @@ export interface ViewContribution {
   readonly id: string;
   readonly title: string;
   readonly view: DomPluginView;
+}
+export type FileRendererSurface = 'full-page' | 'markdown-embed';
+export interface FileRendererMountContext {
+  readonly pluginId: PluginId;
+  readonly rendererId: string;
+  readonly surface: FileRendererSurface;
+  readonly root: HTMLElement;
+  readonly path: VaultPath;
+  readonly fragment?: string;
+  readonly readText: () => Promise<string>;
+  readonly dispose: (disposable: Disposable | (() => void | Promise<void>)) => void;
+}
+export interface FileRendererContribution {
+  readonly id: string;
+  readonly title: string;
+  readonly mount: (ctx: FileRendererMountContext) => void | Promise<void>;
+  readonly dispose?: () => void | Promise<void>;
 }
 export interface StatusItemContribution {
   readonly id: string;
@@ -430,6 +449,12 @@ export const capabilityInfos = [
     since: '0.1.0',
     stability: 'public',
     description: 'Navigate the workspace to files and editor panes.',
+  },
+  {
+    id: 'workspace.fileRenderers',
+    since: '0.1.0',
+    stability: 'public-experimental',
+    description: 'Register and use trusted custom file renderers for full-page and Markdown embed surfaces.',
   },
   { id: 'editor.read', since: '0.1.0', stability: 'public', description: 'Open and read editor buffers.' },
   {
@@ -603,6 +628,7 @@ export const apiInfoFixture: ApiInfo = {
         command: publicFunction(['commands.register']),
         setting: publicFunction(['settings.register']),
         view: publicFunction(['workspace.views']),
+        fileRenderer: experimentalFunction(['workspace.fileRenderers']),
         viewRenderer: publicFunction(['workspace.views']),
         statusItem: publicFunction(['status.register']),
         editorExtension: publicFunction(['editor.write']),

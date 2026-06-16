@@ -1,22 +1,26 @@
 <script setup lang="ts">
 import {
+  type BlockAction,
   createMountedMarkdownEditor,
   type EditorWindowContext,
   type EditorWindowContribution,
   type EditorWindowContributionHost,
+  type MarkdownBlockRegistration,
   type MountedMarkdownEditor,
   renderEditorWindowContributions,
 } from '@zorid/editor';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { createRendererDebugLogger } from '../debug-log.js';
 import { createFieldsPropertiesEditorContribution } from '../editor-window-fields-properties.js';
-import type { FieldDto, FileFieldsDto, TypeDto } from '../types.js';
+import { mountTrustedFileRenderer } from '../trusted-file-renderers.js';
+import type { FieldDto, FileFieldsDto, FileRendererMatchDto, MarkdownEmbedDto, TypeDto } from '../types.js';
 
 const props = withDefaults(
   defineProps<{
     text: string;
     documentPath?: string | undefined;
     fileFields?: FileFieldsDto | undefined;
+    markdownEmbeds?: readonly MarkdownEmbedDto[] | undefined;
     types?: readonly TypeDto[] | undefined;
     fieldsPropertiesEnabled?: boolean | undefined;
   }>(),
@@ -64,6 +68,56 @@ const propertiesContribution = computed<EditorWindowContribution[]>(() => {
     }),
   ];
 });
+
+const fileRendererEmbedMatches = computed<ReadonlyMap<string, FileRendererMatchDto>>(() => {
+  const matches = new Map<string, FileRendererMatchDto>();
+  for (const embed of props.markdownEmbeds ?? []) if (embed.renderer) matches.set(embed.basePath, embed.renderer);
+  return matches;
+});
+
+const fileRendererEmbedRegistrations = computed<MarkdownBlockRegistration[]>(() => {
+  const renderedPaths = fileRendererEmbedMatches.value;
+  if (renderedPaths.size === 0) return [];
+  return [
+    {
+      id: 'file-renderer-markdown-embed',
+      priority: 1000,
+      syntax: [{ kind: 'embed-reference', pathMatches: (path) => renderedPaths.has(path) }],
+      render(match) {
+        const path = match.definition.kind === 'external' ? match.definition.path : '';
+        const element = document.createElement('section');
+        element.className = 'z-file-renderer-markdown-embed';
+        element.dataset.fileRendererSurface = 'markdown-embed';
+        const renderer = renderedPaths.get(path);
+        if (!renderer) return element;
+        const host = mountTrustedFileRenderer({
+          container: element,
+          match: renderer,
+          ...(match.definition.kind === 'external' && match.definition.fragment
+            ? { fragment: match.definition.fragment }
+            : {}),
+          readText: window.zoridDesktop.readVaultText.bind(window.zoridDesktop),
+          onError: (message) => emit('error', message),
+        });
+        const observer = new MutationObserver(() => {
+          if (element.isConnected) return;
+          observer.disconnect();
+          host.dispose();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        return element;
+      },
+      onActivate(_event, match) {
+        if (match.definition.kind !== 'external') return { kind: 'none' };
+        return openReferenceBlockAction(match.definition.path, match.definition.fragment);
+      },
+    },
+  ];
+});
+
+function openReferenceBlockAction(path: string, fragment: string | undefined): BlockAction {
+  return fragment === undefined ? { kind: 'open-reference', path } : { kind: 'open-reference', path, fragment };
+}
 
 function editorWindowContext(): EditorWindowContext {
   const view = editor?.view;
@@ -127,6 +181,7 @@ onMounted(() => {
       },
       onSave: () => emit('save'),
       onOpenReference: openReference,
+      markdownBlockRegistrations: fileRendererEmbedRegistrations.value,
       onError: (error, context) => {
         log({ level: 'error', message: `Markdown editor runtime error: ${context}`, data: error });
       },
@@ -158,9 +213,13 @@ watch(
   },
 );
 
-watch([() => props.documentPath, () => props.fileFields, () => props.types], () => renderEditorWindowHost(), {
-  deep: true,
-});
+watch(
+  [() => props.documentPath, () => props.fileFields, () => props.types, () => props.markdownEmbeds],
+  () => renderEditorWindowHost(),
+  {
+    deep: true,
+  },
+);
 
 onBeforeUnmount(() => {
   editorWindowHost?.dispose();

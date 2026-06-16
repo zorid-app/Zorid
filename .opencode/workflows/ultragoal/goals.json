@@ -1,57 +1,67 @@
-{
-  "aggregateObjective": "First-party editable Markdown pipe table widget for @zorid/editor live preview",
-  "goals": [
-    {
-      "id": "G001",
-      "objective": "Lezer-based table syntax discovery, model normalization, and source serialization",
-      "status": "complete",
-      "verification": [
-        "pnpm test tests/editor-live-preview-no-regex-parsers.test.ts tests/editor-live-preview-table.test.ts",
-        "pnpm test"
-      ],
-      "evidence": "Added collectMarkdownTables/findMarkdownTableAt and table serialization tests; no-regex parser guard passes."
-    },
-    {
-      "id": "G002",
-      "objective": "Bounded visible-range widget collection for long documents/tables",
-      "status": "complete",
-      "verification": ["pnpm test tests/editor-live-preview-table.test.ts"],
-      "evidence": "Added visible-window widget collection coverage for table ranges."
-    },
-    {
-      "id": "G003",
-      "objective": "Private live-preview table widget renderer wiring",
-      "status": "complete",
-      "verification": ["pnpm test", "pnpm typecheck", "pnpm lint:boundaries"],
-      "evidence": "Private markdownTableLivePreviewRenderer is wired into default widget renderers and editor extension composition without public API exports."
-    },
-    {
-      "id": "G004",
-      "objective": "Editable cells, keyboard navigation, row/column structural selection, and guarded deletion",
-      "status": "complete",
-      "verification": ["pnpm test tests/editor-live-preview-table.test.ts", "pnpm typecheck"],
-      "evidence": "Widget cell editing test confirms CodeMirror transaction source edits; private state/effects and keymap implement structural selection deletion guards."
-    },
-    {
-      "id": "G005",
-      "objective": "Context menu operations plus bottom/right add controls",
-      "status": "complete",
-      "verification": ["pnpm typecheck"],
-      "evidence": "Renderer includes add/move/duplicate/delete row/column operations, bottom row plus, and right column plus."
-    },
-    {
-      "id": "G006",
-      "objective": "Desktop styles and verification",
-      "status": "complete",
-      "verification": [
-        "focused table/no-regex tests: 2 files / 13 tests passed",
-        "pnpm test: 62 files / 371 tests passed",
-        "pnpm typecheck passed",
-        "pnpm lint:boundaries passed",
-        "changed-file Biome passed",
-        "pnpm lint blocked only by pre-existing untouched formatting issue in tests/desktop-file-tree-styles.test.ts"
-      ],
-      "evidence": "Final verification/review evidence recorded: code-review APPROVE with no CRITICAL/HIGH/MEDIUM/LOW issues; architect review CLEAR."
-    }
-  ]
-}
+[
+  {
+    "id": "G001",
+    "title": "Contract + capability + manifest types",
+    "status": "completed",
+    "evidence": [
+      "packages/platform-api/src/index.ts defines workspace.fileRenderers and framework-neutral FileRenderer* contracts",
+      "packages/plugin-api/src/index.ts defines rendererEntry and contributes.fileRenderers manifest contracts",
+      "tests/plugin-api-contracts.test.ts passed in focused regression suite"
+    ]
+  },
+  {
+    "id": "G002",
+    "title": "@zorid/plugin-ui package + Solid wiring + import boundaries",
+    "status": "completed",
+    "evidence": [
+      "packages/plugin-ui exports Solid primitives and mountPluginUI",
+      "scripts/check-import-boundaries.mjs and tests/import-boundaries.test.mjs allow only core plugins to consume @zorid/plugin-ui",
+      "tests/plugin-ui-package.test.ts and tests/import-boundaries.test.mjs passed"
+    ]
+  },
+  {
+    "id": "G003",
+    "title": "Plugin-host validation/capability enforcement + static matcher",
+    "status": "completed",
+    "evidence": [
+      "packages/plugin-host/src/index.ts validates fileRenderer manifests, rejects community contributions, enforces register.fileRenderer capability, and resolves static matches",
+      "tests/kernel-plugin-host.test.ts passed"
+    ]
+  },
+  {
+    "id": "G004",
+    "title": "Desktop trusted renderer runtime + full-page routing + markdown-embed adapter/fallback",
+    "status": "completed",
+    "evidence": [
+      "apps/desktop/src/main/runtime.ts adds trustedCoreFileRendererLoaders and resolveFileRenderer",
+      "apps/desktop/src/main/index.ts and apps/desktop/src/preload/index.ts expose explicit resolveFileRenderer IPC/preload allowlist",
+      "apps/desktop/src/renderer/src/App.vue and MarkdownEditor.vue consume full-page and markdown-embed matches",
+      "tests/desktop-runtime.test.ts passed"
+    ]
+  },
+  {
+    "id": "G005",
+    "title": ".zbase dogfood renderer + legacy fallback override",
+    "status": "completed",
+    "evidence": [
+      "plugins/core/data-views/plugin.json declares .zbase fileRenderer contribution and rendererEntry",
+      "plugins/core/data-views/src/file-renderers.ts dogfoods @zorid/plugin-ui",
+      "tests/core-manifests.test.ts and tests/editor-live-preview-block-registration-api.test.ts passed"
+    ]
+  },
+  {
+    "id": "G006",
+    "title": "Verification and cleanup",
+    "status": "completed",
+    "evidence": [
+      "pnpm test tests/desktop-runtime.test.ts tests/kernel-plugin-host.test.ts tests/core-manifests.test.ts tests/plugin-ui-package.test.ts tests/desktop-trusted-file-renderers.test.ts tests/desktop-markdown-editor-window-properties.test.ts tests/editor-live-preview-block-registration-api.test.ts tests/import-boundaries.test.mjs passed: 8 files, 55 tests",
+      "tests/desktop-file-tree-toolbar.test.ts mock desktop bridge now includes resolveFileRenderer fallback; pnpm test tests/desktop-file-tree-toolbar.test.ts passed: 1 file, 7 tests",
+      "pnpm typecheck passed",
+      "pnpm lint:boundaries passed: import boundaries ok",
+      "pnpm lint passed: biome ci checked 252 files; import boundaries ok",
+      "Fixed MarkdownEditor.vue open-reference block actions to omit fragment when undefined under exactOptionalPropertyTypes",
+      "pnpm desktop:build passed after the exact-optional fix",
+      "pnpm quality:fast passed after the exact-optional fix: lint, typecheck, and 63 Vitest files / 370 tests"
+    ]
+  }
+]

@@ -43,5 +43,8 @@
     "typescript": "latest",
     "vitest": "latest",
     "vue": "^3.5.34"
+  },
+  "dependencies": {
+    "solid-js": "^1.9.10"
   }
 }

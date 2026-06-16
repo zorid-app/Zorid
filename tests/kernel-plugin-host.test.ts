@@ -5,6 +5,7 @@ import {
   createLazyTriggerIndex,
   createPluginRegistryAPI,
   PluginHost,
+  resolveFileRendererContribution,
   resolvePluginOrder,
   validatePluginManifest,
 } from '../packages/plugin-host/src/index';
@@ -30,11 +31,27 @@ const dataViewsManifest: PluginManifest = {
   version: '0.1.0',
   kind: 'core',
   entry: './src/index.ts',
+  rendererEntry: './src/file-renderers.ts',
   zoridApi: '^0.1.0',
   platforms: ['desktop'],
-  capabilities: { required: ['metadata.read', 'workspace.views', 'vault.read', 'commands.register'], optional: [] },
+  capabilities: {
+    required: ['metadata.read', 'workspace.views', 'workspace.fileRenderers', 'vault.read', 'commands.register'],
+    optional: [],
+  },
   dependsOn: { 'zorid.core.fields': '^0.1.0' },
-  activation: ['onMarkdownEmbed:.zbase'],
+  activation: ['onMarkdownEmbed:.zbase', 'onFileRenderer:.zbase'],
+  contributes: {
+    fileRenderers: [
+      {
+        id: 'zorid.core.data-views.zbase',
+        title: 'Zbase Data View',
+        extensions: ['.zbase'],
+        surfaces: ['full-page', 'markdown-embed'],
+        priority: 100,
+        rendererExport: 'zbaseFileRenderer',
+      },
+    ],
+  },
 };
 
 describe('kernel registries', () => {
@@ -75,7 +92,20 @@ describe('kernel registries', () => {
 describe('plugin host', () => {
   it('validates manifests and optional activation/contributes', () => {
     expect(validatePluginManifest(fieldsManifest)).toEqual({ ok: true, errors: [] });
+    expect(validatePluginManifest(dataViewsManifest)).toEqual({ ok: true, errors: [] });
     expect(validatePluginManifest({ ...fieldsManifest, id: 'Bad ID' }).ok).toBe(false);
+    expect(validatePluginManifest({ ...dataViewsManifest, rendererEntry: undefined }).errors).toContain(
+      'rendererEntry is required when contributes.fileRenderers exists',
+    );
+    expect(validatePluginManifest({ ...dataViewsManifest, kind: 'community' }).errors).toContain(
+      'community plugins cannot contribute trusted fileRenderers',
+    );
+    expect(
+      validatePluginManifest({
+        ...dataViewsManifest,
+        capabilities: { required: ['metadata.read', 'workspace.views', 'vault.read'], optional: [] },
+      }).errors,
+    ).toContain('workspace.fileRenderers capability is required when contributes.fileRenderers exists');
   });
 
   it('orders dependencies and rejects cycles', () => {
@@ -141,6 +171,11 @@ describe('plugin host', () => {
     const index = createLazyTriggerIndex([fieldsManifest, dataViewsManifest]);
     expect(index.onCommand.get('fields.open')).toEqual(['zorid.core.fields']);
     expect(index.onMarkdownEmbed.get('.zbase')).toEqual(['zorid.core.data-views']);
+    expect(index.onFileRenderer.get('.zbase')).toEqual(['zorid.core.data-views']);
+    expect(resolveFileRendererContribution([dataViewsManifest], 'views/tasks.zbase', 'markdown-embed')).toMatchObject({
+      id: 'zorid.core.data-views.zbase',
+      pluginId: 'zorid.core.data-views',
+    });
   });
 
   it('disables plugins with missing required capabilities before runtime import', () => {
@@ -218,7 +253,13 @@ describe('plugin host', () => {
     const host = new PluginHost({
       manifests: [dataViewsManifest, fieldsManifest],
       platform: 'desktop',
-      capabilities: new Set(['metadata.read', 'workspace.views', 'vault.read', 'commands.register']),
+      capabilities: new Set([
+        'metadata.read',
+        'workspace.views',
+        'workspace.fileRenderers',
+        'vault.read',
+        'commands.register',
+      ]),
       load: (manifest) => ({
         activate: async (ctx) => {
           if (manifest.id === 'zorid.core.data-views')
@@ -284,7 +325,13 @@ describe('plugin host', () => {
     const host = new PluginHost({
       manifests: [dataViewsManifest, fieldsManifest],
       platform: 'desktop',
-      capabilities: new Set(['metadata.read', 'workspace.views', 'vault.read', 'commands.register']),
+      capabilities: new Set([
+        'metadata.read',
+        'workspace.views',
+        'workspace.fileRenderers',
+        'vault.read',
+        'commands.register',
+      ]),
       load: (manifest) => ({
         activate: (ctx) => {
           activated.push(manifest.id);

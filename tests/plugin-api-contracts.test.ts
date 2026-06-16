@@ -72,6 +72,7 @@ describe('platform/plugin API contracts', () => {
         'command',
         'setting',
         'view',
+        'fileRenderer',
         'viewRenderer',
         'statusItem',
         'editorExtension',
@@ -91,6 +92,9 @@ describe('platform/plugin API contracts', () => {
     expect(apiInfoFixture.namespaces.vault.functions.watch?.capabilities).toEqual(['vault.read', 'nativeFs.watch']);
     expect(apiInfoFixture.namespaces.workspace.functions.splitPane?.capabilities).toEqual(['workspace.navigation']);
     expect(apiInfoFixture.namespaces.workspace.functions.closePane?.capabilities).toEqual(['workspace.navigation']);
+    expect(apiInfoFixture.namespaces.register.functions.fileRenderer?.capabilities).toEqual([
+      'workspace.fileRenderers',
+    ]);
     expect(apiInfoFixture.namespaces.editor.functions.getActiveEditor?.capabilities).toEqual(['editor.read']);
     expect(apiInfoFixture.namespaces.platform.functions).toHaveProperty('listCapabilities');
   });
@@ -106,6 +110,7 @@ describe('platform/plugin API contracts', () => {
 
   it('exports normalized capability names', () => {
     expect(capabilityNames).toContain('desktop.folderVault');
+    expect(capabilityNames).toContain('workspace.fileRenderers');
     expect(capabilityNames).toContain('platform.haptics');
     expect(capabilityNames).not.toContain('haptics');
   });
@@ -124,6 +129,34 @@ describe('platform/plugin API contracts', () => {
     } satisfies PluginManifest;
     expect(manifest.activation).toBeUndefined();
     expect(manifest.contributes).toBeUndefined();
+  });
+
+  it('defines static fileRenderer manifest contributions with public surface identifiers', () => {
+    const manifest = {
+      schemaVersion: 1,
+      id: 'zorid.core.data-views',
+      name: 'Data Views',
+      version: '0.1.0',
+      kind: 'core',
+      entry: './src/index.ts',
+      rendererEntry: './src/file-renderers.ts',
+      zoridApi: '^0.1.0',
+      platforms: ['desktop'],
+      capabilities: { required: ['workspace.fileRenderers'], optional: [] },
+      contributes: {
+        fileRenderers: [
+          {
+            id: 'zorid.core.data-views.zbase',
+            title: 'Zbase Data View',
+            extensions: ['.zbase'],
+            surfaces: ['full-page', 'markdown-embed'],
+            priority: 100,
+            rendererExport: 'zbaseFileRenderer',
+          },
+        ],
+      },
+    } satisfies PluginManifest;
+    expect(manifest.contributes.fileRenderers[0].surfaces).toEqual(['full-page', 'markdown-embed']);
   });
 
   it('makes host-owned fields/dataViews direct context properties at type level', () => {

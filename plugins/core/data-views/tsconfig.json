@@ -11,6 +11,9 @@
       "path": "../../../packages/plugin-api"
     },
     {
+      "path": "../../../packages/plugin-ui"
+    },
+    {
       "path": "../../../packages/platform-api"
     },
     {

@@ -12,6 +12,18 @@ describe('import boundary rules', () => {
     expect(isImportAllowed('@zorid/plugin-api', '@zorid/app-kernel')).toBe(false);
   });
 
+  it('allows core plugins to use the blessed plugin-ui authoring package', () => {
+    expect(isImportAllowed('@zorid/plugin-data-views', '@zorid/plugin-ui')).toBe(true);
+    expect(isImportAllowed('@zorid/platform-api', '@zorid/plugin-ui')).toBe(false);
+  });
+
+  it('allows only the desktop trusted renderer loader to import the first-party data-views renderer', () => {
+    expect(isImportAllowed('@zorid/desktop-app', '@zorid/plugin-data-views/file-renderers')).toBe(true);
+    expect(isImportAllowed('@zorid/desktop-app', '@zorid/plugin-data-views')).toBe(false);
+    expect(isImportAllowed('@zorid/mobile-app', '@zorid/plugin-data-views')).toBe(false);
+    expect(isImportAllowed('@zorid/mobile-app', '@zorid/plugin-data-views/file-renderers')).toBe(false);
+  });
+
   it('keeps current workspace boundary-clean', () => {
     expect(checkWorkspace()).toEqual([]);
   });

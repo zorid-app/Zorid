@@ -2,8 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { nextTick } from 'vue';
-import type { VaultEntry } from '../apps/desktop/src/renderer/src/types.js';
+import { defineComponent, nextTick } from 'vue';
+import type { FileRendererMatchDto, MarkdownEmbedDto, VaultEntry } from '../apps/desktop/src/renderer/src/types.js';
 
 function entry(path: string, kind: VaultEntry['kind'], mtimeMs: number): VaultEntry {
   return { path, kind, mtimeMs, size: kind === 'directory' ? 0 : 10 };
@@ -45,6 +45,7 @@ function createZoridDesktopMock({
     listBases: vi.fn().mockResolvedValue([]),
     renderDataView: vi.fn().mockResolvedValue(undefined),
     getMarkdownEmbeds: vi.fn().mockResolvedValue([]),
+    resolveFileRenderer: vi.fn().mockResolvedValue(undefined),
     onIndexUpdated: vi.fn().mockReturnValue(() => undefined),
     onEditorSnapshot: vi.fn().mockReturnValue(() => undefined),
     onSettingUpdated: vi.fn().mockReturnValue(() => undefined),
@@ -61,6 +62,27 @@ function createZoridDesktopMock({
     createVault: vi.fn().mockResolvedValue(undefined),
     openVault: vi.fn().mockResolvedValue(undefined),
   } satisfies Record<string, unknown>;
+}
+
+function fileRendererMatch(path: string): FileRendererMatchDto {
+  return {
+    pluginId: 'zorid.core.data-views',
+    rendererId: 'zorid.core.data-views.zbase',
+    title: 'Zbase Data View',
+    surface: 'markdown-embed',
+    path,
+    rendererEntry: './src/file-renderers.ts',
+    rendererExport: 'zbaseFileRenderer',
+  };
+}
+
+function markdownEmbed(sourcePath: string, basePath: string): MarkdownEmbedDto {
+  return {
+    sourcePath,
+    basePath,
+    rendererId: 'zorid.core.data-views.zbase',
+    renderer: fileRendererMatch(basePath),
+  };
 }
 
 afterEach(() => {
@@ -188,6 +210,74 @@ describe('desktop file tree toolbar contract', () => {
     await flush();
 
     expect((desk.readVaultText as vi.Mock).mock.calls.map((call) => call[0])).toEqual(['Current.md', 'test.md']);
+  });
+
+  it('remounts MarkdownEditor on markdown-to-markdown navigation so embed renderer registrations are rebuilt', async () => {
+    const desk = createZoridDesktopMock({
+      listVault: (path = '') =>
+        Promise.resolve(path === '' ? [entry('Alpha.md', 'file', 1), entry('Beta.md', 'file', 2)] : []),
+    });
+    (desk.readVaultText as vi.Mock).mockImplementation((path: string) => Promise.resolve(`![[views/${path}.zbase]]`));
+    (desk.getMarkdownEmbeds as vi.Mock).mockImplementation((path: string) =>
+      Promise.resolve([markdownEmbed(path, path === 'Alpha.md' ? 'views/alpha.zbase' : 'views/beta.zbase')]),
+    );
+    Object.defineProperty(window, 'zoridDesktop', {
+      configurable: true,
+      value: desk,
+    });
+
+    const editorLifecycle: Array<{ event: 'mounted' | 'unmounted'; path: string; embeds: string[] }> = [];
+    const MarkdownEditorStub = defineComponent({
+      name: 'MarkdownEditor',
+      props: {
+        documentPath: { type: String, required: true },
+        markdownEmbeds: { type: Array as () => readonly MarkdownEmbedDto[], default: () => [] },
+      },
+      mounted() {
+        editorLifecycle.push({
+          event: 'mounted',
+          path: this.documentPath,
+          embeds: this.markdownEmbeds.map((embed) => embed.basePath),
+        });
+      },
+      unmounted() {
+        editorLifecycle.push({
+          event: 'unmounted',
+          path: this.documentPath,
+          embeds: this.markdownEmbeds.map((embed) => embed.basePath),
+        });
+      },
+      template: '<div class="mock-markdown-editor">{{ documentPath }}</div>',
+    });
+
+    const { default: App } = await import('../apps/desktop/src/renderer/src/App.vue');
+    const wrapper = mount(App, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          ActivityRail: true,
+          AppResizeHandle: true,
+          AppStatusBar: true,
+          CommandPaletteWindow: true,
+          MarkdownEditor: MarkdownEditorStub,
+          RightSidebarPanels: true,
+          SettingsWindow: true,
+          TopTabStrip: true,
+        },
+      },
+    });
+    await flush();
+
+    await wrapper.findAll('.file-tree .tree-item')[0]!.trigger('click');
+    await flush();
+    await wrapper.findAll('.file-tree .tree-item')[1]!.trigger('click');
+    await flush();
+
+    expect(editorLifecycle).toEqual([
+      { event: 'mounted', path: 'Alpha.md', embeds: ['views/alpha.zbase'] },
+      { event: 'unmounted', path: 'Alpha.md', embeds: ['views/alpha.zbase'] },
+      { event: 'mounted', path: 'Beta.md', embeds: ['views/beta.zbase'] },
+    ]);
   });
 
   it('opens an inline Untitled row for new file and commits on blur with unique fallback naming', async () => {

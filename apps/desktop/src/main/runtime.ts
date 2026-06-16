@@ -10,6 +10,7 @@ import { parseZbase, parseZtype } from '@zorid/object-store';
 import type {
   CapabilityName,
   CommandContribution,
+  FileRendererSurface,
   PluginStatus,
   SettingsContribution,
   VaultEntry,
@@ -19,7 +20,7 @@ import type {
   ZtypeField,
 } from '@zorid/platform-api';
 import type { PluginManifest, ZoridPlugin, ZoridPluginContext } from '@zorid/plugin-api';
-import { createPluginRegistryAPI, PluginHost } from '@zorid/plugin-host';
+import { createPluginRegistryAPI, PluginHost, resolveFileRendererContribution } from '@zorid/plugin-host';
 import {
   asPluginId,
   type Disposable,
@@ -172,7 +173,33 @@ export interface MarkdownEmbedDto {
   readonly sourcePath: VaultPath;
   readonly basePath: VaultPath;
   readonly viewId?: string;
+  readonly rendererId?: string;
+  readonly renderer?: FileRendererMatchDto;
 }
+
+export interface FileRendererMatchDto {
+  readonly pluginId: string;
+  readonly rendererId: string;
+  readonly title: string;
+  readonly surface: FileRendererSurface;
+  readonly path: VaultPath;
+  readonly rendererEntry: string;
+  readonly rendererExport: string;
+}
+
+export const trustedCoreFileRendererLoaders: ReadonlyMap<
+  string,
+  { readonly pluginId: string; readonly rendererEntry: string; readonly rendererExport: string }
+> = new Map([
+  [
+    'zorid.core.data-views.zbase',
+    {
+      pluginId: 'zorid.core.data-views',
+      rendererEntry: './src/file-renderers.ts',
+      rendererExport: 'zbaseFileRenderer',
+    },
+  ],
+]);
 
 export const appSettingsSections: readonly SettingsContribution[] = [
   {
@@ -227,6 +254,7 @@ const desktopCapabilities: readonly CapabilityName[] = [
   'metadata.read',
   'workspace.views',
   'workspace.navigation',
+  'workspace.fileRenderers',
   'editor.read',
   'editor.write',
   'commands.register',
@@ -362,14 +390,33 @@ export const corePluginManifests: readonly PluginManifest[] = [
     version: '0.1.0',
     kind: 'core',
     entry: './src/index.ts',
+    rendererEntry: './src/file-renderers.ts',
     zoridApi: '^0.1.0',
     platforms: ['desktop'],
-    capabilities: { required: ['metadata.read', 'workspace.views', 'vault.read', 'commands.register'], optional: [] },
+    capabilities: {
+      required: ['metadata.read', 'workspace.views', 'workspace.fileRenderers', 'vault.read', 'commands.register'],
+      optional: [],
+    },
     dependsOn: { 'zorid.core.fields': '^0.1.0' },
-    activation: ['onCommand:data-views.open', 'onMarkdownEmbed:.zbase', 'onFileExtension:.zbase'],
+    activation: [
+      'onCommand:data-views.open',
+      'onMarkdownEmbed:.zbase',
+      'onFileExtension:.zbase',
+      'onFileRenderer:.zbase',
+    ],
     contributes: {
       commands: [{ id: 'data-views.open', title: 'Open Base' }],
       viewRenderers: [{ type: 'table' }, { type: 'list' }],
+      fileRenderers: [
+        {
+          id: 'zorid.core.data-views.zbase',
+          title: 'Zbase Data View',
+          extensions: ['.zbase'],
+          surfaces: ['full-page', 'markdown-embed'],
+          priority: 100,
+          rendererExport: 'zbaseFileRenderer',
+        },
+      ],
     },
   },
 ];
@@ -829,11 +876,44 @@ export class DesktopRuntime {
     const normalized = normalizeVaultPath(vaultPath);
     const record = this.getIndexedFile(normalized);
     if (!record) return [];
-    return [...record.text.matchAll(/!\[\[(.+?\.zbase)(?:#([A-Za-z0-9_.-]+))?\]\]/g)].map((match) => ({
-      sourcePath: normalized,
-      basePath: normalizeVaultPath(match[1] ?? ''),
-      ...(match[2] ? { viewId: match[2] } : {}),
-    }));
+    return [...record.text.matchAll(/!\[\[([^\]#]+)(?:#([A-Za-z0-9_.-]+))?\]\]/g)].flatMap((match) => {
+      const basePath = normalizeVaultPath(match[1] ?? '');
+      const renderer = this.resolveFileRenderer(basePath, 'markdown-embed');
+      if (!renderer && !basePath.toLowerCase().endsWith('.zbase')) return [];
+      return {
+        sourcePath: normalized,
+        basePath,
+        ...(match[2] ? { viewId: match[2] } : {}),
+        ...(renderer ? { rendererId: renderer.rendererId, renderer } : {}),
+      };
+    });
+  }
+
+  resolveFileRenderer(path: string, surface: FileRendererSurface): FileRendererMatchDto | undefined {
+    const normalized = normalizeVaultPath(path);
+    const contribution = resolveFileRendererContribution([...this.pluginHost.manifests.values()], normalized, surface);
+    const loader = contribution ? trustedCoreFileRendererLoaders.get(contribution.id) : undefined;
+    const manifest = contribution ? this.pluginHost.manifests.get(contribution.pluginId) : undefined;
+    if (
+      !contribution ||
+      !loader ||
+      !manifest ||
+      loader.pluginId !== contribution.pluginId ||
+      loader.rendererEntry !== manifest.rendererEntry ||
+      loader.rendererExport !== contribution.rendererExport
+    )
+      return undefined;
+    return contribution
+      ? {
+          pluginId: contribution.pluginId,
+          rendererId: contribution.id,
+          title: contribution.title,
+          surface,
+          path: normalized,
+          rendererEntry: loader.rendererEntry,
+          rendererExport: loader.rendererExport,
+        }
+      : undefined;
   }
 
   async rebuildIndex(): Promise<IndexStatusDto> {
@@ -1502,6 +1582,7 @@ export class DesktopRuntime {
         command: (command: CommandContribution) => stack.use(this.kernel.commands.register(command)),
         setting: (schema: SettingsContribution) => stack.use(this.kernel.settings.register(schema)),
         view: (view) => stack.use(this.workspace.registerView(view)),
+        fileRenderer: () => registerDisposable({ dispose: () => undefined }),
         viewRenderer: () => registerDisposable({ dispose: () => undefined }),
         statusItem: () => registerDisposable({ dispose: () => undefined }),
         editorExtension: (extension) => stack.use(this.editor.registerExtension(extension)),

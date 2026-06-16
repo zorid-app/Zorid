@@ -34,6 +34,7 @@ const editor: DesktopEditorBridge = {
   listBases: () => ipcRenderer.invoke('zorid:list-bases'),
   renderDataView: (basePath, viewId) => ipcRenderer.invoke('zorid:render-data-view', basePath, viewId),
   getMarkdownEmbeds: (path) => ipcRenderer.invoke('zorid:get-markdown-embeds', path),
+  resolveFileRenderer: (path, surface) => ipcRenderer.invoke('zorid:resolve-file-renderer', path, surface),
   openExternalUrl: (url) => ipcRenderer.invoke('zorid:open-external-url', url),
   onIndexUpdated: (callback) => {
     const listener = () => callback();

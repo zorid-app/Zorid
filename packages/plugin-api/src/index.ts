@@ -6,6 +6,7 @@ import type {
   EditorAPI,
   EventBusAPI,
   FieldsAPI,
+  FileRendererSurface,
   MetadataAPI,
   ObjectStoreAPI,
   PlatformAPI,
@@ -57,6 +58,7 @@ export type ActivationTrigger =
   | `onView:${string}`
   | `onFileExtension:${string}`
   | `onMarkdownEmbed:${string}`
+  | `onFileRenderer:${string}`
   | 'onStartup';
 
 export interface PluginManifest {
@@ -66,6 +68,8 @@ export interface PluginManifest {
   readonly version: string;
   readonly kind: PluginKind;
   readonly entry: string;
+  /** Trusted-core renderer module entry. Required when contributes.fileRenderers is present. */
+  readonly rendererEntry?: string;
   readonly zoridApi: string;
   readonly platforms: readonly ('desktop' | 'mobile')[];
   readonly capabilities: PluginCapabilityManifest;
@@ -87,6 +91,16 @@ export interface StaticContributions {
   readonly commands?: readonly { readonly id: string; readonly title: string }[];
   readonly views?: readonly { readonly id: string; readonly title: string }[];
   readonly viewRenderers?: readonly { readonly type: string }[];
+  readonly fileRenderers?: readonly FileRendererManifestContribution[];
   readonly statusItems?: readonly { readonly id: string }[];
   readonly settings?: readonly SettingsContribution[];
+}
+
+export interface FileRendererManifestContribution {
+  readonly id: string;
+  readonly title: string;
+  readonly extensions: readonly string[];
+  readonly surfaces: readonly FileRendererSurface[];
+  readonly priority: number;
+  readonly rendererExport: string;
 }

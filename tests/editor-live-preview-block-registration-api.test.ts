@@ -212,6 +212,33 @@ describe('editor Live Preview block registration API', () => {
     parent.remove();
   });
 
+  it('uses the public file renderer markdown-embed registration over the legacy zbase widget', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const registration: MarkdownBlockRegistration = {
+      id: 'file-renderer-markdown-embed',
+      priority: 1000,
+      syntax: [{ kind: 'embed-reference', extensions: ['.zbase'] }],
+      render(match) {
+        const element = document.createElement('div');
+        element.className = 'test-file-renderer-embed';
+        element.textContent = match.definition.kind === 'external' ? match.definition.path : '';
+        return element;
+      },
+    };
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: 'Dashboard: ![[views/tasks.zbase#open]]',
+      markdownBlockRegistrations: [registration],
+    });
+
+    expect(parent.querySelector('.test-file-renderer-embed')?.textContent).toBe('views/tasks.zbase');
+    expect(parent.querySelector('.z-live-preview-zbase-embed-widget')).toBeNull();
+
+    editor.destroy();
+    parent.remove();
+  });
+
   it('keeps default .zbase rendering for paths outside a scoped custom registration', () => {
     const parent = document.createElement('div');
     document.body.append(parent);

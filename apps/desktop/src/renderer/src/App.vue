@@ -26,6 +26,7 @@ import MarkdownEditor from './components/MarkdownEditor.vue';
 import RightSidebarPanels from './components/RightSidebarPanels.vue';
 import SettingsWindow from './components/SettingsWindow.vue';
 import TopTabStrip from './components/TopTabStrip.vue';
+import TrustedFileRenderer from './components/TrustedFileRenderer.vue';
 import type { TopTabItem } from './components/top-tab-model.js';
 import { fileTab, fileTabId, nextTabIdAfterClose, placeholderTab } from './components/top-tab-model.js';
 import { createMarkdownAutosave, type MarkdownAutosaveSnapshot } from './markdown-autosave.js';
@@ -48,6 +49,7 @@ import type {
   EditorSnapshotDto,
   FieldDto,
   FileFieldsDto,
+  FileRendererMatchDto,
   IndexStatusDto,
   MarkdownEmbedDto,
   OutlineItemDto,
@@ -102,6 +104,7 @@ const desktop = window.zoridDesktop as unknown as {
   listBases(): Promise<readonly BaseDto[]>;
   renderDataView(basePath: string, viewId?: string): Promise<DataViewResultDto>;
   getMarkdownEmbeds(path: string): Promise<readonly MarkdownEmbedDto[]>;
+  resolveFileRenderer(path: string, surface: 'full-page' | 'markdown-embed'): Promise<FileRendererMatchDto | undefined>;
   onIndexUpdated(callback: () => void): () => void;
   onEditorSnapshot(callback: (snapshot: EditorSnapshotDto) => void): () => void;
   onSettingUpdated(callback: (setting: SettingValueUpdate) => void): () => void;
@@ -170,6 +173,7 @@ const activeBasePath = ref<string>();
 const activeViewId = ref<string>();
 const dataView = ref<DataViewResultDto>();
 const markdownEmbeds = ref<readonly MarkdownEmbedDto[]>([]);
+const activeFileRenderer = ref<FileRendererMatchDto>();
 const selectedLeftPaneTab = ref<'files' | 'search' | 'bookmarks'>('files');
 const paneLayout = ref<PaneLayout>({ ...DEFAULT_PANE_LAYOUT });
 const systemTheme = ref<ResolvedTheme>(readSystemTheme());
@@ -638,6 +642,7 @@ function clearFileSelection(): void {
   outline.value = [];
   fileFields.value = undefined;
   markdownEmbeds.value = [];
+  activeFileRenderer.value = undefined;
 }
 
 async function activatePlaceholderTab(tabId: string): Promise<void> {
@@ -652,9 +657,15 @@ async function activateFilePath(path: string): Promise<void> {
   selectedTabId.value = nextTabId;
   clearFileSelection();
   const text = await desktop.readVaultText(path);
+  const [fileRenderer, embeds] = await Promise.all([
+    desktop.resolveFileRenderer(path, 'full-page'),
+    desktop.getMarkdownEmbeds(path),
+  ]);
   if (selectedTabId.value !== nextTabId) return;
   selectedPath.value = path;
   editorText.value = text;
+  activeFileRenderer.value = fileRenderer;
+  markdownEmbeds.value = embeds;
   editorCursorPosition.value = 0;
   savedText.value = text;
   await refreshMetadataPanels();
@@ -1316,10 +1327,12 @@ onBeforeUnmount(() => {
 
     <section class="editor" data-region="editor">
       <MarkdownEditor
-        v-if="selectedPath"
+        v-if="selectedPath && !activeFileRenderer"
+        :key="selectedPath"
         :text="editorText"
         :document-path="selectedPath"
         :file-fields="fileFields"
+        :markdown-embeds="markdownEmbeds"
         :types="types"
         :fields-properties-enabled="fieldsPropertiesEnabled"
         @change="updateEditorText"
@@ -1329,6 +1342,11 @@ onBeforeUnmount(() => {
         @update-field="setActiveFieldValue"
         @update-type="setActiveType"
         @open-reference="openEditorReference"
+      />
+      <TrustedFileRenderer
+        v-else-if="selectedPath && activeFileRenderer"
+        :match="activeFileRenderer"
+        @error="(message) => (error = message)"
       />
       <p v-else class="muted new-tab-empty">{{ editorEmptyText }}</p>
     </section>

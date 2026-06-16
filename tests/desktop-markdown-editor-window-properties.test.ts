@@ -12,6 +12,7 @@ function installDesktopStub(): void {
     value: {
       saveDebugLog: vi.fn().mockResolvedValue(undefined),
       openExternalUrl: vi.fn().mockResolvedValue(undefined),
+      readVaultText: vi.fn().mockResolvedValue('{"views":[]}'),
     },
   });
 }
@@ -20,6 +21,20 @@ async function flush(): Promise<void> {
   await flushPromises();
   await nextTick();
   await flushPromises();
+}
+
+async function waitFor(assertion: () => void): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw lastError;
 }
 
 describe('desktop MarkdownEditor editor-window properties', () => {
@@ -130,5 +145,38 @@ describe('desktop MarkdownEditor editor-window properties', () => {
 
     expect(wrapper.emitted('openReference')).toEqual([[{ path: 'test.md' }]]);
     expect(window.zoridDesktop.openExternalUrl).toHaveBeenCalledWith('https://example.com/');
+  });
+
+  it('mounts trusted markdown-embed file renderers instead of placeholder text', async () => {
+    const wrapper = mount(MarkdownEditor, {
+      attachTo: document.body,
+      props: {
+        text: '![[views/tasks.zbase#open]]',
+        documentPath: 'Current.md',
+        markdownEmbeds: [
+          {
+            sourcePath: 'Current.md',
+            basePath: 'views/tasks.zbase',
+            viewId: 'open',
+            rendererId: 'zorid.core.data-views.zbase',
+            renderer: {
+              pluginId: 'zorid.core.data-views',
+              rendererId: 'zorid.core.data-views.zbase',
+              title: 'Zbase Data View',
+              surface: 'markdown-embed',
+              path: 'views/tasks.zbase',
+              rendererEntry: './src/file-renderers.ts',
+              rendererExport: 'zbaseFileRenderer',
+            },
+          },
+        ],
+      },
+    });
+    await flush();
+
+    expect(wrapper.find('[data-file-renderer="zorid.core.data-views.zbase"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('Embedded data view');
+    expect(wrapper.text()).not.toContain('File renderer: views/tasks.zbase');
+    await waitFor(() => expect(window.zoridDesktop.readVaultText).toHaveBeenCalledWith('views/tasks.zbase'));
   });
 });

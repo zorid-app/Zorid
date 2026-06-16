@@ -1,6 +1,8 @@
 import { defineZoridPlugin } from '@zorid/plugin-api';
 import { normalizeVaultPath } from '@zorid/shared';
 
+export { zbaseFileRenderer } from './file-renderers.js';
+
 export default defineZoridPlugin({
   activate(ctx) {
     ctx.register.viewRenderer({

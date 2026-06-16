@@ -6,6 +6,8 @@ import type {
   EditorAPI,
   EventBusAPI,
   FieldsAPI,
+  FileRendererContribution,
+  FileRendererSurface,
   MetadataAPI,
   ObjectStoreAPI,
   PluginRegistryAPI,
@@ -14,7 +16,13 @@ import type {
   VaultAPI,
   WorkspaceAPI,
 } from '@zorid/platform-api';
-import type { ActivationTrigger, PluginManifest, ZoridPlugin, ZoridPluginContext } from '@zorid/plugin-api';
+import type {
+  ActivationTrigger,
+  FileRendererManifestContribution,
+  PluginManifest,
+  ZoridPlugin,
+  ZoridPluginContext,
+} from '@zorid/plugin-api';
 import {
   asPluginId,
   type Disposable,
@@ -62,7 +70,35 @@ export interface ManifestValidationResult {
   readonly errors: readonly string[];
 }
 
-const validActivationPrefixes = ['onCommand:', 'onView:', 'onFileExtension:', 'onMarkdownEmbed:'];
+const validActivationPrefixes = ['onCommand:', 'onView:', 'onFileExtension:', 'onMarkdownEmbed:', 'onFileRenderer:'];
+const fileRendererSurfaces = new Set<FileRendererSurface>(['full-page', 'markdown-embed']);
+
+function isValidExtension(value: unknown): value is string {
+  return typeof value === 'string' && /^\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
+}
+
+function validateFileRendererContribution(
+  contribution: Partial<FileRendererManifestContribution>,
+  index: number,
+  errors: string[],
+): void {
+  const prefix = `contributes.fileRenderers[${index}]`;
+  if (typeof contribution.id !== 'string' || contribution.id.trim() === '') errors.push(`${prefix}.id is required`);
+  if (typeof contribution.title !== 'string' || contribution.title.trim() === '')
+    errors.push(`${prefix}.title is required`);
+  if (!Array.isArray(contribution.extensions) || contribution.extensions.length === 0)
+    errors.push(`${prefix}.extensions must be a non-empty array`);
+  else if (contribution.extensions.some((extension) => !isValidExtension(extension)))
+    errors.push(`${prefix}.extensions must contain dot-prefixed extensions`);
+  if (!Array.isArray(contribution.surfaces) || contribution.surfaces.length === 0)
+    errors.push(`${prefix}.surfaces must be a non-empty array`);
+  else if (contribution.surfaces.some((surface) => !fileRendererSurfaces.has(surface as FileRendererSurface)))
+    errors.push(`${prefix}.surfaces must contain full-page/markdown-embed`);
+  if (typeof contribution.priority !== 'number' || !Number.isFinite(contribution.priority))
+    errors.push(`${prefix}.priority must be a finite number`);
+  if (typeof contribution.rendererExport !== 'string' || contribution.rendererExport.trim() === '')
+    errors.push(`${prefix}.rendererExport is required`);
+}
 
 export function validatePluginManifest(input: unknown): ManifestValidationResult {
   const errors: string[] = [];
@@ -92,7 +128,42 @@ export function validatePluginManifest(input: unknown): ManifestValidationResult
     if (trigger !== 'onStartup' && !validActivationPrefixes.some((prefix) => trigger.startsWith(prefix)))
       errors.push(`invalid activation trigger: ${trigger}`);
   }
+  const fileRenderers = manifest.contributes?.fileRenderers;
+  if (fileRenderers !== undefined) {
+    if (!Array.isArray(fileRenderers)) errors.push('contributes.fileRenderers must be an array');
+    else {
+      if (typeof manifest.rendererEntry !== 'string' || manifest.rendererEntry.trim() === '')
+        errors.push('rendererEntry is required when contributes.fileRenderers exists');
+      if (!manifest.capabilities?.required?.includes('workspace.fileRenderers'))
+        errors.push('workspace.fileRenderers capability is required when contributes.fileRenderers exists');
+      if (manifest.kind === 'community') errors.push('community plugins cannot contribute trusted fileRenderers');
+      fileRenderers.forEach((contribution, index) => {
+        validateFileRendererContribution(contribution, index, errors);
+      });
+    }
+  }
   return { ok: errors.length === 0, errors };
+}
+
+export interface ResolvedFileRendererContribution extends FileRendererManifestContribution {
+  readonly pluginId: string;
+}
+
+export function resolveFileRendererContribution(
+  manifests: readonly PluginManifest[],
+  path: string,
+  surface: FileRendererSurface,
+): ResolvedFileRendererContribution | undefined {
+  const lowerPath = path.toLowerCase();
+  const candidates: ResolvedFileRendererContribution[] = [];
+  for (const manifest of manifests) {
+    for (const contribution of manifest.contributes?.fileRenderers ?? []) {
+      if (!contribution.surfaces.includes(surface)) continue;
+      if (!contribution.extensions.some((extension) => lowerPath.endsWith(extension.toLowerCase()))) continue;
+      candidates.push({ ...contribution, pluginId: manifest.id });
+    }
+  }
+  return candidates.sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id))[0];
 }
 
 export function resolvePluginOrder(manifests: readonly PluginManifest[]): string[] {
@@ -123,11 +194,13 @@ export interface LazyTriggerIndex {
   readonly onView: ReadonlyMap<string, readonly string[]>;
   readonly onFileExtension: ReadonlyMap<string, readonly string[]>;
   readonly onMarkdownEmbed: ReadonlyMap<string, readonly string[]>;
+  readonly onFileRenderer: ReadonlyMap<string, readonly string[]>;
   readonly onStartup: readonly string[];
 }
 
 function add(map: Map<string, string[]>, key: string, pluginId: string): void {
   const list = map.get(key) ?? [];
+  if (list.includes(pluginId)) return;
   list.push(pluginId);
   map.set(key, list);
 }
@@ -137,6 +210,7 @@ export function createLazyTriggerIndex(manifests: readonly PluginManifest[]): La
   const onView = new Map<string, string[]>();
   const onFileExtension = new Map<string, string[]>();
   const onMarkdownEmbed = new Map<string, string[]>();
+  const onFileRenderer = new Map<string, string[]>();
   const onStartup: string[] = [];
   for (const manifest of manifests) {
     for (const trigger of manifest.activation ?? []) {
@@ -147,9 +221,14 @@ export function createLazyTriggerIndex(manifests: readonly PluginManifest[]): La
         add(onFileExtension, trigger.slice('onFileExtension:'.length), manifest.id);
       else if (trigger.startsWith('onMarkdownEmbed:'))
         add(onMarkdownEmbed, trigger.slice('onMarkdownEmbed:'.length), manifest.id);
+      else if (trigger.startsWith('onFileRenderer:'))
+        add(onFileRenderer, trigger.slice('onFileRenderer:'.length), manifest.id);
+    }
+    for (const renderer of manifest.contributes?.fileRenderers ?? []) {
+      for (const extension of renderer.extensions) add(onFileRenderer, extension, manifest.id);
     }
   }
-  return { onCommand, onView, onFileExtension, onMarkdownEmbed, onStartup };
+  return { onCommand, onView, onFileExtension, onMarkdownEmbed, onFileRenderer, onStartup };
 }
 
 export type PluginRuntimeLoader = (manifest: PluginManifest) => Promise<ZoridPlugin> | ZoridPlugin;
@@ -542,6 +621,12 @@ export class PluginHost {
             ? base.register.view(view)
             : (() => {
                 throw unavailable('workspace.views');
+              })(),
+        fileRenderer: (renderer: FileRendererContribution) =>
+          ensure('workspace.fileRenderers')
+            ? base.register.fileRenderer(renderer)
+            : (() => {
+                throw unavailable('workspace.fileRenderers');
               })(),
         viewRenderer: (renderer) =>
           ensure('workspace.views')

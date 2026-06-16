@@ -38,6 +38,37 @@ const settingsPluginManifest: PluginManifest = {
   },
 };
 
+function coreDataViewsManifestForTest(): PluginManifest {
+  return {
+    schemaVersion: 1,
+    id: 'zorid.core.data-views',
+    name: 'Data Views',
+    version: '0.1.0',
+    kind: 'core',
+    entry: './src/index.ts',
+    rendererEntry: './src/file-renderers.ts',
+    zoridApi: '^0.1.0',
+    platforms: ['desktop'],
+    capabilities: {
+      required: ['metadata.read', 'workspace.views', 'workspace.fileRenderers', 'vault.read', 'commands.register'],
+      optional: [],
+    },
+    activation: ['onFileRenderer:.zbase'],
+    contributes: {
+      fileRenderers: [
+        {
+          id: 'zorid.core.data-views.zbase',
+          title: 'Zbase Data View',
+          extensions: ['.zbase'],
+          surfaces: ['full-page', 'markdown-embed'],
+          priority: 100,
+          rendererExport: 'zbaseFileRenderer',
+        },
+      ],
+    },
+  };
+}
+
 describe('desktop runtime composition', () => {
   it('keeps first-party app settings available as reusable app-owned schemas', () => {
     expect(appSettingsSections).toEqual(
@@ -257,8 +288,24 @@ status: done
         rows: [expect.objectContaining({ path: 'A.md' })],
         groups: [expect.objectContaining({ key: 'open' })],
       });
+      expect(runtime.resolveFileRenderer('.zorid/views/tasks.zbase', 'full-page')).toMatchObject({
+        rendererId: 'zorid.core.data-views.zbase',
+        surface: 'full-page',
+        rendererEntry: './src/file-renderers.ts',
+        rendererExport: 'zbaseFileRenderer',
+      });
       expect(runtime.getMarkdownEmbeds('A.md')).toEqual([
-        { sourcePath: 'A.md', basePath: '.zorid/views/tasks.zbase', viewId: 'open' },
+        {
+          sourcePath: 'A.md',
+          basePath: '.zorid/views/tasks.zbase',
+          viewId: 'open',
+          rendererId: 'zorid.core.data-views.zbase',
+          renderer: expect.objectContaining({
+            rendererId: 'zorid.core.data-views.zbase',
+            surface: 'markdown-embed',
+            rendererExport: 'zbaseFileRenderer',
+          }),
+        },
       ]);
       await expect(runtime.getFileFields('A.md')).resolves.toMatchObject({
         typeName: 'task',
@@ -288,6 +335,57 @@ status: done
       expect(runtime.getIndexedFile('A.md')).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('requires trusted file renderer manifests to match allowlisted entry/export metadata', () => {
+    const runtimeWithWrongEntry = createDesktopRuntime({
+      manifests: [
+        {
+          ...coreDataViewsManifestForTest(),
+          rendererEntry: './src/other-renderers.ts',
+        },
+      ],
+    });
+    expect(runtimeWithWrongEntry.resolveFileRenderer('tasks.zbase', 'full-page')).toBeUndefined();
+
+    const wrongExport = coreDataViewsManifestForTest();
+    wrongExport.contributes!.fileRenderers![0] = {
+      ...wrongExport.contributes!.fileRenderers![0]!,
+      rendererExport: 'otherExport',
+    };
+    const runtimeWithWrongExport = createDesktopRuntime({ manifests: [wrongExport] });
+    expect(runtimeWithWrongExport.resolveFileRenderer('tasks.zbase', 'markdown-embed')).toBeUndefined();
+  });
+
+  it('uses renderer resolution as markdown embed source of truth and keeps .zbase legacy fallback only unresolved', async () => {
+    const first = await mkdtemp(path.join(tmpdir(), 'zorid-runtime-embed-renderer-'));
+    const second = await mkdtemp(path.join(tmpdir(), 'zorid-runtime-embed-fallback-'));
+    try {
+      const manifest = coreDataViewsManifestForTest();
+      const runtime = createDesktopRuntime({ manifests: [manifest] });
+      await runtime.openVault(first);
+      await runtime.createMarkdownFile('A.md', '![[views/tasks.zbase#open]]\n![[notes/plain.txt]]');
+      expect(runtime.getMarkdownEmbeds('A.md')).toEqual([
+        expect.objectContaining({
+          basePath: 'views/tasks.zbase',
+          viewId: 'open',
+          rendererId: 'zorid.core.data-views.zbase',
+          renderer: expect.objectContaining({ rendererId: 'zorid.core.data-views.zbase' }),
+        }),
+      ]);
+
+      const runtimeWithoutTrustedMatch = createDesktopRuntime({
+        manifests: [{ ...manifest, rendererEntry: './src/other-renderers.ts' }],
+      });
+      await runtimeWithoutTrustedMatch.openVault(second);
+      await runtimeWithoutTrustedMatch.createMarkdownFile('A.md', '![[views/tasks.zbase#open]]\n![[notes/plain.txt]]');
+      expect(runtimeWithoutTrustedMatch.getMarkdownEmbeds('A.md')).toEqual([
+        { sourcePath: 'A.md', basePath: 'views/tasks.zbase', viewId: 'open' },
+      ]);
+    } finally {
+      await rm(first, { recursive: true, force: true });
+      await rm(second, { recursive: true, force: true });
     }
   });
 
