@@ -555,6 +555,21 @@ describe('Markdown table live preview', () => {
     );
   });
 
+  it('draws the focused-cell visual on the bordered cell box instead of inset on the textarea', () => {
+    const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(
+      /\.markdown-editor \.z-live-preview-table-cell-box:focus-within\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--z-color-accent\) 9%, transparent\);/s,
+    );
+    expect(styles).toMatch(
+      /\.markdown-editor \.z-live-preview-table-cell-box:focus-within\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px color-mix\(in srgb, var\(--z-color-accent\) 45%, transparent\);/s,
+    );
+    expect(styles).toMatch(/\.markdown-editor \.z-live-preview-table-cell:focus\s*\{[^}]*box-shadow:\s*none;/s);
+    expect(styles).not.toMatch(
+      /\.markdown-editor \.z-live-preview-table-cell:focus\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px color-mix\(in srgb, var\(--z-color-accent\) 45%, transparent\);/s,
+    );
+  });
+
   it('refreshes mounted widget DOM after same-bounds table source changes', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
