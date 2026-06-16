@@ -3,6 +3,7 @@ import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate
 import {
   type InternalLivePreviewRange,
   type InternalLivePreviewRenderer,
+  isLivePreviewHiddenLineRange,
   isLivePreviewLineRange,
   isLivePreviewWidgetRange,
   setInternalLivePreviewFocused,
@@ -63,7 +64,11 @@ export function filterLivePreviewRanges(
   context: Pick<LivePreviewContext, 'visibleFrom' | 'visibleTo' | 'focused' | 'selectionRanges'>,
 ): LivePreviewRange[] {
   return ranges
-    .filter((range) => range.from < context.visibleTo && range.to > context.visibleFrom)
+    .filter((range) =>
+      range.from === range.to
+        ? range.from >= context.visibleFrom && range.from <= context.visibleTo
+        : range.from < context.visibleTo && range.to > context.visibleFrom,
+    )
     .filter((range) => shouldRenderLivePreviewRange(range, context))
     .sort(
       (left, right) => left.from - right.from || left.to - right.to || left.rendererId.localeCompare(right.rendererId),
@@ -252,6 +257,20 @@ function livePreviewDecorationsForView(
     return Decoration.set(
       ranges.flatMap((range) => {
         if (isLivePreviewWidgetRange(range)) return [];
+        if (isLivePreviewHiddenLineRange(range)) {
+          return [
+            Decoration.line({
+              class: range.className,
+              attributes: {
+                'data-live-preview-renderer': range.rendererId,
+                style: 'display: none;',
+                ...range.attributes,
+              },
+            }).range(range.from),
+            Decoration.replace({}).range(range.from, range.to),
+          ];
+        }
+
         if (isLivePreviewLineRange(range)) {
           return [
             Decoration.line({
@@ -271,6 +290,10 @@ function livePreviewDecorationsForView(
               range.to,
             ),
           ];
+        }
+
+        if (range.kind === 'insert' && range.widget) {
+          return [Decoration.widget({ widget: range.widget, side: 1 }).range(range.from)];
         }
 
         return [

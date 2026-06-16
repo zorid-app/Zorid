@@ -11,6 +11,7 @@ import type {
   OpenDocumentOptions,
 } from '@zorid/platform-api';
 import { type Disposable, normalizeVaultPath, type VaultPath } from '@zorid/shared';
+import { editorIndentationExtension } from './indentation.js';
 import {
   type LivePreviewActionHandlers,
   type LivePreviewErrorReporter,
@@ -40,7 +41,12 @@ import { markdownTableLivePreviewRenderer } from './live-preview/table/renderer.
 import { markdownTableStateExtension } from './live-preview/table/state.js';
 import { toggleTaskMarkerAtSelection } from './live-preview/task-toggle.js';
 import type { LivePreviewRenderer } from './live-preview/types.js';
-import { deleteEmptyTaskListAtSelection, handleTaskListEnterAtSelection } from './markdown-list-commands.js';
+import {
+  deleteEmptyTaskListAtSelection,
+  handleTaskListEnterAtSelection,
+  handleToggleEnterAtSelection,
+  outdentToggleChildAtSelection,
+} from './markdown-list-commands.js';
 
 export type {
   DisposableView,
@@ -216,7 +222,15 @@ export function composeEditorExtensions(
 export const markdownTaskKeymap: readonly KeyBinding[] = [
   {
     key: 'Enter',
-    run: handleTaskListEnterAtSelection,
+    run: (view) => handleToggleEnterAtSelection(view) || handleTaskListEnterAtSelection(view),
+  },
+  {
+    key: 'Shift-Tab',
+    run: outdentToggleChildAtSelection,
+  },
+  {
+    key: 'Backspace',
+    run: outdentToggleChildAtSelection,
   },
   {
     key: 'Backspace',
@@ -264,6 +278,7 @@ export function createMarkdownEditorExtensions({
   const extensions: Extension[] = [
     zoridMarkdown(),
     EditorView.lineWrapping,
+    editorIndentationExtension,
     history(),
     keymap.of(historyKeymap),
     Prec.highest(keymap.of(markdownTaskKeymap)),

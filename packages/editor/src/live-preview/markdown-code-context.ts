@@ -22,6 +22,26 @@ export interface MarkdownCalloutRange extends MarkdownCodeRange {
   readonly type: string;
   readonly title: string;
   readonly body: string;
+  readonly foldSign?: '+' | '-';
+  readonly foldSignFrom?: number;
+}
+
+export interface MarkdownToggleRange extends MarkdownCodeRange {
+  readonly markerFrom: number;
+  readonly markerTo: number;
+  readonly foldSign: '+' | '-';
+  readonly foldSignFrom: number;
+  readonly titleFrom: number;
+  readonly titleTo: number;
+  readonly titleLineFrom: number;
+  readonly titleLineTo: number;
+  readonly childLines: readonly MarkdownCodeRange[];
+  readonly heading?: {
+    readonly level: number;
+    readonly markerFrom: number;
+    readonly contentFrom: number;
+    readonly to: number;
+  };
 }
 
 const backtickMarker = '`';
@@ -30,6 +50,9 @@ const lineFeed = '\n';
 const spaceCode = ' '.charCodeAt(0);
 const tabCode = '\t'.charCodeAt(0);
 const greaterThanCode = '>'.charCodeAt(0);
+const plusCode = '+'.charCodeAt(0);
+const minusCode = '-'.charCodeAt(0);
+const numberSignCode = '#'.charCodeAt(0);
 const rightBracketCode = ']'.charCodeAt(0);
 
 interface SyntaxNodeLike {
@@ -135,10 +158,99 @@ function quotedContentOffset(lineText: string): number {
   return index;
 }
 
+function leadingIndentColumns(lineText: string): number {
+  let columns = 0;
+  let index = 0;
+  while (index < lineText.length) {
+    const code = lineText.charCodeAt(index);
+    if (code === spaceCode) columns += 1;
+    else if (code === tabCode) columns += 4;
+    else break;
+    index += 1;
+  }
+  return columns;
+}
+
+function toggleTitleHeading(lineText: string, titleFrom: number): MarkdownToggleRange['heading'] {
+  let markerLength = 0;
+  while (markerLength < 6 && lineText.charCodeAt(titleFrom + markerLength) === numberSignCode) markerLength += 1;
+  if (markerLength === 0) return undefined;
+  let contentFrom = titleFrom + markerLength;
+  if (contentFrom >= lineText.length || lineText.charCodeAt(contentFrom) !== spaceCode) return undefined;
+  while (contentFrom < lineText.length && lineText.charCodeAt(contentFrom) === spaceCode) contentFrom += 1;
+  return { level: markerLength, markerFrom: titleFrom, contentFrom, to: lineText.length };
+}
+
+function toggleTitleLineRange(line: MarkdownCodeRange, lineText: string): MarkdownToggleRange | null {
+  let index = 0;
+  while (index < lineText.length && index < 4) {
+    const code = lineText.charCodeAt(index);
+    if (code !== spaceCode && code !== tabCode) break;
+    index += 1;
+  }
+  if (
+    index > 3 ||
+    lineText.charCodeAt(index) !== greaterThanCode ||
+    lineText.charCodeAt(index + 1) !== greaterThanCode
+  ) {
+    return null;
+  }
+  const signIndex = index + 2;
+  const signCode = lineText.charCodeAt(signIndex);
+  if (signCode !== plusCode && signCode !== minusCode) return null;
+  const afterSign = signIndex + 1;
+  if (afterSign >= lineText.length) return null;
+  const afterSignCode = lineText.charCodeAt(afterSign);
+  if (afterSignCode !== spaceCode && afterSignCode !== tabCode) return null;
+
+  let titleFrom = afterSign + 1;
+  while (titleFrom < lineText.length) {
+    const code = lineText.charCodeAt(titleFrom);
+    if (code !== spaceCode && code !== tabCode) break;
+    titleFrom += 1;
+  }
+
+  const heading = toggleTitleHeading(lineText, titleFrom);
+  const range: MarkdownToggleRange = {
+    from: line.from,
+    to: line.to,
+    markerFrom: line.from + index,
+    markerTo: line.from + titleFrom,
+    foldSign: signCode === plusCode ? '+' : '-',
+    foldSignFrom: line.from + signIndex,
+    titleFrom: line.from + titleFrom,
+    titleTo: line.to,
+    titleLineFrom: line.from,
+    titleLineTo: line.to,
+    childLines: [],
+  };
+  return heading
+    ? {
+        ...range,
+        heading: {
+          level: heading.level,
+          markerFrom: line.from + heading.markerFrom,
+          contentFrom: line.from + heading.contentFrom,
+          to: line.from + heading.to,
+        },
+      }
+    : range;
+}
+
+function calloutFoldSign(lineText: string, signIndex: number): '+' | '-' | undefined {
+  const sign = lineText.charAt(signIndex);
+  if (sign !== '+' && sign !== '-') return undefined;
+  const afterSign = lineText.charCodeAt(signIndex + 1);
+  if (signIndex + 1 < lineText.length && afterSign !== spaceCode && afterSign !== tabCode) return undefined;
+  return sign;
+}
+
 function calloutTitle(docText: string, marker: SyntaxNodeLike, markerLine: MarkdownCodeRange): string {
   const lineText = docText.slice(markerLine.from, markerLine.to);
   const markerText = docText.slice(marker.from, marker.to);
-  const titleFrom = marker.from - markerLine.from + markerText.length;
+  const afterMarker = marker.from - markerLine.from + markerText.length;
+  const foldSign = calloutFoldSign(lineText, afterMarker);
+  const titleFrom = foldSign ? afterMarker + 1 : afterMarker;
   let index = titleFrom;
   while (index < lineText.length) {
     const code = lineText.charCodeAt(index);
@@ -151,6 +263,34 @@ function calloutTitle(docText: string, marker: SyntaxNodeLike, markerLine: Markd
 
 function calloutType(docText: string, marker: SyntaxNodeLike): string {
   return docText.slice(marker.from + 2, Math.max(marker.from + 2, marker.to - 1)).toLowerCase();
+}
+
+function isCalloutTypeCharacter(code: number, index: number): boolean {
+  const uppercase = code >= 65 && code <= 90;
+  const lowercase = code >= 97 && code <= 122;
+  if (index === 0) return uppercase || lowercase;
+  return uppercase || lowercase || (code >= 48 && code <= 57) || code === 95 || code === 45;
+}
+
+export function isMarkdownCalloutTitleLine(lineText: string): boolean {
+  const contentOffset = quotedContentOffset(lineText);
+  if (contentOffset < 0) return false;
+  if (lineText.charCodeAt(contentOffset) !== 91 || lineText.charCodeAt(contentOffset + 1) !== 33) return false;
+
+  let index = contentOffset + 2;
+  const typeStart = index;
+  while (index < lineText.length && lineText.charCodeAt(index) !== rightBracketCode) {
+    if (!isCalloutTypeCharacter(lineText.charCodeAt(index), index - typeStart)) return false;
+    index += 1;
+  }
+  return index > typeStart && lineText.charCodeAt(index) === rightBracketCode;
+}
+
+function calloutFoldState(docText: string, marker: SyntaxNodeLike, markerLine: MarkdownCodeRange) {
+  const lineText = docText.slice(markerLine.from, markerLine.to);
+  const signIndex = marker.from - markerLine.from + (marker.to - marker.from);
+  const foldSign = calloutFoldSign(lineText, signIndex);
+  return foldSign ? { foldSign, foldSignFrom: markerLine.from + signIndex } : {};
 }
 
 export function markdownFencedCodeRanges(
@@ -277,10 +417,37 @@ export function markdownCalloutRanges(
         type: calloutType(docText, marker),
         title: calloutTitle(docText, marker, firstLine),
         body,
+        ...calloutFoldState(docText, marker, firstLine),
       });
       return false;
     },
   });
+  return ranges;
+}
+
+export function markdownToggleRanges(
+  docText: string,
+  scanWindow: MarkdownCodeRange,
+  state?: EditorState,
+): MarkdownToggleRange[] {
+  const suppressedRanges = markdownSuppressedCodeRanges(docText, scanWindow, state);
+  const lines = sourceLines(docText, scanWindow.from, scanWindow.to);
+  const ranges: MarkdownToggleRange[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (suppressedRanges.some((container) => line.from >= container.from && line.to <= container.to)) continue;
+    const title = toggleTitleLineRange(line, docText.slice(line.from, line.to));
+    if (!title) continue;
+
+    const childLines: MarkdownCodeRange[] = [];
+    for (const childLine of lines.slice(index + 1)) {
+      const text = docText.slice(childLine.from, childLine.to);
+      if (leadingIndentColumns(text) < 4) break;
+      childLines.push(childLine);
+    }
+    const to = childLines.at(-1)?.to ?? title.to;
+    ranges.push({ ...title, to, childLines });
+  }
   return ranges;
 }
 

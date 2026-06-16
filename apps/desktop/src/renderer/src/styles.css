@@ -658,6 +658,17 @@ h2 {
   border-right-color: var(--z-color-border);
 }
 
+/* Indent guides are line decorations only; leading source whitespace remains editable text. */
+.markdown-editor .z-editor-indent-guide {
+  background-image: repeating-linear-gradient(
+    to right,
+    color-mix(in srgb, var(--z-color-border) 70%, transparent) 0 1px,
+    transparent 1px 4ch
+  );
+  background-position: 0 0;
+  background-repeat: no-repeat;
+}
+
 /* @zorid/editor emits z-live-preview-* classes; desktop owns the scoped host styling contract. */
 .markdown-editor .z-live-preview-heading {
   color: var(--z-color-text);
@@ -864,27 +875,117 @@ h2 {
   background: transparent;
 }
 
-.markdown-editor .z-live-preview-callout-widget {
-  margin: 4px 0;
-  padding: 8px 10px;
+.markdown-editor .z-live-preview-callout-line {
   color: var(--z-color-text);
   background: color-mix(in srgb, var(--z-color-accent) 8%, var(--z-control-bg-strong));
-  border: 1px solid color-mix(in srgb, var(--z-color-accent) 28%, var(--z-color-border));
   border-left: 3px solid color-mix(in srgb, var(--z-color-accent) 72%, var(--z-color-border));
-  border-radius: var(--z-radius-md);
+  font-family: var(--z-font-ui);
+  transition:
+    max-height 120ms ease,
+    opacity 120ms ease;
+}
+
+.markdown-editor .z-live-preview-callout-title-line {
+  color: var(--z-color-accent);
+  font-weight: 700;
+}
+
+.markdown-editor .z-live-preview-callout-structural-marker--title {
+  display: inline-block;
+  margin-right: 0.45em;
+  color: var(--z-color-accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.markdown-editor .z-live-preview-callout-fold-chevron {
+  display: inline-block;
+  margin-right: 0.35em;
+  cursor: pointer;
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+  user-select: none;
+}
+
+.markdown-editor .z-live-preview-callout-fold-chevron--collapsed {
+  transform: rotate(-90deg);
+}
+
+.markdown-editor .z-live-preview-callout-hidden-body {
+  display: inline-block;
+  width: 0;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    max-height 120ms ease,
+    opacity 120ms ease;
+}
+
+.markdown-editor .z-live-preview-toggle-line {
+  color: var(--z-color-text);
   font-family: var(--z-font-ui);
 }
 
-.markdown-editor .z-live-preview-callout-widget__header {
-  color: var(--z-color-accent);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+.markdown-editor .z-live-preview-toggle-title-line {
+  font-weight: 650;
 }
 
-.markdown-editor .z-live-preview-callout-widget__body {
-  margin-top: 6px;
-  white-space: pre-wrap;
+.markdown-editor .z-live-preview-toggle-child-line {
+  background: color-mix(in srgb, var(--z-control-bg-strong) 28%, transparent);
+  transition:
+    max-height 120ms ease,
+    opacity 120ms ease;
+}
+
+.markdown-editor .z-live-preview-toggle-structural-marker {
+  display: inline-block;
+  margin-right: 0.25em;
+}
+
+.markdown-editor .z-live-preview-toggle-chevron {
+  display: inline-block;
+  cursor: pointer;
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+  user-select: none;
+}
+
+.markdown-editor .z-live-preview-toggle-chevron--collapsed {
+  transform: rotate(-90deg);
+}
+
+.markdown-editor .z-live-preview-toggle-placeholder {
+  display: inline-block;
+  margin-left: 0.75em;
+  color: var(--z-color-subtle);
+  font-size: 0.85em;
+  font-style: italic;
+  cursor: pointer;
+  user-select: none;
+}
+
+.markdown-editor .z-live-preview-toggle-hidden-children {
+  display: inline-block;
+  width: 0;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    max-height 120ms ease,
+    opacity 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-editor .z-live-preview-callout-line,
+  .markdown-editor .z-live-preview-callout-hidden-body,
+  .markdown-editor .z-live-preview-callout-fold-chevron,
+  .markdown-editor .z-live-preview-toggle-child-line,
+  .markdown-editor .z-live-preview-toggle-hidden-children,
+  .markdown-editor .z-live-preview-toggle-chevron {
+    transition-duration: 0ms;
+  }
 }
 
 .markdown-editor .z-live-preview-table-widget {

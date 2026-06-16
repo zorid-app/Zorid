@@ -43,7 +43,7 @@ describe('editor Live Preview viewport/performance fixtures', () => {
     expect(contexts[0]!.to).toBeLessThan(doc.indexOf('distant'));
   });
 
-  it('returns only near-visible widgets from a large mixed document', () => {
+  it('returns only near-visible source-backed callout ranges from a large mixed document', () => {
     const visibleCallout = ['> [!note] Visible', '> body'].join('\n');
     const distantCallout = ['> [!warning] Distant', '> body'].join('\n');
     const doc = [
@@ -58,15 +58,25 @@ describe('editor Live Preview viewport/performance fixtures', () => {
     const state = EditorState.create({ doc });
     const visibleRange = { from: doc.indexOf('Visible'), to: doc.indexOf('Visible') + 'Visible'.length };
 
-    const ranges = collectLivePreviewWidgetRangesForVisibleRanges(
+    const widgetRanges = collectLivePreviewWidgetRangesForVisibleRanges(
       defaultLivePreviewWidgetRenderers,
       state,
       [visibleRange],
       false,
     );
+    const ranges = collectLivePreviewRangesWithWidgetSuppression(
+      defaultLivePreviewRenderers,
+      defaultLivePreviewInternalRenderers,
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [visibleRange],
+      false,
+    ).filter((range) => range.rendererId.startsWith('callout-'));
 
+    expect(widgetRanges).toEqual([]);
     expect(ranges.map((range) => [range.rendererId, doc.slice(range.from, range.to)])).toEqual([
-      ['callout-widget', visibleCallout],
+      ['callout-structural-marker', '> [!note] '],
+      ['callout-line', '> [!note] Visible'],
     ]);
   });
 
@@ -103,7 +113,10 @@ describe('editor Live Preview viewport/performance fixtures', () => {
       ['heading', 'Visible heading'],
       ['task-marker', '- [ ]'],
       ['code-block-widget', visibleCode],
-      ['callout-widget', visibleCallout],
+      ['callout-structural-marker', '> [!note] '],
+      ['callout-line', '> [!note] Visible'],
+      ['callout-structural-marker', '> '],
+      ['callout-line', '> body'],
     ]);
   });
 

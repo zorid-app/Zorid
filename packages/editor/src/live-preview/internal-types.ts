@@ -2,7 +2,12 @@ import { StateEffect } from '@codemirror/state';
 import type { WidgetType } from '@codemirror/view';
 import type { LivePreviewDecorationKind, LivePreviewRange, LivePreviewRenderer } from './types.js';
 
-export type InternalLivePreviewDecorationKind = LivePreviewDecorationKind | 'line' | 'widget';
+export type InternalLivePreviewDecorationKind =
+  | LivePreviewDecorationKind
+  | 'line'
+  | 'hidden-line'
+  | 'widget'
+  | 'insert';
 
 export type InternalLivePreviewRange = Omit<LivePreviewRange, 'kind'> & {
   readonly kind?: InternalLivePreviewDecorationKind;
@@ -22,6 +27,12 @@ export function isLivePreviewLineRange(
   range: InternalLivePreviewRange,
 ): range is InternalLivePreviewRange & { readonly kind: 'line' } {
   return range.kind === 'line';
+}
+
+export function isLivePreviewHiddenLineRange(
+  range: InternalLivePreviewRange,
+): range is InternalLivePreviewRange & { readonly kind: 'hidden-line' } {
+  return range.kind === 'hidden-line';
 }
 
 export function isLivePreviewWidgetRange(

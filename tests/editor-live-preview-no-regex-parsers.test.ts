@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 const productionRoots = ['packages/editor/src/live-preview'];
 const futureParserModuleRoots = ['packages/editor/src/live-preview', 'packages/editor/src/markdown'];
+const parserAdjacentFiles = ['packages/editor/src/indentation.ts', 'packages/editor/src/markdown-list-commands.ts'];
 const allowedRendererApiMethod = 'match(context)';
 
 async function sourceFiles(root: string): Promise<string[]> {
@@ -75,6 +76,18 @@ describe('Live Preview parser ownership', () => {
       const source = await readFile(file, 'utf8');
       const findings = forbiddenParserTokens(source);
       if (findings.length > 0) failures.push(`${relative(process.cwd(), file)}: ${findings.join(', ')}`);
+    }
+
+    expect(failures).toEqual([]);
+  });
+
+  it('keeps parser-adjacent editor command helpers free of regex scanners', async () => {
+    const failures: string[] = [];
+
+    for (const file of parserAdjacentFiles) {
+      const source = await readFile(file, 'utf8');
+      const findings = forbiddenParserTokens(source);
+      if (findings.length > 0) failures.push(`${file}: ${findings.join(', ')}`);
     }
 
     expect(failures).toEqual([]);

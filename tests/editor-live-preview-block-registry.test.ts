@@ -76,12 +76,22 @@ describe('editor Live Preview private block renderer registry', () => {
     });
   });
 
-  it('keeps first-party block widgets on the same private source and activation contract', async () => {
-    const { defaultLivePreviewWidgetRenderers } = await import('../packages/editor/src/live-preview/renderers');
+  it('keeps first-party block widgets source-backed while callouts stay line-projected', async () => {
+    const { defaultLivePreviewInternalRenderers, defaultLivePreviewWidgetRenderers } = await import(
+      '../packages/editor/src/live-preview/renderers'
+    );
     const doc = ['```ts', 'const value = 1;', '```', '', '> [!note] Title', '> Body', '', 'after'].join('\n');
     const state = EditorState.create({ doc });
 
-    const ranges = collectLivePreviewWidgetRangesForVisibleRanges(
+    const widgetRanges = collectLivePreviewWidgetRangesForVisibleRanges(
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [{ from: 0, to: doc.length }],
+      false,
+    );
+    const allRanges = collectLivePreviewRangesWithWidgetSuppression(
+      defaultLivePreviewRenderers,
+      defaultLivePreviewInternalRenderers,
       defaultLivePreviewWidgetRenderers,
       state,
       [{ from: 0, to: doc.length }],
@@ -89,7 +99,7 @@ describe('editor Live Preview private block renderer registry', () => {
     );
 
     expect(
-      ranges.map((range) => ({
+      widgetRanges.map((range) => ({
         id: range.rendererId,
         source: doc.slice(range.sourceFrom ?? -1, range.sourceTo ?? -1),
         activation: doc.slice(range.activationFrom ?? -1, range.activationTo ?? -1),
@@ -104,13 +114,17 @@ describe('editor Live Preview private block renderer registry', () => {
         clipboardSource: 'document-source',
         atomic: 'none',
       },
-      {
-        id: 'callout-widget',
-        source: ['> [!note] Title', '> Body'].join('\n'),
-        activation: ['> [!note] Title', '> Body'].join('\n'),
-        clipboardSource: 'document-source',
-        atomic: 'none',
-      },
+    ]);
+    expect(widgetRanges.map((range) => range.rendererId)).not.toContain('callout-widget');
+    expect(
+      allRanges
+        .filter((range) => range.rendererId.startsWith('callout-'))
+        .map((range) => [range.rendererId, range.kind, doc.slice(range.from, range.to)]),
+    ).toEqual([
+      ['callout-structural-marker', 'replace', '> [!note] '],
+      ['callout-line', 'line', '> [!note] Title'],
+      ['callout-structural-marker', 'replace', '> '],
+      ['callout-line', 'line', '> Body'],
     ]);
   });
 

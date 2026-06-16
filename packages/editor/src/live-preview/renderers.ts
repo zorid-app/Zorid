@@ -2,6 +2,7 @@ import { insertNewlineContinueMarkup } from '@codemirror/lang-markdown';
 import type { EditorState } from '@codemirror/state';
 import { type EditorView, WidgetType } from '@codemirror/view';
 import { continueTaskListAtLineEndSelection } from '../markdown-list-commands.js';
+import { insertEmptyTogglePlaceholderChild, toggleCalloutFoldSign, toggleToggleFoldSign } from './block-commands.js';
 import {
   type InternalLivePreviewRange,
   type InternalLivePreviewRenderer,
@@ -18,6 +19,7 @@ import {
   markdownCompleteFencedCodeBlockRanges,
   markdownFrontmatterRanges,
   markdownSuppressedPreviewRanges,
+  markdownToggleRanges,
 } from './markdown-code-context.js';
 import { syntaxTreeLivePreviewRenderer } from './syntax-tree-ranges.js';
 import { markdownTableLivePreviewRenderer } from './table/renderer.js';
@@ -32,25 +34,67 @@ interface CodeBlockPreviewMatch extends MarkdownBlockMatch {
   readonly activateAt: number;
 }
 
-interface CalloutPreviewMatch extends MarkdownBlockMatch {
-  readonly source: string;
-  readonly type: string;
-  readonly title: string;
-  readonly body: string;
-  readonly activateAt: number;
-}
-
 const codeBlockWidgetClassName = 'z-live-preview-code-block-widget';
-const calloutWidgetClassName = 'z-live-preview-callout-widget';
 const zbaseEmbedWidgetClassName = 'z-live-preview-zbase-embed-widget';
 const horizontalRuleWidgetClassName = 'z-live-preview-horizontal-rule';
+const calloutLineClassName = 'z-live-preview-callout-line';
+const calloutTitleLineClassName = 'z-live-preview-callout-title-line';
+const calloutBodyLineClassName = 'z-live-preview-callout-body-line';
+const calloutStructuralClassName = 'z-live-preview-callout-structural-marker';
+const calloutFoldChevronClassName = 'z-live-preview-callout-fold-chevron';
+const calloutHiddenBodyClassName = 'z-live-preview-callout-hidden-body';
+const toggleLineClassName = 'z-live-preview-toggle-line';
+const toggleTitleLineClassName = 'z-live-preview-toggle-title-line';
+const toggleChildLineClassName = 'z-live-preview-toggle-child-line';
+const toggleStructuralClassName = 'z-live-preview-toggle-structural-marker';
+const toggleChevronClassName = 'z-live-preview-toggle-chevron';
+const togglePlaceholderClassName = 'z-live-preview-toggle-placeholder';
+const toggleHiddenChildrenClassName = 'z-live-preview-toggle-hidden-children';
+
+const knownCalloutTypes = new Set([
+  'note',
+  'abstract',
+  'summary',
+  'tldr',
+  'info',
+  'todo',
+  'tip',
+  'hint',
+  'important',
+  'success',
+  'check',
+  'done',
+  'question',
+  'help',
+  'faq',
+  'warning',
+  'caution',
+  'attention',
+  'failure',
+  'fail',
+  'missing',
+  'danger',
+  'error',
+  'bug',
+  'example',
+  'quote',
+  'cite',
+]);
 
 function livePreviewScanWindow(
   docText: string,
   visibleFrom: number,
   visibleTo: number,
 ): Pick<LivePreviewRange, 'from' | 'to'> {
-  const lineStart = docText.lastIndexOf('\n', Math.max(0, visibleFrom - 1)) + 1;
+  const visibleLineStart = docText.lastIndexOf('\n', Math.max(0, visibleFrom - 1)) + 1;
+  let lineStart = visibleLineStart;
+  while (lineStart > 0) {
+    const previousLineEnd = lineStart - 1;
+    const previousLineStart = docText.lastIndexOf('\n', Math.max(0, previousLineEnd - 1)) + 1;
+    const previousLine = docText.slice(previousLineStart, previousLineEnd);
+    if (previousLine.trim().length === 0) break;
+    lineStart = previousLineStart;
+  }
   const nextLineBreak = docText.indexOf('\n', visibleTo);
   return {
     from: Math.max(0, lineStart),
@@ -103,13 +147,35 @@ function quotedContentOffset(line: string): number {
   return index;
 }
 
+function quotedPrefixLength(line: string): number {
+  const contentOffset = quotedContentOffset(line);
+  if (contentOffset < 0) return -1;
+  return contentOffset;
+}
+
+function isBareQuoteLine(line: string): boolean {
+  let index = 0;
+  while (index < line.length && index < 4) {
+    const code = line.charCodeAt(index);
+    if (code !== spaceCode && code !== tabCode) break;
+    index += 1;
+  }
+  return index <= 3 && line.charCodeAt(index) === greaterThanCode && index + 1 === line.length;
+}
+
 function blockquoteLineRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
+  state: EditorState,
 ): InternalLivePreviewRange[] {
   const ranges: InternalLivePreviewRange[] = [];
+  const calloutRanges = markdownCalloutRanges(docText, scanWindow, state);
+  const toggleRanges = markdownToggleRanges(docText, scanWindow, state);
   for (const line of sourceLines(docText, scanWindow.from, scanWindow.to)) {
     if (quotedContentOffset(line.text) < 0) continue;
+    if (isBareQuoteLine(line.text)) continue;
+    if (calloutRanges.some((range) => line.from >= range.from && line.to <= range.to)) continue;
+    if (toggleRanges.some((range) => line.from >= range.from && line.to <= range.to)) continue;
     ranges.push({
       rendererId: 'blockquote',
       from: line.from,
@@ -121,6 +187,126 @@ function blockquoteLineRanges(
     });
   }
   return ranges;
+}
+
+class CalloutStructuralMarkerWidget extends WidgetType {
+  constructor(
+    readonly type: string,
+    readonly title: boolean,
+    readonly foldSign?: '+' | '-',
+    readonly foldSignFrom?: number,
+  ) {
+    super();
+  }
+
+  eq(other: CalloutStructuralMarkerWidget): boolean {
+    return (
+      this.type === other.type &&
+      this.title === other.title &&
+      this.foldSign === other.foldSign &&
+      this.foldSignFrom === other.foldSignFrom
+    );
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const marker = document.createElement('span');
+    marker.className = this.title
+      ? `${calloutStructuralClassName} ${calloutStructuralClassName}--title`
+      : calloutStructuralClassName;
+    marker.dataset.livePreviewRenderer = 'callout-structural-marker';
+    marker.setAttribute('aria-hidden', 'true');
+    marker.textContent = this.title ? this.type.toUpperCase() : '';
+    if (this.title && this.foldSign && this.foldSignFrom !== undefined) {
+      const foldSignFrom = this.foldSignFrom;
+      const chevron = document.createElement('span');
+      chevron.className =
+        this.foldSign === '-'
+          ? `${calloutFoldChevronClassName} ${calloutFoldChevronClassName}--collapsed`
+          : calloutFoldChevronClassName;
+      chevron.dataset.livePreviewRenderer = 'callout-fold-chevron';
+      chevron.setAttribute('aria-hidden', 'true');
+      chevron.tabIndex = -1;
+      chevron.textContent = '⌄';
+      chevron.addEventListener('mousedown', (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        toggleCalloutFoldSign(view, foldSignFrom, this.foldSign!);
+      });
+      marker.prepend(chevron);
+    }
+    return marker;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return event.type === 'mousedown';
+  }
+}
+
+class ToggleStructuralMarkerWidget extends WidgetType {
+  constructor(
+    readonly foldSign: '+' | '-',
+    readonly foldSignFrom: number,
+  ) {
+    super();
+  }
+
+  eq(other: ToggleStructuralMarkerWidget): boolean {
+    return this.foldSign === other.foldSign && this.foldSignFrom === other.foldSignFrom;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const marker = document.createElement('span');
+    marker.className = toggleStructuralClassName;
+    marker.dataset.livePreviewRenderer = 'toggle-structural-marker';
+    marker.setAttribute('aria-hidden', 'true');
+
+    const chevron = document.createElement('span');
+    chevron.className =
+      this.foldSign === '-' ? `${toggleChevronClassName} ${toggleChevronClassName}--collapsed` : toggleChevronClassName;
+    chevron.dataset.livePreviewRenderer = 'toggle-chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    chevron.tabIndex = -1;
+    chevron.textContent = '⌄';
+    chevron.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      toggleToggleFoldSign(view, this.foldSignFrom, this.foldSign);
+    });
+    marker.append(chevron);
+    return marker;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return event.type === 'mousedown';
+  }
+}
+
+class EmptyTogglePlaceholderWidget extends WidgetType {
+  constructor(readonly insertAt: number) {
+    super();
+  }
+
+  eq(other: EmptyTogglePlaceholderWidget): boolean {
+    return this.insertAt === other.insertAt;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const placeholder = document.createElement('span');
+    placeholder.className = togglePlaceholderClassName;
+    placeholder.dataset.livePreviewRenderer = 'toggle-placeholder';
+    placeholder.setAttribute('aria-hidden', 'true');
+    placeholder.textContent = 'Add child';
+    placeholder.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      insertEmptyTogglePlaceholderChild(view, this.insertAt);
+    });
+    return placeholder;
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return event.type === 'mousedown';
+  }
 }
 
 function activateLivePreviewWidgetSource(view: EditorView, activateAt: number): void {
@@ -278,54 +464,8 @@ class ListMarkerPreviewWidget extends WidgetType {
       : 'z-live-preview-list-marker';
     marker.dataset.livePreviewRenderer = 'list-marker';
     marker.setAttribute('aria-hidden', 'true');
-    marker.textContent = this.ordered ? `${this.orderedIndex ?? ''}.` : '•';
+    marker.textContent = this.ordered ? this.marker.trimEnd() : '•';
     return marker;
-  }
-}
-
-class CalloutPreviewWidget extends WidgetType {
-  constructor(
-    readonly source: string,
-    readonly type: string,
-    readonly title: string,
-    readonly body: string,
-    readonly activateAt: number,
-  ) {
-    super();
-  }
-
-  eq(other: CalloutPreviewWidget): boolean {
-    return this.source === other.source && this.activateAt === other.activateAt;
-  }
-
-  toDOM(view: EditorView): HTMLElement {
-    const wrapper = document.createElement('div');
-    wrapper.className = calloutWidgetClassName;
-    wrapper.dataset.livePreviewRenderer = 'callout-widget';
-    wrapper.setAttribute('role', 'group');
-
-    const header = document.createElement('div');
-    header.className = 'z-live-preview-callout-widget__header';
-    header.textContent = this.title || this.type;
-    wrapper.append(header);
-
-    if (this.body.trim().length > 0) {
-      const body = document.createElement('div');
-      body.className = 'z-live-preview-callout-widget__body';
-      body.textContent = this.body;
-      wrapper.append(body);
-    }
-
-    wrapper.addEventListener('mousedown', (event) => {
-      event.preventDefault();
-      activateLivePreviewWidgetSource(view, this.activateAt);
-    });
-
-    return wrapper;
-  }
-
-  ignoreEvent(event: Event): boolean {
-    return event.type === 'mousedown';
   }
 }
 
@@ -371,32 +511,180 @@ function codeBlockWidgetRanges(
     });
 }
 
-function calloutWidgetRanges(
+function calloutKindClass(type: string): string {
+  return knownCalloutTypes.has(type) ? `${calloutLineClassName}--${type}` : `${calloutLineClassName}--generic`;
+}
+
+function calloutLineRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
   state: EditorState,
-): CalloutPreviewMatch[] {
-  return markdownCalloutRanges(docText, scanWindow, state).map((range) => ({
-    id: `callout-widget:${range.from}:${range.to}`,
-    type: range.type,
-    from: range.from,
-    to: range.to,
-    activationFrom: range.from,
-    activationTo: range.to,
-    definition: {
-      kind: 'inline' as const,
-      sourceFrom: range.from,
-      sourceTo: range.to,
-      sourceText: docText.slice(range.from, range.to),
-    },
-    className: calloutWidgetClassName,
-    atomic: 'none' as const,
-    source: docText.slice(range.from, range.to),
-    title: range.title,
-    body: range.body,
-    activateAt: range.from,
-    meta: { type: range.type, title: range.title, body: range.body },
-  }));
+): InternalLivePreviewRange[] {
+  const ranges: InternalLivePreviewRange[] = [];
+  for (const callout of markdownCalloutRanges(docText, scanWindow, state)) {
+    const calloutLines = sourceLines(docText, callout.from, callout.to).filter(
+      (line) => line.from >= callout.from && line.to <= callout.to,
+    );
+    const collapsed = callout.foldSign === '-';
+    for (const [index, line] of calloutLines.entries()) {
+      const prefixLength = quotedPrefixLength(line.text);
+      if (prefixLength < 0) continue;
+
+      if (collapsed && index > 0) {
+        ranges.push({
+          rendererId: 'callout-hidden-body',
+          from: line.from,
+          to: line.to,
+          activationFrom: line.from,
+          activationTo: line.to,
+          revealPolicy: 'never',
+          className: calloutHiddenBodyClassName,
+          kind: 'hidden-line',
+        });
+        continue;
+      }
+
+      const lineClassName = [
+        calloutLineClassName,
+        calloutKindClass(callout.type),
+        index === 0 ? calloutTitleLineClassName : calloutBodyLineClassName,
+        index === 0 && callout.foldSign ? `${calloutTitleLineClassName}--foldable` : '',
+        index === 0 && collapsed ? `${calloutTitleLineClassName}--collapsed` : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      ranges.push({
+        rendererId: 'callout-line',
+        from: line.from,
+        to: line.to,
+        activationFrom: line.from,
+        activationTo: line.from + prefixLength,
+        className: lineClassName,
+        kind: 'line',
+        attributes: {
+          'data-callout-type': callout.type,
+          'data-callout-known': knownCalloutTypes.has(callout.type) ? 'true' : 'false',
+          ...(callout.foldSign ? { 'data-callout-fold': callout.foldSign === '-' ? 'collapsed' : 'expanded' } : {}),
+        },
+      });
+
+      const markerTo = index === 0 ? calloutTitleMarkerEnd(line.text, prefixLength) : prefixLength;
+      ranges.push({
+        rendererId: 'callout-structural-marker',
+        from: line.from,
+        to: line.from + markerTo,
+        activationFrom: line.from,
+        activationTo: line.from + markerTo,
+        className: calloutStructuralClassName,
+        kind: 'replace',
+        widget: new CalloutStructuralMarkerWidget(callout.type, index === 0, callout.foldSign, callout.foldSignFrom),
+      });
+    }
+  }
+  return ranges;
+}
+
+function calloutTitleMarkerEnd(line: string, contentOffset: number): number {
+  const closingBracket = line.indexOf(']', contentOffset);
+  if (closingBracket < 0) return contentOffset;
+  let index = closingBracket + 1;
+  const sign = line.charAt(index);
+  const afterSign = line.charCodeAt(index + 1);
+  if (
+    (sign === '+' || sign === '-') &&
+    (index + 1 >= line.length || afterSign === spaceCode || afterSign === tabCode)
+  ) {
+    index += 1;
+  }
+  while (index < line.length) {
+    const code = line.charCodeAt(index);
+    if (code !== spaceCode && code !== tabCode) break;
+    index += 1;
+  }
+  return index;
+}
+
+function headingClassName(level: number): string {
+  return `z-live-preview-heading z-live-preview-heading--h${level}`;
+}
+
+function toggleLineRanges(
+  docText: string,
+  scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
+  state: EditorState,
+): InternalLivePreviewRange[] {
+  const ranges: InternalLivePreviewRange[] = [];
+  for (const toggle of markdownToggleRanges(docText, scanWindow, state)) {
+    const titleClassName = [
+      toggleLineClassName,
+      toggleTitleLineClassName,
+      toggle.foldSign === '-' ? `${toggleTitleLineClassName}--collapsed` : '',
+      toggle.heading ? headingClassName(toggle.heading.level) : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    ranges.push({
+      rendererId: 'toggle-line',
+      from: toggle.titleLineFrom,
+      to: toggle.titleLineTo,
+      activationFrom: toggle.markerFrom,
+      activationTo: toggle.markerTo,
+      className: titleClassName,
+      kind: 'line',
+      attributes: { 'data-toggle-fold': toggle.foldSign === '-' ? 'collapsed' : 'expanded' },
+    });
+    ranges.push({
+      rendererId: 'toggle-structural-marker',
+      from: toggle.markerFrom,
+      to: toggle.markerTo,
+      activationFrom: toggle.markerFrom,
+      activationTo: toggle.markerTo,
+      className: toggleStructuralClassName,
+      kind: 'replace',
+      widget: new ToggleStructuralMarkerWidget(toggle.foldSign, toggle.foldSignFrom),
+    });
+
+    for (const childLine of toggle.childLines) {
+      if (toggle.foldSign === '-') {
+        ranges.push({
+          rendererId: 'toggle-hidden-children',
+          from: childLine.from,
+          to: childLine.to,
+          activationFrom: childLine.from,
+          activationTo: childLine.to,
+          revealPolicy: 'never',
+          className: toggleHiddenChildrenClassName,
+          kind: 'hidden-line',
+        });
+        continue;
+      }
+      ranges.push({
+        rendererId: 'toggle-line',
+        from: childLine.from,
+        to: childLine.to,
+        activationFrom: childLine.from,
+        activationTo: childLine.to,
+        className: `${toggleLineClassName} ${toggleChildLineClassName}`,
+        kind: 'line',
+        attributes: { 'data-toggle-fold': 'expanded' },
+      });
+    }
+
+    if (toggle.foldSign === '+' && toggle.childLines.length === 0) {
+      ranges.push({
+        rendererId: 'toggle-placeholder',
+        from: toggle.titleLineTo,
+        to: toggle.titleLineTo,
+        activationFrom: toggle.titleLineTo,
+        activationTo: toggle.titleLineTo,
+        revealPolicy: 'never',
+        className: togglePlaceholderClassName,
+        kind: 'insert',
+        widget: new EmptyTogglePlaceholderWidget(toggle.titleLineTo),
+      });
+    }
+  }
+  return ranges;
 }
 
 function isInsideRange(
@@ -404,6 +692,30 @@ function isInsideRange(
   container: Pick<LivePreviewRange, 'from' | 'to'>,
 ): boolean {
   return range.from >= container.from && range.to <= container.to;
+}
+
+function isHorizontalRuleLine(lineText: string): boolean {
+  let index = 0;
+  while (index < lineText.length && index < 4 && lineText.charCodeAt(index) === spaceCode) index += 1;
+  if (index > 3) return false;
+  const markerCode = lineText.charCodeAt(index);
+  if (markerCode !== 45 && markerCode !== 42 && markerCode !== 95) return false;
+
+  let markerCount = 0;
+  while (index < lineText.length) {
+    const code = lineText.charCodeAt(index);
+    if (code === markerCode) {
+      markerCount += 1;
+      index += 1;
+      continue;
+    }
+    if (code === spaceCode || code === tabCode) {
+      index += 1;
+      continue;
+    }
+    return false;
+  }
+  return markerCount >= 3;
 }
 
 function horizontalRuleRanges(
@@ -414,7 +726,7 @@ function horizontalRuleRanges(
   const suppressedRanges = markdownSuppressedPreviewRanges(docText, scanWindow, state);
   return sourceLines(docText, scanWindow.from, scanWindow.to)
     .filter((line) => !suppressedRanges.some((container) => isInsideRange(line, container)))
-    .filter((line) => /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line.text))
+    .filter((line) => isHorizontalRuleLine(line.text))
     .map((line) => ({
       rendererId: 'horizontal-rule',
       from: line.from,
@@ -480,8 +792,20 @@ const listMarkerLivePreviewRenderer: InternalLivePreviewRenderer = {
 
 const blockquoteLivePreviewRenderer: InternalLivePreviewRenderer = {
   id: 'blockquote',
-  match: ({ docText, visibleFrom, visibleTo }) =>
-    blockquoteLineRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo)),
+  match: ({ state, docText, visibleFrom, visibleTo }) =>
+    blockquoteLineRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo), state),
+};
+
+const calloutLivePreviewRenderer: InternalLivePreviewRenderer = {
+  id: 'callout-line',
+  match: ({ state, docText, visibleFrom, visibleTo }) =>
+    calloutLineRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo), state),
+};
+
+const toggleLivePreviewRenderer: InternalLivePreviewRenderer = {
+  id: 'toggle-line',
+  match: ({ state, docText, visibleFrom, visibleTo }) =>
+    toggleLineRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo), state),
 };
 
 const horizontalRuleLivePreviewRenderer: InternalLivePreviewRenderer = {
@@ -498,12 +822,11 @@ export const codeBlockMarkdownBlockRegistration: MarkdownBlockRegistration<CodeB
   render: (match) => new CodeBlockPreviewWidget(match.source, match.info, match.code, match.activateAt),
 };
 
-export const calloutMarkdownBlockRegistration: MarkdownBlockRegistration<CalloutPreviewMatch> = {
+export const calloutMarkdownBlockRegistration: MarkdownBlockRegistration = {
   id: 'callout-widget',
   priority: -100,
-  match: ({ state, docText, visibleFrom, visibleTo }) =>
-    calloutWidgetRanges(docText, livePreviewScanWindow(docText, visibleFrom, visibleTo), state),
-  render: (match) => new CalloutPreviewWidget(match.source, match.type, match.title, match.body, match.activateAt),
+  match: () => [],
+  render: () => document.createElement('div'),
 };
 
 export const zbaseEmbedMarkdownBlockRegistration: MarkdownBlockRegistration = {
@@ -553,7 +876,6 @@ export const zbaseEmbedMarkdownBlockRegistration: MarkdownBlockRegistration = {
 
 export const defaultMarkdownBlockRegistrations: readonly MarkdownBlockRegistration[] = [
   codeBlockMarkdownBlockRegistration,
-  calloutMarkdownBlockRegistration,
   zbaseEmbedMarkdownBlockRegistration,
 ];
 
@@ -572,6 +894,8 @@ export const defaultLivePreviewRenderers: readonly LivePreviewRenderer[] = [
 
 export const defaultLivePreviewInternalRenderers: readonly InternalLivePreviewRenderer[] = [
   horizontalRuleLivePreviewRenderer,
+  calloutLivePreviewRenderer,
+  toggleLivePreviewRenderer,
   blockquoteLivePreviewRenderer,
   listMarkerLivePreviewRenderer,
   taskMarkerLivePreviewRenderer,

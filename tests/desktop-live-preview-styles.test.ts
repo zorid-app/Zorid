@@ -27,9 +27,18 @@ const livePreviewClasses = [
   'z-live-preview-code-block-widget',
   'z-live-preview-code-block-widget__header',
   'z-live-preview-code-block-widget__body',
-  'z-live-preview-callout-widget',
-  'z-live-preview-callout-widget__header',
-  'z-live-preview-callout-widget__body',
+  'z-live-preview-callout-line',
+  'z-live-preview-callout-title-line',
+  'z-live-preview-callout-structural-marker--title',
+  'z-live-preview-callout-fold-chevron',
+  'z-live-preview-callout-hidden-body',
+  'z-live-preview-toggle-line',
+  'z-live-preview-toggle-title-line',
+  'z-live-preview-toggle-child-line',
+  'z-live-preview-toggle-structural-marker',
+  'z-live-preview-toggle-chevron',
+  'z-live-preview-toggle-placeholder',
+  'z-live-preview-toggle-hidden-children',
 ];
 
 describe('desktop Live Preview styles', () => {
@@ -49,6 +58,15 @@ describe('desktop Live Preview styles', () => {
 
     expect(styles).toMatch(/\.markdown-editor\s+\.cm-scroller\s*\{[^}]*overflow-x:\s*hidden;[^}]*\}/s);
     expect(styles).toMatch(/\.markdown-editor\s+\.cm-content\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*\}/s);
+  });
+
+  it('styles editor indentation guides as markdown-scoped line decorations', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-editor-indent-guide\s*\{[^}]*background-image:\s*repeating-linear-gradient\([^}]*\}/s,
+    );
+    expect(styles).toContain('leading source whitespace remains editable text');
   });
 
   it('scopes all live-preview selectors to the markdown editor', async () => {
@@ -99,6 +117,34 @@ describe('desktop Live Preview styles', () => {
 
     expect(styles).toMatch(
       /\.markdown-editor\s+\.z-live-preview-horizontal-rule\s*\{[^}]*display:\s*block;[^}]*height:\s*1px;[^}]*background:\s*color-mix\(/s,
+    );
+  });
+
+  it('animates callout folding for 120ms and snaps under reduced motion', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-callout-fold-chevron\s*\{[^}]*transition:\s*transform\s+120ms\s+ease;[^}]*\}/s,
+    );
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-callout-hidden-body\s*\{[^}]*transition:\s*max-height\s+120ms\s+ease,\s*opacity\s+120ms\s+ease;[^}]*\}/s,
+    );
+    expect(styles).toMatch(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.markdown-editor\s+\.z-live-preview-callout-fold-chevron,[^}]*\.markdown-editor\s+\.z-live-preview-toggle-chevron\s*\{[^}]*transition-duration:\s*0ms;[^}]*\}/s,
+    );
+  });
+
+  it('animates toggle folding content and chevrons for 120ms and snaps under reduced motion', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-toggle-chevron\s*\{[^}]*transition:\s*transform\s+120ms\s+ease;[^}]*\}/s,
+    );
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-live-preview-toggle-hidden-children\s*\{[^}]*transition:\s*max-height\s+120ms\s+ease,\s*opacity\s+120ms\s+ease;[^}]*\}/s,
+    );
+    expect(styles).toMatch(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.markdown-editor\s+\.z-live-preview-toggle-child-line,[^}]*\.markdown-editor\s+\.z-live-preview-toggle-hidden-children,[^}]*\.markdown-editor\s+\.z-live-preview-toggle-chevron\s*\{[^}]*transition-duration:\s*0ms;[^}]*\}/s,
     );
   });
 

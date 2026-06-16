@@ -21,6 +21,20 @@ import {
 } from '../packages/editor/src/live-preview/renderers';
 
 describe('editor Live Preview primitives', () => {
+  const adr0003StructuralPreviewFixture = {
+    doc: ['> [!note]- Folded title', '> Hidden body', '', '- [?] Toggle title', '  - Hidden child'].join('\n'),
+    callout: {
+      marker: { from: 2, to: 10 },
+      title: { from: 11, to: 23 },
+      body: { from: 26, to: 37 },
+    },
+    toggle: {
+      marker: { from: 39, to: 44 },
+      title: { from: 45, to: 57 },
+      child: { from: 62, to: 74 },
+    },
+  } as const;
+
   const renderer: LivePreviewRenderer = {
     id: 'test-emphasis',
     match: () => [
@@ -59,6 +73,42 @@ describe('editor Live Preview primitives', () => {
     expect(
       shouldRenderLivePreviewRange(neverRevealRange, { focused: true, selectionRanges: [{ from: 7, to: 7 }] }),
     ).toBe(true);
+  });
+
+  it('supports structural reveal policy fixtures without mutating source text', () => {
+    const { doc, callout, toggle } = adr0003StructuralPreviewFixture;
+    const structuralRanges = [
+      {
+        from: callout.marker.from,
+        to: callout.body.to,
+        activationFrom: callout.marker.from,
+        activationTo: callout.marker.to,
+      },
+      {
+        from: toggle.marker.from,
+        to: toggle.child.to,
+        activationFrom: toggle.marker.from,
+        activationTo: toggle.marker.to,
+      },
+    ];
+
+    for (const range of structuralRanges) {
+      expect(
+        shouldRenderLivePreviewRange(range, { focused: true, selectionRanges: [{ from: range.from, to: range.from }] }),
+      ).toBe(false);
+      expect(
+        shouldRenderLivePreviewRange(range, {
+          focused: true,
+          selectionRanges: [{ from: range.to - 1, to: range.to - 1 }],
+        }),
+      ).toBe(true);
+    }
+
+    expect(doc.slice(callout.title.from, callout.title.to)).toBe('Folded title');
+    expect(doc.slice(callout.body.from, callout.body.to)).toBe('Hidden body');
+    expect(doc.slice(toggle.title.from, toggle.title.to)).toBe('Toggle title');
+    expect(doc.slice(toggle.child.from, toggle.child.to)).toBe('Hidden child');
+    expect(adr0003StructuralPreviewFixture.doc).toBe(doc);
   });
 
   it('keeps non-intersecting focused ranges previewable', () => {
@@ -198,7 +248,7 @@ describe('editor Live Preview primitives', () => {
       '# ',
       'Heading',
       '`',
-      '`#not-a-tag [not](link.md) [[Nope]]`',
+      '#not-a-tag [not](link.md) [[Nope]]',
       '`',
       '[',
       'link',
@@ -322,6 +372,42 @@ describe('editor Live Preview primitives', () => {
     ]);
   });
 
+  it('keeps inline style content rendered for content selections and reveals only touched delimiter syntax', () => {
+    const doc = '**bold** *em*';
+    const contentState = EditorState.create({
+      doc,
+      selection: { anchor: doc.indexOf('bold'), head: doc.indexOf('bold') + 2 },
+    });
+    const contentRanges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(contentState, { from: 0, to: doc.length }, true),
+    );
+
+    expect(contentRanges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['strong', '**', 'replace'],
+      ['strong', 'bold', undefined],
+      ['strong', '**', 'replace'],
+      ['emphasis', '*', 'replace'],
+      ['emphasis', 'em', undefined],
+      ['emphasis', '*', 'replace'],
+    ]);
+
+    const delimiterState = EditorState.create({ doc, selection: { anchor: 1 } });
+    const delimiterRanges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(delimiterState, { from: 0, to: doc.length }, true),
+    );
+
+    expect(delimiterRanges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['strong', 'bold', undefined],
+      ['strong', '**', 'replace'],
+      ['emphasis', '*', 'replace'],
+      ['emphasis', 'em', undefined],
+      ['emphasis', '*', 'replace'],
+    ]);
+    expect(delimiterState.doc.toString()).toBe(doc);
+  });
+
   it('opens inactive rendered web links through the editor reference handler', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
@@ -368,6 +454,91 @@ describe('editor Live Preview primitives', () => {
 
     editor.destroy();
     parent.remove();
+  });
+
+  it('keeps link display text rendered for label selections and reveals touched hidden syntax', () => {
+    const doc = 'See [Label](target.md) and [[Target#part|Alias]]';
+    const labelState = EditorState.create({
+      doc,
+      selection: { anchor: doc.indexOf('Label'), head: doc.indexOf('Label') + 3 },
+    });
+    const labelRanges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(labelState, { from: 0, to: doc.length }, true),
+    );
+
+    expect(labelRanges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['markdown-link', '[', 'replace'],
+      ['markdown-link', 'Label', undefined],
+      ['markdown-link', '](target.md)', 'replace'],
+      ['wiki-link', '[[Target#part|', 'replace'],
+      ['wiki-link', 'Alias', undefined],
+      ['wiki-link', ']]', 'replace'],
+    ]);
+
+    const syntaxState = EditorState.create({ doc, selection: { anchor: doc.indexOf('target.md') } });
+    const syntaxRanges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(syntaxState, { from: 0, to: doc.length }, true),
+    );
+
+    expect(syntaxRanges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['markdown-link', '[', 'replace'],
+      ['markdown-link', 'Label', undefined],
+      ['wiki-link', '[[Target#part|', 'replace'],
+      ['wiki-link', 'Alias', undefined],
+      ['wiki-link', ']]', 'replace'],
+    ]);
+    expect(syntaxState.doc.toString()).toBe(doc);
+  });
+
+  it('renders complete wiki links only after closing syntax and preserves alias display text', () => {
+    const doc = '[[Page|Alias]] [[Incomplete|Alias]';
+    const state = EditorState.create({ doc });
+    const ranges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(state, { from: 0, to: doc.length }),
+    ).filter((range) => range.rendererId === 'wiki-link');
+
+    expect(ranges.map((range) => [doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['[[Page|', 'replace'],
+      ['Alias', undefined],
+      [']]', 'replace'],
+    ]);
+    expect(state.doc.toString()).toBe(doc);
+
+    const missingTargetDoc = '[[|MissingTarget]]';
+    const missingTargetState = EditorState.create({ doc: missingTargetDoc });
+    expect(
+      collectLivePreviewRanges(
+        defaultLivePreviewRenderers,
+        createLivePreviewContext(missingTargetState, { from: 0, to: missingTargetDoc.length }),
+      ).filter((range) => range.rendererId === 'wiki-link'),
+    ).toEqual([]);
+  });
+
+  it('keeps complete tags rendered while active or selected and drops preview when reduced to #', () => {
+    const doc = '#math #';
+    const activeState = EditorState.create({ doc, selection: { anchor: doc.indexOf('math') } });
+    const selectedState = EditorState.create({ doc, selection: { anchor: 0, head: '#math'.length } });
+
+    for (const state of [activeState, selectedState]) {
+      const ranges = collectLivePreviewRanges(
+        defaultLivePreviewRenderers,
+        createLivePreviewContext(state, { from: 0, to: doc.length }, true),
+      ).filter((range) => range.rendererId === 'tag');
+      expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['#math']);
+      expect(state.doc.toString()).toBe(doc);
+    }
+
+    const reducedDoc = '#';
+    const reducedState = EditorState.create({ doc: reducedDoc, selection: { anchor: 1 } });
+    expect(
+      collectLivePreviewRanges(
+        defaultLivePreviewRenderers,
+        createLivePreviewContext(reducedState, { from: 0, to: reducedDoc.length }, true),
+      ).filter((range) => range.rendererId === 'tag'),
+    ).toEqual([]);
   });
 
   it('keeps heading content rendered while focused caret reveals heading source marker', () => {
@@ -458,6 +629,49 @@ describe('editor Live Preview primitives', () => {
     editor.destroy();
   });
 
+  it('renders unordered and ordered list markers without mutating or normalizing source delimiters', () => {
+    const text = [
+      '- dash',
+      '* star',
+      '+ plus',
+      '- ',
+      '* ',
+      '+ ',
+      '-',
+      '*',
+      '+',
+      '3. dot',
+      '4) paren',
+      '5. ',
+      '6) ',
+      '7.',
+      '8)',
+    ].join('\n');
+    const parent = document.createElement('div');
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    const markers = [...parent.querySelectorAll<HTMLElement>('.z-live-preview-list-marker')];
+
+    expect(markers.map((marker) => marker.textContent)).toEqual(['•', '•', '•', '•', '•', '•', '3.', '4)', '5.', '6)']);
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+  });
+
+  it('projects indentation guides as visual-only line metadata without replacing source', () => {
+    const text = ['    child', '\ttab child', '  shallow', 'plain'].join('\n');
+    const parent = document.createElement('div');
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    const guideLines = [...parent.querySelectorAll<HTMLElement>('.cm-line.z-editor-indent-guide')];
+
+    expect(guideLines.map((line) => line.getAttribute('data-indent-depth'))).toEqual(['1', '1']);
+    expect(parent.querySelectorAll('.z-editor-indent-guide [contenteditable="false"]')).toHaveLength(0);
+    expect(editor.getText()).toBe(text);
+
+    editor.destroy();
+  });
+
   it('keeps explicit livePreviewRenderers customization on the public renderer path only', () => {
     const parent = document.createElement('div');
     const editor = createMountedMarkdownEditor({
@@ -475,7 +689,7 @@ describe('editor Live Preview primitives', () => {
     editor.destroy();
   });
 
-  it('hides inactive inline-code delimiters but reveals them when the code span is active', () => {
+  it('hides inactive inline-code delimiters, suppresses nested markdown, and reveals touched delimiter syntax', () => {
     const doc = 'Use `code` here';
     const inactiveState = EditorState.create({ doc, selection: { anchor: 0 } });
     const inactiveRanges = collectLivePreviewRanges(
@@ -484,18 +698,41 @@ describe('editor Live Preview primitives', () => {
     );
     expect(inactiveRanges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
       ['inline-code-delimiter', '`', 'replace'],
-      ['inline-code', '`code`', undefined],
+      ['inline-code', 'code', undefined],
       ['inline-code-delimiter', '`', 'replace'],
     ]);
     expect(inactiveState.doc.toString()).toBe(doc);
 
-    const activeState = EditorState.create({ doc, selection: { anchor: doc.indexOf('code') } });
+    const activeState = EditorState.create({ doc, selection: { anchor: doc.indexOf('code') + 1 } });
     const activeRanges = collectLivePreviewRanges(
       defaultLivePreviewRenderers,
       createLivePreviewContext(activeState, { from: 0, to: doc.length }, true),
     );
-    expect(activeRanges.map((range) => range.rendererId)).toEqual([]);
+    expect(activeRanges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['inline-code-delimiter', '`', 'replace'],
+      ['inline-code', 'code', undefined],
+      ['inline-code-delimiter', '`', 'replace'],
+    ]);
     expect(activeState.doc.toString()).toBe(doc);
+
+    const delimiterState = EditorState.create({ doc, selection: { anchor: doc.indexOf('`') } });
+    const delimiterRanges = collectLivePreviewRanges(
+      defaultLivePreviewRenderers,
+      createLivePreviewContext(delimiterState, { from: 0, to: doc.length }, true),
+    );
+    expect(delimiterRanges.map((range) => [range.rendererId, doc.slice(range.from, range.to), range.kind])).toEqual([
+      ['inline-code', 'code', undefined],
+      ['inline-code-delimiter', '`', 'replace'],
+    ]);
+
+    const nestedDoc = 'Use `#not-a-tag [not](link.md) [[Nope]]` here';
+    const nestedState = EditorState.create({ doc: nestedDoc });
+    expect(
+      collectLivePreviewRanges(
+        defaultLivePreviewRenderers,
+        createLivePreviewContext(nestedState, { from: 0, to: nestedDoc.length }),
+      ).map((range) => range.rendererId),
+    ).toEqual(['inline-code-delimiter', 'inline-code', 'inline-code-delimiter']);
   });
 
   it('keeps save shortcut wiring inside the mounted editor factory', () => {

@@ -15,6 +15,11 @@ Hard constraints from Architect review:
 - API freeze: no new root exports and no platform/plugin contract expansion; keep helpers private unless a separate API review explicitly approves exposure.
 - Separation of concerns: renderers project visuals; commands mutate source; widgets dispatch commands/actions and must not own source-rewrite logic.
 - Horizontal rules are in scope: `---`, `***`, and `___` render only while inactive; caret/selection reveal the source line; copy/cut preserves the original markdown source.
+- Expanded callouts and toggles are CodeMirror-editable source-backed document content, not embedded preview components: title/body/children must remain editable document flow using marks, line decorations, block wrappers, or narrowly scoped marker/chevron widgets.
+- Whole-block `Decoration.replace` / `MarkdownBlockRegistration` replacement is disallowed for expanded callouts/toggles; existing `CalloutPreviewWidget` / `calloutMarkdownBlockRegistration` must be retired, bypassed, or limited to preview-only/collapsed-hidden states with proven source preservation.
+- Chevron controls are pointer-clickable only and must not be tabbable or keyboard focus targets; keyboard toggling occurs only through editor/source/keymap structural positions.
+- Collapse/expand motion uses 120ms content and chevron animation; under `prefers-reduced-motion: reduce`, content motion and chevron rotation animation are disabled and state changes snap immediately.
+- Collapsed hidden content is edited by expanding first; invisible hidden bodies/children are not directly editable while collapsed.
 
 ## Repository Evidence
 
@@ -299,6 +304,9 @@ Deliverables:
 - Plain `> ` blockquotes render immediately while `>` alone stays plain.
 - Tab/Shift+Tab add/remove quote levels through command helpers; top-level Shift+Tab unwraps.
 - Detect complete non-collapsed callout title syntax `> [!type] Title`; apply known/generic styling and body containment for quoted following lines.
+- Render expanded/non-collapsed callouts as CodeMirror-editable source-backed projections: title and body remain editable document text; only structural markers/chrome may be hidden/replaced with narrow decorations/widgets.
+- Retire, bypass, or limit `CalloutPreviewWidget` / `calloutMarkdownBlockRegistration` so expanded callouts are not rendered as opaque whole-block widgets.
+- Define structural reveal cases for callouts: marker/fold syntax reveal when caret/selection touches the quote/callout marker/fold sign; title selection stays rendered unless touching structural syntax; body selection stays editable/rendered; selection crossing structural syntax reveals/copies source.
 - Prevent Tab/Shift+Tab indentation on callout title lines while allowing body quote nesting.
 - Do not implement fold/collapse chevrons or hidden-body behavior in this goal.
 
@@ -306,8 +314,10 @@ Acceptance criteria:
 
 - Blockquote selection stays rendered and copy preserves source.
 - Incomplete or escaped `>`/callout marker syntax remains literal source.
-- Active caret/selection behavior reveals syntax only where ADR requires; inactive complete blockquotes/callouts render.
+- Active caret/selection behavior reveals syntax only at structural positions; normal title/body editing does not reveal/replace the whole callout.
 - Non-collapsed callouts style correctly without adding or mutating fold markers.
+- Expanded callout title/body edits, selections, copy, cut, undo, and redo operate on CodeMirror document text without whole-block widget replacement.
+- Tests fail if expanded callouts are controlled by `CalloutPreviewWidget` / `calloutMarkdownBlockRegistration` as an opaque block widget.
 - Tab/Shift+Tab and Enter behavior for quote/body lines is source-mutating through commands and undoable.
 - Renderer code projects visuals only; source changes remain in command modules.
 
@@ -326,13 +336,20 @@ Touchpoints:
 Deliverables:
 
 - Add fold state support for `+`/`-` callout markers only after Goal 3 policy is accepted.
-- Chevron widgets dispatch commands/actions to mutate only existing fold markers.
+- Chevron widgets are pointer-clickable only, not tabbable, and never keyboard focus targets; they dispatch commands/actions to mutate only existing fold markers.
+- Keyboard toggling, if provided, comes only from editor/source/keymap structural positions, not focused chevrons.
 - Collapsed body hiding uses shared collapsed-selection/copy semantics and never deletes source.
+- Collapsed hidden body content is edited by expanding first; invisible body text is not directly editable while collapsed.
+- Add 120ms chevron rotation and content open/close animation, with `prefers-reduced-motion: reduce` disabling content motion and chevron rotation animation.
 
 Acceptance criteria:
 
 - Callout chevron mutates only existing `+`/`-` fold markers and never adds a fold marker to normal callouts.
+- Callout chevron is pointer-clickable, not tabbable, and absent from keyboard tab order.
 - Collapsed/expanded selection, title-only copy, crossing-hidden-body copy, cut/delete, and undo behavior are covered by tests from the Goal 3 architecture.
+- Collapsed hidden body cannot be edited until expanded; expand restores CodeMirror-editable source-backed body content without normalization/loss.
+- Structural reveal tests cover marker/fold sign, title text, body text, selection touching syntax, title-only collapsed selection, and selection crossing hidden body.
+- CSS/style tests cover 120ms content+chevron animation and reduced-motion snapping without content motion or chevron rotation animation.
 - Incomplete/escaped fold marker syntax remains literal source and does not create a collapse control.
 - Visual-only controls/placeholders are not copied.
 
@@ -351,7 +368,9 @@ Deliverables:
 
 - Start with Architect review before implementation to approve the private parser-extension path for non-standard `>>+` / `>>-` syntax, confirm whether a private Markdown parser facade, Lezer extension, or approved parser-owned char scanner is used, and expand `tests/editor-live-preview-no-regex-parsers.test.ts` to every new parser-adjacent module.
 - Implement persisted `>>+ ` and `>>- ` syntax and shorthand `>> ` / `>> # Heading` auto-conversion to expanded toggles.
-- Implement title rendering/editing interactions, keyboard toggle dispatch on focused chevron, and empty expanded-toggle placeholder behavior.
+- Implement title rendering/editing interactions, pointer-clickable non-tabbable chevrons, structural-position keymap/source toggling, and empty expanded-toggle placeholder behavior.
+- Render expanded toggles and toggle headings as CodeMirror-editable source-backed projections: title and children remain editable document text; only structural marker/chrome may be hidden/replaced narrowly.
+- Define structural reveal cases for toggles: marker/fold syntax reveal when caret/selection touches `>>`, `+`/`-`, or required marker space; title text selection stays rendered unless touching structural syntax; child selection remains editable/rendered; collapsed-range selection uses Goal 3 mapping.
 - Use Goal 2 indentation primitives for containment with 4 spaces or one tab as one unit and 4-space auto-created children.
 - Implement Enter behavior for expanded titles and child content; exit through Shift+Tab or Backspace at logical line start.
 - Defer collapsed subtree hiding/selection/copy to Goal 9 if needed.
@@ -361,10 +380,12 @@ Acceptance criteria:
 - `>>`, `>>+`, and `>>-` without trailing space remain plain text.
 - Escaped toggle-like syntax remains literal source.
 - Shorthand conversion, Enter, Tab, Shift+Tab, and Backspace-at-logical-start mutations are command-owned, source-preserving where applicable, and undoable.
-- Active/inactive selection behavior is covered for toggle marker, title text, and placeholder; selection touching marker syntax reveals source when required by ADR.
+- Active/inactive selection behavior is covered for toggle marker, title text, child text, and placeholder; selection touching marker syntax reveals source when required by ADR.
+- Expanded toggle title/children edits, selections, copy, cut, undo, and redo operate on CodeMirror document text without whole-block widget replacement.
+- Chevrons are pointer-clickable but not tabbable; no test or implementation relies on focused-chevron Space/Enter.
 - Copy/cut preserves exact toggle source and excludes visual-only chevrons/placeholders.
 - Toggle syntax/rendering works without regex parser scans and without public API expansion.
-- Empty expanded toggles show a visual-only placeholder that is not copied.
+- Empty expanded toggles show a visual-only placeholder that is not copied; clicking it creates/places caret on a 4-space-indented child line.
 - Indentation containment tests cover spaces, tabs, children, siblings, and outdent edge cases.
 
 ### Goal 9: Toggle Collapse, Selection, Copy, and Subtree Commands
@@ -382,13 +403,19 @@ Deliverables:
 
 - Implement collapse/expand source mutation changing only `+`/`-` where applicable.
 - Hide collapsed toggle children visually while preserving exact source and copy behavior.
+- Collapsed hidden children are edited by expanding first; invisible children are not directly editable while collapsed.
+- Add 120ms chevron rotation and content open/close animation, with `prefers-reduced-motion: reduce` disabling content motion and chevron rotation animation.
 - Implement subtree outdent behavior for current block plus following same-level siblings and nested subtrees.
 
 Acceptance criteria:
 
 - Collapsed toggles hide children visually without deleting source.
 - Toggle source mutation changes only the collapse marker.
+- Toggle chevron is pointer-clickable, not tabbable, and absent from keyboard tab order; keyboard toggling occurs only through editor/source/keymap structural positions.
 - Selection/copy tests cover collapsed children, title-only selections, crossing hidden body/children, visual-only placeholders, and full subtree copy.
+- Structural reveal tests cover toggle marker/fold sign, title text, child text, selection touching syntax, title-only collapsed selection, and selection crossing hidden children.
+- Collapsed hidden children cannot be edited until expanded; expand restores CodeMirror-editable source-backed child content without normalization/loss.
+- CSS/style tests cover 120ms content+chevron animation and reduced-motion snapping without content motion or chevron rotation animation.
 - Cut/delete/undo behavior follows the Goal 3 collapsed-source architecture and does not silently drop hidden descendants.
 - Subtree outdent behavior preserves containment and sibling boundaries.
 
@@ -403,7 +430,7 @@ Deliverables:
 
 - Run focused tests after each goal and `pnpm quality:fast` at the end.
 - Add regression coverage for code blocks, images/embeds, and tables remaining unchanged.
-- Add final regression expectations for render triggers, incomplete/escaped syntax, active/inactive selection behavior, copy/cut source preservation, Enter/Tab/Shift+Tab behavior, undoable source mutations, and no-regex parser ownership across all new parser modules.
+- Add final regression expectations for render triggers, incomplete/escaped syntax, structural-position reveal behavior, active/inactive selection behavior, non-tabbable pointer-only chevrons, 120ms animation/reduced-motion CSS, copy/cut source preservation, collapsed expand-before-edit behavior, Enter/Tab/Shift+Tab behavior, undoable source mutations, and no-regex parser ownership across all new parser modules.
 - Document deferred ADR behavior as explicit follow-up tasks rather than silent gaps.
 
 Acceptance criteria:
@@ -420,7 +447,7 @@ Acceptance criteria:
 - Risk: indentation semantics drift between lists, blockquotes, callouts, and toggles. Mitigation: implement shared indentation primitives first and make later goals consume them.
 - Risk: parser convenience introduces regex scans in live preview. Mitigation: keep `tests/editor-live-preview-no-regex-parsers.test.ts` in every parser-adjacent verification set and prefer CodeMirror/lezer syntax tree/facades or approved char scanners.
 - Risk: helper exposure leaks into public APIs. Mitigation: default to private modules; require API review for any root export or platform/plugin contract proposal.
-- Risk: renderer/widget/command responsibilities blur. Mitigation: acceptance criteria require renderers to project visuals, widgets to dispatch, and commands to mutate source.
+- Risk: renderer/widget/command responsibilities blur. Mitigation: acceptance criteria require renderers to project visuals, widgets to dispatch, commands to mutate source, and expanded callouts/toggles to remain CodeMirror-editable source-backed content rather than whole-block widgets.
 - Risk: ordered list/task changes conflict with current conservative commands. Mitigation: add ordered-specific tests before command changes.
 
 ## Verification Plan

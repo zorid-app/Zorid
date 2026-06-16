@@ -34,6 +34,17 @@ describe('editor task marker toggle', () => {
     });
   });
 
+  it('finds task marker ranges for unordered and ordered marker forms', () => {
+    const doc = ['- [ ] dash', '* [x] star', '+ [X] plus', '7. [ ] dot', '8) [x] paren'].join('\n');
+    const state = EditorState.create({ doc });
+
+    expect(findTaskMarkerAtPosition(state, doc.indexOf('dash'))?.marker).toBe('- [ ]');
+    expect(findTaskMarkerAtPosition(state, doc.indexOf('star'))?.marker).toBe('* [x]');
+    expect(findTaskMarkerAtPosition(state, doc.indexOf('plus'))?.marker).toBe('+ [X]');
+    expect(findTaskMarkerAtPosition(state, doc.indexOf('dot'))?.marker).toBe('7. [ ]');
+    expect(findTaskMarkerAtPosition(state, doc.indexOf('paren'))?.marker).toBe('8) [x]');
+  });
+
   it('rejects malformed adjacent task marker text without spanning lines', () => {
     const doc = ['intro', '- [ ]f- [ ]a 4- [ ]- [ ]', '- [ ] real task'].join('\n');
     const state = EditorState.create({ doc });
@@ -295,7 +306,7 @@ describe('editor task marker toggle', () => {
     parent.remove();
   });
 
-  it('falls back to Markdown Enter for focused non-empty ordered visual task checkboxes', () => {
+  it('continues focused non-empty ordered visual task checkboxes with incremented task markers', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
     const editor = createMountedMarkdownEditor({ parent, text: '1. [ ] pending' });
@@ -306,8 +317,24 @@ describe('editor task marker toggle', () => {
     checkbox?.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(editor.getText()).toBe('1. [ ] pending\n2. ');
-    expect(editor.view.state.selection.main.head).toBe('1. [ ] pending\n2. '.length);
+    expect(editor.getText()).toBe('1. [ ] pending\n2. [ ] ');
+    expect(editor.view.state.selection.main.head).toBe('1. [ ] pending\n2. [ ] '.length);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('preserves ordered task delimiter when continuing focused visual task checkboxes', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({ parent, text: '9) [X] pending' });
+
+    const checkbox = parent.querySelector<HTMLElement>('.z-live-preview-task-checkbox');
+    expect(checkbox).toBeTruthy();
+    checkbox?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+
+    expect(editor.getText()).toBe('9) [X] pending\n10) [ ] ');
+    expect(editor.view.state.selection.main.head).toBe('9) [X] pending\n10) [ ] '.length);
 
     editor.destroy();
     parent.remove();

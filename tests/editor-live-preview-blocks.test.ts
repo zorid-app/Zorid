@@ -61,16 +61,29 @@ describe('editor Live Preview block renderers', () => {
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['---', '***', '* * *', '_ _ _']);
   });
 
-  it('emits line-level blockquote ranges for normal, blank, and indented blockquote lines', () => {
+  it('keeps incomplete and escaped horizontal rule markers plain', () => {
+    const doc = ['---', '***', '___', '--', '**', '__', '\\---', 'text ---'].join('\n');
+    const ranges = collectRanges(doc).filter((range) => range.rendererId === 'horizontal-rule');
+
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['---', '***', '___']);
+  });
+
+  it('emits line-level blockquote ranges for normal, spaced blank, and indented blockquote lines', () => {
     const doc = ['> quote', '   > indented quote', '>', '> ', 'paragraph'].join('\n');
     const ranges = collectRanges(doc).filter((range) => range.rendererId === 'blockquote');
 
     expect(ranges.map((range) => [range.from, range.to, range.className])).toEqual([
       [0, 7, 'z-live-preview-blockquote-line'],
       [8, 27, 'z-live-preview-blockquote-line'],
-      [28, 29, 'z-live-preview-blockquote-line'],
       [30, 32, 'z-live-preview-blockquote-line'],
     ]);
+  });
+
+  it('keeps a bare greater-than line plain while rendering a spaced blank quote line', () => {
+    const doc = ['>', '> ', '> quote'].join('\n');
+    const ranges = collectRanges(doc).filter((range) => range.rendererId === 'blockquote');
+
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(['> ', '> quote']);
   });
 
   it('keeps blockquote matching out of tables and code examples', () => {
@@ -122,10 +135,31 @@ describe('editor Live Preview block renderers', () => {
       'inline-code-delimiter',
       'tag',
     ]);
-    expect(ranges.map((range) => doc.slice(range.from, range.to))).toContain('`code`');
+    expect(ranges.map((range) => doc.slice(range.from, range.to))).toContain('code');
     expect(ranges.map((range) => doc.slice(range.from, range.to))).toEqual(
       expect.arrayContaining(['[', 'link', '](target.md)']),
     );
+  });
+
+  it('reveals horizontal rule source when focused caret or selection touches the rule line', () => {
+    const doc = ['intro', '---', 'paragraph'].join('\n');
+    const ruleFrom = doc.indexOf('---');
+    const ruleTo = ruleFrom + '---'.length;
+
+    expect(collectRanges(doc, 0, false).map((range) => range.rendererId)).toContain('horizontal-rule');
+    expect(collectRanges(doc, ruleFrom + 1, true).map((range) => range.rendererId)).not.toContain('horizontal-rule');
+
+    const state = EditorState.create({ doc, selection: { anchor: ruleFrom - 1, head: ruleTo } });
+    const selectedRanges = collectLivePreviewRangesWithWidgetSuppression(
+      defaultLivePreviewRenderers,
+      defaultLivePreviewInternalRenderers,
+      defaultLivePreviewWidgetRenderers,
+      state,
+      [{ from: 0, to: doc.length }],
+      true,
+    );
+    expect(selectedRanges.map((range) => range.rendererId)).not.toContain('horizontal-rule');
+    expect(state.doc.toString()).toBe(doc);
   });
 
   it('mounts blockquote line decorations and restores them after source reveal', () => {

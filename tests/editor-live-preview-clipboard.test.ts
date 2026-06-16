@@ -4,7 +4,37 @@ import { redo, undo } from '@codemirror/commands';
 import { EditorSelection, EditorState, Transaction } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
 import { createMountedMarkdownEditor } from '../packages/editor/src';
-import { livePreviewSourceTextForRange } from '../packages/editor/src/live-preview/source-text';
+import {
+  livePreviewCutForCollapsedSelection,
+  livePreviewSourceTextForCollapsedSelection,
+  livePreviewSourceTextForRange,
+} from '../packages/editor/src/live-preview/source-text';
+
+const collapsedCalloutFixture = (() => {
+  const doc = ['intro', '> [!note]- Visible title', '> Hidden body', '> - Hidden child', 'after'].join('\n');
+  const callout = ['> [!note]- Visible title', '> Hidden body', '> - Hidden child'].join('\n');
+  return {
+    doc,
+    visualOnlyPlaceholder: '2 hidden lines',
+    source: sourceRange(doc, callout),
+    title: sourceRange(doc, 'Visible title'),
+    body: sourceRange(doc, '> Hidden body'),
+    child: sourceRange(doc, '> - Hidden child'),
+  };
+})();
+
+const collapsedToggleFixture = (() => {
+  const doc = ['intro', '>>- Toggle title', '    Hidden child', '        Hidden grandchild', 'after'].join('\n');
+  const toggle = ['>>- Toggle title', '    Hidden child', '        Hidden grandchild'].join('\n');
+  return {
+    doc,
+    visualOnlyPlaceholder: 'Add child',
+    source: sourceRange(doc, toggle),
+    title: sourceRange(doc, 'Toggle title'),
+    child: sourceRange(doc, '    Hidden child'),
+    grandchild: sourceRange(doc, '        Hidden grandchild'),
+  };
+})();
 
 function sourceFor(doc: string, selected: string): string {
   const from = doc.indexOf(selected);
@@ -66,6 +96,60 @@ function sourceRange(doc: string, selected: string): { from: number; to: number 
 }
 
 describe('editor Live Preview clipboard/source preservation', () => {
+  it('copies collapsed candidate title selections as title source without hidden body text', () => {
+    const { doc, source, title, body, child } = collapsedCalloutFixture;
+    const text = livePreviewSourceTextForCollapsedSelection(
+      EditorState.create({ doc }),
+      { source, title, hidden: [body, child] },
+      title,
+    );
+
+    expect(text).toBe('Visible title');
+  });
+
+  it('copies collapsed candidate selections crossing hidden content as complete canonical source', () => {
+    const { doc, source, title, body, child } = collapsedCalloutFixture;
+    const state = EditorState.create({ doc });
+    const text = livePreviewSourceTextForCollapsedSelection(
+      state,
+      { source, title, hidden: [body, child] },
+      { from: title.from, to: body.to },
+    );
+
+    expect(text).toBe(['> [!note]- Visible title', '> Hidden body', '> - Hidden child'].join('\n'));
+  });
+
+  it('copies collapsed toggle title selections and full subtrees from canonical source', () => {
+    const { doc, source, title, child, grandchild, visualOnlyPlaceholder } = collapsedToggleFixture;
+    const state = EditorState.create({ doc });
+
+    expect(
+      livePreviewSourceTextForCollapsedSelection(state, { source, title, hidden: [child, grandchild] }, title),
+    ).toBe('Toggle title');
+    expect(
+      livePreviewSourceTextForCollapsedSelection(
+        state,
+        { source, title, hidden: [child, grandchild] },
+        { from: title.from, to: child.to },
+      ),
+    ).toBe(['>>- Toggle title', '    Hidden child', '        Hidden grandchild'].join('\n'));
+    expect(
+      livePreviewSourceTextForCollapsedSelection(state, { source, title, hidden: [child, grandchild] }, source),
+    ).not.toContain(visualOnlyPlaceholder);
+  });
+
+  it('excludes visual-only collapsed placeholders from clipboard source text', () => {
+    const { doc, source, title, body, child, visualOnlyPlaceholder } = collapsedCalloutFixture;
+    const text = livePreviewSourceTextForCollapsedSelection(
+      EditorState.create({ doc }),
+      { source, title, hidden: [body, child] },
+      source,
+    );
+
+    expect(text).toContain('> Hidden body');
+    expect(text).not.toContain(visualOnlyPlaceholder);
+  });
+
   it('extracts inactive inline-code source including Markdown delimiters', () => {
     expect(sourceFor('before `code` after', '`code`')).toBe('`code`');
   });
@@ -170,6 +254,35 @@ describe('editor Live Preview clipboard/source preservation', () => {
     expect(editor.getText()).toBe(doc);
     expect(redo(editor.view)).toBe(true);
     expect(editor.getText()).toBe(['intro', '', '', 'after'].join('\n'));
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('cuts collapsed candidate source ranges with an undoable explicit delete.cut transaction', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const { doc, source, title, body, child } = collapsedCalloutFixture;
+    const editor = createMountedMarkdownEditor({ parent, text: doc });
+    const cut = livePreviewCutForCollapsedSelection(
+      editor.view.state,
+      { source, title, hidden: [body, child] },
+      { from: title.from, to: body.to },
+    );
+
+    expect(cut?.text).toBe(['> [!note]- Visible title', '> Hidden body', '> - Hidden child'].join('\n'));
+    if (!cut) throw new Error('Expected collapsed cut policy to resolve a source change');
+
+    editor.view.dispatch({
+      changes: { from: cut.from, to: cut.to, insert: cut.insert },
+      annotations: Transaction.userEvent.of('delete.cut'),
+    });
+    expect(editor.getText()).toBe(['intro', '', 'after'].join('\n'));
+
+    expect(undo(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(doc);
+    expect(redo(editor.view)).toBe(true);
+    expect(editor.getText()).toBe(['intro', '', 'after'].join('\n'));
 
     editor.destroy();
     parent.remove();

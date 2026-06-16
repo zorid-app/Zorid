@@ -1,5 +1,6 @@
 import { Transaction } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
+import { indentLineText, leadingIndentColumns, outdentLineText } from './indentation.js';
 import { findTaskMarkerAtPosition } from './live-preview/task-toggle.js';
 
 interface TouchedLine {
@@ -33,6 +34,50 @@ function isSpaceOrTab(code: number): boolean {
 
 function isDigit(code: number): boolean {
   return code >= 48 && code <= 57;
+}
+
+function completeToggleMarkerEnd(text: string): number | null {
+  let index = firstNonSpace(text);
+  if (index > 3) return null;
+  if (text.charAt(index) !== '>' || text.charAt(index + 1) !== '>') return null;
+  const sign = text.charAt(index + 2);
+  if (sign !== '+' && sign !== '-') return null;
+  const afterSign = index + 3;
+  if (afterSign >= text.length) return null;
+  if (!isSpaceOrTab(text.charCodeAt(afterSign))) return null;
+  while (index < text.length && !isSpaceOrTab(text.charCodeAt(index))) index += 1;
+  while (index < text.length && isSpaceOrTab(text.charCodeAt(index))) index += 1;
+  return index;
+}
+
+function shorthandToggleMarkerEnd(text: string): number | null {
+  let index = firstNonSpace(text);
+  if (index > 3) return null;
+  if (text.charAt(index) !== '>' || text.charAt(index + 1) !== '>') return null;
+  const afterMarker = index + 2;
+  if (afterMarker >= text.length || !isSpaceOrTab(text.charCodeAt(afterMarker))) return null;
+  while (index < text.length && !isSpaceOrTab(text.charCodeAt(index))) index += 1;
+  while (index < text.length && isSpaceOrTab(text.charCodeAt(index))) index += 1;
+  return index;
+}
+
+function toggleChildIndent(text: string): boolean {
+  return leadingIndentColumns(text) >= 4;
+}
+
+function outdentToggleSubtreeLines(view: EditorView, lineInfo: TouchedLine): TouchedLine[] {
+  const baseIndent = leadingIndentColumns(lineInfo.text);
+  const lines: TouchedLine[] = [lineInfo];
+  for (let number = lineInfo.number + 1; number <= view.state.doc.lines; number += 1) {
+    const line = view.state.doc.line(number);
+    if (line.text.trim().length === 0) {
+      lines.push({ number, from: line.from, to: line.to, text: line.text });
+      continue;
+    }
+    if (leadingIndentColumns(line.text) <= baseIndent) break;
+    lines.push({ number, from: line.from, to: line.to, text: line.text });
+  }
+  return lines;
 }
 
 function unorderedBulletMarkerEnd(text: string): number | null {
@@ -108,7 +153,36 @@ function addTaskMarker(text: string): string {
 }
 
 function continuedTaskMarker(marker: string): string {
-  return `${marker.replace(/\[[^\]]\]/u, '[ ]')} `;
+  let index = firstNonSpace(marker);
+  const numberStart = index;
+  while (index < marker.length && isDigit(marker.charCodeAt(index))) index += 1;
+  const markerNumber = marker.slice(numberStart, index);
+  const delimiter = marker.charAt(index);
+  if (markerNumber.length > 0 && (delimiter === '.' || delimiter === ')')) {
+    const spacingStart = index + 1;
+    let taskStart = spacingStart;
+    while (taskStart < marker.length && isSpaceOrTab(marker.charCodeAt(taskStart))) taskStart += 1;
+    if (
+      taskStart > spacingStart &&
+      marker.charAt(taskStart) === '[' &&
+      marker.charAt(taskStart + 2) === ']' &&
+      taskStart + 3 === marker.length
+    ) {
+      const taskState = marker.charAt(taskStart + 1);
+      if (taskState === ' ' || taskState === 'x' || taskState === 'X') {
+        return `${marker.slice(0, numberStart)}${Number.parseInt(markerNumber, 10) + 1}${delimiter}${marker.slice(
+          spacingStart,
+          taskStart,
+        )}[ ] `;
+      }
+    }
+  }
+
+  const taskMarkerStart = marker.indexOf('[');
+  if (taskMarkerStart >= 0 && marker.charAt(taskMarkerStart + 2) === ']') {
+    return `${marker.slice(0, taskMarkerStart)}[ ]${marker.slice(taskMarkerStart + 3)} `;
+  }
+  return `${marker} `;
 }
 
 function taskMarkerEditBoundary(
@@ -120,12 +194,6 @@ function taskMarkerEditBoundary(
     boundary += 1;
   }
   return boundary;
-}
-
-function isUnorderedTaskMarker(marker: string): boolean {
-  const markerStart = firstNonSpace(marker);
-  const code = marker.charCodeAt(markerStart);
-  return code === 45 || code === 42 || code === 43;
 }
 
 function exitEmptyTaskListAtSelection(view: EditorView, userEvent: string): boolean {
@@ -156,8 +224,7 @@ function continueTaskListAtSelectionPosition(view: EditorView, insertAtLineEnd: 
   const position = selection.main.head;
   const range = findTaskMarkerAtPosition(view.state, position);
   if (!range) return false;
-  if (!isUnorderedTaskMarker(range.marker)) return false;
-  if (position > taskMarkerEditBoundary(view, range)) return false;
+  if (position > taskMarkerEditBoundary(view, range) && position !== range.lineTo) return false;
 
   const insertAt = insertAtLineEnd ? range.lineTo : position;
   const insert = `\n${continuedTaskMarker(range.marker)}`;
@@ -175,6 +242,90 @@ export function continueTaskListAtSelection(view: EditorView): boolean {
 
 export function handleTaskListEnterAtSelection(view: EditorView): boolean {
   return exitEmptyTaskListAtSelection(view, 'delete.list.task.empty') || continueTaskListAtSelection(view);
+}
+
+function toggleTitleRangeAtSelection(view: EditorView): { line: TouchedLine; markerEnd: number } | null {
+  const selection = view.state.selection;
+  if (selection.ranges.length !== 1 || !selection.main.empty) return null;
+  const lineInfo = view.state.doc.lineAt(selection.main.head);
+  const line = { number: lineInfo.number, from: lineInfo.from, to: lineInfo.to, text: lineInfo.text };
+  const markerEnd = completeToggleMarkerEnd(line.text) ?? shorthandToggleMarkerEnd(line.text);
+  if (markerEnd === null) return null;
+  return { line, markerEnd };
+}
+
+function convertToggleShorthandChange(line: TouchedLine): LineReplacement | null {
+  const markerEnd = shorthandToggleMarkerEnd(line.text);
+  if (markerEnd === null) return null;
+  const indent = firstNonSpace(line.text);
+  return { from: line.from, to: line.to, insert: `${line.text.slice(0, indent)}>>+ ${line.text.slice(markerEnd)}` };
+}
+
+export function handleToggleEnterAtSelection(view: EditorView): boolean {
+  const selection = view.state.selection;
+  if (selection.ranges.length !== 1 || !selection.main.empty) return false;
+  const position = selection.main.head;
+  const currentLine = view.state.doc.lineAt(position);
+  const current: TouchedLine = {
+    number: currentLine.number,
+    from: currentLine.from,
+    to: currentLine.to,
+    text: currentLine.text,
+  };
+
+  const title = toggleTitleRangeAtSelection(view);
+  if (title && position >= title.line.from + title.markerEnd) {
+    const shorthand = convertToggleShorthandChange(title.line);
+    const insertAt = position;
+    const insert = '\n    ';
+    view.dispatch({
+      changes: [...(shorthand ? [shorthand] : []), { from: insertAt, to: insertAt, insert }],
+      selection: { anchor: insertAt + insert.length + (shorthand ? 1 : 0) },
+      annotations: Transaction.userEvent.of(shorthand ? 'input.toggle.expand-shorthand' : 'input.toggle.enter.title'),
+    });
+    return true;
+  }
+
+  if (!toggleChildIndent(current.text)) return false;
+  const previousLine = current.number > 1 ? view.state.doc.line(current.number - 1) : null;
+  if (!previousLine) return false;
+  const previousText = previousLine.text;
+  const previousIsToggleTitle = completeToggleMarkerEnd(previousText) !== null;
+  const previousIsToggleChild = toggleChildIndent(previousText);
+  if (!previousIsToggleTitle && !previousIsToggleChild) return false;
+  if (current.text.trim().length === 0) {
+    view.dispatch({
+      changes: { from: current.from, to: current.to, insert: '' },
+      selection: { anchor: current.from },
+      annotations: Transaction.userEvent.of('delete.toggle.empty-child'),
+    });
+    return true;
+  }
+  const insert = `\n${indentLineText('')}`;
+  view.dispatch({
+    changes: { from: position, to: position, insert },
+    selection: { anchor: position + insert.length },
+    annotations: Transaction.userEvent.of('input.toggle.enter.child'),
+  });
+  return true;
+}
+
+export function outdentToggleChildAtSelection(view: EditorView): boolean {
+  const selection = view.state.selection;
+  if (selection.ranges.length !== 1 || !selection.main.empty) return false;
+  const position = selection.main.head;
+  const lineInfo = view.state.doc.lineAt(position);
+  if (!toggleChildIndent(lineInfo.text)) return false;
+  const beforeCaret = view.state.doc.sliceString(lineInfo.from, position);
+  if (beforeCaret.trim().length > 0) return false;
+  const line: TouchedLine = { number: lineInfo.number, from: lineInfo.from, to: lineInfo.to, text: lineInfo.text };
+  const subtreeLines = outdentToggleSubtreeLines(view, line);
+  view.dispatch({
+    changes: subtreeLines.map((line) => ({ from: line.from, to: line.to, insert: outdentLineText(line.text) })),
+    selection: { anchor: lineInfo.from },
+    annotations: Transaction.userEvent.of('input.toggle.outdent-child'),
+  });
+  return true;
 }
 
 export function deleteEmptyTaskListAtSelection(view: EditorView): boolean {

@@ -92,15 +92,21 @@ function closingBacktickRunLength(docText: string, from: number, to: number): nu
 function inlineCodeRanges(docText: string, from: number, to: number): LivePreviewRange[] {
   const openingLength = backtickRunLengthAt(docText, from, to);
   const closingLength = closingBacktickRunLength(docText, from + openingLength, to);
+  const contentFrom = from + openingLength;
+  const contentTo = to - closingLength;
   return [
     previewRange('inline-code-delimiter', from, from + openingLength, {
       activationFrom: from,
-      activationTo: to,
+      activationTo: from + openingLength,
       kind: 'replace',
     }),
-    previewRange('inline-code', from, to),
+    previewRange('inline-code', contentFrom, contentTo, {
+      activationFrom: contentFrom,
+      activationTo: contentTo,
+      revealPolicy: 'never',
+    }),
     previewRange('inline-code-delimiter', to - closingLength, to, {
-      activationFrom: from,
+      activationFrom: to - closingLength,
       activationTo: to,
       kind: 'replace',
     }),
@@ -149,15 +155,16 @@ function delimiterRanges(
   return [
     previewRange(rendererId, from, from + openingLength, {
       activationFrom: from,
-      activationTo: to,
+      activationTo: from + openingLength,
       kind: 'replace',
     }),
     previewRange(rendererId, from + openingLength, to - closingLength, {
       activationFrom: from,
       activationTo: to,
+      revealPolicy: 'never',
     }),
     previewRange(rendererId, to - closingLength, to, {
-      activationFrom: from,
+      activationFrom: to - closingLength,
       activationTo: to,
       kind: 'replace',
     }),
@@ -176,16 +183,17 @@ function markdownLinkRanges(docText: string, from: number, to: number): LivePrev
   return [
     previewRange('markdown-link', from, labelFrom, {
       activationFrom: from,
-      activationTo: to,
+      activationTo: labelFrom,
       kind: 'replace',
     }),
     previewRange('markdown-link', labelFrom, labelTo, {
       activationFrom: from,
       activationTo: to,
+      revealPolicy: 'never',
       ...(webUrl ? { attributes: { 'data-live-preview-url': webUrl } } : {}),
     }),
     previewRange('markdown-link', labelTo, to, {
-      activationFrom: from,
+      activationFrom: labelTo,
       activationTo: to,
       kind: 'replace',
     }),
@@ -223,16 +231,17 @@ function wikiLinkRanges(docText: string, from: number, to: number): LivePreviewR
   return [
     previewRange('wiki-link', from, labelFrom, {
       activationFrom: from,
-      activationTo: to,
+      activationTo: labelFrom,
       kind: 'replace',
     }),
     previewRange('wiki-link', labelFrom, labelTo, {
       activationFrom: from,
       activationTo: to,
+      revealPolicy: 'never',
       attributes: wikiLinkAttributes(targetSource),
     }),
     previewRange('wiki-link', labelTo, to, {
-      activationFrom: from,
+      activationFrom: labelTo,
       activationTo: to,
       kind: 'replace',
     }),
@@ -292,6 +301,8 @@ export function collectSyntaxTreeLivePreviewRanges(context: LivePreviewContext):
           ranges.push(...delimiterRanges(rendererId, node.from, node.to, 2));
         } else if (rendererId === 'emphasis') {
           ranges.push(...delimiterRanges(rendererId, node.from, node.to, 1));
+        } else if (rendererId === 'tag') {
+          pushRange(ranges, previewRange(rendererId, node.from, node.to, { revealPolicy: 'never' }));
         } else pushRange(ranges, previewRange(rendererId, node.from, node.to));
         return false;
       }

@@ -60,7 +60,10 @@ describe('editor Live Preview semantic fixtures', () => {
       'link',
       '](target.md)',
       '- [ ]',
-      ['> [!note] Title', '> body'].join('\n'),
+      '> [!note] ',
+      '> [!note] Title',
+      '> ',
+      '> body',
     ]);
   });
 
@@ -121,7 +124,7 @@ describe('editor Live Preview semantic fixtures', () => {
       ['emphasis', 'italic'],
       ['emphasis', '_'],
       ['inline-code-delimiter', '`'],
-      ['inline-code', '`**raw** *raw* ~~raw~~ ==raw== #raw [raw](x.md)`'],
+      ['inline-code', '**raw** *raw* ~~raw~~ ==raw== #raw [raw](x.md)'],
       ['inline-code-delimiter', '`'],
     ]);
   });
@@ -141,7 +144,19 @@ describe('editor Live Preview semantic fixtures', () => {
     expect(markdownFrontmatterRanges(doc, { from: 0, to: doc.length })).toEqual([
       { from: 0, to: doc.indexOf('\n> [!note] Outside') },
     ]);
-    expect(renderedSource).toEqual([['> [!note] Outside', '> Body #tag [[Wiki]] ==mark=='].join('\n')]);
+    expect(renderedSource).toEqual([
+      '> [!note] ',
+      '> [!note] Outside',
+      '> ',
+      '> Body #tag [[Wiki]] ==mark==',
+      '#tag',
+      '[[',
+      'Wiki',
+      ']]',
+      '==',
+      'mark',
+      '==',
+    ]);
   });
 
   it('keeps task, blockquote, callout, and inline previews raw inside fenced code and frontmatter', () => {

@@ -9,6 +9,7 @@ import {
   toggleBulletListAtSelection,
   toggleTaskListAtSelection,
 } from '../packages/editor/src/index';
+import { outdentToggleChildAtSelection } from '../packages/editor/src/markdown-list-commands';
 
 type Command = (view: ReturnType<typeof createMountedMarkdownEditor>['view']) => boolean;
 
@@ -150,5 +151,18 @@ describe('editor Markdown list commands', () => {
     expect(editor.getText()).toBe(['- alpha', 'beta', '- gamma'].join('\n'));
 
     editor.destroy();
+  });
+
+  it('outdents a toggle child subtree while preserving sibling containment boundaries', () => {
+    const text = ['>>+ Parent', '    child a', '        grandchild a', '    child b', '        grandchild b'].join(
+      '\n',
+    );
+    const childAStart = text.indexOf('    child a');
+
+    expect(runCommand(text, outdentToggleChildAtSelection, { from: childAStart })).toMatchObject({
+      result: true,
+      text: ['>>+ Parent', 'child a', '    grandchild a', '    child b', '        grandchild b'].join('\n'),
+      events: ['input.toggle.outdent-child'],
+    });
   });
 });

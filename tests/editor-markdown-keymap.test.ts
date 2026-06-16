@@ -11,6 +11,8 @@ import {
 import {
   deleteEmptyTaskListAtSelection,
   handleTaskListEnterAtSelection,
+  handleToggleEnterAtSelection,
+  outdentToggleChildAtSelection,
 } from '../packages/editor/src/markdown-list-commands';
 
 function runMarkdownEnter(text: string): string {
@@ -50,6 +52,26 @@ function pressEditorKey(
   return result;
 }
 
+function pressEditorIndentKey(
+  text: string,
+  key: 'Tab',
+  selection: { readonly anchor: number; readonly head?: number },
+  shiftKey = false,
+): { text: string; selectionHead: number } {
+  const parent = document.createElement('div');
+  const editor = createMountedMarkdownEditor({ parent, text });
+  editor.focus();
+  editor.view.dispatch({ selection: { anchor: selection.anchor, head: selection.head ?? selection.anchor } });
+
+  editor.view.contentDOM.dispatchEvent(
+    new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }),
+  );
+
+  const result = { text: editor.getText(), selectionHead: editor.view.state.selection.main.head };
+  editor.destroy();
+  return result;
+}
+
 function runDeletionWithSourceFallback(
   text: string,
   key: 'Backspace' | 'Delete',
@@ -82,12 +104,35 @@ describe('editor Markdown keymap behavior', () => {
   it('exposes conservative task commands before Markdown fallback behavior', () => {
     expect(markdownTaskKeymap).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ key: 'Enter', run: handleTaskListEnterAtSelection }),
+        expect.objectContaining({ key: 'Enter', run: expect.any(Function) }),
+        expect.objectContaining({ key: 'Shift-Tab', run: outdentToggleChildAtSelection }),
         expect.objectContaining({ key: 'Backspace', run: deleteEmptyTaskListAtSelection }),
+        expect.objectContaining({ key: 'Backspace', run: outdentToggleChildAtSelection }),
         expect.objectContaining({ key: 'Delete', run: deleteEmptyTaskListAtSelection }),
         expect.objectContaining({ key: 'Mod-Enter', run: toggleTaskMarkerAtSelection }),
       ]),
     );
+    expect(handleTaskListEnterAtSelection).toEqual(expect.any(Function));
+    expect(handleToggleEnterAtSelection).toEqual(expect.any(Function));
+  });
+
+  it('indents and outdents paragraphs with editor-wide four-space Tab commands', () => {
+    expect(pressEditorIndentKey('paragraph', 'Tab', { anchor: 'para'.length }).text).toBe('    paragraph');
+    expect(pressEditorIndentKey('    paragraph', 'Tab', { anchor: '    para'.length }, true).text).toBe('paragraph');
+  });
+
+  it('indents selected nonblank lines and outdents at most one four-column unit', () => {
+    const text = ['alpha', '', '  beta', '\tgamma'].join('\n');
+    const indented = ['    alpha', '', '      beta', '    \tgamma'].join('\n');
+
+    expect(pressEditorIndentKey(text, 'Tab', { anchor: 0, head: text.length }).text).toBe(indented);
+    expect(pressEditorIndentKey(indented, 'Tab', { anchor: 0, head: indented.length }, true).text).toBe(text);
+  });
+
+  it('does not indent or outdent callout title lines with editor-wide Tab commands', () => {
+    const title = '> [!note] Title';
+    expect(pressEditorIndentKey(title, 'Tab', { anchor: title.indexOf('Title') }).text).toBe(title);
+    expect(pressEditorIndentKey(`  ${title}`, 'Tab', { anchor: 2 }, true).text).toBe(`  ${title}`);
   });
 
   it('exits empty task lines with Enter and leaves the cursor at the line start', () => {
@@ -179,11 +224,77 @@ describe('editor Markdown keymap behavior', () => {
       text: '- [ ] task\n- [ ] ',
       selectionHead: '- [ ] task\n- [ ] '.length,
     });
+    expect(pressEditorKey('* [x] task', 'Enter')).toEqual({
+      text: '* [x] task\n* [ ] ',
+      selectionHead: '* [x] task\n* [ ] '.length,
+    });
+    expect(pressEditorKey('+ [X] task', 'Enter')).toEqual({
+      text: '+ [X] task\n+ [ ] ',
+      selectionHead: '+ [X] task\n+ [ ] '.length,
+    });
+    expect(pressEditorKey('3. [ ] task', 'Enter')).toEqual({
+      text: '3. [ ] task\n4. [ ] ',
+      selectionHead: '3. [ ] task\n4. [ ] '.length,
+    });
+    expect(pressEditorKey('9) [x] task', 'Enter')).toEqual({
+      text: '9) [x] task\n10) [ ] ',
+      selectionHead: '9) [x] task\n10) [ ] '.length,
+    });
   });
 
   it('falls through for non-task Markdown Enter and Backspace cases', () => {
     expect(pressEditorKey('- item', 'Enter')).toEqual({ text: '- item\n- ', selectionHead: '- item\n- '.length });
     expect(pressEditorKey('- ', 'Backspace')).toEqual({ text: '', selectionHead: 0 });
+  });
+
+  it('converts toggle shorthand and creates four-space child lines with Enter', () => {
+    expect(pressEditorKey('>> Toggle title', 'Enter')).toEqual({
+      text: '>>+ Toggle title\n    ',
+      selectionHead: '>>+ Toggle title\n    '.length,
+    });
+    expect(pressEditorKey('>> # Heading', 'Enter')).toEqual({
+      text: '>>+ # Heading\n    ',
+      selectionHead: '>>+ # Heading\n    '.length,
+    });
+    expect(pressEditorKey('>>+ Toggle title', 'Enter')).toEqual({
+      text: '>>+ Toggle title\n    ',
+      selectionHead: '>>+ Toggle title\n    '.length,
+    });
+  });
+
+  it('continues and exits expanded toggle child content', () => {
+    expect(pressEditorKey(['>>+ Toggle title', '    child'].join('\n'), 'Enter')).toEqual({
+      text: ['>>+ Toggle title', '    child', '    '].join('\n'),
+      selectionHead: ['>>+ Toggle title', '    child', '    '].join('\n').length,
+    });
+    expect(pressEditorKey(['>>+ Toggle title', '    '].join('\n'), 'Enter')).toEqual({
+      text: ['>>+ Toggle title', ''].join('\n'),
+      selectionHead: '>>+ Toggle title\n'.length,
+    });
+  });
+
+  it('outdents toggle child lines with Shift+Tab or Backspace at indentation boundary', () => {
+    const text = ['>>+ Toggle title', '    child'].join('\n');
+    const childStart = text.indexOf('    child');
+
+    expect(pressEditorIndentKey(text, 'Tab', { anchor: childStart }, true)).toEqual({
+      text: ['>>+ Toggle title', 'child'].join('\n'),
+      selectionHead: childStart,
+    });
+    expect(pressEditorKey(text, 'Backspace', childStart)).toEqual({
+      text: ['>>+ Toggle title', 'child'].join('\n'),
+      selectionHead: childStart,
+    });
+  });
+
+  it('outdents only the selected toggle child subtree without crossing sibling boundaries', () => {
+    const text = ['>>+ Toggle title', '    child a', '        grandchild a', '    child b', 'after'].join('\n');
+    const childAStart = text.indexOf('    child a');
+
+    expect(pressEditorIndentKey(text, 'Tab', { anchor: childAStart }, true)).toEqual({
+      text: ['>>+ Toggle title', 'child a', '    grandchild a', '    child b', 'after'].join('\n'),
+      selectionHead: childAStart,
+    });
   });
 
   it('continues task markers at the caret when Enter is pressed at the marker boundary', () => {

@@ -1,67 +1,236 @@
-[
-  {
-    "id": "G001",
-    "title": "Contract + capability + manifest types",
-    "status": "completed",
-    "evidence": [
-      "packages/platform-api/src/index.ts defines workspace.fileRenderers and framework-neutral FileRenderer* contracts",
-      "packages/plugin-api/src/index.ts defines rendererEntry and contributes.fileRenderers manifest contracts",
-      "tests/plugin-api-contracts.test.ts passed in focused regression suite"
-    ]
-  },
-  {
-    "id": "G002",
-    "title": "@zorid/plugin-ui package + Solid wiring + import boundaries",
-    "status": "completed",
-    "evidence": [
-      "packages/plugin-ui exports Solid primitives and mountPluginUI",
-      "scripts/check-import-boundaries.mjs and tests/import-boundaries.test.mjs allow only core plugins to consume @zorid/plugin-ui",
-      "tests/plugin-ui-package.test.ts and tests/import-boundaries.test.mjs passed"
-    ]
-  },
-  {
-    "id": "G003",
-    "title": "Plugin-host validation/capability enforcement + static matcher",
-    "status": "completed",
-    "evidence": [
-      "packages/plugin-host/src/index.ts validates fileRenderer manifests, rejects community contributions, enforces register.fileRenderer capability, and resolves static matches",
-      "tests/kernel-plugin-host.test.ts passed"
-    ]
-  },
-  {
-    "id": "G004",
-    "title": "Desktop trusted renderer runtime + full-page routing + markdown-embed adapter/fallback",
-    "status": "completed",
-    "evidence": [
-      "apps/desktop/src/main/runtime.ts adds trustedCoreFileRendererLoaders and resolveFileRenderer",
-      "apps/desktop/src/main/index.ts and apps/desktop/src/preload/index.ts expose explicit resolveFileRenderer IPC/preload allowlist",
-      "apps/desktop/src/renderer/src/App.vue and MarkdownEditor.vue consume full-page and markdown-embed matches",
-      "tests/desktop-runtime.test.ts passed"
-    ]
-  },
-  {
-    "id": "G005",
-    "title": ".zbase dogfood renderer + legacy fallback override",
-    "status": "completed",
-    "evidence": [
-      "plugins/core/data-views/plugin.json declares .zbase fileRenderer contribution and rendererEntry",
-      "plugins/core/data-views/src/file-renderers.ts dogfoods @zorid/plugin-ui",
-      "tests/core-manifests.test.ts and tests/editor-live-preview-block-registration-api.test.ts passed"
-    ]
-  },
-  {
-    "id": "G006",
-    "title": "Verification and cleanup",
-    "status": "completed",
-    "evidence": [
-      "pnpm test tests/desktop-runtime.test.ts tests/kernel-plugin-host.test.ts tests/core-manifests.test.ts tests/plugin-ui-package.test.ts tests/desktop-trusted-file-renderers.test.ts tests/desktop-markdown-editor-window-properties.test.ts tests/editor-live-preview-block-registration-api.test.ts tests/import-boundaries.test.mjs passed: 8 files, 55 tests",
-      "tests/desktop-file-tree-toolbar.test.ts mock desktop bridge now includes resolveFileRenderer fallback; pnpm test tests/desktop-file-tree-toolbar.test.ts passed: 1 file, 7 tests",
-      "pnpm typecheck passed",
-      "pnpm lint:boundaries passed: import boundaries ok",
-      "pnpm lint passed: biome ci checked 252 files; import boundaries ok",
-      "Fixed MarkdownEditor.vue open-reference block actions to omit fragment when undefined under exactOptionalPropertyTypes",
-      "pnpm desktop:build passed after the exact-optional fix",
-      "pnpm quality:fast passed after the exact-optional fix: lint, typecheck, and 63 Vitest files / 370 tests"
-    ]
-  }
-]
+{
+  "ultragoalId": "adr-0003-foldable-callouts-toggles",
+  "title": "ADR 0003 foldable callouts and toggles",
+  "aggregateObjective": "Implement ADR 0003 foldable Obsidian callouts, toggle lists, and toggle headings with source-backed editable projection and full source-preserving editing/clipboard behavior.",
+  "goals": [
+    {
+      "id": "G001",
+      "status": "completed",
+      "dependencies": [],
+      "objective": "Establish shared live-preview policy primitives and private test fixtures for structural reveal and source-preservation expectations without implementing fold behavior.",
+      "acceptanceCriteria": [
+        "Durable fixtures encode structural, title/body, collapsed-subtree, and placeholder regions for ADR 0003 follow-up tests.",
+        "Tests lock that structural reveal uses existing activation/reveal policy behavior and does not mutate source text.",
+        "No callout/toggle rendering or source mutation behavior for later goals is implemented."
+      ],
+      "verificationCommands": ["pnpm test tests/editor-live-preview-primitives.test.ts"]
+    },
+    {
+      "id": "G002",
+      "status": "completed",
+      "dependencies": ["G001"],
+      "objective": "Add editor-wide indentation primitives and visual-only indentation guides shared by callouts, toggles, and existing list behavior.",
+      "acceptanceCriteria": [
+        "Indentation metadata is source-backed and reusable by later renderers/commands.",
+        "Visual guides do not replace editable source content.",
+        "Existing list/task indentation behavior remains compatible."
+      ],
+      "verificationCommands": [
+        "pnpm test tests/editor-markdown-list-commands.test.ts",
+        "pnpm test tests/editor-live-preview-primitives.test.ts"
+      ]
+    },
+    {
+      "id": "G003",
+      "status": "completed",
+      "dependencies": ["G001"],
+      "objective": "Create collapsed selection/copy/cut architecture that can preserve canonical source while projecting collapsed visuals.",
+      "acceptanceCriteria": [
+        "Collapsed selection mapping has explicit source ranges.",
+        "Copy/cut behavior can target collapsed source subtrees without exposing renderer internals as public API.",
+        "Non-collapsed selection and clipboard regressions stay green."
+      ],
+      "evidence": [
+        "Added private collapsed source projection helpers in packages/editor/src/live-preview/source-text.ts.",
+        "Added inert collapsed callout/toggle fixture tests for title-only selection, hidden body/child crossing, full subtree copy, visual-only placeholder exclusion, and undoable cut/delete policy.",
+        "Focused tests passed: pnpm test tests/editor-live-preview-selection-mapping.test.ts tests/editor-live-preview-clipboard.test.ts tests/editor-live-preview-widgets.test.ts (3 files, 37 tests).",
+        "Touched-file Biome check passed."
+      ],
+      "verificationCommands": [
+        "pnpm test tests/editor-live-preview-selection-mapping.test.ts",
+        "pnpm test tests/editor-live-preview-clipboard.test.ts"
+      ]
+    },
+    {
+      "id": "G004",
+      "status": "completed",
+      "dependencies": ["G001", "G002"],
+      "objective": "Lock list/task regressions and align shared commands before toggle syntax changes.",
+      "acceptanceCriteria": [
+        "Existing bullet, ordered, and task-list commands retain behavior.",
+        "Shared command primitives are ready for toggle commands without public API expansion.",
+        "Enter, Shift+Tab, and Backspace regressions are covered where existing list semantics apply."
+      ],
+      "evidence": [
+        "List marker projection now preserves ordered delimiters for N. and N) forms and covers complete marker-only lines versus malformed bare markers without mutating source.",
+        "Task marker coverage now includes unordered -, *, + markers and ordered N./N) markers with [ ], [x], and [X] source-backed detection/toggling.",
+        "Task Enter continuation preserves unordered marker characters and ordered delimiters while incrementing ordered numbers and resetting continued checkboxes to [ ].",
+        "Focused tests passed: pnpm test tests/editor-task-toggle.test.ts tests/editor-markdown-keymap.test.ts tests/editor-live-preview-primitives.test.ts tests/editor-markdown-list-commands.test.ts (4 files, 73 tests).",
+        "Touched-file Biome check and pnpm typecheck passed."
+      ],
+      "verificationCommands": [
+        "pnpm test tests/editor-markdown-list-commands.test.ts",
+        "pnpm test tests/editor-markdown-keymap.test.ts",
+        "pnpm test tests/editor-task-toggle.test.ts"
+      ]
+    },
+    {
+      "id": "G005",
+      "status": "completed",
+      "dependencies": ["G001"],
+      "objective": "Align inline styling, link, tag, and horizontal-rule regressions with ADR 0003 live-preview policy.",
+      "acceptanceCriteria": [
+        "Inline renderers continue to reveal/edit source at active positions.",
+        "Horizontal-rule rendering remains compatible with source-backed selection behavior.",
+        "No later callout/toggle projection regresses existing inline behavior."
+      ],
+      "evidence": [
+        "Inline style, inline-code, markdown-link, and wiki-link visible content now remains rendered while hidden delimiter/target syntax reveals only when touched by focused caret/selection.",
+        "Tags now use a never-reveal policy so complete #m-style tags remain rendered while active/selected, while # alone stays plain.",
+        "Horizontal-rule tests now lock inactive rendering plus caret/selection source reveal and incomplete/escaped plain-text cases for --, **, __, \\---, and text-prefixed markers.",
+        "Focused tests passed: pnpm test tests/editor-live-preview-inline-registration.test.ts tests/editor-live-preview-primitives.test.ts tests/editor-live-preview-selection-mapping.test.ts tests/editor-live-preview-clipboard.test.ts tests/editor-live-preview-no-regex-parsers.test.ts tests/editor-live-preview-blocks.test.ts tests/desktop-live-preview-styles.test.ts (7 files, 84 tests).",
+        "Touched-file Biome check and pnpm typecheck passed."
+      ],
+      "verificationCommands": [
+        "pnpm test tests/editor-live-preview-primitives.test.ts",
+        "pnpm test tests/editor-live-preview-selection-mapping.test.ts"
+      ]
+    },
+    {
+      "id": "G006",
+      "status": "completed",
+      "dependencies": ["G001", "G002", "G005"],
+      "objective": "Implement plain blockquote and non-collapsed callout rendering/commands while ensuring expanded callouts do not use a whole-block widget replacement.",
+      "acceptanceCriteria": [
+        "Expanded callouts remain CodeMirror-editable source-backed content.",
+        "Whole-block callout widget replacement is retired, bypassed, or limited away from expanded states.",
+        "Plain blockquote rendering and commands remain correct."
+      ],
+      "evidence": [
+        "Expanded callouts now render as source-backed line decorations plus structural marker replacements only; default Markdown block registrations no longer include the callout whole-block widget.",
+        "Callout title/body text remains CodeMirror document text, with structural marker reveal scoped to quote/callout marker intersections and no fold/collapse chevrons or hidden body behavior.",
+        "Plain blockquotes remain line decorations, while bare '>' lines stay plain and '> ' blank quote lines render.",
+        "Focused tests passed: pnpm test tests/editor-live-preview-callouts.test.ts tests/editor-live-preview-selection-mapping.test.ts tests/editor-live-preview-clipboard.test.ts tests/editor-live-preview-blocks.test.ts tests/editor-markdown-keymap.test.ts tests/editor-live-preview-no-regex-parsers.test.ts tests/desktop-live-preview-styles.test.ts tests/editor-live-preview-semantic-fixtures.test.ts tests/editor-live-preview-primitives.test.ts (9 files, 110 tests).",
+        "Touched-file Biome check and pnpm typecheck passed."
+      ],
+      "verificationCommands": [
+        "pnpm test tests/editor-live-preview-callouts.test.ts",
+        "pnpm test tests/editor-live-preview-selection-mapping.test.ts",
+        "pnpm test tests/editor-live-preview-no-regex-parsers.test.ts"
+      ]
+    },
+    {
+      "id": "G007",
+      "status": "completed",
+      "dependencies": ["G003", "G006"],
+      "objective": "Add callout fold/collapse behavior with source-preserving mutation, structural reveal, and approved motion/accessibility semantics.",
+      "acceptanceCriteria": [
+        "Callout collapse state mutates canonical Markdown source as approved.",
+        "Collapsed body editing requires expansion first.",
+        "Chevrons are pointer-clickable but not tabbable.",
+        "120ms animation and reduced-motion behavior are implemented."
+      ],
+      "evidence": [
+        "Extended source-backed callout parsing and line rendering for existing > [!type]+/- Title markers without adding fold markers to normal callouts.",
+        "Added pointer-only chevron mutation that changes only the existing canonical fold sign between + and -, with chevrons kept non-tabbable and non-focus-targeted.",
+        "Collapsed - callout body lines are visually hidden by source-preserving replacement decorations with never-reveal behavior; expanding first restores direct editing of body source.",
+        "Added coverage for fold sign parsing, title/body preservation, structural reveal, title-only and hidden-body-crossing collapsed selections, malformed literal syntax, and 120ms/reduced-motion styles.",
+        "Focused tests passed: pnpm test tests/editor-live-preview-callouts.test.ts tests/editor-live-preview-selection-mapping.test.ts tests/desktop-live-preview-styles.test.ts (3 files, 31 tests).",
+        "Clipboard/parser/registry/performance tests passed: pnpm test tests/editor-live-preview-clipboard.test.ts tests/editor-live-preview-no-regex-parsers.test.ts tests/editor-live-preview-block-registry.test.ts tests/editor-live-preview-performance-fixtures.test.ts (4 files, 25 tests).",
+        "Touched-file Biome check and pnpm typecheck passed."
+      ],
+      "verificationCommands": [
+        "pnpm test tests/editor-live-preview-callouts.test.ts",
+        "pnpm test tests/editor-live-preview-selection-mapping.test.ts",
+        "pnpm test tests/desktop-live-preview-styles.test.ts"
+      ]
+    },
+    {
+      "id": "G008",
+      "status": "completed",
+      "dependencies": ["G002", "G004", "G005"],
+      "objective": "Add toggle list and toggle heading syntax plus expanded source-backed rendering.",
+      "acceptanceCriteria": [
+        "Expanded toggle titles and children remain editable source content.",
+        "Toggle syntax is parser-owned or uses an approved parser-owned scanner.",
+        "Empty toggle placeholder is visual-only and clickable."
+      ],
+      "evidence": [
+        "Added private parser-owned toggle range scanning for complete >>+ and >>- title lines with four-space child detection; incomplete >>, >>+, and >>- remain plain.",
+        "Expanded toggles render as source-backed line decorations plus structural marker replacements only; titles and children remain CodeMirror document text, with pointer-only non-tabbable chevrons mutating the existing fold sign.",
+        "Toggle headings compose with existing heading preview styling, and empty expanded toggles get a visual-only clickable placeholder that inserts a four-space child line without changing copied source.",
+        "Added undoable Enter/keymap behavior for shorthand >> / >> # conversion to >>+, title-to-child continuation, child continuation/exit, and Shift+Tab/Backspace child outdent using G002 four-space indentation primitives.",
+        "Focused tests passed: pnpm test tests/editor-live-preview-primitives.test.ts tests/editor-live-preview-selection-mapping.test.ts tests/editor-live-preview-clipboard.test.ts tests/editor-live-preview-toggles.test.ts tests/editor-markdown-keymap.test.ts tests/editor-live-preview-no-regex-parsers.test.ts tests/desktop-live-preview-styles.test.ts (7 files, 92 tests).",
+        "Touched-file Biome check and pnpm typecheck passed. Full pnpm check:biome still reports a pre-existing unrelated formatting issue in tests/desktop-file-tree-styles.test.ts."
+      ],
+      "verificationCommands": [
+        "pnpm test tests/editor-live-preview-primitives.test.ts",
+        "pnpm test tests/editor-live-preview-selection-mapping.test.ts",
+        "pnpm test tests/editor-live-preview-no-regex-parsers.test.ts"
+      ]
+    },
+    {
+      "id": "G009",
+      "status": "completed",
+      "dependencies": ["G003", "G007", "G008"],
+      "objective": "Implement toggle collapse, selection/copy, structural reveal, motion, and subtree commands for lists and headings across packages/editor/src/live-preview/markdown-code-context.ts, packages/editor/src/live-preview/renderers.ts, packages/editor/src/live-preview/source-text.ts, packages/editor/src/markdown-list-commands.ts, packages/editor/src/index.ts, and apps/desktop/src/renderer/src/styles.css.",
+      "acceptanceCriteria": [
+        "Collapsed >>- toggles hide children visually without deleting source.",
+        "Collapse/expand mutation changes only the canonical + or - fold sign.",
+        "Chevrons are pointer-clickable but not tabbable; keyboard toggling occurs only via editor/source/keymap structural positions.",
+        "Selection/copy tests cover collapsed children, title-only selections, crossing hidden body/children, visual-only placeholders, and full subtree copy.",
+        "Structural reveal tests cover marker/fold sign, title text, child text, syntax-touch selection, title-only collapsed selection, and crossing hidden children.",
+        "Collapsed hidden children are edited only after expansion.",
+        "Content and chevron transitions animate for 120ms, with reduced-motion snapping instead of animating.",
+        "Subtree outdent preserves containment and sibling boundaries.",
+        "Existing G008 tests that expect collapsed children to remain visible are replaced by G009 coverage."
+      ],
+      "evidence": [
+        "Collapsed >>- toggle child lines are now source-preserving replacement projections, hiding children visually until the toggle is expanded without deleting source text.",
+        "Pointer-only non-tabbable chevrons still mutate only the canonical + or - fold sign; expanded titles and children remain CodeMirror source-backed content.",
+        "Selection/copy coverage now includes collapsed toggle title-only selections, hidden-child crossings, full subtree source, and visual-only placeholder exclusion alongside existing callout coverage.",
+        "Structural reveal coverage now locks fold marker/title/child behavior for collapsed toggles, including syntax-touch and crossing hidden children cases.",
+        "Toggle fold content/chevron motion is covered at 120ms with reduced-motion snapping, and subtree outdent now outdents only the selected child subtree while preserving sibling boundaries.",
+        "Focused tests passed: pnpm test tests/editor-live-preview-toggles.test.ts tests/editor-live-preview-selection-mapping.test.ts tests/editor-live-preview-clipboard.test.ts tests/editor-markdown-keymap.test.ts tests/editor-markdown-list-commands.test.ts tests/desktop-live-preview-styles.test.ts (6 files, 74 tests).",
+        "Touched-file Biome check and pnpm typecheck passed."
+      ],
+      "verificationCommands": [
+        "pnpm test tests/editor-live-preview-toggles.test.ts",
+        "pnpm test tests/editor-live-preview-clipboard.test.ts",
+        "pnpm test tests/editor-live-preview-selection-mapping.test.ts",
+        "pnpm test tests/editor-markdown-keymap.test.ts",
+        "pnpm test tests/editor-markdown-list-commands.test.ts",
+        "pnpm test tests/desktop-live-preview-styles.test.ts"
+      ]
+    },
+    {
+      "id": "G010",
+      "status": "completed",
+      "dependencies": ["G001", "G002", "G003", "G004", "G005", "G006", "G007", "G008", "G009"],
+      "objective": "Run final quality gate and lock regressions for ADR 0003 behavior.",
+      "acceptanceCriteria": [
+        "All targeted ADR 0003 tests pass.",
+        "Fast quality gate passes.",
+        "No public API expansion or import-boundary regression is introduced."
+      ],
+      "evidence": [
+        "Changed one stale widget regression expectation so focused tags remain rendered under the ADR 0003 never-reveal tag policy while code-block widget reveal still behaves correctly.",
+        "Touched-file Biome format/check passed for ADR 0003 changed files and the updated widget regression test.",
+        "Targeted ADR 0003 regression tests passed: pnpm test tests/editor-live-preview-callouts.test.ts tests/editor-live-preview-toggles.test.ts tests/editor-live-preview-clipboard.test.ts tests/editor-live-preview-selection-mapping.test.ts tests/editor-markdown-keymap.test.ts tests/editor-markdown-list-commands.test.ts tests/editor-live-preview-no-regex-parsers.test.ts tests/editor-live-preview-block-registry.test.ts tests/editor-live-preview-block-registration-api.test.ts tests/editor-live-preview-performance-fixtures.test.ts tests/editor-live-preview-blocks.test.ts tests/editor-live-preview-primitives.test.ts tests/editor-live-preview-semantic-fixtures.test.ts tests/desktop-live-preview-styles.test.ts tests/editor-task-toggle.test.ts (15 files, 180 tests).",
+        "Full test suite passed after expectation update: pnpm test (63 files, 420 tests).",
+        "Import boundaries passed: pnpm lint:boundaries.",
+        "Typecheck passed: pnpm typecheck.",
+        "User approved fixing the unrelated/pre-existing Biome formatting issue in tests/desktop-file-tree-styles.test.ts; formatting-only Biome cleanup was applied to that file.",
+        "Fast quality gate passed after cleanup: pnpm quality:fast (Biome checked 251 files; import boundaries ok; typecheck passed; tests passed: 63 files, 420 tests)."
+      ],
+      "verificationCommands": [
+        "pnpm exec biome ci <changed ADR 0003 files>",
+        "pnpm test tests/editor-live-preview-callouts.test.ts tests/editor-live-preview-toggles.test.ts tests/editor-live-preview-clipboard.test.ts tests/editor-live-preview-selection-mapping.test.ts tests/editor-markdown-keymap.test.ts tests/editor-markdown-list-commands.test.ts tests/editor-live-preview-no-regex-parsers.test.ts tests/editor-live-preview-block-registry.test.ts tests/editor-live-preview-block-registration-api.test.ts tests/editor-live-preview-performance-fixtures.test.ts tests/editor-live-preview-blocks.test.ts tests/editor-live-preview-primitives.test.ts tests/editor-live-preview-semantic-fixtures.test.ts tests/desktop-live-preview-styles.test.ts tests/editor-task-toggle.test.ts",
+        "pnpm quality:fast",
+        "pnpm lint:boundaries",
+        "pnpm typecheck",
+        "pnpm test"
+      ]
+    }
+  ]
+}

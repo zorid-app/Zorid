@@ -214,7 +214,10 @@ describe('editor Live Preview structured widgets', () => {
 
     expect(collectAllRanges(doc, 0, false).map((range) => range.rendererId)).toEqual(['code-block-widget', 'tag']);
     expect(collectAllRanges(doc, doc.indexOf('value'), true).map((range) => range.rendererId)).toEqual(['tag']);
-    expect(collectAllRanges(doc, doc.length, true).map((range) => range.rendererId)).toEqual(['code-block-widget']);
+    expect(collectAllRanges(doc, doc.length, true).map((range) => range.rendererId)).toEqual([
+      'code-block-widget',
+      'tag',
+    ]);
   });
 
   it('freezes focused widget activation boundary semantics', () => {

@@ -83,12 +83,11 @@ describe('editor Live Preview block registration API', () => {
   it('exposes first-party default block registrations for built-in widgets', () => {
     expect(defaultMarkdownBlockRegistrations.map((registration) => registration.id)).toEqual([
       'code-block-widget',
-      'callout-widget',
       'zbase-embed-widget',
     ]);
     expect(
       markdownBlockRegistrationsToInternalRenderers(defaultMarkdownBlockRegistrations).map((renderer) => renderer.id),
-    ).toEqual(['code-block-widget', 'callout-widget', 'zbase-embed-widget']);
+    ).toEqual(['code-block-widget', 'zbase-embed-widget']);
   });
 
   it('renders Markdown-defined fenced-code blocks through registered HTMLElement widgets', () => {
