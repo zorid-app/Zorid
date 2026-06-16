@@ -16,6 +16,7 @@ import {
   createMountedMarkdownEditor,
   defaultLivePreviewRenderers,
   filterLivePreviewRanges,
+  type MarkdownBlockRegistration,
 } from '../packages/editor/src/index';
 import {
   collectLivePreviewRangesWithWidgetSuppression,
@@ -68,7 +69,188 @@ async function waitForWidgetVisibleRangeEffect(): Promise<void> {
   await new Promise((resolve) => queueMicrotask(resolve));
 }
 
+function testHTMLElementBlockRegistration(className = 'z-live-preview-resizing-widget'): MarkdownBlockRegistration {
+  return {
+    id: 'test-resizing-widget',
+    match: (context) => {
+      const to = context.docText.indexOf('\n');
+      return [
+        {
+          id: 'test-resizing-widget:0',
+          type: 'test-resizing-widget',
+          from: 0,
+          to: to < 0 ? context.docText.length : to,
+          activationFrom: 0,
+          activationTo: to < 0 ? context.docText.length : to,
+          definition: {
+            kind: 'inline',
+            sourceFrom: 0,
+            sourceTo: to < 0 ? context.docText.length : to,
+            sourceText: context.docText.slice(0, to < 0 ? context.docText.length : to),
+          },
+          className,
+        },
+      ];
+    },
+    render: () => {
+      const element = document.createElement('div');
+      element.className = className;
+      element.textContent = 'resizing preview';
+      return element;
+    },
+  };
+}
+
+function installResizeObserverHarness() {
+  const originalResizeObserver = window.ResizeObserver;
+  const originalRequestAnimationFrame = window.requestAnimationFrame;
+  const originalCancelAnimationFrame = window.cancelAnimationFrame;
+  const observerCallbacks: ResizeObserverCallback[] = [];
+  const disconnects: Array<ReturnType<typeof vi.fn>> = [];
+  const animationFrameCallbacks = new Map<number, FrameRequestCallback>();
+  let nextAnimationFrame = 1;
+
+  class TestResizeObserver implements ResizeObserver {
+    readonly disconnect = vi.fn();
+
+    constructor(callback: ResizeObserverCallback) {
+      observerCallbacks.push(callback);
+      disconnects.push(this.disconnect);
+    }
+
+    observe = vi.fn();
+    unobserve = vi.fn();
+  }
+
+  Object.defineProperty(window, 'ResizeObserver', {
+    configurable: true,
+    value: TestResizeObserver,
+  });
+  Object.defineProperty(window, 'requestAnimationFrame', {
+    configurable: true,
+    value: vi.fn((callback: FrameRequestCallback) => {
+      const id = nextAnimationFrame++;
+      animationFrameCallbacks.set(id, callback);
+      return id;
+    }),
+  });
+  Object.defineProperty(window, 'cancelAnimationFrame', {
+    configurable: true,
+    value: vi.fn((id: number) => {
+      animationFrameCallbacks.delete(id);
+    }),
+  });
+
+  return {
+    triggerResize(index = 0) {
+      observerCallbacks[index]?.([], {} as ResizeObserver);
+    },
+    flushAnimationFrames() {
+      const callbacks = [...animationFrameCallbacks.values()];
+      animationFrameCallbacks.clear();
+      for (const callback of callbacks) callback(performance.now());
+    },
+    get scheduledAnimationFrameCount() {
+      return animationFrameCallbacks.size;
+    },
+    disconnects,
+    restore() {
+      Object.defineProperty(window, 'ResizeObserver', {
+        configurable: true,
+        value: originalResizeObserver,
+      });
+      Object.defineProperty(window, 'requestAnimationFrame', {
+        configurable: true,
+        value: originalRequestAnimationFrame,
+      });
+      Object.defineProperty(window, 'cancelAnimationFrame', {
+        configurable: true,
+        value: originalCancelAnimationFrame,
+      });
+    },
+  };
+}
+
 describe('editor Live Preview structured widgets', () => {
+  it('coalesces HTMLElement block widget resizes into one CodeMirror layout measure without dispatching', () => {
+    const resizeHarness = installResizeObserverHarness();
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: 'resizing block\n\nparagraph',
+      markdownBlockRegistrations: [testHTMLElementBlockRegistration()],
+    });
+    const requestMeasure = vi.spyOn(editor.view, 'requestMeasure');
+    const dispatch = vi.spyOn(editor.view, 'dispatch');
+
+    expect(parent.querySelector('.z-live-preview-resizing-widget')).toBeTruthy();
+
+    resizeHarness.triggerResize();
+    resizeHarness.triggerResize();
+
+    expect(resizeHarness.scheduledAnimationFrameCount).toBe(1);
+    expect(requestMeasure).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    resizeHarness.flushAnimationFrames();
+
+    expect(requestMeasure).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    editor.destroy();
+    parent.remove();
+    resizeHarness.restore();
+  });
+
+  it('disconnects HTMLElement block widget resize observation and cancels pending measure on destroy', () => {
+    const resizeHarness = installResizeObserverHarness();
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: 'resizing block\n\nparagraph',
+      markdownBlockRegistrations: [testHTMLElementBlockRegistration()],
+    });
+    const requestMeasure = vi.spyOn(editor.view, 'requestMeasure');
+
+    resizeHarness.triggerResize();
+    expect(resizeHarness.scheduledAnimationFrameCount).toBe(1);
+
+    editor.destroy();
+
+    expect(resizeHarness.disconnects[0]).toHaveBeenCalledTimes(1);
+    expect(resizeHarness.scheduledAnimationFrameCount).toBe(0);
+    expect(requestMeasure).not.toHaveBeenCalled();
+
+    parent.remove();
+    resizeHarness.restore();
+  });
+
+  it('mounts HTMLElement block widgets when ResizeObserver is unavailable', () => {
+    const originalResizeObserver = window.ResizeObserver;
+    Object.defineProperty(window, 'ResizeObserver', {
+      configurable: true,
+      value: undefined,
+    });
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: 'resizing block\n\nparagraph',
+      markdownBlockRegistrations: [testHTMLElementBlockRegistration()],
+    });
+
+    expect(parent.querySelector('.z-live-preview-resizing-widget')).toBeTruthy();
+
+    editor.destroy();
+    parent.remove();
+    Object.defineProperty(window, 'ResizeObserver', {
+      configurable: true,
+      value: originalResizeObserver,
+    });
+  });
+
   it('collects widget ranges from bounded visible windows rather than full document context', () => {
     const doc = [
       'intro',
