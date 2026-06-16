@@ -54,6 +54,18 @@ export interface TrustedFileRendererHost extends Disposable {
   readonly ready: Promise<void>;
 }
 
+function toSerializableFileRendererMatch(match: FileRendererMatchDto): FileRendererMatchDto {
+  return {
+    pluginId: match.pluginId,
+    rendererId: match.rendererId,
+    title: match.title,
+    surface: match.surface,
+    path: match.path,
+    rendererEntry: match.rendererEntry,
+    rendererExport: match.rendererExport,
+  };
+}
+
 export function mountTrustedFileRenderer({
   container,
   match,
@@ -80,7 +92,7 @@ export function mountTrustedFileRenderer({
 
   const imageSource = async (): Promise<string> => {
     if (disposed) throw new FileRendererResourceDisposedError();
-    const resource = await readImageResource(match);
+    const resource = await readImageResource(toSerializableFileRendererMatch(match));
     if (disposed) throw new FileRendererResourceDisposedError();
     const bytes = new Uint8Array(resource.bytes);
     const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;

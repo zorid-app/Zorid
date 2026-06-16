@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it, vi } from 'vitest';
+import { reactive } from 'vue';
 import {
   FileRendererResourceDisposedError,
   mountTrustedFileRenderer,
@@ -29,6 +30,16 @@ const zbaseMatch: FileRendererMatchDto = {
   path: '.zorid/views/tasks.zbase',
   rendererEntry: './src/file-renderers.ts',
   rendererExport: 'zbaseFileRenderer',
+};
+
+const imageMatch: FileRendererMatchDto = {
+  pluginId: 'zorid.core.images',
+  rendererId: 'zorid.core.images.image',
+  title: 'Image Viewer',
+  surface: 'markdown-embed',
+  path: 'image.png',
+  rendererEntry: './src/file-renderers.ts',
+  rendererExport: 'imageFileRenderer',
 };
 
 describe('desktop trusted file renderer loader', () => {
@@ -69,15 +80,7 @@ describe('desktop trusted file renderer loader', () => {
     const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     const host = mountTrustedFileRenderer({
       container,
-      match: {
-        pluginId: 'zorid.core.images',
-        rendererId: 'zorid.core.images.image',
-        title: 'Image Viewer',
-        surface: 'markdown-embed',
-        path: 'image.png',
-        rendererEntry: './src/file-renderers.ts',
-        rendererExport: 'imageFileRenderer',
-      },
+      match: imageMatch,
       readText: vi.fn(),
       readImageResource: vi.fn().mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/png' }),
     });
@@ -89,6 +92,32 @@ describe('desktop trusted file renderer loader', () => {
 
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledTimes(1);
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
+  });
+
+  it('passes a plain serializable match to image resource reads when the renderer match is reactive', async () => {
+    const container = document.createElement('main');
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:reactive-image');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const reactiveMatch = reactive({ ...imageMatch });
+    const readImageResource = vi.fn().mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/png' });
+    const host = mountTrustedFileRenderer({
+      container,
+      match: reactiveMatch,
+      readText: vi.fn(),
+      readImageResource,
+    });
+
+    await host.ready;
+    await waitFor(() => expect(readImageResource).toHaveBeenCalledTimes(1));
+
+    const receivedMatch = readImageResource.mock.calls[0]?.[0];
+    expect(receivedMatch).not.toBe(reactiveMatch);
+    expect(structuredClone(receivedMatch)).toEqual(imageMatch);
+    expect(receivedMatch).toEqual(imageMatch);
+
+    host.dispose();
     createObjectURL.mockRestore();
     revokeObjectURL.mockRestore();
   });
