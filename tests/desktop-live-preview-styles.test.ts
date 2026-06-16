@@ -144,7 +144,6 @@ describe('desktop Live Preview styles', () => {
       /\.markdown-editor\s+\.z-live-preview-toggle-hidden-children\s*\{[^}]*transition:\s*max-height\s+120ms\s+ease,\s*opacity\s+120ms\s+ease;[^}]*\}/s,
     );
     expect(styles).toMatch(
-    expect(styles).toMatch(
       /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.markdown-editor\s+\.z-live-preview-toggle-child-line,[^}]*\.markdown-editor\s+\.z-live-preview-toggle-hidden-children,[^}]*\.markdown-editor\s+\.z-live-preview-toggle-chevron\s*\{[^}]*transition-duration:\s*0ms;[^}]*\}/s,
     );
   });
