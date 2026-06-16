@@ -162,6 +162,7 @@ class HTMLElementBlockResizeMeasure {
   private readonly observer: ResizeObserver | undefined;
   private pendingAnimationFrame: number | undefined;
   private pendingTimeout: ReturnType<typeof setTimeout> | undefined;
+  private destroyed = false;
 
   constructor(
     private readonly element: HTMLElement,
@@ -170,11 +171,15 @@ class HTMLElementBlockResizeMeasure {
     const ResizeObserverConstructor = element.ownerDocument.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
     if (!ResizeObserverConstructor) return;
 
-    this.observer = new ResizeObserverConstructor(() => this.scheduleMeasure());
+    this.observer = new ResizeObserverConstructor(() => {
+      if (this.destroyed) return;
+      this.scheduleMeasure();
+    });
     this.observer.observe(element);
   }
 
   destroy(): void {
+    this.destroyed = true;
     this.observer?.disconnect();
     if (this.pendingAnimationFrame !== undefined) {
       this.element.ownerDocument.defaultView?.cancelAnimationFrame(this.pendingAnimationFrame);
@@ -187,12 +192,14 @@ class HTMLElementBlockResizeMeasure {
   }
 
   private scheduleMeasure(): void {
+    if (this.destroyed) return;
     if (this.pendingAnimationFrame !== undefined || this.pendingTimeout !== undefined) return;
 
     const viewWindow = this.element.ownerDocument.defaultView;
     if (viewWindow) {
       this.pendingAnimationFrame = viewWindow.requestAnimationFrame(() => {
         this.pendingAnimationFrame = undefined;
+        if (this.destroyed) return;
         this.view.requestMeasure();
       });
       return;
@@ -200,6 +207,7 @@ class HTMLElementBlockResizeMeasure {
 
     this.pendingTimeout = setTimeout(() => {
       this.pendingTimeout = undefined;
+      if (this.destroyed) return;
       this.view.requestMeasure();
     }, 0);
   }
