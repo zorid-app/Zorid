@@ -13,6 +13,7 @@ import {
   replaceMarkdownTableCell,
   serializeMarkdownTable,
 } from './model.js';
+import { renderMarkdownTableSelection } from './selection-rendering.js';
 import { type MarkdownTableSelectionKind, markdownTableSelectionField, setMarkdownTableSelection } from './state.js';
 
 const tableWidgetClassName = 'z-live-preview-table-widget';
@@ -30,6 +31,16 @@ interface TableContextMenuTarget {
 interface CellSelectionRange {
   readonly start: number;
   readonly end: number;
+}
+
+function appendDotHandle(element: HTMLElement, label: string): void {
+  element.setAttribute('aria-label', label);
+  element.title = label;
+  const dots = document.createElement('span');
+  dots.className = 'z-live-preview-table-handle-dots';
+  dots.setAttribute('aria-hidden', 'true');
+  for (let index = 0; index < 6; index += 1) dots.append(document.createElement('span'));
+  element.append(dots);
 }
 
 function selectedRange(view: EditorView, table: MarkdownTableModel, kind: MarkdownTableSelectionKind, index: number) {
@@ -199,14 +210,14 @@ class MarkdownTableWidget extends WidgetType {
 
     const select = (kind: MarkdownTableSelectionKind, index: number, extend: boolean) => {
       const range = extend ? selectedRange(view, this.table, kind, index) : { from: index, to: index };
-      view.dispatch({ effects: setMarkdownTableSelection.of({ tableFrom: this.table.from, kind, ...range }) });
-      root.querySelectorAll('.z-live-preview-table-handle--selected').forEach((element) => {
-        element.classList.remove('z-live-preview-table-handle--selected');
-      });
-      root.querySelectorAll(`[data-${kind}].z-live-preview-table-handle`).forEach((element) => {
-        const value = Number((element as HTMLElement).dataset[kind]);
-        if (value >= range.from && value <= range.to) element.classList.add('z-live-preview-table-handle--selected');
-      });
+      const selection = { tableFrom: this.table.from, kind, ...range };
+      view.dispatch({ effects: setMarkdownTableSelection.of(selection) });
+      renderMarkdownTableSelection(root, selection);
+    };
+    const clearSelection = () => {
+      if (!view.state.field(markdownTableSelectionField, false)) return;
+      view.dispatch({ effects: setMarkdownTableSelection.of(null) });
+      renderMarkdownTableSelection(root, null);
     };
 
     rows.forEach((row, rowIndex) => {
@@ -214,7 +225,9 @@ class MarkdownTableWidget extends WidgetType {
       const handle = document.createElement(rowIndex === 0 ? 'th' : 'td');
       handle.className = 'z-live-preview-table-handle z-live-preview-table-row-handle';
       handle.dataset.row = String(rowIndex);
-      handle.textContent = rowIndex === 0 ? 'H' : String(rowIndex);
+      handle.setAttribute('role', 'button');
+      handle.tabIndex = 0;
+      appendDotHandle(handle, rowIndex === 0 ? 'Select header row' : `Select row ${rowIndex}`);
       handle.addEventListener('mousedown', (event) => {
         event.preventDefault();
         select('row', rowIndex, event.shiftKey);
@@ -223,6 +236,10 @@ class MarkdownTableWidget extends WidgetType {
 
       row.forEach((value, columnIndex) => {
         const cell = document.createElement(rowIndex === 0 ? 'th' : 'td');
+        cell.className = 'z-live-preview-table-cell-box';
+        cell.dataset.livePreviewTableCellBox = 'true';
+        cell.dataset.row = String(rowIndex);
+        cell.dataset.column = String(columnIndex);
         const input = document.createElement('textarea');
         input.className = 'z-live-preview-table-cell';
         input.dataset.livePreviewTableCell = 'true';
@@ -230,7 +247,10 @@ class MarkdownTableWidget extends WidgetType {
         input.dataset.column = String(columnIndex);
         input.value = value;
         input.rows = Math.max(1, value.split('\n').length);
-        input.addEventListener('focus', () => view.dispatch({ effects: setMarkdownTableSelection.of(null) }));
+        input.addEventListener('mousedown', (event) => {
+          if (event.button === 0) clearSelection();
+        });
+        input.addEventListener('focus', clearSelection);
         input.addEventListener('input', () => {
           const table = currentTable(view, this.table);
           if (!table) return;
@@ -298,7 +318,7 @@ class MarkdownTableWidget extends WidgetType {
       button.type = 'button';
       button.className = 'z-live-preview-table-handle z-live-preview-table-column-handle';
       button.dataset.column = String(columnIndex);
-      button.textContent = '▾';
+      appendDotHandle(button, `Select column ${columnIndex + 1}`);
       button.addEventListener('mousedown', (event) => {
         event.preventDefault();
         select('column', columnIndex, event.shiftKey);
@@ -364,6 +384,7 @@ class MarkdownTableWidget extends WidgetType {
         ['delete-row', 'Delete row'],
         ['delete-column', 'Delete column'],
       ] as const;
+      let removeOnOutsideMouseDown: ((mouseDownEvent: MouseEvent) => void) | null = null;
       for (const [action, label] of actions) {
         const item = document.createElement('button');
         item.type = 'button';
@@ -374,13 +395,20 @@ class MarkdownTableWidget extends WidgetType {
           const table = currentTable(view, this.table);
           const source = table ? tableContextMenuAction(table, contextTarget, action) : null;
           menu.remove();
+          if (removeOnOutsideMouseDown) document.removeEventListener('mousedown', removeOnOutsideMouseDown);
           if (table && source) replaceTable(view, table, source);
         });
         menu.append(item);
       }
       root.append(menu);
       queueMicrotask(() => {
-        document.addEventListener('mousedown', () => menu.remove(), { once: true });
+        removeOnOutsideMouseDown = (mouseDownEvent: MouseEvent) => {
+          const mouseDownTarget = mouseDownEvent.target instanceof Node ? mouseDownEvent.target : null;
+          if (mouseDownTarget && menu.contains(mouseDownTarget)) return;
+          menu.remove();
+          if (removeOnOutsideMouseDown) document.removeEventListener('mousedown', removeOnOutsideMouseDown);
+        };
+        document.addEventListener('mousedown', removeOnOutsideMouseDown);
       });
     });
 

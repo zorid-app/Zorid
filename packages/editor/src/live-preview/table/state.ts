@@ -1,6 +1,7 @@
 import { type Extension, StateEffect, StateField } from '@codemirror/state';
-import { type EditorView, keymap } from '@codemirror/view';
+import { type EditorView, keymap, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import { deleteMarkdownTableColumns, deleteMarkdownTableRows, findMarkdownTableAt } from './model.js';
+import { markdownTableWidgetSelector, renderMarkdownTableSelection } from './selection-rendering.js';
 
 export type MarkdownTableSelectionKind = 'row' | 'column';
 
@@ -46,6 +47,21 @@ function deleteSelectedTableStructure(view: EditorView): boolean {
 export function markdownTableStateExtension(): Extension {
   return [
     markdownTableSelectionField,
+    ViewPlugin.fromClass(
+      class {
+        update(update: ViewUpdate): void {
+          const selectionChanged = update.transactions.some((transaction) =>
+            transaction.effects.some((effect) => effect.is(setMarkdownTableSelection)),
+          );
+          if (!selectionChanged && !update.docChanged) return;
+
+          const selection = update.state.field(markdownTableSelectionField, false) ?? null;
+          update.view.dom.querySelectorAll<HTMLElement>(markdownTableWidgetSelector).forEach((root) => {
+            renderMarkdownTableSelection(root, selection);
+          });
+        }
+      },
+    ),
     keymap.of([
       { key: 'Backspace', run: deleteSelectedTableStructure },
       { key: 'Delete', run: deleteSelectedTableStructure },

@@ -15,6 +15,7 @@ import {
   deleteMarkdownTableRows,
   replaceMarkdownTableCell,
 } from '../packages/editor/src/live-preview/table/model';
+import { setMarkdownTableSelection } from '../packages/editor/src/live-preview/table/state';
 
 function tableState(doc: string): EditorState {
   return EditorState.create({ doc, extensions: [zoridMarkdown()] });
@@ -22,6 +23,13 @@ function tableState(doc: string): EditorState {
 
 function flushMicrotasks(): Promise<void> {
   return Promise.resolve();
+}
+
+function expectNoTableSelectionMarkers(parent: HTMLElement): void {
+  expect(parent.querySelectorAll('.z-live-preview-table-handle--selected')).toHaveLength(0);
+  expect(parent.querySelectorAll('.z-live-preview-table-cell-box--selected')).toHaveLength(0);
+  expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-row="true"]')).toHaveLength(0);
+  expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-column="true"]')).toHaveLength(0);
 }
 
 describe('Markdown table live preview', () => {
@@ -154,6 +162,120 @@ describe('Markdown table live preview', () => {
     parent.remove();
   });
 
+  it('renders accessible dot handles without visible row numbers, header labels, or column arrows', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'),
+    });
+    const rowHandles = parent.querySelectorAll<HTMLElement>('.z-live-preview-table-row-handle');
+    const columnHandles = parent.querySelectorAll<HTMLButtonElement>('.z-live-preview-table-column-handle');
+
+    expect(rowHandles).toHaveLength(2);
+    expect(columnHandles).toHaveLength(2);
+    expect(rowHandles[0]?.textContent).toBe('');
+    expect(rowHandles[1]?.textContent).toBe('');
+    expect(columnHandles[0]?.textContent).toBe('');
+    expect(parent.textContent).not.toContain('H');
+    expect(parent.textContent).not.toContain('▾');
+    expect(rowHandles[0]?.querySelectorAll('.z-live-preview-table-handle-dots span')).toHaveLength(6);
+    expect(columnHandles[0]?.querySelectorAll('.z-live-preview-table-handle-dots span')).toHaveLength(6);
+    expect(rowHandles[1]?.getAttribute('aria-label')).toBe('Select row 1');
+    expect(columnHandles[1]?.getAttribute('aria-label')).toBe('Select column 2');
+    expect(rowHandles[1]?.title).toBe('Select row 1');
+    expect(columnHandles[1]?.title).toBe('Select column 2');
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('selects row and column cell boxes from handles without applying selected styling to textareas', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B | C |', '| - | - | - |', '| 1 | 2 | 3 |', '| 4 | 5 | 6 |'].join('\n'),
+    });
+    const firstRowHandle = parent.querySelector<HTMLElement>('[data-row="1"].z-live-preview-table-row-handle');
+    const lastRowHandle = parent.querySelector<HTMLElement>('[data-row="2"].z-live-preview-table-row-handle');
+    const columnHandle = parent.querySelector<HTMLElement>('[data-column="1"].z-live-preview-table-column-handle');
+
+    firstRowHandle!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    lastRowHandle!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, shiftKey: true }));
+
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-row="true"]')).toHaveLength(6);
+    expect(
+      parent
+        .querySelector('[data-live-preview-table-cell-box][data-row="1"][data-column="0"]')
+        ?.classList.contains('z-live-preview-table-cell-box--selected'),
+    ).toBe(true);
+    expect(
+      parent
+        .querySelector('[data-live-preview-table-cell][data-row="1"][data-column="0"]')
+        ?.classList.contains('z-live-preview-table-cell-box--selected'),
+    ).toBe(false);
+
+    columnHandle!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-row="true"]')).toHaveLength(0);
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-column="true"]')).toHaveLength(3);
+    expect(
+      parent
+        .querySelector('[data-live-preview-table-cell-box][data-row="0"][data-column="1"]')
+        ?.classList.contains('z-live-preview-table-cell-box--selected'),
+    ).toBe(true);
+    expect(
+      parent
+        .querySelector('[data-live-preview-table-cell][data-row="0"][data-column="1"]')
+        ?.classList.contains('z-live-preview-table-cell-box--selected'),
+    ).toBe(false);
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('clears selected row and column cell-box markers when cell focus or state clearing removes table selection', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({
+      parent,
+      text: ['| A | B | C |', '| - | - | - |', '| 1 | 2 | 3 |', '| 4 | 5 | 6 |'].join('\n'),
+    });
+    const firstRowHandle = parent.querySelector<HTMLElement>('[data-row="1"].z-live-preview-table-row-handle');
+    const lastRowHandle = parent.querySelector<HTMLElement>('[data-row="2"].z-live-preview-table-row-handle');
+    const columnHandle = parent.querySelector<HTMLElement>('[data-column="1"].z-live-preview-table-column-handle');
+    const focusedCell = parent.querySelector<HTMLTextAreaElement>(
+      '[data-live-preview-table-cell][data-row="1"][data-column="0"]',
+    );
+    const clickedCell = parent.querySelector<HTMLTextAreaElement>(
+      '[data-live-preview-table-cell][data-row="2"][data-column="2"]',
+    );
+
+    firstRowHandle!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    lastRowHandle!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, shiftKey: true }));
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-row="true"]')).toHaveLength(6);
+
+    focusedCell!.focus();
+    expectNoTableSelectionMarkers(parent);
+
+    columnHandle!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-column="true"]')).toHaveLength(3);
+
+    clickedCell!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    clickedCell!.focus();
+    expectNoTableSelectionMarkers(parent);
+
+    columnHandle!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(parent.querySelectorAll('[data-live-preview-table-cell-box][data-selected-column="true"]')).toHaveLength(3);
+
+    editor.view.dispatch({ effects: setMarkdownTableSelection.of(null) });
+    expectNoTableSelectionMarkers(parent);
+
+    editor.destroy();
+    parent.remove();
+  });
+
   it('adds a bottom-row blank row that remains rendered and editable', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
@@ -206,6 +328,13 @@ describe('Markdown table live preview', () => {
     const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
 
     expect(styles).toMatch(/\.z-live-preview-table-cell\s*\{[^}]*resize:\s*none;/s);
+  });
+
+  it('keeps table overflow horizontal on the widget wrapper', () => {
+    const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
+
+    expect(styles).toMatch(/\.z-live-preview-table-widget\s*\{[^}]*overflow-x:\s*auto;/s);
+    expect(styles).toMatch(/\.z-live-preview-table-grid\s*\{[^}]*width:\s*max-content;/s);
   });
 
   it('refreshes mounted widget DOM after same-bounds table source changes', () => {
@@ -293,7 +422,9 @@ describe('Markdown table live preview', () => {
     cell!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 12, clientY: 20 }));
     const duplicateColumn = parent.querySelector<HTMLButtonElement>('[data-table-context-action="duplicate-column"]');
     expect(duplicateColumn).toBeTruthy();
-    duplicateColumn!.click();
+    duplicateColumn!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    duplicateColumn!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    duplicateColumn!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
     expect(editor.getText()).toBe(['| A | B | B |', '| --- | --- | --- |', '| 1 | 2 | 2 |'].join('\n'));
 
