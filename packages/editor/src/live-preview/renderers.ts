@@ -45,7 +45,6 @@ const calloutFoldChevronClassName = 'z-live-preview-callout-fold-chevron';
 const calloutHiddenBodyClassName = 'z-live-preview-callout-hidden-body';
 const toggleLineClassName = 'z-live-preview-toggle-line';
 const toggleTitleLineClassName = 'z-live-preview-toggle-title-line';
-const toggleChildLineClassName = 'z-live-preview-toggle-child-line';
 const toggleStructuralClassName = 'z-live-preview-toggle-structural-marker';
 const toggleChevronClassName = 'z-live-preview-toggle-chevron';
 const togglePlaceholderClassName = 'z-live-preview-toggle-placeholder';
@@ -163,6 +162,32 @@ function isBareQuoteLine(line: string): boolean {
   return index <= 3 && line.charCodeAt(index) === greaterThanCode && index + 1 === line.length;
 }
 
+function offsetAfterIndentColumns(line: string, columns: number): number {
+  let offset = 0;
+  let consumedColumns = 0;
+  while (offset < line.length && consumedColumns < columns) {
+    const code = line.charCodeAt(offset);
+    if (code === spaceCode) consumedColumns += 1;
+    else if (code === tabCode) consumedColumns += 4;
+    else break;
+    offset += 1;
+  }
+  return consumedColumns >= columns ? offset : -1;
+}
+
+function toggleChildQuoteContentOffset(line: string): number {
+  const childContentOffset = offsetAfterIndentColumns(line, 4);
+  if (childContentOffset < 0) return -1;
+  const relativeQuoteOffset = quotedContentOffset(line.slice(childContentOffset));
+  return relativeQuoteOffset < 0 ? -1 : childContentOffset + relativeQuoteOffset;
+}
+
+function isBareToggleChildQuoteLine(line: string): boolean {
+  const childContentOffset = offsetAfterIndentColumns(line, 4);
+  if (childContentOffset < 0) return false;
+  return isBareQuoteLine(line.slice(childContentOffset));
+}
+
 function blockquoteLineRanges(
   docText: string,
   scanWindow: Pick<LivePreviewRange, 'from' | 'to'>,
@@ -172,10 +197,25 @@ function blockquoteLineRanges(
   const calloutRanges = markdownCalloutRanges(docText, scanWindow, state);
   const toggleRanges = markdownToggleRanges(docText, scanWindow, state);
   for (const line of sourceLines(docText, scanWindow.from, scanWindow.to)) {
-    if (quotedContentOffset(line.text) < 0) continue;
-    if (isBareQuoteLine(line.text)) continue;
+    const expandedToggleChild = toggleRanges.some(
+      (range) =>
+        range.foldSign === '+' &&
+        range.childLines.some((childLine) => line.from >= childLine.from && line.to <= childLine.to),
+    );
+    const quoteOffset = expandedToggleChild ? toggleChildQuoteContentOffset(line.text) : quotedContentOffset(line.text);
+    if (quoteOffset < 0) continue;
+    if (expandedToggleChild ? isBareToggleChildQuoteLine(line.text) : isBareQuoteLine(line.text)) continue;
     if (calloutRanges.some((range) => line.from >= range.from && line.to <= range.to)) continue;
-    if (toggleRanges.some((range) => line.from >= range.from && line.to <= range.to)) continue;
+    if (toggleRanges.some((range) => line.from >= range.titleLineFrom && line.to <= range.titleLineTo)) continue;
+    if (
+      toggleRanges.some(
+        (range) =>
+          range.foldSign === '-' &&
+          range.childLines.some((childLine) => line.from >= childLine.from && line.to <= childLine.to),
+      )
+    ) {
+      continue;
+    }
     ranges.push({
       rendererId: 'blockquote',
       from: line.from,
@@ -656,18 +696,7 @@ function toggleLineRanges(
           className: toggleHiddenChildrenClassName,
           kind: 'hidden-line',
         });
-        continue;
       }
-      ranges.push({
-        rendererId: 'toggle-line',
-        from: childLine.from,
-        to: childLine.to,
-        activationFrom: childLine.from,
-        activationTo: childLine.to,
-        className: `${toggleLineClassName} ${toggleChildLineClassName}`,
-        kind: 'line',
-        attributes: { 'data-toggle-fold': 'expanded' },
-      });
     }
 
     if (toggle.foldSign === '+' && toggle.childLines.length === 0) {

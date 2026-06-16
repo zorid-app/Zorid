@@ -34,7 +34,6 @@ const livePreviewClasses = [
   'z-live-preview-callout-hidden-body',
   'z-live-preview-toggle-line',
   'z-live-preview-toggle-title-line',
-  'z-live-preview-toggle-child-line',
   'z-live-preview-toggle-structural-marker',
   'z-live-preview-toggle-chevron',
   'z-live-preview-toggle-placeholder',
@@ -134,7 +133,7 @@ describe('desktop Live Preview styles', () => {
     );
   });
 
-  it('animates toggle folding content and chevrons for 120ms and snaps under reduced motion', async () => {
+  it('animates collapsed toggle content and chevrons for 120ms and snaps under reduced motion', async () => {
     const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
 
     expect(styles).toMatch(
@@ -144,8 +143,9 @@ describe('desktop Live Preview styles', () => {
       /\.markdown-editor\s+\.z-live-preview-toggle-hidden-children\s*\{[^}]*transition:\s*max-height\s+120ms\s+ease,\s*opacity\s+120ms\s+ease;[^}]*\}/s,
     );
     expect(styles).toMatch(
-      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.markdown-editor\s+\.z-live-preview-toggle-child-line,[^}]*\.markdown-editor\s+\.z-live-preview-toggle-hidden-children,[^}]*\.markdown-editor\s+\.z-live-preview-toggle-chevron\s*\{[^}]*transition-duration:\s*0ms;[^}]*\}/s,
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.markdown-editor\s+\.z-live-preview-toggle-hidden-children,[^}]*\.markdown-editor\s+\.z-live-preview-toggle-chevron\s*\{[^}]*transition-duration:\s*0ms;[^}]*\}/s,
     );
+    expect(styles).not.toContain('.markdown-editor .z-live-preview-toggle-child-line');
   });
 
   it('keeps live-preview list markers compact, muted, and scaled to 1.3x', async () => {

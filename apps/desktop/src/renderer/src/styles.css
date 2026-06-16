@@ -932,13 +932,6 @@ h2 {
   font-weight: 650;
 }
 
-.markdown-editor .z-live-preview-toggle-child-line {
-  background: color-mix(in srgb, var(--z-control-bg-strong) 28%, transparent);
-  transition:
-    max-height 120ms ease,
-    opacity 120ms ease;
-}
-
 .markdown-editor .z-live-preview-toggle-structural-marker {
   display: inline-block;
   margin-right: 0.25em;
@@ -981,7 +974,6 @@ h2 {
   .markdown-editor .z-live-preview-callout-line,
   .markdown-editor .z-live-preview-callout-hidden-body,
   .markdown-editor .z-live-preview-callout-fold-chevron,
-  .markdown-editor .z-live-preview-toggle-child-line,
   .markdown-editor .z-live-preview-toggle-hidden-children,
   .markdown-editor .z-live-preview-toggle-chevron {
     transition-duration: 0ms;

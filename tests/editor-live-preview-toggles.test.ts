@@ -35,7 +35,7 @@ describe('editor Live Preview toggle projections', () => {
 
     expect(
       ranges.filter((range) => range.rendererId === 'toggle-line').map((range) => doc.slice(range.from, range.to)),
-    ).toEqual(['>>+ Expanded', '    child', '>>- Collapsed']);
+    ).toEqual(['>>+ Expanded', '>>- Collapsed']);
     expect(
       ranges
         .filter((range) => range.rendererId === 'toggle-hidden-children')
@@ -65,6 +65,29 @@ describe('editor Live Preview toggle projections', () => {
 
     chevron!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
     expect(editor.getText()).toBe(['>>+ Title', '    child'].join('\n'));
+    expect(parent.querySelector('.z-live-preview-toggle-child-line')).toBeNull();
+    expect(parent.querySelector('.cm-line.z-live-preview-toggle-line')?.textContent).toContain('Title');
+    expect(parent.querySelector('.cm-line.z-live-preview-toggle-line')?.textContent).not.toContain('child');
+
+    editor.destroy();
+    parent.remove();
+  });
+
+  it('leaves expanded toggle children as normal indented markdown flow', () => {
+    const text = ['>>+ Title', '    > quoted child', '    [[Linked child]]', 'after'].join('\n');
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const editor = createMountedMarkdownEditor({ parent, text });
+
+    const childLine = [...parent.querySelectorAll<HTMLElement>('.cm-line')].find((line) =>
+      line.textContent?.includes('quoted child'),
+    );
+
+    expect(parent.querySelector('.z-live-preview-toggle-child-line')).toBeNull();
+    expect(childLine?.classList.contains('z-live-preview-toggle-line')).toBe(false);
+    expect(childLine?.classList.contains('z-live-preview-blockquote-line')).toBe(true);
+    expect(parent.querySelector('[data-live-preview-renderer="wiki-link"]')?.textContent).toBe('Linked child');
+    expect(editor.getText()).toBe(text);
 
     editor.destroy();
     parent.remove();

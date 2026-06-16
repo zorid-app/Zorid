@@ -128,7 +128,7 @@ function indentationGuideDecorations(view: EditorView): DecorationSet {
     while (position <= visibleRange.to) {
       const line = view.state.doc.lineAt(position);
       const depth = indentationDepth(line.text);
-      if (depth > 0) {
+      if (depth > 0 && !isBlank(line.text)) {
         decorations.push(
           Decoration.line({
             class: 'z-editor-indent-guide',

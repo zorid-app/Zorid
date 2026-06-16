@@ -658,14 +658,17 @@ describe('editor Live Preview primitives', () => {
     editor.destroy();
   });
 
-  it('projects indentation guides as visual-only line metadata without replacing source', () => {
-    const text = ['    child', '\ttab child', '  shallow', 'plain'].join('\n');
+  it('projects indentation guides only for nonblank real leading indentation without replacing source', () => {
+    const text = ['    child', '\ttab child', '  shallow', 'plain', '    ', '', '>>+ Toggle', '    toggle child'].join(
+      '\n',
+    );
     const parent = document.createElement('div');
     const editor = createMountedMarkdownEditor({ parent, text });
 
     const guideLines = [...parent.querySelectorAll<HTMLElement>('.cm-line.z-editor-indent-guide')];
 
-    expect(guideLines.map((line) => line.getAttribute('data-indent-depth'))).toEqual(['1', '1']);
+    expect(guideLines.map((line) => line.getAttribute('data-indent-depth'))).toEqual(['1', '1', '1']);
+    expect(guideLines.map((line) => line.textContent)).toEqual(['    child', '\ttab child', '    toggle child']);
     expect(parent.querySelectorAll('.z-editor-indent-guide [contenteditable="false"]')).toHaveLength(0);
     expect(editor.getText()).toBe(text);
 
