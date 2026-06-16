@@ -1,50 +1,57 @@
 {
-  "aggregateObjective": "Implement markdown heading live-preview behavior where '# ' activates headings, inactive markers hide, caret editing reveals markers, and selected/copying headings remain rendered while source markdown is preserved.",
+  "aggregateObjective": "First-party editable Markdown pipe table widget for @zorid/editor live preview",
   "goals": [
     {
       "id": "G001",
-      "objective": "Add default-preserving per-range reveal policy support to live-preview filtering.",
-      "status": "completed",
-      "dependencies": [],
-      "constraints": [
-        "Extend LivePreviewRange only with optional metadata",
-        "Default undefined behavior must match existing caret-or-selection source reveal behavior",
-        "Do not special-case heading renderer ids in generic filtering"
-      ],
+      "objective": "Lezer-based table syntax discovery, model normalization, and source serialization",
+      "status": "complete",
       "verification": [
-        "Unit tests prove caret-only and never-reveal policies behave as expected",
-        "Existing focused source reveal behavior remains covered for default policy"
-      ]
+        "pnpm test tests/editor-live-preview-no-regex-parsers.test.ts tests/editor-live-preview-table.test.ts",
+        "pnpm test"
+      ],
+      "evidence": "Added collectMarkdownTables/findMarkdownTableAt and table serialization tests; no-regex parser guard passes."
     },
     {
       "id": "G002",
-      "objective": "Update heading range generation to require '# ' and apply marker/content reveal policies.",
-      "status": "completed",
-      "dependencies": ["G001"],
-      "constraints": [
-        "'#' alone must produce no heading live-preview ranges",
-        "'# ' must be accepted as heading syntax",
-        "Heading marker replacement ranges reveal only for a collapsed caret",
-        "Heading content ranges remain rendered for caret and non-collapsed selection"
-      ],
-      "verification": ["Tests cover '#', '# ', inactive headings, caret reveal, and selected heading rendering"]
+      "objective": "Bounded visible-range widget collection for long documents/tables",
+      "status": "complete",
+      "verification": ["pnpm test tests/editor-live-preview-table.test.ts"],
+      "evidence": "Added visible-window widget collection coverage for table ranges."
     },
     {
       "id": "G003",
-      "objective": "Run verification, cleanup, independent review, and finalize the durable goal ledger.",
-      "status": "completed",
-      "dependencies": ["G001", "G002"],
-      "constraints": [
-        "Do not mark complete until targeted tests have evidence",
-        "Run independent code-review and resolve high-severity findings",
-        "Record final quality-gate evidence in ledger.jsonl"
-      ],
+      "objective": "Private live-preview table widget renderer wiring",
+      "status": "complete",
+      "verification": ["pnpm test", "pnpm typecheck", "pnpm lint:boundaries"],
+      "evidence": "Private markdownTableLivePreviewRenderer is wired into default widget renderers and editor extension composition without public API exports."
+    },
+    {
+      "id": "G004",
+      "objective": "Editable cells, keyboard navigation, row/column structural selection, and guarded deletion",
+      "status": "complete",
+      "verification": ["pnpm test tests/editor-live-preview-table.test.ts", "pnpm typecheck"],
+      "evidence": "Widget cell editing test confirms CodeMirror transaction source edits; private state/effects and keymap implement structural selection deletion guards."
+    },
+    {
+      "id": "G005",
+      "objective": "Context menu operations plus bottom/right add controls",
+      "status": "complete",
+      "verification": ["pnpm typecheck"],
+      "evidence": "Renderer includes add/move/duplicate/delete row/column operations, bottom row plus, and right column plus."
+    },
+    {
+      "id": "G006",
+      "objective": "Desktop styles and verification",
+      "status": "complete",
       "verification": [
-        "pnpm test tests/editor-live-preview-primitives.test.ts",
-        "pnpm test tests/editor-live-preview-selection-mapping.test.ts",
-        "pnpm typecheck and pnpm lint if feasible",
-        "independent code-review returns APPROVE or findings are resolved"
-      ]
+        "focused table/no-regex tests: 2 files / 13 tests passed",
+        "pnpm test: 62 files / 371 tests passed",
+        "pnpm typecheck passed",
+        "pnpm lint:boundaries passed",
+        "changed-file Biome passed",
+        "pnpm lint blocked only by pre-existing untouched formatting issue in tests/desktop-file-tree-styles.test.ts"
+      ],
+      "evidence": "Final verification/review evidence recorded: code-review APPROVE with no CRITICAL/HIGH/MEDIUM/LOW issues; architect review CLEAR."
     }
   ]
 }

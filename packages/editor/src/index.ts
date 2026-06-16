@@ -36,6 +36,8 @@ import {
   defaultLivePreviewRenderers,
   defaultMarkdownBlockRegistrations,
 } from './live-preview/renderers.js';
+import { markdownTableLivePreviewRenderer } from './live-preview/table/renderer.js';
+import { markdownTableStateExtension } from './live-preview/table/state.js';
 import { toggleTaskMarkerAtSelection } from './live-preview/task-toggle.js';
 import type { LivePreviewRenderer } from './live-preview/types.js';
 import { deleteEmptyTaskListAtSelection, handleTaskListEnterAtSelection } from './markdown-list-commands.js';
@@ -265,6 +267,7 @@ export function createMarkdownEditorExtensions({
     history(),
     keymap.of(historyKeymap),
     Prec.highest(keymap.of(markdownTaskKeymap)),
+    markdownTableStateExtension(),
     ...markdownInlineRegistrationExtensions(activeMarkdownInlineRegistrations),
     ...markdownBlockRegistrationExtensions([
       ...activeDefaultMarkdownBlockRegistrations,
@@ -298,7 +301,7 @@ export function createMarkdownEditorExtensions({
         ? livePreviewExtensionWithInternalRenderers(
             defaultLivePreviewRenderers,
             [...defaultInternalRenderers, ...registeredInlineRenderers],
-            [...defaultBlockRenderers, ...registeredBlockRenderers],
+            [markdownTableLivePreviewRenderer, ...defaultBlockRenderers, ...registeredBlockRenderers],
             reportLivePreviewError,
             projectionActionHandlers,
           )

@@ -887,6 +887,105 @@ h2 {
   white-space: pre-wrap;
 }
 
+.markdown-editor .z-live-preview-table-widget {
+  display: inline-block;
+  max-width: 100%;
+  margin: 8px 0;
+  overflow: auto;
+  color: var(--z-color-text);
+  font-family: var(--z-font-ui);
+}
+
+.markdown-editor .z-live-preview-table-grid {
+  border-collapse: collapse;
+  background: color-mix(in srgb, var(--z-control-bg-strong) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--z-color-border) 78%, transparent);
+  border-radius: var(--z-radius-md);
+}
+
+.markdown-editor .z-live-preview-table-grid th,
+.markdown-editor .z-live-preview-table-grid td {
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--z-color-border) 72%, transparent);
+}
+
+.markdown-editor .z-live-preview-table-cell {
+  min-width: 9rem;
+  min-height: 2.2rem;
+  padding: 7px 9px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: inherit;
+  resize: vertical;
+}
+
+.markdown-editor .z-live-preview-table-cell:focus {
+  background: color-mix(in srgb, var(--z-color-accent) 9%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--z-color-accent) 45%, transparent);
+}
+
+.markdown-editor .z-live-preview-table-handle,
+.markdown-editor .z-live-preview-table-plus {
+  color: var(--z-color-subtle);
+  background: color-mix(in srgb, var(--z-control-bg-strong) 86%, transparent);
+  border: 0;
+  font: 600 11px var(--z-font-ui);
+  cursor: pointer;
+}
+
+.markdown-editor .z-live-preview-table-row-handle {
+  min-width: 2rem;
+  padding: 0 6px;
+}
+
+.markdown-editor .z-live-preview-table-column-handle {
+  width: 100%;
+  padding: 3px 0;
+}
+
+.markdown-editor .z-live-preview-table-handle:hover,
+.markdown-editor .z-live-preview-table-handle--selected,
+.markdown-editor .z-live-preview-table-plus:hover {
+  color: var(--z-color-accent);
+  background: color-mix(in srgb, var(--z-color-accent) 14%, var(--z-control-bg-strong));
+}
+
+.markdown-editor .z-live-preview-table-plus {
+  margin-top: 6px;
+  margin-right: 6px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--z-color-border) 72%, transparent);
+  border-radius: var(--z-radius-sm);
+}
+
+.markdown-editor .z-live-preview-table-context-menu {
+  position: fixed;
+  z-index: 20;
+  display: grid;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--z-panel-bg);
+  border: 1px solid color-mix(in srgb, var(--z-color-border) 82%, transparent);
+  border-radius: var(--z-radius-md);
+  box-shadow: var(--z-shadow-lg);
+}
+
+.markdown-editor .z-live-preview-table-context-menu button {
+  padding: 6px 8px;
+  color: var(--z-color-text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--z-radius-sm);
+  font: 500 12px var(--z-font-ui);
+  text-align: left;
+}
+
+.markdown-editor .z-live-preview-table-context-menu button:hover {
+  background: color-mix(in srgb, var(--z-color-accent) 14%, transparent);
+}
+
 .resize-handle {
   position: relative;
   z-index: 2;

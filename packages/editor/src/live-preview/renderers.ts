@@ -20,6 +20,7 @@ import {
   markdownSuppressedPreviewRanges,
 } from './markdown-code-context.js';
 import { syntaxTreeLivePreviewRenderer } from './syntax-tree-ranges.js';
+import { markdownTableLivePreviewRenderer } from './table/renderer.js';
 import { taskMarkerRangesForState } from './task-marker-ranges.js';
 import { toggleTaskMarkerAtPosition } from './task-toggle.js';
 import type { LivePreviewRange, LivePreviewRenderer } from './types.js';
@@ -577,5 +578,6 @@ export const defaultLivePreviewInternalRenderers: readonly InternalLivePreviewRe
 ];
 
 export const defaultLivePreviewWidgetRenderers: readonly InternalLivePreviewRenderer[] = [
+  markdownTableLivePreviewRenderer,
   ...markdownBlockRegistrationsToInternalRenderers(defaultMarkdownBlockRegistrations),
 ];
