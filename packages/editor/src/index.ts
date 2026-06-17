@@ -48,24 +48,6 @@ import {
   outdentToggleChildAtSelection,
 } from './markdown-list-commands.js';
 
-export type {
-  DisposableView,
-  DynamicRangeProvider,
-  EditorWindowContext,
-  EditorWindowContribution,
-  EditorWindowContributionHostOptions,
-  EditorWindowPlacement,
-  EditorWindowSourceRange,
-  GroupedEditorWindowContribution,
-  PlacementPredicate,
-  ViewportPosition,
-} from './editor-window-contributions.js';
-export {
-  EditorWindowContributionHost,
-  editorWindowPlacementKey,
-  groupEditorWindowContributions,
-  renderEditorWindowContributions,
-} from './editor-window-contributions.js';
 // Live Preview exports remain available from the package root for current
 // first-party integrations and tests. Treat them as experimental while the
 // package is private; do not publish them as a stable third-party plugin API

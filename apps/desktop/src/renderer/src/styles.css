@@ -2197,9 +2197,19 @@ input::placeholder {
   display: none;
 }
 
+.markdown-editor-window-contributions {
+  position: relative;
+  overflow: visible;
+  z-index: 2;
+}
+
 .markdown-editor-window-contributions .z-editor-window-contributions {
   border-bottom: 1px solid var(--z-color-border);
   background: var(--z-color-surface);
+}
+
+.markdown-editor-window-contributions [data-anchor='cursor'] {
+  z-index: 3;
 }
 
 .markdown-editor-window-contributions [data-placement-key='document-header'] {

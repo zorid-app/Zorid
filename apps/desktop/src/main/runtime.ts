@@ -10,6 +10,7 @@ import { parseZbase, parseZtype } from '@zorid/object-store';
 import type {
   CapabilityName,
   CommandContribution,
+  EditorContainerPlacement,
   FileRendererSurface,
   PluginStatus,
   SettingsContribution,
@@ -20,7 +21,12 @@ import type {
   ZtypeField,
 } from '@zorid/platform-api';
 import type { PluginManifest, ZoridPlugin, ZoridPluginContext } from '@zorid/plugin-api';
-import { createPluginRegistryAPI, PluginHost, resolveFileRendererContribution } from '@zorid/plugin-host';
+import {
+  createPluginRegistryAPI,
+  PluginHost,
+  resolveEditorContainerContributions,
+  resolveFileRendererContribution,
+} from '@zorid/plugin-host';
 import {
   asPluginId,
   type Disposable,
@@ -202,6 +208,16 @@ const imageRendererMimeTypes = new Map([
 
 const maxFileRendererImageBytes = 25 * 1024 * 1024;
 
+export interface EditorContainerMatchDto {
+  readonly pluginId: string;
+  readonly containerId: string;
+  readonly title: string;
+  readonly placement: EditorContainerPlacement;
+  readonly priority?: number;
+  readonly containerEntry: string;
+  readonly containerExport: string;
+}
+
 export const trustedCoreFileRendererLoaders: ReadonlyMap<
   string,
   { readonly pluginId: string; readonly rendererEntry: string; readonly rendererExport: string }
@@ -220,6 +236,20 @@ export const trustedCoreFileRendererLoaders: ReadonlyMap<
       pluginId: 'zorid.core.images',
       rendererEntry: './src/file-renderers.ts',
       rendererExport: 'imageFileRenderer',
+    },
+  ],
+]);
+
+export const trustedCoreEditorContainerLoaders: ReadonlyMap<
+  string,
+  { readonly pluginId: string; readonly containerEntry: string; readonly containerExport: string }
+> = new Map([
+  [
+    'zorid.core.slash-menu.cursor',
+    {
+      pluginId: 'zorid.core.slash-menu',
+      containerEntry: './src/editor-containers.ts',
+      containerExport: 'slashMenuEditorContainer',
     },
   ],
 ]);
@@ -280,6 +310,7 @@ const desktopCapabilities: readonly CapabilityName[] = [
   'workspace.fileRenderers',
   'editor.read',
   'editor.write',
+  'editor.containers',
   'commands.register',
   'settings.register',
   'status.register',
@@ -386,6 +417,31 @@ export const corePluginManifests: readonly PluginManifest[] = [
               showIndexStatus: { type: 'boolean', default: true },
             },
           },
+        },
+      ],
+    },
+  },
+  {
+    schemaVersion: 1,
+    id: 'zorid.core.slash-menu',
+    name: 'Slash Menu',
+    version: '0.1.0',
+    kind: 'core',
+    entry: './src/index.ts',
+    containerEntry: './src/editor-containers.ts',
+    zoridApi: '^0.1.0',
+    platforms: ['desktop'],
+    capabilities: { required: ['editor.containers', 'editor.read'], optional: [] },
+    activation: ['onStartup'],
+    contributes: {
+      editorContainers: [
+        {
+          id: 'zorid.core.slash-menu.cursor',
+          title: 'Slash Menu',
+          placement: { kind: 'cursor-popover' },
+          priority: 100,
+          containerExport: 'slashMenuEditorContainer',
+          activationReads: ['cursor', 'cursorText'],
         },
       ],
     },
@@ -1000,6 +1056,32 @@ export class DesktopRuntime {
           rendererExport: loader.rendererExport,
         }
       : undefined;
+  }
+
+  resolveEditorContainers(): readonly EditorContainerMatchDto[] {
+    return resolveEditorContainerContributions([...this.pluginHost.manifests.values()]).flatMap((contribution) => {
+      const loader = trustedCoreEditorContainerLoaders.get(contribution.id);
+      const manifest = this.pluginHost.manifests.get(contribution.pluginId);
+      if (
+        !loader ||
+        !manifest ||
+        loader.pluginId !== contribution.pluginId ||
+        loader.containerEntry !== manifest.containerEntry ||
+        loader.containerExport !== contribution.containerExport
+      )
+        return [];
+      return [
+        {
+          pluginId: contribution.pluginId,
+          containerId: contribution.id,
+          title: contribution.title,
+          placement: contribution.placement,
+          ...(contribution.priority === undefined ? {} : { priority: contribution.priority }),
+          containerEntry: loader.containerEntry,
+          containerExport: loader.containerExport,
+        },
+      ];
+    });
   }
 
   async rebuildIndex(): Promise<IndexStatusDto> {
@@ -1669,6 +1751,7 @@ export class DesktopRuntime {
         setting: (schema: SettingsContribution) => stack.use(this.kernel.settings.register(schema)),
         view: (view) => stack.use(this.workspace.registerView(view)),
         fileRenderer: () => registerDisposable({ dispose: () => undefined }),
+        editorContainer: () => registerDisposable({ dispose: () => undefined }),
         viewRenderer: () => registerDisposable({ dispose: () => undefined }),
         statusItem: () => registerDisposable({ dispose: () => undefined }),
         editorExtension: (extension) => stack.use(this.editor.registerExtension(extension)),

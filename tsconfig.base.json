@@ -25,6 +25,8 @@
       "@zorid/vault": ["packages/vault/src/index.ts"],
       "@zorid/workspace": ["packages/workspace/src/index.ts"],
       "@zorid/editor": ["packages/editor/src/index.ts"],
+      "@zorid/editor/internal/editor-container-adapter": ["packages/editor/src/editor-container-adapter.ts"],
+      "@zorid/editor/internal/editor-window-contributions": ["packages/editor/src/editor-window-contributions.ts"],
       "@zorid/metadata": ["packages/metadata/src/index.ts"],
       "@zorid/object-store": ["packages/object-store/src/index.ts"],
       "@zorid/db": ["packages/db/src/index.ts"],
@@ -48,6 +50,8 @@
       "@zorid/plugin-data-views/file-renderers": ["plugins/core/data-views/src/file-renderers.ts"],
       "@zorid/plugin-images": ["plugins/core/images/src/index.ts"],
       "@zorid/plugin-images/file-renderers": ["plugins/core/images/src/file-renderers.ts"],
+      "@zorid/plugin-slash-menu": ["plugins/core/slash-menu/src/index.ts"],
+      "@zorid/plugin-slash-menu/editor-containers": ["plugins/core/slash-menu/src/editor-containers.ts"],
       "@zorid/db/node-sqlite": ["packages/db/src/node-sqlite.ts"],
       "@zorid/ui-vue/tokens.css": ["packages/ui-vue/src/tokens.css"],
       "@zorid/ui-vue/components.css": ["packages/ui-vue/src/components.css"]

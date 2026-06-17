@@ -13,6 +13,12 @@ export default defineConfig({
       '@zorid/db': fileURLToPath(new URL('./packages/db/src/index.ts', import.meta.url)),
       '@zorid/desktop-app': fileURLToPath(new URL('./apps/desktop/src/index.ts', import.meta.url)),
       '@zorid/desktop-shell': fileURLToPath(new URL('./packages/desktop-shell/src/index.ts', import.meta.url)),
+      '@zorid/editor/internal/editor-container-adapter': fileURLToPath(
+        new URL('./packages/editor/src/editor-container-adapter.ts', import.meta.url),
+      ),
+      '@zorid/editor/internal/editor-window-contributions': fileURLToPath(
+        new URL('./packages/editor/src/editor-window-contributions.ts', import.meta.url),
+      ),
       '@zorid/editor': fileURLToPath(new URL('./packages/editor/src/index.ts', import.meta.url)),
       '@zorid/index-api': fileURLToPath(new URL('./packages/index-api/src/index.ts', import.meta.url)),
       '@zorid/index-worker': fileURLToPath(new URL('./packages/index-worker/src/index.ts', import.meta.url)),
@@ -41,6 +47,10 @@ export default defineConfig({
       '@zorid/plugin-ui': fileURLToPath(new URL('./packages/plugin-ui/src/index.ts', import.meta.url)),
       '@zorid/plugin-outline': fileURLToPath(new URL('./plugins/core/outline/src/index.ts', import.meta.url)),
       '@zorid/plugin-search': fileURLToPath(new URL('./plugins/core/search/src/index.ts', import.meta.url)),
+      '@zorid/plugin-slash-menu/editor-containers': fileURLToPath(
+        new URL('./plugins/core/slash-menu/src/editor-containers.ts', import.meta.url),
+      ),
+      '@zorid/plugin-slash-menu': fileURLToPath(new URL('./plugins/core/slash-menu/src/index.ts', import.meta.url)),
       '@zorid/plugin-status-bar': fileURLToPath(new URL('./plugins/core/status-bar/src/index.ts', import.meta.url)),
       '@zorid/plugin-tags': fileURLToPath(new URL('./plugins/core/tags/src/index.ts', import.meta.url)),
       '@zorid/shared': fileURLToPath(new URL('./packages/shared/src/index.ts', import.meta.url)),

@@ -2,12 +2,17 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  adaptEditorContainerContribution,
+  createEditorReadAPI,
+} from '../packages/editor/src/editor-container-adapter.js';
+import {
   type EditorWindowContext,
   type EditorWindowContribution,
   editorWindowPlacementKey,
   groupEditorWindowContributions,
   renderEditorWindowContributions,
-} from '../packages/editor/src';
+} from '../packages/editor/src/editor-window-contributions.js';
+import type { EditorContainerContribution } from '../packages/platform-api/src/index';
 
 const context: EditorWindowContext = {
   documentPath: 'notes/today.md',
@@ -20,6 +25,9 @@ const context: EditorWindowContext = {
     stateReadonly: { readonly: true },
   },
 };
+
+type ShouldActivateReturn =
+  NonNullable<EditorContainerContribution['shouldActivate']> extends (context: never) => infer Return ? Return : never;
 
 function contribution(
   id: string,
@@ -154,5 +162,130 @@ describe('editor window contribution host', () => {
     ).toEqual(['Link', 'AI']);
 
     host.dispose();
+  });
+
+  it('anchors cursor popovers to the host-owned cursor coordinates', () => {
+    const parent = document.createElement('div');
+    parent.getBoundingClientRect = () => new DOMRect(10, 20, 200, 100);
+    const host = renderEditorWindowContributions({
+      parent,
+      context: {
+        ...context,
+        editor: {
+          ...context.editor!,
+          mainCursor: 8,
+          coordsAtPos: (position) => (position === 8 ? new DOMRect(30, 50, 2, 10) : null),
+        },
+      },
+      contributions: [
+        {
+          id: 'slash-menu',
+          placement: { kind: 'cursor-popover' },
+          render: () => Object.assign(document.createElement('div'), { textContent: 'Slash' }),
+        },
+      ],
+    });
+
+    const group = parent.querySelector<HTMLElement>('[data-placement-key="cursor-popover"]');
+    expect(group?.dataset.anchor).toBe('cursor');
+    expect(group?.style.position).toBe('absolute');
+    expect(group?.style.left).toBe('20px');
+    expect(group?.style.top).toBe('40px');
+
+    host.dispose();
+  });
+});
+
+describe('editor container adapter', () => {
+  it('keeps public editor container activation synchronous', () => {
+    const syncOnly: ShouldActivateReturn = true;
+    expect(syncOnly).toBe(true);
+  });
+
+  it('builds a safe EditorReadAPI without raw editor state', () => {
+    const read = createEditorReadAPI(context, () => 'abcd/ef');
+    expect(read.documentPath).toBe('notes/today.md');
+    expect(read.cursor).toBe(4);
+    expect(read.getText({ from: 0, to: 4 })).toBe('abcd');
+    expect(read.getSelectedText()).toBe('');
+    expect(JSON.stringify(read)).not.toContain('stateReadonly');
+  });
+
+  it('adapts public cursor-popover containers through mount update dispose and input policy', () => {
+    const events: string[] = [];
+    const adapted = adaptEditorContainerContribution({
+      pluginId: 'zorid.core.test' as never,
+      getText: () => '/',
+      contribution: {
+        id: 'test.cursor',
+        title: 'Test Cursor',
+        placement: { kind: 'cursor-popover' },
+        input: {
+          keyboardFocus: 'editor',
+          textInput: 'editor',
+          capturedKeys: ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'],
+          pointer: { hitArea: 'content' },
+        },
+        shouldActivate: (ctx) => ctx.read.getText({ from: ctx.read.cursor - 1, to: ctx.read.cursor }) === '/',
+        mount(ctx) {
+          events.push(`mount:${ctx.input.pointer?.hitArea}`);
+          ctx.dispose(() => events.push('dispose-registered'));
+          ctx.root.textContent = 'fixture';
+        },
+        update: () => events.push('update'),
+        dispose: () => events.push('dispose-contribution'),
+      },
+    });
+    const view = adapted.render?.({ ...context, editor: { ...context.editor!, mainCursor: 1 } });
+    expect(view?.element.textContent).toBe('fixture');
+    adapted.update?.({ ...context, editor: { ...context.editor!, mainCursor: 1 } });
+    view?.dispose?.();
+    adapted.dispose?.();
+    expect(events).toEqual(['mount:content', 'update', 'dispose-registered', 'dispose-contribution']);
+  });
+
+  it('suppresses a closed container until activation invalidates', () => {
+    let text = '/';
+    let closes = 0;
+    const adapted = adaptEditorContainerContribution({
+      pluginId: 'zorid.core.test' as never,
+      getText: () => text,
+      close: () => {
+        closes += 1;
+      },
+      contribution: {
+        id: 'test.closeable',
+        title: 'Closeable',
+        placement: { kind: 'cursor-popover' },
+        input: {
+          keyboardFocus: 'editor',
+          textInput: 'editor',
+          capturedKeys: ['Escape'],
+          pointer: { hitArea: 'content' },
+        },
+        shouldActivate: (ctx) => ctx.read.getText({ from: ctx.read.cursor - 1, to: ctx.read.cursor }) === '/',
+        mount(ctx) {
+          ctx.root.addEventListener('keydown', (event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            ctx.close();
+          });
+          ctx.root.textContent = 'closeable';
+        },
+      },
+    });
+
+    const activeContext = { ...context, editor: { ...context.editor!, mainCursor: 1 } };
+    const view = adapted.render?.(activeContext);
+    expect(view?.element.dataset.editorContainerCapturedKeys).toBe('["Escape"]');
+    view?.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true }));
+    view?.dispose?.();
+    expect(closes).toBe(1);
+    expect(adapted.render?.(activeContext)).toBeUndefined();
+
+    text = '';
+    expect(adapted.render?.(activeContext)).toBeUndefined();
+    text = '/';
+    expect(adapted.render?.(activeContext)?.element.textContent).toBe('closeable');
   });
 });

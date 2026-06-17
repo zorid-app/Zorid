@@ -46,6 +46,7 @@ import type {
   BaseDto,
   CommandDto,
   DataViewResultDto,
+  EditorContainerMatchDto,
   EditorSnapshotDto,
   FieldDto,
   FileFieldsDto,
@@ -106,6 +107,7 @@ const desktop = window.zoridDesktop as unknown as {
   renderDataView(basePath: string, viewId?: string): Promise<DataViewResultDto>;
   getMarkdownEmbeds(path: string): Promise<readonly MarkdownEmbedDto[]>;
   resolveFileRenderer(path: string, surface: 'full-page' | 'markdown-embed'): Promise<FileRendererMatchDto | undefined>;
+  resolveEditorContainers(): Promise<readonly EditorContainerMatchDto[]>;
   onIndexUpdated(callback: () => void): () => void;
   onEditorSnapshot(callback: (snapshot: EditorSnapshotDto) => void): () => void;
   onSettingUpdated(callback: (setting: SettingValueUpdate) => void): () => void;
@@ -175,6 +177,7 @@ const activeViewId = ref<string>();
 const dataView = ref<DataViewResultDto>();
 const markdownEmbeds = ref<readonly MarkdownEmbedDto[]>([]);
 const activeFileRenderer = ref<FileRendererMatchDto>();
+const editorContainers = ref<readonly EditorContainerMatchDto[]>([]);
 const selectedLeftPaneTab = ref<'files' | 'search' | 'bookmarks'>('files');
 const paneLayout = ref<PaneLayout>({ ...DEFAULT_PANE_LAYOUT });
 const systemTheme = ref<ResolvedTheme>(readSystemTheme());
@@ -389,14 +392,18 @@ function inputValue(event: Event): string {
 }
 
 async function refreshShellData(): Promise<void> {
-  const nextCommands = await desktop.listCommands();
-  const nextPlugins = await desktop.listPluginStatuses();
-  const nextSettings = await desktop.listSettingsSections();
-  const nextIndexStatus = await desktop.getIndexStatus();
+  const [nextCommands, nextPlugins, nextSettings, nextIndexStatus, nextEditorContainers] = await Promise.all([
+    desktop.listCommands(),
+    desktop.listPluginStatuses(),
+    desktop.listSettingsSections(),
+    desktop.getIndexStatus(),
+    desktop.resolveEditorContainers(),
+  ]);
   commands.value = nextCommands;
   plugins.value = nextPlugins;
   settingsSections.value = nextSettings;
   indexStatus.value = nextIndexStatus;
+  editorContainers.value = nextEditorContainers;
   await loadSettingValues(nextSettings);
   await refreshMetadataPanels();
 }
@@ -1333,6 +1340,7 @@ onBeforeUnmount(() => {
         :document-path="selectedPath"
         :file-fields="fileFields"
         :markdown-embeds="markdownEmbeds"
+        :editor-containers="editorContainers"
         :types="types"
         :fields-properties-enabled="fieldsPropertiesEnabled"
         @change="updateEditorText"

@@ -23,8 +23,9 @@ export type EditorWindowPlacement =
   | { readonly kind: 'status-area' }
   | { readonly kind: 'cursor-popover'; readonly mode?: 'stacked' | 'exclusive'; readonly when?: PlacementPredicate }
   | { readonly kind: 'selection-popover'; readonly mode?: 'stacked' | 'exclusive'; readonly when?: PlacementPredicate }
-  | { readonly kind: 'range-overlay'; readonly range: EditorWindowSourceRange | DynamicRangeProvider }
-  | { readonly kind: 'viewport-overlay'; readonly position: ViewportPosition };
+  | { readonly kind: 'range-overlay'; readonly range?: EditorWindowSourceRange | DynamicRangeProvider }
+  | { readonly kind: 'hover-popover'; readonly mode?: 'stacked' | 'exclusive'; readonly when?: PlacementPredicate }
+  | { readonly kind: 'viewport-overlay'; readonly position?: ViewportPosition };
 
 export interface EditorWindowContext {
   readonly documentPath: string;
@@ -44,7 +45,7 @@ export interface EditorWindowContribution {
   readonly id: string;
   readonly placement: EditorWindowPlacement;
   readonly priority?: number;
-  render?(context: EditorWindowContext): HTMLElement | DisposableView;
+  render?(context: EditorWindowContext): HTMLElement | DisposableView | undefined;
   update?(context: EditorWindowContext): void;
   dispose?(): void;
 }
@@ -63,13 +64,23 @@ export function editorWindowPlacementKey(placement: EditorWindowPlacement): stri
 }
 
 function placementMode(placement: EditorWindowPlacement): 'stacked' | 'exclusive' {
-  if (placement.kind === 'cursor-popover' || placement.kind === 'selection-popover') return placement.mode ?? 'stacked';
+  if (
+    placement.kind === 'cursor-popover' ||
+    placement.kind === 'selection-popover' ||
+    placement.kind === 'hover-popover'
+  )
+    return placement.mode ?? 'stacked';
   return 'stacked';
 }
 
 function contributionIsEnabled(contribution: EditorWindowContribution, context: EditorWindowContext): boolean {
   const { placement } = contribution;
-  if ((placement.kind === 'cursor-popover' || placement.kind === 'selection-popover') && placement.when) {
+  if (
+    (placement.kind === 'cursor-popover' ||
+      placement.kind === 'selection-popover' ||
+      placement.kind === 'hover-popover') &&
+    placement.when
+  ) {
     return placement.when(context);
   }
   return true;
@@ -146,7 +157,22 @@ function contributionGroupClassName(group: GroupedEditorWindowContribution): str
 }
 
 function groupUsesPopoverShell(group: GroupedEditorWindowContribution): boolean {
-  return group.placementKey === 'cursor-popover' || group.placementKey === 'selection-popover';
+  return (
+    group.placementKey === 'cursor-popover' ||
+    group.placementKey === 'selection-popover' ||
+    group.placementKey === 'hover-popover'
+  );
+}
+
+function applyCursorPopoverAnchor(groupElement: HTMLElement, parent: HTMLElement, context: EditorWindowContext): void {
+  const coords = context.editor?.coordsAtPos(context.editor.mainCursor);
+  if (!coords) return;
+  const anchorHost = parent.parentElement ?? parent;
+  const parentRect = anchorHost.getBoundingClientRect();
+  groupElement.dataset.anchor = 'cursor';
+  groupElement.style.position = 'absolute';
+  groupElement.style.left = `${coords.left - parentRect.left}px`;
+  groupElement.style.top = `${coords.bottom - parentRect.top}px`;
 }
 
 function mountContributionGroup(
@@ -158,6 +184,7 @@ function mountContributionGroup(
   groupElement.className = contributionGroupClassName(group);
   groupElement.dataset.placementKey = group.placementKey;
   groupElement.dataset.mode = group.mode;
+  if (group.placementKey === 'cursor-popover') applyCursorPopoverAnchor(groupElement, parent, context);
   parent.append(groupElement);
 
   const mounted = group.active.flatMap((contribution) => {

@@ -274,6 +274,7 @@ ipcMain.handle(
   async (event, vaultPath: string, surface: 'full-page' | 'markdown-embed') =>
     runtimeFor(event).resolveFileRenderer(vaultPath, surface),
 );
+ipcMain.handle('zorid:resolve-editor-containers', async (event) => runtimeFor(event).resolveEditorContainers());
 ipcMain.handle('zorid:open-external-url', async (_event, url: string) => openExternalUrl(url));
 ipcMain.handle('zorid:list-commands', async (event) => runtimeFor(event).listCommands());
 ipcMain.handle('zorid:execute-command', async (event, id: string, args?: JsonValue) =>

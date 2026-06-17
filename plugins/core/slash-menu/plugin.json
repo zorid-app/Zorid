@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "zorid.core.slash-menu",
+  "name": "Slash Menu",
+  "version": "0.1.0",
+  "kind": "core",
+  "entry": "./src/index.ts",
+  "containerEntry": "./src/editor-containers.ts",
+  "zoridApi": "^0.1.0",
+  "platforms": ["desktop"],
+  "capabilities": { "required": ["editor.containers", "editor.read"], "optional": [] },
+  "activation": ["onStartup"],
+  "contributes": {
+    "editorContainers": [
+      {
+        "id": "zorid.core.slash-menu.cursor",
+        "title": "Slash Menu",
+        "placement": { "kind": "cursor-popover" },
+        "priority": 100,
+        "containerExport": "slashMenuEditorContainer",
+        "activationReads": ["cursor", "cursorText"]
+      }
+    ]
+  }
+}

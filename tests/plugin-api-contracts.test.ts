@@ -1,8 +1,25 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { apiInfoFixture, capabilityInfos, capabilityNames } from '../packages/platform-api/src/index';
 import { defineZoridPlugin, type PluginManifest, type ZoridPluginContext } from '../packages/plugin-api/src/index';
 
 describe('platform/plugin API contracts', () => {
+  it('does not expose private editor-window host primitives from @zorid/editor root', () => {
+    const source = readFileSync('packages/editor/src/index.ts', 'utf8');
+    for (const privateName of [
+      'EditorWindowContribution',
+      'EditorWindowPlacement',
+      'ViewportPosition',
+      'EditorWindowContributionHost',
+      'renderEditorWindowContributions',
+      'groupEditorWindowContributions',
+    ]) {
+      expect(source).not.toMatch(
+        new RegExp(`export(?:\\s+type)?[\\s\\S]*\\b${privateName}\\b[\\s\\S]*from './editor-window-contributions`),
+      );
+    }
+  });
+
   it('keeps AppAPI metadata-only with no public getService escape hatch', () => {
     expect(apiInfoFixture.namespaces.app.functions).toHaveProperty('apiInfo');
     expect(JSON.stringify(apiInfoFixture)).not.toContain('getService');
@@ -73,6 +90,7 @@ describe('platform/plugin API contracts', () => {
         'setting',
         'view',
         'fileRenderer',
+        'editorContainer',
         'viewRenderer',
         'statusItem',
         'editorExtension',
@@ -95,6 +113,7 @@ describe('platform/plugin API contracts', () => {
     expect(apiInfoFixture.namespaces.register.functions.fileRenderer?.capabilities).toEqual([
       'workspace.fileRenderers',
     ]);
+    expect(apiInfoFixture.namespaces.register.functions.editorContainer?.capabilities).toEqual(['editor.containers']);
     expect(apiInfoFixture.namespaces.editor.functions.getActiveEditor?.capabilities).toEqual(['editor.read']);
     expect(apiInfoFixture.namespaces.platform.functions).toHaveProperty('listCapabilities');
   });
@@ -111,6 +130,7 @@ describe('platform/plugin API contracts', () => {
   it('exports normalized capability names', () => {
     expect(capabilityNames).toContain('desktop.folderVault');
     expect(capabilityNames).toContain('workspace.fileRenderers');
+    expect(capabilityNames).toContain('editor.containers');
     expect(capabilityNames).toContain('platform.haptics');
     expect(capabilityNames).not.toContain('haptics');
   });
@@ -157,6 +177,33 @@ describe('platform/plugin API contracts', () => {
       },
     } satisfies PluginManifest;
     expect(manifest.contributes.fileRenderers[0].surfaces).toEqual(['full-page', 'markdown-embed']);
+  });
+
+  it('defines static editorContainer manifest contributions with public ADR0005 placement identifiers', () => {
+    const manifest = {
+      schemaVersion: 1,
+      id: 'zorid.core.slash-menu',
+      name: 'Slash Menu',
+      version: '0.1.0',
+      kind: 'core',
+      entry: './src/index.ts',
+      containerEntry: './src/editor-containers.ts',
+      zoridApi: '^0.1.0',
+      platforms: ['desktop'],
+      capabilities: { required: ['editor.containers', 'editor.read'], optional: [] },
+      contributes: {
+        editorContainers: [
+          {
+            id: 'zorid.core.slash-menu.cursor',
+            title: 'Slash Menu',
+            placement: { kind: 'cursor-popover' },
+            containerExport: 'slashMenuEditorContainer',
+            activationReads: ['cursor', 'cursorText'],
+          },
+        ],
+      },
+    } satisfies PluginManifest;
+    expect(manifest.contributes.editorContainers[0].placement.kind).toBe('cursor-popover');
   });
 
   it('makes host-owned fields/dataViews direct context properties at type level', () => {

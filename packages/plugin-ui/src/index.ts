@@ -1,4 +1,9 @@
-import type { FileRendererContribution, FileRendererMountContext } from '@zorid/platform-api';
+import type {
+  EditorContainerContribution,
+  EditorContainerMountContext,
+  FileRendererContribution,
+  FileRendererMountContext,
+} from '@zorid/platform-api';
 import type { Disposable } from '@zorid/shared';
 import { createEffect, createSignal, For, type JSX, onCleanup, Show } from 'solid-js';
 import { render } from 'solid-js/web';
@@ -10,6 +15,11 @@ export type PluginUIComponent<P = Record<string, never>> = (props: P) => JSX.Ele
 export interface PluginUIMountOptions<P extends object = FileRendererMountContext> {
   readonly component: PluginUIComponent<P>;
   readonly props?: (ctx: FileRendererMountContext) => P;
+}
+
+export function mountPluginUIRoot<P extends object>(root: HTMLElement, renderComponent: () => JSX.Element): Disposable {
+  const dispose = render(renderComponent, root);
+  return { dispose };
 }
 
 export function mountPluginUI<P extends object = FileRendererMountContext>({
@@ -26,6 +36,29 @@ export function mountPluginUI<P extends object = FileRendererMountContext>({
     ctx.dispose(() => {
       for (const disposable of disposables.splice(0)) void disposable.dispose();
       dispose();
+    });
+  };
+}
+
+export interface EditorContainerUIMountOptions<P extends object = EditorContainerMountContext> {
+  readonly component: PluginUIComponent<P>;
+  readonly props?: (ctx: EditorContainerMountContext) => P;
+}
+
+export function mountEditorContainerUI<P extends object = EditorContainerMountContext>({
+  component,
+  props,
+}: EditorContainerUIMountOptions<P>): EditorContainerContribution['mount'] {
+  return (ctx) => {
+    const disposables: Disposable[] = [];
+    const registerDisposable = (disposable: Disposable | (() => void | Promise<void>)): void => {
+      disposables.push(typeof disposable === 'function' ? { dispose: disposable } : disposable);
+    };
+    const mountContext = { ...ctx, dispose: registerDisposable };
+    const disposable = mountPluginUIRoot(ctx.root, () => component(props ? props(mountContext) : (mountContext as P)));
+    ctx.dispose(() => {
+      for (const item of disposables.splice(0)) void item.dispose();
+      disposable.dispose();
     });
   };
 }

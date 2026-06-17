@@ -13,10 +13,22 @@ const workspaceAliases = {
   '@zorid/plugin-ui': path.resolve(repoRoot, 'packages/plugin-ui/src/index.ts'),
   '@zorid/plugin-data-views/file-renderers': path.resolve(repoRoot, 'plugins/core/data-views/src/file-renderers.ts'),
   '@zorid/plugin-images/file-renderers': path.resolve(repoRoot, 'plugins/core/images/src/file-renderers.ts'),
+  '@zorid/plugin-slash-menu/editor-containers': path.resolve(
+    repoRoot,
+    'plugins/core/slash-menu/src/editor-containers.ts',
+  ),
   '@zorid/app-kernel': path.resolve(repoRoot, 'packages/app-kernel/src/index.ts'),
   '@zorid/plugin-host': path.resolve(repoRoot, 'packages/plugin-host/src/index.ts'),
   '@zorid/vault': path.resolve(repoRoot, 'packages/vault/src/index.ts'),
   '@zorid/workspace': path.resolve(repoRoot, 'packages/workspace/src/index.ts'),
+  '@zorid/editor/internal/editor-container-adapter': path.resolve(
+    repoRoot,
+    'packages/editor/src/editor-container-adapter.ts',
+  ),
+  '@zorid/editor/internal/editor-window-contributions': path.resolve(
+    repoRoot,
+    'packages/editor/src/editor-window-contributions.ts',
+  ),
   '@zorid/editor': path.resolve(repoRoot, 'packages/editor/src/index.ts'),
   '@zorid/file-explorer': path.resolve(repoRoot, 'packages/file-explorer/src/index.ts'),
   '@zorid/db/node-sqlite': path.resolve(repoRoot, 'packages/db/src/node-sqlite.ts'),

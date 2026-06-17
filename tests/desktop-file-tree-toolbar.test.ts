@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, nextTick } from 'vue';
-import type { FileRendererMatchDto, MarkdownEmbedDto, VaultEntry } from '../apps/desktop/src/renderer/src/types.js';
+import type {
+  EditorContainerMatchDto,
+  FileRendererMatchDto,
+  MarkdownEmbedDto,
+  VaultEntry,
+} from '../apps/desktop/src/renderer/src/types.js';
 
 function entry(path: string, kind: VaultEntry['kind'], mtimeMs: number): VaultEntry {
   return { path, kind, mtimeMs, size: kind === 'directory' ? 0 : 10 };
@@ -46,6 +51,7 @@ function createZoridDesktopMock({
     renderDataView: vi.fn().mockResolvedValue(undefined),
     getMarkdownEmbeds: vi.fn().mockResolvedValue([]),
     resolveFileRenderer: vi.fn().mockResolvedValue(undefined),
+    resolveEditorContainers: vi.fn().mockResolvedValue([]),
     onIndexUpdated: vi.fn().mockReturnValue(() => undefined),
     onEditorSnapshot: vi.fn().mockReturnValue(() => undefined),
     onSettingUpdated: vi.fn().mockReturnValue(() => undefined),
@@ -278,6 +284,64 @@ describe('desktop file tree toolbar contract', () => {
       { event: 'unmounted', path: 'Alpha.md', embeds: ['views/alpha.zbase'] },
       { event: 'mounted', path: 'Beta.md', embeds: ['views/beta.zbase'] },
     ]);
+  });
+
+  it('loads trusted editor containers through the desktop bridge and passes them to MarkdownEditor', async () => {
+    const desk = createZoridDesktopMock({
+      listVault: (path = '') => Promise.resolve(path === '' ? [entry('Alpha.md', 'file', 1)] : []),
+    });
+    const containers: readonly EditorContainerMatchDto[] = [
+      {
+        pluginId: 'zorid.core.slash-menu',
+        containerId: 'zorid.core.slash-menu.cursor',
+        title: 'Slash Menu',
+        placement: { kind: 'cursor-popover' },
+        containerEntry: './src/editor-containers.ts',
+        containerExport: 'slashMenuEditorContainer',
+      },
+    ];
+    (desk.resolveEditorContainers as vi.Mock).mockResolvedValue(containers);
+    Object.defineProperty(window, 'zoridDesktop', {
+      configurable: true,
+      value: desk,
+    });
+
+    const received: readonly EditorContainerMatchDto[][] = [];
+    const MarkdownEditorStub = defineComponent({
+      name: 'MarkdownEditor',
+      props: {
+        documentPath: { type: String, required: true },
+        editorContainers: { type: Array as () => readonly EditorContainerMatchDto[], default: () => [] },
+      },
+      mounted() {
+        received.push(this.editorContainers);
+      },
+      template: '<div class="mock-markdown-editor">{{ documentPath }}</div>',
+    });
+
+    const { default: App } = await import('../apps/desktop/src/renderer/src/App.vue');
+    const wrapper = mount(App, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          ActivityRail: true,
+          AppResizeHandle: true,
+          AppStatusBar: true,
+          CommandPaletteWindow: true,
+          MarkdownEditor: MarkdownEditorStub,
+          RightSidebarPanels: true,
+          SettingsWindow: true,
+          TopTabStrip: true,
+        },
+      },
+    });
+    await flush();
+
+    await wrapper.find('.file-tree .tree-item').trigger('click');
+    await flush();
+
+    expect(desk.resolveEditorContainers).toHaveBeenCalled();
+    expect(received).toEqual([containers]);
   });
 
   it('opens an inline Untitled row for new file and commits on blur with unique fallback naming', async () => {

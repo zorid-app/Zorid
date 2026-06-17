@@ -7,6 +7,7 @@ import type {
   BaseDto,
   CommandDto,
   DataViewResultDto,
+  EditorContainerMatchDto,
   FieldValidationDiagnosticDto,
   FileFieldsDto,
   FileRendererMatchDto,
@@ -28,6 +29,7 @@ export type {
   BaseDto,
   CommandDto,
   DataViewResultDto,
+  EditorContainerMatchDto,
   FieldDto,
   FieldValidationDiagnosticDto,
   FileFieldsDto,
@@ -85,6 +87,7 @@ export interface DesktopEditorBridge {
   renderDataView(basePath: string, viewId?: string): Promise<DataViewResultDto>;
   getMarkdownEmbeds(path: string): Promise<readonly MarkdownEmbedDto[]>;
   resolveFileRenderer(path: string, surface: 'full-page' | 'markdown-embed'): Promise<FileRendererMatchDto | undefined>;
+  resolveEditorContainers(): Promise<readonly EditorContainerMatchDto[]>;
   openExternalUrl(url: string): Promise<void>;
   onIndexUpdated(callback: () => void): () => void;
   onEditorSnapshot(callback: (snapshot: EditorSnapshotDto) => void): () => void;

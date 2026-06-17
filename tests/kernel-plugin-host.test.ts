@@ -5,6 +5,7 @@ import {
   createLazyTriggerIndex,
   createPluginRegistryAPI,
   PluginHost,
+  resolveEditorContainerContributions,
   resolveFileRendererContribution,
   resolvePluginOrder,
   validatePluginManifest,
@@ -54,6 +55,32 @@ const dataViewsManifest: PluginManifest = {
   },
 };
 
+const slashMenuManifest: PluginManifest = {
+  schemaVersion: 1,
+  id: 'zorid.core.slash-menu',
+  name: 'Slash Menu',
+  version: '0.1.0',
+  kind: 'core',
+  entry: './src/index.ts',
+  containerEntry: './src/editor-containers.ts',
+  zoridApi: '^0.1.0',
+  platforms: ['desktop'],
+  capabilities: { required: ['editor.containers', 'editor.read'], optional: [] },
+  activation: ['onStartup'],
+  contributes: {
+    editorContainers: [
+      {
+        id: 'zorid.core.slash-menu.cursor',
+        title: 'Slash Menu',
+        placement: { kind: 'cursor-popover' },
+        priority: 100,
+        containerExport: 'slashMenuEditorContainer',
+        activationReads: ['cursor', 'cursorText'],
+      },
+    ],
+  },
+};
+
 describe('kernel registries', () => {
   it('registers services, events, and commands with disposable cleanup', async () => {
     const services = new ServiceRegistry();
@@ -93,6 +120,7 @@ describe('plugin host', () => {
   it('validates manifests and optional activation/contributes', () => {
     expect(validatePluginManifest(fieldsManifest)).toEqual({ ok: true, errors: [] });
     expect(validatePluginManifest(dataViewsManifest)).toEqual({ ok: true, errors: [] });
+    expect(validatePluginManifest(slashMenuManifest)).toEqual({ ok: true, errors: [] });
     expect(validatePluginManifest({ ...fieldsManifest, id: 'Bad ID' }).ok).toBe(false);
     expect(validatePluginManifest({ ...dataViewsManifest, rendererEntry: undefined }).errors).toContain(
       'rendererEntry is required when contributes.fileRenderers exists',
@@ -106,6 +134,34 @@ describe('plugin host', () => {
         capabilities: { required: ['metadata.read', 'workspace.views', 'vault.read'], optional: [] },
       }).errors,
     ).toContain('workspace.fileRenderers capability is required when contributes.fileRenderers exists');
+  });
+
+  it('validates editor container manifests and capability gates independently from file renderers', () => {
+    expect(validatePluginManifest({ ...slashMenuManifest, containerEntry: undefined }).errors).toContain(
+      'containerEntry is required when contributes.editorContainers exists',
+    );
+    expect(
+      validatePluginManifest({
+        ...slashMenuManifest,
+        capabilities: { required: ['editor.read'], optional: [] },
+      }).errors,
+    ).toContain('editor.containers capability is required when contributes.editorContainers exists');
+    expect(
+      validatePluginManifest({
+        ...slashMenuManifest,
+        capabilities: { required: ['editor.containers'], optional: [] },
+      }).errors,
+    ).toContain('editor.read capability is required when editorContainers declare activationReads');
+    expect(
+      validatePluginManifest({
+        ...slashMenuManifest,
+        contributes: {
+          editorContainers: [
+            { ...slashMenuManifest.contributes!.editorContainers![0]!, placement: { kind: 'status-area' } as never },
+          ],
+        },
+      }).errors,
+    ).toContain('contributes.editorContainers[0].placement must use an ADR0005 v0 placement');
   });
 
   it('orders dependencies and rejects cycles', () => {
@@ -175,6 +231,10 @@ describe('plugin host', () => {
     expect(resolveFileRendererContribution([dataViewsManifest], 'views/tasks.zbase', 'markdown-embed')).toMatchObject({
       id: 'zorid.core.data-views.zbase',
       pluginId: 'zorid.core.data-views',
+    });
+    expect(resolveEditorContainerContributions([slashMenuManifest])[0]).toMatchObject({
+      id: 'zorid.core.slash-menu.cursor',
+      pluginId: 'zorid.core.slash-menu',
     });
   });
 
@@ -317,6 +377,31 @@ describe('plugin host', () => {
       code: 'plugin.capability.undeclared',
       capability: 'commands.register',
     });
+  });
+
+  it('gates editor container registration by editor.containers', async () => {
+    const calls: string[] = [];
+    const host = new PluginHost({
+      manifests: [
+        { ...slashMenuManifest, capabilities: { required: ['editor.containers', 'editor.read'], optional: [] } },
+      ],
+      platform: 'desktop',
+      capabilities: new Set(['editor.read']),
+      load: () => ({ activate: (ctx) => ctx.register.editorContainer({} as never) }),
+      createBaseContext: (manifest) =>
+        ({
+          pluginId: asPluginId(manifest.id),
+          register: {
+            editorContainer: () => {
+              calls.push('registered');
+              return { dispose: () => undefined };
+            },
+            disposable: (disposable) => disposable,
+          },
+        }) as ZoridPluginContext,
+    });
+    expect(host.record('zorid.core.slash-menu')?.status).toBe('disabled');
+    expect(calls).toEqual([]);
   });
 
   it('activates dependencies, records status, and disposes lifecycle resources', async () => {

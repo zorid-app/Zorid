@@ -62,6 +62,7 @@ function stubDesktop(themeValue: unknown): { emitSettingUpdated: (setting: unkno
       listVault: vi.fn().mockResolvedValue([]),
       listCommands: vi.fn().mockResolvedValue([]),
       listPluginStatuses: vi.fn().mockResolvedValue([]),
+      resolveEditorContainers: vi.fn().mockResolvedValue([]),
       listSettingsSections: vi.fn().mockResolvedValue([appearanceSection]),
       getSettingValue: vi.fn().mockResolvedValue({ value: themeValue }),
       setSettingValue: vi.fn().mockResolvedValue(undefined),

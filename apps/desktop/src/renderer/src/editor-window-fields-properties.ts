@@ -1,4 +1,4 @@
-import type { EditorWindowContribution } from '@zorid/editor';
+import type { EditorWindowContribution } from '@zorid/editor/internal/editor-window-contributions';
 import type { JsonValue } from '@zorid/shared';
 import type { FieldDto, FileFieldsDto, TypeDto } from './types.js';
 

@@ -15,6 +15,7 @@ export type CapabilityName =
   | 'workspace.fileRenderers'
   | 'editor.read'
   | 'editor.write'
+  | 'editor.containers'
   | 'commands.register'
   | 'settings.register'
   | 'status.register'
@@ -260,6 +261,7 @@ export interface PluginRegistrationAPI {
   setting(schema: SettingsContribution): Disposable;
   view(view: ViewContribution): Disposable;
   fileRenderer(renderer: FileRendererContribution): Disposable;
+  editorContainer(container: EditorContainerContribution): Disposable;
   viewRenderer(renderer: ViewRendererContribution): Disposable;
   statusItem(item: StatusItemContribution): Disposable;
   editorExtension(extension: EditorExtensionContribution): Disposable;
@@ -320,6 +322,69 @@ export interface FileRendererContribution {
   readonly title: string;
   readonly mount: (ctx: FileRendererMountContext) => void | Promise<void>;
   readonly dispose?: () => void | Promise<void>;
+}
+export type EditorContainerPlacement =
+  | { readonly kind: 'cursor-popover' }
+  | { readonly kind: 'selection-popover' }
+  | { readonly kind: 'range-overlay' }
+  | { readonly kind: 'hover-popover' }
+  | { readonly kind: 'viewport-overlay' }
+  | { readonly kind: 'document-header' }
+  | { readonly kind: 'document-footer' };
+export type EditorContainerActivationRead =
+  | 'cursor'
+  | 'selection'
+  | 'visibleRanges'
+  | 'hoverTarget'
+  | 'cursorText'
+  | 'selectedText'
+  | 'wholeDocument';
+export interface EditorSourceRange {
+  readonly from: number;
+  readonly to: number;
+}
+export interface EditorReadAPI {
+  readonly documentPath: VaultPath;
+  readonly cursor: number;
+  readonly selection: readonly EditorSourceRange[];
+  readonly visibleRanges: readonly EditorSourceRange[];
+  readonly hoverTarget?: EditorSourceRange;
+  getText(range?: EditorSourceRange): string;
+  getCursorText(maxChars?: number): string;
+  getSelectedText(): string;
+}
+export interface EditorContainerInputPolicy {
+  readonly keyboardFocus: 'editor' | 'container';
+  readonly textInput: 'editor' | 'container' | 'blocked';
+  readonly capturedKeys?: readonly string[];
+  readonly pointer?: { readonly hitArea: 'container' | 'content' };
+}
+export interface EditorContainerActivationContext {
+  readonly pluginId: PluginId;
+  readonly containerId: string;
+  readonly read: EditorReadAPI;
+}
+export interface EditorContainerMountContext extends EditorContainerActivationContext {
+  readonly root: HTMLElement;
+  readonly placement: EditorContainerPlacement;
+  readonly input: EditorContainerInputPolicy;
+  readonly dispose: (disposable: Disposable | (() => void | Promise<void>)) => void;
+  close(): void;
+}
+export interface EditorContainerUpdateContext extends EditorContainerActivationContext {
+  readonly placement: EditorContainerPlacement;
+}
+export interface EditorContainerContribution {
+  readonly id: string;
+  readonly title: string;
+  readonly placement: EditorContainerPlacement;
+  readonly priority?: number;
+  readonly input: EditorContainerInputPolicy;
+  readonly activationReads?: readonly EditorContainerActivationRead[];
+  shouldActivate?(ctx: EditorContainerActivationContext): boolean;
+  mount(ctx: EditorContainerMountContext): void | Promise<void>;
+  update?(ctx: EditorContainerUpdateContext): void | Promise<void>;
+  dispose?(): void | Promise<void>;
 }
 export interface StatusItemContribution {
   readonly id: string;
@@ -466,6 +531,12 @@ export const capabilityInfos = [
     since: '0.1.0',
     stability: 'public',
     description: 'Modify editor buffers and register editor/Markdown extensions.',
+  },
+  {
+    id: 'editor.containers',
+    since: '0.1.0',
+    stability: 'public-experimental',
+    description: 'Register trusted editor-adjacent UI containers such as cursor and selection popovers.',
   },
   { id: 'commands.register', since: '0.1.0', stability: 'public', description: 'Register command palette commands.' },
   { id: 'settings.register', since: '0.1.0', stability: 'public', description: 'Register settings schema sections.' },
@@ -633,6 +704,7 @@ export const apiInfoFixture: ApiInfo = {
         setting: publicFunction(['settings.register']),
         view: publicFunction(['workspace.views']),
         fileRenderer: experimentalFunction(['workspace.fileRenderers']),
+        editorContainer: experimentalFunction(['editor.containers']),
         viewRenderer: publicFunction(['workspace.views']),
         statusItem: publicFunction(['status.register']),
         editorExtension: publicFunction(['editor.write']),

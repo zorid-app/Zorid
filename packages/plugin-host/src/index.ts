@@ -4,6 +4,9 @@ import type {
   DataViewRenderOptions,
   DataViewsAPI,
   EditorAPI,
+  EditorContainerActivationRead,
+  EditorContainerContribution,
+  EditorContainerPlacement,
   EventBusAPI,
   FieldsAPI,
   FileRendererContribution,
@@ -18,6 +21,7 @@ import type {
 } from '@zorid/platform-api';
 import type {
   ActivationTrigger,
+  EditorContainerManifestContribution,
   FileRendererManifestContribution,
   PluginManifest,
   ZoridPlugin,
@@ -72,6 +76,24 @@ export interface ManifestValidationResult {
 
 const validActivationPrefixes = ['onCommand:', 'onView:', 'onFileExtension:', 'onMarkdownEmbed:', 'onFileRenderer:'];
 const fileRendererSurfaces = new Set<FileRendererSurface>(['full-page', 'markdown-embed']);
+const editorContainerPlacements = new Set<EditorContainerPlacement['kind']>([
+  'cursor-popover',
+  'selection-popover',
+  'range-overlay',
+  'hover-popover',
+  'viewport-overlay',
+  'document-header',
+  'document-footer',
+]);
+const editorContainerActivationReads = new Set<EditorContainerActivationRead>([
+  'cursor',
+  'selection',
+  'visibleRanges',
+  'hoverTarget',
+  'cursorText',
+  'selectedText',
+  'wholeDocument',
+]);
 
 function isValidExtension(value: unknown): value is string {
   return typeof value === 'string' && /^\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
@@ -98,6 +120,31 @@ function validateFileRendererContribution(
     errors.push(`${prefix}.priority must be a finite number`);
   if (typeof contribution.rendererExport !== 'string' || contribution.rendererExport.trim() === '')
     errors.push(`${prefix}.rendererExport is required`);
+}
+
+function validateEditorContainerContribution(
+  contribution: Partial<EditorContainerManifestContribution>,
+  index: number,
+  errors: string[],
+): void {
+  const prefix = `contributes.editorContainers[${index}]`;
+  if (typeof contribution.id !== 'string' || contribution.id.trim() === '') errors.push(`${prefix}.id is required`);
+  if (typeof contribution.title !== 'string' || contribution.title.trim() === '')
+    errors.push(`${prefix}.title is required`);
+  if (!contribution.placement || !editorContainerPlacements.has(contribution.placement.kind))
+    errors.push(`${prefix}.placement must use an ADR0005 v0 placement`);
+  if (
+    contribution.priority !== undefined &&
+    (typeof contribution.priority !== 'number' || !Number.isFinite(contribution.priority))
+  )
+    errors.push(`${prefix}.priority must be a finite number`);
+  if (typeof contribution.containerExport !== 'string' || contribution.containerExport.trim() === '')
+    errors.push(`${prefix}.containerExport is required`);
+  if (contribution.activationReads !== undefined) {
+    if (!Array.isArray(contribution.activationReads)) errors.push(`${prefix}.activationReads must be an array`);
+    else if (contribution.activationReads.some((read) => !editorContainerActivationReads.has(read)))
+      errors.push(`${prefix}.activationReads contains an unknown read token`);
+  }
 }
 
 export function validatePluginManifest(input: unknown): ManifestValidationResult {
@@ -142,11 +189,43 @@ export function validatePluginManifest(input: unknown): ManifestValidationResult
       });
     }
   }
+  const editorContainers = manifest.contributes?.editorContainers;
+  if (editorContainers !== undefined) {
+    if (!Array.isArray(editorContainers)) errors.push('contributes.editorContainers must be an array');
+    else {
+      if (typeof manifest.containerEntry !== 'string' || manifest.containerEntry.trim() === '')
+        errors.push('containerEntry is required when contributes.editorContainers exists');
+      if (!manifest.capabilities?.required?.includes('editor.containers'))
+        errors.push('editor.containers capability is required when contributes.editorContainers exists');
+      if (manifest.kind === 'community') errors.push('community plugins cannot contribute trusted editorContainers');
+      editorContainers.forEach((contribution, index) => {
+        validateEditorContainerContribution(contribution, index, errors);
+        if (
+          Array.isArray(contribution.activationReads) &&
+          contribution.activationReads.length > 0 &&
+          !manifest.capabilities?.required?.includes('editor.read')
+        )
+          errors.push('editor.read capability is required when editorContainers declare activationReads');
+      });
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 
 export interface ResolvedFileRendererContribution extends FileRendererManifestContribution {
   readonly pluginId: string;
+}
+
+export interface ResolvedEditorContainerContribution extends EditorContainerManifestContribution {
+  readonly pluginId: string;
+}
+
+export function resolveEditorContainerContributions(
+  manifests: readonly PluginManifest[],
+): readonly ResolvedEditorContainerContribution[] {
+  return manifests.flatMap((manifest) =>
+    (manifest.contributes?.editorContainers ?? []).map((contribution) => ({ ...contribution, pluginId: manifest.id })),
+  );
 }
 
 export function resolveFileRendererContribution(
@@ -627,6 +706,12 @@ export class PluginHost {
             ? base.register.fileRenderer(renderer)
             : (() => {
                 throw unavailable('workspace.fileRenderers');
+              })(),
+        editorContainer: (container: EditorContainerContribution) =>
+          ensure('editor.containers')
+            ? base.register.editorContainer(container)
+            : (() => {
+                throw unavailable('editor.containers');
               })(),
         viewRenderer: (renderer) =>
           ensure('workspace.views')

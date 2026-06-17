@@ -2,7 +2,11 @@ import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { appSettingsSections, createDesktopRuntime } from '../apps/desktop/src/main/runtime';
+import {
+  appSettingsSections,
+  createDesktopRuntime,
+  trustedCoreEditorContainerLoaders,
+} from '../apps/desktop/src/main/runtime';
 import type { PluginManifest } from '../packages/plugin-api/src/index';
 import { normalizeVaultPath } from '../packages/shared/src/index';
 
@@ -97,6 +101,33 @@ function coreImagesManifestForTest(): PluginManifest {
   };
 }
 
+function coreSlashMenuManifestForTest(): PluginManifest {
+  return {
+    schemaVersion: 1,
+    id: 'zorid.core.slash-menu',
+    name: 'Slash Menu',
+    version: '0.1.0',
+    kind: 'core',
+    entry: './src/index.ts',
+    containerEntry: './src/editor-containers.ts',
+    zoridApi: '^0.1.0',
+    platforms: ['desktop'],
+    capabilities: { required: ['editor.containers', 'editor.read'], optional: [] },
+    contributes: {
+      editorContainers: [
+        {
+          id: 'zorid.core.slash-menu.cursor',
+          title: 'Slash Menu',
+          placement: { kind: 'cursor-popover' },
+          priority: 100,
+          containerExport: 'slashMenuEditorContainer',
+          activationReads: ['cursor', 'cursorText'],
+        },
+      ],
+    },
+  };
+}
+
 describe('desktop runtime composition', () => {
   it('keeps first-party app settings available as reusable app-owned schemas', () => {
     expect(appSettingsSections).toEqual(
@@ -168,6 +199,27 @@ describe('desktop runtime composition', () => {
     expect(runtime.listPluginStatuses().find((status) => status.pluginId === 'zorid.core.status-bar')?.status).toBe(
       'placeholder',
     );
+  });
+
+  it('resolves trusted editor containers only when manifest metadata matches the static allowlist', () => {
+    const runtime = createDesktopRuntime({ manifests: [coreSlashMenuManifestForTest()] });
+    expect(runtime.resolveEditorContainers()).toEqual([
+      expect.objectContaining({
+        pluginId: 'zorid.core.slash-menu',
+        containerId: 'zorid.core.slash-menu.cursor',
+        containerEntry: './src/editor-containers.ts',
+        containerExport: 'slashMenuEditorContainer',
+      }),
+    ]);
+    expect(trustedCoreEditorContainerLoaders.get('zorid.core.slash-menu.cursor')).toMatchObject({
+      pluginId: 'zorid.core.slash-menu',
+      containerEntry: './src/editor-containers.ts',
+      containerExport: 'slashMenuEditorContainer',
+    });
+    const mismatched = createDesktopRuntime({
+      manifests: [{ ...coreSlashMenuManifestForTest(), containerEntry: './src/other.ts' }],
+    });
+    expect(mismatched.resolveEditorContainers()).toEqual([]);
   });
 
   it('opens a folder vault through safe profile DTOs and file-operation bridge methods', async () => {

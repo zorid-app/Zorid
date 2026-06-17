@@ -194,6 +194,8 @@ importers:
 
   plugins/core/search: {}
 
+  plugins/core/slash-menu: {}
+
   plugins/core/status-bar: {}
 
   plugins/core/tags: {}

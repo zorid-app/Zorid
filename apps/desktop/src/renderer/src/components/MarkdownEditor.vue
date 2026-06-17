@@ -2,18 +2,29 @@
 import {
   type BlockAction,
   createMountedMarkdownEditor,
-  type EditorWindowContext,
-  type EditorWindowContribution,
-  type EditorWindowContributionHost,
   type MarkdownBlockRegistration,
   type MountedMarkdownEditor,
-  renderEditorWindowContributions,
 } from '@zorid/editor';
+import type {
+  EditorWindowContext,
+  EditorWindowContribution,
+  EditorWindowContributionHost,
+} from '@zorid/editor/internal/editor-window-contributions';
+import { renderEditorWindowContributions } from '@zorid/editor/internal/editor-window-contributions';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { createRendererDebugLogger } from '../debug-log.js';
+import { routeEditorContainerCapturedKeydown } from '../editor-container-key-routing.js';
 import { createFieldsPropertiesEditorContribution } from '../editor-window-fields-properties.js';
+import { createTrustedEditorContainerContributions } from '../trusted-editor-containers.js';
 import { mountTrustedFileRenderer } from '../trusted-file-renderers.js';
-import type { FieldDto, FileFieldsDto, FileRendererMatchDto, MarkdownEmbedDto, TypeDto } from '../types.js';
+import type {
+  EditorContainerMatchDto,
+  FieldDto,
+  FileFieldsDto,
+  FileRendererMatchDto,
+  MarkdownEmbedDto,
+  TypeDto,
+} from '../types.js';
 
 const props = withDefaults(
   defineProps<{
@@ -21,6 +32,7 @@ const props = withDefaults(
     documentPath?: string | undefined;
     fileFields?: FileFieldsDto | undefined;
     markdownEmbeds?: readonly MarkdownEmbedDto[] | undefined;
+    editorContainers?: readonly EditorContainerMatchDto[] | undefined;
     types?: readonly TypeDto[] | undefined;
     fieldsPropertiesEnabled?: boolean | undefined;
   }>(),
@@ -45,6 +57,7 @@ const editorHost = ref<HTMLElement>();
 const contributionHost = ref<HTMLElement>();
 let editor: MountedMarkdownEditor | undefined;
 let editorWindowHost: EditorWindowContributionHost | undefined;
+let removeEditorKeydownCapture: (() => void) | undefined;
 
 function toDomRect(
   rect: { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number } | null,
@@ -68,6 +81,18 @@ const propertiesContribution = computed<EditorWindowContribution[]>(() => {
     }),
   ];
 });
+
+const trustedEditorContainerContributions = computed<EditorWindowContribution[]>(() =>
+  createTrustedEditorContainerContributions(props.editorContainers ?? [], {
+    getText: () => editor?.view.state.doc.toString() ?? props.text,
+    close: () => renderEditorWindowHost(),
+  }),
+);
+
+const editorWindowContributions = computed<EditorWindowContribution[]>(() => [
+  ...propertiesContribution.value,
+  ...trustedEditorContainerContributions.value,
+]);
 
 const fileRendererEmbedMatches = computed<ReadonlyMap<string, FileRendererMatchDto>>(() => {
   const matches = new Map<string, FileRendererMatchDto>();
@@ -143,14 +168,19 @@ function renderEditorWindowHost(): void {
   if (!contributionHost.value) return;
   const context = editorWindowContext();
   if (editorWindowHost) {
-    editorWindowHost.update(context, propertiesContribution.value);
+    editorWindowHost.update(context, editorWindowContributions.value);
     return;
   }
   editorWindowHost = renderEditorWindowContributions({
     parent: contributionHost.value,
     context,
-    contributions: propertiesContribution.value,
+    contributions: editorWindowContributions.value,
   });
+}
+
+function captureEditorKeydown(event: KeyboardEvent): void {
+  if (!contributionHost.value) return;
+  routeEditorContainerCapturedKeydown(contributionHost.value, event);
 }
 
 function emitCursorChange(): void {
@@ -179,6 +209,7 @@ onMounted(() => {
       },
       onUpdate: (update) => {
         if (update.docChanged || update.selectionSet) emitCursorChange();
+        if (update.selectionSet) renderEditorWindowHost();
       },
       onSave: () => emit('save'),
       onOpenReference: openReference,
@@ -187,6 +218,9 @@ onMounted(() => {
         log({ level: 'error', message: `Markdown editor runtime error: ${context}`, data: error });
       },
     });
+    editorHost.value.addEventListener('keydown', captureEditorKeydown, { capture: true });
+    removeEditorKeydownCapture = () =>
+      editorHost.value?.removeEventListener('keydown', captureEditorKeydown, { capture: true });
     renderEditorWindowHost();
     emitCursorChange();
   } catch (caught) {
@@ -215,7 +249,13 @@ watch(
 );
 
 watch(
-  [() => props.documentPath, () => props.fileFields, () => props.types, () => props.markdownEmbeds],
+  [
+    () => props.documentPath,
+    () => props.fileFields,
+    () => props.types,
+    () => props.markdownEmbeds,
+    () => props.editorContainers,
+  ],
   () => renderEditorWindowHost(),
   {
     deep: true,
@@ -223,6 +263,8 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  removeEditorKeydownCapture?.();
+  removeEditorKeydownCapture = undefined;
   editorWindowHost?.dispose();
   editorWindowHost = undefined;
   editor?.destroy();

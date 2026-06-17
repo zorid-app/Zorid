@@ -60,6 +60,9 @@
     },
     {
       "path": "../../plugins/core/images"
+    },
+    {
+      "path": "../../plugins/core/slash-menu"
     }
   ]
 }

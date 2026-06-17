@@ -4,6 +4,8 @@ import type {
   CommandsAPI,
   DataViewsAPI,
   EditorAPI,
+  EditorContainerActivationRead,
+  EditorContainerPlacement,
   EventBusAPI,
   FieldsAPI,
   FileRendererSurface,
@@ -70,6 +72,8 @@ export interface PluginManifest {
   readonly entry: string;
   /** Trusted-core renderer module entry. Required when contributes.fileRenderers is present. */
   readonly rendererEntry?: string;
+  /** Trusted-core editor container module entry. Required when contributes.editorContainers is present. */
+  readonly containerEntry?: string;
   readonly zoridApi: string;
   readonly platforms: readonly ('desktop' | 'mobile')[];
   readonly capabilities: PluginCapabilityManifest;
@@ -92,6 +96,7 @@ export interface StaticContributions {
   readonly views?: readonly { readonly id: string; readonly title: string }[];
   readonly viewRenderers?: readonly { readonly type: string }[];
   readonly fileRenderers?: readonly FileRendererManifestContribution[];
+  readonly editorContainers?: readonly EditorContainerManifestContribution[];
   readonly statusItems?: readonly { readonly id: string }[];
   readonly settings?: readonly SettingsContribution[];
 }
@@ -104,3 +109,14 @@ export interface FileRendererManifestContribution {
   readonly priority: number;
   readonly rendererExport: string;
 }
+
+export interface EditorContainerManifestContribution {
+  readonly id: string;
+  readonly title: string;
+  readonly placement: EditorContainerPlacement;
+  readonly priority?: number;
+  readonly containerExport: string;
+  readonly activationReads?: readonly EditorContainerActivationRead[];
+}
+
+export type { EditorContainerActivationRead };
