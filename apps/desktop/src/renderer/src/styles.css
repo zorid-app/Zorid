@@ -632,7 +632,7 @@ h2 {
 
 .markdown-editor .cm-scroller {
   min-height: 100%;
-  font-family: var(--z-font-mono);
+  font-family: var(--z-font-ui);
   overflow-x: hidden;
 }
 
@@ -713,6 +713,11 @@ h2 {
   background: color-mix(in srgb, var(--z-control-bg-strong) 86%, transparent);
   border: 1px solid color-mix(in srgb, var(--z-color-border) 72%, transparent);
   border-radius: var(--z-radius-sm);
+  font-family: var(--z-font-mono);
+}
+
+.markdown-editor .z-live-preview-inline-code-delimiter {
+  font-family: var(--z-font-mono);
 }
 
 .markdown-editor .z-live-preview-strong {

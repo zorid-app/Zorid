@@ -10,6 +10,7 @@ const livePreviewClasses = [
   'z-live-preview-heading--h5',
   'z-live-preview-heading--h6',
   'z-live-preview-inline-code',
+  'z-live-preview-inline-code-delimiter',
   'z-live-preview-strong',
   'z-live-preview-emphasis',
   'z-live-preview-strikethrough',
@@ -64,6 +65,19 @@ describe('desktop Live Preview styles', () => {
 
     expect(styles).toMatch(/\.markdown-editor\s+\.cm-scroller\s*\{[^}]*overflow-x:\s*hidden;[^}]*\}/s);
     expect(styles).toMatch(/\.markdown-editor\s+\.cm-content\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*\}/s);
+  });
+
+  it('uses the platform UI font for markdown prose and monospace for code-like content', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+    const scroller = ruleFor(styles, '.markdown-editor .cm-scroller');
+    const inlineCode = ruleFor(styles, '.markdown-editor .z-live-preview-inline-code');
+    const inlineCodeDelimiter = ruleFor(styles, '.markdown-editor .z-live-preview-inline-code-delimiter');
+    const codeSurface = ruleFor(styles, '.markdown-editor .z-live-preview-code-block-widget__surface');
+
+    expect(scroller).toMatch(/font-family:\s*var\(--z-font-ui\);/);
+    expect(inlineCode).toMatch(/font-family:\s*var\(--z-font-mono\);/);
+    expect(inlineCodeDelimiter).toMatch(/font-family:\s*var\(--z-font-mono\);/);
+    expect(codeSurface).toMatch(/font-family:\s*var\(--z-font-mono\);/);
   });
 
   it('styles editor indentation guides as markdown-scoped line decorations', async () => {
