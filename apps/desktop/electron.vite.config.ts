@@ -25,6 +25,10 @@ const workspaceAliases = {
     repoRoot,
     'packages/editor/src/editor-container-adapter.ts',
   ),
+  '@zorid/editor/internal/editor-embed-lifecycle': path.resolve(
+    repoRoot,
+    'packages/editor/src/editor-embed-lifecycle.ts',
+  ),
   '@zorid/editor/internal/editor-window-contributions': path.resolve(
     repoRoot,
     'packages/editor/src/editor-window-contributions.ts',

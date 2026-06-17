@@ -1,3 +1,4 @@
+import type { EditorEmbedMountContext } from '@zorid/editor/internal/editor-embed-lifecycle';
 import type { FileRendererContribution, FileRendererMountContext } from '@zorid/platform-api';
 import { zbaseFileRenderer } from '@zorid/plugin-data-views/file-renderers';
 import { imageFileRenderer } from '@zorid/plugin-images/file-renderers';
@@ -152,4 +153,38 @@ export function mountTrustedFileRenderer({
   });
 
   return { ready, dispose };
+}
+
+export interface TrustedFileRendererEmbedAdapterOptions {
+  readonly rendererForTarget: (target: string) => FileRendererMatchDto | undefined;
+  readonly readText: (path: string) => Promise<string>;
+  readonly readImageResource: (match: FileRendererMatchDto) => Promise<{ bytes: Uint8Array; mimeType: string }>;
+  readonly onError?: (message: string) => void;
+}
+
+export function trustedFileRendererIdentity(match: FileRendererMatchDto): string {
+  return `${match.pluginId}:${match.rendererId}:${match.rendererEntry}:${match.rendererExport}:${match.surface}`;
+}
+
+export function createTrustedFileRendererEmbedAdapter({
+  rendererForTarget,
+  readText,
+  readImageResource,
+  onError,
+}: TrustedFileRendererEmbedAdapterOptions): (context: EditorEmbedMountContext) => Disposable {
+  return ({ occurrence, host }) => {
+    const match = rendererForTarget(occurrence.target);
+    if (!match) {
+      host.replaceChildren();
+      return { dispose: () => undefined };
+    }
+    return mountTrustedFileRenderer({
+      container: host,
+      match,
+      ...(occurrence.fragment ? { fragment: occurrence.fragment } : {}),
+      readText,
+      readImageResource,
+      ...(onError ? { onError } : {}),
+    });
+  };
 }

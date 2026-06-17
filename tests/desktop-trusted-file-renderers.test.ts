@@ -3,8 +3,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { reactive } from 'vue';
 import {
+  createTrustedFileRendererEmbedAdapter,
   FileRendererResourceDisposedError,
   mountTrustedFileRenderer,
+  trustedFileRendererIdentity,
 } from '../apps/desktop/src/renderer/src/trusted-file-renderers';
 import type { FileRendererMatchDto } from '../apps/desktop/src/renderer/src/types';
 
@@ -154,6 +156,40 @@ describe('desktop trusted file renderer loader', () => {
     expect(createObjectURL).not.toHaveBeenCalled();
     expect(revokeObjectURL).not.toHaveBeenCalled();
     expect(new FileRendererResourceDisposedError().code).toBe('resource.disposed');
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
+  });
+
+  it('adapts editor embed lifecycle mounts to trusted markdown file renderer mounts', async () => {
+    const container = document.createElement('main');
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:embed-image');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const adapter = createTrustedFileRendererEmbedAdapter({
+      rendererForTarget: (target) => (target === imageMatch.path ? imageMatch : undefined),
+      readText: vi.fn(),
+      readImageResource: vi.fn().mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/png' }),
+    });
+
+    const disposable = adapter({
+      host: container,
+      occurrence: {
+        documentSessionKey: 'doc.md',
+        kind: 'embed-reference',
+        referenceSyntax: 'wikilink-embed',
+        target: imageMatch.path,
+        fragment: 'hero',
+        rendererIdentity: trustedFileRendererIdentity(imageMatch),
+        sourceFrom: 0,
+        sourceTo: 16,
+        sourceText: '![[image.png#hero]]',
+      },
+    });
+
+    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:embed-image'));
+    disposable.dispose();
+
+    expect(container.childElementCount).toBe(0);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1);
     createObjectURL.mockRestore();
     revokeObjectURL.mockRestore();
   });

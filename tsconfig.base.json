@@ -26,6 +26,7 @@
       "@zorid/workspace": ["packages/workspace/src/index.ts"],
       "@zorid/editor": ["packages/editor/src/index.ts"],
       "@zorid/editor/internal/editor-container-adapter": ["packages/editor/src/editor-container-adapter.ts"],
+      "@zorid/editor/internal/editor-embed-lifecycle": ["packages/editor/src/editor-embed-lifecycle.ts"],
       "@zorid/editor/internal/editor-window-contributions": ["packages/editor/src/editor-window-contributions.ts"],
       "@zorid/metadata": ["packages/metadata/src/index.ts"],
       "@zorid/object-store": ["packages/object-store/src/index.ts"],

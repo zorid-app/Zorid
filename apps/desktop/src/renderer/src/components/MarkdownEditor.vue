@@ -5,6 +5,11 @@ import {
   type MarkdownBlockRegistration,
   type MountedMarkdownEditor,
 } from '@zorid/editor';
+import {
+  collectMarkdownEmbedOccurrencesFromText,
+  EditorEmbedLifecycle,
+  markdownEmbedOccurrenceFromBlockMatch,
+} from '@zorid/editor/internal/editor-embed-lifecycle';
 import type {
   EditorWindowContext,
   EditorWindowContribution,
@@ -16,7 +21,7 @@ import { createRendererDebugLogger } from '../debug-log.js';
 import { routeEditorContainerCapturedKeydown } from '../editor-container-key-routing.js';
 import { createFieldsPropertiesEditorContribution } from '../editor-window-fields-properties.js';
 import { createTrustedEditorContainerContributions } from '../trusted-editor-containers.js';
-import { mountTrustedFileRenderer } from '../trusted-file-renderers.js';
+import { createTrustedFileRendererEmbedAdapter, trustedFileRendererIdentity } from '../trusted-file-renderers.js';
 import type {
   EditorContainerMatchDto,
   FieldDto,
@@ -58,6 +63,7 @@ const contributionHost = ref<HTMLElement>();
 let editor: MountedMarkdownEditor | undefined;
 let editorWindowHost: EditorWindowContributionHost | undefined;
 let removeEditorKeydownCapture: (() => void) | undefined;
+let embedLifecycle: EditorEmbedLifecycle | undefined;
 
 function toDomRect(
   rect: { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number } | null,
@@ -100,6 +106,30 @@ const fileRendererEmbedMatches = computed<ReadonlyMap<string, FileRendererMatchD
   return matches;
 });
 
+function documentSessionKey(): string {
+  return props.documentPath ?? 'untitled-markdown-document';
+}
+
+function fileRendererIdentityForTarget(target: string): string | undefined {
+  const renderer = fileRendererEmbedMatches.value.get(target);
+  return renderer ? trustedFileRendererIdentity(renderer) : undefined;
+}
+
+function reconcileMarkdownEmbeds(): void {
+  if (!embedLifecycle) return;
+  const text = editor?.view.state.doc.toString() ?? props.text;
+  const visibleRanges = editor?.view.visibleRanges ?? [{ from: 0, to: Math.min(text.length, 2000) }];
+  const visibleFrom = Math.min(...visibleRanges.map((range) => range.from));
+  const visibleTo = Math.max(...visibleRanges.map((range) => range.to));
+  embedLifecycle.reconcile(
+    collectMarkdownEmbedOccurrencesFromText(text, {
+      documentSessionKey: documentSessionKey(),
+      rendererIdentityForTarget: fileRendererIdentityForTarget,
+    }),
+    { visibleFrom, visibleTo },
+  );
+}
+
 const fileRendererEmbedRegistrations = computed<MarkdownBlockRegistration[]>(() => {
   const renderedPaths = fileRendererEmbedMatches.value;
   if (renderedPaths.size === 0) return [];
@@ -110,28 +140,23 @@ const fileRendererEmbedRegistrations = computed<MarkdownBlockRegistration[]>(() 
       syntax: [{ kind: 'embed-reference', pathMatches: (path) => renderedPaths.has(path) }],
       render(match) {
         const path = match.definition.kind === 'external' ? match.definition.path : '';
-        const element = document.createElement('section');
-        element.className = 'z-file-renderer-markdown-embed';
-        element.dataset.fileRendererSurface = 'markdown-embed';
         const renderer = renderedPaths.get(path);
-        if (!renderer) return element;
-        const host = mountTrustedFileRenderer({
-          container: element,
-          match: renderer,
-          ...(match.definition.kind === 'external' && match.definition.fragment
-            ? { fragment: match.definition.fragment }
-            : {}),
-          readText: window.zoridDesktop.readVaultText.bind(window.zoridDesktop),
-          readImageResource: window.zoridDesktop.readFileRendererImageResource.bind(window.zoridDesktop),
-          onError: (message) => emit('error', message),
-        });
-        const observer = new MutationObserver(() => {
-          if (element.isConnected) return;
-          observer.disconnect();
-          host.dispose();
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-        return element;
+        const occurrence = renderer
+          ? markdownEmbedOccurrenceFromBlockMatch(match, {
+              documentSessionKey: documentSessionKey(),
+              rendererIdentity: trustedFileRendererIdentity(renderer),
+            })
+          : null;
+        if (!occurrence || !embedLifecycle) {
+          const element = document.createElement('section');
+          element.className = 'z-file-renderer-markdown-embed';
+          element.dataset.fileRendererSurface = 'markdown-embed';
+          return element;
+        }
+        const placeholder = embedLifecycle.renderPlaceholder(occurrence, editor?.view);
+        placeholder.classList.add('z-file-renderer-markdown-embed');
+        placeholder.dataset.fileRendererSurface = 'markdown-embed';
+        return placeholder;
       },
       onActivate(_event, match) {
         if (match.definition.kind !== 'external') return { kind: 'none' };
@@ -200,6 +225,14 @@ function openReference(target: { readonly path: string; readonly fragment?: stri
 onMounted(() => {
   if (!editorHost.value) return;
   try {
+    embedLifecycle = new EditorEmbedLifecycle({
+      mount: createTrustedFileRendererEmbedAdapter({
+        rendererForTarget: (target) => fileRendererEmbedMatches.value.get(target),
+        readText: window.zoridDesktop.readVaultText.bind(window.zoridDesktop),
+        readImageResource: window.zoridDesktop.readFileRendererImageResource.bind(window.zoridDesktop),
+        onError: (message) => emit('error', message),
+      }),
+    });
     editor = createMountedMarkdownEditor({
       parent: editorHost.value,
       text: props.text,
@@ -208,6 +241,8 @@ onMounted(() => {
         renderEditorWindowHost();
       },
       onUpdate: (update) => {
+        if (update.docChanged) embedLifecycle?.mapSourceRanges(update.changes);
+        reconcileMarkdownEmbeds();
         if (update.docChanged || update.selectionSet) emitCursorChange();
         if (update.selectionSet) renderEditorWindowHost();
       },
@@ -218,6 +253,8 @@ onMounted(() => {
         log({ level: 'error', message: `Markdown editor runtime error: ${context}`, data: error });
       },
     });
+    embedLifecycle.setMeasureView(editor.view);
+    reconcileMarkdownEmbeds();
     editorHost.value.addEventListener('keydown', captureEditorKeydown, { capture: true });
     removeEditorKeydownCapture = () =>
       editorHost.value?.removeEventListener('keydown', captureEditorKeydown, { capture: true });
@@ -238,6 +275,7 @@ watch(
     // silent by default so cache synchronization does not echo back as edits.
     try {
       editor?.setText(text);
+      reconcileMarkdownEmbeds();
       renderEditorWindowHost();
       emitCursorChange();
     } catch (caught) {
@@ -256,7 +294,10 @@ watch(
     () => props.markdownEmbeds,
     () => props.editorContainers,
   ],
-  () => renderEditorWindowHost(),
+  () => {
+    reconcileMarkdownEmbeds();
+    renderEditorWindowHost();
+  },
   {
     deep: true,
   },
@@ -267,6 +308,8 @@ onBeforeUnmount(() => {
   removeEditorKeydownCapture = undefined;
   editorWindowHost?.dispose();
   editorWindowHost = undefined;
+  embedLifecycle?.reconcile([], { documentClosed: true });
+  embedLifecycle = undefined;
   editor?.destroy();
   editor = undefined;
 });

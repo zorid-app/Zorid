@@ -16,6 +16,9 @@ export default defineConfig({
       '@zorid/editor/internal/editor-container-adapter': fileURLToPath(
         new URL('./packages/editor/src/editor-container-adapter.ts', import.meta.url),
       ),
+      '@zorid/editor/internal/editor-embed-lifecycle': fileURLToPath(
+        new URL('./packages/editor/src/editor-embed-lifecycle.ts', import.meta.url),
+      ),
       '@zorid/editor/internal/editor-window-contributions': fileURLToPath(
         new URL('./packages/editor/src/editor-window-contributions.ts', import.meta.url),
       ),
