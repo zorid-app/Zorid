@@ -665,7 +665,7 @@ h2 {
     color-mix(in srgb, var(--z-color-border) 70%, transparent) 0 1px,
     transparent 1px 4ch
   );
-  background-position: 0 0;
+  background-position: 2ch 0;
   background-repeat: no-repeat;
 }
 

@@ -260,10 +260,10 @@ export function createMarkdownEditorExtensions({
   const extensions: Extension[] = [
     zoridMarkdown(),
     EditorView.lineWrapping,
-    editorIndentationExtension,
     history(),
     keymap.of(historyKeymap),
     Prec.highest(keymap.of(markdownTaskKeymap)),
+    editorIndentationExtension,
     markdownTableStateExtension(),
     ...markdownInlineRegistrationExtensions(activeMarkdownInlineRegistrations),
     ...markdownBlockRegistrationExtensions([

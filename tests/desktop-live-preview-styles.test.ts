@@ -86,6 +86,9 @@ describe('desktop Live Preview styles', () => {
     expect(styles).toMatch(
       /\.markdown-editor\s+\.z-editor-indent-guide\s*\{[^}]*background-image:\s*repeating-linear-gradient\([^}]*\}/s,
     );
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-editor-indent-guide\s*\{[^}]*background-position:\s*2ch\s+0;[^}]*\}/s,
+    );
     expect(styles).toContain('leading source whitespace remains editable text');
   });
 

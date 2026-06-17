@@ -3,6 +3,7 @@
 import { deleteCharBackward, deleteCharForward } from '@codemirror/commands';
 import { deleteMarkupBackward, insertNewlineContinueMarkup, markdownKeymap } from '@codemirror/lang-markdown';
 import { describe, expect, it } from 'vitest';
+import { deletePlainIndentAtSelection, outdentLinesAtSelection } from '../packages/editor/src/indentation';
 import {
   createMountedMarkdownEditor,
   markdownTaskKeymap,
@@ -72,6 +73,28 @@ function pressEditorIndentKey(
   return result;
 }
 
+function createFocusedEditor(text: string) {
+  const parent = document.createElement('div');
+  const editor = createMountedMarkdownEditor({ parent, text });
+  editor.focus();
+  return { parent, editor };
+}
+
+function dispatchKey(
+  editor: ReturnType<typeof createMountedMarkdownEditor>,
+  key: 'Enter' | 'Backspace' | 'Tab',
+  shiftKey = false,
+): void {
+  editor.view.contentDOM.dispatchEvent(
+    new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }),
+  );
+}
+
+function insertSourceTextAtSelection(editor: ReturnType<typeof createMountedMarkdownEditor>, text: string): void {
+  const head = editor.view.state.selection.main.head;
+  editor.view.dispatch({ changes: { from: head, to: head, insert: text }, selection: { anchor: head + text.length } });
+}
+
 function runDeletionWithSourceFallback(
   text: string,
   key: 'Backspace' | 'Delete',
@@ -116,17 +139,153 @@ describe('editor Markdown keymap behavior', () => {
     expect(handleToggleEnterAtSelection).toEqual(expect.any(Function));
   });
 
-  it('indents and outdents paragraphs with editor-wide four-space Tab commands', () => {
-    expect(pressEditorIndentKey('paragraph', 'Tab', { anchor: 'para'.length }).text).toBe('    paragraph');
-    expect(pressEditorIndentKey('    paragraph', 'Tab', { anchor: '    para'.length }, true).text).toBe('paragraph');
+  it('indents blank and plain paragraph lines with command-owned four-space Tab commands', () => {
+    const { parent, editor } = createFocusedEditor('\nparagraph');
+    editor.view.dispatch({ selection: { anchor: 0 } });
+
+    dispatchKey(editor, 'Tab');
+    expect(editor.getText()).toBe('    \nparagraph');
+    expect(editor.view.state.selection.main.head).toBe(4);
+    expect(parent.querySelector('.z-editor-indent-guide')).not.toBeNull();
+
+    editor.view.dispatch({ selection: { anchor: editor.getText().length } });
+    dispatchKey(editor, 'Tab');
+    expect(editor.getText()).toBe('    \n    paragraph');
+    expect(editor.view.state.selection.main.head).toBe('    \n    paragraph'.length);
+    editor.destroy();
   });
 
-  it('indents selected nonblank lines and outdents at most one four-column unit', () => {
-    const text = ['alpha', '', '  beta', '\tgamma'].join('\n');
-    const indented = ['    alpha', '', '      beta', '    \tgamma'].join('\n');
+  it('keeps typing after a blank-line Tab at the source caret column without a horizontal jump', () => {
+    const { editor } = createFocusedEditor('');
+    dispatchKey(editor, 'Tab');
+    insertSourceTextAtSelection(editor, 'x');
 
-    expect(pressEditorIndentKey(text, 'Tab', { anchor: 0, head: text.length }).text).toBe(indented);
-    expect(pressEditorIndentKey(indented, 'Tab', { anchor: 0, head: indented.length }, true).text).toBe(text);
+    expect(editor.getText()).toBe('    x');
+    expect(editor.view.state.selection.main.head).toBe(5);
+    editor.destroy();
+  });
+
+  it('indents selected nonblank plain lines and outdents at most one four-column command-owned unit', () => {
+    const text = ['alpha', '', '  beta', '\tgamma'].join('\n');
+    const rootText = ['alpha', '', 'beta', 'gamma'].join('\n');
+    const indented = ['    alpha', '', '    beta', '    gamma'].join('\n');
+
+    expect(pressEditorIndentKey(text, 'Tab', { anchor: 0, head: text.length }).text).toBe(
+      '    alpha\n\n  beta\n\tgamma',
+    );
+
+    const { editor } = createFocusedEditor(rootText);
+    editor.view.dispatch({ selection: { anchor: 0, head: rootText.length } });
+    dispatchKey(editor, 'Tab');
+    expect(editor.getText()).toBe(indented);
+
+    editor.view.dispatch({ selection: { anchor: 0, head: editor.getText().length } });
+    dispatchKey(editor, 'Tab', true);
+    expect(editor.getText()).toBe(rootText);
+    editor.destroy();
+  });
+
+  it('inherits command-owned plain indentation on Enter and places the caret at the inherited column', () => {
+    const { editor } = createFocusedEditor('paragraph');
+    editor.view.dispatch({ selection: { anchor: 'paragraph'.length } });
+    dispatchKey(editor, 'Tab');
+    dispatchKey(editor, 'Enter');
+
+    expect(editor.getText()).toBe('    paragraph\n    ');
+    expect(editor.view.state.selection.main.head).toBe('    paragraph\n    '.length);
+    editor.destroy();
+  });
+
+  it('outdents command-owned empty plain lines by one unit per Enter until root', () => {
+    const { parent, editor } = createFocusedEditor('');
+    dispatchKey(editor, 'Tab');
+    dispatchKey(editor, 'Tab');
+    expect(editor.getText()).toBe('        ');
+    expect(parent.querySelector('.z-editor-indent-guide')).not.toBeNull();
+
+    dispatchKey(editor, 'Enter');
+    expect(editor.getText()).toBe('    ');
+    expect(editor.view.state.selection.main.head).toBe(4);
+    expect(parent.querySelector('.z-editor-indent-guide')).not.toBeNull();
+
+    dispatchKey(editor, 'Enter');
+    expect(editor.getText()).toBe('');
+    expect(editor.view.state.selection.main.head).toBe(0);
+    expect(parent.querySelector('.z-editor-indent-guide')).toBeNull();
+    editor.destroy();
+  });
+
+  it('outdents command-owned plain paragraphs with Shift-Tab and Backspace at indentation boundaries', () => {
+    const { editor } = createFocusedEditor('paragraph');
+    editor.view.dispatch({ selection: { anchor: 'paragraph'.length } });
+    dispatchKey(editor, 'Tab');
+    dispatchKey(editor, 'Tab');
+    expect(editor.getText()).toBe('        paragraph');
+
+    dispatchKey(editor, 'Tab', true);
+    expect(editor.getText()).toBe('    paragraph');
+    expect(editor.view.state.selection.main.head).toBe('    paragraph'.length);
+
+    editor.view.dispatch({ selection: { anchor: 4 } });
+    dispatchKey(editor, 'Backspace');
+    expect(editor.getText()).toBe('paragraph');
+    expect(editor.view.state.selection.main.head).toBe(0);
+    editor.destroy();
+  });
+
+  it('protects pre-existing, pasted, and manually typed leading four-space indentation from plain commands', () => {
+    expect(pressEditorIndentKey('    paragraph', 'Tab', { anchor: '    paragraph'.length }, true)).toEqual({
+      text: '    paragraph',
+      selectionHead: '    paragraph'.length,
+    });
+
+    const { editor } = createFocusedEditor('paragraph');
+    editor.view.dispatch({ selection: { anchor: 0 } });
+    insertSourceTextAtSelection(editor, '    ');
+    expect(outdentLinesAtSelection(editor.view)).toBe(true);
+    expect(editor.getText()).toBe('    paragraph');
+    editor.view.dispatch({ selection: { anchor: 4 } });
+    expect(deletePlainIndentAtSelection(editor.view)).toBe(true);
+    expect(editor.getText()).toBe('    paragraph');
+    editor.destroy();
+  });
+
+  it('drops command-owned markers when paste or manual edits replace marked leading indentation', () => {
+    const { parent, editor } = createFocusedEditor('');
+    dispatchKey(editor, 'Tab');
+    expect(parent.querySelector('.z-editor-indent-guide')).not.toBeNull();
+
+    editor.view.dispatch({ changes: { from: 0, to: editor.getText().length, insert: '    pasted' } });
+    expect(parent.querySelector('.z-editor-indent-guide')).toBeNull();
+    editor.view.dispatch({ selection: { anchor: editor.getText().length } });
+    dispatchKey(editor, 'Tab', true);
+    expect(editor.getText()).toBe('    pasted');
+    editor.view.dispatch({ selection: { anchor: 4 } });
+    expect(deletePlainIndentAtSelection(editor.view)).toBe(true);
+    expect(editor.getText()).toBe('    pasted');
+
+    editor.view.dispatch({ changes: { from: 0, to: editor.getText().length, insert: 'paragraph' } });
+    editor.view.dispatch({ selection: { anchor: editor.getText().length } });
+    dispatchKey(editor, 'Tab');
+    expect(parent.querySelector('.z-editor-indent-guide')).not.toBeNull();
+    editor.view.dispatch({ changes: { from: 0, to: 0, insert: '    ' } });
+    expect(parent.querySelector('.z-editor-indent-guide')).toBeNull();
+    editor.view.dispatch({ selection: { anchor: editor.getText().length } });
+    dispatchKey(editor, 'Tab', true);
+    expect(editor.getText()).toBe('        paragraph');
+
+    editor.view.dispatch({ changes: { from: 0, to: editor.getText().length, insert: 'paragraph' } });
+    editor.view.dispatch({ selection: { anchor: editor.getText().length } });
+    dispatchKey(editor, 'Tab');
+    expect(editor.getText()).toBe('    paragraph');
+    expect(parent.querySelector('.z-editor-indent-guide')).not.toBeNull();
+    editor.view.dispatch({ changes: { from: 4, to: editor.getText().length, insert: '    pasted' } });
+    expect(editor.getText()).toBe('        pasted');
+    expect(parent.querySelector('.z-editor-indent-guide')).toBeNull();
+    editor.view.dispatch({ selection: { anchor: editor.getText().length } });
+    dispatchKey(editor, 'Tab', true);
+    expect(editor.getText()).toBe('        pasted');
+    editor.destroy();
   });
 
   it('does not indent or outdent callout title lines with editor-wide Tab commands', () => {
