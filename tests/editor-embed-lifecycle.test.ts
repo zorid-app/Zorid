@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EditorEmbedOccurrence } from '../packages/editor/src/editor-embed-lifecycle';
 import {
   collectMarkdownEmbedOccurrencesFromText,
@@ -23,8 +23,61 @@ function occurrence(target: string, sourceFrom: number, sourceText = `![[${targe
   };
 }
 
+function nextMicrotask(): Promise<void> {
+  return new Promise((resolve) => queueMicrotask(resolve));
+}
+
 describe('editor-owned embed lifecycle', () => {
-  it('keeps unchanged embeds mounted across cursor/selection-only placeholder refreshes', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('does not let a speculative disconnected render steal a host from the connected placeholder', async () => {
+    const disposes: string[] = [];
+    const mounts: string[] = [];
+    const lifecycle = new EditorEmbedLifecycle({
+      mount: ({ occurrence }) => {
+        mounts.push(`${occurrence.target}:${occurrence.sourceFrom}`);
+        return { dispose: () => disposes.push(`${occurrence.target}:${occurrence.sourceFrom}`) };
+      },
+    });
+    const image = occurrence('image.png', 0);
+
+    const connected = lifecycle.renderPlaceholder(image);
+    document.body.append(connected);
+    await nextMicrotask();
+    const host = connected.querySelector('[data-editor-embed-host="true"]');
+
+    const speculative = lifecycle.renderPlaceholder(image);
+    await nextMicrotask();
+
+    expect(mounts).toEqual(['image.png:0']);
+    expect(disposes).toEqual([]);
+    expect(connected.querySelector('[data-editor-embed-host="true"]')).toBe(host);
+    expect(speculative.querySelector('[data-editor-embed-host="true"]')).toBeNull();
+  });
+
+  it('attaches a connected placeholder when a detached speculative render follows before the attach microtask', async () => {
+    const mounts: string[] = [];
+    const lifecycle = new EditorEmbedLifecycle({
+      mount: ({ occurrence }) => {
+        mounts.push(`${occurrence.target}:${occurrence.sourceFrom}`);
+        return { dispose: () => undefined };
+      },
+    });
+    const image = occurrence('image.png', 0);
+
+    const connected = lifecycle.renderPlaceholder(image);
+    document.body.append(connected);
+    const speculative = lifecycle.renderPlaceholder(image);
+    await nextMicrotask();
+
+    expect(mounts).toEqual(['image.png:0']);
+    expect(connected.querySelector('[data-editor-embed-host="true"]')).toBeTruthy();
+    expect(speculative.querySelector('[data-editor-embed-host="true"]')).toBeNull();
+  });
+
+  it('moves a host to a connected replacement placeholder without remounting', async () => {
     const disposes: string[] = [];
     const mounts: string[] = [];
     const lifecycle = new EditorEmbedLifecycle({
@@ -39,15 +92,20 @@ describe('editor-owned embed lifecycle', () => {
     expect(mounts).toEqual([]);
 
     const first = lifecycle.renderPlaceholder(image);
+    document.body.append(first);
+    await nextMicrotask();
+    const host = first.querySelector('[data-editor-embed-host="true"]');
     const second = lifecycle.renderPlaceholder(image);
+    document.body.append(second);
+    await nextMicrotask();
 
     expect(first).not.toBe(second);
     expect(mounts).toEqual(['image.png:0']);
     expect(disposes).toEqual([]);
-    expect(second.querySelector('[data-editor-embed-host="true"]')).toBeTruthy();
+    expect(second.querySelector('[data-editor-embed-host="true"]')).toBe(host);
   });
 
-  it('maps source ranges before reconcile so unrelated edits before an embed do not remount it', () => {
+  it('maps source ranges before reconcile so unrelated edits before an embed do not remount it', async () => {
     const mounts: number[] = [];
     const disposes: number[] = [];
     const lifecycle = new EditorEmbedLifecycle({
@@ -58,7 +116,8 @@ describe('editor-owned embed lifecycle', () => {
     });
     const original = occurrence('image.png', 10);
     lifecycle.reconcile([original], { visibleFrom: 0, visibleTo: 30 });
-    lifecycle.renderPlaceholder(original);
+    document.body.append(lifecycle.renderPlaceholder(original));
+    await nextMicrotask();
 
     lifecycle.mapSourceRanges({ mapPos: (position: number) => position + 5 });
     lifecycle.reconcile([occurrence('image.png', 15)], { visibleFrom: 0, visibleTo: 40 });
@@ -67,7 +126,7 @@ describe('editor-owned embed lifecycle', () => {
     expect(disposes).toEqual([]);
   });
 
-  it('mounts duplicate identical embeds independently and preserves shifted existing hosts when inserting before them', () => {
+  it('mounts duplicate identical embeds independently and preserves shifted existing hosts when inserting before them', async () => {
     const mounts: number[] = [];
     const disposes: number[] = [];
     const lifecycle = new EditorEmbedLifecycle({
@@ -78,7 +137,9 @@ describe('editor-owned embed lifecycle', () => {
     });
     const originalOccurrences = [occurrence('image.png', 10), occurrence('image.png', 30)];
     lifecycle.reconcile(originalOccurrences, { visibleFrom: 0, visibleTo: 50 });
-    for (const originalOccurrence of originalOccurrences) lifecycle.renderPlaceholder(originalOccurrence);
+    for (const originalOccurrence of originalOccurrences)
+      document.body.append(lifecycle.renderPlaceholder(originalOccurrence));
+    await nextMicrotask();
 
     const nextOccurrences = [occurrence('image.png', 0), occurrence('image.png', 30), occurrence('image.png', 50)];
     lifecycle.mapSourceRanges({ mapPos: (position: number) => position + 20 });
@@ -86,14 +147,15 @@ describe('editor-owned embed lifecycle', () => {
       visibleFrom: 0,
       visibleTo: 80,
     });
-    lifecycle.renderPlaceholder(nextOccurrences[0]!);
+    document.body.append(lifecycle.renderPlaceholder(nextOccurrences[0]!));
+    await nextMicrotask();
 
     expect(mounts).toEqual([10, 30, 0]);
     expect(disposes).toEqual([]);
     expect(lifecycle.retainedHostCount).toBe(3);
   });
 
-  it('disposes a deleted duplicate host and preserves the surviving shifted host', () => {
+  it('disposes a deleted duplicate host and preserves the surviving shifted host', async () => {
     const mounts: number[] = [];
     const disposes: number[] = [];
     const lifecycle = new EditorEmbedLifecycle({
@@ -105,8 +167,10 @@ describe('editor-owned embed lifecycle', () => {
     const first = occurrence('image.png', 0);
     const second = occurrence('image.png', first.sourceTo + 1);
     lifecycle.reconcile([first, second], { visibleFrom: 0, visibleTo: 50 });
-    lifecycle.renderPlaceholder(first);
+    document.body.append(lifecycle.renderPlaceholder(first));
     const secondPlaceholder = lifecycle.renderPlaceholder(second);
+    document.body.append(secondPlaceholder);
+    await nextMicrotask();
     const secondHost = secondPlaceholder.querySelector('[data-editor-embed-host="true"]');
 
     lifecycle.mapSourceRanges({
@@ -118,6 +182,8 @@ describe('editor-owned embed lifecycle', () => {
     const shiftedSecond = occurrence('image.png', 0);
     lifecycle.reconcile([shiftedSecond], { visibleFrom: 0, visibleTo: 20 });
     const reconciledPlaceholder = lifecycle.renderPlaceholder(shiftedSecond);
+    document.body.append(reconciledPlaceholder);
+    await nextMicrotask();
 
     expect(mounts).toEqual([0, second.sourceFrom]);
     expect(disposes).toEqual([0]);
@@ -125,7 +191,7 @@ describe('editor-owned embed lifecycle', () => {
     expect(lifecycle.retainedHostCount).toBe(1);
   });
 
-  it('reserves fallback height and coalesces measured height writes into one rAF requestMeasure', () => {
+  it('reserves fallback height and coalesces measured height writes into one rAF requestMeasure', async () => {
     const animationFrames: FrameRequestCallback[] = [];
     const requestMeasure = vi.fn();
     const lifecycle = new EditorEmbedLifecycle({
@@ -152,6 +218,8 @@ describe('editor-owned embed lifecycle', () => {
     Object.defineProperty(window, 'ResizeObserver', { configurable: true, value: TestResizeObserver });
 
     const placeholder = lifecycle.renderPlaceholder(occurrence('image.png', 0), { requestMeasure });
+    document.body.append(placeholder);
+    await nextMicrotask();
     resizeCallbacks[0]?.([], {} as ResizeObserver);
     resizeCallbacks[0]?.([], {} as ResizeObserver);
 
@@ -164,7 +232,7 @@ describe('editor-owned embed lifecycle', () => {
     Object.defineProperty(window, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
   });
 
-  it('keeps reconciliation side effects lazy until a live-preview placeholder renders', () => {
+  it('keeps reconciliation side effects lazy until a live-preview placeholder connects', async () => {
     const mounts: number[] = [];
     const disposes: number[] = [];
     const lifecycle = new EditorEmbedLifecycle({
@@ -183,12 +251,18 @@ describe('editor-owned embed lifecycle', () => {
     expect(mounts).toEqual([]);
     expect(disposes).toEqual([]);
 
-    lifecycle.renderPlaceholder(occurrences[0]!);
+    const placeholder = lifecycle.renderPlaceholder(occurrences[0]!);
+    await nextMicrotask();
+
+    expect(mounts).toEqual([]);
+
+    document.body.append(placeholder);
+    await nextMicrotask();
 
     expect(mounts).toEqual([0]);
   });
 
-  it('matches occurrences by canonical embed identity when raw source text uses whitespace, alias, or fragment spelling', () => {
+  it('matches occurrences by canonical embed identity when raw source text uses whitespace, alias, or fragment spelling', async () => {
     const mounts: string[] = [];
     const disposes: string[] = [];
     const lifecycle = new EditorEmbedLifecycle({
@@ -205,17 +279,19 @@ describe('editor-owned embed lifecycle', () => {
     const canonicalFragment = { ...occurrence('image.png', 30, '![[image.png#hero]]'), fragment: 'hero' };
 
     lifecycle.reconcile([rawWhitespaceAlias, rawFragmentAlias], { visibleFrom: 0, visibleTo: 80 });
-    lifecycle.renderPlaceholder(rawWhitespaceAlias);
-    lifecycle.renderPlaceholder(rawFragmentAlias);
+    document.body.append(lifecycle.renderPlaceholder(rawWhitespaceAlias));
+    document.body.append(lifecycle.renderPlaceholder(rawFragmentAlias));
+    await nextMicrotask();
     lifecycle.reconcile([canonicalWhitespaceAlias, canonicalFragment], { visibleFrom: 0, visibleTo: 80 });
-    lifecycle.renderPlaceholder(canonicalWhitespaceAlias);
-    lifecycle.renderPlaceholder(canonicalFragment);
+    document.body.append(lifecycle.renderPlaceholder(canonicalWhitespaceAlias));
+    document.body.append(lifecycle.renderPlaceholder(canonicalFragment));
+    await nextMicrotask();
 
     expect(mounts).toEqual(['image.png:![[ image.png|Hero ]]', 'image.png#hero:![[ image.png#hero|Hero ]]']);
     expect(disposes).toEqual([]);
   });
 
-  it('evicts old offscreen hosts by named retention constants without evicting attached hosts', () => {
+  it('evicts old offscreen hosts by named retention constants without evicting attached hosts', async () => {
     let now = 0;
     const disposes: number[] = [];
     const lifecycle = new EditorEmbedLifecycle({
@@ -226,12 +302,34 @@ describe('editor-owned embed lifecycle', () => {
       occurrence(`image-${index}.png`, index * 20),
     );
     document.body.append(lifecycle.renderPlaceholder(occurrences[0]!));
+    await nextMicrotask();
     lifecycle.reconcile(occurrences, { visibleFrom: 0, visibleTo: 10_000 });
     now = maxOffscreenAgeMs + 1;
     lifecycle.evictOffscreen({ visibleFrom: 1_000_000, visibleTo: 1_000_100 });
 
     expect(disposes).not.toContain(0);
     expect(lifecycle.retainedHostCount).toBeLessThanOrEqual(maxRetainedEmbedHosts + 1);
+  });
+
+  it('marks removed placeholders offscreen so retained hosts remain evictable', async () => {
+    let now = 0;
+    const disposes: number[] = [];
+    const lifecycle = new EditorEmbedLifecycle({
+      now: () => now,
+      mount: ({ occurrence }) => ({ dispose: () => disposes.push(occurrence.sourceFrom) }),
+    });
+    const image = occurrence('image.png', 0);
+    const placeholder = lifecycle.renderPlaceholder(image);
+    document.body.append(placeholder);
+    await nextMicrotask();
+
+    placeholder.remove();
+    await nextMicrotask();
+    now = maxOffscreenAgeMs + 1;
+    lifecycle.evictOffscreen({ visibleFrom: 1_000_000, visibleTo: 1_000_100 });
+
+    expect(disposes).toEqual([0]);
+    expect(lifecycle.retainedHostCount).toBe(0);
   });
 
   it('collects embed occurrence identities with target, fragment, syntax, renderer identity, session, and source range', () => {

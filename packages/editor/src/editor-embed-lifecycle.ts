@@ -42,6 +42,7 @@ interface EditorEmbedHostRecord {
   lastSeenFrom: number;
   attached: boolean;
   disposed: boolean;
+  pendingPlaceholders: HTMLElement[];
   rafHandle: number | undefined;
   measureView: Pick<EditorView, 'requestMeasure'> | undefined;
   observer: ResizeObserver | undefined;
@@ -188,26 +189,11 @@ export class EditorEmbedLifecycle {
     placeholder.dataset.editorEmbedKey = hostDomKey(occurrence);
     placeholder.style.minHeight = `${Math.max(1, record.height)}px`;
     placeholder.style.position = 'relative';
-    record.placeholder = placeholder;
     record.measureView = view ?? this.#measureView;
-    record.attached = true;
-    record.lastVisibleAt = this.#now();
-    this.#ensureMounted(record);
-    placeholder.replaceChildren(record.host);
-    record.connectionObserver?.disconnect();
-    const MutationObserverConstructor =
-      placeholder.ownerDocument.defaultView?.MutationObserver ?? globalThis.MutationObserver;
-    if (MutationObserverConstructor) {
-      record.connectionObserver = new MutationObserverConstructor(() => {
-        if (placeholder.isConnected) return;
-        record.attached = false;
-        record.placeholder = undefined;
-        record.connectionObserver?.disconnect();
-        record.connectionObserver = undefined;
-      });
-      record.connectionObserver.observe(placeholder.ownerDocument.body, { childList: true, subtree: true });
-    }
-    this.#observe(record);
+    record.pendingPlaceholders.push(placeholder);
+    this.#watchPlaceholderConnection(record);
+    this.#schedulePlaceholderConnectionSync(record);
+    window.setTimeout(() => this.#syncPlaceholderConnection(record), 0);
     return placeholder;
   }
 
@@ -278,6 +264,7 @@ export class EditorEmbedLifecycle {
     }
     this.#records.clear();
     for (const [key, record] of nextRecords) this.#records.set(key, record);
+    for (const record of this.#records.values()) this.#syncPlaceholderConnection(record);
     this.evictOffscreen({
       ...(options.visibleFrom === undefined ? {} : { visibleFrom: options.visibleFrom }),
       ...(options.visibleTo === undefined ? {} : { visibleTo: options.visibleTo }),
@@ -346,6 +333,7 @@ export class EditorEmbedLifecycle {
       attached: false,
       disposed: false,
       placeholder: undefined,
+      pendingPlaceholders: [],
       rafHandle: undefined,
       measureView: undefined,
       observer: undefined,
@@ -367,6 +355,53 @@ export class EditorEmbedLifecycle {
     record.observer = new ResizeObserverConstructor(() => this.#scheduleHeightWrite(record));
     record.observer.observe(record.host);
     this.#scheduleHeightWrite(record);
+  }
+
+  #watchPlaceholderConnection(record: EditorEmbedHostRecord): void {
+    if (record.connectionObserver) return;
+    const placeholder = record.pendingPlaceholders.at(-1) ?? record.placeholder;
+    if (!placeholder) return;
+    const MutationObserverConstructor =
+      placeholder.ownerDocument.defaultView?.MutationObserver ?? globalThis.MutationObserver;
+    if (!MutationObserverConstructor) return;
+    record.connectionObserver = new MutationObserverConstructor(() => this.#syncPlaceholderConnection(record));
+    record.connectionObserver.observe(placeholder.ownerDocument.body, { childList: true, subtree: true });
+  }
+
+  #syncPlaceholderConnection(record: EditorEmbedHostRecord): void {
+    if (record.disposed) return;
+    if (record.placeholder && !record.placeholder.isConnected) {
+      record.attached = false;
+      record.placeholder = undefined;
+    }
+    const placeholder = [...record.pendingPlaceholders]
+      .reverse()
+      .find((pendingPlaceholder) => pendingPlaceholder.isConnected);
+    if (placeholder) this.#attachPlaceholder(record, placeholder);
+    if (!record.placeholder && record.pendingPlaceholders.length === 0) {
+      record.connectionObserver?.disconnect();
+      record.connectionObserver = undefined;
+    }
+  }
+
+  #schedulePlaceholderConnectionSync(record: EditorEmbedHostRecord, remainingAttempts = 4): void {
+    queueMicrotask(() => {
+      this.#syncPlaceholderConnection(record);
+      if (!record.disposed && record.pendingPlaceholders.length > 0 && remainingAttempts > 0) {
+        this.#schedulePlaceholderConnectionSync(record, remainingAttempts - 1);
+      }
+    });
+  }
+
+  #attachPlaceholder(record: EditorEmbedHostRecord, placeholder: HTMLElement): void {
+    if (record.disposed || !record.pendingPlaceholders.includes(placeholder) || !placeholder.isConnected) return;
+    record.pendingPlaceholders = [];
+    record.placeholder = placeholder;
+    record.attached = true;
+    record.lastVisibleAt = this.#now();
+    this.#ensureMounted(record);
+    placeholder.replaceChildren(record.host);
+    this.#observe(record);
   }
 
   #scheduleHeightWrite(record: EditorEmbedHostRecord): void {
@@ -394,5 +429,7 @@ export class EditorEmbedLifecycle {
     record.disposable?.dispose();
     record.host.remove();
     record.placeholder?.replaceChildren();
+    for (const placeholder of record.pendingPlaceholders) placeholder.replaceChildren();
+    record.pendingPlaceholders = [];
   }
 }
