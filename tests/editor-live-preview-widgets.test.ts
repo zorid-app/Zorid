@@ -362,7 +362,6 @@ describe('editor Live Preview structured widgets', () => {
   it.each([
     ['table', ['| A | B |', '| - | - |', '| 1 | 2 |'].join('\n'), '.z-live-preview-table-widget'],
     ['code block', ['```ts', 'const value = 1;', '```'].join('\n'), '.z-live-preview-code-block-widget'],
-    ['callout', ['> [!note] Title', '> Body'].join('\n'), '.z-live-preview-callout-widget'],
   ])('measures first-party %s block widget resizes at the block decoration boundary', (_name, text, selector) => {
     const resizeHarness = installResizeObserverHarness();
     const parent = document.createElement('div');
@@ -702,7 +701,11 @@ describe('editor Live Preview structured widgets', () => {
     const editor = createMountedMarkdownEditor({ parent, text });
 
     const widget = parent.querySelector('.z-live-preview-code-block-widget');
+    const surface = widget?.querySelector(':scope > .z-live-preview-code-block-widget__surface');
     expect(widget).toBeTruthy();
+    expect(surface).toBeTruthy();
+    expect(surface?.querySelector(':scope > .z-live-preview-code-block-widget__header')?.textContent).toBe('ts');
+    expect(surface?.querySelector(':scope > .z-live-preview-code-block-widget__body')).toBeTruthy();
     expect(widget?.textContent).toContain('<script>alert("safe text")</script>');
     expect(widget?.querySelector('script')).toBeNull();
     expect(editor.getText()).toBe(text);

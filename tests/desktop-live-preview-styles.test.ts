@@ -25,6 +25,7 @@ const livePreviewClasses = [
   'z-live-preview-horizontal-rule',
   'z-live-preview-blockquote-line',
   'z-live-preview-code-block-widget',
+  'z-live-preview-code-block-widget__surface',
   'z-live-preview-code-block-widget__header',
   'z-live-preview-code-block-widget__body',
   'z-live-preview-callout-line',
@@ -39,7 +40,16 @@ const livePreviewClasses = [
   'z-live-preview-toggle-chevron',
   'z-live-preview-toggle-placeholder',
   'z-live-preview-toggle-hidden-children',
+  'z-live-preview-callout-widget',
+  'z-live-preview-callout-widget__surface',
+  'z-live-preview-callout-widget__header',
+  'z-live-preview-callout-widget__body',
 ];
+
+function ruleFor(styles: string, selector: string): string {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return styles.match(new RegExp(`${escapedSelector}\\s*\\{[^}]*\\}`, 's'))?.[0] ?? '';
+}
 
 describe('desktop Live Preview styles', () => {
   it('keeps the CodeMirror cursor visible on themed editor surfaces', async () => {
@@ -157,5 +167,44 @@ describe('desktop Live Preview styles', () => {
     expect(styles).toMatch(
       /\.markdown-editor\s+\.z-live-preview-task-checkbox\s*\{[^}]*width:\s*1\.235em;[^}]*height:\s*1\.235em;[^}]*font-size:\s*0\.72em;[^}]*\}/s,
     );
+  });
+
+  it('uses measured internal spacing instead of root vertical margins for block widgets', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+    const codeRoot = ruleFor(styles, '.markdown-editor .z-live-preview-code-block-widget');
+    const codeSurface = ruleFor(styles, '.markdown-editor .z-live-preview-code-block-widget__surface');
+    const calloutRoot = ruleFor(styles, '.markdown-editor .z-live-preview-callout-widget');
+    const calloutSurface = ruleFor(styles, '.markdown-editor .z-live-preview-callout-widget__surface');
+    const tableRoot = ruleFor(styles, '.markdown-editor .z-live-preview-table-widget');
+
+    expect(codeRoot).toMatch(/margin:\s*0;/);
+    expect(codeRoot).toMatch(/padding-block:\s*4px;/);
+    expect(codeRoot).not.toMatch(/margin:\s*4px 0;/);
+    expect(codeSurface).toMatch(/overflow:\s*hidden;/);
+    expect(codeSurface).toMatch(/border:\s*1px solid color-mix\(in srgb, var\(--z-color-border\) 72%, transparent\);/);
+    expect(codeSurface).toMatch(/border-radius:\s*var\(--z-radius-md\);/);
+    expect(codeSurface).toMatch(/background:\s*color-mix\(in srgb, var\(--z-control-bg-strong\) 86%, transparent\);/);
+    expect(codeSurface).toMatch(/font-family:\s*var\(--z-font-mono\);/);
+
+    expect(calloutRoot).toMatch(/margin:\s*0;/);
+    expect(calloutRoot).toMatch(/padding-block:\s*4px;/);
+    expect(calloutRoot).not.toMatch(/margin:\s*4px 0;/);
+    expect(calloutSurface).toMatch(/padding:\s*8px 10px;/);
+    expect(calloutSurface).toMatch(/color:\s*var\(--z-color-text\);/);
+    expect(calloutSurface).toMatch(
+      /background:\s*color-mix\(in srgb, var\(--z-color-accent\) 8%, var\(--z-control-bg-strong\)\);/,
+    );
+    expect(calloutSurface).toMatch(
+      /border:\s*1px solid color-mix\(in srgb, var\(--z-color-accent\) 28%, var\(--z-color-border\)\);/,
+    );
+    expect(calloutSurface).toMatch(
+      /border-left:\s*3px solid color-mix\(in srgb, var\(--z-color-accent\) 72%, var\(--z-color-border\)\);/,
+    );
+    expect(calloutSurface).toMatch(/border-radius:\s*var\(--z-radius-md\);/);
+    expect(calloutSurface).toMatch(/font-family:\s*var\(--z-font-ui\);/);
+
+    expect(tableRoot).toMatch(/margin:\s*0;/);
+    expect(tableRoot).toMatch(/padding-block:\s*8px;/);
+    expect(tableRoot).not.toMatch(/margin:\s*8px 0;/);
   });
 });

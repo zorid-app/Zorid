@@ -147,7 +147,7 @@ describe('Markdown table live preview', () => {
     parent.remove();
   });
 
-  it('keeps table scrolling inside a guttered non-clipping wrapper for overlay handles', () => {
+  it('keeps table scrolling, overlay, and plus controls direct children of the measured root', () => {
     const parent = document.createElement('div');
     document.body.append(parent);
     const editor = createMountedMarkdownEditor({
@@ -158,10 +158,19 @@ describe('Markdown table live preview', () => {
     const scroller = root.querySelector<HTMLElement>(':scope > .z-live-preview-table-scroll');
     const table = scroller?.querySelector(':scope > .z-live-preview-table-grid');
     const overlay = root.querySelector<HTMLElement>(':scope > .z-live-preview-table-overlay');
+    const rowPlus = root.querySelector<HTMLElement>(':scope > .z-live-preview-table-plus--row');
+    const columnPlus = root.querySelector<HTMLElement>(':scope > .z-live-preview-table-plus--column');
 
     expect(scroller).toBeTruthy();
     expect(table).toBeTruthy();
     expect(overlay).toBeTruthy();
+    expect(rowPlus).toBeTruthy();
+    expect(columnPlus).toBeTruthy();
+    expect(
+      root.querySelector(
+        ':scope > :not(.z-live-preview-table-scroll):not(.z-live-preview-table-overlay):not(.z-live-preview-table-plus)',
+      ),
+    ).toBeNull();
 
     editor.destroy();
     parent.remove();
@@ -539,6 +548,8 @@ describe('Markdown table live preview', () => {
     const styles = readFileSync('apps/desktop/src/renderer/src/styles.css', 'utf8');
 
     expect(styles).toMatch(/\.z-live-preview-table-widget\s*\{[^}]*--z-live-preview-table-gutter:\s*18px;/s);
+    expect(styles).toMatch(/\.z-live-preview-table-widget\s*\{[^}]*margin:\s*0;/s);
+    expect(styles).toMatch(/\.z-live-preview-table-widget\s*\{[^}]*padding-block:\s*8px;/s);
     expect(styles).toMatch(/\.z-live-preview-table-widget\s*\{[^}]*overflow:\s*visible;/s);
     expect(styles).toMatch(
       /\.z-live-preview-table-scroll\s*\{[^}]*margin-top:\s*var\(--z-live-preview-table-gutter\);/s,

@@ -338,17 +338,21 @@ class CodeBlockPreviewWidget extends WidgetType {
     wrapper.dataset.livePreviewRenderer = 'code-block-widget';
     wrapper.setAttribute('role', 'group');
 
+    const surface = document.createElement('div');
+    surface.className = 'z-live-preview-code-block-widget__surface';
+
     const header = document.createElement('div');
     header.className = 'z-live-preview-code-block-widget__header';
     header.textContent = this.info || 'code';
-    wrapper.append(header);
+    surface.append(header);
 
     const body = document.createElement('pre');
     body.className = 'z-live-preview-code-block-widget__body';
     const code = document.createElement('code');
     code.textContent = this.code;
     body.append(code);
-    wrapper.append(body);
+    surface.append(body);
+    wrapper.append(surface);
 
     wrapper.addEventListener('mousedown', (event) => {
       event.preventDefault();
