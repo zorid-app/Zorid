@@ -3,6 +3,7 @@
 import { readFile } from 'node:fs/promises';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
+import { indentLinesAtSelection } from '../packages/editor/src/indentation';
 import {
   collectLivePreviewRanges,
   createLivePreviewContext,
@@ -659,15 +660,25 @@ describe('editor Live Preview primitives', () => {
   });
 
   it('projects indentation guides as visual-only line metadata without replacing source', () => {
-    const text = ['    child', '\ttab child', '  shallow', 'plain'].join('\n');
+    const text = ['child', 'grandchild', 'plain'].join('\n');
     const parent = document.createElement('div');
     const editor = createMountedMarkdownEditor({ parent, text });
 
+    editor.view.dispatch({ selection: { anchor: 0, head: editor.view.state.doc.line(2).to } });
+    expect(indentLinesAtSelection(editor.view)).toBe(true);
+    const secondLine = editor.view.state.doc.line(2);
+    editor.view.dispatch({ selection: { anchor: secondLine.from, head: secondLine.to } });
+    expect(indentLinesAtSelection(editor.view)).toBe(true);
+
     const guideLines = [...parent.querySelectorAll<HTMLElement>('.cm-line.z-editor-indent-guide')];
 
-    expect(guideLines.map((line) => line.getAttribute('data-indent-depth'))).toEqual(['1', '1']);
+    expect(guideLines.map((line) => line.getAttribute('data-indent-depth'))).toEqual(['1', '2']);
+    expect(guideLines.map((line) => line.getAttribute('style'))).toEqual([
+      '--z-indent-depth: 1;',
+      '--z-indent-depth: 2;',
+    ]);
     expect(parent.querySelectorAll('.z-editor-indent-guide [contenteditable="false"]')).toHaveLength(0);
-    expect(editor.getText()).toBe(text);
+    expect(editor.getText()).toBe(['    child', '        grandchild', 'plain'].join('\n'));
 
     editor.destroy();
   });

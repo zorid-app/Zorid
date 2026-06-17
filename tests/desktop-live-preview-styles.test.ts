@@ -89,6 +89,12 @@ describe('desktop Live Preview styles', () => {
     expect(styles).toMatch(
       /\.markdown-editor\s+\.z-editor-indent-guide\s*\{[^}]*background-position:\s*2ch\s+0;[^}]*\}/s,
     );
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-editor-indent-guide\s*\{[^}]*background-size:\s*calc\(var\(--z-indent-depth\) \* 4ch\)\s+100%;[^}]*\}/s,
+    );
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-editor-indent-guide\s*\{[^}]*background-repeat:\s*no-repeat;[^}]*\}/s,
+    );
     expect(styles).toContain('leading source whitespace remains editable text');
   });
 

@@ -667,6 +667,7 @@ h2 {
   );
   background-position: 2ch 0;
   background-repeat: no-repeat;
+  background-size: calc(var(--z-indent-depth) * 4ch) 100%;
 }
 
 /* @zorid/editor emits z-live-preview-* classes; desktop owns the scoped host styling contract. */

@@ -326,10 +326,12 @@ export const markdownIndentKeymap: readonly KeyBinding[] = [
 ];
 
 function plainIndentMarkerDecoration(lineText: string): Decoration {
+  const depth = indentationDepth(lineText);
   return Decoration.line({
     class: 'z-editor-indent-guide',
     attributes: {
-      'data-indent-depth': String(indentationDepth(lineText)),
+      'data-indent-depth': String(depth),
+      style: `--z-indent-depth: ${depth};`,
     },
   });
 }
