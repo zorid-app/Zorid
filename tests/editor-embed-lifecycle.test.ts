@@ -232,6 +232,50 @@ describe('editor-owned embed lifecycle', () => {
     Object.defineProperty(window, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
   });
 
+  it('requests measure and preserves retained minHeight when moving host to a connected replacement', async () => {
+    const animationFrames: FrameRequestCallback[] = [];
+    const requestMeasure = vi.fn();
+    const lifecycle = new EditorEmbedLifecycle({
+      mount: ({ host }) => {
+        Object.defineProperty(host, 'offsetHeight', { configurable: true, value: 240 });
+        return { dispose: () => undefined };
+      },
+      requestAnimationFrame: (callback) => {
+        animationFrames.push(callback);
+        return animationFrames.length;
+      },
+      cancelAnimationFrame: () => undefined,
+    });
+    class TestResizeObserver implements ResizeObserver {
+      readonly disconnect = vi.fn();
+      readonly observe = vi.fn();
+      readonly unobserve = vi.fn();
+    }
+    const originalResizeObserver = window.ResizeObserver;
+    Object.defineProperty(window, 'ResizeObserver', { configurable: true, value: TestResizeObserver });
+
+    const image = occurrence('image.png', 0);
+    const first = lifecycle.renderPlaceholder(image, { requestMeasure });
+    document.body.append(first);
+    await nextMicrotask();
+    animationFrames.shift()?.(0);
+    const host = first.querySelector('[data-editor-embed-host="true"]');
+    expect(first.style.minHeight).toBe('240px');
+    expect(requestMeasure).toHaveBeenCalledTimes(1);
+
+    const second = lifecycle.renderPlaceholder(image, { requestMeasure });
+    document.body.append(second);
+    await nextMicrotask();
+    expect(second.style.minHeight).toBe('240px');
+    expect(second.querySelector('[data-editor-embed-host="true"]')).toBe(host);
+    animationFrames.shift()?.(0);
+
+    expect(second.style.minHeight).toBe('240px');
+    expect(requestMeasure).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(window, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
+  });
+
   it('keeps reconciliation side effects lazy until a live-preview placeholder connects', async () => {
     const mounts: number[] = [];
     const disposes: number[] = [];

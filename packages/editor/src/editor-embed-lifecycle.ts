@@ -400,8 +400,10 @@ export class EditorEmbedLifecycle {
     record.attached = true;
     record.lastVisibleAt = this.#now();
     this.#ensureMounted(record);
+    placeholder.style.minHeight = `${Math.max(1, record.height)}px`;
     placeholder.replaceChildren(record.host);
     this.#observe(record);
+    this.#scheduleHeightWrite(record);
   }
 
   #scheduleHeightWrite(record: EditorEmbedHostRecord): void {
@@ -413,9 +415,10 @@ export class EditorEmbedLifecycle {
         1,
         record.host.getBoundingClientRect().height || record.host.offsetHeight || record.height,
       );
-      if (Math.abs(measuredHeight - record.height) < 1) return;
-      record.height = measuredHeight;
-      record.placeholder.style.minHeight = `${measuredHeight}px`;
+      if (Math.abs(measuredHeight - record.height) >= 1) {
+        record.height = measuredHeight;
+        record.placeholder.style.minHeight = `${measuredHeight}px`;
+      }
       record.measureView?.requestMeasure();
     });
   }
