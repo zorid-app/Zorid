@@ -619,27 +619,43 @@ h2 {
 
 .markdown-editor {
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  max-width: 100%;
   overflow: hidden;
   background: var(--z-editor-bg);
 }
 
 .markdown-editor .cm-editor {
   height: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   color: var(--z-color-text);
   background: transparent;
 }
 
 .markdown-editor .cm-scroller {
+  max-width: 100%;
   min-height: 100%;
   font-family: var(--z-font-ui);
   overflow-x: hidden;
 }
 
 .markdown-editor .cm-content {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 32px;
   caret-color: var(--z-color-accent);
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-editor .cm-line {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Desktop owns host-level CodeMirror surface theming inside the Markdown editor. */
@@ -855,11 +871,18 @@ h2 {
 }
 
 .markdown-editor .z-live-preview-code-block-widget {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
   padding-block: 4px;
 }
 
 .markdown-editor .z-live-preview-code-block-widget__surface {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--z-color-border) 72%, transparent);
   border-radius: var(--z-radius-md);
@@ -883,6 +906,18 @@ h2 {
   overflow: auto;
   color: var(--z-color-text);
   background: transparent;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-editor .z-file-renderer-markdown-embed,
+.markdown-editor [data-file-renderer-surface='markdown-embed'] {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .markdown-editor .z-live-preview-callout-line {

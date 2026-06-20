@@ -62,9 +62,46 @@ describe('desktop Live Preview styles', () => {
 
   it('prevents horizontal Markdown editor scrolling and breaks long words', async () => {
     const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+    const editor = ruleFor(styles, '.markdown-editor');
+    const cmEditor = ruleFor(styles, '.markdown-editor .cm-editor');
+    const scroller = ruleFor(styles, '.markdown-editor .cm-scroller');
+    const content = ruleFor(styles, '.markdown-editor .cm-content');
+    const line = ruleFor(styles, '.markdown-editor .cm-line');
 
-    expect(styles).toMatch(/\.markdown-editor\s+\.cm-scroller\s*\{[^}]*overflow-x:\s*hidden;[^}]*\}/s);
-    expect(styles).toMatch(/\.markdown-editor\s+\.cm-content\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*\}/s);
+    expect(editor).toMatch(/min-width:\s*0;/);
+    expect(editor).toMatch(/max-width:\s*100%;/);
+    expect(editor).toMatch(/overflow:\s*hidden;/);
+    expect(cmEditor).toMatch(/min-width:\s*0;/);
+    expect(cmEditor).toMatch(/max-width:\s*100%;/);
+    expect(cmEditor).toMatch(/overflow:\s*hidden;/);
+    expect(scroller).toMatch(/max-width:\s*100%;/);
+    expect(scroller).toMatch(/overflow-x:\s*hidden;/);
+    expect(content).toMatch(/width:\s*100%;/);
+    expect(content).toMatch(/min-width:\s*0;/);
+    expect(content).toMatch(/max-width:\s*100%;/);
+    expect(content).toMatch(/overflow-wrap:\s*anywhere;/);
+    expect(content).toMatch(/word-break:\s*break-word;/);
+    expect(line).toMatch(/max-width:\s*100%;/);
+    expect(line).toMatch(/overflow-wrap:\s*anywhere;/);
+    expect(line).toMatch(/word-break:\s*break-word;/);
+  });
+
+  it('constrains block widgets and markdown embed hosts without restyling plugin internals', async () => {
+    const styles = await readFile('apps/desktop/src/renderer/src/styles.css', 'utf8');
+    const codeRoot = ruleFor(styles, '.markdown-editor .z-live-preview-code-block-widget');
+    const codeSurface = ruleFor(styles, '.markdown-editor .z-live-preview-code-block-widget__surface');
+
+    expect(codeRoot).toMatch(/display:\s*block;/);
+    expect(codeRoot).toMatch(/width:\s*100%;/);
+    expect(codeRoot).toMatch(/min-width:\s*0;/);
+    expect(codeRoot).toMatch(/max-width:\s*100%;/);
+    expect(codeSurface).toMatch(/width:\s*100%;/);
+    expect(codeSurface).toMatch(/min-width:\s*0;/);
+    expect(codeSurface).toMatch(/max-width:\s*100%;/);
+    expect(styles).toMatch(
+      /\.markdown-editor\s+\.z-file-renderer-markdown-embed,\s*\.markdown-editor\s+\[data-file-renderer-surface='markdown-embed'\]\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto;[^}]*\}/s,
+    );
+    expect(styles).not.toMatch(/\.markdown-editor\s+\[data-file-renderer-surface='markdown-embed'\]\s+\*/);
   });
 
   it('uses the platform UI font for markdown prose and monospace for code-like content', async () => {
