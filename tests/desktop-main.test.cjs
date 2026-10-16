@@ -25,7 +25,7 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   }
   const app = new EventEmitter();
   Object.assign(app, { setName() {}, whenReady: () => Promise.resolve(), getPath: () => '/state', quit() {} });
-  const services = new Map();
+  const services = new Map(), removals = [];
   const electron = { app, BrowserWindow: FakeWindow, ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
     dialog: { showOpenDialog: async owner => { pickerOwner = owner; return { filePaths: [nextPick], canceled: false }; }, showErrorBox: assert.fail },
     Menu: { buildFromTemplate: value => { template = value; return value; }, setApplicationMenu() {} }, shell: { openExternal() {} } };
@@ -36,7 +36,7 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
     if (name === './window-broker.cjs') return { WindowBroker };
     if (name === './context-menu.cjs') return { createContextMenuController: () => ({ close() {}, popup() {} }) };
     if (name === './vault-service.cjs') return { VaultService: { open: async root => {
-      if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {} });
+      if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {}, remove: async (target, force) => { removals.push([root, target, force]); } });
       return services.get(root);
     } } };
     return require(name);
@@ -55,6 +55,13 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.equal(pickerOwner, windows[1]);
   assert.equal(invoke(windows[1], 'getVault').path, '/second');
   assert.equal(invoke(windows[0], 'getVault').path, '/first');
+  // Exercise actual main registration, broker grants, and service forwarding.
+  assert.ok(handlers.has('zorid:remove'));
+  await invoke(windows[0], 'remove', '/first', 'Owned.md', false);
+  await invoke(windows[1], 'remove', '/second', 'Folder', true);
+  assert.throws(() => invoke(windows[0], 'remove', '/second', 'Foreign.md', true), /vault|grant|authorized/i);
+  assert.throws(() => handlers.get('zorid:remove')({sender:windows[0].webContents,senderFrame:{url:windows[0].webContents.mainFrame.url}}, '/first', 'Child.md', true), /Untrusted/);
+  assert.deepEqual(removals, [['/first','Owned.md',false],['/second','Folder',true]]);
   const newWindowMenu = template.find(item => item.label === 'File').submenu[0];
   assert.equal(newWindowMenu.accelerator, 'CmdOrCtrl+Shift+N');
   newWindowMenu.click(); await new Promise(resolve => setImmediate(resolve));

@@ -36,7 +36,7 @@ function registerIPC() {
     await fs.writeFile(stateFile, JSON.stringify({ path: result.path }), { mode: 0o600 });
     return result;
   });
-  for (const method of ['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash']) {
+  for (const method of ['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash', 'remove']) {
     handle(method, (record, event, expectedRoot, ...args) => broker.dispatch(record, expectedRoot, method, args, () => broker.authenticate(event)));
   }
 }
