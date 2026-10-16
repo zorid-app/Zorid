@@ -57,7 +57,7 @@ Both accept:
   Default editing is limited to note properties on Markdown files: booleans and
   text/number/null input. The host is responsible for write authorization, metadata
   type coercion, undo transactions, and rejecting stale versions at commit time.
-  View guards prevent stale controls from initiating writes or redrawing new results.
+  Failed primitive edits retain their draft for retry or Escape; accepted checkbox state is retained for a later rollback. View guards prevent stale controls from initiating writes or redrawing new results.
 - Optional context-menu, hover-file, and drag-file callbacks. Cards provide all three;
   List currently provides context-menu/hover callbacks. Menus themselves remain a
   host responsibility and are not presented as reference-complete.
@@ -103,7 +103,7 @@ performance or a matching reference latency/memory budget.
   here; loading is an explicit host capability. No browser network request occurs
   without a URL supplied by that capability.
 
-Validation: 12 focused serial tests cover settings, ordered properties, event
+Validation: 14 focused serial tests cover settings, ordered properties, event
 modifiers, text selection/editor protection, List omissions and numbering, nested
 markers, group collapse, asynchronous thumbnail retirement, 10,000-row virtual
 mounting, write-version boundaries, edit failures, repeated edits, bounded observer

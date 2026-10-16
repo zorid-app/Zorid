@@ -1,5 +1,5 @@
 import type { BaseQueryResult, BaseQueryRow } from './query.ts';
-import { createBaseVirtualSurface, createGroupUnit, emptyListValue, groupIdentity, mountBaseProperty, propertyValue } from './presentation-common.ts';
+import { createBaseVirtualSurface, createGroupUnit, disposePresentationResources, emptyListValue, groupIdentity, mountBaseProperty, propertyValue, reportPresentationError } from './presentation-common.ts';
 import type { BasePresentationHandle, BasePresentationOptions, VirtualUnit } from './presentation-common.ts';
 
 export interface BaseListViewOptions extends BasePresentationOptions {
@@ -46,7 +46,7 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
     if (options.hoverFile) element.addEventListener('mouseover', event => {
       if (current() && (!event.relatedTarget || !element.contains(event.relatedTarget as Node))) options.hoverFile!(row, event);
     });
-    return { element, dispose() { live = false; for (const dispose of disposers) dispose(); } };
+    return { element, dispose() { live = false; disposePresentationResources(disposers, options); } };
   };
   const surface = createBaseVirtualSurface(container, `bases-list-container${options.showIndentationGuides ? ' show-indentation-guide' : ''}`, () => {
     const snapshot = result; const settings = baseListSettings(snapshot); const units: VirtualUnit[] = [];
@@ -68,7 +68,7 @@ export function createBaseListView(container: HTMLElement, options: BaseListView
       });
     });
     return units;
-  });
+  }, error => reportPresentationError(options, error));
   surface.refresh();
   return {
     update(next) { if (destroyed) return; result = next; epoch++; surface.refresh(); },

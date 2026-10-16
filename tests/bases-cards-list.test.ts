@@ -166,7 +166,10 @@ test('Pending edit failures cannot redraw newer snapshot; live failures report o
     const input = cell.querySelector('input')!; input.value = 'Changed'; input.dispatchEvent(new win.Event('blur')); return cell;
   };
   edit(); reject(new Error('write failed')); await tick(); assert.equal(failures.length, 1);
-  assert.match(container.textContent!, /Todo/);
+  const failed = container.querySelector<HTMLInputElement>('[data-property="note.status"] input')!;
+  assert.equal(failed.value, 'Changed'); assert.equal(failed.disabled, false);
+  assert.equal(failed.getAttribute('aria-invalid'), 'true');
+  failed.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   const old = edit(); view.update({ ...data, version: 2 }); reject(new Error('stale failed')); await tick();
   assert.equal(failures.length, 1); assert.equal(old.isConnected, false); assert.match(container.textContent!, /Todo/);
   view.destroy(); d.window.close();
@@ -191,4 +194,28 @@ test('Single observer tracks only mounted units and restores scroll anchor after
   callback([{ target: above } as ResizeObserverEntry], {} as ResizeObserver); await tick();
   assert.equal(scroll.scrollTop, 352, 'expanded row above anchor retains visible note position');
   view.destroy(); assert.equal(observed.size, 0); assert.equal(disconnected, true); d.window.close();
+});
+
+test('Checkbox failed second write restores the last accepted state, not the original snapshot', async () => {
+  const { dom: d, container, win } = dom(); let calls = 0;
+  const view = createBaseListView(container, { result: result([row('A.md', { 'note.done': false })], {}, ['note.done']), openFile() {},
+    editProperty() { if (++calls > 1) throw new Error('second write failed'); } });
+  const input = container.querySelector<HTMLInputElement>('input')!;
+  input.checked = true; input.dispatchEvent(new win.Event('change')); await tick(); assert.equal(input.checked, true);
+  input.checked = false; input.dispatchEvent(new win.Event('change')); await tick(); assert.equal(input.checked, true);
+  view.destroy(); d.window.close();
+});
+
+test('Failed text draft can be retried without losing edits', async () => {
+  const { dom: d, container, win } = dom(); let calls = 0;
+  const view = createBaseListView(container, { result: result([row('A.md', { 'note.status': 'Todo' })], {}, ['note.status']), openFile() {},
+    editProperty() { if (++calls === 1) throw new Error('temporary failure'); } });
+  const cell = container.querySelector<HTMLElement>('[data-property="note.status"]')!;
+  cell.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  const input = cell.querySelector('input')!; input.value = 'Saved draft';
+  input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter' })); await tick();
+  assert.equal(cell.querySelector('input'), input); assert.equal(input.value, 'Saved draft');
+  input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter' })); await tick();
+  assert.equal(cell.textContent, 'Saved draft'); assert.equal(calls, 2);
+  view.destroy(); d.window.close();
 });

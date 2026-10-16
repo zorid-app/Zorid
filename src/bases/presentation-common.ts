@@ -33,7 +33,13 @@ export function emptyListValue(value: BaseExpressionValue): boolean {
   return value.type === 'null' || (value.type === 'string' && !value.value) || (value.type === 'list' && !value.value.length);
 }
 export function reportPresentationError(options: BasePresentationOptions, error: unknown): void {
-  options.onError?.(error);
+  try { options.onError?.(error); } catch { /* A reporting callback must not interrupt sibling resource cleanup. */ }
+}
+
+export function disposePresentationResources(disposers: (() => void)[], options: BasePresentationOptions): void {
+  for (const dispose of disposers.splice(0)) {
+    try { dispose(); } catch (error) { reportPresentationError(options, error); }
+  }
 }
 
 /** A single visible property. This default is intentionally not the complete metadata widget registry. */
@@ -76,9 +82,14 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
       input.type = 'checkbox'; input.checked = current.value; input.disabled = !editable;
       input.setAttribute('aria-label', options.getPropertyLabel?.(property) ?? property.replace(/^note\./, ''));
       input.addEventListener('change', async () => {
+        if (pending || disposed || !isCurrent()) return;
         const next = input.checked; input.disabled = true;
-        if (!(await commit({ type: 'boolean', value: next })) && !disposed) input.checked = current.value;
-        if (!disposed) input.disabled = !editable;
+        const accepted = await commit({ type: 'boolean', value: next });
+        if (!disposed && isCurrent()) {
+          if (accepted) value = { type: 'boolean', value: next };
+          input.checked = value.type === 'boolean' ? value.value : current.value;
+          input.disabled = !editable;
+        }
       });
       element.append(input);
     } else {
@@ -104,7 +115,13 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
       if (next.type === 'number' && !Number.isFinite(next.value)) { draw(value); return; }
       input.disabled = true;
       const accepted = await commit(next);
-      if (!disposed && isCurrent()) { if (accepted) value = next; draw(value); }
+      if (!disposed && isCurrent()) {
+        if (accepted) { value = next; draw(value); }
+        else {
+          // Keep the failed draft available for correction/retry; Escape restores the accepted value.
+          ended = false; input.disabled = false; input.setAttribute('aria-invalid', 'true');
+        }
+      }
     };
     input.addEventListener('blur', () => { void finish(); });
     input.addEventListener('keydown', event => {
@@ -155,7 +172,7 @@ class HeightIndex {
 }
 
 /** Owns one scroller, visible units plus the focused unit, and one bounded ResizeObserver. */
-export function createBaseVirtualSurface(container: HTMLElement, className: string, layout: (width: number) => readonly VirtualUnit[]) {
+export function createBaseVirtualSurface(container: HTMLElement, className: string, layout: (width: number) => readonly VirtualUnit[], onError?: (error: unknown) => void) {
   const document = container.ownerDocument;
   const scroller = document.createElement('div'); scroller.className = `bases-virtual-scroll ${className}`;
   scroller.style.cssText = 'overflow:auto;overflow-anchor:none;position:relative;height:100%;min-height:100px';
@@ -167,7 +184,9 @@ export function createBaseVirtualSurface(container: HTMLElement, className: stri
   const win = document.defaultView;
   const release = (index: number) => {
     const item = mounted.get(index); if (!item) return;
-    observer?.unobserve(item.element); item.dispose(); item.element.remove(); mounted.delete(index);
+    observer?.unobserve(item.element);
+    try { item.dispose(); } catch (error) { try { onError?.(error); } catch {} }
+    finally { item.element.remove(); mounted.delete(index); }
   };
   const render = () => {
     if (destroyed) return;

@@ -1,6 +1,6 @@
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseQueryResult, BaseQueryRow } from './query.ts';
-import { createBaseVirtualSurface, createGroupUnit, groupIdentity, mountBaseProperty, propertyValue, reportPresentationError } from './presentation-common.ts';
+import { createBaseVirtualSurface, createGroupUnit, disposePresentationResources, groupIdentity, mountBaseProperty, propertyValue, reportPresentationError } from './presentation-common.ts';
 import type { BasePresentationHandle, BasePresentationOptions, VirtualUnit } from './presentation-common.ts';
 
 export interface BaseCardsViewOptions extends BasePresentationOptions {
@@ -41,7 +41,7 @@ export function createBaseCardsView(container: HTMLElement, options: BaseCardsVi
         Promise.resolve().then(() => current() ? options.loadThumbnail!({ row, property,
           value: propertyValue(row, property), version: snapshot.version, signal: controller.signal }) : null).then(resource => {
           if (!resource) return;
-          if (!current()) { resource.dispose(); return; }
+          if (!current()) { disposePresentationResources([() => resource.dispose()], options); return; }
           cleanups.push(() => resource.dispose());
           const image = document.createElement('img'); image.alt = ''; image.draggable = false;
           image.style.objectFit = settings.imageFit; image.src = resource.url; cover.append(image);
@@ -82,7 +82,7 @@ export function createBaseCardsView(container: HTMLElement, options: BaseCardsVi
       if (current() && (!event.relatedTarget || !card.contains(event.relatedTarget as Node))) options.hoverFile!(row, event);
     });
     if (options.dragFile) { card.draggable = true; card.addEventListener('dragstart', event => { if (current()) options.dragFile!(row, event); }); }
-    return { element: card, dispose() { live = false; for (const cleanup of cleanups.splice(0)) cleanup(); } };
+    return { element: card, dispose() { live = false; disposePresentationResources(cleanups, options); } };
   };
   const surface = createBaseVirtualSurface(container, 'bases-cards-container', width => {
     const snapshot = result; const settings = baseCardsSettings(snapshot);
@@ -104,12 +104,12 @@ export function createBaseCardsView(container: HTMLElement, options: BaseCardsVi
           strip.style.gridTemplateColumns = `repeat(${columns},minmax(0,1fr))`;
           const cards = rows.map(row => mountCard(row, settings, snapshot, cardHeight));
           strip.append(...cards.map(card => card.element));
-          return { element: strip, dispose() { for (const card of cards) card.dispose(); } };
+          return { element: strip, dispose() { disposePresentationResources(cards.map(card => () => card.dispose()), options); } };
         } });
       }
     });
     return units;
-  });
+  }, error => reportPresentationError(options, error));
   surface.refresh();
   return {
     update(next) { if (destroyed) return; result = next; epoch++; surface.refresh(); },
