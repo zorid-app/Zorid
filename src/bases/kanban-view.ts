@@ -56,6 +56,10 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     for (const [stored, top] of scrolls) if (equal(stored, key)) return top;
     return 0;
   };
+  const saveScroll = (key: BaseQueryGroup['key'], top: number) => {
+    for (const stored of scrolls.keys()) if (equal(stored, key)) scrolls.delete(stored);
+    if (top > 0) scrolls.set(key, top);
+  };
   const canMove = (path: string) => {
     const property = propertyOf(result);
     return !!options.requestMove && !options.readOnly && !!property && !property.startsWith('formula.') &&
@@ -132,7 +136,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     const space = doc.createElement('div'); space.className = 'bases-kanban-column-space'; space.style.height = `${rows.length * rowHeight}px`;
     body.replaceChildren(space);
     body.scrollTop = Math.min(requestedTop, Math.max(0, rows.length * rowHeight - height));
-    scrolls.set(group.key, body.scrollTop);
+    saveScroll(group.key, body.scrollTop);
     const start = Math.max(0, Math.floor(body.scrollTop / rowHeight) - 2);
     const end = Math.min(rows.length, Math.ceil((body.scrollTop + height) / rowHeight) + 2);
     for (let i = start; i < end; i++) space.append(card(rows[i], i));
@@ -151,7 +155,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       const count = doc.createElement('span'); count.className = 'bases-kanban-column-count'; count.textContent = String(group.rows.length); heading.append(count);
       const body = doc.createElement('div'); body.className = 'bases-kanban-column-body'; body.setAttribute('role', 'listbox'); body.setAttribute('aria-label', label(group.key));
       column.append(heading, body); nodes.push(column);
-      body.addEventListener('scroll', () => { if (destroyed || !root.contains(body)) return; scrolls.set(group.key, body.scrollTop); renderRows(body, group); });
+      body.addEventListener('scroll', () => { if (destroyed || !root.contains(body)) return; saveScroll(group.key, body.scrollTop); renderRows(body, group); });
       column.addEventListener('dragover', event => {
         if (!destroyed && root.contains(column) && drag && drag.version === result.version && canMove(drag.path) && group.key) { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; }
       });
@@ -189,7 +193,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       if (propertyOf(result) !== operation.request.property || !equal(locate(path)?.key ?? null, operation.request.source) || !groups.some(group => equal(group.key, operation.request.destination))) pending.delete(path);
     }
     if (selected && !locate(selected)) selected = undefined;
-    const retainedScrolls = groups.map(group => [group.key, columnScroll(group.key)] as const);
+    const retainedScrolls = [...scrolls].filter(([key]) => groups.some(group => equal(group.key, key)));
     scrolls.clear(); for (const [key, top] of retainedScrolls) scrolls.set(key, top);
     render();
   }
@@ -202,7 +206,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     if (event.key === 'Enter') { event.preventDefault(); options.openFile(selected, event); }
     else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault(); const row = rows[Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))];
-      if (row) { selected = row.path; scrolls.set(group.key, Math.max(0, rows.indexOf(row) * rowHeight - rowHeight)); render(); }
+      if (row) { selected = row.path; saveScroll(group.key, Math.max(0, rows.indexOf(row) * rowHeight - rowHeight)); render(); }
     }
   };
   root.addEventListener('keydown', onKey);

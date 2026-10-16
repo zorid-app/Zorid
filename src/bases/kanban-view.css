@@ -1,5 +1,5 @@
 .bases-kanban-view { position: relative; box-sizing: border-box; height: 100%; min-height: 180px; overflow: auto hidden; padding: 12px; outline: none; color: var(--text-normal, #222); }
-.bases-kanban-board { position: relative; height: 100%; min-height: 156px; }
+.bases-kanban-board { position: relative; min-width: 100%; height: 100%; min-height: 156px; }
 .bases-kanban-column { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column; box-sizing: border-box; border: 1px solid var(--background-modifier-border, #ddd); border-radius: var(--radius-m, 8px); background: var(--background-primary-alt, #f7f7f7); overflow: hidden; }
 .bases-kanban-column-header { height: 40px; flex: 0 0 40px; display: flex; align-items: center; gap: 8px; padding: 0 8px; font-weight: 600; overflow: hidden; white-space: nowrap; }
 .bases-kanban-column-count { color: var(--text-muted, #777); font-size: .85em; font-weight: normal; }
