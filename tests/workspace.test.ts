@@ -693,3 +693,12 @@ test('toolbar menus anchor below their controls while right-click menus retain p
   root.querySelector<HTMLElement>('[role=tab]')!.dispatchEvent(new dom.window.MouseEvent('contextmenu',{clientX:315,clientY:27,bubbles:true,cancelable:true}));
   assert.deepEqual(positions.at(-1),{x:315,y:27});
 });
+
+
+test('inactive caret preserves unchanged middle text across separated sibling edits',async t=>{
+  const {workspace,type}=await setup(t,new MemoryAdapter({'Note.md':'prefix MIDDLE suffix','Other.md':'other'}));
+  await workspace.openNote('Note.md');const first=workspace.activePane;await (workspace as any).split('right');const second=workspace.activePane;
+  currentEditor().setSelectionRange(9,9);await workspace.openNote('Other.md',true,second);
+  type(first.element.querySelector('textarea')!,'XXprefix MIDDLE suffixYY');await workspace.flush();
+  await workspace.openNote('Note.md',false,second);assert.equal(currentEditor().selectionStart,11);
+});

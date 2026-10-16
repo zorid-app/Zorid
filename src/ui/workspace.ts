@@ -24,6 +24,7 @@ import { createCanvasView } from '../canvas/view.ts';
 import type { CanvasView } from '../canvas/view.ts';
 import { SplitLayout } from './split-layout.ts';
 import { ChangeSet, EditorSelection } from '@codemirror/state';
+import { textChanges } from '../editor/text-changes.ts';
 
 type Mode = 'live' | 'reading';
 interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; subpath?: string; viewState?: { editor?: EditorViewState; scrollTop: number; scrollLeft: number }; }
@@ -342,7 +343,7 @@ export class Workspace {
       if(isImage(path))pane.imageView=createImageView(host,path,this.attachments!);
       else if(/\.pdf$/i.test(path)){
         host.classList.add('pdf-attachment-view');
-        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches});
+        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches,onOpenMenu:event=>{const entry=this.vault.entries.get(path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}}});
         pane.pdfView=view;void view.ready.catch(error=>{if(pane.pdfView===view&&version===pane.renderVersion)notice(error instanceof Error?error.message:String(error));});
       }else if(/\.canvas$/i.test(path)){
         host.classList.add('canvas-attachment-view');
@@ -357,7 +358,7 @@ export class Workspace {
               other.canvasSource=source;other.canvasView.setDocument(CanvasDocument.parse(source));
             }
           },openFile:(target,fragment)=>this.vault.entries.has(target)?this.openNote(target,false,pane,true,fragment??''):this.followLink(path,target+(fragment??''),pane,'markdown'),
-          openLink:target=>{if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');},onError:error=>notice(error instanceof Error?error.message:String(error))});
+          openFileInNewTab:target=>this.vault.entries.has(target)?this.openNote(target,true,pane):Promise.resolve(),openLink:target=>{if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');},onError:error=>notice(error instanceof Error?error.message:String(error))});
         }catch(error){host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
       }
       else host.append(el('p','muted',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
@@ -372,13 +373,13 @@ export class Workspace {
       const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
       {
         const host=el('div','properties-host');scroll.append(host);
-        pane.properties=renderProperties(host,{getSource:()=>buffer.text,onChange:async next=>{
+        pane.properties=renderProperties(host,{isCurrent:()=>pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
           this.updateMarkdownBuffer(buffer,next);
           for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
           await buffer.flush();
         },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
       }
-      const createEmbeds=()=>new MarkdownEmbeds({vault:this.vault,resources:this.attachments,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){event.preventDefault();event.stopPropagation();this.fileMenu(entry,event.clientX,event.clientY);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
+      const createEmbeds=()=>new MarkdownEmbeds({vault:this.vault,resources:this.attachments,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
       if(tab.mode==='reading'){
         const preview=el('div','markdown-preview');scroll.append(preview);
         pane.refreshPreview=()=>{
@@ -413,10 +414,7 @@ export class Workspace {
     const buffer=this.buffers.get(path);if(buffer)this.bufferRevisions.set(buffer,(this.bufferRevisions.get(buffer)??0)+1);
     const states=this.panes.flatMap(pane=>pane.tabs.filter(tab=>tab.path===path&&(tab.id!==pane.viewTabId||!pane.editor)).map(tab=>tab.viewState?.editor)).filter(state=>state&&Array.isArray(state.selection?.ranges));
     if(!states.length)return;
-    let from=0;while(from<previous.length&&from<next.length&&previous[from]===next[from])from++;
-    let oldEnd=previous.length,newEnd=next.length;
-    while(oldEnd>from&&newEnd>from&&previous[oldEnd-1]===next[newEnd-1]){oldEnd--;newEnd--;}
-    const changes=ChangeSet.of({from,to:oldEnd,insert:next.slice(from,newEnd)},previous.length);
+    const changes=ChangeSet.of(textChanges(previous,next),previous.length);
     for(const state of states){
       const saved=state!,ranges=saved.selection.ranges;
       if(!ranges.length||ranges.length>1000||!ranges.every(range=>Number.isFinite(range?.anchor)&&Number.isFinite(range?.head)))continue;
@@ -610,6 +608,10 @@ export class Workspace {
     })):[];
     const path=tab.path;
     this.menu([{name:'Split right',action:()=>this.split('right',pane,tab)},{name:'Split down',action:()=>this.split('bottom',pane,tab)},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
+  }
+  private menuPoint(event:MouseEvent):{x:number;y:number}{
+    if(event.type!=='contextmenu'&&event.currentTarget instanceof HTMLElement){const bounds=event.currentTarget.getBoundingClientRect();return{x:bounds.left,y:bounds.bottom};}
+    return{x:event.clientX,y:event.clientY};
   }
   private tabMenuAt(pane:Pane,anchor:HTMLElement):void{
     const bounds=anchor.getBoundingClientRect();this.tabMenu(pane,this.current(pane),bounds.left,bounds.bottom);

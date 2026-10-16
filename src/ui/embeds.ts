@@ -172,11 +172,11 @@ export class MarkdownEmbeds {
     }
     if (!path) { fail('File not found'); return; }
     if (/\.pdf$/i.test(path)) {
-      state.node.className='internal-embed pdf-embed';
+      state.node.className='internal-embed pdf-embed';state.node.replaceChildren();
       const hash=request.target.indexOf('#');
       try {
         // The view acquires the resource itself. An outer lease would duplicate ownership.
-        const view=(this.options.pdfFactory??createPdfView)(state.node,path,this.resources,{embed:true,subpath:hash<0?'':request.target.slice(hash)});
+        const view=(this.options.pdfFactory??createPdfView)(state.node,path,this.resources,{embed:true,subpath:hash<0?'':request.target.slice(hash),onOpenMenu:event=>{if(!current())return;if(this.options.contextMenu)this.options.contextMenu(event,request,source);else this.options.open(source,request.target,request.kind);}});
         state.pdfView=view;
         // PDF views render their own loading errors. Consume completion without adding
         // stale errors to a replacement widget or duplicating the viewer's status UI.

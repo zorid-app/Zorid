@@ -92,24 +92,25 @@ test('embeds cap concurrent source loads and skip code and escaped syntax', asyn
   assert.equal(maximum,4);assert.equal(container.querySelectorAll('.markdown-embed').length,12);
 });
 
-async function pdfSetup(t:TestContext){
+async function pdfSetup(t:TestContext,contextMenu?: import('../src/ui/embeds.ts').EmbedOptions['contextMenu']){
   const {vault,container,dom}=await setup(t,{'Home.md':'','Folder/Note.md':''});await vault.createBinary('Folder/Document.PDF',new Uint8Array([1,2,3]));
   const {AttachmentResources}=await import('../src/ui/attachments.ts');const resources=new AttachmentResources(vault);
   let acquisitions=0;const acquire=resources.acquire.bind(resources);resources.acquire=path=>{acquisitions++;return acquire(path);};
   const calls:{node:HTMLElement;path:string;resources:typeof resources;options:import('../src/ui/pdf-view.ts').PdfViewOptions;destroyed:number;reject:(error:Error)=>void}[]=[];
-  const embeds=new MarkdownEmbeds({vault,resources,open(){},pdfFactory(node,path,shared,options){
+  const opens:string[]=[];
+  const embeds=new MarkdownEmbeds({vault,resources,contextMenu,open(source,target){opens.push(source+':'+target);},pdfFactory(node,path,shared,options){
     let reject!:(error:Error)=>void;const ready=new Promise<void>((_,b)=>{reject=b;});const call={node,path,resources:shared,options:options??{},destroyed:0,reject};calls.push(call);
     const marker=dom.window.document.createElement('div');marker.className='fake-pdf-view';node.append(marker);
     return {ready,destroy(){call.destroyed++;marker.remove();},goToPage(){},setScale(){},rotate(){},showSearch(){},applySubpath(){},getSelectionSubpath(){return null;}};
   }});
   t.after(()=>{embeds.destroy();resources.destroy();});
-  return {vault,container,embeds,calls,resources,get acquisitions(){return acquisitions;}};
+  return {vault,container,embeds,calls,resources,opens,dom,get acquisitions(){return acquisitions;}};
 }
 
 test('local PDF embeds use the shared viewer with exact subpath and no duplicate outer lease',async t=>{
   const f=await pdfSetup(t),node=f.embeds.render({target:'Folder/Document.PDF#page=2&selection=0,1,2,3&height=300',kind:'wiki'},'Home.md');f.container.append(node);
   assert.equal(f.calls.length,1);assert.equal(f.calls[0].path,'Folder/Document.PDF');assert.equal(f.calls[0].resources,f.resources);
-  assert.deepEqual(f.calls[0].options,{embed:true,subpath:'#page=2&selection=0,1,2,3&height=300'});assert.equal(f.acquisitions,0);
+  assert.equal(f.calls[0].options.embed,true);assert.equal(f.calls[0].options.subpath,'#page=2&selection=0,1,2,3&height=300');assert.equal(typeof f.calls[0].options.onOpenMenu,'function');assert.equal(node.querySelector('.embed-open'),null);assert.equal(f.acquisitions,0);
   assert.ok(node.classList.contains('pdf-embed'));assert.equal(node.querySelectorAll('.fake-pdf-view').length,1);
   assert.doesNotMatch(node.textContent??'',/not implemented/);
 });
@@ -132,4 +133,21 @@ test('late PDF load rejection cannot append an error into a replacement or unmou
 test('deleting an embedded PDF releases its viewer and renders a missing-file result',async t=>{
   const f=await pdfSetup(t),node=f.embeds.render({target:'Folder/Document.PDF',kind:'wiki'},'Home.md');f.container.append(node);
   await f.vault.trash('Folder/Document.PDF');assert.equal(f.calls[0].destroyed,1);assert.equal(f.calls.length,1);assert.match(node.textContent??'',/File not found/);assert.equal(node.querySelector('.fake-pdf-view'),null);
+});
+
+
+test('PDF toolbar open menu forwards the live event and ignores replaced viewer controls',async t=>{
+  const seen:MouseEvent[]=[];const f=await pdfSetup(t,event=>{seen.push(event);});
+  const node=f.embeds.render({target:'Folder/Document.PDF#page=2',kind:'wiki'},'Home.md');f.container.append(node);
+  const event=new f.dom.window.MouseEvent('click',{clientX:23,clientY:34});
+  f.calls[0].options.onOpenMenu!(event);assert.equal(seen[0],event);
+  f.embeds.invalidate('Folder/Document.PDF');f.calls[0].options.onOpenMenu!(event);assert.equal(seen.length,1);
+  f.calls[1].options.onOpenMenu!(event);assert.equal(seen.length,2);
+  f.embeds.releaseEmbed(node);f.calls[1].options.onOpenMenu!(event);assert.equal(seen.length,2);
+});
+
+test('PDF toolbar opens its source target when the host has no menu capability',async t=>{
+  const f=await pdfSetup(t),node=f.embeds.render({target:'Folder/Document.PDF#page=2',kind:'wiki'},'Home.md');f.container.append(node);
+  f.calls[0].options.onOpenMenu!(new f.dom.window.MouseEvent('click'));
+  assert.deepEqual(f.opens,['Home.md:Folder/Document.PDF#page=2']);
 });
