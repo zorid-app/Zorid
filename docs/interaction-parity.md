@@ -99,7 +99,7 @@ copying, search/highlights, outlines/thumbnails, internal/external links, page a
 selection deep links, embeds, context menus, keyboard shortcuts, annotation
 behavior supported by the reference, scrolling, password/error cases, large files,
 multiple views and mobile gestures. A browser iframe or generic PDF viewer is not
-assumed equivalent. A PDF.js viewer is now integrated into file tabs and Markdown embeds. Native local-file loading exposed a blob transport failure; its repair and native revalidation are in progress. Passing simulated viewer tests does not establish native functionality.
+assumed equivalent. A PDF.js viewer is now integrated into file tabs and Markdown embeds. Native local-file testing exposed and repaired a blob transport failure by passing owned bytes. A two-page native fixture verifies rendering, page navigation, search and Live Edit embedding. Full reference comparison remains outstanding.
 
 ## Mobile and remaining application surfaces
 

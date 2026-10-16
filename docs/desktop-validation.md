@@ -166,3 +166,22 @@ row and focused its first nested editor. Typing `Added` updated the Markdown;
 two native Undo shortcuts removed the typing and row insertion. Saving and
 checking disk bytes confirmed exact restoration of the original fixture.
 These actions do not establish the complete reference table interaction model.
+
+### Native PDF and Canvas integration
+
+The integrated renderer passed 523 tests and production build before native
+viewer checks. Opening an original two-page PDF initially failed with an
+unexpected response from its `blob:file://` resource. Commit `23bf02f` passes
+owned, independently transferable bytes to PDF.js instead; no CSP or Electron
+security settings were weakened. Its 38 focused tests and production build pass.
+
+After a clean launch, the same native PDF rendered its text and red rectangle;
+the accessibility tree exposed both pages. Setting Page to 2 navigated correctly.
+Searching `Zorid` returned `2 of 2`. A Live Edit Markdown embed targeting
+`#page=2&height=320` loaded the actual viewer and reported page 2 of 2. These are
+bounded native checks, not full PDF interaction or reference-UI certification.
+
+A separate Canvas fixture rendered two text cards and their connecting edge.
+The user subsequently moved those cards, so their changed positions were retained
+and no automated rollback was applied. Full Canvas editing, history and visual
+parity remain unverified natively.
