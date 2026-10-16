@@ -559,6 +559,9 @@ class TableController {
   /** Called after outer transactions, outside CodeMirror's update stack. */
   receiveSelection(restoreFocus = false) {
     if (this.destroyed) return;
+    // A child editor owns one cell and one range. Never collapse a parent
+    // multicursor selection while transferring focus into that child.
+    if (this.owner.state.selection.ranges.length > 1) { this.close(); return; }
     const range = this.owner.state.selection.main;
     if (this.selected) {
       if (range.from >= this.model.from && range.to <= this.model.to) return;
@@ -611,8 +614,17 @@ class TableController {
     if (!this.destroyed && this.cells[active.row]?.[active.column] && this.model.rows[active.row]?.cells[active.column]) this.renderCell(active.row, active.column);
   }
   destroy() {
+    const transferFocus = this.active?.view.hasFocus && this.owner.state.selection.ranges.length > 1;
     this.destroyed = true; this.stopGesture?.(); this.close();
     destroyMathRenders(this.dom); controllers.delete(this.dom);
+    if (transferFocus) queueMicrotask(() => {
+      const document = this.owner.dom.ownerDocument;
+      // A selection change can replace a focused child during the parent view's
+      // update. Restore focus only after that update, without stealing it from
+      // an intervening click or focusing a removed editor.
+      if (this.owner.contentDOM.isConnected && this.owner.state.selection.ranges.length > 1
+        && document.activeElement === document.body) this.owner.focus();
+    });
   }
 }
 
@@ -775,6 +787,10 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
       if (node.name !== 'Table') return;
       while (exclusionIndex < excluded.length && excluded[exclusionIndex].to <= node.from) exclusionIndex++;
       if (excluded[exclusionIndex]?.from < node.to) return false;
+      // Keep intersecting source visible when multiple parent ranges cannot be
+      // represented by the single-cell editor. Unaffected tables stay rendered.
+      if (state.selection.ranges.length > 1 && state.selection.ranges.some(range =>
+        range.from <= node.to && range.to >= node.from)) return false;
       const previous = cached.get(node.from);
       const model = previous && !previous.changed && previous.model.to === node.to ? previous.model
         : parseTable(state.doc.sliceString(node.from, node.to), node.from);
@@ -789,7 +805,9 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
       const excluded = exclusions(transaction.state);
       const sameExclusions = excluded.length === value.excluded.length && excluded.every((range, i) =>
         range.from === value.excluded[i].from && range.to === value.excluded[i].to);
-      if (!transaction.docChanged && syntaxTree(transaction.startState) === syntaxTree(transaction.state) && sameExclusions) return value;
+      const multiSelectionChanged = (transaction.startState.selection.ranges.length > 1 || transaction.state.selection.ranges.length > 1)
+        && !transaction.startState.selection.eq(transaction.state.selection);
+      if (!transaction.docChanged && syntaxTree(transaction.startState) === syntaxTree(transaction.state) && sameExclusions && !multiSelectionChanged) return value;
       const cached = new Map<number, CachedTable>();
       value.decorations.between(0, transaction.startState.doc.length, (from, to, decoration) => {
         const start = transaction.changes.mapPos(from, 1), end = transaction.changes.mapPos(to, -1);
