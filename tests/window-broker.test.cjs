@@ -137,3 +137,22 @@ test('broadcasts skip untrusted pages and isolate failed recipients after a succ
   assert.deepEqual(b.window.messages, []);
   assert.equal(c.window.messages.length, 2);
 });
+
+test('permanent removal rechecks queued grants and broadcasts only successful scoped operations', async () => {
+  const { broker, services, a, b } = fixture();
+  await broker.select(a, '/one'); broker.bind(b, a.vault);
+  const removals = [];
+  services.get('/one').remove = async (...args) => removals.push(args);
+  let release;
+  a.vault.tail = new Promise(resolve => { release = resolve; });
+  const stale = broker.dispatch(a, '/one', 'remove', ['Keep.md', true]);
+  await broker.select(a, '/two'); release();
+  await assert.rejects(stale, /selected vault changed/);
+  assert.deepEqual(removals, []);
+  assert.deepEqual(b.window.messages, []);
+  await broker.dispatch(b, '/one', 'remove', ['Gone.md', false]);
+  assert.deepEqual(removals, [['Gone.md', false]]);
+  assert.deepEqual(b.window.messages, [['zorid:change', { type: 'change', path: 'Gone.md', vault: '/one' }]]);
+  assert.deepEqual(a.window.messages, []);
+  broker.dispose();
+});
