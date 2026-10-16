@@ -7,6 +7,7 @@ import './ui/chrome.css';
 import './editor/table-controls.css';
 import './editor/live-lists.css';
 import './editor/live-inline.css';
+import './editor/wiki-completion.css';
 import './ui/pdf-view.css';
 import './canvas/view.css';
 import './ui/split-layout.css';
