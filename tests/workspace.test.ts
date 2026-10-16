@@ -642,3 +642,91 @@ test('session storage failure cannot bypass the unsaved-document unload guard',a
     assert.equal(event.defaultPrevented,true);
   }finally{prototype.setItem=original;}
 });
+
+function deferred(){let resolve!:()=>void;const promise=new Promise<void>(done=>resolve=done);return{promise,resolve};}
+
+test('background-tab caret maps through edits from the other split',async t=>{
+ const {workspace,type}=await setup(t,new MemoryAdapter({'Note.md':'0123456789','Other.md':'other'}));
+ await workspace.openNote('Note.md');const first=workspace.activePane;
+ await (workspace as any).split('right');const second=workspace.activePane;
+ currentEditor().setSelectionRange(7,7);
+ await workspace.openNote('Other.md',true,second);
+ type(first.element.querySelector('textarea')!,'ABC0123456789');
+ await workspace.flush();
+ await workspace.openNote('Note.md',false,second);
+ assert.equal(currentEditor().selectionStart,10,'saved caret before original 7 must follow inserted prefix');
+});
+
+test('superseded slow vault initialization cannot recreate the current panes or subscribe old adapter',async t=>{
+ const {workspace,destroy}=await setup(t,new MemoryAdapter({'Start.md':'start'}));
+ const started=deferred(),release=deferred();
+ class SlowVault extends MemoryAdapter{
+  subscriptions=0;
+  async list(){started.resolve();await release.promise;return super.list();}
+  subscribe(){this.subscriptions++;return()=>{this.subscriptions--;};}
+ }
+ const slow=new SlowVault({'Slow.md':'slow'}),fast=new MemoryAdapter({'Current.md':'current'});
+ const pending=workspace.openVault({adapter:slow,id:'slow',label:'slow'});
+ await started.promise;
+ await workspace.openVault({adapter:fast,id:'fast',label:'fast'});
+ await workspace.openNote('Current.md');
+ const pane=workspace.activePane,editor=pane.editor!;let destroyed=0;const dispose=editor.destroy;editor.destroy=()=>{destroyed++;dispose();};
+ release.resolve();await pending;
+ const result={oldWatchers:slow.subscriptions,paneStable:workspace.activePane===pane,editorStable:workspace.activePane.editor===editor};await destroy();
+ assert.deepEqual({...result,destroyed},{oldWatchers:0,paneStable:true,editorStable:true,destroyed:1},'superseded initialization must preserve pane ownership and eventual editor disposal');
+});
+
+
+test('toolbar menus anchor below their controls while right-click menus retain pointer coordinates',async t=>{
+  const {workspace,root,dom}=await setup(t,new MemoryAdapter({'Note.md':'note'}));
+  await workspace.openNote('Note.md');
+  const positions:{x:number;y:number}[]=[];
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:async(request:{x:number;y:number})=>{positions.push({x:request.x,y:request.y});return null;},dismissContextMenu:async()=>{}}});
+  for(const label of ['More options','Tab menu']){
+    const button=root.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+    button.getBoundingClientRect=()=>({x:880,y:45,left:880,right:910,top:45,bottom:75,width:30,height:30,toJSON(){return{};}});
+    button.click();assert.deepEqual(positions.at(-1),{x:880,y:75});
+  }
+  const status=root.querySelector<HTMLButtonElement>('.status-mode')!;
+  status.getBoundingClientRect=()=>({x:900,y:650,left:900,right:980,top:650,bottom:680,width:80,height:30,toJSON(){return{};}});
+  status.click();assert.deepEqual(positions.at(-1),{x:900,y:680});
+  root.querySelector<HTMLElement>('[role=tab]')!.dispatchEvent(new dom.window.MouseEvent('contextmenu',{clientX:315,clientY:27,bubbles:true,cancelable:true}));
+  assert.deepEqual(positions.at(-1),{x:315,y:27});
+});
+
+
+test('inactive caret preserves unchanged middle text across separated sibling edits',async t=>{
+  const {workspace,type}=await setup(t,new MemoryAdapter({'Note.md':'prefix MIDDLE suffix','Other.md':'other'}));
+  await workspace.openNote('Note.md');const first=workspace.activePane;await (workspace as any).split('right');const second=workspace.activePane;
+  currentEditor().setSelectionRange(9,9);await workspace.openNote('Other.md',true,second);
+  type(first.element.querySelector('textarea')!,'XXprefix MIDDLE suffixYY');await workspace.flush();
+  await workspace.openNote('Note.md',false,second);assert.equal(currentEditor().selectionStart,11);
+});
+
+
+test('file toolbar auto-reveal and collapse controls persist real tree state',async t=>{
+  const {workspace,root,click}=await setup(t,new MemoryAdapter({'Folder/Note.md':'note','Other.md':'other'}));
+  await workspace.openNote('Folder/Note.md');
+  click('Collapse all folders');assert.equal(root.querySelector('[role=treeitem][title="Folder"]')?.getAttribute('aria-expanded'),'false');
+  assert.ok(root.querySelector('button[aria-label="Expand all folders"]'));
+  click('Auto-reveal active file');
+  assert.equal(root.querySelector('[role=treeitem][title="Folder"]')?.getAttribute('aria-expanded'),'true');
+  assert.equal(root.querySelector('[data-action="auto-reveal"]')?.getAttribute('aria-pressed'),'true');
+  await workspace.openVault(workspace.platform);
+  assert.equal(root.querySelector('[data-action="auto-reveal"]')?.getAttribute('aria-pressed'),'true');
+  assert.ok(root.querySelector('[role=treeitem][title="Folder/Note.md"]'));
+});
+
+test('live link ownership uses source-relative metadata and external URLs never create notes',async t=>{
+  const {workspace}=await setup(t,new MemoryAdapter({'Folder/Note.md':'links','Folder/Target.md':'target','Target.md':'root'}));
+  await workspace.openNote('Folder/Note.md');const options=editorOptions.get(currentEditor())!;
+  assert.equal(options.isUnresolved?.('Target.md','markdown'),false);
+  assert.equal(options.isUnresolved?.('Missing','wiki'),true);
+  const opened:string[]=[];window.open=((url:unknown)=>{opened.push(String(url));return null;}) as typeof window.open;
+  await (workspace as any).followLink('Folder/Note.md','https://example.test',workspace.activePane,'markdown');
+  await (workspace as any).followLink('Folder/Note.md','javascript:alert(1)',workspace.activePane,'markdown');
+  assert.deepEqual(opened,['https://example.test']);assert.equal(workspace.vault.entries.size,4);
+  await workspace.openVault({adapter:new MemoryAdapter({'Current.md':'current'}),label:'new',id:'new'});
+  options.open('Should not exist','wiki');await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(workspace.vault.entries.has('Should not exist.md'),false);
+});

@@ -23,6 +23,8 @@ import { CanvasDocument } from '../canvas/document.ts';
 import { createCanvasView } from '../canvas/view.ts';
 import type { CanvasView } from '../canvas/view.ts';
 import { SplitLayout } from './split-layout.ts';
+import { ChangeSet, EditorSelection } from '@codemirror/state';
+import { textChanges } from '../editor/text-changes.ts';
 
 type Mode = 'live' | 'reading';
 interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; subpath?: string; viewState?: { editor?: EditorViewState; scrollTop: number; scrollLeft: number }; }
@@ -60,6 +62,7 @@ export class Workspace {
   private query = '';
   private searchGeneration = 0;
   private reverseSort = false;
+  private autoRevealFiles = false;
   private disposers: (() => void)[] = [];
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
@@ -78,6 +81,9 @@ export class Workspace {
   };
   private reloadTimer?: ReturnType<typeof setTimeout>;
   private vaultGeneration = 0;
+  private vaultRequest = 0;
+  private vaultTransition: Promise<void> = Promise.resolve();
+  private bufferRevisions = new WeakMap<NoteBuffer,number>();
   private initialized = false;
   private attachments?:AttachmentResources;
   private attachmentImporter?: AttachmentImporter;
@@ -122,6 +128,18 @@ export class Workspace {
   }
 
   async openVault(platform: PlatformVault): Promise<void> {
+    const request=++this.vaultRequest,next=new Vault(platform.adapter);
+    // Initialization is read-only and can overlap; only the latest request may
+    // enter the serialized teardown/install phase. Old views stay usable while
+    // a new adapter initializes, and a late request cannot acquire a watcher.
+    await next.initialize();
+    if(request!==this.vaultRequest)return;
+    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest)await this.replaceVault(platform,next);});
+    this.vaultTransition=transition.catch(()=>{});
+    await transition;
+  }
+
+  private async replaceVault(platform:PlatformVault,next:Vault):Promise<void>{
     this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
     await this.flush();
     this.saveSession();
@@ -130,18 +148,17 @@ export class Workspace {
     clearTimeout(this.reloadTimer);
     this.panes.forEach(pane => this.disposePaneViews(pane)); this.buffers.clear();
     this.attachments?.destroy();
-    this.platform = platform; this.vault = new Vault(platform.adapter); this.vaultGeneration++;
-    await this.vault.initialize();
+    this.platform = platform; this.vault = next; this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
-    this.panes = []; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};
+    this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};
     this.buildShell();
     let restored = false;
     try {
       const saved = JSON.parse(localStorage.getItem(this.sessionKey()) || 'null');
       if (saved) {
-        this.sessionState = saved;
+        this.sessionState = saved;this.autoRevealFiles=saved.autoRevealFiles===true;
         this.root.classList.toggle('right-hidden', saved.rightHidden !== false);
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
@@ -190,8 +207,14 @@ export class Workspace {
       }
       if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)this.run(()=>this.renderPane(pane));return;}
       const buffer = this.buffers.get(change.path);
-      if (buffer && !buffer.dirty) this.run(async () => { await buffer.reload(); for (const pane of this.panes) if (this.current(pane)?.path === change.path) { if (this.current(pane).mode === 'reading') await this.renderPane(pane); else pane.editor?.setValue(buffer.text); } this.renderRight(); });
+      if (buffer && !buffer.dirty) this.run(async () => {
+        const previous=buffer.text,revision=this.bufferRevisions.get(buffer)??0,generation=this.vaultGeneration;
+        await buffer.reload();if(generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
+        if((this.bufferRevisions.get(buffer)??0)===revision)this.mapInactiveSelections(change.path,previous,buffer.text);
+        for (const pane of this.panes) if (this.current(pane)?.path === change.path) { if (this.current(pane).mode === 'reading') await this.renderPane(pane); else pane.editor?.setValue(buffer.text); } this.renderRight();
+      });
     }));
+    for(const event of ['create','delete','rename','modify'] as const)this.disposers.push(this.vault.on(event,()=>{for(const pane of this.panes)pane.editor?.refreshLinks?.();}));
     const generation = this.vaultGeneration;
     const changedPaths = new Set<string>();
     let needsFullReload = false;
@@ -213,6 +236,7 @@ export class Workspace {
 
   private buildShell(): void {
     this.root.replaceChildren(); this.root.className = 'workspace right-hidden';
+    this.root.classList.toggle('is-macos-desktop',!!window.zorid&&/Mac/i.test(window.navigator.platform));
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
     const top = el('div', 'ribbon-top');
     top.append(button('search', 'Open quick switcher (⌘O)', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.run(() => this.openGraph())), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), button('terminal', 'Open command palette (⌘P)', () => this.commandPalette()));
@@ -223,7 +247,10 @@ export class Workspace {
     for (const [type, glyph, label] of [['files','folder','Files'],['search','search','Search'],['bookmarks','bookmark','Bookmarks']] as const) {
       const control = button(glyph, label, () => { this.treeTab = type; this.renderSidebar(); }); control.dataset.type = type; tabs.append(control);
     }
-    const tools = el('div', 'sidebar-toolbar'); tools.append(button('file','New note',() => this.run(() => this.newNote())),button('folder','New folder',() => this.run(() => this.newFolder())),button('sort','Change sort order',() => {this.reverseSort = !this.reverseSort; this.renderSidebar();}),button('collapse','Collapse all folders',() => {this.collapsed = new Set([...this.vault.entries.values()].filter(e=>e.type==='folder').map(e=>e.path)); this.renderSidebar();}));
+    const tools = el('div', 'sidebar-toolbar');
+    const autoReveal=button('gallery-vertical','Auto-reveal active file',()=>{this.autoRevealFiles=!this.autoRevealFiles;this.renderSidebar();this.saveSession();});autoReveal.dataset.action='auto-reveal';
+    const collapse=button('chevrons-down-up','Collapse all folders',()=>{const folders=[...this.vault.entries.values()].filter(entry=>entry.type==='folder').map(entry=>entry.path);if(folders.every(path=>this.collapsed.has(path)))this.collapsed.clear();else this.collapsed=new Set(folders);this.renderSidebar();this.saveSession();});collapse.dataset.action='collapse-all';
+    tools.append(button('square-pen','New note',() => this.run(() => this.newNote())),button('folder-plus','New folder',() => this.run(() => this.newFolder())),button('arrow-up-narrow-wide','Change sort order',() => {this.reverseSort = !this.reverseSort; this.renderSidebar();}),autoReveal,collapse);
     this.sidebarContent = el('div','sidebar-content');
     const switcher = textButton(this.platform.label, () => this.run(() => this.chooseVault()), 'vault-switcher'); switcher.prepend(icon('folder')); switcher.append(icon('down',14));
     this.sidebar.append(title,tabs,tools,this.sidebarContent,switcher);
@@ -257,7 +284,7 @@ export class Workspace {
     this.panes.push(pane); this.paneContainer.append(pane.element); return pane;
   }
   private focusPane(pane:Pane):void{if(pane.editor)pane.editor.focus();else pane.element.focus({preventScroll:true});}
-  private activate(pane: Pane): void { this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane)); this.renderRight(); this.renderStatus(); }
+  private activate(pane: Pane): void { const changed=this.activePane!==pane;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
   async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath=''): Promise<void> {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     await this.flushPane(pane); this.capturePaneState(pane); const current=this.current(pane);
@@ -304,7 +331,7 @@ export class Workspace {
       }catch{/* Not an app tab. */}};
       bar.append(node);
     }
-    bar.append(button('plus','New tab (⌘T)',()=>this.run(()=>this.newTab(pane)),'tab-add'),button('down','Tab menu',()=>this.tabMenu(pane)));
+    bar.append(button('plus','New tab (⌘T)',()=>this.run(()=>this.newTab(pane)),'tab-add'),button('down','Tab menu',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)));
     pane.element.append(bar);
     const toolbar=el('div','pane-toolbar');
     const back=button('left','Navigate back',()=>this.run(()=>this.navigate(-1,pane)));back.disabled=pane.historyIndex<=0;
@@ -312,7 +339,7 @@ export class Workspace {
     toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.md$/,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
     if(!tab.path||isMarkdown(tab.path))actions.append(button(tab.mode==='reading'?'edit':'book',tab.mode==='reading'?'Switch to Live Edit (⌘E)':'Switch to reading view (⌘E)',()=>this.run(()=>this.toggleReading(pane))));
-    actions.append(button('more','More options',()=>this.tabMenu(pane)),button('rightbar','Toggle right sidebar',()=>this.toggleRight()));toolbar.append(actions);pane.element.append(toolbar);
+    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight()));toolbar.append(actions);pane.element.append(toolbar);
     if(tab.kind==='graph'){this.renderGraph(pane.element);return;}
     if(!tab.path){this.renderEmpty(pane);return;}
     const path=tab.path;
@@ -322,7 +349,7 @@ export class Workspace {
       if(isImage(path))pane.imageView=createImageView(host,path,this.attachments!);
       else if(/\.pdf$/i.test(path)){
         host.classList.add('pdf-attachment-view');
-        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches});
+        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches,onOpenMenu:event=>{const entry=this.vault.entries.get(path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}}});
         pane.pdfView=view;void view.ready.catch(error=>{if(pane.pdfView===view&&version===pane.renderVersion)notice(error instanceof Error?error.message:String(error));});
       }else if(/\.canvas$/i.test(path)){
         host.classList.add('canvas-attachment-view');
@@ -337,7 +364,7 @@ export class Workspace {
               other.canvasSource=source;other.canvasView.setDocument(CanvasDocument.parse(source));
             }
           },openFile:(target,fragment)=>this.vault.entries.has(target)?this.openNote(target,false,pane,true,fragment??''):this.followLink(path,target+(fragment??''),pane,'markdown'),
-          openLink:target=>{if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');},onError:error=>notice(error instanceof Error?error.message:String(error))});
+          openFileInNewTab:target=>this.vault.entries.has(target)?this.openNote(target,true,pane):Promise.resolve(),openLink:target=>{if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');},onError:error=>notice(error instanceof Error?error.message:String(error))});
         }catch(error){host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
       }
       else host.append(el('p','muted',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
@@ -352,13 +379,13 @@ export class Workspace {
       const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
       {
         const host=el('div','properties-host');scroll.append(host);
-        pane.properties=renderProperties(host,{getSource:()=>buffer.text,onChange:async next=>{
-          buffer.update(next);
+        pane.properties=renderProperties(host,{isCurrent:()=>pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
+          this.updateMarkdownBuffer(buffer,next);
           for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
           await buffer.flush();
         },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
       }
-      const createEmbeds=()=>new MarkdownEmbeds({vault:this.vault,resources:this.attachments,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){event.preventDefault();event.stopPropagation();this.fileMenu(entry,event.clientX,event.clientY);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
+      const createEmbeds=()=>new MarkdownEmbeds({vault:this.vault,resources:this.attachments,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
       if(tab.mode==='reading'){
         const preview=el('div','markdown-preview');scroll.append(preview);
         pane.refreshPreview=()=>{
@@ -373,15 +400,36 @@ export class Workspace {
         const factory=this.editorFactory||(await import('./editor.ts')).createEditor;if(version!==pane.renderVersion)return;
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
         pane.editor=factory(host,{value:buffer.text,mode:tab.mode,paths:()=>[...this.vault.entries.keys()],
+          isUnresolved:(target,kind)=>generation!==this.vaultGeneration||!this.vault.metadata.resolveLink(path,target,kind),
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:request=>{const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
           transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
-          onChange:value=>{buffer.update(value);this.renderStatus();for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);other.propertyTimer=setTimeout(()=>{other.properties?.refresh();other.refreshPreview?.();},150);}}},open:target=>this.run(()=>this.followLink(path,target,pane))});
+          onChange:value=>{this.updateMarkdownBuffer(buffer,value);this.renderStatus();for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);other.propertyTimer=setTimeout(()=>{other.properties?.refresh();other.refreshPreview?.();},150);}}},open:(target,kind)=>{if(generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path)this.run(()=>this.followLink(path,target,pane,kind));}});
       }
       if(tab.viewState){if(tab.viewState.editor)pane.editor?.restoreViewState?.(tab.viewState.editor);if(Number.isFinite(tab.viewState.scrollTop))scroll.scrollTop=Math.max(0,tab.viewState.scrollTop);if(Number.isFinite(tab.viewState.scrollLeft))scroll.scrollLeft=Math.max(0,tab.viewState.scrollLeft);}
       if(buffer.error)notice(buffer.error.message);
     }catch(error){scroll.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
     this.renderStatus();
+  }
+
+  private updateMarkdownBuffer(buffer:NoteBuffer,next:string):void{
+    const previous=buffer.text;buffer.update(next);this.mapInactiveSelections(buffer.path,previous,next);
+  }
+
+  private mapInactiveSelections(path:string,previous:string,next:string):void{
+    if(previous===next)return;
+    const buffer=this.buffers.get(path);if(buffer)this.bufferRevisions.set(buffer,(this.bufferRevisions.get(buffer)??0)+1);
+    const states=this.panes.flatMap(pane=>pane.tabs.filter(tab=>tab.path===path&&(tab.id!==pane.viewTabId||!pane.editor)).map(tab=>tab.viewState?.editor)).filter(state=>state&&Array.isArray(state.selection?.ranges));
+    if(!states.length)return;
+    const changes=ChangeSet.of(textChanges(previous,next),previous.length);
+    for(const state of states){
+      const saved=state!,ranges=saved.selection.ranges;
+      if(!ranges.length||ranges.length>1000||!ranges.every(range=>Number.isFinite(range?.anchor)&&Number.isFinite(range?.head)))continue;
+      const clamp=(position:number)=>Math.max(0,Math.min(previous.length,Math.trunc(position)));
+      const main=Number.isInteger(saved.selection.mainIndex)?Math.max(0,Math.min(ranges.length-1,saved.selection.mainIndex)):0;
+      const mapped=EditorSelection.create(ranges.map(range=>EditorSelection.range(clamp(range.anchor),clamp(range.head))),main).map(changes);
+      saved.selection={ranges:mapped.ranges.map(range=>({anchor:range.anchor,head:range.head})),mainIndex:mapped.mainIndex};
+    }
   }
 
   private capturePaneState(pane:Pane):void{
@@ -417,7 +465,7 @@ export class Workspace {
     const buffer=await this.bufferFor(path),lines=buffer.text.split('\n');
     const marker=lines[line]?.match(/^([ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])[ \t]+\[)([^\]\r\n])(\])(?=[ \t]|\r?$)/);
     if(!marker)throw new Error('The task changed. Reopen the note before toggling it.');
-    const at=marker[1].length;lines[line]=lines[line].slice(0,at)+(checked?'x':' ')+lines[line].slice(at+1);buffer.update(lines.join('\n'));await buffer.flush();
+    const at=marker[1].length;lines[line]=lines[line].slice(0,at)+(checked?'x':' ')+lines[line].slice(at+1);this.updateMarkdownBuffer(buffer,lines.join('\n'));await buffer.flush();
     for(const pane of this.panes){pane.embeds?.invalidate(path);if(this.current(pane)?.path===path){if(this.current(pane).mode==='reading')await this.renderPane(pane);else pane.editor?.setValue(buffer.text);}}
   }
 
@@ -429,6 +477,12 @@ export class Workspace {
 
   private renderSidebar():void{
     if(!this.vault)return;
+    const activePath=this.activePane&&this.current()?.path;
+    if(this.autoRevealFiles&&activePath){let folder=parentOf(activePath);while(folder){this.collapsed.delete(folder);folder=parentOf(folder);}}
+    const autoReveal=this.sidebar.querySelector<HTMLButtonElement>('[data-action="auto-reveal"]');autoReveal?.classList.toggle('is-active',this.autoRevealFiles);autoReveal?.setAttribute('aria-pressed',String(this.autoRevealFiles));
+    const folders=[...this.vault.entries.values()].filter(entry=>entry.type==='folder'),allCollapsed=folders.length>0&&folders.every(entry=>this.collapsed.has(entry.path));
+    const collapse=this.sidebar.querySelector<HTMLButtonElement>('[data-action="collapse-all"]');
+    if(collapse){const label=allCollapsed?'Expand all folders':'Collapse all folders';collapse.title=label;collapse.setAttribute('aria-label',label);collapse.replaceChildren(icon(allCollapsed?'chevrons-up-down':'chevrons-down-up'));}
     this.sidebar.querySelectorAll<HTMLElement>('.sidebar-tabs button').forEach(node=>node.classList.toggle('is-active',node.dataset.type===this.treeTab));
     this.sidebarContent.replaceChildren();
     if(this.treeTab==='search'){
@@ -454,7 +508,7 @@ export class Workspace {
         if(folder){row.ondragover=event=>event.preventDefault();row.ondrop=event=>{event.preventDefault();const path=event.dataTransfer?.getData('application/x-zorid-file');if(path)this.run(async()=>{await this.flush();await this.vault.rename(path,`${entry.path}/${path.split('/').at(-1)}`);});};}
         container.append(row);if(folder&&!this.collapsed.has(entry.path))append(entry.path,container,depth+1);
       }
-    };append('',tree,0);this.sidebarContent.append(tree);
+    };append('',tree,0);this.sidebarContent.append(tree);if(this.autoRevealFiles)tree.querySelector<HTMLElement>('.tree-row.is-active')?.scrollIntoView({block:'nearest'});
   }
 
   private async search():Promise<void>{
@@ -491,7 +545,7 @@ export class Workspace {
     this.status.replaceChildren();
     if(tab?.path&&!isMarkdown(tab.path)){this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
     this.status.append(el('span','save-state',buffer?.error?'Save failed — draft retained':buffer?.dirty?'Saving…':''));
-    const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(),'status-mode');
+    const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(mode),'status-mode');
     this.status.append(mode,el('span','',`${text.trim()?text.trim().split(/\s+/u).length:0} words`),el('span','',`${[...text].length} characters`));
   }
 
@@ -510,7 +564,7 @@ export class Workspace {
   private async closeTab(pane:Pane,tab:Tab):Promise<void>{await this.flushPane(pane);if(tab.path)await this.buffers.get(tab.path)?.flush();const index=pane.tabs.indexOf(tab);if(index<0)return;pane.tabs.splice(index,1);if(!pane.tabs.length){if(this.panes.length>1){this.disposePaneViews(pane);this.panes=this.panes.filter(p=>p!==pane);this.splitLayout?.remove(pane.id);if(this.activePane===pane){this.activate(this.panes[0]);this.focusPane(this.panes[0]);}this.saveSession();return;}pane.tabs.push({id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'});}if(tab.id===pane.active)pane.active=pane.tabs[Math.min(index,pane.tabs.length-1)].id;await this.renderPane(pane);this.saveSession();this.renderRight();}
   private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
   private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.path&&!isMarkdown(tab.path))return;if(tab.path)await this.buffers.get(tab.path)?.flush();tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
-  private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane,true,target.includes('#')?target.slice(target.indexOf('#')):'');return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
+  private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane,true,target.includes('#')?target.slice(target.indexOf('#')):'');return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
   private async dailyNote():Promise<void>{const now=new Date();const name=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.md`;if(!this.vault.entries.has(name))await this.vault.create(name,'');await this.openNote(name);}
   private async split(edge:'right'|'bottom'='right',source=this.activePane,tab=this.current(source)):Promise<void>{
     const generation=this.vaultGeneration;
@@ -568,7 +622,14 @@ export class Workspace {
     const path=tab.path;
     this.menu([{name:'Split right',action:()=>this.split('right',pane,tab)},{name:'Split down',action:()=>this.split('bottom',pane,tab)},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
   }
-  private modeMenu():void{this.tabMenu(this.activePane);}
+  private menuPoint(event:MouseEvent):{x:number;y:number}{
+    if(event.type!=='contextmenu'&&event.currentTarget instanceof HTMLElement){const bounds=event.currentTarget.getBoundingClientRect();return{x:bounds.left,y:bounds.bottom};}
+    return{x:event.clientX,y:event.clientY};
+  }
+  private tabMenuAt(pane:Pane,anchor:HTMLElement):void{
+    const bounds=anchor.getBoundingClientRect();this.tabMenu(pane,this.current(pane),bounds.left,bounds.bottom);
+  }
+  private modeMenu(anchor:HTMLElement):void{this.tabMenuAt(this.activePane,anchor);}
 
   private async openGraph():Promise<void>{await this.flushPane(this.activePane);const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'graph'};this.activePane.tabs.push(tab);this.activePane.active=tab.id;this.run(()=>this.renderPane(this.activePane));this.saveSession();}
   private renderGraph(parent:HTMLElement):void{
@@ -623,7 +684,7 @@ export class Workspace {
   }
   private applySettings():void{const theme=this.settings.theme==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):this.settings.theme;document.documentElement.dataset.theme=theme;document.documentElement.style.setProperty('--font-text-size',`${this.settings.fontSize}px`);}
   private saveSettings():void{localStorage.setItem('zorid:settings',JSON.stringify(this.settings));this.applySettings();}
-  private saveSession():void{if(!this.platform||this.restoringLayout)return;this.panes.forEach(pane=>this.capturePaneState(pane));localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),layout:this.splitLayout?.serialize(),activePaneId:this.activePane?.id,panes:this.panes.map(p=>({...p.persisted,id:p.id,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
+  private saveSession():void{if(!this.platform||this.restoringLayout)return;this.panes.forEach(pane=>this.capturePaneState(pane));localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),autoRevealFiles:this.autoRevealFiles,layout:this.splitLayout?.serialize(),activePaneId:this.activePane?.id,panes:this.panes.map(p=>({...p.persisted,id:p.id,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','','Create a note with ⌘N. Link to another note with [[note name]]. Use ⌘O to find a file and ⌘P to find a command.'));
   }
   private onKey(event:KeyboardEvent):void{
@@ -634,5 +695,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
   async flush():Promise<void>{for(const pane of this.panes)await pane.canvasView?.flush();for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.root.replaceChildren();}
+  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.root.replaceChildren();}
 }

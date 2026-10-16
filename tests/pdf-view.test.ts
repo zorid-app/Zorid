@@ -157,9 +157,9 @@ test('real official viewer components initialize continuous page hosts through t
 
 test('destroyed viewer rejects retained controls and all public mutations',async t=>{
   const f=fixture(t);f.resolve();await f.view.ready;
-  const controls=f.root.querySelector('.zorid-pdf-view')!,zoom=controls.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!,spread=controls.querySelector<HTMLSelectElement>('[aria-label="Page spread"]')!,input=controls.querySelector<HTMLInputElement>('[aria-label="Page"]')!,searchClose=controls.querySelector<HTMLButtonElement>('[aria-label="Close search"]')!;
+  const controls=f.root.querySelector('.zorid-pdf-view')!,zoom=controls.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!,display=controls.querySelector<HTMLButtonElement>('[aria-label="Display options"]')!,input=controls.querySelector<HTMLInputElement>('[aria-label="Page"]')!,searchClose=controls.querySelector<HTMLButtonElement>('[aria-label="Close search"]')!;
   f.view.destroy();await ticks();const before={page:f.viewer.currentPageNumber,rotation:f.viewer.pagesRotation,scale:f.viewer.currentScale,scaleValue:f.viewer.currentScaleValue,spread:f.viewer.spreadMode,hashes:f.hashes.length,events:f.events.length};
-  f.view.goToPage(2);f.view.rotate(90);f.view.setScale(2);f.view.applySubpath('#page=2');f.view.showSearch();zoom.click();searchClose.click();spread.value='2';spread.dispatchEvent(new f.env.window.Event('change'));input.value='3';input.dispatchEvent(new f.env.window.Event('change'));
+  f.view.goToPage(2);f.view.rotate(90);f.view.setScale(2);f.view.applySubpath('#page=2');f.view.showSearch();zoom.click();searchClose.click();display.click();input.value='3';input.dispatchEvent(new f.env.window.Event('change'));
   assert.deepEqual({page:f.viewer.currentPageNumber,rotation:f.viewer.pagesRotation,scale:f.viewer.currentScale,scaleValue:f.viewer.currentScaleValue,spread:f.viewer.spreadMode,hashes:f.hashes.length,events:f.events.length},before);
   assert.equal(f.view.getSelectionSubpath(),null);
 });
@@ -195,4 +195,36 @@ test('failed byte materialization releases the lease and reports failure without
   const {root}=dom(t);let released=0;
   const view=createPdfView(root,'a.pdf',{async acquire(){return {url:'blob:file:///unfetchable',type:'application/pdf',async arrayBuffer(){throw new Error('Bytes unavailable');},release(){released++;}};}},{loadEngine:async()=>({} as PdfEngine)});
   await assert.rejects(view.ready,/Bytes unavailable/);assert.equal(released,1);assert.match(root.textContent??'',/Bytes unavailable/);view.destroy();
+});
+
+
+test('compact PDF toolbar puts fit and spread actions in the checked display menu',async t=>{
+  const f=fixture(t,{embed:true});f.resolve();await f.view.ready;
+  const toolbar=f.root.querySelector('.zorid-pdf-toolbar')!;
+  assert.equal(toolbar.querySelector('select'),null);
+  assert.deepEqual(Array.from(toolbar.querySelectorAll('button')).map(button=>button.getAttribute('aria-label')),['Zoom out','Zoom in','Display options']);
+  const display=toolbar.querySelector<HTMLButtonElement>('[aria-label="Display options"]')!;
+  display.click();const doc=f.env.window.document;
+  assert.deepEqual(Array.from(doc.querySelectorAll('[role=menuitemcheckbox]')).map(row=>row.textContent),['Fit width','Fit height','Single page','Two-page (odd)','Two-page (even)']);
+  assert.equal(doc.querySelector('[role=menuitemcheckbox]')!.getAttribute('aria-checked'),'true');
+  Array.from(doc.querySelectorAll<HTMLButtonElement>('[role=menuitemcheckbox]')).find(row=>row.textContent==='Two-page (even)')!.click();await ticks();assert.equal(f.viewer.spreadMode,2);
+  display.click();Array.from(doc.querySelectorAll<HTMLButtonElement>('[role=menuitemcheckbox]')).find(row=>row.textContent==='Fit height')!.click();await ticks();assert.equal(f.viewer.currentScaleValue,'page-height');
+  assert.equal(f.root.querySelector<HTMLElement>('.zorid-pdf-stage')!.style.height,'720px');
+  assert.ok(f.root.querySelector('.zorid-pdf-view.interactive-child.has-page-height'));
+});
+
+test('late native display-menu selection and retained host button do nothing after PDF closes',async t=>{
+  let opens=0,dismissals=0;const f=fixture(t,{embed:true,onOpenMenu:()=>{opens++;}});f.resolve();await f.view.ready;
+  const pending=deferred<string|null>();Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:()=>pending.promise,dismissContextMenu:async()=>{dismissals++;}}});
+  const more=f.root.querySelector<HTMLButtonElement>('[aria-label="More options"]')!;more.click();assert.equal(opens,1);
+  f.root.querySelector<HTMLButtonElement>('[aria-label="Display options"]')!.click();f.view.destroy();pending.resolve('pdf-spread-even');await ticks();more.click();
+  assert.equal(opens,1);assert.equal(f.viewer.spreadMode,0);assert.equal(dismissals,1);
+});
+
+test('PDF search settings stay out of the toolbar and retain functional find flags',async t=>{
+  const f=fixture(t);f.resolve();await f.view.ready;f.view.showSearch();
+  const preferences=f.root.querySelector<HTMLElement>('.zorid-pdf-find-preferences')!,button=f.root.querySelector<HTMLButtonElement>('[aria-label="Search options"]')!;
+  assert.equal(preferences.hidden,true);f.root.querySelector<HTMLButtonElement>('[aria-label="Match case"]')!.click();assert.equal(f.events.findLast(item=>item.name==='find')!.data.caseSensitive,true);button.click();assert.equal(preferences.hidden,false);
+  const input=preferences.querySelector<HTMLInputElement>('[aria-label="Whole words"]')!;input.checked=true;input.dispatchEvent(new f.env.window.Event('change'));assert.equal(f.events.findLast(item=>item.name==='find')!.data.entireWord,true);
+  f.root.querySelector<HTMLButtonElement>('[aria-label="Close search"]')!.click();assert.equal(preferences.hidden,true);assert.equal(button.getAttribute('aria-expanded'),'false');
 });

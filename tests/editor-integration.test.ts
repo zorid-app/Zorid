@@ -119,18 +119,20 @@ test('external metadata edits retain embed renderer identity and task source add
   destroy(); assert.ok(renders.every(render => render.destroys === 1)); assert.equal(host.querySelector('.cm-editor'), null);
 });
 
-test('embed source action maps through body edits and releases/remounts once beside tasks', t => {
+test('embed source action maps through body edits and retains the rendered view beside tasks', t => {
   const source = metadata + '- [ ] body\n![[Note]]\nend';
   const { editor, host, view, renders, click, cursor, destroy } = setup(t, source);
   cursor(source.length);
   editor.setValue(source.replace('- [ ] body', '- [ ] longer body'));
   const current = editor.getValue(), start = current.indexOf('![[Note]]');
+  const retained=host.querySelector('.cm-live-embed');
   click(host.querySelector('.cm-live-embed-edit')!);
   assert.equal(view.state.selection.main.from, start); assert.equal(view.state.selection.main.to, start + '![[Note]]'.length);
-  assert.equal(host.querySelector('.cm-live-embed'), null); assert.equal(renders[0].destroys, 1);
+  assert.ok(host.querySelector('.cm-live-embed')===retained); assert.equal(renders[0].destroys, 0);
+  assert.ok(host.textContent?.includes('![[Note]]'));
   assert.equal(host.querySelectorAll('.task-list-item-checkbox').length, 1);
   assert.equal(editor.getValue(), current);
-  cursor(current.length); assert.equal(renders.length, 2); assert.ok(host.querySelector('.cm-live-embed'));
+  cursor(current.length); assert.equal(renders.length, 1); assert.ok(host.querySelector('.cm-live-embed')===retained);
   destroy(); assert.ok(renders.every(render => render.destroys === 1));
 });
 

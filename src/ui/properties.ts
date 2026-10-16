@@ -1,10 +1,19 @@
 import { readProperties, removeProperty, renameProperty, setProperty, validatePropertyValue } from '../core/properties.ts';
 import type { Property, PropertyType, PropertyValue } from '../core/properties.ts';
+import { dismissContextMenu, showContextMenu } from '../platform/context-menu.ts';
+import type { ContextMenuItem } from '../platform/context-menu.ts';
+import { clearProperties, sortProperties } from './property-menus.ts';
 
 export interface PropertiesOptions {
   getSource: () => string;
   onChange: (next: string) => Promise<void> | void;
   openLink?: (target: string) => void;
+  showMenu?: typeof showContextMenu;
+  dismissMenu?: typeof dismissContextMenu;
+  writeClipboard?: (text: string) => Promise<void> | void;
+  onError?: (error: unknown) => void;
+  /** Optional owner identity guard for a host that reuses a panel across files. */
+  isCurrent?: () => boolean;
 }
 export interface PropertiesView { refresh(): void; destroy(): void }
 
@@ -42,18 +51,27 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     node.value = current; return node;
   };
   const root = element('div', 'metadata-container'); root.setAttribute('aria-label', 'Properties');
-  const heading = element('div', 'metadata-properties-heading', 'Properties');
+  const heading = element('div', 'metadata-properties-heading', 'Properties'); heading.tabIndex = 0;
   const rowsContainer = element('div', 'metadata-content');
   const globalError = element('div', 'metadata-error'); globalError.setAttribute('role', 'alert'); globalError.hidden = true;
   const addButton = button('Add property', 'metadata-add-button');
   root.append(heading, rowsContainer, globalError, addButton); container.append(root);
   const rows = new Map<string, Row>(), selectedTypes = new Map<string, PropertyType>();
   let destroyed = false, pending = Promise.resolve(), addForm: HTMLElement | undefined;
+  let menuSerial = 0, menuPending = false;
+  const showMenu = options.showMenu ?? showContextMenu;
+  const clipboard = options.writeClipboard ?? (document.defaultView?.navigator.clipboard?.writeText
+    ? (text: string) => document.defaultView!.navigator.clipboard.writeText(text) : undefined);
 
   function error(target: HTMLElement, problem?: unknown): void {
     target.textContent = problem ? problem instanceof Error ? problem.message : String(problem) : '';
     target.hidden = !problem;
   }
+  function report(problem: unknown, target: HTMLElement = globalError): void {
+    error(target, problem);
+    try { options.onError?.(problem); } catch (error) { console.error('Properties error handler failed', error); }
+  }
+  function live(): boolean { return !destroyed && root.isConnected && (options.isCurrent?.() ?? true); }
   function current(source: string, row: Row): Property {
     const property = readProperties(source).find(item => item.key === row.key);
     if (!property) throw new Error(`Property was removed or renamed: ${row.key}`);
@@ -68,7 +86,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
         if (next !== source) await options.onChange(next);
         if (destroyed) return;
         success?.(); refresh();
-      } catch (problem) { if (!destroyed) { refresh(); error(target, problem); } }
+      } catch (problem) { if (!destroyed) { refresh(); report(problem, target); } }
     });
   }
   function typeFor(property: Property): PropertyType { return selectedTypes.get(property.key) ?? property.type; }
@@ -111,7 +129,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       const list = element('div', 'metadata-list');
       items.forEach((item, index) => {
         let baseline = item;
-        const chip = element('div', 'metadata-list-item');
+        const chip = element('div', 'metadata-list-item'); chip.dataset.itemIndex = String(index);
         const input = element('textarea', 'metadata-input metadata-list-input'); input.rows = 1; input.value = item;
         input.setAttribute('aria-label', `${row.key} item ${index + 1}`);
         input.addEventListener('input', () => edited(row));
@@ -192,7 +210,7 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       keyInput: element('input', 'metadata-property-key-input'), selector: selectType(`${property.key} type`, typeFor(property)),
       value: element('div', 'metadata-property-value'), error: element('div', 'metadata-property-error'), dirty: false, revision: 0,
     };
-    row.element.dataset.propertyKey = property.key; row.keyInput.value = property.key;
+    row.element.dataset.propertyKey = property.key; row.element.tabIndex = 0; row.keyInput.value = property.key;
     row.keyInput.setAttribute('aria-label', `${property.key} name`); row.error.setAttribute('role', 'alert'); row.error.hidden = true;
     row.value.addEventListener('focusout', () => {
       // Wait for change handling to capture drafts before a background value refresh.
@@ -229,7 +247,9 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       let row = rows.get(property.key);
       if (!row) { row = createRow(property); rows.set(property.key, row); }
       row.property = property; row.element.dataset.propertyKey = property.key;
-      if (document.activeElement !== row.keyInput) row.keyInput.value = property.key;
+      // A row's key input is initialized once. A rename updates this row's key
+      // after saving; refresh must not replace a rejected or newer name draft,
+      // even after focus moves elsewhere. External keys get distinct rows.
       row.keyInput.setAttribute('aria-label', `${property.key} name`); row.selector.setAttribute('aria-label', `${property.key} type`);
       row.element.querySelector('.metadata-property-remove')?.setAttribute('aria-label', `Remove ${property.key}`);
       row.selector.value = typeFor(property); renderValue(row);
@@ -237,6 +257,151 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
       if (rowsContainer.children[index] !== row.element) rowsContainer.insertBefore(row.element, rowsContainer.children[index] ?? null);
     });
   }
+
+  type MenuEvent = Parameters<typeof showContextMenu>[0];
+  function propertySignature(property: Property): string { return JSON.stringify([property.key, property.value]); }
+  function hasDraft(row: Row): boolean { return row.dirty || row.keyInput.value !== row.key; }
+  function guardRow(row: Row, expected: string, revision: number, source: string): Property {
+    if (!live() || rows.get(row.key) !== row || !row.element.isConnected) throw new Error('This property editor is no longer active');
+    if (row.revision !== revision || hasDraft(row)) throw new Error('This property has an unsaved draft; finish editing before using this action');
+    const property = current(source, row);
+    if (propertySignature(property) !== expected) throw new Error('This property changed while the menu was open');
+    return property;
+  }
+  function openMenu(event: MenuEvent, items: ContextMenuItem[], actions: Map<string, () => void | Promise<void>>): void {
+    if (!live()) return;
+    const serial = ++menuSerial; menuPending = true;
+    const failed = (problem: unknown) => {
+      if (serial !== menuSerial) return;
+      menuPending = false;
+      if (!destroyed) report(problem);
+    };
+    let result: Promise<string | null>;
+    try { result = showMenu(event, items, { document }); }
+    catch (problem) { failed(problem); return; }
+    void result.then(async id => {
+      if (serial !== menuSerial) return;
+      menuPending = false;
+      if (!id || destroyed) return;
+      if (!live()) throw new Error('This property editor is no longer active');
+      await actions.get(id)?.();
+    }).catch(failed);
+  }
+  function openPropertyMenu(event: MenuEvent, row: Row): void {
+    const expected = propertySignature(row.property), revision = row.revision;
+    const actions = new Map<string, () => void | Promise<void>>();
+    const reserved = ['aliases', 'cssclasses', 'tags'].includes(row.key);
+    const inferred = row.property.value === null ? 'text' : row.property.type;
+    const assigned = selectedTypes.get(row.key);
+    const submenu: ContextMenuItem[] = [];
+    if (!reserved) {
+      submenu.push({ id: 'property-type-automatic', label: assigned ? 'Automatic' : `Automatic (${inferred === 'unknown' ? 'Unknown' : labels[inferred]})`, checked: !assigned, enabled: !hasDraft(row) });
+      actions.set('property-type-automatic', () => {
+        guardRow(row, expected, revision, options.getSource()); selectedTypes.delete(row.key);
+        row.renderedType = undefined; refresh();
+      });
+    }
+    const entries: { id: string; type: PropertyType; label: string }[] = [
+      ...(row.key === 'aliases' ? [{ id: 'aliases', type: 'list' as const, label: 'Aliases' }] : []),
+      ...(['checkbox', 'date', 'datetime', 'list', 'number'] as const).map(type => ({ id: type, type, label: labels[type] })),
+      ...(row.key === 'tags' ? [{ id: 'tags', type: 'tags' as const, label: 'Tags' }] : []),
+      { id: 'text', type: 'text', label: 'Text' },
+    ];
+    for (const entry of entries) {
+      let compatible = true;
+      try { validatePropertyValue(entry.type, row.property.value); } catch { compatible = false; }
+      const id = `property-type-${entry.id}`;
+      submenu.push({ id, label: entry.label, enabled: !reserved && !hasDraft(row) && compatible,
+        checked: reserved ? entry.id === (row.key === 'cssclasses' ? 'list' : row.key) : assigned === entry.type });
+      if (!reserved && compatible) actions.set(id, () => {
+        const property = guardRow(row, expected, revision, options.getSource());
+        validatePropertyValue(entry.type, property.value);
+        // Local display choice only: no coercion or fabricated vault-wide registry.
+        selectedTypes.set(row.key, entry.type); row.renderedType = undefined; refresh();
+      });
+    }
+    actions.set('property-remove', () => commit(globalError, source => {
+      guardRow(row, expected, revision, source); return removeProperty(source, row.key);
+    }, () => { selectedTypes.delete(row.key); }));
+    openMenu(event, [
+      { label: 'Property type', submenu }, { type: 'separator' },
+      { id: 'property-remove', label: 'Remove', enabled: !hasDraft(row) },
+    ], actions);
+  }
+  function openListMenu(event: MenuEvent, row: Row, chip: HTMLElement): void {
+    const index = Number(chip.dataset.itemIndex), expected = propertySignature(row.property), revision = row.revision;
+    const values = listValues(row.property), item = values[index];
+    if (item === undefined) return;
+    const guard = (source = options.getSource()) => {
+      const property = guardRow(row, expected, revision, source);
+      if (!chip.isConnected || listValues(property)[index] !== item) throw new Error('This list item changed while the menu was open');
+      return property;
+    };
+    const actions = new Map<string, () => void | Promise<void>>([
+      ['list-edit', () => { guard(); const input = chip.querySelector('textarea')!; input.focus(); input.select(); }],
+      ['list-remove', () => commit(globalError, source => {
+        const property = guard(source), next = listValues(property); next.splice(index, 1);
+        return setProperty(source, row.key, next, typeFor(property));
+      })],
+    ]);
+    if (clipboard) actions.set('list-copy', async () => { guard(); await clipboard(item); });
+    openMenu(event, [
+      { id: 'list-edit', label: 'Edit', enabled: !hasDraft(row) },
+      { id: 'list-copy', label: 'Copy', enabled: !!clipboard && !hasDraft(row) },
+      { id: 'list-remove', label: 'Remove from list', enabled: !hasDraft(row) },
+    ], actions);
+  }
+  function openHeaderMenu(event: MenuEvent): void {
+    let expected: string;
+    try { expected = JSON.stringify(readProperties(options.getSource())); }
+    catch (problem) { event.preventDefault?.(); event.stopPropagation?.(); report(problem); return; }
+    const dirty = [...rows.values()].some(hasDraft);
+    const guard = (source: string) => {
+      if (!live()) throw new Error('This property editor is no longer active');
+      if ([...rows.values()].some(hasDraft)) throw new Error('Properties have unsaved drafts; finish editing before using this action');
+      if (JSON.stringify(readProperties(source)) !== expected) throw new Error('Properties changed while the menu was open');
+    };
+    const actions = new Map<string, () => void | Promise<void>>([
+      ['properties-add', () => { if (!live()) return; readProperties(options.getSource()); addButton.click(); }],
+      ['properties-sort-asc', () => commit(globalError, source => { guard(source); return sortProperties(source); })],
+      ['properties-sort-desc', () => commit(globalError, source => { guard(source); return sortProperties(source, true); })],
+      ['properties-clear', () => commit(globalError, source => { guard(source); return clearProperties(source); }, () => selectedTypes.clear())],
+    ]);
+    openMenu(event, [
+      { id: 'properties-add', label: 'Add file property' }, { type: 'separator' },
+      { label: 'Sort', submenu: [
+        { id: 'properties-sort-asc', label: 'Name (A to Z)', enabled: !dirty },
+        { id: 'properties-sort-desc', label: 'Name (Z to A)', enabled: !dirty },
+      ] }, { type: 'separator' }, { id: 'properties-clear', label: 'Clear file properties', enabled: !dirty },
+    ], actions);
+  }
+  function routeMenu(event: MenuEvent): void {
+    if (!live()) return;
+    const target = event.target as HTMLElement | null;
+    if (!target || target.nodeType !== 1 || !root.contains(target)) return;
+    if (heading.contains(target)) { openHeaderMenu(event); return; }
+    const rowElement = target.closest<HTMLElement>('.metadata-property');
+    const row = rowElement?.dataset.propertyKey ? rows.get(rowElement.dataset.propertyKey) : undefined;
+    if (!row) return;
+    const chip = target.closest<HTMLElement>('.metadata-list-item');
+    if (chip) { openListMenu(event, row, chip); return; }
+    if (target === row.element || target === row.selector) openPropertyMenu(event, row);
+    // Name and scalar-value inputs retain native text-editing context menus.
+  }
+  function contextMenu(event: MouseEvent): void { if (!event.defaultPrevented) routeMenu(event); }
+  function keyboardMenu(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.isComposing || !(event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey))) return;
+    const target = event.target as HTMLElement, rect = target.getBoundingClientRect();
+    routeMenu({ clientX: rect.left + 4, clientY: rect.bottom, target, preventDefault: () => event.preventDefault(), stopPropagation: () => event.stopPropagation() });
+  }
+  // Another surface's context event relinquishes ownership before it can open a
+  // new popup, so destroying this panel cannot dismiss that surface's menu.
+  function supersede(): void { menuSerial++; menuPending = false; }
+  function keyboardSupersede(event: KeyboardEvent): void { if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) supersede(); }
+  document.addEventListener('contextmenu', supersede, true);
+  document.addEventListener('keydown', keyboardSupersede, true);
+  root.addEventListener('contextmenu', contextMenu);
+  root.addEventListener('keydown', keyboardMenu);
 
   addButton.addEventListener('click', () => {
     if (destroyed || addForm) return;
@@ -257,5 +422,12 @@ export function renderProperties(container: HTMLElement, options: PropertiesOpti
     addForm.append(name, selector, add, cancel); root.append(addForm); name.focus();
   });
   refresh();
-  return { refresh, destroy() { if (destroyed) return; destroyed = true; rows.clear(); selectedTypes.clear(); root.remove(); } };
+  return { refresh, destroy() {
+    if (destroyed) return;
+    destroyed = true; menuSerial++;
+    document.removeEventListener('contextmenu', supersede, true); document.removeEventListener('keydown', keyboardSupersede, true);
+    root.removeEventListener('contextmenu', contextMenu); root.removeEventListener('keydown', keyboardMenu);
+    if (menuPending) void (options.dismissMenu ?? dismissContextMenu)(document).catch(problem => { try { options.onError?.(problem); } catch { /* The owner is already disposed. */ } });
+    menuPending = false; rows.clear(); selectedTypes.clear(); root.remove();
+  } };
 }

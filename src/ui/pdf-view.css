@@ -1,21 +1,43 @@
-.zorid-pdf-view{display:flex;flex-direction:column;position:relative;flex:1;min-height:0;width:100%;height:100%;color:var(--text-normal,#222);background:var(--background-primary,#fff)}
-.zorid-pdf-toolbar,.zorid-pdf-find{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:5px 8px;flex-shrink:0;background:var(--background-secondary,#f3f3f3);border-bottom:1px solid var(--background-modifier-border,#ddd);font-size:13px}
-.zorid-pdf-toolbar button,.zorid-pdf-toolbar select,.zorid-pdf-toolbar input,.zorid-pdf-find input,.zorid-pdf-find button{font:inherit;color:inherit}
-.zorid-pdf-button{min-width:26px;min-height:26px;border:0;border-radius:4px;background:transparent;cursor:pointer}
-.zorid-pdf-button:hover{background:var(--background-modifier-hover,#e7e7e7)}
+/* Original styles derived from the bounded measurements in docs/pdf-reference.md. */
+.zorid-pdf-view{display:flex;flex-direction:column;position:relative;flex:1;min-height:0;min-width:0;width:100%;height:100%;overflow:hidden;color:var(--text-normal,#222);background:var(--background-primary,#fff);--zorid-pdf-page-shadow:0 0 0 1px #0000000d,0 2px 8px #0000001a}
+.theme-dark .zorid-pdf-view{--zorid-pdf-page-shadow:0 0 0 1px var(--background-modifier-border,#444)}
+.zorid-pdf-toolbar{display:flex;align-items:stretch;justify-content:space-between;gap:4px;overflow:auto;padding:4px 12px;flex:none;background:var(--background-primary,#fff);border-bottom:1px solid var(--background-modifier-border,#ddd);font-size:13px}
+.zorid-pdf-toolbar-group{display:flex;align-items:center;gap:4px;flex:none}
+.zorid-pdf-view .zorid-pdf-button{display:flex;align-items:center;justify-content:center;flex:none;width:auto;height:auto;min-width:0;min-height:0;margin:0;padding:4px 6px;border:0;border-radius:4px;background:transparent;box-shadow:none;color:var(--icon-color,var(--text-muted,#666));cursor:pointer}
+.zorid-pdf-button svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+.zorid-pdf-view .zorid-pdf-button:hover{background:var(--background-modifier-hover,#e7e7e7);color:var(--text-normal,#222)}
+.zorid-pdf-view .zorid-pdf-button[aria-pressed=true]{color:var(--interactive-accent,#7d5fe1);background:var(--background-modifier-hover,#e7e7e7)}
 .zorid-pdf-button:disabled{opacity:.4;cursor:default}
-.zorid-pdf-page-input{width:4em;text-align:center;min-height:24px}
-.zorid-pdf-page-count{white-space:nowrap;margin-right:auto}
-.zorid-pdf-find[hidden],.zorid-pdf-password[hidden],.zorid-pdf-status[hidden]{display:none}
-.zorid-pdf-query{min-width:100px;flex:1;padding:4px}
+.zorid-pdf-button:focus-visible{outline:2px solid var(--interactive-accent,#7d5fe1);outline-offset:-2px}
+.zorid-pdf-spacer{width:12px;flex:none}
+.zorid-pdf-divider{width:1px;height:16px;flex:none;background:var(--background-modifier-border,#ddd)}
+.zorid-pdf-view .zorid-pdf-page-input{box-sizing:border-box;width:7ch;height:30px;min-width:0;margin:0;padding:4px 8px;border:1px solid var(--background-modifier-border,#ddd);border-radius:5px;background:var(--background-primary,#fff);color:inherit;font:inherit;text-align:right;font-variant-numeric:tabular-nums}
+.zorid-pdf-page-count{white-space:nowrap;margin-inline-end:4px;font-variant-numeric:tabular-nums}
+.zorid-pdf-find{position:absolute;inset:0 0 auto;z-index:101;display:flex;align-items:center;gap:4px;padding:6px;background:var(--background-primary,#fff);font-size:13px;line-height:1;box-sizing:border-box}
+.zorid-pdf-find[hidden],.zorid-pdf-find-preferences[hidden],.zorid-pdf-password[hidden],.zorid-pdf-status[hidden]{display:none}
+.zorid-pdf-view .zorid-pdf-query{box-sizing:border-box;min-width:0;flex:1;width:300px;height:30px;padding:4px 8px;border:1px solid var(--background-modifier-border,#ddd);border-radius:5px;color:inherit;background:var(--background-primary,#fff);font:inherit}
 .zorid-pdf-query[aria-invalid=true]{outline:1px solid var(--text-error,#d33)}
-.zorid-pdf-find-option{display:flex;gap:3px;align-items:center;font-size:12px}
-.zorid-pdf-stage{position:relative;flex:1;min-height:0;background:var(--background-secondary,#eee)}
-.zorid-pdf-scroll{position:absolute;inset:0;overflow:auto;overscroll-behavior:contain}
-.zorid-pdf-scroll .pdfViewer{--scale-factor:1;--user-unit:1}
-.zorid-pdf-scroll .pdfViewer .page{box-sizing:content-box}
+.zorid-pdf-match-count{white-space:nowrap;color:var(--text-muted,#666)}
+.zorid-pdf-find-preferences{position:absolute;right:6px;top:100%;display:flex;flex-direction:column;gap:8px;padding:12px;background:var(--background-primary,#fff);border:1px solid var(--background-modifier-border,#ddd);border-radius:4px;box-shadow:var(--zorid-pdf-page-shadow)}
+.zorid-pdf-find-option{display:flex;gap:6px;align-items:center;white-space:nowrap;font-size:13px}
+.zorid-pdf-stage{position:relative;flex:1;min-height:0;background:var(--background-primary,#fff)}
+.zorid-pdf-scroll{position:absolute;inset:0;overflow:auto;overscroll-behavior:contain;scroll-padding:12px;outline:none;z-index:0}
+.zorid-pdf-scroll .pdfViewer{--scale-factor:1;--user-unit:1;--page-margin:0 auto;--page-border:calc(4px * var(--scale-factor)) solid transparent;--page-bg-color:transparent}
+.zorid-pdf-scroll .pdfViewer .page{box-sizing:content-box;flex-shrink:0;background:transparent}
+.zorid-pdf-scroll .pdfViewer .canvasWrapper{box-shadow:var(--zorid-pdf-page-shadow)}
+.zorid-pdf-scroll .pdfViewer.removePageBorders .page+.page{border-top:4px solid transparent}
+.zorid-pdf-scroll .pdfViewer .spread .page+.page{border-top:0}
+.zorid-pdf-scroll .pdfViewer .spread+.spread{border-top:4px solid transparent}
+.zorid-pdf-scroll .pdfViewer .spread .canvasWrapper{box-shadow:0 0 0 1px #0000000d}
+.zorid-pdf-scroll .textLayer{user-select:text}
 .zorid-pdf-status{position:absolute;top:12px;left:12px;right:12px;padding:12px;background:var(--background-primary,#fff);pointer-events:none;z-index:5}
-.zorid-pdf-password{position:absolute;z-index:6;top:20%;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:12px;padding:24px;max-width:90%;background:var(--background-primary,#fff);border:1px solid var(--background-modifier-border,#ccc);border-radius:8px;box-shadow:0 4px 24px #0003}
-.zorid-pdf-view.is-embed{height:auto;min-height:250px}
-.zorid-pdf-view.is-embed .zorid-pdf-stage{flex:none;height:450px}
+.zorid-pdf-password{position:absolute;z-index:102;top:20%;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:12px;padding:24px;max-width:90%;background:var(--background-primary,#fff);border:1px solid var(--background-modifier-border,#ccc);border-radius:8px;box-shadow:0 4px 24px #0003}
+.zorid-pdf-view.is-embed{flex:none;height:800px;border:1px solid var(--background-modifier-border,#ddd);border-radius:4px;box-sizing:border-box}
+.zorid-pdf-view.is-embed.has-page-height{height:auto}
+.zorid-pdf-view.is-embed.has-page-height .zorid-pdf-stage{flex:none}
+.internal-embed.pdf-embed{display:block;width:100%;padding:0;white-space:normal}
+.cm-live-embed-block:has(>.pdf-embed){padding:0}
+.cm-live-embed-block:has(>.pdf-embed)>.edit-block-button{top:6px;opacity:1;z-index:1;background:var(--background-primary,#fff)}
+.cm-live-embed-block:has(>.pdf-embed) .zorid-pdf-toolbar{padding-right:36px}
 .zorid-pdf-annotation-focus{outline:2px solid var(--interactive-accent,#7d5fe1);outline-offset:3px}
+@media(max-width:600px){.zorid-pdf-find .zorid-pdf-match-count{display:none}}
