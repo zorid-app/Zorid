@@ -12,7 +12,7 @@ import type { LiveCalloutOptions } from '../src/editor/live-callouts.ts';
 import { liveProperties } from '../src/editor/live-properties.ts';
 
 function setup(t: TestContext, source: string, options: LiveCalloutOptions = {}) {
-  const dom = new JSDOM('<!doctype html><body><main></main><button id="outside">Outside</button>', { pretendToBeVisual: true });
+  const dom = new JSDOM('<!doctype html><body><main></main><button id="outside">Outside</button>', { pretendToBeVisual: true, url: 'http://localhost/' });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
     HTMLElement: dom.window.HTMLElement, Node: dom.window.Node, Text: dom.window.Text, Window: dom.window.Window,
@@ -254,4 +254,51 @@ test('an image without its own click action can still reveal callout source', as
   click(view.dom.querySelector('.callout img')!); await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(view.dom.querySelector('.cm-live-callout'), null);
   assert.equal(view.state.selection.main.head, 0); assert.equal(view.state.selection.main.anchor, source.indexOf('\n\nAfter'));
+});
+
+async function flushMath() { for (let index = 0; index < 30; index++) await Promise.resolve(); }
+async function pendingMathEngine(dom: JSDOM) {
+  await flushMath();
+  const script = dom.window.document.querySelector<HTMLScriptElement>('script[data-zorid-mathjax]')!;
+  assert.ok(script, 'The callout started the shared local math loader');
+  let resolveStartup!: () => void;
+  const startup = new Promise<void>(resolve => { resolveStartup = resolve; });
+  (dom.window as unknown as { MathJax: unknown }).MathJax = {
+    startup: { promise: startup },
+    tex2chtmlPromise(source: string) { const output = dom.window.document.createElement('mjx-container'); output.textContent = `Rendered ${source}`; return Promise.resolve(output); },
+    chtmlStylesheet() { return null; },
+  };
+  script.dispatchEvent(new dom.window.Event('load'));
+  return async () => { resolveStartup(); await flushMath(); };
+}
+
+for (const action of ['source reveal', 'destroy'] as const) test(`pending title and body math cannot mutate removed callout after ${action}`, async t => {
+  const source = '> [!note] $title$\n> Body $content$\n\nAfter';
+  const { view, dom, focusAt, destroy } = setup(t, source);
+  const wrapper = view.dom.querySelector('.cm-live-callout')!, math = [...wrapper.querySelectorAll('.math')];
+  assert.deepEqual(math.map(node => node.textContent), ['title', 'content']);
+  const finish = await pendingMathEngine(dom);
+  if (action === 'destroy') destroy(); else await focusAt(source.indexOf('title'));
+  assert.equal(wrapper.isConnected, false);
+  await finish();
+  assert.deepEqual(math.map(node => node.textContent), ['title', 'content']);
+  assert.ok(math.every(node => !node.classList.contains('is-loaded') && !node.querySelector('mjx-container')));
+});
+
+for (const position of ['title', 'body'] as const) test(`failed callout render disposes detached math allocated in its ${position}`, async t => {
+  const { view, dom } = setup(t, 'Outside', { renderEmbed() { throw new Error('Expected embed failure after math allocation'); } });
+  const createElement = dom.window.document.createElement.bind(dom.window.document), candidates: HTMLElement[] = [];
+  dom.window.document.createElement = ((...args: Parameters<Document['createElement']>) => {
+    const node = createElement(...args); candidates.push(node); return node;
+  }) as Document['createElement'];
+  const source = position === 'title' ? '> [!note] $title$ ![[failure.png]]\n> Body' : '> [!note] $title$\n> $content$ ![[failure.png]]';
+  try { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } }); }
+  finally { dom.window.document.createElement = createElement; }
+  const math = candidates.filter(node => node.classList.contains('math'));
+  assert.equal(math.length, position === 'title' ? 1 : 2);
+  assert.ok(math.every(node => !node.isConnected));
+  await flushMath();
+  assert.equal(dom.window.document.querySelector('script[data-zorid-mathjax]'), null, 'Disposed work never starts the engine');
+  assert.equal(view.dom.querySelector('.callout-source-fallback')?.textContent, source);
+  assert.ok(math.every(node => !node.classList.contains('is-loaded')));
 });

@@ -9,6 +9,7 @@ import { Bug, Check, ChevronDown, CircleCheck, CircleHelp, ClipboardList, CodeXm
 import type { IconNode } from 'lucide';
 import { inline, renderMarkdown } from '../ui/markdown.ts';
 import type { EmbedRequest, LinkHandler } from '../ui/markdown.ts';
+import { destroyMathRenders } from '../ui/reading-math.ts';
 import { bodyStart } from './live-properties.ts';
 
 export interface LiveCalloutOptions {
@@ -84,6 +85,12 @@ function icon(document: Document, glyph: IconNode): SVGSVGElement {
 function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions, wrapper: HTMLElement, cleanup: (() => void)[]): void {
   const document = wrapper.ownerDocument, open = options.open ?? (() => {});
   const embed = options.renderEmbed ? (request: EmbedRequest) => { const instance = options.renderEmbed!(request); cleanup.push(() => instance.destroy()); return instance.dom; } : undefined;
+  const renderInline = (parent: HTMLElement, source: string) => {
+    // Inline renderers may allocate math before a later embed throws, while
+    // their parent has not yet been attached to the widget subtree.
+    cleanup.push(() => destroyMathRenders(parent));
+    inline(parent, source, open, { embed });
+  };
   const listen = <K extends keyof HTMLElementEventMap>(node: HTMLElement, type: K, handler: (event: HTMLElementEventMap[K]) => void) => {
     node.addEventListener(type, handler); cleanup.push(() => node.removeEventListener(type, handler));
   };
@@ -130,18 +137,18 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
           const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'task-list-item-checkbox'; input.checked = text(marker)[1] !== ' '; input.disabled = view.state.readOnly;
           into.classList.add('task-list-item'); into.classList.toggle('is-checked', input.checked); into.dataset.task = text(marker)[1];
           input.setAttribute('aria-label', 'Toggle task'); listen(input, 'click', event => { event.preventDefault(); event.stopPropagation(); task(lineMap[lineAt(marker.from)]); });
-          into.append(input); inline(into, source.slice(marker.to, node.to).trimStart(), open, { embed }); return;
+          into.append(input); renderInline(into, source.slice(marker.to, node.to).trimStart()); return;
         }
       }
       if (node.name === 'Paragraph' || node.name === 'Task') {
-        const paragraph = document.createElement('p'); inline(paragraph, text(node), open, { embed }); into.append(paragraph); return;
+        const paragraph = document.createElement('p'); renderInline(paragraph, text(node)); into.append(paragraph); return;
       }
       if (/^(ATX|Setext)Heading[1-6]$/.test(node.name)) {
         const heading = document.createElement(`h${node.name.slice(-1)}`);
         const marks = children(node).filter(child => child.name === 'HeaderMark');
         const from = node.name.startsWith('ATX') ? marks[0]?.to ?? node.from : node.from;
         const to = node.name.startsWith('Setext') ? marks[0]?.from ?? node.to : marks.length > 1 ? marks.at(-1)!.from : node.to;
-        inline(heading, source.slice(from, to).trim(), open, { embed }); into.append(heading); return;
+        renderInline(heading, source.slice(from, to).trim()); into.append(heading); return;
       }
       if (node.name === 'FencedCode' || node.name === 'CodeBlock') {
         const pre = document.createElement('pre'), code = document.createElement('code');
@@ -151,7 +158,7 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
       }
       if (node.name === 'HorizontalRule') { into.append(document.createElement('hr')); return; }
       if (['ListMark', 'QuoteMark', 'LinkReference'].includes(node.name)) return;
-      const fragment = document.createElement('div'); renderMarkdown(fragment, text(node), open, undefined, { embed, properties: false });
+      const fragment = document.createElement('div'); cleanup.push(() => destroyMathRenders(fragment)); renderMarkdown(fragment, text(node), open, undefined, { embed, properties: false });
       into.append(...fragment.childNodes);
     };
     for (const node of children(markdownLanguage.parser.parse(source).topNode)) render(parent, node);
@@ -165,7 +172,7 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
     const title = document.createElement('div'); title.className = 'callout-title';
     const glyph = document.createElement('span'); glyph.className = 'callout-icon'; glyph.append(icon(document, Object.hasOwn(glyphs, header.type) ? glyphs[header.type] : Pencil));
     const label = document.createElement('div'); label.className = 'callout-title-inner'; label.dir = 'auto';
-    const fallback = header.type.replace(/-/g, ' '); inline(label, header.title || fallback[0].toUpperCase() + fallback.slice(1), open, { embed });
+    const fallback = header.type.replace(/-/g, ' '); renderInline(label, header.title || fallback[0].toUpperCase() + fallback.slice(1));
     title.append(glyph, label); callout.append(title);
     const body = document.createElement('div'); body.className = 'callout-content';
     if (newline >= 0) blocks(body, source.slice(newline + 1), lineMap.slice(1), path);
@@ -203,7 +210,7 @@ class CalloutWidget extends WidgetType {
     catch {
       // A later embedded child may fail after earlier children allocated resources.
       // Release every completed mount and retain usable source editing.
-      releaseResources(cleanup);
+      destroyMathRenders(wrapper); releaseResources(cleanup);
       const literal = wrapper.ownerDocument.createElement('pre'); literal.className = 'callout-source-fallback'; literal.textContent = this.span.source; wrapper.replaceChildren(literal);
     }
     const cancelActivation = () => { clearTimeout(timer); pendingActivations.get(view)?.delete(cancelActivation); };
@@ -233,7 +240,7 @@ class CalloutWidget extends WidgetType {
     edit.addEventListener('click', editClick); wrapper.addEventListener('click', click); wrapper.addEventListener('mousedown', down);
     const Observer = view.dom.ownerDocument.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
     const observer = typeof Observer === 'function' ? new Observer(() => { if (!disposed) view.requestMeasure(); }) : undefined; observer?.observe(wrapper);
-    resources.set(wrapper, () => { if (disposed) return; disposed = true; cancelActivation(); observer?.disconnect(); edit.removeEventListener('click', editClick); wrapper.removeEventListener('click', click); wrapper.removeEventListener('mousedown', down); releaseResources(cleanup); });
+    resources.set(wrapper, () => { if (disposed) return; disposed = true; cancelActivation(); observer?.disconnect(); destroyMathRenders(wrapper); edit.removeEventListener('click', editClick); wrapper.removeEventListener('click', click); wrapper.removeEventListener('mousedown', down); releaseResources(cleanup); });
     return wrapper;
   }
   ignoreEvent(): boolean { return true; }
