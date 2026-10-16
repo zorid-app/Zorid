@@ -38,8 +38,7 @@ export function renderMarkdown(container: HTMLElement, markdown: string, open: L
   // Whole-document parser ownership prevents fences and display math inside
   // code, HTML, lists or quotes from becoming unrelated top-level blocks.
   const roots = new Map<number, ReturnType<typeof blockParser.parse>['topNode']>();
-  const tree = blockParser.parse(markdown);
-  for (let node = tree.topNode.firstChild; node; node = node.nextSibling) roots.set(lineAt(node.from), node);
+  let parsingSource = markdown;
   let renderList: ReturnType<typeof createMarkdownListRenderer> | undefined;
   let position = 0;
   if (/^\uFEFF?---[ \t]*(?:#.*)?$/.test(lines[0])) {
@@ -53,8 +52,14 @@ export function renderMarkdown(container: HTMLElement, markdown: string, open: L
         }
       } catch(error) { table.append(el('span','error-message',error instanceof Error?error.message:String(error))); }
       properties.append(table); if(options.properties !== false)container.append(properties); position = end + 1;
+      // YAML belongs to the properties parser. Mask it without shifting body
+      // coordinates so YAML fences cannot claim subsequent Markdown blocks.
+      const bodyStart = starts[position] ?? markdown.length;
+      parsingSource = markdown.slice(0, bodyStart).replace(/[^\n]/g, ' ') + markdown.slice(bodyStart);
     }
   }
+  const tree = blockParser.parse(parsingSource);
+  for (let node = tree.topNode.firstChild; node; node = node.nextSibling) roots.set(lineAt(node.from), node);
   for (; position < lines.length; position++) {
     const line = lines[position];
     if (!line.trim()) continue;
@@ -88,7 +93,7 @@ export function renderMarkdown(container: HTMLElement, markdown: string, open: L
     }
     if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { container.append(el('hr')); continue; }
     if (/^\s*(?:>|[-*+]\s|\d+[.)]\s)/.test(line)) {
-      renderList ??= createMarkdownListRenderer(markdown, { quotes: true });
+      renderList ??= createMarkdownListRenderer(parsingSource, { quotes: true });
       const consumed = renderList(container, position, (parent, source) => inline(parent, source, open, options), taskChange);
       if (consumed !== null) { position += consumed - 1; continue; }
     }

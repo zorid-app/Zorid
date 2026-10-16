@@ -98,3 +98,17 @@ test('paragraph ownership preserves multiline code spans and callout default tit
   assert.equal(parent.querySelectorAll('.math').length, 0);
   destroyMarkdown(parent);
 });
+
+test('frontmatter literals cannot own later fences, math or task source lines', () => {
+  for (const yamlLiteral of ['```', '$$']) {
+    const { parent } = host();
+    const changes: [number, boolean][] = [];
+    renderMarkdown(parent, `---\ndescription: |\n  ${yamlLiteral}\n---\n\n\`\`\`js\n$x$\n\`\`\`\n\n$$\ny^2\n$$\n\n- [ ] task`, () => {}, (line, checked) => changes.push([line, checked]));
+    assert.equal(parent.querySelector('pre code')?.textContent, '$x$');
+    assert.equal(parent.querySelectorAll('.math').length, 1);
+    assert.equal(parent.querySelector('.math-block')?.textContent, '\ny^2\n');
+    parent.querySelector<HTMLInputElement>('input[type=checkbox]')!.click();
+    assert.deepEqual(changes, [[13, true]]);
+    destroyMarkdown(parent);
+  }
+});
