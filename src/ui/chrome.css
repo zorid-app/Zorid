@@ -1,0 +1,88 @@
+/* Original desktop shell layout derived from the supplied chrome screenshots
+   and the retained default-theme measurements. Editor content is out of scope. */
+@media (min-width: 701px) {
+  .workspace {
+    --chrome-header-height: 40px;
+    --chrome-icon-size: 16px;
+    --chrome-icon-stroke: 2;
+  }
+
+  .workspace > .ribbon {
+    position: relative;
+    border-right: 0;
+    padding-top: calc(var(--chrome-header-height) + 8px);
+  }
+  /* Window controls sit across the ribbon/sidebar boundary. The divider must
+     start below them, rather than cutting through the traffic-light strip. */
+  .workspace > .ribbon::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--chrome-header-height);
+    border-bottom: 1px solid var(--background-modifier-border);
+    -webkit-app-region: drag;
+  }
+  .workspace > .ribbon::after {
+    content: '';
+    position: absolute;
+    top: var(--chrome-header-height);
+    right: 0;
+    bottom: 0;
+    border-right: 1px solid var(--background-modifier-border);
+    pointer-events: none;
+  }
+
+  .workspace > .sidebar > .sidebar-tabs {
+    height: var(--chrome-header-height);
+    min-height: var(--chrome-header-height);
+    flex-shrink: 0;
+    justify-content: flex-start;
+    gap: 2px;
+    padding: 0 40px 0 8px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    -webkit-app-region: drag;
+  }
+  .workspace.is-macos-desktop > .sidebar > .sidebar-tabs {
+    padding-left: max(8px, calc(88px - var(--ribbon-width)));
+  }
+  .workspace > .sidebar > .sidebar-tabs .icon-button {
+    width: 28px;
+    height: 26px;
+    padding: 4px 6px;
+    border-radius: 8px;
+  }
+  .workspace > .sidebar > .titlebar {
+    height: var(--chrome-header-height);
+    min-height: var(--chrome-header-height);
+    border-bottom: 1px solid var(--background-modifier-border);
+  }
+  .workspace > .sidebar > .sidebar-toolbar {
+    gap: 2px;
+    padding: 8px;
+  }
+  .workspace > .sidebar > .sidebar-toolbar .icon-button {
+    width: 28px;
+    height: 24px;
+    padding: 4px 6px;
+    border-radius: 4px;
+  }
+  .workspace > .sidebar > .sidebar-toolbar .is-active {
+    color: var(--text-accent);
+  }
+  .workspace > :is(.ribbon, .sidebar, .right-sidebar) .icon-button > svg,
+  .workspace .pane-toolbar .icon-button > svg,
+  .workspace .tab-bar > .icon-button > svg {
+    width: var(--chrome-icon-size);
+    height: var(--chrome-icon-size);
+    stroke-width: var(--chrome-icon-stroke);
+  }
+  /* Collapsing the sidebar moves the first tab group under window controls. */
+  .workspace.is-macos-desktop.left-hidden .pane:not(
+    .split-layout-separator ~ .pane,
+    .split-layout-separator ~ .split-layout-group .pane
+  ) > .tab-bar {
+    padding-left: max(8px, calc(88px - var(--ribbon-width)));
+  }
+}
