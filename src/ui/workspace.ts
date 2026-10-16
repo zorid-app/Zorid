@@ -29,6 +29,10 @@ import { CanvasDocument } from '../canvas/document.ts';
 import { createCanvasView } from '../canvas/view.ts';
 import type { CanvasView } from '../canvas/view.ts';
 import { SplitLayout } from './split-layout.ts';
+import { createTabViewRuntime } from './tab-view-runtime.ts';
+import type { TabViewRuntime } from './tab-view-runtime.ts';
+import { createTabDocking } from './tab-docking.ts';
+import type { DockIntent, DockPane } from './tab-docking.ts';
 import { ChangeSet, EditorSelection } from '@codemirror/state';
 import { textChanges } from '../editor/text-changes.ts';
 import { WorkspaceStorageScope, validateWorkspaceWindowInfo, workspaceWindowBridge } from './workspace-window.ts';
@@ -37,8 +41,23 @@ import { createSidebarControls } from './sidebar-controls.ts';
 import { buildFileListBackgroundMenu, installFileListBackgroundMenu } from './file-list-background-menu.ts';
 
 type Mode = 'live' | 'reading';
-interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; subpath?: string; viewState?: { editor?: EditorViewState; scrollTop: number; scrollLeft: number }; }
-interface Pane { id: string; tabs: Tab[]; active: string; element: HTMLElement; viewTabId?:string; viewPath?:string|null; editor?: EditorHandle; imageView?:ImageView; pdfView?:PdfView; canvasView?:CanvasView; canvasSource?:string; embeds?: MarkdownEmbeds; properties?: PropertiesView; propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void; renderVersion: number; history: string[]; historyIndex: number; persisted?: Record<string, unknown>; }
+interface Tab {
+  id:string; path:string|null; mode:Mode; kind:'note'|'graph'; subpath?:string;
+  history?:string[]; historyIndex?:number;
+  viewState?:{editor?:EditorViewState;scrollTop:number;scrollLeft:number};
+}
+// Visible panes mirror one loaded tab. A parked record keeps those resources and
+// mutable callback ownership while its wrapper is detached; it is never serialized.
+interface Pane {
+  id:string; tabs:Tab[]; active:string; element:HTMLElement;
+  content?:HTMLElement; runtime?:TabViewRuntime; rebindView?:(pane:Pane)=>void;
+  viewReady?:boolean; viewMode?:Mode; viewKind?:Tab['kind']; viewSettings?:string;
+  viewTabId?:string; viewPath?:string|null; renderVersion:number;
+  editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; canvasView?:CanvasView;
+  canvasSource?:string; embeds?:MarkdownEmbeds; properties?:PropertiesView;
+  propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void;
+  history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
+}
 interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; autoConvertHtml: boolean; }
 interface Command { name: string; shortcut?: string; icon?: string; action: () => void | Promise<void>; }
 export interface WorkspaceViewFactories { pdf?: typeof createPdfView; canvas?: typeof createCanvasView }
@@ -86,7 +105,7 @@ export class Workspace {
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
     try{this.saveSession();}catch{/* Storage failure must not bypass the dirty-document unload guard. */}
-    if ([...this.buffers.values()].some(buffer => buffer.dirty) || this.panes.some(pane => pane.canvasView?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
+    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.canvasView?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
   };
   private menuSerial = 0;
   private inputContextListener=(event:MouseEvent)=>{
@@ -110,6 +129,10 @@ export class Workspace {
   private storageScope = new WorkspaceStorageScope();
   private navigationIntent = new WeakMap<Pane, number>();
   private paneActivationRevision = 0;
+  private viewSequence = 0;
+  private renderRequests = new WeakMap<Pane,number>();
+  private cachedViews = new Map<Tab, Pane>();
+  private tabDocking?: ReturnType<typeof createTabDocking>;
   private sidebarControls?: ReturnType<typeof createSidebarControls>;
   private disposeFileListMenu?: () => void;
 
@@ -175,10 +198,10 @@ export class Workspace {
     this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
     await this.flush();
     this.saveSession();
-    for (const buffer of this.buffers.values()) await buffer.dispose();
     for (const dispose of this.disposers) dispose(); this.disposers = [];
     clearTimeout(this.reloadTimer);
-    this.panes.forEach(pane => this.disposePaneViews(pane)); this.buffers.clear();
+    this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();
+    for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose(); this.buffers.clear();
     this.attachments?.destroy();
     this.treeDrag?.destroy(); this.treeDrag=undefined; this.treeRename?.session.dispose(); this.treeRename=undefined; this.folderCreationIntent++;
     this.treeRows=[]; this.treeSelection.clear(); this.treeSelectionAnchor=undefined; this.entryTokens.clear();
@@ -198,7 +221,7 @@ export class Workspace {
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
         for (const item of (Array.isArray(saved.panes) ? saved.panes : []).slice(0, 100)) {
-          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => ({...tab, mode:tab.mode==='reading'?'reading':'live', id:makeId()}));
+          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => {const history=Array.isArray(tab.history)?tab.history.filter(path=>typeof path==='string'):[];return{...tab,history,historyIndex:Number.isInteger(tab.historyIndex)?Math.max(-1,Math.min(tab.historyIndex!,history.length-1)):history.length-1,mode:tab.mode==='reading'?'reading' as const:'live' as const,id:makeId()};});
           const pane = this.addPane(tabs.length ? tabs : undefined, typeof item.id === 'string' && item.id && !this.panes.some(p=>p.id===item.id) ? item.id : undefined); pane.active = pane.tabs[Math.max(0,Math.min(Number.isInteger(item.active) ? item.active : 0, pane.tabs.length - 1))].id; pane.persisted = item;
         }
         restored = this.panes.length > 0;
@@ -209,6 +232,7 @@ export class Workspace {
     this.activate(this.panes.find(pane=>pane.id===this.sessionState.activePaneId)??this.panes[0]);
     this.restoringLayout=false;
     for (const pane of this.panes) await this.renderPane(pane);
+    this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
     this.disposers.push(this.vault.on('create', change => { this.invalidateTreeTokens(change.path); this.renderSidebar(); }), this.vault.on('delete', change => {
       this.invalidateTreeTokens(change.path);
       const removed=(path:string)=>path===change.path||path.startsWith(change.path+'/');
@@ -217,7 +241,7 @@ export class Workspace {
       if(this.treeRename&&(this.treeRename.path===change.path||this.treeRename.path.startsWith(change.path+'/')))this.treeRename.session.dispose();
       for (const pane of this.panes) for (const tab of [...pane.tabs]) if (tab.path === change.path || tab.path?.startsWith(change.path + '/')) {
         const buffer = this.buffers.get(tab.path);
-        if (buffer?.dirty || (pane.active === tab.id && pane.canvasView?.hasPendingChanges())) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
+        if (buffer?.dirty || (pane.active === tab.id ? pane.canvasView : this.cachedViews.get(tab)?.canvasView)?.hasPendingChanges()) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
         tab.path = null; this.run(()=>this.renderPane(pane));
       }
       this.renderSidebar(); this.renderRight();
@@ -230,7 +254,8 @@ export class Workspace {
       this.treeSelection=new Set([...this.treeSelection].map(relocate));
       if(this.treeSelectionAnchor)this.treeSelectionAnchor=relocate(this.treeSelectionAnchor);
       if(this.treeRename)this.treeRename.path=relocate(this.treeRename.path);
-      for(const pane of this.panes)pane.history=pane.history.map(relocate);
+      for(const pane of this.loadedViews())pane.history=pane.history.map(relocate);
+      for(const pane of this.panes)for(const tab of pane.tabs)if(tab.history)tab.history=tab.history.map(relocate);
       for (const [previous, buffer] of [...this.buffers]) if (previous === oldPath || previous.startsWith(oldPath + '/')) {
         const next = change.path + previous.slice(oldPath.length);
         this.buffers.delete(previous); this.buffers.set(next, buffer); this.run(() => buffer.relocate(next));
@@ -242,27 +267,27 @@ export class Workspace {
     }), this.vault.on('modify', change => {
       if(/\.canvas$/i.test(change.path)){
         const buffer=this.buffers.get(change.path),generation=this.vaultGeneration;
-        const targets=this.panes.filter(pane=>this.current(pane)?.path===change.path&&pane.canvasView).map(pane=>({pane,view:pane.canvasView!}));
+        const targets=this.loadedViews().filter(pane=>this.current(pane)?.path===change.path&&pane.canvasView).map(pane=>({pane,view:pane.canvasView!}));
         if(buffer&&!buffer.dirty)this.run(async()=>{
           for(const {view} of targets)await view.flush();
           if(generation!==this.vaultGeneration)return;
           await buffer.reload();
           if(generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
-          for(const {pane,view} of targets)if(pane.canvasView===view&&!view.hasPendingChanges()){
-            pane.canvasSource=buffer.text;view.setDocument(CanvasDocument.parse(buffer.text));
-          }
+          for(const {view} of targets){const owner=this.loadedViews().find(pane=>pane.canvasView===view);if(owner&&!view.hasPendingChanges()){
+            owner.canvasSource=buffer.text;view.setDocument(CanvasDocument.parse(buffer.text));
+          }}
         });return;
       }
-      if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)this.run(()=>this.renderPane(pane));return;}
+      if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)this.run(()=>this.renderPane(pane,{refresh:true}));for(const [tab,pane] of this.cachedViews)if(pane.viewPath===change.path)this.run(async()=>{await this.disposePaneViews(pane);if(this.cachedViews.get(tab)===pane)this.cachedViews.delete(tab);});return;}
       const buffer = this.buffers.get(change.path);
       if (buffer && !buffer.dirty) this.run(async () => {
         const previous=buffer.text,revision=this.bufferRevisions.get(buffer)??0,generation=this.vaultGeneration;
         await buffer.reload();if(generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
         if((this.bufferRevisions.get(buffer)??0)===revision)this.mapInactiveSelections(change.path,previous,buffer.text);
-        for (const pane of this.panes) if (this.current(pane)?.path === change.path) { if (this.current(pane).mode === 'reading') await this.renderPane(pane); else pane.editor?.setValue(buffer.text); } this.renderRight();
+        for (const pane of this.loadedViews()) if (pane.viewPath === change.path) { if (pane.viewMode === 'reading') pane.refreshPreview?.(); else pane.editor?.setValue(buffer.text); } this.renderRight();
       });
     }));
-    for(const event of ['create','delete','rename','modify'] as const)this.disposers.push(this.vault.on(event,()=>{for(const pane of this.panes)pane.editor?.refreshLinks?.();}));
+    for(const event of ['create','delete','rename','modify'] as const)this.disposers.push(this.vault.on(event,()=>{for(const pane of this.loadedViews())pane.editor?.refreshLinks?.();}));
     const generation = this.vaultGeneration;
     const changedPaths = new Set<string>();
     let needsFullReload = false;
@@ -366,7 +391,9 @@ export class Workspace {
     else if(!newTab&&current){if(current.path!==path)current.viewState=undefined;if(current.kind==='graph')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
     else {const tab:Tab={id:makeId(),path,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;}
     this.current(pane).subpath=subpath;
+    pane.history=this.current(pane).history??[];pane.historyIndex=this.current(pane).historyIndex??-1;
     if(recordHistory&&pane.history[pane.historyIndex]!==path){pane.history=pane.history.slice(0,pane.historyIndex+1);pane.history.push(path);pane.historyIndex=pane.history.length-1;}
+    this.current(pane).history=pane.history;this.current(pane).historyIndex=pane.historyIndex;
     this.activate(pane); await this.renderPane(pane); this.renderSidebar();this.renderRight();this.saveSession();
     if(matchMedia('(max-width: 700px)').matches)this.root.classList.add('left-hidden');
   }
@@ -378,47 +405,67 @@ export class Workspace {
     try{await buffer.load();return buffer;}catch(error){this.buffers.delete(path);throw error;}
   }
 
-  async renderPane(pane:Pane):Promise<void>{
-    await this.flushPane(pane);
-    const version=++pane.renderVersion; this.disposePaneViews(pane);pane.element.replaceChildren();
-    const tab=this.current(pane); if(!tab)return;pane.viewTabId=tab.id;pane.viewPath=tab.path;
+  private renderTabBar(pane:Pane):void{
+    const tab=this.current(pane);if(!tab)return;
     const bar=el('div','tab-bar'); bar.setAttribute('role','tablist');
-    const strip=el('div','tab-strip');
-    bar.append(button('sidebar','Toggle left sidebar',()=>this.toggleLeft(),'pane-sidebar-toggle'),strip);
+    bar.append(button('sidebar','Toggle left sidebar',()=>this.toggleLeft(),'pane-sidebar-toggle'));
+    const strip=el('div','tab-strip');bar.append(strip);
     for(const item of pane.tabs){
-      const node=el('div',`tab${item.id===tab.id?' is-active':''}`);node.role='tab';node.tabIndex=item.id===tab.id?0:-1;node.setAttribute('aria-selected',String(item.id===tab.id));node.draggable=true;
+      const node=el('div',`tab${item.id===tab.id?' is-active':''}`);node.role='tab';node.tabIndex=item.id===tab.id?0:-1;node.setAttribute('aria-selected',String(item.id===tab.id));node.draggable=true;node.dataset.tabId=item.id;
       node.append(icon(item.kind==='graph'?'graph':'file',15),el('span','tab-title',item.kind==='graph'?'Graph view':item.path?nameOf(item.path):'New tab'));
       const close=button('close','Close tab',event=>{event.stopPropagation();this.run(()=>this.closeTab(pane,item));},'tab-close');node.append(close);
-      const select=()=>this.run(async()=>{await this.flushPane(pane);pane.active=item.id;this.activate(pane);await this.renderPane(pane);this.saveSession();});node.onclick=select;
+      const select=()=>this.run(()=>this.selectTab(pane,item));node.onclick=select;
       node.oncontextmenu=event=>{event.preventDefault();event.stopPropagation();this.tabMenu(pane,item,event.clientX,event.clientY);};
-      node.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')select();if(event.key==='ArrowRight'||event.key==='ArrowLeft'){event.preventDefault();const index=pane.tabs.indexOf(item);const next=pane.tabs[(index+(event.key==='ArrowRight'?1:pane.tabs.length-1))%pane.tabs.length].id;this.run(async()=>{await this.flushPane(pane);pane.active=next;await this.renderPane(pane);this.saveSession();});}};
-      node.ondragstart=event=>event.dataTransfer?.setData('application/x-zorid-tab',JSON.stringify({pane:pane.id,tab:item.id}));
-      node.ondragover=event=>event.preventDefault();node.ondrop=event=>{event.preventDefault();try{
-        const data=JSON.parse(event.dataTransfer?.getData('application/x-zorid-tab')||'null'),from=this.panes.find(p=>p.id===data?.pane),moving=from?.tabs.find(t=>t.id===data?.tab);
-        if(!from||!moving||moving===item)return;
-        this.run(async()=>{await this.flushPane(from);if(from!==pane)await this.flushPane(pane);if(!from.tabs.includes(moving)||!pane.tabs.includes(item))return;
-          this.capturePaneState(from);if(from!==pane)this.capturePaneState(pane);
-          from.tabs=from.tabs.filter(t=>t!==moving);pane.tabs.splice(pane.tabs.indexOf(item),0,moving);pane.active=moving.id;
-          if(!from.tabs.length)from.tabs.push({id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'});
-          if(!from.tabs.some(t=>t.id===from.active))from.active=from.tabs[0].id;
-          await this.renderPane(from);if(from!==pane)await this.renderPane(pane);this.saveSession();});
-      }catch{/* Not an app tab. */}};
+      node.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')select();if(event.key==='ArrowRight'||event.key==='ArrowLeft'){event.preventDefault();const index=pane.tabs.indexOf(item);const next=pane.tabs[(index+(event.key==='ArrowRight'?1:pane.tabs.length-1))%pane.tabs.length].id;this.run(()=>this.selectTab(pane,pane.tabs.find(tab=>tab.id===next)!));}};
       strip.append(node);
     }
     bar.append(button('plus','New tab (⌘T)',()=>this.run(()=>this.newTab(pane)),'tab-add'),button('down','Tab menu',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)));
-    pane.element.append(bar);
+    pane.element.querySelector(':scope > .tab-bar')?.remove();pane.element.prepend(bar);
+  }
+
+  private async selectTab(pane:Pane,tab:Tab):Promise<void>{
+    const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration;this.navigationIntent.set(pane,intent);
+    if(pane.active===tab.id){this.activate(pane);this.focusPane(pane);return;}
+    await this.flushPane(pane);
+    if(intent!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab))return;
+    pane.active=tab.id;this.activate(pane);await this.renderPane(pane);this.saveSession();
+  }
+
+  async renderPane(initialPane:Pane,options:{flush?:boolean;refresh?:boolean}={}):Promise<void>{
+    let pane=initialPane;
+    const request=(this.renderRequests.get(initialPane)??0)+1,generation=this.vaultGeneration;this.renderRequests.set(initialPane,request);
+    const current=()=>generation===this.vaultGeneration&&this.panes.includes(initialPane)&&this.renderRequests.get(initialPane)===request;
+    if(options.flush!==false)await this.flushPane(pane);
+    if(!current())return;
+    const wanted=this.current(pane);
+    if(!options.refresh&&pane.viewReady&&pane.viewTabId===wanted?.id&&pane.viewPath===wanted.path&&pane.viewMode===wanted.mode&&pane.viewKind===wanted.kind ){
+      this.applyViewSettings(pane);this.renderTabBar(pane);pane.refreshPreview?.();return;
+    }
+    if(pane.viewTabId&&pane.viewTabId!==pane.active&&pane.tabs.some(tab=>tab.id===pane.viewTabId))this.parkPaneView(pane);else await this.disposePaneViews(pane);
+    if(!current())return;
+    const tab=this.current(pane);if(!tab)return;
+    this.renderTabBar(pane);
+    if(await this.restoreCachedView(pane,tab)){this.renderStatus();return;}
+    if(!current())return;
+    const version=++this.viewSequence;pane.renderVersion=version;pane.viewTabId=tab.id;pane.viewPath=tab.path;pane.viewMode=tab.mode;pane.viewKind=tab.kind;pane.viewSettings=this.viewSettings();
+    pane.history=tab.history??[];pane.historyIndex=tab.historyIndex??-1;
+    const content=el('div','tab-view-content');Object.assign(content.style,{display:'flex',flexDirection:'column',flex:'1',minHeight:'0',minWidth:'0',overflow:'hidden'});pane.element.append(content);pane.content=content;
+    const runtime=createTabViewRuntime({id:tab.id,element:content,owner:this.viewOwner(pane),
+      flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flush();},
+      dispose:()=>this.releasePaneView(pane,content),focus:()=>this.focusPane(pane)});pane.runtime=runtime;
+    let ownerChanged=()=>{};pane.rebindView=owner=>{pane=owner;ownerChanged();};
     const toolbar=el('div','pane-toolbar');
     const back=button('left','Navigate back',()=>this.run(()=>this.navigate(-1,pane)));back.disabled=pane.historyIndex<=0;
     const forward=button('right','Navigate forward',()=>this.run(()=>this.navigate(1,pane)));forward.disabled=pane.historyIndex>=pane.history.length-1;
     toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.md$/,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
     if(!tab.path||isMarkdown(tab.path))actions.append(button(tab.mode==='reading'?'edit':'book',tab.mode==='reading'?'Switch to Live Edit (⌘E)':'Switch to reading view (⌘E)',()=>this.run(()=>this.toggleReading(pane))));
-    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);pane.element.append(toolbar);
-    if(tab.kind==='graph'){this.renderGraph(pane.element);return;}
-    if(!tab.path){this.renderEmpty(pane);return;}
+    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);content.append(toolbar);
+    if(tab.kind==='graph'){this.renderGraph(content);pane.viewReady=true;return;}
+    if(!tab.path){this.renderEmpty(pane,content);pane.viewReady=true;return;}
     const path=tab.path;
     if(!isMarkdown(path)){
-      const host=el('div','attachment-view');pane.element.append(host);
+      const host=el('div','attachment-view');content.append(host);
       host.oncontextmenu=event=>{event.preventDefault();const entry=this.vault.entries.get(path);if(entry)this.fileMenu(entry,event.clientX,event.clientY);};
       if(isImage(path))pane.imageView=createImageView(host,path,this.attachments!);
       else if(/\.pdf$/i.test(path)){
@@ -433,8 +480,8 @@ export class Workspace {
           pane.canvasView=(this.viewFactories.canvas??createCanvasView)(host,{document:CanvasDocument.parse(buffer.text),onChange:async source=>{
             if(generation!==this.vaultGeneration||version!==pane.renderVersion)throw new Error('The Canvas is no longer open.');
             if(buffer.text!==pane.canvasSource)throw new Error('The Canvas changed in another pane. Save or reload before editing it again.');
-            buffer.update(source);pane.canvasSource=source;await buffer.flush();
-            for(const other of this.panes)if(other!==pane&&this.current(other)?.path===path&&other.canvasView&&!other.canvasView.hasPendingChanges()){
+            buffer.update(source);runtime.touch();pane.canvasSource=source;await buffer.flush();
+            for(const other of this.loadedViews())if(other!==pane&&this.current(other)?.path===path&&other.canvasView&&!other.canvasView.hasPendingChanges()){
               other.canvasSource=source;other.canvasView.setDocument(CanvasDocument.parse(source));
             }
           },openFile:(target,fragment)=>this.vault.entries.has(target)?this.openNote(target,false,pane,true,fragment??''):this.followLink(path,target+(fragment??''),pane,'markdown'),
@@ -442,24 +489,24 @@ export class Workspace {
         }catch(error){host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
       }
       else host.append(el('p','muted',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
-      this.renderStatus();return;
+      pane.viewReady=true;this.renderStatus();return;
     }
     const scroll=el('div','note-scroll');scroll.classList.toggle('readable-width',this.settings.readableWidth);
     const title=el('input','note-title');title.value=nameOf(path);title.setAttribute('aria-label','Note title');title.hidden=!this.settings.showInlineTitle;
-    const titleGeneration=this.vaultGeneration,titleNavigation=this.noteNavigation.get(pane);let titlePath=path;
+    const titleGeneration=this.vaultGeneration;let titleNavigation=this.noteNavigation.get(pane),titlePath=path;ownerChanged=()=>{titleNavigation=this.noteNavigation.get(pane);};
     bindNoteTitleFocus(title,{
       save:async name=>{if(titleGeneration!==this.vaultGeneration||!this.panes.includes(pane)||this.current(pane)!==tab||tab.path!==titlePath)return;if(name!==nameOf(titlePath))titlePath=await this.renamePath(titlePath,name);},
       isCurrent:()=>this.initialized&&titleGeneration===this.vaultGeneration&&this.activePane===pane&&this.current(pane)===tab&&tab.path===titlePath&&this.noteNavigation.get(pane)===titleNavigation&&pane.element.isConnected,
       focusBody:()=>pane.editor?.focus(),onError:error=>notice(error instanceof Error?error.message:String(error)),
     });
-    scroll.append(title);pane.element.append(scroll);
+    scroll.append(title);content.append(scroll);
     try{
       const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
       {
         const host=el('div','properties-host');scroll.append(host);
         pane.properties=renderProperties(host,{isCurrent:()=>pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
-          this.updateMarkdownBuffer(buffer,next);
-          for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
+          this.updateMarkdownBuffer(buffer,next);runtime.touch();
+          for(const other of this.loadedViews()){other.embeds?.invalidate(path);if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
           await buffer.flush();
         },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
       }
@@ -467,7 +514,7 @@ export class Workspace {
       if(tab.mode==='reading'){
         const preview=el('div','markdown-preview');scroll.append(preview);
         pane.refreshPreview=()=>{
-          if(version!==pane.renderVersion||pane.viewPath!==path||!this.panes.includes(pane))return;
+          if(version!==pane.renderVersion||pane.viewPath!==path||!pane.runtime||pane.runtime.phase==='disposed')return;
           destroyMarkdown(preview);
           pane.embeds?.destroy();
           const embeds=createEmbeds();
@@ -497,7 +544,7 @@ export class Workspace {
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:request=>{const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
           transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
-          onChange:value=>{this.updateMarkdownBuffer(buffer,value);this.renderStatus();for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);other.propertyTimer=setTimeout(()=>{other.properties?.refresh();other.refreshPreview?.();},150);}}},open:(target,kind)=>{if(generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path)this.run(()=>this.followLink(path,target,pane,kind));}});
+          onChange:value=>{this.updateMarkdownBuffer(buffer,value);runtime.touch();this.renderStatus();for(const other of this.loadedViews()){other.embeds?.invalidate(path);if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);const properties=other.properties,preview=other.refreshPreview;other.propertyTimer=setTimeout(()=>{properties?.refresh();preview?.();},150);}}},open:(target,kind)=>{if(generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path)this.run(()=>this.followLink(path,target,pane,kind));}});
       }
       if(tab.viewState){if(tab.viewState.editor)pane.editor?.restoreViewState?.(tab.viewState.editor);if(Number.isFinite(tab.viewState.scrollTop))scroll.scrollTop=Math.max(0,tab.viewState.scrollTop);if(Number.isFinite(tab.viewState.scrollLeft))scroll.scrollLeft=Math.max(0,tab.viewState.scrollLeft);}
       if(buffer.error)notice(buffer.error.message);
@@ -506,7 +553,7 @@ export class Workspace {
       destroyMarkdown(scroll);pane.embeds?.destroy();pane.embeds=undefined;pane.refreshPreview=undefined;
       scroll.append(el('p','error-message',error instanceof Error?error.message:String(error)));
     }
-    this.renderStatus();
+    if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
 
   private updateMarkdownBuffer(buffer:NoteBuffer,next:string):void{
@@ -532,15 +579,139 @@ export class Workspace {
   private capturePaneState(pane:Pane):void{
     const tab=pane.tabs.find(item=>item.id===pane.viewTabId);
     if(!tab||tab.path!==pane.viewPath)return;
+    if(tab.id===pane.active){tab.history=[...pane.history];tab.historyIndex=pane.historyIndex;}
     const scroll=pane.element.querySelector<HTMLElement>('.note-scroll');
     if(!scroll)return;
     tab.viewState={editor:pane.editor?.getViewState?.()??tab.viewState?.editor,scrollTop:scroll.scrollTop,scrollLeft:scroll.scrollLeft};
   }
 
-  private disposePaneViews(pane:Pane):void{
-    this.capturePaneState(pane);pane.viewTabId=undefined;pane.viewPath=undefined;
-    destroyMarkdown(pane.element);
-    clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.editor=undefined;pane.imageView?.destroy();pane.imageView=undefined;pane.pdfView?.destroy();pane.pdfView=undefined;pane.canvasView?.destroy();pane.canvasView=undefined;pane.canvasSource=undefined;pane.embeds?.destroy();pane.embeds=undefined;pane.properties?.destroy();pane.properties=undefined;pane.refreshPreview=undefined;
+  private dockPanes():DockPane[]{
+    return this.panes.flatMap(pane=>{const tabBar=pane.element.querySelector<HTMLElement>(':scope > .tab-bar');if(!tabBar)return[];
+      const nodes=[...tabBar.querySelectorAll<HTMLElement>(':scope > .tab-strip > .tab')];
+      return[{id:pane.id,element:pane.element,tabBar,tabs:pane.tabs.flatMap(tab=>{const element=nodes.find(node=>node.dataset.tabId===tab.id);return element?[{id:tab.id,element}]:[];})}];});
+  }
+
+  /** Model/topology and live ownership commit synchronously, before loading the
+   * source's next tab. Moving content never requires writing a dirty buffer. */
+  private async dockTab(intent:DockIntent):Promise<void>{
+    const source=this.panes.find(pane=>pane.id===intent.sourcePaneId),target=this.panes.find(pane=>pane.id===intent.targetPaneId);
+    const tab=source?.tabs.find(tab=>tab.id===intent.tabId),layout=this.splitLayout;
+    if(!source||!target||!tab||!layout||!['center','left','right','top','bottom'].includes(intent.edge))return;
+    const cached=this.cachedViews.get(tab);
+    if(cached&&(cached.viewPath!==tab.path||cached.viewMode!==tab.mode||cached.viewKind!==tab.kind)){
+      await this.disposePaneViews(cached);if(this.cachedViews.get(tab)===cached)this.cachedViews.delete(tab);
+      if(!this.panes.includes(source)||!this.panes.includes(target)||!source.tabs.includes(tab))return;
+    }
+    if(source.runtime&&(!source.viewReady||source.runtime.phase!=='active')||target.runtime&&(!target.viewReady||target.runtime.phase!=='active'))return;
+    const generation=this.vaultGeneration;
+    this.navigationIntent.set(source,(this.navigationIntent.get(source)??0)+1);this.navigationIntent.set(target,(this.navigationIntent.get(target)??0)+1);
+    if(intent.edge==='center'&&source===target){
+      const from=source.tabs.indexOf(tab),index=Math.max(0,Math.min(source.tabs.length-1,Math.trunc(intent.index)));
+      if(!Number.isFinite(index)||from===index)return;
+      source.tabs.splice(from,1);source.tabs.splice(index,0,tab);this.renderTabBar(source);this.saveSession();return;
+    }
+    const tree=layout.serialize(),panes=[...this.panes],active=this.activePane;
+    const snapshots=panes.map(pane=>({pane,tabs:[...pane.tabs],active:pane.active,viewTabId:pane.viewTabId}));
+    const restoring=this.restoringLayout;this.restoringLayout=true;
+    let destination=target,moved=false;
+    try{
+      // A whole group can move without changing any content ownership.
+      if(intent.edge!=='center'&&source.tabs.length===1){
+        if(source===target)return;
+        if(layout.move(source.id,target.id,intent.edge)){this.activate(source);moved=true;}return;
+      }
+      if(intent.edge!=='center'){
+        destination=this.addPane([tab]);
+        const edge=intent.edge==='left'?'right':intent.edge==='top'?'bottom':intent.edge;
+        if(!layout.split(target.id,destination.id,destination.element,edge))throw new Error('Could not split the destination pane.');
+        if(intent.edge==='left'||intent.edge==='top')if(!layout.move(destination.id,target.id,intent.edge))throw new Error('Could not position the destination pane.');
+      }
+      const wasActive=source.active===tab.id,sourceIndex=source.tabs.indexOf(tab);
+      // Keep the moving wrapper connected until runtime.attach has captured child
+      // focus. The target's prior view remains cached with its own resources.
+      if(wasActive)this.parkPaneView(source,true);
+      if(destination===target)this.parkPaneView(destination);
+      source.tabs.splice(sourceIndex,1);
+      if(destination===target){const index=Number.isFinite(intent.index)?Math.max(0,Math.min(destination.tabs.length,Math.trunc(intent.index))):destination.tabs.length;destination.tabs.splice(index,0,tab);}
+      destination.active=tab.id;
+      if(wasActive&&source.tabs.length)source.active=source.tabs[Math.min(sourceIndex,source.tabs.length-1)].id;
+      this.restoreCachedViewNow(destination,tab);
+      if(!source.tabs.length){this.panes=this.panes.filter(pane=>pane!==source);layout.remove(source.id);}
+      this.renderTabBar(destination);if(source.tabs.length)this.renderTabBar(source);
+      this.activate(destination);if(destination.runtime&&!destination.content?.contains(document.activeElement))this.focusPane(destination);moved=true;
+    }catch(error){
+      // No resources are destroyed during this transaction. Recover the former
+      // tab owners and topology before exposing the failure to the caller.
+      for(const pane of this.panes){const original=snapshots.find(snapshot=>snapshot.pane===pane);if(pane.runtime&&pane.viewTabId!==original?.viewTabId)this.parkPaneView(pane,true);}
+      this.panes=panes;
+      for(const snapshot of snapshots){
+        const pane=snapshot.pane;pane.tabs=snapshot.tabs;pane.active=snapshot.active;
+        if(!pane.element.isConnected)this.paneContainer.append(pane.element);
+        if(!pane.runtime)this.restoreCachedViewNow(pane,this.current(pane));this.renderTabBar(pane);
+      }
+      if(destination!==target)destination.element.remove();
+      layout.setPanes(new Map(panes.map(pane=>[pane.id,pane.element])),tree);
+      this.activate(active);throw error;
+    }finally{this.restoringLayout=restoring;this.saveSession();}
+    if(!moved||generation!==this.vaultGeneration)return;
+    // Existing views restore synchronously; only never-loaded fallback tabs await.
+    if(source.tabs.length&&!source.runtime)await this.renderPane(source,{flush:false});
+    if(generation!==this.vaultGeneration||!this.panes.includes(destination))return;
+    if(!destination.runtime){await this.renderPane(destination,{flush:false});if(generation===this.vaultGeneration&&this.activePane===destination)this.focusPane(destination);}
+    this.renderRight();this.saveSession();
+  }
+
+  private loadedViews():Pane[]{return[...this.panes,...this.cachedViews.values()];}
+  private viewOwner(pane:Pane){return{paneId:pane.id,vaultId:this.platform.id,vaultGeneration:this.vaultGeneration};}
+  private applyViewSettings(pane:Pane):void{
+    pane.content?.querySelector('.note-scroll')?.classList.toggle('readable-width',this.settings.readableWidth);
+    const title=pane.content?.querySelector<HTMLInputElement>('.note-title');if(title)title.hidden=!this.settings.showInlineTitle;
+    if(pane.viewSettings!==this.viewSettings())pane.editor?.configureLists?.({useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList});
+    pane.viewSettings=this.viewSettings();
+  }
+  private viewSettings():string{return JSON.stringify([this.settings.readableWidth,this.settings.showInlineTitle,this.settings.useTab,this.settings.tabSize,this.settings.smartIndentList]);}
+  private clearPaneViewFields(pane:Pane):void{
+    pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
+    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.canvasView=undefined;pane.canvasSource=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
+    pane.renderVersion=++this.viewSequence;
+  }
+  private parkPaneView(pane:Pane,keepConnected=false):void{
+    const tab=pane.tabs.find(tab=>tab.id===pane.viewTabId);
+    if(!tab||!pane.content||!pane.runtime)return;
+    this.capturePaneState(pane);
+    const parked:Pane={...pane,tabs:[tab],active:tab.id,history:[...pane.history],element:pane.content};
+    pane.rebindView?.(parked);this.cachedViews.set(tab,parked);
+    if(!keepConnected)pane.runtime.detach();
+    this.clearPaneViewFields(pane);
+  }
+  /** No await between attachment and owner rebinding. Failed attach leaves the
+   * cached owner/resources intact so the caller can roll back its tab model. */
+  private restoreCachedViewNow(pane:Pane,tab:Tab):boolean{
+    const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
+    const connected=cached.content.isConnected;
+    cached.runtime.attach(pane.element,this.viewOwner(pane));
+    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','canvasView','canvasSource','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
+    for(const key of fields)(pane as unknown as Record<string,unknown>)[key]=cached[key];
+    pane.history=tab.history??cached.history;pane.historyIndex=tab.historyIndex??cached.historyIndex;
+    pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);
+    const saved=tab.viewState?.editor,current=pane.editor?.getViewState?.();
+    if(!connected&&saved&&current&&JSON.stringify(saved.selection)!==JSON.stringify(current.selection))pane.editor?.restoreViewState?.({...current,selection:saved.selection});
+    return true;
+  }
+  private async restoreCachedView(pane:Pane,tab:Tab):Promise<boolean>{
+    const cached=this.cachedViews.get(tab);if(!cached)return false;
+    if(cached.viewPath!==tab.path||cached.viewMode!==tab.mode||cached.viewKind!==tab.kind){
+      await this.disposePaneViews(cached);this.cachedViews.delete(tab);return false;
+    }
+    return this.restoreCachedViewNow(pane,tab);
+  }
+  private async clearCachedViews():Promise<void>{for(const [tab,pane] of this.cachedViews){await this.disposePaneViews(pane);this.cachedViews.delete(tab);}}
+  private releasePaneView(pane:Pane,content:HTMLElement):void{
+    this.capturePaneState(pane);destroyMarkdown(content);
+    clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.canvasView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
+  }
+  private async disposePaneViews(pane:Pane):Promise<void>{
+    if(pane.runtime){await pane.canvasView?.flush();await pane.runtime.destroy();}
   }
 
   private async importAttachment(file:TransferFile,ownerPath:string,generation:number):Promise<string>{
@@ -564,13 +735,13 @@ export class Workspace {
     const marker=lines[line]?.match(/^([ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])[ \t]+\[)([^\]\r\n])(\])(?=[ \t]|\r?$)/);
     if(!marker)throw new Error('The task changed. Reopen the note before toggling it.');
     const at=marker[1].length;lines[line]=lines[line].slice(0,at)+(checked?'x':' ')+lines[line].slice(at+1);this.updateMarkdownBuffer(buffer,lines.join('\n'));await buffer.flush();
-    for(const pane of this.panes){pane.embeds?.invalidate(path);if(this.current(pane)?.path===path){if(this.current(pane).mode==='reading')await this.renderPane(pane);else pane.editor?.setValue(buffer.text);}}
+    for(const pane of this.loadedViews()){pane.embeds?.invalidate(path);if(pane.viewPath===path){if(pane.viewMode==='reading')pane.refreshPreview?.();else pane.editor?.setValue(buffer.text);}}
   }
 
-  private renderEmpty(pane:Pane):void{
+  private renderEmpty(pane:Pane,host=pane.element):void{
     const empty=el('div','empty-state');
     const actions=el('div','empty-actions');
-    for(const [label,shortcut,action]of [['Create new file','⌘ N',()=>this.run(()=>this.newNote())],['Go to file','⌘ O',()=>this.quickSwitcher()],['Open command palette','⌘ P',()=>this.commandPalette()]] as const){const row=textButton(label,action,'empty-action');row.append(el('kbd','',shortcut));actions.append(row);}empty.append(actions);pane.element.append(empty);
+    for(const [label,shortcut,action]of [['Create new file','⌘ N',()=>this.run(()=>this.newNote())],['Go to file','⌘ O',()=>this.quickSwitcher()],['Open command palette','⌘ P',()=>this.commandPalette()]] as const){const row=textButton(label,action,'empty-action');row.append(el('kbd','',shortcut));actions.append(row);}empty.append(actions);host.append(empty);
   }
 
   private renderSidebar():void{
@@ -780,8 +951,21 @@ export class Workspace {
   }
   private async deletePath(path:string):Promise<void>{await this.flush();await this.vault.trash(path);this.buffers.delete(path);notice('Moved to vault trash.');}
   private async newTab(pane=this.activePane):Promise<void>{await this.flushPane(pane);const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.run(()=>this.renderPane(pane));this.saveSession();}
-  private async closeTab(pane:Pane,tab:Tab):Promise<void>{await this.flushPane(pane);if(tab.path)await this.buffers.get(tab.path)?.flush();const index=pane.tabs.indexOf(tab);if(index<0)return;pane.tabs.splice(index,1);if(!pane.tabs.length){if(this.panes.length>1){this.disposePaneViews(pane);this.panes=this.panes.filter(p=>p!==pane);this.splitLayout?.remove(pane.id);if(this.activePane===pane){this.activate(this.panes[0]);this.focusPane(this.panes[0]);}this.saveSession();return;}pane.tabs.push({id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'});}if(tab.id===pane.active)pane.active=pane.tabs[Math.min(index,pane.tabs.length-1)].id;await this.renderPane(pane);this.saveSession();this.renderRight();}
-  private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
+  private async closeTab(pane:Pane,tab:Tab):Promise<void>{
+    if(!pane.tabs.includes(tab))return;
+    const owner=pane.viewTabId===tab.id?pane:this.cachedViews.get(tab);
+    if(owner)await this.disposePaneViews(owner);else if(tab.path)await this.buffers.get(tab.path)?.flush();
+    if(!this.panes.includes(pane))return;
+    const index=pane.tabs.indexOf(tab);if(index<0)return;
+    this.cachedViews.delete(tab);pane.tabs.splice(index,1);
+    if(!pane.tabs.length){
+      if(this.panes.length>1){this.panes=this.panes.filter(p=>p!==pane);this.splitLayout?.remove(pane.id);if(this.activePane===pane){this.activate(this.panes[0]);this.focusPane(this.panes[0]);}this.saveSession();return;}
+      pane.tabs.push({id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'});
+    }
+    if(tab.id===pane.active)pane.active=pane.tabs[Math.min(index,pane.tabs.length-1)].id;
+    await this.renderPane(pane);this.saveSession();this.renderRight();
+  }
+  private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;this.current(pane).historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
   private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.path&&!isMarkdown(tab.path))return;if(tab.path)await this.buffers.get(tab.path)?.flush();tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
   private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane,true,target.includes('#')?target.slice(target.indexOf('#')):'');return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
   private async dailyNote():Promise<void>{const now=new Date();const name=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.md`;if(!this.vault.entries.has(name))await this.vault.create(name,'');await this.openNote(name);}
@@ -877,7 +1061,7 @@ export class Workspace {
         for(const[key,label]of choices){const option=el('option','',label);option.value=key;select.append(option);}
         select.value=value;select.onchange=()=>{change(select.value);this.saveSettings();};return select;
       };
-      const configureLists=()=>{for(const pane of this.panes)pane.editor?.configureLists?.({useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList});};
+      const configureLists=()=>{for(const pane of this.loadedViews())pane.editor?.configureLists?.({useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList});};
       if(section==='Appearance'){
         const select=el('select');for(const[label,value]of[['Adapt to system','system'],['Dark','dark'],['Light','light']]){const option=el('option','',label);option.value=value;select.append(option);}select.value=this.settings.theme;select.setAttribute('aria-label','Base color scheme');select.onchange=()=>{this.settings.theme=select.value as Settings['theme'];this.saveSettings();};row('Base color scheme','Choose your default color scheme.',select);
         const size=el('input');size.type='range';size.min='12';size.max='26';size.value=String(this.settings.fontSize);size.setAttribute('aria-label','Font size');size.oninput=()=>{this.settings.fontSize=Number(size.value);this.saveSettings();};row('Font size','Font size in pixels for the editor and reading view.',size);
@@ -941,6 +1125,6 @@ export class Workspace {
     if(action){event.preventDefault();this.run(action);}
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
-  async flush():Promise<void>{for(const pane of this.panes)await pane.canvasView?.flush();for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
+  async flush():Promise<void>{for(const pane of [...this.panes,...this.cachedViews.values()])await pane.canvasView?.flush();for(const buffer of this.buffers.values())await buffer.flush();}
+  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
 }
