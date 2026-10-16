@@ -22,6 +22,7 @@ class TableController {
   private active: { row: number; column: number; view: EditorView; from: number; to: number; insertion?: { readonly prefix: string; readonly suffix: string } } | null = null;
   private syncing = false;
   private destroyed = false;
+  private editorRetainers = 0;
   private readOnly = new Compartment();
   readonly owner: EditorView;
   model: MarkdownTable;
@@ -50,9 +51,7 @@ class TableController {
     this.dom.append(wrapper);
     controllers.set(this.dom, this);
     this.render();
-    this.dom.addEventListener('focusout', () => queueMicrotask(() => {
-      if (!this.destroyed && !this.dom.contains(document.activeElement)) this.close();
-    }));
+    this.dom.addEventListener('focusout', () => queueMicrotask(() => this.closeIfUnfocused()));
   }
 
   /** Structural edits share the note's history and reacquire the rebuilt widget. */
@@ -339,6 +338,21 @@ class TableController {
   }
 
   get editor() { return this.active?.view; }
+  private closeIfUnfocused() {
+    if (!this.destroyed && !this.editorRetainers && !this.dom.contains(this.dom.ownerDocument.activeElement)) this.close();
+  }
+  /** Menus may temporarily move focus out of the child. Only blur cleanup is
+   * retained; explicit navigation, structural changes and teardown still close. */
+  retainEditor(): () => void {
+    if (this.destroyed || !this.active) return () => {};
+    this.editorRetainers++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true; this.editorRetainers--;
+      this.closeIfUnfocused();
+    };
+  }
   close() {
     const active = this.active; if (!active) return;
     this.active = null; active.view.destroy();
@@ -364,6 +378,15 @@ export function activeTableEditor(view: EditorView): EditorView | undefined {
     const editor = controllers.get(dom)?.editor; if (editor?.hasFocus) return editor;
   }
   return undefined;
+}
+
+/** Keep the owning table's current child available while an asynchronous menu
+ * owns focus. Release in finally after the action/refocus has completed. */
+export function retainTableEditor(view: EditorView, target: HTMLElement): () => void {
+  const tableDOM = target.closest<HTMLElement>('.cm-live-table');
+  if (!tableDOM || !view.dom.contains(tableDOM)) return () => {};
+  const controller = controllers.get(tableDOM);
+  return controller?.owner === view ? controller.retainEditor() : () => {};
 }
 
 export interface TableAction {
