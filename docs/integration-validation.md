@@ -106,3 +106,13 @@ vault/prompt rejection, and both delayed-save activation regressions. Native edg
 positions, overflowing tabs, macOS drag/double-click behavior and popup placement
 remain root verification work. Full Explorer inline naming, menu icons and Bases
 creation remain explicit gaps; the current New folder action still uses a dialog.
+
+The frozen combined implementation at `39f6319` also includes root's reviewed
+folding controls, saved fold restoration and active-table-cell focus repair.
+Serialized final verification passes **917/917 tests** with concurrency two
+(17.2 seconds), then TypeScript, then the production webpack build (3.9 seconds).
+Webpack reports its three existing bundle/performance warnings. There are no
+skipped tests. Independent host review reran all three original delayed-creation
+probes and both permanent delayed-save regressions after the activation fix.
+No Electron window was launched for this integration pass; native verification
+and closing the test app afterward remain with root.
