@@ -32,6 +32,8 @@ them or interrupting the current work.
 | Enter after a new filename should focus the note body | Async rename/rerender focus race identified; repair assigned with blank-note focus | Wait for successful rename and focus the current editor; preserve newer user focus intent |
 | Opening an existing file should not expose the first line's Markdown automatically | New inline renderer reveals syntax only for focused editor selections; opening-focus audit assigned | Verify sidebar open separately from intentional title-Enter and body clicks in next native build |
 | Obsidian-style launch page and vault selection | Existing basic chooser; full launch/create/open/recent-vault flows queued | Audit reference flows and implement after higher-priority editor dependencies |
+| Launch should reuse the previously open vault and workspace | Native relaunch restored the saved test vault, both tabs and contents; unavailable previous folder falls back to chooser | Complete broader startup/multiple-vault lifecycle reference comparison |
+| Close agent-launched Electron after testing on the 8 GB MacBook Air | Persisted resource policy in AGENTS.md; latest native pass ended with exit zero and no Electron in app inventory | Keep heavy checks serialized and close test processes after each pass |
 | Use maximum useful parallel agents with good architecture and independent verification | Persisted in `AGENTS.md`; implementation, audits, integration and review assigned in parallel | Reassign available workers as useful scopes become independent |
 | LiveSync-style easy default sync, FullCalendar and TaskNotes-style task/calendar features | Explicitly deferred by user until editor base is solid | Discuss only at that stage; see `deferred-product-roadmap.md` |
 

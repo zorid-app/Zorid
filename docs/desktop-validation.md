@@ -226,3 +226,37 @@ source above the retained image. No fixture text was changed by these actions.
 PDF source toggling, native rectangle clipboard, new focus repairs, and new-window
 behavior still need their separate native checks; the latter patches are not in
 this running checkpoint.
+
+### Native focus and window checkpoint (2026-10-16)
+
+Integrated `7749d61` after 874 tests passed at concurrency two and TypeScript
+passed. Root then wired `installEmptyNoteFocus` into the actual editor lifecycle.
+The existing seven focus tests now create the full editor: two positive cases
+failed before wiring and all seven passed afterward. A broader focused run
+passed 64 editor/workspace tests. TypeScript and production webpack passed;
+the build retained its three bundle/performance warnings.
+
+Native checks used the exclusive `/private/tmp/zorid-focus-verification-20261016`
+vault. Command-N selected the new note title. Renaming it and pressing Enter
+focused the body; immediate typing inserted `Title Enter works.`. Clicking well
+below that body moved focus from the title into the editor and allowed typing.
+A second empty note accepted `Empty note click works.` after clicking the blank
+body area. Command-T, Command-1, and Command-2 operated on the expected tabs.
+Command-Shift-N opened a new empty workspace window with the same vault.
+
+Closing that new window exposed a real Electron lifecycle bug: the broker read
+`window.webContents.id` after the native object had been destroyed. Root changed
+the broker to retain its registration-time ID and use it for cleanup and early
+liveness checks. Eighteen focused tests passed, including a throwing destroyed
+getter; independent review also exercised the actual main-process close wiring.
+After restarting with that fix, a second window closed without the error and
+the surviving window remained interactive.
+
+Relaunch reopened the saved vault automatically, with both tabs, active note,
+and saved contents. User edits made during the test were preserved. The earlier
+chooser appeared because the previous temporary vault no longer existed after
+the environment boundary, not because a valid saved vault was ignored.
+
+At the end, Electron quit with exit code zero and was absent from the native app
+inventory. Quit cancellation with deliberately unsaved data, tab tear-off,
+mobile touch behavior, and paired Obsidian visual comparison remain unverified.

@@ -2,17 +2,17 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { EditorSelection, EditorState } from '@codemirror/state';
+import { EditorSelection, EditorState, StateEffect } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { liveProperties, bodyStart } from '../src/editor/live-properties.ts';
-import { installEmptyNoteFocus } from '../src/editor/empty-note-focus.ts';
+import { bodyStart } from '../src/editor/live-properties.ts';
+import { createEditor } from '../src/ui/editor.ts';
 
 // Real CM DOM listeners/state with synthetic rectangles; native geometry is a
 // separate verification step. No browser caret-layout emulation is asserted.
 function setup(t: TestContext, source = '', readonly = false, editable = true) {
   const dom = new JSDOM('<!doctype html><body><button id="other">Other</button><div class="note-scroll"><input class="note-title"><div class="properties-host"><input></div><div class="editor-host"></div></div>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
-  for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Node: dom.window.Node, Window: dom.window.Window, MutationObserver: dom.window.MutationObserver, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window) })) {
+  for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Text: dom.window.Text, Node: dom.window.Node, Window: dom.window.Window, MutationObserver: dom.window.MutationObserver, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window) })) {
     saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
   const rect = (top: number, bottom: number) => ({ x: 0, y: top, top, bottom, left: 0, right: 800, width: 800, height: bottom - top, toJSON() { return {}; } });
@@ -20,12 +20,15 @@ function setup(t: TestContext, source = '', readonly = false, editable = true) {
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const document = dom.window.document, host = document.querySelector<HTMLElement>('.editor-host')!, surface = host.parentElement!;
   host.getBoundingClientRect = () => rect(100, 300); surface.getBoundingClientRect = () => rect(0, 800);
-  const view = new EditorView({ parent: host, state: EditorState.create({ doc: source, extensions: [liveProperties(), EditorState.readOnly.of(readonly), EditorView.editable.of(editable)] }) });
+  const editor = createEditor(host, { value: source, mode: 'live', paths: () => [], onChange() {}, open() {} });
+  const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
+  view.dispatch({ effects: StateEffect.appendConfig.of([EditorState.readOnly.of(readonly), EditorView.editable.of(editable)]) });
   view.contentDOM.getBoundingClientRect = () => rect(100, 124);
   view.dispatch({ selection: { anchor: bodyStart(view.state) } });
-  const dispose = installEmptyNoteFocus(view, host);
+  let destroyed = false;
+  const dispose = () => { if (!destroyed) { destroyed = true; editor.destroy(); } };
   const other = document.getElementById('other')!; other.focus();
-  t.after(() => { dispose(); view.destroy(); dom.window.close(); for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
+  t.after(() => { dispose(); dom.window.close(); for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
   const mouse = (target: EventTarget, type: string, extra: MouseEventInit = {}) => { const event = new dom.window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: 200, clientY: 250, ...extra }); target.dispatchEvent(event); return event; };
   const click = (target: EventTarget, extra: MouseEventInit = {}) => { mouse(target, 'mousedown', extra); return mouse(target, 'mouseup', extra); };
   return { dom, document, view, host, surface, other, mouse, click, dispose };

@@ -14,12 +14,12 @@ class WindowBroker {
   register(window, { primary = false, initialState = 'empty' } = {}) {
     const id = primary ? 'main' : randomUUID();
     if ([...this.windows.values()].some(record => record.id === id)) throw new Error('Window identity already in use');
-    const record = { id, window, initialState, vault: null, generation: 0 };
-    this.windows.set(window.webContents.id, record);
+    const record = { id, window, webContentsId: window.webContents.id, initialState, vault: null, generation: 0 };
+    this.windows.set(record.webContentsId, record);
     return record;
   }
   assertLive(record) {
-    if (this.windows.get(record.window.webContents.id) !== record || record.window.isDestroyed() || record.window.webContents.isDestroyed()) throw new Error('Window is no longer available');
+    if (this.windows.get(record.webContentsId) !== record || record.window.isDestroyed() || record.window.webContents.isDestroyed()) throw new Error('Window is no longer available');
   }
   authenticate(event) {
     const record = this.windows.get(event.sender.id);
@@ -104,7 +104,7 @@ class WindowBroker {
   remove(record) {
     this.detach(record);
     record.generation++;
-    this.windows.delete(record.window.webContents.id);
+    if (this.windows.get(record.webContentsId) === record) this.windows.delete(record.webContentsId);
   }
   dispose() {
     for (const record of [...this.windows.values()]) this.remove(record);

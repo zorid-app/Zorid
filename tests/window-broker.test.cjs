@@ -37,6 +37,26 @@ test('window identities, main frame and page grants cannot be supplied by render
   broker.remove(a);
   assert.throws(() => broker.authenticate(event(a)), /Untrusted sender/);
 });
+test('closed windows release grants and watchers without reading destroyed webContents', async () => {
+  const { broker, services, a, b } = fixture();
+  await broker.select(a, '/one'); broker.bind(b, a.vault);
+  const originalId = b.window.webContents.id;
+  b.window.isDestroyed = () => true;
+  Object.defineProperty(b.window, 'webContents', { get() { throw new TypeError('Object has been destroyed'); } });
+  assert.throws(() => broker.assertLive(b), /Window is no longer available/);
+  assert.doesNotThrow(() => broker.remove(b));
+  assert.equal(broker.windows.has(originalId), false);
+  assert.equal(b.vault, null);
+  assert.equal(services.get('/one').watchers.size, 1, 'surviving window keeps the shared watcher');
+  assert.doesNotThrow(() => broker.remove(b), 'repeated close is harmless');
+  await broker.dispatch(a, '/one', 'write', ['a.md', 'still usable']);
+  a.window.isDestroyed = () => true;
+  Object.defineProperty(a.window, 'webContents', { get() { throw new TypeError('Object has been destroyed'); } });
+  assert.doesNotThrow(() => broker.dispose());
+  assert.equal(broker.windows.size, 0);
+  assert.equal(services.get('/one').watchers.size, 0);
+  assert.doesNotThrow(() => broker.dispose());
+});
 test('vault selection and broadcasts remain window scoped; same-vault watchers are shared', async () => {
   const { broker, services, a, b } = fixture();
   await broker.select(a, '/one'); broker.bind(b, a.vault);

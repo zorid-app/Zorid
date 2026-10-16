@@ -21,6 +21,7 @@ import type { LiveInlineOptions } from '../editor/live-inline.ts';
 import { textChanges } from '../editor/text-changes.ts';
 import { wikiCompletion } from '../editor/wiki-completion.ts';
 import type { WikiCompletionOptions } from '../editor/wiki-completion.ts';
+import { installEmptyNoteFocus } from '../editor/empty-note-focus.ts';
 
 export interface EditorViewState {
   selection: { ranges: { anchor: number; head: number }[]; mainIndex: number };
@@ -83,6 +84,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     ]}),
   });
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
+  const disposeEmptyFocus = installEmptyNoteFocus(view, parent);
   return {
     getValue: () => view.state.doc.toString(),
     getViewState: () => ({selection: {ranges:view.state.selection.ranges.map(range=>({anchor:range.anchor,head:range.head})),mainIndex:view.state.selection.mainIndex}, scrollTop: view.scrollDOM.scrollTop, scrollLeft: view.scrollDOM.scrollLeft}),
@@ -107,7 +109,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       view.dispatch({ changes: textChanges(previous, value),
         annotations: [externalChange.of(true), propertyUpdate.of(true), Transaction.addToHistory.of(false), isolateHistory.of('full')] });
     },
-    focus: () => (activeTableEditor(view) ?? view).focus(), destroy: () => view.destroy(),
+    focus: () => (activeTableEditor(view) ?? view).focus(), destroy() { disposeEmptyFocus(); view.destroy(); },
     insert(text) { const target = activeTableEditor(view) ?? view; target.dispatch({ ...target.state.replaceSelection(text), annotations: Transaction.userEvent.of('input') }); target.focus(); },
   };
 }
