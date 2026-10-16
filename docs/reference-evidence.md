@@ -19,7 +19,7 @@ The framework observation identifies the installed reference host. It does not e
 
 ## REA execution and retained evidence
 
-The installed `reverse-engineer-anything` skill, version 42, was used. Its supported public CLI fallback is installed at `/Users/ctk/.npm/_npx/9b9809298fe40d2c/node_modules/.bin/rea`, version 6.5.0. E1/E2 used that CLI fallback. A subsequently connected REA MCP server produced E3; its complete two-record bundle was exported outside the repository.
+The installed `reverse-engineer-anything` skill, version 42, was used. Its supported public CLI fallback is installed at `$HOME/.npm/_npx/9b9809298fe40d2c/node_modules/.bin/rea`, version 6.5.0. E1/E2 used that CLI fallback. A subsequently connected REA MCP server produced E3; its complete two-record bundle was exported outside the repository.
 
 | ID | REA Evidence ID | File outside repository | Coverage |
 | --- | --- | --- | --- |

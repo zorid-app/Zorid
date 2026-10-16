@@ -116,7 +116,7 @@ document-provider behavior still need device validation.
   was not launched, device interaction and signing remain unverified, and later
   renderer changes still need synchronization and runtime validation.
 - **Android compile blocked by missing prerequisites:** `ANDROID_HOME` points to
-  `/Users/ctk/Library/Android/sdk`, which does not exist. No Gradle distribution or
+  `$HOME/Library/Android/sdk`, which does not exist. No Gradle distribution or
   dependency cache was found in the standard user locations. Installed Java
   versions top out at 17; the generated app/plugin require Java 21. The Gradle
   wrapper would need its 8.14.3 distribution before it can run, even with

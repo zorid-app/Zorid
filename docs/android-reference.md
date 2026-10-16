@@ -1,6 +1,6 @@
 # Android reference evidence: Obsidian 1.14.4
 
-This report records static evidence from the user-supplied `/Users/ctk/Downloads/Obsidian-1.14.4.apk`, inspected on 2026-10-16. It does not certify mobile parity. No application execution, device session, UI automation, or original proprietary implementation is included in the project.
+This report records static evidence from the user-supplied `$HOME/Downloads/Obsidian-1.14.4.apk`, inspected on 2026-10-16. It does not certify mobile parity. No application execution, device session, UI automation, or original proprietary implementation is included in the project.
 
 ## Identity and REA coverage
 
