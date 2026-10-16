@@ -239,3 +239,12 @@ Canvas JSON confirmed the undo reached disk. Toolbar Redo restored the text,
 again verified on disk. A final Undo restored the pre-test fixture, and the test
 Electron process exited zero. This verifies the reported own-save history bug;
 it does not establish complete Canvas interaction parity.
+
+Native verification of `13b11a1` confirmed the corrected file-tree policy:
+Markdown, WAV and Canvas displayed names omit their suffixes, while original
+`.unknown` and `.constructor` fixtures retain theirs without crashing. Accessible
+row names still contain full paths. The focused label/host/attachment checks
+passed (32 tests), and the production build passed. This does not add a standalone
+audio viewer: opening the WAV directly still reports the missing viewer.
+The pass also found file-click/F2 loses focus after navigation; this is assigned
+separately from the verified folder-click/F2 repair. The test app exited zero.
