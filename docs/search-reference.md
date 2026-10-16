@@ -125,7 +125,7 @@ Copy results exports the sorted file list, with full path or short name, plain/w
 
 ## Verification still required
 
-No independent reconstruction tests or reference execution were performed in this audit. The following fixtures should gate implementation parity:
+The initial static audit did not execute the reference. The original engine implementation and its independent fixtures are recorded below; reference execution remains outstanding. The following fixture categories should gate full implementation parity:
 
 1. Operator precedence, scoping, exclusivity and malformed/incomplete input; reserved-word case; tab/newline handling; escapes and unterminated delimiters.
 2. Quotes across content/filename/path/property names, Unicode and digit boundaries, regex multiline/zero-length behavior, and range merging without equating occurrence count to snippet/file count.
@@ -137,3 +137,28 @@ No independent reconstruction tests or reference execution were performed in thi
 8. Restored view state, debounce/history behavior, explanation/error visibility, copy formatting and the separately registered CLI contracts.
 
 The matcher/parser/operator/update branches described here are inspected; complete metadata production, all suggestion behavior, renderer virtualization internals, editor-local find/replace, regex denial-of-service characteristics, full plugin API compatibility, Android equivalence, and runtime performance/visual parity remain open. This document does not close the whole search feature or certify a clone implementation.
+
+
+## Original query-engine implementation (2026-10-16)
+
+The independently written [query engine](../src/search/query.ts) implements the parser and evaluator contract above. [Search fixtures](../tests/search-query.test.ts) cover precedence and grouping; malformed regex/unsupported operators/nesting; quotes/escapes and permissive incomplete input; regex flags, zero-width matches and case overrides; filename/path/content selection; typed/scalar/array properties; line/block/section/task scopes; metadata tags; merged UTF-16 intervals; and repeated use without regex-state leakage.
+
+Public entry points:
+
+- `parseSearchQuery(query)` returns a discriminated `SearchQueryNode` AST or `null`. Unsupported names and invalid regex/operands/nesting throw `SearchQueryError` with a stable code and UTF-16 position.
+- `compileSearchQuery(query, { caseSensitive })` returns the AST, `requiredInputs: { content, metadata }`, and `match(document)`.
+- `match({ path, text, metadata })` returns a `SearchMatch` or `null`. String-field hits are half-open `[start, end]` pairs. Property hits carry `key`, optional `subkey: [arrayIndex]`, and optional value-relative `pos`. Empty result objects are positive matches without highlight intervals.
+- `prepareSearchDocument(document)` creates a reusable document wrapper. Line ranges, heading intervals, block ranges and task candidates are derived lazily once per wrapper. Its text and metadata must represent one immutable snapshot; recreate it after either changes. Metadata is borrowed and never mutated.
+
+`SearchMetadata` accepts existing note frontmatter, string tags and line-based headings. For precise scopes, supply optional `sections: { type, start, end }[]`, `listItems: { start, end, task? }[]`, ranged tags `{ tag, start, end }`, and heading `start` offsets. Offsets always address the exact supplied text. Missing block/task metadata produces no matches, rather than guessing paragraph/task boundaries. Line/heading scopes share indexes; compiled queries reuse regex instances and reset their cursors for each field/document. Filename/path-only queries do not require content. Property-only queries require metadata but not file text. The metadata requirement propagates through file/path wrappers so callers can provide property data used inside those expressions.
+
+A focused follow-up of the same artifact at **771443–772100** and **1445621–1445788** resolved frontmatter tag normalization: the first own case-insensitive `tags` key supplies a string singleton or array of strings; strings are trimmed, empty values and values containing a literal space are rejected, and a leading hash is added as needed. A scalar comma-separated string is not split into tags in this source helper. The engine follows that normalization. The reference's property highlight key helper prefers exact lowercase `tags` if present, otherwise its first case-insensitive key. These are additional ordinary static observations, not a new REA analysis.
+
+Validation on the isolated `parity/search-engine` worktree: `node --test tests/search-query.test.ts` passed **17 tests**; the repository TypeScript check (`tsc --noEmit`) passed. These test the original implementation against explicit fixtures; they are not execution comparisons against Obsidian.
+
+Remaining engine/integration boundaries:
+
+- The reference's historical bundled letter/digit boundary table is not redistributed. Quoted content uses modern Unicode BMP letter/decimal-digit classification. ASCII, accents, underscores, digits and UTF-16 astral offsets have fixtures; characters newly assigned since the bundled table may differ.
+- Existing `NoteMetadata.tags` is an aggregate string list with no origin/range information. Such tags can establish a match but cannot identify inline highlight offsets, and upstream tag parsing differences remain upstream. Supply ranged inline tags plus frontmatter for exact presentation. Current metadata production still needs section/list-item ranges for block/task integration.
+- Canvas text-node dispatch is not implemented by this file; `.canvas` default filename matching is supported. Vault filtering, content IO, incremental queues, sorting, rendering, navigation/highlight lifecycle, search suggestions, embedded query fences and CLI/UI wiring remain separate integration work.
+- Regex execution remains synchronous with JavaScript semantics. No claim of bounded execution time, native indexing, performance parity, or whole-feature completion is made.

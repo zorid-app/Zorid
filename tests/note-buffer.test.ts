@@ -6,9 +6,12 @@ import type { StorageLike } from '../src/ui/note-buffer.ts';
 
 class Storage implements StorageLike {
   values = new Map<string, string>();
+  writes = 0;
+  removals = 0;
+  writtenCharacters = 0;
   getItem(key: string): string | null { return this.values.get(key) ?? null; }
-  setItem(key: string, value: string): void { this.values.set(key, value); }
-  removeItem(key: string): void { this.values.delete(key); }
+  setItem(key: string, value: string): void { this.writes++; this.writtenCharacters += value.length; this.values.set(key, value); }
+  removeItem(key: string): void { this.removals++; this.values.delete(key); }
   draft(): {base: string; content: string} | undefined {
     const raw = this.values.values().next().value;
     return raw ? JSON.parse(raw) : undefined;
@@ -37,6 +40,148 @@ test('edits immediately recover to storage; flush persists and clears the draft'
   assert.equal(await vault.read('One.md'), 'changed');
   assert.equal(note.savedText, 'changed');
   assert.equal(note.dirty, false);
+  assert.equal(storage.values.size, 0);
+  await note.dispose();
+});
+
+test('distinct edits remain immediately recoverable while duplicate snapshots reuse checkpoint and base encoding', async t => {
+  const base = 'base"\\\n😀\ud800'.repeat(16_384);
+  const {note, storage} = await setup(new MemoryAdapter({'One.md': base}));
+  const values = Array.from({length: 16}, (_, index) => base + String(index));
+  const encoded: unknown[] = [];
+  const stringify = JSON.stringify;
+  const mock = t.mock.method(JSON, 'stringify', (...args: Parameters<typeof JSON.stringify>) => {
+    encoded.push(args[0]); return stringify(...args);
+  });
+  try {
+    for (const value of values) {
+      note.update(value);
+      // Recoverability is checked before timers/microtasks or explicit flush.
+      assert.deepEqual(JSON.parse(storage.getItem('test-vault:One.md')!), {base, content: value});
+      note.update(value); note.update(value);
+    }
+  } finally { mock.mock.restore(); }
+  assert.equal(storage.writes, values.length);
+  assert.deepEqual(encoded, [base, ...values], 'the stable saved base is encoded once, each distinct edit once');
+  assert.equal(storage.writtenCharacters, values.reduce((count, content) => count + stringify({base, content}).length, 0));
+  // A fresh buffer can recover before the original buffer ever saves to disk.
+  const restarted = await setup(new MemoryAdapter({'One.md': base}), storage);
+  assert.equal(restarted.note.text, values.at(-1));
+  restarted.note.update(values.at(-1)!);
+  assert.equal(storage.writes, values.length, 'the recovered checkpoint is already durable');
+  await restarted.note.dispose();
+  await note.dispose();
+});
+
+test('duplicate updates do not postpone autosave and disposal leaves no pending timer', async t => {
+  const {note, vault, storage, adapter} = await setup();
+  t.mock.timers.enable({apis: ['setTimeout']});
+  let saves = 0;
+  vault.on('modify', () => saves++);
+  note.update('first');
+  t.mock.timers.tick(30_000);
+  note.update('first');
+  t.mock.timers.tick(30_000);
+  // Drain the in-memory adapter's promise chain without advancing a wall clock.
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(await adapter.read('One.md'), 'first');
+  assert.equal(saves, 1);
+  assert.equal(storage.writes, 1);
+  assert.equal(storage.removals, 1);
+  note.update('second');
+  await note.dispose();
+  t.mock.timers.tick(120_000);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(saves, 2);
+  assert.equal(storage.values.size, 0);
+  assert.throws(() => note.update('late'), /disposed/);
+});
+
+test('failed recovery writes retry identical snapshots and explicit flush or close before failed disk I/O', async () => {
+  for (const boundary of ['update', 'flush', 'dispose'] as const) {
+    class FailingStorage extends Storage {
+      fail = true;
+      attempts = 0;
+      setItem(key: string, value: string): void {
+        this.attempts++;
+        if (this.fail) throw new Error('recovery quota');
+        super.setItem(key, value);
+      }
+    }
+    class FailingAdapter extends MemoryAdapter {
+      fail = true;
+      async write(path: string, content: string): Promise<void> {
+        if (this.fail) throw new Error('disk full');
+        await super.write(path, content);
+      }
+    }
+    const storage = new FailingStorage(), adapter = new FailingAdapter({'One.md': 'initial'});
+    const {note} = await setup(adapter, storage);
+    note.update('valuable');
+    assert.equal(note.error?.message, 'recovery quota');
+    assert.equal(storage.values.size, 0);
+    storage.fail = false;
+    if (boundary === 'update') note.update('valuable');
+    else await assert.rejects(note[boundary](), /disk full/);
+    assert.equal(storage.attempts, 2, 'failed checkpoints are not mistaken for persisted snapshots');
+    assert.deepEqual(storage.draft(), {base: 'initial', content: 'valuable'});
+    await assert.rejects(note.dispose(), /disk full/);
+    assert.equal(storage.attempts, 2, 'successful recovery is not rewritten by another failed close');
+    const restarted = await setup(new MemoryAdapter({'One.md': 'initial'}), storage);
+    assert.equal(restarted.note.text, 'valuable');
+    await restarted.note.dispose();
+    adapter.fail = false;
+    await note.dispose();
+    assert.equal(storage.values.size, 0);
+  }
+});
+
+test('clean checkpoint removal is deduplicated but failed removal is retried at flush', async () => {
+  class FailingRemoval extends Storage {
+    fail = true;
+    attempts = 0;
+    removeItem(key: string): void {
+      this.attempts++;
+      if (this.fail) throw new Error('recovery removal failed');
+      super.removeItem(key);
+    }
+  }
+  const storage = new FailingRemoval(), {note} = await setup(undefined, storage);
+  note.update('saved');
+  await note.flush();
+  assert.equal(note.dirty, false);
+  assert.equal(note.error?.message, 'recovery removal failed');
+  assert.equal(storage.values.size, 1);
+  storage.fail = false;
+  await note.flush();
+  assert.equal(storage.values.size, 0);
+  assert.equal(storage.attempts, 2);
+  note.update('saved'); note.update('saved');
+  await note.flush(); await note.dispose();
+  assert.equal(storage.attempts, 2);
+});
+
+test('recovery checkpoint advances its base between overlapping saves', async () => {
+  const firstStarted = deferred(), firstRelease = deferred(), secondStarted = deferred(), secondRelease = deferred();
+  class SlowAdapter extends MemoryAdapter {
+    count = 0;
+    async write(path: string, content: string): Promise<void> {
+      if (++this.count === 1) { firstStarted.resolve(); await firstRelease.promise; }
+      else { secondStarted.resolve(); await secondRelease.promise; }
+      await super.write(path, content);
+    }
+  }
+  const {note, storage} = await setup(new SlowAdapter({'One.md': 'initial'}));
+  note.update('first');
+  const saving = note.flush();
+  await firstStarted.promise;
+  note.update('second');
+  firstRelease.resolve();
+  await secondStarted.promise;
+  assert.deepEqual(storage.draft(), {base: 'first', content: 'second'});
+  assert.equal(storage.writes, 3, 'new saved base requires a new checkpoint even with unchanged current text');
+  secondRelease.resolve();
+  await saving;
   assert.equal(storage.values.size, 0);
   await note.dispose();
 });
@@ -273,6 +418,9 @@ test('relocate with unchanged disk base allows dirty text to save under the new 
   assert.equal(note.error, null);
   assert.equal(storage.values.has('test-vault:One.md'), false);
   assert.equal(storage.values.has('test-vault:Two.md'), true);
+  assert.equal(storage.writes, 2, 'the path change requires a new checkpoint; its second persist is redundant');
+  await note.relocate('Two.md');
+  assert.equal(storage.writes, 2, 'duplicate path notifications reuse the durable checkpoint');
   await note.dispose();
   assert.equal(await vault.read('Two.md'), 'new draft');
 });

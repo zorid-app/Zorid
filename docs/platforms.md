@@ -104,17 +104,17 @@ document-provider behavior still need device validation.
   final log is `/private/tmp/zorid-mobile-web-build-final.log`. Native sync also
   completed in the isolated verification checkout; log is
   `/private/tmp/zorid-mobile-sync.log`.
-- **iOS compile attempted, blocked before compilation:** Xcode 26.2, iOS and iOS
-  Simulator SDK 26.2, and Swift 6.2.3 are installed. An unsigned generic simulator
-  build with automatic dependency resolution disabled and derived data/package
-  checkout output under `/private/tmp` failed during package resolution: SwiftPM
-  attempted to create its default cache outside the permitted writable roots.
-  The log is `/private/tmp/zorid-mobile-xcode-build.log`. The inspected existing
-  Xcode package cache contains Capacitor 8.3.4, whereas this project requires
-  `capacitor-swift-pm` 8.5.3 and `ion-ios-filesystem` 2.0.1; those exact dependencies
-  were not available there. Completing a build requires writable SwiftPM caches
-  and the exact package/binary dependencies. No dependencies were substituted,
-  signing credentials copied, or simulator launched.
+- **Unsigned iOS Simulator compilation succeeds:** after authorized official
+  dependency resolution and writable SwiftPM cache access, the generic simulator
+  build completed with `BUILD SUCCEEDED` in
+  `/private/tmp/zorid-mobile-xcode-authorized.log`. This used Xcode 26.2 and the
+  pinned Capacitor 8.5.3/Filesystem package dependencies in the isolated
+  `mobile-validation` checkout. The earlier cache-permission failure recorded in
+  `/private/tmp/zorid-mobile-xcode-build.log` is resolved. The generated app is
+  `/private/tmp/zorid-mobile-validation/DerivedData/Build/Products/Debug-iphonesimulator/App.app`.
+  This proves native simulator compilation for that checkpoint; the simulator
+  was not launched, device interaction and signing remain unverified, and later
+  renderer changes still need synchronization and runtime validation.
 - **Android compile blocked by missing prerequisites:** `ANDROID_HOME` points to
   `/Users/ctk/Library/Android/sdk`, which does not exist. No Gradle distribution or
   dependency cache was found in the standard user locations. Installed Java
@@ -126,7 +126,7 @@ document-provider behavior still need device validation.
   `android/`. No toolchain download or global configuration change was made.
 
 Generation, synchronization, parsing, compilation, device execution, and parity
-are distinct validation stages. The first three are established here; the last
+are distinct validation stages. Generation, synchronization, parsing and iOS simulator compilation are established here; runtime and parity
 three remain open.
 
 ## Browser preview and verification limits

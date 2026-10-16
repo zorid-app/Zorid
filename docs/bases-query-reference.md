@@ -181,3 +181,36 @@ Priority reference fixtures remain:
 6. Performance: separately measure scan latency, update-to-render latency, formula fan-out, expensive filters, memory and view virtualization on fixed workloads. No reference benchmark was run here.
 
 No target execution, fixture capture, Android query audit, plugin ABI validation, exhaustive parser audit, or end-to-end implementation mapping was completed in this pass. All behavior statements remain bounded static observations or explicitly labeled inferences.
+
+## Original implementation foundation (2026-10-16)
+
+`src/bases/expression.ts` now contains an original lexer, precedence parser, expression tree and interpreter. It neither evaluates JavaScript source nor exposes ambient JavaScript objects/functions. This implementation uses tagged values and explicit namespace/function capabilities rather than the reference class hierarchy. No recovered code, generated grammar tables or assets were copied into the implementation.
+
+The public boundary is:
+
+| API | Contract |
+| --- | --- |
+| `parseBaseExpression(source)` | Returns a readonly expression-tree shape; malformed/unsupported syntax throws `BaseExpressionError` with a UTF-16 source offset. Blank input parses as null. |
+| `evaluateBaseExpression(sourceOrTree, context)` | Returns a typed value, including an explicit error value for a failed parse or evaluation. |
+| `evaluateBaseExpressionOrThrow(...)` / `testBaseExpression(...)` | Propagate thrown parse/evaluation failures; the latter converts returned values to typed truthiness. A host function can explicitly return an error value, which remains falsey data rather than being rethrown. A caller can report thrown filter failures separately from nonmatching rows. |
+| `createBaseExpressionContext(options)` | Takes detached plain note/file/current-file data, named formula expressions and optional host identifier/function capabilities. Resolves `note`, `file`, `this`, `formula` and bare note names; memoizes formulas per context with a cycle guard. Construct a new context after data/query changes. |
+| `BaseFunctionRegistry` | Explicit global or receiver-type registrations, argument schemas and lifecycle removal; custom registrations take precedence over supplied built-ins. Syntax cannot call arbitrary object members. |
+| `baseExpressionValue`, `baseDate`, `baseDuration` | Construct tagged values. Plain-data conversion rejects accessors, cycles and unsupported object prototypes; own prototype-like property names remain ordinary data. |
+
+Implemented behavior includes short-circuit Boolean results, lazy lowercase `if`, arithmetic on supported typed pairs, loose typed equality, case-insensitive own-property lookup with exact-name preference, dot/bracket access, negative list indexes, arrays, regex literals, list/object `map` and `filter`, list `reduce`, per-row formula memoization and cycle errors. The memoized formula retains its row context rather than capturing a nested list/object binding. Ordinary function arguments are evaluated and validated in order; a required null can stop evaluation of later arguments. Error-returning and throwing entry points remain separate.
+
+The supplied function subset includes numeric conversion/arithmetic helpers, date conversion and now/today, simple signed-integer calendar durations, list construction, global min/max, common type/truthiness/text operations, observed string operations, numeric rounding, list membership/slicing/reversal/flattening/joining/numeric aggregates, object keys/values, regex matching, and date-only conversion. Unsupported functions fail explicitly. Lowercase special expression calls are distinguished from ordinary case-insensitive registry dispatch, as the audited evaluator does. No function inventory completeness claim is made.
+
+The implementation adds a configurable evaluation step budget (default 100,000; a finite nonnegative safe integer is required) and a nesting limit of 256. These are original resource controls, not recovered reference limits or measured performance guarantees. Formula budget failures are not cached, so a large surrounding expression cannot permanently poison an otherwise evaluable formula. The budget is shared through nested formula/list evaluation; it does not interrupt an individual native regex/string operation or bound data conversion, parsing input size, or every built-in loop.
+
+A focused additional inert reading at source offsets 1445367–1445788 confirmed local date/time text fields and the exact-key-first, then first case-insensitive key lookup order. The artifact digest and E3 limitations above are unchanged. No target execution or repeat application analysis was performed.
+
+The following differences/gaps are explicit:
+
+- The parser uses conventional precedence (unary, multiplication, addition, relational, equality, `&&`, `||`) and left-associative binary tiers. The reference compiled grammar's exhaustive precedence/lexical acceptance was not reconstructed. The tests establish the original implementation's behavior, not reference conformance for all syntax.
+- Raw note/file/current-file input conversion does not implement the reference's automatic frontmatter link/URL/date/tag specialization, File identity, link resolution, backlinks or metadata-cache integration. Callers can supply typed values through identifier/namespace capabilities. Host-dependent file/link/tag/image/HTML functions are unavailable unless registered explicitly.
+- ISO duration parsing, humanized durations, calendar-unit member conversions, locale formatting, some date/list functions and the full plugin value hierarchy remain unsupported. Invalid calendar timestamps are rejected explicitly. Empty global min/max normalize to typed null; the reference body returns JavaScript null. Malformed expressions return/throw explicit errors here, whereas reference invalid-expression nodes can yield null/false. These are deliberate foundation boundaries, not parity claims.
+- Formula errors are memoized within the row context, with no metadata/clock/plugin-registry invalidation beyond constructing a new context. No query dependency graph, persisted filter-tree runner, sorting/grouping/summary pipeline, `.base` view wiring, UI error renderer, editing path or save lifecycle was connected in this change. Existing `.base` document parsing remains separate from evaluation.
+- Strict/loose object equality, regex state, Date behavior, mixed-case special calls and other edge cases still need controlled reference fixtures. The implementation tests are independently authored expectations grounded in bounded source findings and explicit original choices.
+
+Validation: `node --test tests/bases-expression.test.ts tests/bases-document.test.ts` and `npm run check`. The focused tests cover operator precedence/associativity, syntax rejection, null/false/missing distinctions, short-circuiting, own-property access, coercion, explicit function capabilities, lazy formula caching/cycles, nested binding scopes, mixed list aggregates, calendar dates/simple durations, regex state and evaluation limits. Passing these checks does not establish full Bases or Obsidian parity.

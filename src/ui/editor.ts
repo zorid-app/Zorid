@@ -15,6 +15,7 @@ import { editorTransfers } from '../editor/transfers.ts';
 import type { TransferOptions } from '../editor/transfers.ts';
 import type { EmbedRequest } from './markdown.ts';
 import { liveTasks } from '../editor/live-tasks.ts';
+import { liveLists } from '../editor/live-lists.ts';
 import { markdownListKeymap } from '../editor/list-commands.ts';
 import type { MarkdownListOptions } from '../editor/list-commands.ts';
 import { editorContextMenu } from '../editor/context-menu.ts';
@@ -180,7 +181,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       }}),
       ...(options.transfers ? [editorTransfers(options.transfers)] : []),
       editorContextMenu(),
-      ...(options.mode === 'live' ? [liveProperties(), liveTables(options.open), liveTasks(), ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed)] : []), preview] : []),
+      ...(options.mode === 'live' ? [liveProperties(), liveTables(options.open), liveTasks(), liveLists(), ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed)] : []), preview] : []),
     ]}),
   });
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });

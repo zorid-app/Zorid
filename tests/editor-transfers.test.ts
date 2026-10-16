@@ -273,3 +273,40 @@ test('native controls inside editor content retain their own clipboard handling'
   assert.equal(editor.getValue(), 'original note');
   assert.deepEqual(imports, []);
 });
+
+
+test('HTML paste converts before files and respects the current conversion preference', async t => {
+  let enabled = true;
+  const { paste, file, editor, imports, view } = setup(t, '', { autoConvertHtml: () => enabled });
+  paste({ 'text/html': '<p>Rich <strong>text</strong></p>', 'text/plain': 'Rich text' }, [file('image.png', [42])]);
+  assert.equal(editor.getValue(), 'Rich **text**');
+  assert.equal(undo(view), true);
+  enabled = false;
+  paste({ 'text/html': '<strong>formatted</strong>', 'text/plain': 'plain' });
+  assert.equal(editor.getValue(), 'plain');
+  await settle();
+  assert.deepEqual(imports, []);
+});
+
+test('own-copy marker with plain text bypasses conflicting Markdown and HTML formats', t => {
+  const { paste, editor, view } = setup(t, '');
+  paste({ 'text/html': '<!-- obsidian --><strong>rendered</strong>', 'text/plain': 'original', 'text/markdown': '**different**' });
+  assert.equal(editor.getValue(), 'original');
+  assert.equal(undo(view), true);
+  paste({ 'text/html': '<!-- obsidian --><strong>rendered</strong>', 'text/markdown': '**different**' });
+  assert.equal(editor.getValue(), '**different**', 'marker without plain text does not discard Markdown');
+});
+
+test('an image-only HTML fragment with files imports the binary and ignores its source URL', async t => {
+  const { paste, file, editor, imports } = setup(t, '');
+  paste({ 'text/html': '<!--StartFragment--><img src="file:///outside/image.png">' }, [file('image.png', [0, 255])]);
+  await settle();
+  assert.equal(editor.getValue(), '![[image.png]]');
+  assert.deepEqual(imports[0].bytes, [0, 255]);
+});
+
+test('HTML conversion remains inert and falls back to plain text for excluded content', t => {
+  const { paste, editor } = setup(t, '');
+  paste({ 'text/html': '<script>throw new Error("executed")</script>', 'text/plain': 'safe fallback' });
+  assert.equal(editor.getValue(), 'safe fallback');
+});
