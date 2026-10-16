@@ -329,7 +329,7 @@ test('legacy source-mode settings and tabs migrate to live without discarding ot
   });
   assert.equal(workspace.settings.defaultMode, 'live');
   assert.deepEqual(JSON.parse(localStorage.getItem('zorid:settings')!), { ...settings, defaultMode: 'live',
-    useTab:true, tabSize:4, smartIndentList:true, attachmentFolderPath:'/', useMarkdownLinks:false, newLinkFormat:'shortest' });
+    useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, attachmentFolderPath:'/', useMarkdownLinks:false, newLinkFormat:'shortest' });
   assert.deepEqual(workspace.activePane.tabs.map(tab => tab.mode), ['live', 'reading']);
   assert.equal(currentEditor().dataset.editorMode, 'live');
   assert.ok(root.querySelector('.properties-host'));
@@ -456,4 +456,28 @@ test('native file menus cannot apply actions to a replacement vault', async t =>
   await workspace.openVault({adapter:other,id:'test:replacement',label:'Replacement'});
   finish(remove.id!);await new Promise(resolve=>setImmediate(resolve));
   assert.equal(await adapter.read('Same.md'),'original');assert.equal(await other.read('Same.md'),'replacement');
+});
+
+
+test('fresh right dock is collapsed and its toggled state survives vault restoration', async t => {
+  const { workspace, root, click } = await setup(t);
+  assert.equal(root.classList.contains('right-hidden'), true);
+  click('Toggle right sidebar');
+  assert.equal(root.classList.contains('right-hidden'), false);
+  await workspace.openVault(workspace.platform);
+  assert.equal(root.classList.contains('right-hidden'), false);
+});
+
+test('HTML conversion preference updates the existing editor transfer callback', async t => {
+  const { workspace, click, dom } = await setup(t, new MemoryAdapter({ 'Note.md': 'text' }));
+  await workspace.openNote('Note.md');
+  const options = editorOptions.get(currentEditor())!, original = currentEditor();
+  assert.equal((options.transfers!.autoConvertHtml as () => boolean)(), true);
+  workspace.showSettings();
+  const toggle = document.querySelector<HTMLInputElement>('input[aria-label="Auto convert HTML"]')!;
+  toggle.checked = false; toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  click('Close settings');
+  assert.equal(currentEditor(), original);
+  assert.equal((options.transfers!.autoConvertHtml as () => boolean)(), false);
+  assert.equal(JSON.parse(localStorage.getItem('zorid:settings')!).autoConvertHtml, false);
 });

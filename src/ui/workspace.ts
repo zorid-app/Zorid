@@ -21,7 +21,7 @@ import { showContextMenu, dismissContextMenu } from '../platform/context-menu.ts
 type Mode = 'live' | 'reading';
 interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; }
 interface Pane { id: string; tabs: Tab[]; active: string; element: HTMLElement; editor?: EditorHandle; imageView?:ImageView; embeds?: MarkdownEmbeds; properties?: PropertiesView; propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void; renderVersion: number; history: string[]; historyIndex: number; persisted?: Record<string, unknown>; }
-interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; }
+interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; autoConvertHtml: boolean; }
 interface Command { name: string; shortcut?: string; icon?: string; action: () => void | Promise<void>; }
 type EditorFactory = (parent: HTMLElement, options: EditorOptions) => EditorHandle;
 const nameOf = (path: string) => path.split('/').at(-1)!.replace(/\.md$/i, '');
@@ -35,7 +35,7 @@ export class Workspace {
   panes: Pane[] = [];
   activePane!: Pane;
   buffers = new Map<string, NoteBuffer>();
-  settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
+  settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
   private editorFactory?: EditorFactory;
   private sidebar = el('aside', 'sidebar');
   private sidebarContent = el('div', 'sidebar-content');
@@ -129,6 +129,8 @@ export class Workspace {
       const saved = JSON.parse(localStorage.getItem(this.sessionKey()) || 'null');
       if (saved) {
         this.sessionState = saved;
+        this.root.classList.toggle('right-hidden', saved.rightHidden !== false);
+        this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
         for (const item of (saved.panes || []).slice(0, 4)) {
           const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => ({...tab, mode:tab.mode==='reading'?'reading':'live', id:makeId()}));
@@ -182,7 +184,7 @@ export class Workspace {
   }
 
   private buildShell(): void {
-    this.root.replaceChildren(); this.root.className = 'workspace';
+    this.root.replaceChildren(); this.root.className = 'workspace right-hidden';
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
     const top = el('div', 'ribbon-top');
     top.append(button('search', 'Open quick switcher (⌘O)', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.openGraph()), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), button('terminal', 'Open command palette (⌘P)', () => this.commandPalette()));
@@ -311,7 +313,7 @@ export class Workspace {
         pane.editor=factory(host,{value:buffer.text,mode:tab.mode,paths:()=>[...this.vault.entries.keys()],
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:request=>{const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
-          transfers:{importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
+          transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
           onChange:value=>{buffer.update(value);this.renderStatus();for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);other.propertyTimer=setTimeout(()=>{other.properties?.refresh();other.refreshPreview?.();},150);}}},open:target=>this.run(()=>this.followLink(path,target,pane))});
       }
       if(buffer.error)notice(buffer.error.message);
@@ -439,8 +441,8 @@ export class Workspace {
   private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane);return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
   private async dailyNote():Promise<void>{const now=new Date();const name=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.md`;if(!this.vault.entries.has(name))await this.vault.create(name,'');await this.openNote(name);}
   private split():void{if(this.panes.length>=4)return;const current=this.current();const pane=this.addPane([{...current,id:makeId()}]);this.activate(pane);this.run(()=>this.renderPane(pane));this.saveSession();}
-  private toggleLeft():void{this.root.classList.toggle('left-hidden');}
-  private toggleRight():void{this.root.classList.toggle('right-hidden');}
+  private toggleLeft():void{this.root.classList.toggle('left-hidden');this.saveSession();}
+  private toggleRight():void{this.root.classList.toggle('right-hidden');this.saveSession();}
 
   private commands():Command[]{return[
     {name:'Create new note',shortcut:'⌘ N',action:()=>this.newNote()}, {name:'Open quick switcher',shortcut:'⌘ O',action:()=>this.quickSwitcher()},
@@ -515,6 +517,7 @@ export class Workspace {
         const title=toggle(this.settings.showInlineTitle,value=>{this.settings.showInlineTitle=value;this.panes.forEach(pane=>void this.renderPane(pane));});title.setAttribute('aria-label','Show inline title');row('Show inline title','Display the file name at the top of each note.',title);
       }else if(section==='Editor'){
         const width=toggle(this.settings.readableWidth,value=>{this.settings.readableWidth=value;this.panes.forEach(pane=>void this.renderPane(pane));});width.setAttribute('aria-label','Readable line length');row('Readable line length','Limit the maximum line length for comfortable reading.',width);
+        const html=toggle(this.settings.autoConvertHtml,value=>{this.settings.autoConvertHtml=value;});html.setAttribute('aria-label','Auto convert HTML');row('Auto convert HTML','Convert pasted HTML into Markdown.',html);
         const tabs=toggle(this.settings.useTab,value=>{this.settings.useTab=value;configureLists();});tabs.setAttribute('aria-label','Indent using tabs');row('Indent using tabs','Use tab characters for indentation. Turn off to use spaces.',tabs);
         const tabSize=el('input');tabSize.type='number';tabSize.min='1';tabSize.max='32';tabSize.value=String(this.settings.tabSize);tabSize.setAttribute('aria-label','Tab size');
         tabSize.onchange=()=>{const value=Number(tabSize.value);if(!Number.isInteger(value)||value<1||value>32){tabSize.value=String(this.settings.tabSize);return;}this.settings.tabSize=value;configureLists();this.saveSettings();};row('Tab size','Number of spaces used to display a tab.',tabSize);
@@ -540,7 +543,7 @@ export class Workspace {
   }
   private applySettings():void{const theme=this.settings.theme==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):this.settings.theme;document.documentElement.dataset.theme=theme;document.documentElement.style.setProperty('--font-text-size',`${this.settings.fontSize}px`);}
   private saveSettings():void{localStorage.setItem('zorid:settings',JSON.stringify(this.settings));this.applySettings();}
-  private saveSession():void{if(!this.platform)return;localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,panes:this.panes.map(p=>({...p.persisted,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
+  private saveSession():void{if(!this.platform)return;localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),panes:this.panes.map(p=>({...p.persisted,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','','Create a note with ⌘N. Link to another note with [[note name]]. Use ⌘O to find a file and ⌘P to find a command.'));
   }
   private onKey(event:KeyboardEvent):void{
