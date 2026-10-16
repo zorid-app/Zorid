@@ -316,7 +316,12 @@ export class Workspace {
       const root=this.platform.id.slice(8).replace(/\\/g,'/').replace(/\/$/,''),native=file.nativePath.replace(/\\/g,'/');
       if(native.startsWith(root+'/')){const relative=native.slice(root.length+1);if(this.vault.entries.get(relative)?.type==='file')existingVaultPath=relative;}
     }
-    const result=await this.attachmentImporter.import({...file,existingVaultPath},ownerPath,()=>this.current()?.path??null,this.settings);
+    const result=await this.attachmentImporter.import({...file,existingVaultPath},ownerPath,()=>{
+      // Reading a pasted file can outlive this vault. Validate ownership before
+      // sampling the active note and allocating any attachment directories.
+      if(generation!==this.vaultGeneration)throw new Error('The destination vault is no longer open.');
+      return this.current()?.path??null;
+    },this.settings);
     return result.embed;
   }
 
