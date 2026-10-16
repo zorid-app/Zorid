@@ -1,52 +1,52 @@
-// Original implementation against public API shapes, not recovered application code.
-export interface EventRef { readonly __eventRef: unique symbol }
+// Original implementation against the statically audited event contract.
 export type ErrorReporter = (error: unknown) => void;
 type Callback = (...args: any[]) => unknown;
-interface Subscription { emitter: Events; name: string; callback: Callback; context: unknown; active: boolean }
-const subscriptions = new WeakMap<EventRef, Subscription>();
+export interface EventRef {
+  e: Events;
+  name: string;
+  fn: Callback;
+  ctx: unknown;
+}
 
-export const reportAsyncError: ErrorReporter = error => { queueMicrotask(() => { throw error; }); };
+export const reportAsyncError: ErrorReporter = error => { setTimeout(() => { throw error; }, 0); };
 
-export function detachEvent(ref: EventRef): void { subscriptions.get(ref)?.emitter.offref(ref); }
+export function detachEvent(ref: EventRef): void { ref.e.offref(ref); }
 
 export class Events {
-  private listeners = new Map<string, Set<EventRef>>();
+  private listeners = new Map<string, EventRef[]>();
   private reportError: ErrorReporter;
 
+  /** A custom reporter is a host extension; the default reports through a timer. */
   constructor(reportError: ErrorReporter = reportAsyncError) { this.reportError = reportError; }
 
   on<Args extends unknown[]>(name: string, callback: (...args: Args) => unknown, ctx?: unknown): EventRef {
-    const ref = Object.freeze({}) as EventRef;
-    subscriptions.set(ref, { emitter: this, name, callback, context: ctx, active: true });
-    let listeners = this.listeners.get(name);
-    if (!listeners) { listeners = new Set(); this.listeners.set(name, listeners); }
-    listeners.add(ref);
+    const ref: EventRef = { e: this, name, fn: callback, ctx };
+    const listeners = this.listeners.get(name) ?? [];
+    listeners.push(ref);
+    this.listeners.set(name, listeners);
     return ref;
   }
 
-  off(name: string, callback: Callback): void {
-    for (const ref of this.listeners.get(name) ?? []) if (subscriptions.get(ref)?.callback === callback) this.offref(ref);
+  off(name: string, callback?: Callback): void {
+    const remaining = callback ? this.listeners.get(name)?.filter(ref => ref.fn !== callback) : undefined;
+    if (remaining?.length) this.listeners.set(name, remaining);
+    else this.listeners.delete(name);
   }
 
-  offref(ref: EventRef): void {
-    const subscription = subscriptions.get(ref);
-    if (!subscription || subscription.emitter !== this || !subscription.active) return;
-    subscription.active = false;
-    const listeners = this.listeners.get(subscription.name);
-    listeners?.delete(ref);
-    if (listeners?.size === 0) this.listeners.delete(subscription.name);
-    subscriptions.delete(ref);
+  offref(ref: EventRef | null | undefined): void {
+    if (!ref) return;
+    const remaining = this.listeners.get(ref.name)?.filter(listener => listener !== ref);
+    if (remaining?.length) this.listeners.set(ref.name, remaining);
+    else this.listeners.delete(ref.name);
   }
 
   trigger(name: string, ...args: unknown[]): void {
-    // Additions during dispatch wait until the next event; removals take effect immediately.
-    for (const ref of [...this.listeners.get(name) ?? []]) this.tryTrigger(ref, args);
+    // Dispatch keeps the original snapshot, including subsequently detached refs.
+    for (const ref of this.listeners.get(name)?.slice() ?? []) this.tryTrigger(ref, args);
   }
 
   tryTrigger(ref: EventRef, args: unknown[]): void {
-    const subscription = subscriptions.get(ref);
-    if (!subscription || subscription.emitter !== this || !subscription.active) return;
-    try { subscription.callback.apply(subscription.context, args); }
+    try { ref.fn.apply(ref.ctx, args); }
     catch (error) { this.reportError(error); }
   }
 }
