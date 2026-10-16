@@ -19,6 +19,7 @@ import './ui/pdf-view.css';
 import './ui/media-view.css';
 import './canvas/view.css';
 import './ui/split-layout.css';
+import './ui/tab-docking.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
 async function start(): Promise<void> {
