@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { Filesystem, Encoding } from '@capacitor/filesystem';
 import { MobileAdapter } from '../src/platform/mobile.ts';
 
-test('mobile binary bridge omits text encoding and atomically renames the base64 temporary file', async () => {
+test('mobile binary writes preserve original bytes and clean temporary files after write or rename failure', async () => {
   const files = new Map<string, Uint8Array>();
   const writes: any[] = [];
   let failRename = false;
+  let failWrite = false;
   const mock = {
     async stat({ path }: any) {
       if (path === 'Zorid') return { type: 'directory', size: 0, mtime: 1 };
@@ -17,6 +18,7 @@ test('mobile binary bridge omits text encoding and atomically renames the base64
     async writeFile(options: any) {
       writes.push(options);
       files.set(options.path, options.encoding === Encoding.UTF8 ? new TextEncoder().encode(options.data) : new Uint8Array(Buffer.from(options.data, 'base64')));
+      if (failWrite) throw new Error('Storage full');
     },
     async readFile(options: any) {
       const bytes = files.get(options.path)!;
@@ -46,6 +48,41 @@ test('mobile binary bridge omits text encoding and atomically renames the base64
     await assert.rejects(adapter.writeBinary('image.png', new Uint8Array([1])), /Rename failed/);
     assert.deepEqual(await adapter.readBinary('image.png'), data);
     assert.ok([...files.keys()].every(path => !path.includes('.zorid-write-')));
+    failRename = false;
+    failWrite = true;
+    await assert.rejects(adapter.writeBinary('image.png', new Uint8Array([1])), /Storage full/);
+    assert.deepEqual(await adapter.readBinary('image.png'), data);
+    assert.ok([...files.keys()].every(path => !path.includes('.zorid-write-')));
+    assert.deepEqual(changes, [['image.png'], ['Note.md']]);
     await assert.rejects(adapter.readBinary('../outside'), /Invalid/);
   } finally { stop(); }
+});
+
+test('mobile storage capability and permission errors are preserved even if the parent listing is empty', async () => {
+  for (const code of ['OS-PLUG-FILE-0004', 'OS-PLUG-FILE-0007', 'OS-PLUG-FILE-0009', 'EACCES', 'EPERM', 'UNIMPLEMENTED', 'UNAVAILABLE']) {
+    const denied = Object.assign(new Error(`Native storage unavailable: ${code}`), { code });
+    let mutations = 0;
+    const adapter = new MobileAdapter({
+      async stat() { throw denied; },
+      async readdir() { return { files: [] }; },
+      async mkdir() { mutations++; },
+      async writeFile() { mutations++; },
+    } as unknown as typeof Filesystem);
+    await assert.rejects(adapter.initialize(), error => error === denied);
+    await assert.rejects(adapter.stat('Note.md'), error => error === denied);
+    await assert.rejects(adapter.write('Note.md', 'text'), error => error === denied);
+    assert.equal(mutations, 0);
+  }
+});
+
+test('mobile missing-file code allows root creation and a missing stat without requesting a listing', async () => {
+  const created: string[] = [];
+  const adapter = new MobileAdapter({
+    async stat() { throw Object.assign(new Error('Missing'), { code: 'OS-PLUG-FILE-0008' }); },
+    async readdir() { throw new Error('Unexpected listing'); },
+    async mkdir({ path }: { path: string }) { created.push(path); },
+  } as unknown as typeof Filesystem);
+  await adapter.initialize();
+  assert.deepEqual(created, ['Zorid']);
+  assert.equal(await adapter.stat('Note.md'), null);
 });
