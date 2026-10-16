@@ -1,3 +1,5 @@
+import { renderExclusions, intersectsRenderExclusion } from './render-exclusions.ts';
+import type { RenderExclusionOptions } from './render-exclusions.ts';
 import type { Extension, EditorState } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
@@ -41,11 +43,12 @@ class TaskWidget extends WidgetType {
   ignoreEvent(): boolean { return true; }
 }
 
-function decorate(view: EditorView): DecorationSet {
+function decorate(view: EditorView, options: RenderExclusionOptions): DecorationSet {
+  const blocked = renderExclusions(view.state, options.excludes);
   const decorations = [], seen = new Set<number>();
   for (const range of view.visibleRanges) {
     for (const marker of markers(view.state, range.from, range.to)) {
-      if (seen.has(marker.from)) continue;
+      if (seen.has(marker.from) || intersectsRenderExclusion(blocked, marker.from, marker.to)) continue;
       seen.add(marker.from);
       decorations.push(Decoration.line({ attributes: { 'data-task': marker.status,
         class: `cm-task-line${/^[xX]$/.test(marker.status) ? ' cm-task-done' : ''}` } }).range(marker.lineFrom));
@@ -59,6 +62,6 @@ function decorate(view: EditorView): DecorationSet {
 /** Install in Live Edit only. Source mode keeps literal task markers. The
  * marker-selection reveal boundary is an original bounded approximation of
  * the reference's grouped-formatting reveal behavior; see list-fold-reference. */
-export function liveTasks(): Extension {
-  return stableListDecorations(decorate);
+export function liveTasks(options: RenderExclusionOptions = {}): Extension {
+  return stableListDecorations(view => decorate(view, options), options);
 }

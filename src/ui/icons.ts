@@ -1,7 +1,7 @@
 import {
   ArrowUpNarrowWide, BookOpen, Bookmark, Calendar, Check, ChevronDown,
   ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleHelp,
-  CodeXml, Columns2, Ellipsis, File, FileSearch, FolderClosed, FolderPlus, GalleryVertical,
+  CodeXml, Columns2, Copy, Ellipsis, File, FileSearch, FolderClosed, FolderPlus, GalleryVertical,
   GitFork, House, Link, List, Maximize, Minus, PanelLeft, PanelRight, PanelTop,
   Plus, Redo2, RotateCw, Search, Settings, SquarePen, StickyNote, Tag, Terminal, Trash2, Undo2, X,
 } from 'lucide';
@@ -13,7 +13,7 @@ const glyphs: Record<string, IconNode> = {
   file: File, folder: FolderClosed, search: Search, plus: Plus, close: X,
   left: ChevronLeft, right: ChevronRight, down: ChevronDown,
   sidebar: PanelLeft, rightbar: PanelRight, book: BookOpen, edit: SquarePen,
-  code: CodeXml, settings: Settings, graph: GitFork, calendar: Calendar,
+  code: CodeXml, copy: Copy, settings: Settings, graph: GitFork, calendar: Calendar,
   terminal: Terminal, link: Link, list: List, tag: Tag, bookmark: Bookmark,
   more: Ellipsis, sort: ArrowUpNarrowWide, collapse: ChevronsDownUp,
   trash: Trash2, split: Columns2, help: CircleHelp, check: Check,

@@ -1,3 +1,5 @@
+import { renderExclusions, sameRenderExclusions, intersectsRenderExclusion } from './render-exclusions.ts';
+import type { RenderExclusionOptions } from './render-exclusions.ts';
 import { StateEffect } from '@codemirror/state';
 import type { EditorState, Extension } from '@codemirror/state';
 import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
@@ -13,7 +15,7 @@ import { createCodeCopyButton } from '../ui/code-block.ts';
 type SyntaxNode = ReturnType<typeof syntaxTree>['topNode'];
 interface Segment { from: number; to: number; codeFrom: number }
 interface Fence { from: number; to: number; openingTo: number; closingFrom?: number; info: string; language: string; code: string; segments: Segment[]; key: string; job?: HighlightJob; search?: { query: ReturnType<typeof getSearchQuery>; matched: boolean } }
-export interface LiveFenceOptions extends CodeHighlightOptions { /** Languages owned by specialized renderers (for example Mermaid). */ handledLanguages?: ReadonlySet<string> }
+export interface LiveFenceOptions extends CodeHighlightOptions, RenderExclusionOptions { /** Languages owned by specialized renderers (for example Mermaid). */ handledLanguages?: ReadonlySet<string> }
 export const refreshLiveFences = StateEffect.define<void>();
 
 function fenceFromNode(state: EditorState, node: SyntaxNode): Fence {
@@ -135,7 +137,8 @@ export function liveFences(options: LiveFenceOptions = {}): Extension {
       const query = searchPanelOpen(view.state) ? getSearchQuery(view.state) : null;
       const tree = syntaxTree(view.state);
       if (this.cachedDoc !== view.state.doc || this.cachedTree !== tree) { this.fenceCache.clear(); this.cachedDoc = view.state.doc; this.cachedTree = tree; }
-      const visible = visibleFences(view, this.fenceCache);
+      const blocked = renderExclusions(view.state, options.excludes);
+      const visible = visibleFences(view, this.fenceCache).filter(fence => !intersectsRenderExclusion(blocked, fence.from, fence.to));
       const visibleStarts = new Set(visible.map(fence => fence.from));
       for (const from of this.fenceCache.keys()) if (!visibleStarts.has(from)) this.fenceCache.delete(from);
       for (const fence of visible) {
@@ -182,10 +185,11 @@ export function liveFences(options: LiveFenceOptions = {}): Extension {
       this.decorations = Decoration.set(ranges, true); this.atomic = Decoration.set(atomic, true);
     }
     update(update: ViewUpdate): void {
-      if (this.pointer || this.settling || this.composition || update.view.composing || !syntaxTreeAvailable(update.state, update.view.viewport.to)) {
+      const ownershipChanged = !sameRenderExclusions(renderExclusions(update.startState, options.excludes), renderExclusions(update.state, options.excludes));
+      if (!ownershipChanged && (this.pointer || this.settling || this.composition || update.view.composing || !syntaxTreeAvailable(update.state, update.view.viewport.to))) {
         this.decorations = this.decorations.map(update.changes); this.atomic = this.atomic.map(update.changes); return;
       }
-      if (update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged || syntaxTree(update.startState) !== syntaxTree(update.state)
+      if (ownershipChanged || update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged || syntaxTree(update.startState) !== syntaxTree(update.state)
         || getSearchQuery(update.startState) !== getSearchQuery(update.state) || searchPanelOpen(update.startState) !== searchPanelOpen(update.state)
         || update.transactions.some(transaction => transaction.effects.some(effect => effect.is(refreshLiveFences)))) this.rebuild();
     }

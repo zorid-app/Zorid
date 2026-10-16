@@ -1,3 +1,5 @@
+import { renderExclusions, sameRenderExclusions, intersectsRenderExclusion } from './render-exclusions.ts';
+import type { RenderExclusionOptions } from './render-exclusions.ts';
 import { StateEffect } from '@codemirror/state';
 import type { EditorState, Extension } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
@@ -96,15 +98,16 @@ const interaction = ViewPlugin.fromClass(class {
 
 /** Shared interaction controller is deduplicated by CodeMirror when both list
  * and task extensions install it. Mapping preserves pointer/IME geometry. */
-export function stableListDecorations(build: (view: EditorView) => DecorationSet): Extension {
+export function stableListDecorations(build: (view: EditorView) => DecorationSet, options: RenderExclusionOptions = {}): Extension {
   return [interaction, ViewPlugin.fromClass(class {
     decorations: DecorationSet;
     constructor(view: EditorView) { this.decorations = build(view); }
     update(update: ViewUpdate): void {
       const activity = update.view.plugin(interaction);
-      if (activity?.pointer || activity?.composition || update.view.composing) {
+      const ownershipChanged = !sameRenderExclusions(renderExclusions(update.startState, options.excludes), renderExclusions(update.state, options.excludes));
+      if (!ownershipChanged && (activity?.pointer || activity?.composition || update.view.composing)) {
         this.decorations = this.decorations.map(update.changes);
-      } else if (update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged
+      } else if (ownershipChanged || update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged
         || syntaxTree(update.startState) !== syntaxTree(update.state)
         || update.startState.readOnly !== update.state.readOnly
         || update.transactions.some(transaction => transaction.effects.some(effect => effect.is(refreshLists)))) {
@@ -114,13 +117,15 @@ export function stableListDecorations(build: (view: EditorView) => DecorationSet
   }, { decorations: plugin => plugin.decorations })];
 }
 
-export interface LiveListOptions { showIndentGuide?: boolean }
+export interface LiveListOptions extends RenderExclusionOptions { showIndentGuide?: boolean }
 
 function decorate(view: EditorView, options: LiveListOptions): DecorationSet {
   const ranges: ReturnType<Decoration['range']>[] = [];
+  const blocked = renderExclusions(view.state, options.excludes);
   const markers = new Map<number, ListMarker>(), lines = new Set<number>();
   for (const visible of view.visibleRanges) {
     for (const marker of listMarkers(view.state, visible.from, visible.to)) {
+      if (intersectsRenderExclusion(blocked, marker.from, marker.to)) continue;
       if (marker.from >= visible.from && marker.from <= visible.to) markers.set(marker.from, marker);
       // Continuation lines share their containing list, including nested items.
       const end = Math.min(marker.itemTo, visible.to);
@@ -167,5 +172,5 @@ function decorate(view: EditorView, options: LiveListOptions): DecorationSet {
 
 /** Install with liveTasks in Live Edit and load live-lists.css for presentation. */
 export function liveLists(options: LiveListOptions = {}): Extension {
-  return stableListDecorations(view => decorate(view, options));
+  return stableListDecorations(view => decorate(view, options), options);
 }

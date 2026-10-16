@@ -7,6 +7,9 @@ import { tags } from '@lezer/highlight';
 import { searchKeymap } from '@codemirror/search';
 import { activeTableEditor, liveTables } from '../editor/live-tables.ts';
 import { bodyStart, liveProperties, propertyUpdate } from '../editor/live-properties.ts';
+import { liveCallouts, renderedCalloutRanges } from '../editor/live-callouts.ts';
+import { liveMath, liveMathMarkdown } from '../editor/live-math.ts';
+import { liveFences } from '../editor/live-fences.ts';
 import { liveEmbeds } from '../editor/live-embeds.ts';
 import { editorTransfers } from '../editor/transfers.ts';
 import type { TransferOptions } from '../editor/transfers.ts';
@@ -71,7 +74,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     parent,
     state: EditorState.create({ doc: options.value, extensions: [
       EditorState.allowMultipleSelections.of(true),
-      history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[liveInlineMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
+      history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, wiki,
       markdownFolding(),
@@ -89,7 +92,11 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       } })] : []),
       ...(options.transfers ? [editorTransfers(options.transfers)] : []),
       editorContextMenu(),
-      ...(options.mode === 'live' ? [liveProperties(), liveTables(options.open, wiki), liveTasks(), liveLists(), ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed)] : []), liveInline({open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover})] : []),
+      ...(options.mode === 'live' ? [liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed}),
+        liveTables(options.open, wiki, renderedCalloutRanges), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
+        liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges}),
+        ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed, {excludes: renderedCalloutRanges})] : []),
+        liveInline({open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover,excludes: renderedCalloutRanges})] : []),
     ]}),
   });
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
