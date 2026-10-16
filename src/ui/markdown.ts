@@ -1,4 +1,8 @@
-import { el } from './dom.ts';
+import { markdown as markdownLanguageSupport, markdownLanguage } from '@codemirror/lang-markdown';
+import { mathMarkdown, mathSpan } from '../editor/math-syntax.ts';
+import { appendCodeBlock, readCodeFence } from './code-block.ts';
+import { renderReadingMath } from './reading-math.ts';
+import { destroyMarkdown } from './markdown-lifecycle.ts';
 import { readProperties } from '../core/properties.ts';
 import { decodeTableCellText, parseTable } from '../editor/table-model.ts';
 import { createMarkdownListRenderer } from './markdown-lists.ts';
@@ -11,9 +15,30 @@ export interface MarkdownRenderOptions { embed?: (request: EmbedRequest) => HTML
 export { renderMarkdownInline as inline } from './markdown-inline.ts';
 import { renderMarkdownInline as inline } from './markdown-inline.ts';
 
+const blockParser = markdownLanguageSupport({ base: markdownLanguage, addKeymap: false, completeHTMLTags: false, extensions: mathMarkdown }).language.parser;
+
 export function renderMarkdown(container: HTMLElement, markdown: string, open: LinkHandler, taskChange?: (line: number, checked: boolean) => void, options: MarkdownRenderOptions = {}): void {
+  destroyMarkdown(container);
   container.replaceChildren();
-  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  const document = container.ownerDocument;
+  const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] => {
+    const node = document.createElement(tag); node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  markdown = markdown.replace(/\r\n/g, '\n');
+  const lines = markdown.split('\n');
+  const starts = [0];
+  for (let index = 0; index < markdown.length; index++) if (markdown[index] === '\n') starts.push(index + 1);
+  const lineAt = (offset: number): number => {
+    let low = 0, high = starts.length;
+    while (low + 1 < high) { const middle = (low + high) >>> 1; if (starts[middle] <= offset) low = middle; else high = middle; }
+    return low;
+  };
+  // Whole-document parser ownership prevents fences and display math inside
+  // code, HTML, lists or quotes from becoming unrelated top-level blocks.
+  const roots = new Map<number, ReturnType<typeof blockParser.parse>['topNode']>();
+  let parsingSource = markdown;
   let renderList: ReturnType<typeof createMarkdownListRenderer> | undefined;
   let position = 0;
   if (/^\uFEFF?---[ \t]*(?:#.*)?$/.test(lines[0])) {
@@ -27,16 +52,39 @@ export function renderMarkdown(container: HTMLElement, markdown: string, open: L
         }
       } catch(error) { table.append(el('span','error-message',error instanceof Error?error.message:String(error))); }
       properties.append(table); if(options.properties !== false)container.append(properties); position = end + 1;
+      // YAML belongs to the properties parser. Mask it without shifting body
+      // coordinates so YAML fences cannot claim subsequent Markdown blocks.
+      const bodyStart = starts[position] ?? markdown.length;
+      parsingSource = markdown.slice(0, bodyStart).replace(/[^\n]/g, ' ') + markdown.slice(bodyStart);
     }
   }
+  const tree = blockParser.parse(parsingSource);
+  for (let node = tree.topNode.firstChild; node; node = node.nextSibling) roots.set(lineAt(node.from), node);
   for (; position < lines.length; position++) {
     const line = lines[position];
     if (!line.trim()) continue;
-    const fence = line.match(/^\s*(```+|~~~+)(.*)$/);
+    const root = roots.get(position);
+    if (root?.name === 'HTMLBlock' || root?.name === 'CodeBlock') {
+      const literal = el('pre');
+      if (root.name === 'CodeBlock') {
+        const chunks: string[] = [];
+        for (let child = root.firstChild; child; child = child.nextSibling) {
+          if (child.name === 'CodeText') chunks.push(markdown.slice(child.from, child.to));
+        }
+        literal.append(el('code', '', chunks.join('\n')));
+      } else literal.textContent = markdown.slice(root.from, root.to);
+      container.append(literal); position = lineAt(Math.max(root.from, root.to - 1)); continue;
+    }
+    const math = root && mathSpan(root, (from, to) => markdown.slice(from, to));
+    if (math?.block) {
+      if (math.closed) {
+        const block = el('div'); container.append(block); renderReadingMath(block, math.tex, { display: true });
+      } else container.append(el('p', '', markdown.slice(root!.from, root!.to)));
+      position = lineAt(Math.max(root!.from, root!.to - 1)); continue;
+    }
+    const fence = root?.name === 'FencedCode' ? readCodeFence(lines, position) : null;
     if (fence) {
-      const code: string[] = []; position++;
-      while (position < lines.length && !lines[position].trimStart().startsWith(fence[1])) code.push(lines[position++]);
-      const pre = el('pre'); const block = el('code', '', code.join('\n')); block.dataset.language = fence[2].trim(); pre.append(block); container.append(pre); continue;
+      appendCodeBlock(container, fence.code, fence.info); position = fence.endLine; continue;
     }
     const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
@@ -45,7 +93,7 @@ export function renderMarkdown(container: HTMLElement, markdown: string, open: L
     }
     if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { container.append(el('hr')); continue; }
     if (/^\s*(?:>|[-*+]\s|\d+[.)]\s)/.test(line)) {
-      renderList ??= createMarkdownListRenderer(markdown);
+      renderList ??= createMarkdownListRenderer(parsingSource, { quotes: true });
       const consumed = renderList(container, position, (parent, source) => inline(parent, source, open, options), taskChange);
       if (consumed !== null) { position += consumed - 1; continue; }
     }
@@ -74,6 +122,9 @@ export function renderMarkdown(container: HTMLElement, markdown: string, open: L
         position += model.rows.length; container.append(table); continue;
       }
     }
-    const paragraph = el('p'); inline(paragraph, line, open, options); container.append(paragraph);
+    const paragraph = el('p');
+    const paragraphSource = root?.name === 'Paragraph' ? markdown.slice(root.from, root.to) : line;
+    inline(paragraph, paragraphSource, open, options); container.append(paragraph);
+    if (root?.name === 'Paragraph') position = lineAt(Math.max(root.from, root.to - 1));
   }
 }

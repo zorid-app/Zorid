@@ -1,0 +1,10 @@
+.cm-live-math { position: relative; }
+.cm-live-math-inline { display: inline; }
+.cm-live-math-block { display: block; min-height: 2em; }
+.cm-live-math-block > .math-block > mjx-container { margin: 0; padding: 1em 0; overflow-x: auto; }
+.math mjx-container { outline: none; }
+.cm-live-math-source { color: var(--code-normal, var(--text-normal)); font-family: var(--font-monospace); font-size: var(--code-size, 0.875em); font-style: italic; }
+.cm-live-math-source .cm-formatting-math, .cm-formatting-math { color: var(--text-accent); font-weight: inherit; }
+.cm-live-math-edit { position: absolute; top: 0.25em; right: 0.25em; opacity: 0; }
+.cm-live-math-block:hover > .cm-live-math-edit, .cm-live-math-edit:focus-visible { opacity: 1; }
+.math-error { white-space: pre-wrap; font-family: var(--font-monospace); }

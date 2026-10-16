@@ -1,3 +1,5 @@
+import { renderExclusions, sameRenderExclusions, containsRenderExclusion } from './render-exclusions.ts';
+import type { RenderExclusionOptions } from './render-exclusions.ts';
 import { StateEffect } from '@codemirror/state';
 import type { EditorState, Extension } from '@codemirror/state';
 import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
@@ -42,7 +44,7 @@ export const liveInlineMarkdown: MarkdownExtension = {
   ],
 };
 
-export interface LiveInlineOptions {
+export interface LiveInlineOptions extends RenderExclusionOptions {
   /** Workspace owns navigation/disposition. The original event preserves
    * Ctrl/Meta/Shift and middle-button information; this module opens no URL. */
   open?: (target: string, kind: 'wiki' | 'markdown', event: MouseEvent) => void;
@@ -55,7 +57,7 @@ export interface LiveInlineOptions {
 
 interface LinkSpan { from: number; to: number; labelFrom: number; labelTo: number; target: string; kind: 'wiki' | 'markdown'; safe: boolean }
 const excluded = new Set(['FencedCode', 'CodeBlock', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock',
-  'Table', 'LinkReference', 'Image', 'LiveInlineWikiEmbed']);
+  'Table', 'LinkReference', 'Image', 'LiveInlineWikiEmbed', 'ZoridMathInline', 'ZoridMathDisplay', 'ZoridMathBlock']);
 const formatClasses: Record<string, string> = { Emphasis: 'cm-live-emphasis', StrongEmphasis: 'cm-strong',
   Strikethrough: 'cm-strike', LiveInlineHighlight: 'cm-highlight' };
 /** Dispatch after metadata changes that can affect existing link resolution. */
@@ -135,6 +137,7 @@ function linkAt(view: EditorView, position: number): LinkSpan | null {
 
 function decorate(view: EditorView, options: LiveInlineOptions): { decorations: DecorationSet; atomic: DecorationSet } {
   const ranges: ReturnType<Decoration['range']>[] = [], hidden: ReturnType<Decoration['range']>[] = [];
+  const blocked = renderExclusions(view.state, options.excludes);
   const prefix = bodyStart(view.state), tree = syntaxTree(view.state), headingLines = new Set<number>();
   const visibleChildren = (parent: SyntaxNode, callback: (child: SyntaxNode) => void): void => {
     const seen = new Set<number>();
@@ -173,7 +176,7 @@ function decorate(view: EditorView, options: LiveInlineOptions): { decorations: 
     if (from < to) ranges.push(Decoration.mark({ class: className, attributes }).range(from, to));
   };
   const visit = (node: SyntaxNode, inheritedReveal = false): void => {
-    if (node.to <= prefix || excluded.has(node.name)
+    if (node.to <= prefix || excluded.has(node.name) || containsRenderExclusion(blocked, node.from, node.to)
       || !view.visibleRanges.some(range => node.from <= range.to && node.to >= range.from)) return;
     const line = view.state.doc.lineAt(node.from);
     if (/^(ATX|Setext)Heading[1-6]$/.test(node.name)) {
@@ -301,9 +304,10 @@ export function liveInline(options: LiveInlineOptions = {}): Extension {
       view.contentDOM.addEventListener('compositionend', this.compose, true);
     }
     update(update: ViewUpdate): void {
-      if (this.pointer || this.settling || this.composition || update.view.composing || !syntaxTreeAvailable(update.state, update.view.viewport.to)) {
+      const ownershipChanged = !sameRenderExclusions(renderExclusions(update.startState, options.excludes), renderExclusions(update.state, options.excludes));
+      if (!ownershipChanged && (this.pointer || this.settling || this.composition || update.view.composing || !syntaxTreeAvailable(update.state, update.view.viewport.to))) {
         this.decorations = this.decorations.map(update.changes); this.atomic = this.atomic.map(update.changes);
-      } else if (update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged
+      } else if (ownershipChanged || update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged
         || syntaxTree(update.startState) !== syntaxTree(update.state)
         || getSearchQuery(update.startState) !== getSearchQuery(update.state)
         || searchPanelOpen(update.startState) !== searchPanelOpen(update.state)

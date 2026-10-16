@@ -1,10 +1,12 @@
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import type { EmbedRequest, LinkHandler, MarkdownRenderOptions } from './markdown.ts';
+import { mathMarkdown, mathSpan } from '../editor/math-syntax.ts';
+import { renderReadingMath } from './reading-math.ts';
 
 const highlight = { resolve: 'ZoridHighlight', mark: 'ZoridHighlightMark' };
 // Inline rendering must not reinterpret a list label, heading title, or table
 // cell as a document block. Lezer still owns inline precedence and nesting.
-const parser = markdown({ base: markdownLanguage, addKeymap: false, completeHTMLTags: false, extensions: {
+const parser = markdown({ base: markdownLanguage, addKeymap: false, completeHTMLTags: false, extensions: [{
   remove: ['LinkReference', 'IndentedCode', 'FencedCode', 'Blockquote', 'HorizontalRule',
     'BulletList', 'OrderedList', 'ATXHeading', 'HTMLBlock', 'SetextHeading', 'Table', 'TaskList'],
   defineNodes: ['ZoridWiki', 'ZoridComment', 'ZoridHighlight', 'ZoridHighlightMark'],
@@ -42,7 +44,7 @@ const parser = markdown({ base: markdownLanguage, addKeymap: false, completeHTML
       },
     },
   ],
-} }).language.parser;
+}, mathMarkdown, { remove: ['ZoridMathBlock'] }] }).language.parser;
 
 type SyntaxNode = ReturnType<typeof parser.parse>['topNode'];
 const formatting: Record<string, string> = {
@@ -51,7 +53,7 @@ const formatting: Record<string, string> = {
 const punctuation = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\\\]^_`{|}~])/g;
 const entityPattern = /&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/gi;
 
-/** Safe inline subset. HTML, math, footnotes and unresolved reference links
+/** Safe inline subset. HTML, footnotes and unresolved reference links
  * remain literal; document-level resolution and async processors belong to the
  * block renderer. Appends to the supplied parent using its owning document.
  */
@@ -142,6 +144,12 @@ export function renderMarkdownInline(parent: HTMLElement, source: string, open: 
       into.append(document.createElement('br'));
     } else if (node.name === 'ZoridComment') {
       // Comments produce no visible text and cannot invoke nested embeds.
+    } else if (node.name === 'ZoridMathInline' || node.name === 'ZoridMathDisplay') {
+      const math = mathSpan(node, (from, to) => source.slice(from, to));
+      if (!math?.closed) { appendText(into, value); return; }
+      const element = document.createElement('span');
+      renderReadingMath(element, math.tex, { display: math.display });
+      into.append(element);
     } else if (node.name === 'ZoridWiki') {
       const embed = value.startsWith('!'), content = value.slice(embed ? 3 : 2, -2).trim();
       const divider = content.indexOf('|');

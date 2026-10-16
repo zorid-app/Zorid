@@ -6,6 +6,7 @@ import { defaultKeymap, insertNewline, isolateHistory, redo, undo } from '@codem
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { inline } from '../ui/markdown.ts';
+import { destroyMathRenders } from '../ui/reading-math.ts';
 import { liveInlineMarkdown } from './live-inline.ts';
 import { alignTableCells, clearTableCells, copyTableCells, deleteTableCells, parseTableClipboard, pasteTableCells, serializeTableClipboard, tableCellRange, decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
   encodeTableCellText, insertTableColumn, insertTableRow, moveTableColumn, moveTableRow, padTableCellBoundary, parseTable,
@@ -144,11 +145,14 @@ class TableController {
           // A currently edited cell contains a CM view rather than rendered
           // Markdown. Render its source independently to use the visible label.
           let node = this.cells[index][column];
-          if (this.active?.row === index && this.active.column === column) {
-            node = this.dom.ownerDocument.createElement('span');
-            inline(node, decodeTableCellText(data.cells[column].text).text, this.open);
+          try {
+            if (this.active?.row === index && this.active.column === column) {
+              node = this.dom.ownerDocument.createElement('span');
+              inline(node, decodeTableCellText(data.cells[column].text).text, this.open);
+            }
+            return node.innerText ?? node.textContent ?? '';
           }
-          return node.innerText ?? node.textContent ?? '';
+          finally { if (node !== this.cells[index][column]) destroyMathRenders(node); }
         });
         return this.applyStructure(sortTableRows(model, column, id === 'sort-ascending' ? 'ascending' : 'descending', values), row, column);
       }
@@ -261,15 +265,17 @@ class TableController {
     if (!range || event.type !== 'copy' && event.type !== 'cut' || event.type === 'cut' && this.owner.state.readOnly) return false;
     const data = copyTableCells(this.model, range), markdown = serializeTableClipboard(data);
     const table = this.dom.ownerDocument.createElement('table');
-    data.rows.forEach((row, r) => {
-      const tr = table.insertRow(); row.forEach((value, c) => {
-        const cell = this.dom.ownerDocument.createElement(r === 0 ? 'th' : 'td');
-        cell.style.textAlign = data.alignment[c] ?? ''; inline(cell, decodeTableCellText(value).text, this.open); tr.append(cell);
+    try {
+      data.rows.forEach((row, r) => {
+        const tr = table.insertRow(); row.forEach((value, c) => {
+          const cell = this.dom.ownerDocument.createElement(r === 0 ? 'th' : 'td');
+          cell.style.textAlign = data.alignment[c] ?? ''; tr.append(cell); inline(cell, decodeTableCellText(value).text, this.open);
+        });
       });
-    });
-    event.clipboardData.setData('text/plain', markdown); event.clipboardData.setData('text/markdown', markdown);
-    event.clipboardData.setData('text/html', '<!-- obsidian -->' + table.outerHTML);
-    event.clipboardData.setData('obsidian/table', JSON.stringify(data));
+      event.clipboardData.setData('text/plain', markdown); event.clipboardData.setData('text/markdown', markdown);
+      event.clipboardData.setData('text/html', '<!-- obsidian -->' + table.outerHTML);
+      event.clipboardData.setData('obsidian/table', JSON.stringify(data));
+    } finally { destroyMathRenders(table); }
     event.preventDefault(); event.stopPropagation();
     if (event.type === 'cut') this.deleteSelection(-1);
     return true;
@@ -369,6 +375,7 @@ class TableController {
 
   private renderCell(row: number, column: number) {
     const node = this.cells[row][column];
+    destroyMathRenders(node);
     node.replaceChildren();
     node.classList.remove('is-editing');
     // Decode breaks/pipe escapes without ever interpreting arbitrary HTML.
@@ -377,6 +384,7 @@ class TableController {
   }
 
   private render() {
+    destroyMathRenders(this.grid);
     this.grid.replaceChildren(); this.cells = [];
     const head = document.createElement('thead'), body = document.createElement('tbody');
     this.grid.append(head, body);
@@ -438,7 +446,8 @@ class TableController {
     this.deselectCells();
     this.close();
     const cell = this.model.rows[row]?.cells[column]; if (!cell) return;
-    const host = this.cells[row][column]; host.replaceChildren(); host.classList.add('is-editing');
+    const host = this.cells[row][column]; destroyMathRenders(host);
+    host.replaceChildren(); host.classList.add('is-editing');
     const value = decodeTableCellText(cell.text).text;
     const view = new EditorView({ parent: host,
       state: EditorState.create({ doc: value,
@@ -550,6 +559,9 @@ class TableController {
   /** Called after outer transactions, outside CodeMirror's update stack. */
   receiveSelection(restoreFocus = false) {
     if (this.destroyed) return;
+    // A child editor owns one cell and one range. Never collapse a parent
+    // multicursor selection while transferring focus into that child.
+    if (this.owner.state.selection.ranges.length > 1) { this.close(); return; }
     const range = this.owner.state.selection.main;
     if (this.selected) {
       if (range.from >= this.model.from && range.to <= this.model.to) return;
@@ -599,9 +611,21 @@ class TableController {
   close() {
     const active = this.active; if (!active) return;
     this.active = null; active.view.destroy();
-    if (this.cells[active.row]?.[active.column] && this.model.rows[active.row]?.cells[active.column]) this.renderCell(active.row, active.column);
+    if (!this.destroyed && this.cells[active.row]?.[active.column] && this.model.rows[active.row]?.cells[active.column]) this.renderCell(active.row, active.column);
   }
-  destroy() { this.destroyed = true; this.stopGesture?.(); this.close(); controllers.delete(this.dom); }
+  destroy() {
+    const transferFocus = this.active?.view.hasFocus && this.owner.state.selection.ranges.length > 1;
+    this.destroyed = true; this.stopGesture?.(); this.close();
+    destroyMathRenders(this.dom); controllers.delete(this.dom);
+    if (transferFocus) queueMicrotask(() => {
+      const document = this.owner.dom.ownerDocument;
+      // A selection change can replace a focused child during the parent view's
+      // update. Restore focus only after that update, without stealing it from
+      // an intervening click or focusing a removed editor.
+      if (this.owner.contentDOM.isConnected && this.owner.state.selection.ranges.length > 1
+        && document.activeElement === document.body) this.owner.focus();
+    });
+  }
 }
 
 class TableWidget extends WidgetType {
@@ -733,7 +757,20 @@ export function tableActionsAt(view: EditorView, target: HTMLElement): TableActi
   return flatten(tableMenuAt(view, target));
 }
 
-export function liveTables(open: (target: string) => void, cellExtensions: Extension = []): Extension {
+export function liveTables(open: (target: string) => void, cellExtensions: Extension = [],
+  excludes?: (state: EditorState) => readonly { from: number; to: number }[]): Extension {
+  type ExcludedRange = { from: number; to: number };
+  const exclusions = (state: EditorState): ExcludedRange[] => {
+    const sorted = (excludes?.(state) ?? []).filter(range => range.from < range.to)
+      .map(({ from, to }) => ({ from, to })).sort((a, b) => a.from - b.from);
+    const merged: ExcludedRange[] = [];
+    for (const range of sorted) {
+      const previous = merged[merged.length - 1];
+      if (previous && range.from <= previous.to) previous.to = Math.max(previous.to, range.to);
+      else merged.push(range);
+    }
+    return merged;
+  };
   type CachedTable = { model: MarkdownTable; identity: object; changed: boolean };
   const shiftModel = (model: MarkdownTable, shift: number): MarkdownTable => !shift ? model : {
     ...model, from: model.from + shift, to: model.to + shift,
@@ -743,10 +780,17 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
         rawFrom: cell.rawFrom + shift, rawTo: cell.rawTo + shift,
         insertion: cell.insertion ? { at: cell.insertion.at + shift, get prefix() { return cell.insertion!.prefix; }, suffix: cell.insertion.suffix } : undefined })) })),
   };
-  const build = (state: EditorState, cached = new Map<number, CachedTable>()) => {
+  const build = (state: EditorState, excluded: readonly ExcludedRange[], cached = new Map<number, CachedTable>()) => {
+    let exclusionIndex = 0;
     const decorations: ReturnType<Decoration['range']>[] = [];
     syntaxTree(state).iterate({ enter(node) {
       if (node.name !== 'Table') return;
+      while (exclusionIndex < excluded.length && excluded[exclusionIndex].to <= node.from) exclusionIndex++;
+      if (excluded[exclusionIndex]?.from < node.to) return false;
+      // Keep intersecting source visible when multiple parent ranges cannot be
+      // represented by the single-cell editor. Unaffected tables stay rendered.
+      if (state.selection.ranges.length > 1 && state.selection.ranges.some(range =>
+        range.from <= node.to && range.to >= node.from)) return false;
       const previous = cached.get(node.from);
       const model = previous && !previous.changed && previous.model.to === node.to ? previous.model
         : parseTable(state.doc.sliceString(node.from, node.to), node.from);
@@ -755,11 +799,17 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
     } });
     return Decoration.set(decorations, true);
   };
-  const field = StateField.define<DecorationSet>({ create: state => build(state),
+  const field = StateField.define<{ decorations: DecorationSet; excluded: ExcludedRange[] }>({
+    create(state) { const excluded = exclusions(state); return { decorations: build(state, excluded), excluded }; },
     update(value, transaction) {
-      if (!transaction.docChanged && syntaxTree(transaction.startState) === syntaxTree(transaction.state)) return value;
+      const excluded = exclusions(transaction.state);
+      const sameExclusions = excluded.length === value.excluded.length && excluded.every((range, i) =>
+        range.from === value.excluded[i].from && range.to === value.excluded[i].to);
+      const multiSelectionChanged = (transaction.startState.selection.ranges.length > 1 || transaction.state.selection.ranges.length > 1)
+        && !transaction.startState.selection.eq(transaction.state.selection);
+      if (!transaction.docChanged && syntaxTree(transaction.startState) === syntaxTree(transaction.state) && sameExclusions && !multiSelectionChanged) return value;
       const cached = new Map<number, CachedTable>();
-      value.between(0, transaction.startState.doc.length, (from, to, decoration) => {
+      value.decorations.between(0, transaction.startState.doc.length, (from, to, decoration) => {
         const start = transaction.changes.mapPos(from, 1), end = transaction.changes.mapPos(to, -1);
         if (start >= end || !(decoration.spec.widget instanceof TableWidget)) return;
         let changed = false;
@@ -767,8 +817,8 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
         const widget = decoration.spec.widget;
         cached.set(start, { model: shiftModel(widget.model, start - from), identity: widget.identity, changed });
       });
-      return build(transaction.state, cached);
-    }, provide: field => EditorView.decorations.from(field) });
+      return { decorations: build(transaction.state, excluded, cached), excluded };
+    }, provide: field => EditorView.decorations.from(field, value => value.decorations) });
   const selection = ViewPlugin.fromClass(class {
     private version = 0;
     update(update: ViewUpdate) {

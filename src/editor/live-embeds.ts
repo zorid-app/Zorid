@@ -1,3 +1,5 @@
+import { renderExclusions, sameRenderExclusions, intersectsRenderExclusion } from './render-exclusions.ts';
+import type { RenderExclusionOptions } from './render-exclusions.ts';
 import { EditorState, StateEffect, StateField } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType } from '@codemirror/view';
@@ -15,10 +17,10 @@ interface EmbedSpan {
   request: EmbedRequest;
   identity: object;
 }
-interface EmbedState { spans: readonly EmbedSpan[]; revealed: object | null; decorations: DecorationSet }
+interface EmbedState { exclusions: ReturnType<typeof renderExclusions>; spans: readonly EmbedSpan[]; revealed: object | null; decorations: DecorationSet }
 type Renderer = (request: EmbedRequest) => { dom: HTMLElement; destroy: () => void };
 
-const excludedNodes = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock', 'LiveInlineComment', 'Table', 'LinkReference', 'URL', 'LinkTitle']);
+const excludedNodes = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock', 'LiveInlineComment', 'Table', 'LinkReference', 'URL', 'LinkTitle', 'ZoridFrontmatter', 'ZoridMathInline', 'ZoridMathDisplay', 'ZoridMathBlock']);
 const interactive = 'a, button, input, select, textarea, audio, video, iframe, object, embed, summary, .cm-editor, .interactive-child, [contenteditable]:not([contenteditable="false"]), [role="button"]';
 
 function unescape(value: string): string {
@@ -80,7 +82,7 @@ function findEmbeds(state: EditorState): Omit<EmbedSpan, 'identity'>[] {
  * after its editable syntax. Obsidian's separate image tooltip/selection/resize
  * keyboard model isn't implemented by this shared embed extension.
  */
-export function liveEmbeds(render: Renderer): Extension {
+export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {}): Extension {
   const reveal = StateEffect.define<object>();
   const mounted = new WeakMap<HTMLElement, () => void>();
   const editSource = (view: EditorView, identity: object) => {
@@ -139,7 +141,8 @@ export function liveEmbeds(render: Renderer): Extension {
     destroy(dom: HTMLElement): void { const dispose = mounted.get(dom); mounted.delete(dom); dispose?.(); }
     get estimatedHeight(): number { return this.span.block ? 100 : -1; }
   }
-  const decorate = (spans: readonly EmbedSpan[], revealed: object | null) => Decoration.set(spans
+  const decorate = (spans: readonly EmbedSpan[], revealed: object | null, exclusions: ReturnType<typeof renderExclusions>) => Decoration.set(spans
+    .filter(span => !intersectsRenderExclusion(exclusions, span.blockFrom, span.blockTo))
     .map(span => span.identity === revealed
       // A point widget leaves the source editable. Keeping the same widget
       // identity lets CodeMirror reuse its DOM, resources and embedded view
@@ -150,7 +153,8 @@ export function liveEmbeds(render: Renderer): Extension {
   const field = StateField.define<EmbedState>({
     create(state) {
       const spans = findEmbeds(state).map(span => ({ ...span, identity: {} }));
-      return { spans, revealed: null, decorations: decorate(spans, null) };
+      const exclusions = renderExclusions(state, options.excludes);
+      return { spans, revealed: null, exclusions, decorations: decorate(spans, null, exclusions) };
     },
     update(previous, transaction) {
       let spans = previous.spans;
@@ -172,8 +176,9 @@ export function liveEmbeds(render: Renderer): Extension {
         const active = spans.find(span => span.identity === revealed);
         if (!active || !transaction.newSelection.ranges.some(range => range.from <= active.to && range.to >= active.from)) revealed = null;
       }
-      return !changed && revealed === previous.revealed ? previous
-        : { spans, revealed, decorations: decorate(spans, revealed) };
+      const exclusions = renderExclusions(transaction.state, options.excludes);
+      return !changed && revealed === previous.revealed && sameRenderExclusions(exclusions, previous.exclusions) ? previous
+        : { spans, revealed, exclusions, decorations: decorate(spans, revealed, exclusions) };
     },
     provide: field => EditorView.decorations.from(field, value => value.decorations),
   });

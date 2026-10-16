@@ -1,5 +1,7 @@
 const path = require('node:path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const { MathAssetsPlugin } = require('./scripts/math-assets.cjs');
+const { PrismAssetsPlugin } = require('./scripts/prism-assets.cjs');
 const { PdfAssetsPlugin } = require('./scripts/pdf-assets.cjs');
 
 module.exports = {
@@ -28,6 +30,6 @@ module.exports = {
       { test: /\.css$/, use: ['style-loader', 'css-loader'] },
     ],
   },
-  plugins: [new HtmlWebpackPlugin({ template: './index.html' }), new PdfAssetsPlugin()],
+  plugins: [new HtmlWebpackPlugin({ template: './index.html' }), new PdfAssetsPlugin(), new MathAssetsPlugin(), new PrismAssetsPlugin()],
   devServer: { host: '127.0.0.1', port: 5173, hot: false, liveReload: true },
 };
