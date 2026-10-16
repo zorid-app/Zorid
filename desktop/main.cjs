@@ -77,4 +77,5 @@ app.whenReady().then(async () => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow({ primary: true, initialState: 'restore' }).catch(error => dialog.showErrorBox('Could not open window', error.message)); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('before-quit', () => broker.dispose());
+// before-quit can still be cancelled by a renderer's unsaved-note guard.
+app.on('will-quit', () => broker.dispose());
