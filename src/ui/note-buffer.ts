@@ -28,6 +28,9 @@ export class NoteBuffer {
   private disposed = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pending: Promise<unknown> = Promise.resolve();
+  private recoveryCheckpoint?: { key: string; draft: Draft | null };
+  private recoveryBase?: { text: string; json: string };
+  private recoveryPending = false;
 
   constructor(vault: Vault, path: string, options: NoteBufferOptions = {}) {
     this.vault = vault;
@@ -53,14 +56,35 @@ export class NoteBuffer {
       || typeof draft.base !== 'string' || typeof draft.content !== 'string') {
       throw new Error(`Invalid recovery draft: ${this.path}`);
     }
-    return { base: draft.base, content: draft.content };
+    const recovered = { base: draft.base, content: draft.content };
+    this.recoveryCheckpoint = { key: this.key(), draft: recovered };
+    return recovered;
   }
   private persist(): boolean {
+    const storage = this.options.storage;
+    if (!storage) return true;
+    const key = this.key(), previous = this.recoveryCheckpoint;
+    if (previous?.key === key && (this.dirty
+      ? previous.draft?.base === this.savedText && previous.draft.content === this.text
+      : previous.draft === null)) { this.recoveryPending = false; return true; }
     try {
-      if (this.dirty) this.options.storage?.setItem(this.key(), JSON.stringify({ base: this.savedText, content: this.text }));
-      else this.options.storage?.removeItem(this.key());
+      if (this.dirty) {
+        // Every distinct edit still reaches recovery storage synchronously.
+        // Only the unchanged base's JSON escaping is reused; the payload format
+        // remains exactly {base, content} for existing recovery readers.
+        if (this.recoveryBase?.text !== this.savedText) {
+          this.recoveryBase = { text: this.savedText, json: JSON.stringify(this.savedText) };
+        }
+        storage.setItem(key, `{"base":${this.recoveryBase.json},"content":${JSON.stringify(this.text)}}`);
+        this.recoveryCheckpoint = { key, draft: { base: this.savedText, content: this.text } };
+      } else {
+        storage.removeItem(key);
+        this.recoveryCheckpoint = { key, draft: null };
+        this.recoveryBase = undefined;
+      }
+      this.recoveryPending = false;
       return true;
-    } catch (error) { this.rememberError(error); return false; }
+    } catch (error) { this.recoveryPending = true; this.rememberError(error); return false; }
   }
   private cancelTimer(): void {
     if (this.timer !== undefined) clearTimeout(this.timer);
@@ -101,11 +125,14 @@ export class NoteBuffer {
 
   update(text: string): void {
     this.requireLoaded();
+    const changed = text !== this.text;
     this.text = text;
     this.dirty = text !== this.savedText;
     this.persist();
-    this.cancelTimer();
-    if (this.dirty) {
+    if (changed) this.cancelTimer();
+    // Repeated delivery of the same snapshot must not postpone a pending save.
+    // persist still retries if its previous attempt failed.
+    if (this.dirty && this.timer === undefined) {
       this.timer = setTimeout(() => {
         this.timer = undefined;
         void this.flush().catch(() => { /* Error and recovery draft remain on the buffer. */ });
@@ -116,6 +143,9 @@ export class NoteBuffer {
 
   private async save(): Promise<void> {
     this.requireLoaded();
+    // Retry a failed synchronous recovery write at explicit save/close boundaries
+    // before disk I/O. A failed disk write must still have a chance to recover.
+    if (this.dirty || this.recoveryPending) this.persist();
     while (this.dirty) {
       const content = this.text;
       await this.vault.modify(this.path, content, { expectedContent: this.savedText });
