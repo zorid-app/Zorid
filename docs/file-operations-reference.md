@@ -1,0 +1,88 @@
+# File operations and link resolution reference
+
+Focused static inspection, 2026-10-16. This report reuses the recovered desktop Obsidian 1.14.4 artifacts under `/private/tmp/zorid-reference-20261016/recovered/obsidian-1.14.4`. No target execution or repeated broad analysis occurred. Findings describe inspected branches, not measured runtime parity. No recovered implementation is included.
+
+`app.js` SHA-256: `958ce57fe22f87fdf121546e46dfccd9c8ee971ce3fd8f801d60d4ece39a2df9`. Its retained REA identity is E3 `ev_a023c82af045a4b5acedab1eab958db521c3828491a6320c1f7ee85152573b37`; E3's expanded semantic graph is incomplete. `main.js` SHA-256: `5d90e3738f7db8fb8ea00d01556d71310fd557c4a3c785601274c2bb875a2cba`, covered partially by E2 `ev_ac5b6f0769f47603747fcf2abec7a2980bedf7d986b23bd9323df29b9cde7501`. Detailed readings below are ordinary source inspection, not new REA semantic results. Ranges are zero-based character positions in Python UTF-8-decoded text, not byte offsets. See [reference evidence](reference-evidence.md) for retention and coverage limits.
+
+## Resolver priority and shortest links
+
+The metadata resolver at `app.js` 1750690–1752440 accepts a link path and source path, without a wiki-versus-Markdown parameter. The first-result API selects the first element of its ordered result. The file-name index uses lowercased full names, including extensions; initialization is at 1756600–1757330 and updates at 1760832–1764100.
+
+Observed internal-vault ordering:
+
+1. An empty path resolves to the source file if present. A separate `file:` branch handles external files and is outside Zorid's vault-only contract.
+2. Look up candidates by lowercased final filename when that filename contains a dot. If no candidate group exists, append `.md` to the target and look up that filename. Thus a real `report.pdf` takes precedence over `report.pdf.md`.
+3. A **bare filename** with exactly one candidate returns it immediately. The fast path requires the whole target to equal its final filename; it does not apply to `./`, `../`, or slash-containing paths.
+4. For explicit relative paths, try an exact case-insensitive path derived from the source directory. Repeated leading `../` removes source-directory components; extra parents at vault root remain at root. The inspected code also recognizes the initial `./../` form. This is string lookup within the vault, not access to parent filesystem directories.
+5. Strip a leading slash, then try an exact case-insensitive vault path. A leading slash suppresses the later suffix fallback when no exact path exists.
+6. Collect candidates whose lowercased full paths end with the remaining target. Partition them into paths beginning with the lowercased source-directory string and other paths. Sort each partition by **total path character length**, then concatenate the preferred partition first. This is a literal prefix comparison, without a directory-boundary check. Comparator `RR` at 1745552–1745615 compares length only. No distance computation, lexical tie breaker, or equal-distance rejection occurs in these branches. Equal-length ordering depends on index order and JavaScript's stable sort; actual index order across filesystem/platform runs remains unverified.
+
+This has consequences that are easy to miss: an exact root-level `Note.md` wins over a same-folder `Note.md` for a bare ambiguous name; `./Note` selects the source folder when present. If only `A/Note.md` and `B/Note.md` exist, a root source gets an ordered candidate list and a first result, rather than an unresolved link. For source `A/Source.md`, the literal prefix also groups `AB/Note.md` with `A/...` paths. These are static branch consequences, not recommendations for a new resolver design.
+
+`fileToLinktext` at 1754094–1754610 is a separate **generation policy**. Absolute format emits the vault path; relative format derives the path from the source directory; shortest format uses the filename only when the resolver returns exactly one candidate and that candidate is the intended file. Otherwise it emits the full vault path. Successful first-result resolution alone does not prove a shortest filename is unambiguous.
+
+`generateMarkdownLink` at 1800965–1801445 calls that same generator. Markdown format retains `.md`; wiki format can strip it. Therefore shortest Markdown links can contain only a basename, including an attachment stored elsewhere in the vault. Rejecting all Markdown basename suffix resolution breaks the generated links. Heading-only self-links use the subpath directly. Markdown note links use a basename display label; attachment labels default empty. Wiki display aliases equivalent to the destination ignoring case are folded into the destination text.
+
+The renderer's local resource path at 3922540–3923000 normalizes/decodes a local media destination and calls the same first-result resolver. The helpers at 653653–654260 classify relative/local URLs, decode URI text, trim, normalize NFC, and encode selected Markdown characters. Exact percent-reserved-character equivalence across parser, editor, raw HTML and generated links remains open; the resolver method itself does not implement every caller's preprocessing.
+
+## Creation, names, case and Unicode
+
+The file manager at 1787100–1789587 chooses a configured new-note parent, trims the supplied name, removes a matching extension, allocates an available name, and creates missing folders. Its folder lookup is case-insensitive. The vault allocator at 1427682–1428371 checks case-insensitive collisions and adds space-separated numeric suffixes beginning at 1 before the extension. Attachment folder interpretation and sanitation are covered further in [attachment reference](attachment-reference.md).
+
+Path normalization at 543264–543970 converts backslash/slash runs to slashes, removes outer slashes, represents the root as `/`, replaces nonbreaking and narrow nonbreaking spaces with regular spaces, and normalizes NFC. This differs from case folding: display spelling is retained. Filename validation at 1335750–1336500 has platform branches, including Windows reserved device names and trailing dot/space rejection. The invalid-character sets are platform-specific; this does not justify one universal Windows-style sanitizer.
+
+The desktop adapter constructor at 546000–546690 tests filesystem case sensitivity with a temporary test filename. This was inspected statically, not executed. Rename at 554286–555540 checks whether the destination exists; a same-name case-only rename is allowed on an insensitive filesystem. After native rename, it updates the stored paths and emits a rename for the folder and each loaded descendant. The generic vault rename at 1424877–1425280 normalizes/checks the destination and delegates. Exact cross-volume behavior, permissions, crash consistency, normalization collisions and case-only moves need runtime fixtures.
+
+Vault create/createBinary/createFolder at 1421690–1423220 normalize and validate, check adapter existence, then write/create and retrieve the resulting object. These checks are not an atomic no-overwrite reservation against other processes. The desktop adapter's ordinary writes at 550100–552990 call filesystem writes and reconcile in a finally path. Its read/modify/write processing is serialized through the adapter queue, but no external-process compare-and-swap guarantee is established.
+
+## Rename and link updates
+
+The file manager's rename at 1789587–1790020 wraps ordinary vault rename in a link-update operation. The operation at 1790000–1792600 waits for a clean metadata cache, records each reference's source object, target object and ordered resolved paths, performs the rename work, then checks references again. Nested updates are accumulated in the same operation. The change detector at 1804350–1804900 considers whether the ordered resolution list changed or became empty and regenerates the path from the original target object while retaining the subpath.
+
+Actual writes use metadata-cache `updateInternalLinks` at 1752980–1753990. Extension-specific link updaters can handle their own references; otherwise the vault processes the text. This scope extends beyond Zorid's parsed Markdown links.
+
+The default `alwaysUpdateLinks` literal at 1409789 is false. Affected-link updates at 1791000–1792600 either run automatically when enabled or present choices to update once, always update, or decline. The inspected operation does **not** establish Zorid's all-or-nothing rollback policy: file rename precedes the optional link-write stage. Rename and updating references are distinct actions.
+
+## Deletion and trash
+
+Defaults near 1410400 are `promptDelete=true`, `trashOption=system`, and `deleteUnlinkedAttachments=ask`. At 1794200–1797400 the file manager can show deletion consequences, distinguish nonempty folders, and report existing backlinks. For a deleted file it collects linked attachment candidates, removes candidates still referenced elsewhere, then applies the configured never/always/ask policy. The exact attachment-extension predicate and race behavior remain unclosed.
+
+Trash routing at 1797133–1797560 selects system, local, or permanent deletion. The vault at 1424100–1424877 protects the root; system trash falls back to local trash if the adapter reports false. Permanent folder deletion supplies the recursive flag. The desktop local-trash implementation at 548582–549230 moves the item's **basename** into `.trash`; a collision starts at suffix ` 2`, then increments. It does not preserve the original directory hierarchy in this branch.
+
+Desktop renderer initialization at 3936500–3936800 connects the adapter trash callback to synchronous `trash` IPC. `main.js` 193957–194120 awaits Electron `shell.trashItem`, returns true on success, logs failure and returns false. This connects the inspected caller to the native API but does not prove OS trash contents, successful permissions or platform behavior. The general filesystem calls occur in the renderer-side adapter; they are not all main-process IPC operations.
+
+## Filesystem events and metadata
+
+The desktop watcher at 558410–560600 uses filesystem watches and queues reconciliation. Recursive watching depends on a platform condition; the alternative installs directory watchers. Hidden paths are excluded from the ordinary file tree, while the configuration folder gets separate hidden-recursive watches. Symlink handling at 563000–564200 resolves targets and avoids overlapping watched ancestry; it is not blanket symlink rejection.
+
+Reconciliation at 560540–565020 retains normalized logical paths alongside native spellings. Existing file changes are detected from rounded millisecond mtime or size, not file contents. Missing-file events from the watcher defer final deletion for 100 ms; an internal operation's reconciliation can delete immediately. Folder deletion removes loaded descendants. Same-stat external rewrites may therefore evade this inspected detector. A watcher rename event does not itself establish identity-preserving rename inference; explicit adapter rename is the branch that emits `renamed` with old and new paths.
+
+Vault event translation at 1420000–1421510 updates file/folder objects before emitting create, modify, delete or rename. Modification invalidates cached content unless a save is active. Raw events are also emitted. Metadata subscribes to create/modify/delete/rename/external-watch at 1754610–1754950, queues parsing and resolution, emits `changed`, `deleted`, per-file `resolve`, and queue-level `resolved`, and persists file/hash metadata in IndexedDB. Relevant ranges: 1754950–1757330, 1758700–1760400, 1760832–1765900. These asynchronous stages are not equivalent to one synchronous vault event, and exact listener timing needs execution evidence.
+
+## Configuration, conflicts and recovery
+
+The default config folder literal is `.obsidian` at 1412171. The vault at 1414550–1418000 merges `appearance.json` and `app.json`, separates appearance keys on save, schedules saves with a 1-second debounce, and reloads externally changed config with a 500-ms debounce. Changed and removed keys emit `config-changed`. Raw config notifications trigger reload; comparison uses config file timestamps and serialized values. JSON read failures distinguish missing files; write failures are caught in the inspected helper. Plugin data paths and independent config JSON helpers are at 1418000–1419400; a complete plugin/settings-file inventory remains open.
+
+The text-view load/save path at 2807150–2809800 tracks last-saved data, dirty state and in-progress saves. On external modification, divergent dirty plaintext can be merged through a three-input helper using the old saved text, current editor text and incoming text. It displays a file-changed notice. Save failure restores the saved-data marker, shows an error and requests a recovery backup. The editable Markdown embed has a related merge path at 2693720–2694150. The merge helper's algorithm, conflict markers, cursor preservation and pathological cases were not audited, so no exact conflict-resolution contract is claimed. Sync's conflict branches are separate and remain outside this report.
+
+File recovery at 3455155–3457000 has default interval 5 minutes and retention 7 days, a per-app IndexedDB `backups` store indexed by path and timestamp, and modify/file-open/create listeners. The snapshot filter at 3460850–3461644 includes Markdown, Canvas and Bases. Unchanged data is deduplicated; changes inside the interval enter a pending set, reconsidered by a minute timer. Forced backups at 3461644 bypass ordinary interval/dedup checks. Cleanup at 3462350–3463000 deletes expired records. Thus local trash, unsaved-editor drafts and recovery history are three different mechanisms.
+
+## Zorid comparison and closure
+
+Inspected Zorid sources: [metadata](../src/core/metadata.ts), [vault](../src/core/vault.ts), [path types](../src/core/types.ts), [desktop service](../desktop/vault-service.cjs), [desktop dispatch](../desktop/vault-dispatch.cjs), [note buffer](../src/ui/note-buffer.ts), and the settings portions of [workspace](../src/ui/workspace.ts).
+
+| Area | Zorid observation / remaining difference |
+| --- | --- |
+| Resolver | Before this pass, Markdown lacked global basename fallback, matching was case-sensitive, wiki candidates used folder distance, and ties were unresolved. This pass corrects the shared candidate ordering and exposes candidates for shortest-link uniqueness. See the metadata tests for the bounded contract. |
+| Rename | Zorid always rewrites parsed Markdown links using its pre-move index and attempts rollback on failure. It does not implement the reference prompt/setting, extension-updater registry or every metadata reference kind. Resolver changes also change which references are rewritten. |
+| Name/path behavior | Core/desktop normalization does not provide the complete reference NFC/native-spelling/platform-name contract. Desktop case-only rename can reject an existing destination. Missing-parent rules vary between core and desktop adapter. |
+| Writes | Desktop uses a temporary file, fsync and rename. This is an original durability choice; inspected reference ordinary writes are different. Neither proves cross-process atomic create or whole-operation crash recovery. |
+| Trash | Desktop always uses `.trash/<timestamp>-<uuid>/<original-relative-path>`. System trash, permanent-delete setting and reference basename collision layout are absent. |
+| Events | Core publishes snapshots and synchronously parses Markdown; structural rescans expose moves as delete/create. Desktop supplements native events with 750-ms polling. Exact-path Markdown notifications reread contents even if stats match. Reference metadata has distinct async events and IndexedDB persistence. |
+| Symlinks | Desktop rejects them. Reference has explicit symlink branches. This remains a deliberate boundary, not parity. |
+| Settings | Workspace persists settings in localStorage under `zorid:settings`; it does not implement vault config JSON reload/save semantics. |
+| Conflicts/recovery | NoteBuffer retains localStorage drafts and rejects saves whose expected content changed. It does not implement the inspected three-input merge or versioned IndexedDB recovery history. |
+
+Required reference fixtures remain: same-name files in root/sibling/nested/prefix-sharing folders; mixed-case extensions; NFC/NFD and case collisions; stable tie ordering; percent-escaped reserved characters; case-only moves; external renames; simultaneous create/write; failed link rewrites; declining update prompts; system-trash failure; unlinked attachments; hidden config replacement; same-stat rewrites; external dirty-buffer merging; recovery after restart and retention cleanup. Tests of original Zorid code verify implementation behavior only and do not replace these reference observations.
+
+Implementation verification in this pass: `npm run check` passed. Metadata/vault/core performance/reload tests passed except the preexisting binary assertion expecting extensionless `Folder` to resolve; the inspected resolver instead looks for `Folder.md`. That expectation was reported to the integrating worker without changing the out-of-scope binary test. The added metadata fixtures cover both syntaxes, root-versus-relative priority, ordered ambiguity, source-prefix grouping, case/extension selection, NFC input, index maintenance, and the effect on incoming link rewrites during rename. Attachment-import and note-buffer tests also passed at this snapshot. Candidate ordering remains tied to the supplied inventory order; filesystem ordering parity and parser preprocessing are not certified.

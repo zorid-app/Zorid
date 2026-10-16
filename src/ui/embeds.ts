@@ -1,0 +1,200 @@
+import type { Vault } from '../core/vault.ts';
+import { selectMarkdownSubpath } from '../core/subpath.ts';
+import { el } from './dom.ts';
+import { renderMarkdown } from './markdown.ts';
+import type { EmbedRequest } from './markdown.ts';
+import { AttachmentResources, imageAlt, isImage } from './attachments.ts';
+import type { AttachmentLease } from './attachments.ts';
+import { openImageLightbox } from './image-view.ts';
+import type { ImageView } from './image-view.ts';
+
+interface EmbedOptions {
+  vault: Vault;
+  open: (source: string, target: string, kind: 'wiki' | 'markdown') => void;
+  read?: (path: string) => Promise<string>;
+  taskChange?: (path: string, line: number, checked: boolean) => Promise<void>;
+  resources?: AttachmentResources;
+}
+interface EmbedState {
+  node: HTMLElement;
+  request: EmbedRequest;
+  source: string;
+  ancestors: readonly string[];
+  path?: string;
+  version: number;
+  visible: boolean;
+  disposed: boolean;
+  children: Set<EmbedState>;
+  lease?: AttachmentLease;
+  imageSource?: () => Promise<AttachmentLease>;
+}
+
+/** Shared embed rendering and resource ownership for Reading and Live Edit. */
+export class MarkdownEmbeds {
+  private options: EmbedOptions;
+  private states = new Set<EmbedState>();
+  private nodes = new WeakMap<HTMLElement, EmbedState>();
+  private observer?: IntersectionObserver;
+  private observed = new Map<Element, EmbedState>();
+  private reads = new Map<string, Promise<string>>();
+  private queue: (() => void)[] = [];
+  private reading = 0;
+  private disposed = false;
+  private unsubscribers: (() => void)[];
+  private resources:AttachmentResources;
+  private ownsResources:boolean;
+  private lightbox?:ImageView;
+
+  constructor(options: EmbedOptions) {
+    this.options = options;
+    this.ownsResources=!options.resources;
+    this.resources=options.resources??new AttachmentResources(options.vault);
+    if (typeof IntersectionObserver !== 'undefined') {
+      this.observer = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const state = this.observed.get(entry.target);
+          if (!state || state.disposed) continue;
+          this.observer!.unobserve(state.node); this.observed.delete(state.node);
+          state.visible = true; void this.refresh(state);
+        }
+      }, { rootMargin: '400px' });
+    }
+    this.unsubscribers = [
+      options.vault.on('modify', change => this.invalidate(change.path)),
+      ...(['create', 'delete', 'rename'] as const).map(event => options.vault.on(event, () => this.invalidate())),
+    ];
+  }
+
+  render(request: EmbedRequest, source: string, ancestors: readonly string[] = [], parent?: EmbedState): HTMLElement {
+    const node = el('span', 'internal-embed markdown-embed');
+    node.setAttribute('role', 'group'); node.setAttribute('aria-label', `Embed ${request.target}`);
+    node.dataset.embedTarget = request.target;
+    const state: EmbedState = { node, request, source, ancestors, version:0, visible:!this.observer, disposed:false, children:new Set() };
+    if (this.disposed) return node;
+    this.states.add(state); parent?.children.add(state);
+    this.nodes.set(node, state);
+    node.append(el('span', 'embed-loading', 'Loading…'));
+    if (this.observer) { this.observed.set(node, state); this.observer.observe(node); }
+    else void this.refresh(state);
+    return node;
+  }
+
+  /** Unsaved buffer updates can invalidate embeds without waiting for filesystem I/O. */
+  invalidate(path?: string): void {
+    if (path) this.reads.delete(path); else this.reads.clear();
+    for (const state of [...this.states]) {
+      if (!state.disposed && state.visible && (!path || state.path === path)) void this.refresh(state);
+    }
+  }
+
+  private read(path: string): Promise<string> {
+    let result = this.reads.get(path);
+    if (result) return result;
+    result = new Promise<string>((resolve, reject) => {
+      this.queue.push(() => {
+        this.reading++;
+        Promise.resolve().then(() => {
+          if (this.disposed) throw new Error('Embed view closed');
+          return this.options.read ? this.options.read(path) : this.options.vault.cachedRead(path);
+        }).then(resolve, reject).finally(() => { this.reading--; this.drain(); });
+      });
+      this.drain();
+    });
+    this.reads.set(path, result);
+    return result;
+  }
+
+  private drain(): void {
+    while (this.reading < 4 && this.queue.length) this.queue.shift()!();
+  }
+
+  private clearChildren(state: EmbedState): void {
+    for (const child of state.children) this.release(child);
+    state.children.clear();
+  }
+
+  private release(state: EmbedState): void {
+    state.disposed = true; state.version++;
+    state.lease?.release();state.lease=undefined;
+    this.observer?.unobserve(state.node); this.observed.delete(state.node);
+    this.clearChildren(state); this.states.delete(state);
+    this.nodes.delete(state.node);
+  }
+
+  /** A live editor can unmount one widget without disposing its other embeds. */
+  releaseEmbed(node: HTMLElement): void {
+    const state = this.nodes.get(node);
+    if (state) this.release(state);
+  }
+
+  private async refresh(state: EmbedState): Promise<void> {
+    if (this.disposed || state.disposed) return;
+    const version = ++state.version;
+    this.clearChildren(state);
+    state.lease?.release();state.lease=undefined;state.imageSource=undefined;
+    const current = () => !this.disposed && !state.disposed && state.version === version;
+    const { request, source } = state;
+    const external=request.kind==='markdown'&&/^https?:\/\//i.test(request.target);
+    const path = this.options.vault.metadata.resolveLink(source, request.target, request.kind);
+    state.path = path ?? undefined;
+    const open = el('a', 'embed-open', request.label || request.target || source);
+    open.href = '#'; open.setAttribute('aria-label', `Open ${request.target || source}`);
+    open.onclick = event => { event.preventDefault(); this.options.open(source, request.target, request.kind); };
+    state.node.replaceChildren(open);
+    const fail = (message: string) => { if (current()) state.node.append(el('span', 'embed-error', message)); };
+    if(external || (path&&isImage(path))){
+      state.node.className='internal-embed image-embed';state.node.replaceChildren();
+      const details=imageAlt(request.label??path?.split('/').at(-1)??''),img=el('img');
+      img.alt=details.alt;img.decoding='async';img.loading='lazy';img.draggable=false;
+      if(details.width!==undefined)img.width=details.width;if(details.height!==undefined)img.height=details.height;
+      img.onerror=()=>fail('Unable to display this image.');state.node.append(img);
+      state.imageSource=external?async()=>({url:request.target,type:'image/*',release(){}}):()=>this.resources.acquire(path!);
+      img.onclick=()=>{
+        const gallery=[...this.states].filter(item=>!item.disposed&&item.imageSource&&item.node.querySelector('img'));
+        this.lightbox?.destroy();
+        this.lightbox=openImageLightbox(gallery.map(item=>({alt:item.node.querySelector('img')!.alt,load:item.imageSource!})),gallery.indexOf(state));
+      };
+      try{
+        const result=await state.imageSource();if(!current()){result.release();return;}state.lease=result;img.src=result.url;
+      }catch(error){fail(error instanceof Error?error.message:String(error));}
+      return;
+    }
+    if (!path) { fail('File not found'); return; }
+    if (!/\.md$/i.test(path)) { fail('Attachment viewer is not implemented yet'); return; }
+    const hash = request.target.indexOf('#');
+    const fragment = hash < 0 ? '' : request.target.slice(hash);
+    const identity = `${path}${fragment}`;
+    if (state.ancestors.includes(identity)) { fail('Recursive embed'); return; }
+    if (state.ancestors.length >= 5) { fail('Embed nesting limit reached'); return; }
+    try {
+      const sourceText = await this.read(path);
+      if (!current()) return;
+      const selection = selectMarkdownSubpath(sourceText, fragment);
+      if (!selection) { fail('Heading or block not found'); return; }
+      const content = el('span', 'markdown-embed-content');
+      renderMarkdown(content, selection.content,
+        (target, kind = 'wiki') => this.options.open(path, target, kind),
+        (line, checked) => {
+          if (!this.options.taskChange) return;
+          void this.options.taskChange(path, selection.startLine + line, checked)
+            .then(() => { if (current()) this.invalidate(path); })
+            .catch(error => fail(error instanceof Error ? error.message : String(error)));
+        },
+        {embed: child => this.render(child, path, [...state.ancestors, identity], state)});
+      state.node.append(content);
+    } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
+  }
+
+  destroy(): void {
+    this.disposed = true;
+    this.lightbox?.destroy();
+    this.observer?.disconnect(); this.observed.clear();
+    this.unsubscribers.forEach(unsubscribe => unsubscribe());
+    for (const state of [...this.states]) this.release(state);
+    this.reads.clear();
+    if(this.ownsResources)this.resources.destroy();
+    // Queued jobs reject without touching storage; their handlers still settle.
+    this.drain();
+  }
+}

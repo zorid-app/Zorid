@@ -1,0 +1,22 @@
+# Local proprietary application artifacts are not project-authored source.
+recovered/
+node_modules/
+.DS_Store
+dist/
+.npm-cache/
+*.log
+ios/App/App/public/
+android/app/src/main/assets/public/
+
+# Local worktrees, runtime data and signing material.
+.worktrees/
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.key
+*.keystore
+*.jks
+*.mobileprovision
+*.asar

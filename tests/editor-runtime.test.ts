@@ -1,0 +1,333 @@
+import test from 'node:test';
+import type { TestContext } from 'node:test';
+import assert from 'node:assert/strict';
+import { JSDOM } from 'jsdom';
+import { EditorSelection, Transaction } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { redo, undo, undoDepth } from '@codemirror/commands';
+import { createEditor } from '../src/ui/editor.ts';
+import { renderMarkdown } from '../src/ui/markdown.ts';
+
+// Real CM6 state, transactions, plugins and DOM, under jsdom. Zero geometry
+// shims only satisfy CM's measurement scheduler; they prove no pixel, native
+// selection, OS keyboard, IME or clipboard parity.
+function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live') {
+  const dom = new JSDOM('<!doctype html><html><body><div id="host"></div></body></html>', { pretendToBeVisual: true });
+  const saved = new Map<string, PropertyDescriptor | undefined>();
+  for (const [key, entry] of Object.entries({ window: dom.window, document: dom.window.document,
+    navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Node: dom.window.Node,
+    Text: dom.window.Text, Window: dom.window.Window, MutationObserver: dom.window.MutationObserver,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window) })) {
+    saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: entry });
+  }
+  const emptyRect = () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) });
+  dom.window.Range.prototype.getBoundingClientRect = emptyRect;
+  dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
+  const host = document.querySelector<HTMLElement>('#host')!;
+  const changes: string[] = [];
+  const editor = createEditor(host, { value, mode, paths: () => ['Note.md'], onChange: text => changes.push(text), open() {} });
+  const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
+  assert.ok(view, 'find real CodeMirror instance from its DOM');
+  let destroyed = false;
+  const destroy = () => { if (!destroyed) { editor.destroy(); destroyed = true; } };
+  t.after(() => {
+    destroy();
+    dom.window.close();
+    for (const [key, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
+  const line = (index: number) => [...host.querySelectorAll<HTMLElement>('.cm-line')][index];
+  const cursor = (position: number) => view.dispatch({ selection: { anchor: position } });
+  return { editor, view, host, changes, line, cursor, dom, destroy };
+}
+
+test('real source editor retains literal syntax; live editor hides only inactive markup', t => {
+  const { editor, line, cursor } = setup(t, '# Heading\n**bold** ~~gone~~ ==marked==\nplain');
+  assert.equal(line(0).textContent, '# Heading');
+  assert.equal(line(1).textContent, 'bold gone marked');
+  assert.equal(line(1).querySelector('.cm-strong')?.textContent, 'bold');
+  cursor(editor.getValue().length);
+  assert.equal(line(0).textContent, 'Heading');
+  cursor('# Heading\n'.length);
+  assert.equal(line(1).textContent, '**bold** ~~gone~~ ==marked==');
+  assert.equal(editor.getValue(), '# Heading\n**bold** ~~gone~~ ==marked==\nplain');
+});
+
+test('source mode never replaces Markdown punctuation', t => {
+  const { line, cursor, editor } = setup(t, '# Heading\n**bold** ~~gone~~ ==mark==\nplain', 'source');
+  cursor(editor.getValue().length);
+  assert.equal(line(0).textContent, '# Heading');
+  assert.equal(line(1).textContent, '**bold** ~~gone~~ ==mark==');
+  assert.equal(line(1).querySelector('.cm-strong'), null);
+});
+
+test('live preview preserves syntax inside inline and fenced code, and escaped emphasis', t => {
+  const value = 'plain\n`**literal** ~~code~~ ==code==` **real**\n```md\n# code\n**fenced** ==fenced==\n```\n\\**escaped** \\==escaped==\nplain';
+  const { line } = setup(t, value);
+  assert.equal(line(1).textContent, '`**literal** ~~code~~ ==code==` real');
+  assert.equal(line(3).textContent, '# code');
+  assert.equal(line(4).textContent, '**fenced** ==fenced==');
+  assert.equal(line(6).textContent, '\\**escaped** \\==escaped==');
+});
+
+test('all cursors and full selected ranges reveal their intersecting lines', t => {
+  const value = 'plain\n**first**\n**second**\n**third**\nplain';
+  const { view, line } = setup(t, value);
+  view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(0), EditorSelection.cursor(value.indexOf('second'))], 0) });
+  assert.equal(view.state.selection.ranges.length, 2);
+  assert.equal(line(1).textContent, 'first');
+  assert.equal(line(2).textContent, '**second**');
+  view.dispatch({ selection: EditorSelection.create([EditorSelection.range(value.indexOf('first'), value.indexOf('third') + 2)]) });
+  assert.equal(line(1).textContent, '**first**');
+  assert.equal(line(2).textContent, '**second**');
+  assert.equal(line(3).textContent, '**third**');
+});
+
+test('external snapshots suppress autosave callbacks, preserve unaffected selection and stay outside history', t => {
+  const { editor, view, changes, cursor } = setup(t, 'alpha\nbeta', 'source');
+  cursor(2);
+  editor.setValue('alpha\nbeta\nexternal');
+  assert.equal(view.state.selection.main.head, 2);
+  assert.deepEqual(changes, []);
+  assert.equal(undoDepth(view.state), 0);
+  editor.setValue(editor.getValue());
+  assert.deepEqual(changes, []);
+  editor.insert('!');
+  assert.deepEqual(changes, ['al!pha\nbeta\nexternal']);
+  assert.ok(undo(view));
+  assert.equal(editor.getValue(), 'alpha\nbeta\nexternal');
+  assert.ok(redo(view));
+  assert.equal(editor.getValue(), 'al!pha\nbeta\nexternal');
+});
+
+test('user undo maps through a separate external edit without reverting that edit', t => {
+  const { editor, view, cursor } = setup(t, 'middle', 'source');
+  cursor(6);
+  editor.insert('!');
+  editor.setValue('external middle!');
+  assert.equal(undoDepth(view.state), 1);
+  assert.ok(undo(view));
+  assert.equal(editor.getValue(), 'external middle');
+});
+
+test('programmatic multi-line insertion replaces all selections and is undoable', t => {
+  const { editor, view, changes } = setup(t, 'left\nright', 'source');
+  view.dispatch({ selection: EditorSelection.create([EditorSelection.range(0, 4), EditorSelection.range(5, 10)]) });
+  editor.insert('one\ntwo');
+  assert.equal(editor.getValue(), 'one\ntwo\none\ntwo');
+  assert.equal(changes.length, 1);
+  assert.equal(view.state.selection.ranges.length, 2);
+  assert.ok(undo(view));
+  assert.equal(editor.getValue(), 'left\nright');
+});
+
+test('installed Markdown keymap continues lists on a real editor Enter event', t => {
+  const { editor, view, cursor, dom } = setup(t, '- item', 'source');
+  cursor(6);
+  const event = new dom.window.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
+  view.contentDOM.dispatchEvent(event);
+  assert.ok(event.defaultPrevented);
+  assert.equal(editor.getValue(), '- item\n- ');
+});
+
+test('a paste transaction updates actual editor state and callbacks once', t => {
+  const { editor, view, changes, cursor } = setup(t, 'before after', 'source');
+  cursor(7);
+  view.dispatch({ ...view.state.replaceSelection('first\nsecond\n'), annotations: Transaction.userEvent.of('input.paste') });
+  assert.equal(editor.getValue(), 'before first\nsecond\nafter');
+  assert.deepEqual(changes, ['before first\nsecond\nafter']);
+});
+
+test('destroy removes the actual editor DOM', t => {
+  const { host, destroy } = setup(t, 'text');
+  assert.ok(host.querySelector('.cm-editor'));
+  destroy();
+  assert.equal(host.querySelector('.cm-editor'), null);
+});
+
+const tableNote = 'Before\n\n| Name | Value |\n| --- | ---: |\n| alpha | beta |\n\nAfter';
+function activateCell(host: HTMLElement, dom: JSDOM, row: number, column: number) {
+  const cell = host.querySelector<HTMLElement>(`.cm-live-table [data-row="${row}"][data-column="${column}"]`)!;
+  assert.ok(cell, 'rendered table cell exists');
+  cell.dispatchEvent(new dom.window.MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+  const editor = EditorView.findFromDOM(cell.querySelector('.cm-editor')!)!;
+  assert.ok(editor, 'active cell has its own real CM editor');
+  return editor;
+}
+
+test('live table renders structure and retains one cell editor across typing, with parent undo', t => {
+  const { host, dom, view, editor, changes } = setup(t, tableNote);
+  const widget = host.querySelector('.cm-live-table');
+  assert.equal(widget?.querySelectorAll('th').length, 2);
+  assert.equal(widget?.querySelectorAll('td').length, 2);
+  assert.equal(widget?.querySelector('td')?.textContent, 'alpha');
+  const child = activateCell(host, dom, 1, 0);
+  child.dispatch({ selection: { anchor: child.state.doc.length } });
+  child.dispatch({ ...child.state.replaceSelection('!'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), tableNote.replace('alpha', 'alpha!'));
+  assert.equal(host.querySelector('.cm-live-table'), widget, 'table DOM is reused');
+  assert.equal(EditorView.findFromDOM(widget!.querySelector('.cm-editor')!), child, 'active editor survives parent updates');
+  assert.equal(changes.length, 1);
+  assert.equal(undoDepth(view.state), 1);
+  assert.equal(undoDepth(child.state), 0, 'cell has no separate history');
+  assert.ok(undo(view));
+  assert.equal(editor.getValue(), tableNote);
+  assert.equal(child.state.doc.toString(), 'alpha');
+  assert.ok(redo(view));
+  assert.equal(child.state.doc.toString(), 'alpha!');
+});
+
+test('cell paste escapes pipes and encodes line breaks without splitting the table', t => {
+  const { host, dom, editor, view } = setup(t, tableNote);
+  const child = activateCell(host, dom, 1, 1);
+  child.dispatch({ selection: EditorSelection.single(0, child.state.doc.length) });
+  child.dispatch({ ...child.state.replaceSelection('left|right\nnext'), annotations: Transaction.userEvent.of('input.paste') });
+  assert.ok(editor.getValue().includes('| alpha | left\\|right<br>next |'));
+  assert.equal(host.querySelectorAll('.cm-live-table td').length, 2);
+  assert.equal(child.state.doc.toString(), 'left|right\nnext');
+  assert.equal(view.state.selection.main.head, editor.getValue().indexOf('next') + 4);
+  assert.ok(undo(view));
+  assert.equal(child.state.doc.toString(), 'beta');
+});
+
+test('table Tab navigation selects cells and creates a row at the end; Shift-Tab creates a header', t => {
+  const { host, dom, editor } = setup(t, tableNote);
+  const key = (view: EditorView, shiftKey = false) => {
+    const event = new dom.window.KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', shiftKey, bubbles: true, cancelable: true });
+    view.contentDOM.dispatchEvent(event); assert.ok(event.defaultPrevented);
+  };
+  let child = activateCell(host, dom, 0, 0);
+  key(child);
+  child = EditorView.findFromDOM(host.querySelector('.cm-live-table .cm-editor')!)!;
+  assert.equal(child.state.doc.toString(), 'Value');
+  assert.equal(child.state.selection.main.to, 5);
+  assert.equal(child.state.selection.main.from, 0);
+  child = activateCell(host, dom, 1, 1); key(child);
+  assert.equal(host.querySelectorAll('.cm-live-table tbody tr').length, 2);
+  assert.match(editor.getValue(), /\| alpha \| beta \|\n\|  \|  \|/);
+  child = activateCell(host, dom, 0, 0); key(child, true);
+  assert.match(editor.getValue(), /\|  \|  \|\n\| --- \| ---: \|\n\| Name \| Value \|/);
+});
+
+test('cell Enter advances down and Shift-Enter stays in the cell as an encoded break', t => {
+  const { host, dom, editor } = setup(t, tableNote);
+  let child = activateCell(host, dom, 0, 1);
+  const enter = (shiftKey = false) => child.contentDOM.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', shiftKey, bubbles: true, cancelable: true }));
+  enter();
+  child = EditorView.findFromDOM(host.querySelector('.cm-live-table .cm-editor')!)!;
+  assert.equal(child.state.doc.toString(), 'beta');
+  child.dispatch({ selection: { anchor: 4 } });
+  enter(true);
+  assert.equal(child.state.doc.toString(), 'beta\n');
+  assert.ok(editor.getValue().includes('beta<br>'));
+  assert.equal(host.querySelectorAll('.cm-live-table tbody tr').length, 1);
+});
+
+test('external snapshots update an active cell without a second save and remove deleted widgets', t => {
+  const { host, dom, editor, changes, view } = setup(t, tableNote);
+  const child = activateCell(host, dom, 1, 0);
+  editor.setValue(tableNote.replace('alpha', 'external'));
+  assert.equal(child.state.doc.toString(), 'external');
+  assert.deepEqual(changes, []);
+  assert.equal(undoDepth(view.state), 0);
+  editor.setValue('Just text');
+  assert.equal(host.querySelector('.cm-live-table'), null);
+  assert.equal(child.dom.isConnected, false);
+});
+
+test('source mode and fenced table examples retain literal table Markdown', t => {
+  const { host } = setup(t, '```md\n| A | B |\n| --- | --- |\n| x | y |\n```');
+  assert.equal(host.querySelector('.cm-live-table'), null);
+});
+
+test('mouse selection preserves rendered geometry until release and refreshes the latest selection', async t => {
+  const { host, dom, view, cursor, line } = setup(t, 'plain\n**first**\n**second**');
+  // Capture-only event avoids asking jsdom to provide browser hit-test geometry.
+  host.querySelectorAll('.cm-line')[1].dispatchEvent(new dom.window.MouseEvent('mousedown', { button: 0, bubbles: false }));
+  cursor(9);
+  assert.equal(line(1).textContent, 'first', 'markers do not move text during pointer selection');
+  dom.window.document.dispatchEvent(new dom.window.MouseEvent('mouseup', { button: 0 }));
+  cursor(view.state.doc.length);
+  await new Promise(resolve => setTimeout(resolve, 70));
+  assert.equal(view.state.selection.main.head, view.state.doc.length, 'deferred refresh never restores an old selection');
+  assert.equal(line(1).textContent, 'first');
+  assert.equal(line(2).textContent, '**second**');
+});
+
+test('typing repeated spaces in a table cell does not duplicate existing input padding', t => {
+  const { host, dom, editor } = setup(t, tableNote);
+  const child = activateCell(host, dom, 1, 0);
+  for (let i = 0; i < 3; i++) child.dispatch(child.state.replaceSelection(' '));
+  child.dispatch(child.state.replaceSelection('Z'));
+  assert.equal(child.state.doc.toString(), '   Zalpha');
+  assert.ok(editor.getValue().includes('|    Zalpha | beta |'));
+  assert.ok(!editor.getValue().includes('|     Zalpha'));
+});
+
+test('selection in a missing cell stays in range and first typing materializes the cell', t => {
+  const { host, dom, editor, view } = setup(t, '| A | B |\n| --- | --- |\n| x |');
+  const child = activateCell(host, dom, 1, 1);
+  child.dispatch({ selection: { anchor: 0 } });
+  assert.ok(view.state.selection.main.head <= view.state.doc.length);
+  child.dispatch(child.state.replaceSelection('new'));
+  assert.match(editor.getValue(), /\| x \| new \|$/);
+});
+
+test('undo from a different cell restores the history target before subsequent typing', async t => {
+  const { host, dom, view, editor } = setup(t, tableNote);
+  const first = activateCell(host, dom, 1, 0);
+  first.dispatch({ selection: { anchor: 5 } });
+  first.dispatch(first.state.replaceSelection('!'));
+  activateCell(host, dom, 1, 1);
+  undo(view); await Promise.resolve();
+  const active = EditorView.findFromDOM(host.querySelector('.cm-live-table .cm-editor')!)!;
+  assert.equal(active.state.doc.toString(), 'alpha');
+  active.dispatch(active.state.replaceSelection('?'));
+  assert.ok(editor.getValue().includes('alpha? | beta'));
+});
+
+test('inserting another table before an active cell cannot redirect typing into the new table', async t => {
+  const value = '| A | B |\n| --- | --- |\n| x | y |';
+  const { host, dom, view, editor } = setup(t, value);
+  const child = activateCell(host, dom, 1, 0);
+  child.dispatch({ selection: { anchor: 1 } });
+  const prefix = '| N | M |\n| --- | --- |\n| new | row |\n\n';
+  editor.setValue(prefix + value); await Promise.resolve();
+  const activeNode = host.querySelector('.cm-live-table .cm-editor');
+  assert.ok(activeNode, 'cell focus restored after table position changes');
+  const active = EditorView.findFromDOM(activeNode)!;
+  assert.equal(active.state.doc.toString(), 'x');
+  active.dispatch(active.state.replaceSelection('!'));
+  assert.equal(editor.getValue(), prefix + value.replace('| x |', '| x! |'));
+  assert.ok(view.state.selection.main.head > prefix.length);
+});
+
+test('valid properties are hidden in Live Edit while body input preserves the exact YAML', t => {
+  const prefix = '---\ntitle: Example\nstatus: ready\n---\n';
+  const { host, editor, view } = setup(t, prefix + '# Heading\nbody');
+  assert.ok(!host.textContent!.includes('title: Example'));
+  assert.ok(!host.textContent!.includes('status: ready'));
+  assert.equal(view.state.selection.main.head, prefix.length);
+  editor.insert('Inserted ');
+  assert.equal(editor.getValue(), prefix + 'Inserted # Heading\nbody');
+  editor.setValue('---\ntitle: Changed\n---\n# Heading\nbody');
+  assert.ok(!host.textContent!.includes('title: Changed'));
+  editor.setValue('---\ntitle: [broken\n---\nbody');
+  assert.ok(host.textContent!.includes('title: [broken'), 'invalid YAML remains repairable');
+});
+
+test('Reading mode uses escaped-pipe boundaries, cell breaks, alignment and ragged padding', t => {
+  const { host } = setup(t, '');
+  const reading = document.createElement('div'); host.append(reading);
+  renderMarkdown(reading, '| Name | Detail |\n| :--- | ---: |\n| left\\|right | first<br>second |\n| short |\n\nAfter', () => {});
+  assert.equal(reading.querySelectorAll('td').length, 4);
+  assert.equal(reading.querySelector('td')?.textContent, 'left|right');
+  assert.equal(reading.querySelectorAll('td')[1].textContent, 'first\nsecond');
+  assert.equal((reading.querySelectorAll('td')[1] as HTMLElement).style.textAlign, 'right');
+  assert.equal(reading.querySelector('p')?.textContent, 'After');
+});

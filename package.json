@@ -1,0 +1,49 @@
+{
+  "name": "zorid",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An original open-source Markdown workspace pursuing Obsidian parity",
+  "type": "module",
+  "license": "MIT",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "webpack serve --mode development --host 127.0.0.1",
+    "build": "tsc --noEmit && webpack --mode production",
+    "test": "node --test tests/*.test.*",
+    "desktop": "electron desktop/main.cjs",
+    "desktop:dev": "ZORID_DEV_URL=http://127.0.0.1:5173 electron desktop/main.cjs",
+    "mobile:sync": "npm run build && cap sync",
+    "mobile:ios": "cap open ios",
+    "mobile:android": "cap open android",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/filesystem": "^8.0.0",
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/commands": "^6.8.0",
+    "@codemirror/lang-markdown": "^6.3.0",
+    "@codemirror/language": "^6.10.0",
+    "@codemirror/search": "^6.5.0",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.36.0",
+    "@lezer/highlight": "^1.2.0",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/cli": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
+    "@types/node": "^24.1.0",
+    "electron": "31.6.0",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.2",
+    "webpack": "^5.99.0",
+    "webpack-cli": "^6.0.0",
+    "webpack-dev-server": "^5.2.0",
+    "ts-loader": "^9.5.0",
+    "style-loader": "^4.0.0",
+    "css-loader": "^7.1.0",
+    "html-webpack-plugin": "^5.6.0"
+  }
+}
