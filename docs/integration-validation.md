@@ -173,3 +173,27 @@ leaving focus on the document, so subsequent F2 does not enter rename. This is
 assigned to the file-tree owner with a regression request; F2 is not counted as
 natively verified. Drag destinations, hover expansion and multi-selection remain
 pending. The agent-launched Electron process exited with code zero after save/quit.
+
+## Reviewed renderer foundations from canonical main
+
+This isolated batch starts at canonical `main` checkpoint `5e4ec97`. It integrates
+reviewed folder-expansion focus, Canvas text-card Markdown rendering, shared
+Reading/Live callout presentation, native local media views and Markdown embed
+ownership. It also includes the standalone same-window tab runtime and Mermaid
+renderer foundations; their presence does not imply workspace docking, cross-window
+transfer, Mermaid engine packaging or production Mermaid host rendering is wired.
+
+Implementation `46edd57` passes **1,280/1,280 tests** with concurrency two (30.4
+seconds), followed by separate TypeScript and production webpack checks (5.2
+seconds, three existing bundle/performance warnings). No tests were skipped.
+Two integration assertions required reviewed updates: editor focus effects can
+legitimately replace the whole EditorState while preserving the actual EditorView,
+document, multicaret selection, history and fold state; and shared callouts now
+place math/code inside their explicit content wrapper. Strengthened semantic and
+exact source/count assertions pass. Neither correction changed runtime behavior.
+
+Native checks remain necessary for folder focus, rich Canvas editing, callout
+appearance/folding, audio/video decoding and controls, media menus and dimensions.
+The media readiness promise indicates settlement, not successful playback. No
+native app or external plugin was launched for this batch; root owns verified
+promotion to main and subsequent runtime checks.
