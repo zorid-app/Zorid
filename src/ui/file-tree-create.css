@@ -1,0 +1,36 @@
+/* Original styles for the file-tree title editor; see file-tree-create-reference.md. */
+.tree-row.is-being-renamed {
+  position: relative;
+  overflow: visible;
+  white-space: normal;
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus, var(--background-modifier-border));
+}
+.tree-row.is-being-renamed:focus-within {
+  color: var(--text-normal);
+  box-shadow: 0 0 0 2px var(--interactive-accent);
+}
+.tree-row.is-being-renamed .tree-label {
+  flex: 1;
+  min-width: 0;
+  cursor: text;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.file-tree-rename-error {
+  position: absolute;
+  z-index: 30;
+  inset: calc(100% + 5px) auto auto 0;
+  max-width: 280px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: var(--background-secondary);
+  color: var(--text-error, #e76c6c);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  white-space: normal;
+  pointer-events: none;
+}
