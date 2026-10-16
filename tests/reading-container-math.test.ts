@@ -16,8 +16,9 @@ test('native mixed callout fixture renders inline math, display math and code in
   const { parent } = render('> [!note] Mixed content\n> Inline $E=mc^2$.\n>\n> $$\n> a^2+b^2=c^2\n> $$\n>\n> ```js\n> const inside = true;\n> ```');
   assert.equal(parent.querySelector('.callout-title')?.textContent, 'Mixed content');
   assert.equal(parent.querySelector('.math-inline')?.textContent, 'E=mc^2');
-  assert.equal(parent.querySelector('.callout > .math-block')?.textContent, '\na^2+b^2=c^2\n');
-  assert.equal(parent.querySelector('.callout > pre code')?.textContent, 'const inside = true;');
+  assert.ok(parent.querySelector('.callout > .callout-content'));
+  assert.equal(parent.querySelector('.callout > .callout-content > .math-block')?.textContent, '\na^2+b^2=c^2\n');
+  assert.equal(parent.querySelector('.callout > .callout-content > pre code')?.textContent, 'const inside = true;');
   assert.equal(parent.querySelectorAll('.math').length, 2);
   destroyMarkdown(parent);
 });
