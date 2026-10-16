@@ -52,3 +52,20 @@ widgets; composed input during external updates; and grapheme/bidi arrow movemen
 Combining-mark backward-deletion policy has not been asserted as parity: editor
 commands may intentionally delete marks separately, and this audit collected no
 reference evidence to establish a different rule.
+
+## Independent fix verification
+
+Reviewed table correction `37949c9` with its prerequisites `e4efccd` and
+`f787d2c`. It reveals source only for tables intersecting multi-range selections,
+retains unaffected table instances, prevents the single-cell controller from
+claiming multiple owner ranges, and safely transfers focus when the selected
+child is removed. The deferred focus transfer checks connection, current
+multi-range state and intervening control focus.
+
+The original 8 audit checks now pass. Running those alongside the author's
+multi-range, ownership and math-lifetime tests gives **19/19 passing** with
+`--test-concurrency=1` in the independent review worktree. Checks include
+2-to-1 selection transitions, non-main ranges across multiple tables, source
+undo, and preventing delayed focus theft. This resolves the reproduced data /
+selection correctness defect in that isolated implementation; native reference
+selection appearance and IME behavior remain unverified.
