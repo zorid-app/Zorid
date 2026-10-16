@@ -5,8 +5,10 @@ import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { getSearchQuery, searchPanelOpen } from '@codemirror/search';
-import { Bug, Check, ChevronDown, CircleCheck, CircleHelp, ClipboardList, CodeXml, Flame, Info, List, Pencil, Quote, TriangleAlert, X, Zap } from 'lucide';
-import type { IconNode } from 'lucide';
+import { icon } from '../ui/icons.ts';
+import { createCalloutPresentation, parseCalloutHeader, calloutOwnsInteraction } from '../ui/callout-presentation.ts';
+export { parseCalloutHeader } from '../ui/callout-presentation.ts';
+export type { CalloutHeader } from '../ui/callout-presentation.ts';
 import { inline, renderMarkdown } from '../ui/markdown.ts';
 import type { EmbedRequest, LinkHandler } from '../ui/markdown.ts';
 import { renderReadingMath } from '../ui/reading-math.ts';
@@ -19,15 +21,6 @@ export interface LiveCalloutOptions {
   open?: LinkHandler;
   renderEmbed?: (request: EmbedRequest) => { dom: HTMLElement; destroy(): void };
 }
-export interface CalloutHeader { type: string; metadata: string; fold: '' | '+' | '-'; title: string }
-export function parseCalloutHeader(text: string): CalloutHeader | null {
-  const match = /^\[!([^\]]+)\]([+-]?)(?:[ \t]+|$)(.*)$/.exec(text);
-  if (!match) return null;
-  const divider = match[1].indexOf('|'), raw = divider < 0 ? match[1] : match[1].slice(0, divider);
-  const type = raw.trim().toLowerCase().replace(/\s+/g, '-');
-  if (!type) return null;
-  return { type, metadata: divider < 0 ? '' : match[1].slice(divider + 1), fold: match[2] as CalloutHeader['fold'], title: match[3] };
-}
 
 interface Span { from: number; to: number; source: string; identity: object; folds: Map<string, boolean> }
 interface CalloutState { spans: readonly Span[]; decorations: DecorationSet; rendered: readonly { from: number; to: number }[]; focused: boolean; held: boolean; searched: ReadonlySet<object> }
@@ -39,11 +32,6 @@ const pendingActivations = new WeakMap<EditorView, Set<() => void>>();
 function cancelPendingActivation(view: EditorView): void { pendingActivations.get(view)?.forEach(cancel => cancel()); }
 function releaseResources(cleanup: (() => void)[]): void { for (const dispose of cleanup.splice(0).reverse()) { try { dispose(); } catch { /* Continue releasing sibling resources. */ } } }
 const ignored = new Set(['FencedCode', 'CodeBlock', 'HTMLBlock', 'CommentBlock', 'LiveInlineComment', 'Table', 'BulletList', 'OrderedList']);
-const interactive = 'a,button,input,textarea,select,audio,video,iframe,object,embed,summary,.cm-editor,.interactive-child,[contenteditable]:not([contenteditable="false"]),[role="button"]';
-function ownsInteraction(target: EventTarget | null, boundary: HTMLElement): boolean {
-  const element = target as Element | null, control = element?.closest?.(interactive);
-  return !!control && boundary.contains(control) || element?.tagName === 'IMG' && typeof (element as HTMLElement).onclick === 'function';
-}
 
 function discover(state: EditorState, previous: readonly Span[] = [], transaction?: Transaction): Span[] {
   const tree = syntaxTree(state), prefix = bodyStart(state), old = new Map<number, Span>();
@@ -66,23 +54,6 @@ function discover(state: EditorState, previous: readonly Span[] = [], transactio
   return spans;
 }
 
-const glyphs: Record<string, IconNode> = {
-  note: Pencil, abstract: ClipboardList, summary: ClipboardList, tldr: ClipboardList,
-  info: Info, todo: CircleCheck, important: Flame, tip: Flame, hint: Flame,
-  success: Check, check: Check, done: Check, question: CircleHelp, help: CircleHelp, faq: CircleHelp,
-  warning: TriangleAlert, caution: TriangleAlert, attention: TriangleAlert, failure: X, fail: X, missing: X,
-  danger: Zap, error: Zap, bug: Bug, example: List, quote: Quote, cite: Quote,
-};
-function icon(document: Document, glyph: IconNode): SVGSVGElement {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  for (const [name, value] of Object.entries({ viewBox: '0 0 24 24', width: '18', height: '18', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false', class: 'svg-icon' })) svg.setAttribute(name, value);
-  for (const [tag, attrs] of glyph) {
-    const node = document.createElementNS(svg.namespaceURI, tag);
-    for (const [key, value] of Object.entries(attrs)) if (value !== undefined) node.setAttribute(key, String(value));
-    svg.append(node);
-  }
-  return svg;
-}
 
 /** Original safe block renderer. Each quote removes one structural quote layer;
  * Lezer still gates fences, lists and nested blocks before any recursion. */
@@ -177,33 +148,13 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
   const quote = (parent: HTMLElement, source: string, lineMap: readonly number[], path: string): void => {
     const newline = source.indexOf('\n'), header = parseCalloutHeader(newline < 0 ? source : source.slice(0, newline));
     if (!header) { const node = document.createElement('blockquote'); blocks(node, source, lineMap, path); parent.append(node); return; }
-    const callout = document.createElement('div'); callout.className = 'callout';
-    callout.dataset.callout = header.type; callout.dataset.calloutMetadata = header.metadata; callout.dataset.calloutFold = header.fold;
-    const title = document.createElement('div'); title.className = 'callout-title';
-    const glyph = document.createElement('span'); glyph.className = 'callout-icon'; glyph.append(icon(document, Object.hasOwn(glyphs, header.type) ? glyphs[header.type] : Pencil));
-    const label = document.createElement('div'); label.className = 'callout-title-inner'; label.dir = 'auto';
-    const fallback = header.type.replace(/-/g, ' '); renderInline(label, header.title || fallback[0].toUpperCase() + fallback.slice(1));
-    title.append(glyph, label); callout.append(title);
-    const body = document.createElement('div'); body.className = 'callout-content';
-    if (newline >= 0) blocks(body, source.slice(newline + 1), lineMap.slice(1), path);
-    callout.append(body); parent.append(callout);
-    if (header.fold) {
-      callout.classList.add('is-collapsible');
-      const fold = document.createElement('button'); fold.type = 'button'; fold.className = 'callout-fold'; fold.append(icon(document, ChevronDown)); title.append(fold);
-      const key = path + ':' + header.type + header.fold;
-      let collapsed = span.folds.get(key) ?? header.fold === '-';
-      const apply = () => { callout.classList.toggle('is-collapsed', collapsed); body.hidden = collapsed; fold.setAttribute('aria-expanded', String(!collapsed)); fold.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} callout`); view.requestMeasure(); };
-      const toggle = () => { collapsed = !collapsed; span.folds.set(key, collapsed); apply(); };
-      listen(fold, 'mousedown', event => event.preventDefault());
-      listen(fold, 'click', event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); toggle(); });
-      let titleTimer: ReturnType<typeof setTimeout> | undefined;
-      cleanup.push(() => clearTimeout(titleTimer));
-      listen(title, 'click', event => {
-        if (event.button !== 0 || event.defaultPrevented || ownsInteraction(event.target, title)) return;
-        clearTimeout(titleTimer); titleTimer = setTimeout(() => { if (!event.defaultPrevented) { event.preventDefault(); toggle(); } }, 0);
-      });
-      apply();
-    }
+    const key = path + ':' + header.type + header.fold;
+    const presentation = createCalloutPresentation(document, header, {
+      collapsed: span.folds.get(key), onToggle: collapsed => span.folds.set(key, collapsed), onResize: () => view.requestMeasure(),
+    });
+    cleanup.push(() => presentation.destroy()); parent.append(presentation.element);
+    renderInline(presentation.title, presentation.titleSource);
+    if (newline >= 0) blocks(presentation.content, source.slice(newline + 1), lineMap.slice(1), path);
   };
   const source = span.source.replace(/\r\n/g, '\n'), lines = source.split('\n');
   quote(wrapper, lines.map(line => line.replace(/^ {0,3}>[ \t]?/, '')).join('\n'), lines.map((_, index) => index), 'root');
@@ -230,10 +181,10 @@ class CalloutWidget extends WidgetType {
       if (!current) return;
       view.focus(); view.dispatch({ effects: refresh.of({ focused: true, held: false }), selection: { anchor: current.to, head: current.from }, userEvent: 'select.pointer', scrollIntoView: true });
     };
-    const edit = view.dom.ownerDocument.createElement('button'); edit.type = 'button'; edit.className = 'edit-block-button cm-callout-edit'; edit.setAttribute('aria-label', 'Edit callout source'); edit.title = 'Edit block'; edit.append(icon(wrapper.ownerDocument, CodeXml)); wrapper.append(edit);
+    const edit = view.dom.ownerDocument.createElement('button'); edit.type = 'button'; edit.className = 'edit-block-button cm-callout-edit'; edit.setAttribute('aria-label', 'Edit callout source'); edit.title = 'Edit block'; edit.append(icon('code', 18, wrapper.ownerDocument)); wrapper.append(edit);
     const editClick = (event: MouseEvent) => { event.preventDefault(); event.stopPropagation(); reveal(); };
     const click = (event: MouseEvent) => {
-      if (event.button !== 0 || event.defaultPrevented || event.detail > 1 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || ownsInteraction(event.target, wrapper) || (event.target as Element).closest('.is-collapsible > .callout-title')) return;
+      if (event.button !== 0 || event.defaultPrevented || event.detail > 1 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || calloutOwnsInteraction(event.target, wrapper) || (event.target as Element).closest('.is-collapsible > .callout-title')) return;
       const selection = wrapper.ownerDocument.getSelection();
       if (selection && !selection.isCollapsed && (wrapper.contains(selection.anchorNode) || wrapper.contains(selection.focusNode))) return;
       let textHit = false;

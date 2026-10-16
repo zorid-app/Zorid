@@ -6,6 +6,7 @@ import { destroyMarkdown } from './markdown-lifecycle.ts';
 import { readProperties } from '../core/properties.ts';
 import { decodeTableCellText, parseTable } from '../editor/table-model.ts';
 import { createMarkdownListRenderer } from './markdown-lists.ts';
+import { createCalloutPresentation, parseCalloutHeader } from './callout-presentation.ts';
 
 export type LinkHandler = (target: string, kind?: 'wiki' | 'markdown') => void;
 export interface EmbedRequest { target: string; kind: 'wiki' | 'markdown'; label?: string }
@@ -122,12 +123,18 @@ function renderMarkdownBlocks(container: HTMLElement, markdown: string, open: Li
       if (consumed !== null) { position += consumed - 1; continue; }
     }
     if (/^>/.test(line)) {
-      const quote = el('blockquote');
-      const callout = line.match(/^>\s*\[!([^\]]+)\]\s*(.*)/);
-      if (callout) { quote.className = 'callout'; quote.append(el('div', 'callout-title', callout[2] || callout[1])); }
-      else inline(quote, line.replace(/^>\s?/, ''), open, options);
-      while (position + 1 < lines.length && /^>/.test(lines[position + 1])) { const p = el('p'); inline(p, lines[++position].replace(/^>\s?/, ''), open, options); quote.append(p); }
-      container.append(quote); continue;
+      const header = parseCalloutHeader(line.replace(/^>[ \t]?/, ''));
+      const presentation = header ? createCalloutPresentation(document, header) : undefined;
+      const quote = presentation?.element ?? el('blockquote'), body = presentation?.content ?? quote;
+      container.append(quote);
+      try {
+        if (presentation) inline(presentation.title, presentation.titleSource, open, options);
+        else inline(quote, line.replace(/^>\s?/, ''), open, options);
+        while (position + 1 < lines.length && /^>/.test(lines[position + 1])) {
+          const paragraph = el('p'); body.append(paragraph); inline(paragraph, lines[++position].replace(/^>\s?/, ''), open, options);
+        }
+      } catch (error) { destroyMarkdown(quote); throw error; }
+      continue;
     }
     if (line.includes('|') && position + 1 < lines.length && /^\s*\|?\s*:?-+/.test(lines[position + 1])) {
       let end = position + 2;

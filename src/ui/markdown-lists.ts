@@ -1,5 +1,7 @@
 import { markdownLanguage } from '@codemirror/lang-markdown';
 import { appendCodeBlock } from './code-block.ts';
+import { createCalloutPresentation, parseCalloutHeader } from './callout-presentation.ts';
+import { destroyMarkdown } from './markdown-lifecycle.ts';
 
 type SyntaxNode = ReturnType<typeof markdownLanguage.parser.parse>['topNode'];
 
@@ -73,39 +75,30 @@ export function createMarkdownListRenderer(source: string, options: { quotes?: b
       if (listTypes.has(node.name)) { renderList(container, node); return; }
       if (node.name === 'QuoteMark' || node.name === 'ListMark' || node.name === 'LinkReference') return;
       if (node.name === 'Blockquote') {
-        const quote = document.createElement('blockquote');
-        if (options.renderQuoteBody) {
-          // Remove exactly one parser-owned quote layer, keeping each physical
-          // line and its source mapping. Nested quotes are parsed recursively.
-          const sourceLines = source.slice(node.from, node.to).split('\n').map(line => line.replace(/^[ \t]*>[ \t]?/, ''));
-          const callout = /^[ \t]*\[!([^\]]+)\][ \t]*(.*)$/.exec(sourceLines[0]);
-          let firstLine = lineAt(node.from);
-          if (callout) {
-            quote.className = 'callout';
-            const title = document.createElement('div'); title.className = 'callout-title';
-            title.textContent = callout[2] || callout[1]; quote.append(title);
-            sourceLines.shift(); firstLine++;
+        // Remove exactly one parser-owned quote layer. The physical lines and
+        // original task offsets survive presentation/title construction.
+        const sourceLines = source.slice(node.from, node.to).split('\n').map(line => line.replace(/^[ \t]*>[ \t]?/, ''));
+        const header = parseCalloutHeader(sourceLines[0]), presentation = header ? createCalloutPresentation(document, header) : undefined;
+        const quote = presentation?.element ?? document.createElement('blockquote'), body = presentation?.content ?? quote;
+        container.append(quote);
+        try {
+          if (presentation) inline(presentation.title, presentation.titleSource);
+          if (options.renderQuoteBody) {
+            let firstLine = lineAt(node.from);
+            if (header) { sourceLines.shift(); firstLine++; }
+            options.renderQuoteBody(body, sourceLines.join('\n'), firstLine);
+            return;
           }
-          // The callback appends to this owner without replacing its title.
-          // Keep async renderer parents stable instead of moving their nodes.
-          options.renderQuoteBody(quote, sourceLines.join('\n'), firstLine);
-          container.append(quote); return;
-        }
-        const callout = /^>[ \t]*\[!([^\]]+)\][ \t]*([^\n]*)/.exec(source.slice(node.from, node.to));
-        let firstParagraph = true;
-        if (callout) {
-          quote.className = 'callout';
-          const title = document.createElement('div'); title.className = 'callout-title';
-          title.textContent = callout[2] || callout[1]; quote.append(title);
-        }
-        for (const child of children(node)) {
-          if (callout && firstParagraph && child.name === 'Paragraph') {
-            firstParagraph = false;
-            const value = text(child.from, child.to), newline = value.indexOf('\n');
-            if (newline >= 0) { const paragraph = document.createElement('p'); inline(paragraph, value.slice(newline + 1)); quote.append(paragraph); }
-          } else renderBlock(quote, child);
-        }
-        container.append(quote); return;
+          let firstParagraph = true;
+          for (const child of children(node)) {
+            if (header && firstParagraph && child.name === 'Paragraph') {
+              firstParagraph = false;
+              const value = text(child.from, child.to), newline = value.indexOf('\n');
+              if (newline >= 0) { const paragraph = document.createElement('p'); body.append(paragraph); inline(paragraph, value.slice(newline + 1)); }
+            } else renderBlock(body, child);
+          }
+        } catch (error) { destroyMarkdown(quote); throw error; }
+        return;
       }
       if (node.name === 'Paragraph' || node.name === 'Task') {
         const paragraph = document.createElement('p'); inline(paragraph, text(node.from, node.to)); container.append(paragraph); return;

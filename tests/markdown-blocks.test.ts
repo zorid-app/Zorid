@@ -93,7 +93,7 @@ test('paragraph ownership preserves multiline code spans and callout default tit
   const { parent } = host();
   renderMarkdown(parent, '`\n$x$\n`\n\n> [!note]\n> ```\n> $literal$\n> ```', () => {});
   assert.equal(parent.querySelector('p > code')?.textContent, '$x$');
-  assert.equal(parent.querySelector('.callout-title')?.textContent, 'note');
+  assert.equal(parent.querySelector('.callout-title')?.textContent, 'Note');
   assert.equal(parent.querySelector('.callout pre code')?.textContent, '$literal$');
   assert.equal(parent.querySelectorAll('.math').length, 0);
   destroyMarkdown(parent);
