@@ -1,13 +1,19 @@
 import { ChangeSet, EditorSelection } from '@codemirror/state';
-import type { ChangeSpec, EditorState, SelectionRange } from '@codemirror/state';
-import { syntaxTree } from '@codemirror/language';
+import type { Annotation, ChangeSpec, EditorState, SelectionRange } from '@codemirror/state';
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import type { EditorView } from '@codemirror/view';
 
 export type FormatMenuItem =
   | { type: 'separator' }
   | { id: string; label: string; enabled: boolean; checked?: boolean; run: () => boolean }
   | { id: string; label: string; enabled: boolean; submenu: FormatMenuItem[] };
-export interface FormatMenuOptions { inTableCell?: boolean }
+export interface FormatMenuOptions {
+  inTableCell?: boolean;
+  /** Resolve selected cell source spans afresh when opening or running an action. */
+  ranges?: () => readonly { from: number; to: number }[];
+  /** Ownership annotations for the caller's rectangular-selection lifecycle. */
+  annotations?: readonly Annotation<unknown>[];
+}
 type Kind = 'bold' | 'italic' | 'strikethrough' | 'code' | 'math' | 'comment' | 'highlight';
 interface Range { from: number; to: number }
 interface Span extends Range { kind: Kind; contentFrom: number; contentTo: number; color?: string; colorMarker?: string }
@@ -57,12 +63,12 @@ class IntervalIndex {
 
 /** Lezer supplies supported Markdown structure; the bounded extra scanner adds
  * the reference's highlight/color, inline math and percent-comment syntax. */
-function inspect(state: EditorState) {
+function inspect(state: EditorState, cellRanges?: readonly Range[]) {
   const spans: Span[] = [], excluded: Range[] = [], codeRanges: Range[] = [], markers: Range[] = [];
   const source = state.doc.toString();
   const kinds: Record<string, Kind> = { StrongEmphasis: 'bold', Emphasis: 'italic', Strikethrough: 'strikethrough', InlineCode: 'code' };
   syntaxTree(state).iterate({ enter(node) {
-    if (blocked.has(node.name)) { excluded.push({ from: node.from, to: node.to }); return false; }
+    if (blocked.has(node.name) && !(cellRanges && node.name === 'Table')) { excluded.push({ from: node.from, to: node.to }); return false; }
     const kind = kinds[node.name];
     if (kind) {
       const first = node.node.firstChild, last = node.node.lastChild;
@@ -71,29 +77,40 @@ function inspect(state: EditorState) {
     }
     if (markerTypes.has(node.name)) markers.push({ from: node.from, to: node.to });
   } });
+  // The caller supplies independent inline documents. Bound lexical matching
+  // directly to those spans, including when the parser has not reached a late
+  // table yet; outside-table text must never pair with a selected cell.
+  const regions: readonly Range[] = cellRanges ?? [{ from: 0, to: source.length }];
   const lexicalExcluded = [...excluded, ...codeRanges];
   for (const kind of ['comment', 'highlight', 'math'] as const) {
     const delimiter = delimiters[kind], lexicalIndex = new IntervalIndex(lexicalExcluded);
-    for (let from = 0; from < source.length;) {
-      from = source.indexOf(delimiter, from);
-      if (from < 0) break;
-      const start = from; from += delimiter.length;
-      if (escaped(source, start) || lexicalIndex.containsPoint(start)
-        || (kind === 'math' && (source[start - 1] === '$' || source[from] === '$'))
-        || (kind !== 'comment' && /\s/.test(source[from] ?? ''))) continue;
-      let end = source.indexOf(delimiter, from);
-      while (end >= 0 && (escaped(source, end) || kind !== 'comment' && lexicalIndex.containsPoint(end) || (kind === 'math' && source[end + 1] === '$'))) end = source.indexOf(delimiter, end + delimiter.length);
-      if (end < 0) continue;
-      if (kind !== 'comment' && (/\n/.test(source.slice(from, end)) || /\s/.test(source[end - 1] ?? ''))) continue;
-      if (kind === 'math' && /\d/.test(source[end + 1] ?? '')) continue;
-      const codePoint = source.codePointAt(from);
-      const marker = kind === 'highlight' && from < end && codePoint !== undefined ? String.fromCodePoint(codePoint) : '';
-      const color = colorAliases[marker] ?? '';
-      const contentFrom = from + (color ? marker.length : 0), to = end + delimiter.length;
-      spans.push({ kind, from: start, to, contentFrom, contentTo: end, color, colorMarker: color ? marker : '' });
-      markers.push({ from: start, to: contentFrom }, { from: end, to });
-      if (kind === 'comment') lexicalExcluded.push({ from: start, to });
-      from = to;
+    for (const region of regions) {
+      const fragment = source.slice(region.from, region.to);
+      const nextDelimiter = (position: number): number => {
+        const local = fragment.indexOf(delimiter, position - region.from);
+        return local < 0 ? -1 : region.from + local;
+      };
+      for (let from = region.from; from < region.to;) {
+        from = nextDelimiter(from);
+        if (from < 0) break;
+        const start = from; from += delimiter.length;
+        if (escaped(source, start) || lexicalIndex.containsPoint(start)
+          || (kind === 'math' && (source[start - 1] === '$' || source[from] === '$'))
+          || (kind !== 'comment' && /\s/.test(source[from] ?? ''))) continue;
+        let end = nextDelimiter(from);
+        while (end >= 0 && (escaped(source, end) || kind !== 'comment' && lexicalIndex.containsPoint(end) || (kind === 'math' && source[end + 1] === '$'))) end = nextDelimiter(end + delimiter.length);
+        if (end < 0) continue;
+        if (kind !== 'comment' && (/\n/.test(source.slice(from, end)) || /\s/.test(source[end - 1] ?? ''))) continue;
+        if (kind === 'math' && /\d/.test(source[end + 1] ?? '')) continue;
+        const codePoint = source.codePointAt(from);
+        const marker = kind === 'highlight' && from < end && codePoint !== undefined ? String.fromCodePoint(codePoint) : '';
+        const color = colorAliases[marker] ?? '';
+        const contentFrom = from + (color ? marker.length : 0), to = end + delimiter.length;
+        spans.push({ kind, from: start, to, contentFrom, contentTo: end, color, colorMarker: color ? marker : '' });
+        markers.push({ from: start, to: contentFrom }, { from: end, to });
+        if (kind === 'comment') lexicalExcluded.push({ from: start, to });
+        from = to;
+      }
     }
   }
   const opaque = new IntervalIndex(spans.filter(span => span.kind === 'comment' || span.kind === 'math')
@@ -163,13 +180,29 @@ function selectionAfter(range: SelectionRange, changes: ChangeSet, from = range.
 }
 function available(view: EditorView): boolean { return view.dom.isConnected && !view.state.readOnly; }
 
-function toggleFormat(view: EditorView, kind: Exclude<Kind, 'highlight'>): boolean {
+function selectionState(view: EditorView, options: FormatMenuOptions): EditorState | null {
+  const state = view.state;
+  if (!options.ranges) return state;
+  const ranges = options.ranges();
+  if (!ranges.length || ranges.some(range => !Number.isInteger(range.from) || !Number.isInteger(range.to)
+    || range.from < 0 || range.to < range.from || range.to > state.doc.length)) return null;
+  // Compute source operations from cell ranges without a preliminary dispatch
+  // that could clear the caller's rectangle or activate a nested cell editor.
+  const selected = state.update({ selection: EditorSelection.create(ranges.map(range => EditorSelection.range(range.from, range.to))), filter: false }).state;
+  // Standard Markdown wrappers also need a complete tree at the target. If a
+  // bounded synchronous parse cannot reach it, decline instead of guessing.
+  return ensureSyntaxTree(selected, ranges.reduce((end, range) => Math.max(end, range.to), 0), 50) ? selected : null;
+}
+
+function toggleFormat(view: EditorView, kind: Exclude<Kind, 'highlight'>, options: FormatMenuOptions): boolean {
   if (!available(view)) return false;
-  const state = view.state, data = inspect(state), marker = delimiters[kind];
+  const state = selectionState(view, options); if (!state) return false;
+  const data = inspect(state, options.ranges ? state.selection.ranges : undefined), marker = delimiters[kind];
   const commonRemove = formatted(state, state.selection.ranges[0], kind, data);
   const removals: Span[] = [], targets: (Range & { prefix: string; suffix: string })[] = [];
   const selected: { from: number; to: number; skip?: number; emptyInsert?: number }[] = [];
   for (const range of state.selection.ranges) {
+    if (options.ranges && range.empty) { selected.push({ from: range.from, to: range.to }); continue; }
     const removing = kind === 'comment' ? formatted(state, range, kind, data) : commonRemove;
     let bounds = kind === 'comment' ? { from: range.from, to: range.to } : trimmed(state, range);
     const enclosing = data.spans.find(span => span.kind === kind && span.from <= bounds.from && bounds.from <= span.to);
@@ -202,15 +235,17 @@ function toggleFormat(view: EditorView, kind: Exclude<Kind, 'highlight'>): boole
     if (plan.emptyInsert !== undefined) return EditorSelection.cursor(changes.mapPos(plan.from, -1) + plan.emptyInsert);
     return selectionAfter(range, changes, plan.from, plan.to);
   });
-  view.dispatch({ changes, selection: EditorSelection.create(ranges, state.selection.mainIndex), ...(kind === 'comment' ? {} : { userEvent: 'input.type' }) });
+  view.dispatch({ changes, selection: EditorSelection.create(ranges, state.selection.mainIndex), ...(kind === 'comment' ? {} : { userEvent: 'input.type' }), annotations: options.annotations });
   return true;
 }
 
-function toggleHighlight(view: EditorView, color: string): boolean {
+function toggleHighlight(view: EditorView, color: string, options: FormatMenuOptions): boolean {
   if (!available(view)) return false;
-  const state = view.state, data = inspect(state), highlights = data.spans.filter(span => span.kind === 'highlight');
+  const state = selectionState(view, options); if (!state) return false;
+  const data = inspect(state, options.ranges ? state.selection.ranges : undefined), highlights = data.spans.filter(span => span.kind === 'highlight');
   const targets: Range[] = [];
   for (const range of state.selection.ranges) {
+    if (options.ranges && range.empty) continue;
     if (range.empty) {
       const current = highlights.find(span => span.from <= range.from && range.from <= span.to);
       targets.push(current ?? state.wordAt(range.from) ?? range);
@@ -263,47 +298,50 @@ function toggleHighlight(view: EditorView, color: string): boolean {
     changes = removed.compose(ChangeSet.of(additions, removed.newLength));
   }
   const singleEmpty = !affected.length && targets.length === 1 && targets[0].from === targets[0].to;
-  view.dispatch({ changes, ...(singleEmpty ? { selection: { anchor: targets[0].from + 2 + (colors[color]?.length ?? 0) } } : {}), userEvent: 'input.type' });
+  view.dispatch({ changes, ...(singleEmpty ? { selection: { anchor: targets[0].from + 2 + (colors[color]?.length ?? 0) } } : {}), userEvent: 'input.type', annotations: options.annotations });
   view.focus(); return true;
 }
-function insertLink(view: EditorView, external: boolean): boolean {
-  if (!available(view) || /\n/.test(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to).trim())) return false;
-  const state = view.state;
+function insertLink(view: EditorView, external: boolean, options: FormatMenuOptions): boolean {
+  if (!available(view)) return false;
+  const state = selectionState(view, options);
+  if (!state || /\n/.test(state.sliceDoc(state.selection.main.from, state.selection.main.to).trim())) return false;
   view.dispatch({ ...state.changeByRange(range => {
     const selected = state.sliceDoc(range.from, range.to);
     const insert = external ? `[${selected}]()` : `[[${selected}]]`;
     const offset = external ? range.empty ? 1 : selected.length + 3 : selected.length + 2;
     return { changes: { from: range.from, to: range.to, insert }, range: EditorSelection.cursor(range.from + offset) };
-  }), userEvent: 'input.autocomplete' });
+  }), userEvent: 'input.autocomplete', annotations: options.annotations });
   return true;
 }
-function clearFormatting(view: EditorView): boolean {
+function clearFormatting(view: EditorView, options: FormatMenuOptions): boolean {
   if (!available(view)) return false;
-  const state = view.state, data = inspect(state);
+  const state = selectionState(view, options); if (!state) return false;
+  const data = inspect(state, options.ranges ? state.selection.ranges : undefined);
   const markers = data.markers.filter(marker => state.selection.ranges.some(range => !range.empty && marker.from <= range.to && marker.to >= range.from));
-  view.dispatch({ changes: uniqueRanges(markers) });
+  view.dispatch({ changes: uniqueRanges(markers), annotations: options.annotations });
   return true;
 }
 
 /** Local action closures dispatch against the current owning editor. The caller
  * serializes only descriptors, and revalidates menu ownership after dismissal. */
 export function formatMenuForEditor(view: EditorView, options: FormatMenuOptions = {}): FormatMenuItem[] {
-  const state = view.state, data = inspect(state), selection = state.selection.main, enabled = !state.readOnly;
+  const selectedState = selectionState(view, options), state = selectedState ?? view.state;
+  const data = inspect(state, options.ranges ? state.selection.ranges : undefined), selection = state.selection.main, enabled = Boolean(selectedState) && !state.readOnly;
   const action = (id: string, label: string, run: () => boolean, checked?: boolean): FormatMenuItem => ({ id, label, enabled, ...(checked === undefined ? {} : { checked }), run });
-  const format = (kind: Exclude<Kind, 'highlight'>, label: string) => action(`format-${kind}`, label, () => toggleFormat(view, kind), formatted(state, selection, kind, data));
+  const format = (kind: Exclude<Kind, 'highlight'>, label: string) => action(`format-${kind}`, label, () => toggleFormat(view, kind, options), formatted(state, selection, kind, data));
   const current = data.spans.find(span => span.kind === 'highlight' && span.from <= selection.head && span.to >= selection.head);
   const highlighted = formatted(state, selection, 'highlight', data);
   const linksEnabled = enabled && !/\n/.test(state.sliceDoc(selection.from, selection.to).trim());
   const items: FormatMenuItem[] = [
-    { id: 'insert-link', label: 'Add link', enabled: linksEnabled, run: () => insertLink(view, false) },
-    { id: 'insert-external-link', label: 'Add external link', enabled: linksEnabled, run: () => insertLink(view, true) },
+    { id: 'insert-link', label: 'Add link', enabled: linksEnabled, run: () => insertLink(view, false, options) },
+    { id: 'insert-external-link', label: 'Add external link', enabled: linksEnabled, run: () => insertLink(view, true, options) },
     { type: 'separator' },
     { id: 'format', label: 'Format', enabled, submenu: [
       format('bold', 'Bold'), format('italic', 'Italic'), format('strikethrough', 'Strikethrough'),
       { id: 'format-highlight', label: 'Highlight', enabled, submenu: ['', ...Object.keys(colors)].map(color =>
-        action(`format-highlight-${color || 'default'}`, color ? color[0].toUpperCase() + color.slice(1) : 'Default', () => toggleHighlight(view, color), highlighted && (current?.color ?? '') === color)) },
+        action(`format-highlight-${color || 'default'}`, color ? color[0].toUpperCase() + color.slice(1) : 'Default', () => toggleHighlight(view, color, options), highlighted && (current?.color ?? '') === color)) },
       { type: 'separator' }, format('code', 'Code'), format('math', 'Math'), format('comment', 'Comment'),
-      { type: 'separator' }, action('format-clear', 'Clear formatting', () => clearFormatting(view)),
+      { type: 'separator' }, action('format-clear', 'Clear formatting', () => clearFormatting(view, options)),
     ] },
   ];
   if (options.inTableCell) {

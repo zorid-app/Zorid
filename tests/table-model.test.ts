@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  appendTableRow, decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
+  alignTableCells, clearTableCells, copyTableCells, deleteTableCells, parseTableClipboard, pasteTableCells, serializeTableClipboard, tableCellRange, appendTableRow, decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
   encodeTableCellText, insertTableColumn, insertTableRow, moveTableColumn, moveTableRow, parseTable, replaceTableCell,
   setTableColumnAlignment, sortTableRows,
   type MarkdownTable, type TableEdit,
@@ -387,4 +387,60 @@ test('cell replacement preserves literal terminal backslashes before compact del
       assert.equal(repeat, next, 'replacement reuses existing source padding');
     }
   }
+});
+
+
+const matrixSource = '| A | B | C |\n| :--- | ---: | --- |\n| a | b | c |\n| d | e | f |\n| g | h | i |';
+const matrix = (value: string) => table(value).rows.map(row => row.cells.map(cell => cell.text));
+
+test('rectangular bounds normalize reversed endpoints and reject invalid ranges', () => {
+  const model = table(matrixSource);
+  assert.deepEqual(tableCellRange(model, { row: 3, column: 2 }, { row: 1, column: 0 }), { top: 1, bottom: 3, left: 0, right: 2 });
+  assert.throws(() => tableCellRange(model, { row: 4, column: 0 }, { row: 0, column: 0 }), RangeError);
+  assert.throws(() => clearTableCells(model, { top: 3, bottom: 1, left: 0, right: 1 }), RangeError);
+});
+
+test('rectangle delete removes whole row or column bands and clears partial contents', () => {
+  const model = table(matrixSource);
+  assert.deepEqual(matrix(apply(matrixSource, deleteTableCells(model, { top: 1, bottom: 2, left: 0, right: 2 }))), [['A','B','C'],['g','h','i']]);
+  const columns = table(apply(matrixSource, deleteTableCells(model, { top: 0, bottom: 3, left: 0, right: 1 })));
+  assert.deepEqual(columns.rows.map(row => row.cells.map(cell => cell.text)), [['C'],['c'],['f'],['i']]);
+  assert.deepEqual(columns.alignments, [null]);
+  assert.deepEqual(matrix(apply(matrixSource, deleteTableCells(model, { top: 1, bottom: 2, left: 1, right: 2 }))), [['A','B','C'],['a','',''],['d','',''],['g','h','i']]);
+  assert.equal(deleteTableCells(model, { top: 0, bottom: 3, left: 0, right: 2 }).insert, '');
+  assert.equal(table(apply(matrixSource, clearTableCells(model, { top: 0, bottom: 3, left: 0, right: 2 }))).rows.length, 4);
+});
+
+test('range alignment changes selected columns and preserves literal source cells', () => {
+  const source = matrixSource.replace(' f ', ' tail\\ '), model = table(source);
+  const next = table(apply(source, alignTableCells(model, { top: 1, bottom: 2, left: 1, right: 2 }, 'center')));
+  assert.deepEqual(next.alignments, ['left','center','center']);
+  assert.deepEqual(next.rows.map(row => row.cells.map(cell => cell.text)), matrix(source));
+});
+
+test('rectangle clipboard exports its first selected row as header with encoded cells', () => {
+  const source = matrixSource.replace(' b ', ' x\\|y<br>z '), model = table(source);
+  const data = copyTableCells(model, { top: 1, bottom: 2, left: 1, right: 2 });
+  assert.deepEqual(data, { rows: [['x\\|y<br>z','c'],['e','f']], alignment: ['right',null] });
+  assert.deepEqual(matrix(serializeTableClipboard(data)), data.rows);
+  assert.deepEqual(parseTableClipboard(JSON.stringify(data)), data);
+  for (const invalid of ['', '{}', '{', '{"rows":[[]],"alignment":[]}', '{"rows":[[1]],"alignment":[null]}', '{"rows":[["a"],["b","c"]],"alignment":[null]}', '{"rows":[["a"]],"alignment":["bad"]}']) assert.equal(parseTableClipboard(invalid), null);
+});
+
+test('structured paste overwrites once and expands with header/body alignment rules', () => {
+  const model = table(matrixSource), data = { rows: [['X','Y','Z'],['P','Q','R']], alignment: ['center','left','right'] as const };
+  const body = table(apply(matrixSource, pasteTableCells(model, { row: 3, column: 2 }, data)));
+  assert.deepEqual(body.rows.map(row => row.cells.map(cell => cell.text)), [['A','B','C','',''],['a','b','c','',''],['d','e','f','',''],['g','h','X','Y','Z'],['','','P','Q','R']]);
+  assert.deepEqual(body.alignments, ['left','right',null,'left','right']);
+  const header = table(apply(matrixSource, pasteTableCells(model, { row: 0, column: 0 }, data)));
+  assert.deepEqual(header.alignments, ['center','left','right']);
+  assert.deepEqual(header.rows[2].cells.map(cell => cell.text), ['d','e','f']);
+});
+
+
+test('paste bounds the expanded destination before allocating the matrix', () => {
+  const width = 1000, source = '| ' + Array(width).fill('x').join(' | ') + ' |\n| ' + Array(width).fill('---').join(' | ') + ' |';
+  const model = table(source), rows = Array.from({ length: 100_000 }, () => ['x']);
+  assert.throws(() => pasteTableCells(model, { row: 0, column: 0 }, { rows, alignment: [null] }), /exceeds 100,000 cells/);
+  assert.equal(model.source, source);
 });

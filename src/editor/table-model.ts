@@ -364,3 +364,101 @@ export function sortTableRows(table: MarkdownTable, column: number, direction: '
   });
   return arrangeTable(table, [0, ...rows], indices(table.columnCount));
 }
+
+export interface TableCellPosition { readonly row: number; readonly column: number }
+export interface TableCellRange { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number }
+export interface TableClipboardData { readonly rows: readonly (readonly string[])[]; readonly alignment: readonly TableAlignment[] }
+
+export function tableCellRange(table: MarkdownTable, anchor: TableCellPosition, head: TableCellPosition): TableCellRange {
+  for (const point of [anchor, head]) { checkedIndex(point.row, table.rows.length, 'row'); checkedIndex(point.column, table.columnCount, 'column'); }
+  return { top: Math.min(anchor.row, head.row), bottom: Math.max(anchor.row, head.row), left: Math.min(anchor.column, head.column), right: Math.max(anchor.column, head.column) };
+}
+function checkRange(table: MarkdownTable, range: TableCellRange) {
+  const bounds = tableCellRange(table, { row: range.top, column: range.left }, { row: range.bottom, column: range.right });
+  if (bounds.top !== range.top || bounds.left !== range.left) throw new RangeError('Reversed table range');
+}
+function rawTableRows(table: MarkdownTable): string[][] {
+  return table.rows.map(row => row.cells.map(cell => cell.virtual ? '  ' : row.source.slice(cell.rawFrom - row.from, cell.rawTo - row.from)));
+}
+function tableFromRawRows(table: MarkdownTable, rows: readonly (readonly string[])[], alignments: readonly TableAlignment[]): TableEdit {
+  if (!rows.length || !alignments.length) return { from: table.from, to: table.to, insert: '' };
+  const separator = serializeRawCells(alignments.map(value => ` ${value === 'left' ? ':---' : value === 'right' ? '---:' : value === 'center' ? ':---:' : '---'} `), true, true);
+  const content = rows.map(row => serializeRawCells(row, true, true));
+  content.splice(1, 0, separator);
+  return { from: table.from, to: table.to, insert: content.join(table.lineEnding) };
+}
+
+/** Clear encoded cell contents, retaining all rows and columns. */
+export function clearTableCells(table: MarkdownTable, range: TableCellRange): TableEdit {
+  checkRange(table, range);
+  const rows = rawTableRows(table);
+  for (let row = range.top; row <= range.bottom; row++) for (let column = range.left; column <= range.right; column++) {
+    const cell = table.rows[row].cells[column], raw = rows[row][column];
+    rows[row][column] = cell.virtual ? '  ' : raw.slice(0, cell.from - cell.rawFrom) + raw.slice(cell.to - cell.rawFrom);
+  }
+  return tableFromRawRows(table, rows, table.alignments);
+}
+
+/** Full-width bands remove rows, full-height bands remove columns; other
+ * rectangles clear contents. Focus and edge newlines belong to the controller. */
+export function deleteTableCells(table: MarkdownTable, range: TableCellRange): TableEdit {
+  checkRange(table, range);
+  if (range.left === 0 && range.right === table.columnCount - 1)
+    return arrangeTable(table, indices(table.rows.length).filter(row => row < range.top || row > range.bottom), indices(table.columnCount));
+  if (range.top === 0 && range.bottom === table.rows.length - 1)
+    return arrangeTable(table, indices(table.rows.length), indices(table.columnCount).filter(column => column < range.left || column > range.right));
+  return clearTableCells(table, range);
+}
+
+export function alignTableCells(table: MarkdownTable, range: TableCellRange, alignment: TableAlignment): TableEdit {
+  checkRange(table, range);
+  if (alignment !== null && !['left', 'center', 'right'].includes(alignment)) throw new RangeError('Invalid table alignment');
+  const alignments = [...table.alignments];
+  for (let column = range.left; column <= range.right; column++) alignments[column] = alignment;
+  return tableFromRawRows(table, rawTableRows(table), alignments);
+}
+
+export function copyTableCells(table: MarkdownTable, range: TableCellRange): TableClipboardData {
+  checkRange(table, range);
+  return { rows: table.rows.slice(range.top, range.bottom + 1).map(row => row.cells.slice(range.left, range.right + 1).map(cell => cell.text)),
+    alignment: table.alignments.slice(range.left, range.right + 1) };
+}
+
+export function serializeTableClipboard(data: TableClipboardData): string {
+  const rowText = (row: readonly string[]) => serializeRawCells(row.map(cell => ` ${encodeTableCellText(cell)} `), true, true);
+  const rows = data.rows.map(rowText);
+  rows.splice(1, 0, rowText(data.alignment.map(value => value === 'left' ? ':---' : value === 'right' ? '---:' : value === 'center' ? ':---:' : '---')));
+  return rows.join('\n');
+}
+
+/** Validate custom clipboard data before allocating a table or dispatching an edit. */
+export function parseTableClipboard(text: string): TableClipboardData | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!value || typeof value !== 'object') return null;
+    const { rows, alignment } = value as { rows?: unknown; alignment?: unknown };
+    if (!Array.isArray(rows) || !rows.length || !Array.isArray(rows[0]) || !rows[0].length || !Array.isArray(alignment)) return null;
+    const width = rows[0].length;
+    if (rows.length * width > 100_000 || alignment.length !== width || !alignment.every(item => item === null || ['left', 'center', 'right'].includes(item))) return null;
+    if (!rows.every(row => Array.isArray(row) && row.length === width && row.every(cell => typeof cell === 'string'))) return null;
+    return { rows, alignment };
+  } catch { return null; }
+}
+
+/** Paste a matrix once at its origin, expanding dimensions without tiling. */
+export function pasteTableCells(table: MarkdownTable, start: TableCellPosition, data: TableClipboardData): TableEdit {
+  checkedIndex(start.row, table.rows.length, 'row'); checkedIndex(start.column, table.columnCount, 'column');
+  if (!data.rows.length || !data.alignment.length || data.rows.length * data.alignment.length > 100_000
+    || data.alignment.some(value => value !== null && !['left', 'center', 'right'].includes(value))
+    || data.rows.some(row => row.length !== data.alignment.length || row.some(value => typeof value !== 'string'))) throw new RangeError('Invalid clipboard matrix');
+  const width = Math.max(table.columnCount, start.column + data.alignment.length), height = Math.max(table.rows.length, start.row + data.rows.length);
+  if (width * height > 100_000) throw new RangeError('Pasted table exceeds 100,000 cells');
+  const rows = rawTableRows(table);
+  while (rows.length < height) rows.push([]);
+  for (const row of rows) while (row.length < width) row.push('  ');
+  const alignments = [...table.alignments];
+  while (alignments.length < width) alignments.push(data.alignment[alignments.length - start.column] ?? null);
+  if (start.row === 0) data.alignment.forEach((alignment, column) => { alignments[start.column + column] = alignment; });
+  data.rows.forEach((row, r) => row.forEach((value, c) => { rows[start.row + r][start.column + c] = ` ${encodeTableCellText(value)} `; }));
+  return tableFromRawRows(table, rows, alignments);
+}

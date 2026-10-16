@@ -185,3 +185,18 @@ A separate Canvas fixture rendered two text cards and their connecting edge.
 The user subsequently moved those cards, so their changed positions were retained
 and no automated rollback was applied. Full Canvas editing, history and visual
 parity remain unverified natively.
+
+### Native split and PDF-adjacent caret observations
+
+On the running structural-menu build, the native More options menu exposed Row
+and Column table submenus including move, duplicate and delete, plus sorting.
+Choosing Split right from the pane menu produced two actual editor panes and a
+50-percent divider; both rendered the same note. The user continued interacting
+with the fixture and switching tabs, so no rollback or further scripted pane
+actions were applied. Nested split resize/restore and reference comparison remain
+unverified natively.
+
+In the earlier Live Edit PDF fixture, clicking the paragraph below the embed and
+typing inserted at the clicked text position (`AfterCLICKPDF`); native Undo and
+Save restored the exact original fixture. This verifies that one PDF-adjacent
+caret case, not general variable-height hit testing.

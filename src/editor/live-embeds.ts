@@ -18,7 +18,7 @@ interface EmbedSpan {
 interface EmbedState { spans: readonly EmbedSpan[]; revealed: object | null; decorations: DecorationSet }
 type Renderer = (request: EmbedRequest) => { dom: HTMLElement; destroy: () => void };
 
-const excludedNodes = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock', 'Table', 'LinkReference', 'URL', 'LinkTitle']);
+const excludedNodes = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock', 'LiveInlineComment', 'Table', 'LinkReference', 'URL', 'LinkTitle']);
 const interactive = 'a, button, input, select, textarea, audio, video, iframe, object, embed, summary, .cm-editor, .interactive-child, [contenteditable]:not([contenteditable="false"]), [role="button"]';
 
 function unescape(value: string): string {
@@ -76,8 +76,9 @@ function findEmbeds(state: EditorState): Omit<EmbedSpan, 'identity'>[] {
 /**
  * Persistent rendered wiki embeds and inline Markdown images for Live Edit.
  * Mount only in live mode. Render owns resources for one DOM instance and must
- * release them in destroy. Explicit source editing is a bounded original UX;
- * Obsidian's separate image-object selection/resize keyboard model isn't here.
+ * release them in destroy. Source editing keeps the rendered child mounted
+ * after its editable syntax. Obsidian's separate image tooltip/selection/resize
+ * keyboard model isn't implemented by this shared embed extension.
  */
 export function liveEmbeds(render: Renderer): Extension {
   const reveal = StateEffect.define<object>();
@@ -139,9 +140,13 @@ export function liveEmbeds(render: Renderer): Extension {
     get estimatedHeight(): number { return this.span.block ? 100 : -1; }
   }
   const decorate = (spans: readonly EmbedSpan[], revealed: object | null) => Decoration.set(spans
-    .filter(span => span.identity !== revealed)
-    .map(span => Decoration.replace({ widget: new EmbedWidget(span), block: span.block, inclusive: false })
-      .range(span.blockFrom, span.blockTo)), true);
+    .map(span => span.identity === revealed
+      // A point widget leaves the source editable. Keeping the same widget
+      // identity lets CodeMirror reuse its DOM, resources and embedded view
+      // state when toggling between hidden and exposed source.
+      ? Decoration.widget({ widget: new EmbedWidget(span), block: span.block, side: 1 }).range(span.blockTo)
+      : Decoration.replace({ widget: new EmbedWidget(span), block: span.block, inclusive: false })
+        .range(span.blockFrom, span.blockTo)), true);
   const field = StateField.define<EmbedState>({
     create(state) {
       const spans = findEmbeds(state).map(span => ({ ...span, identity: {} }));

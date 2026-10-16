@@ -2,10 +2,12 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { EditorSelection, Transaction } from '@codemirror/state';
+import { EditorSelection, EditorState, StateEffect, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { redo, undo, undoDepth } from '@codemirror/commands';
 import { createEditor } from '../src/ui/editor.ts';
+import { editorTransfers } from '../src/editor/transfers.ts';
+import { tableSelectionRanges } from '../src/editor/live-tables.ts';
 import { renderMarkdown } from '../src/ui/markdown.ts';
 
 // Real CM6 state, transactions, plugins and DOM, under jsdom. Zero geometry
@@ -28,9 +30,12 @@ function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live') 
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const host = document.querySelector<HTMLElement>('#host')!;
   const changes: string[] = [];
-  const editor = createEditor(host, { value, mode, paths: () => ['Note.md'], onChange: text => changes.push(text), open() {} });
+  const opened: string[] = [];
+  const editor = createEditor(host, { value, mode, paths: () => ['Note.md'], onChange: text => changes.push(text), open: target => opened.push(target) });
   const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
   assert.ok(view, 'find real CodeMirror instance from its DOM');
+  view.focus();
+  view.dispatch({ selection: view.state.selection });
   let destroyed = false;
   const destroy = () => { if (!destroyed) { editor.destroy(); destroyed = true; } };
   t.after(() => {
@@ -43,8 +48,54 @@ function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live') 
   });
   const line = (index: number) => [...host.querySelectorAll<HTMLElement>('.cm-line')][index];
   const cursor = (position: number) => view.dispatch({ selection: { anchor: position } });
-  return { editor, view, host, changes, line, cursor, dom, destroy };
+  return { editor, view, host, changes, opened, line, cursor, dom, destroy };
 }
+
+for (const mode of ['live', 'source'] as const) test(`${mode} external separated edits preserve the unchanged middle caret and undo`, t => {
+  const { editor, view, changes, cursor } = setup(t, 'aaa\nKEEP\nzzz', mode);
+  cursor(5);
+  editor.setValue('!aaa\nKEEP\nzzz!');
+  assert.equal(view.state.selection.main.head, 6, 'original separated-edit regression');
+  assert.deepEqual(changes, []);
+  editor.insert('?');
+  editor.setValue('!!aaa\nK?EEP\nzzz!!');
+  assert.equal(view.state.selection.main.head, 8);
+  assert.equal(changes.length, 1, 'external snapshots never publish user edits');
+  assert.equal(undoDepth(view.state), 1);
+  assert.ok(undo(view));
+  assert.equal(editor.getValue(), '!!aaa\nKEEP\nzzz!!');
+  assert.ok(redo(view));
+  assert.equal(editor.getValue(), '!!aaa\nK?EEP\nzzz!!');
+});
+
+test('source mode retains modifier-click wiki navigation without hiding source', t => {
+  const { view, dom, opened, line } = setup(t, '[[Note|Alias]]', 'source');
+  t.mock.method(view, 'posAtCoords', () => 8);
+  view.contentDOM.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+  assert.deepEqual(opened, ['Note']);
+  assert.equal(line(0).textContent, '[[Note|Alias]]');
+  assert.equal(view.state.doc.toString(), '[[Note|Alias]]');
+});
+
+test('creating and refreshing an unfocused live editor preserves title focus and renders the initial heading', t => {
+  setup(t, 'existing');
+  const title = document.createElement('input'), host = document.createElement('div');
+  document.body.append(title, host); title.focus();
+  const changes: string[] = [];
+  const editor = createEditor(host, { value: '# Heading\n**bold**', mode: 'live', paths: () => [], open() {}, onChange: text => changes.push(text) });
+  try {
+    const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
+    assert.equal(document.activeElement, title);
+    assert.equal(host.querySelector('.cm-line')?.textContent, 'Heading');
+    editor.restoreViewState!({ selection: { ranges: [{ anchor: 2, head: 2 }], mainIndex: 0 }, scrollTop: 0, scrollLeft: 0 });
+    editor.refreshLinks!(); editor.setValue('# Heading\n**changed**');
+    assert.equal(document.activeElement, title);
+    assert.equal(host.querySelector('.cm-line')?.textContent, 'Heading');
+    assert.deepEqual(changes, []); assert.equal(undoDepth(view.state), 0);
+    editor.focus(); view.dispatch({ selection: view.state.selection });
+    assert.equal(host.querySelector('.cm-line')?.textContent, '# Heading');
+  } finally { editor.destroy(); }
+});
 
 test('real source editor retains literal syntax; live editor hides only inactive markup', t => {
   const { editor, line, cursor } = setup(t, '# Heading\n**bold** ~~gone~~ ==marked==\nplain');
@@ -54,7 +105,7 @@ test('real source editor retains literal syntax; live editor hides only inactive
   cursor(editor.getValue().length);
   assert.equal(line(0).textContent, 'Heading');
   cursor('# Heading\n'.length);
-  assert.equal(line(1).textContent, '**bold** ~~gone~~ ==marked==');
+  assert.equal(line(1).textContent, '**bold** gone marked');
   assert.equal(editor.getValue(), '# Heading\n**bold** ~~gone~~ ==marked==\nplain');
 });
 
@@ -66,13 +117,13 @@ test('source mode never replaces Markdown punctuation', t => {
   assert.equal(line(1).querySelector('.cm-strong'), null);
 });
 
-test('live preview preserves syntax inside inline and fenced code, and escaped emphasis', t => {
+test('live preview renders inline code and escapes while preserving literal code contents', t => {
   const value = 'plain\n`**literal** ~~code~~ ==code==` **real**\n```md\n# code\n**fenced** ==fenced==\n```\n\\**escaped** \\==escaped==\nplain';
   const { line } = setup(t, value);
-  assert.equal(line(1).textContent, '`**literal** ~~code~~ ==code==` real');
+  assert.equal(line(1).textContent, '**literal** ~~code~~ ==code== real');
   assert.equal(line(3).textContent, '# code');
   assert.equal(line(4).textContent, '**fenced** ==fenced==');
-  assert.equal(line(6).textContent, '\\**escaped** \\==escaped==');
+  assert.equal(line(6).textContent, '*escaped* ==escaped==');
 });
 
 test('all cursors and full selected ranges reveal their intersecting lines', t => {
@@ -238,6 +289,31 @@ test('external snapshots update an active cell without a second save and remove 
   editor.setValue('Just text');
   assert.equal(host.querySelector('.cm-live-table'), null);
   assert.equal(child.dom.isConnected, false);
+});
+
+test('two-ended external updates preserve table-cell ownership, literal inline source and parent undo', async t => {
+  const value = tableNote.replace('alpha', '**alpha**');
+  const { host, dom, editor, view, changes, opened } = setup(t, value);
+  let child = activateCell(host, dom, 1, 0);
+  child.dispatch({ selection: { anchor: 4 } });
+  assert.equal(child.contentDOM.textContent, '**alpha**');
+  assert.equal(child.dom.querySelector('.cm-strong,.cm-live-inline-link'), null, 'parent inline decorations must not enter the cell editor');
+  t.mock.method(view, 'posAtCoords', () => 0);
+  child.contentDOM.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+  assert.deepEqual(opened, []);
+  const external = `before\n\n${value}\n\nafter`;
+  editor.setValue(external); await Promise.resolve();
+  const active = host.querySelector('.cm-live-table .cm-editor');
+  assert.ok(active, 'active cell survives changes on both sides of its table');
+  child = EditorView.findFromDOM(active)!;
+  assert.equal(child.state.doc.toString(), '**alpha**');
+  assert.equal(child.state.selection.main.head, 4);
+  editor.focus(); assert.equal(child.hasFocus, true);
+  child.dispatch({ ...child.state.replaceSelection('!'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), external.replace('**alpha**', '**al!pha**'));
+  assert.equal(changes.length, 1);
+  assert.ok(undo(view));
+  assert.equal(editor.getValue(), external);
 });
 
 test('source mode and fenced table examples retain literal table Markdown', t => {
@@ -477,4 +553,93 @@ test('menu bridge failures release a held table editor on synchronous and asynch
     assert.equal(child.dom.isConnected,false,'failed popup must not leave a persistent blur hold');
   }
   assert.equal(reported.length,2);
+});
+
+
+const rectangleSource = '| A | B | C |\n| --- | --- | --- |\n| one | two | three |\n| four | five | six |';
+function rectangleTools(fixture: ReturnType<typeof setup>) {
+  const { host, dom, view } = fixture;
+  const cell = (row: number, column: number) => host.querySelector<HTMLElement>(`[data-row="${row}"][data-column="${column}"]`)!;
+  const pointer = (node: HTMLElement, type: string) => node.dispatchEvent(new dom.window.MouseEvent(type, {button:0,bubbles:true,cancelable:true}));
+  const select = (r1:number,c1:number,r2:number,c2:number) => {
+    pointer(cell(r1,c1),'mousedown');pointer(cell(r2,c2),'mousemove');pointer(cell(r2,c2),'mouseup');
+  };
+  const child = () => EditorView.findFromDOM(host.querySelector('td .cm-editor,th .cm-editor')!)!;
+  const open = (target:HTMLElement=child().contentDOM) => target.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  const clipboard = (target:HTMLElement,type:string, supplied:Record<string,string>={}) => {
+    const values={...supplied},event=new dom.window.Event(type,{bubbles:true,cancelable:true});
+    Object.defineProperty(event,'clipboardData',{value:{getData:(type:string)=>values[type]??'',setData:(type:string,value:string)=>{values[type]=value;},clearData:()=>{for(const key of Object.keys(values))delete values[key];},items:[],files:[]}});
+    target.dispatchEvent(event);return {event,values};
+  };
+  const text = (target:HTMLElement) => tableSelectionRanges(view,target).map(range=>view.state.sliceDoc(range.from,range.to));
+  return {cell,select,child,open,clipboard,text};
+}
+
+test('rectangle native menu exposes only selected-cell clipboard roles and one parent formatting history entry',async t=>{
+  const fixture=setup(t,rectangleSource),tools=rectangleTools(fixture);
+  type Entry={id?:string;role?:string;label?:string;enabled?:boolean;submenu?:Entry[]};
+  let items:Entry[]=[];let choose!:(id:string|null)=>void;
+  Object.defineProperty(fixture.dom.window,'zorid',{value:{showContextMenu:(request:{items:Entry[]})=>{items=request.items;return new Promise<string|null>(resolve=>choose=resolve);}}});
+  tools.select(1,0,2,1);assert.equal(tools.child().state.readOnly,true);tools.open();
+  assert.deepEqual(items.slice(0,3).map(item=>[item.role,item.enabled]),[['cut',true],['copy',true],['paste',true]]);
+  assert.equal(items[3].label,'Format');assert.ok(items[3].submenu?.some(item=>item.label==='Highlight'));
+  assert.equal(items.some(item=>item.role==='pasteAndMatchStyle'||item.label==='Row'||item.label==='Column'),false);
+  const depth=undoDepth(fixture.view.state);choose('format-format-highlight-default');await Promise.resolve();
+  assert.deepEqual(tools.text(tools.cell(1,0)),['==one==','==two==','==four==','==five==']);
+  assert.match(fixture.editor.getValue(),/three/);assert.match(fixture.editor.getValue(),/six/);
+  assert.equal(undoDepth(fixture.view.state),depth+1);assert.equal(undo(fixture.view),true);
+  assert.equal(fixture.editor.getValue(),rectangleSource);
+});
+
+test('browser rectangle formatting retains selected child and releases its blur lease after dismissal',async t=>{
+  const fixture=setup(t,rectangleSource),tools=rectangleTools(fixture);tools.select(1,0,2,1);
+  const child=tools.child();tools.open();await Promise.resolve();assert.equal(child.dom.isConnected,true);
+  const item=(label:string)=>[...document.querySelectorAll<HTMLButtonElement>('.context-menu-item')].find(node=>node.textContent===label)!;
+  item('Format').click();item('Highlight').click();item('Default').click();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(child.hasFocus,true);assert.deepEqual(tools.text(tools.cell(1,0)),['==one==','==two==','==four==','==five==']);
+  tools.open();await Promise.resolve();document.dispatchEvent(new fixture.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+  await Promise.resolve();assert.equal(child.hasFocus,true);
+  fixture.view.focus();await Promise.resolve();assert.equal(child.dom.isConnected,false);
+});
+
+test('rectangle menu rejects changed range and keeps Copy available for a read-only parent',async t=>{
+  const fixture=setup(t,rectangleSource),tools=rectangleTools(fixture);
+  let items:Array<{role?:string;enabled?:boolean;label?:string}>=[];let choose!:(id:string|null)=>void;
+  Object.defineProperty(fixture.dom.window,'zorid',{value:{showContextMenu:(request:{items:typeof items})=>{items=request.items;return new Promise<string|null>(resolve=>choose=resolve);}}});
+  tools.select(1,0,2,1);tools.open();tools.select(1,1,2,2);choose('format-format-highlight-default');await Promise.resolve();
+  assert.equal(fixture.editor.getValue(),rectangleSource);
+  fixture.view.dispatch({effects:StateEffect.appendConfig.of(EditorState.readOnly.of(true))});tools.open();
+  assert.equal(items.find(item=>item.role==='copy')?.enabled,true);
+  assert.equal(items.find(item=>item.role==='cut')?.enabled,false);assert.equal(items.find(item=>item.role==='paste')?.enabled,false);
+  assert.equal(items.find(item=>item.label==='Format')?.enabled,false);
+  choose(null);await Promise.resolve();
+  const copied=tools.clipboard(tools.child().contentDOM,'copy');assert.equal(copied.event.defaultPrevented,true);
+  assert.deepEqual(JSON.parse(copied.values['obsidian/table']).rows,[['two','three'],['five','six']]);
+  assert.equal(fixture.editor.getValue(),rectangleSource);
+});
+
+test('structured table paste wins over generic transfer text while unrelated controls retain ownership',t=>{
+  const fixture=setup(t,rectangleSource),tools=rectangleTools(fixture);
+  fixture.view.dispatch({effects:StateEffect.appendConfig.of(editorTransfers({importFile:async()=>{throw new Error('unexpected import');}}))});
+  tools.select(1,0,2,1);
+  const data={'obsidian/table':JSON.stringify({rows:[['new']],alignment:[null]}),'text/markdown':'WRONG MARKDOWN','text/plain':'WRONG PLAIN'};
+  const pasted=tools.clipboard(tools.child().contentDOM,'paste',data);assert.equal(pasted.event.defaultPrevented,true);
+  assert.match(fixture.editor.getValue(),/\| new \| two \| three \|/);assert.doesNotMatch(fixture.editor.getValue(),/WRONG/);
+  assert.equal(undoDepth(fixture.view.state),1);assert.equal(undo(fixture.view),true);assert.equal(fixture.editor.getValue(),rectangleSource);
+  tools.select(1,0,2,1);
+  const input=document.createElement('input');tools.child().dom.append(input);input.focus();
+  const controlPaste=tools.clipboard(input,'paste',data);
+  assert.equal(controlPaste.event.defaultPrevented,false,'a table child search/input control owns its clipboard event');
+  assert.equal(fixture.editor.getValue(),rectangleSource);
+});
+
+test('table clipboard listeners leave native controls alone without transfers installed',t=>{
+  const fixture=setup(t,rectangleSource),tools=rectangleTools(fixture);tools.select(1,0,2,1);
+  const child=tools.child(), input=document.createElement('input');
+  child.dom.append(input);input.focus();
+  for(const target of [input])for(const type of ['copy','cut','paste']){
+    const result=tools.clipboard(target,type,{'obsidian/table':JSON.stringify({rows:[['wrong']],alignment:[null]})});
+    assert.equal(result.event.defaultPrevented,false,`${type} must preserve control ownership`);
+    assert.equal(fixture.editor.getValue(),rectangleSource);
+  }
 });

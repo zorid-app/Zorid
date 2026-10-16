@@ -6,7 +6,7 @@ import { Compartment, EditorState, StateEffect, Transaction } from '@codemirror/
 import { EditorView } from '@codemirror/view';
 import { redo, undo } from '@codemirror/commands';
 import { createEditor } from '../src/ui/editor.ts';
-import { retainTableEditor, tableActionsAt, tableMenuAt } from '../src/editor/live-tables.ts';
+import { handleTableClipboard, retainTableEditor, tableActionsAt, tableMenuAt, tableSelectionAt, tableSelectionRanges } from '../src/editor/live-tables.ts';
 import type { TableAction, TableMenuItem } from '../src/editor/live-tables.ts';
 import { parseTable } from '../src/editor/table-model.ts';
 
@@ -402,4 +402,222 @@ test('table holds reject unrelated owners and release safely after destruction',
   const next = activate(1, 1), release = retainTableEditor(view, next.contentDOM);
   destroy(); release(); release(); await Promise.resolve();
   assert.equal(next.dom.isConnected, false);
+});
+
+
+const selectionSource = '| A | B | C |\n| :--- | ---: | --- |\n| a | b | c |\n| d | e | f |\n| g | h | i |';
+function selectionTools(fixture: ReturnType<typeof setup>) {
+  const { host, dom, active } = fixture;
+  const cell = (row: number, column: number) => host.querySelector<HTMLElement>(`[data-row="${row}"][data-column="${column}"]`)!;
+  const pointer = (node: Element, type: string, extra: MouseEventInit = {}) => node.dispatchEvent(new dom.window.MouseEvent(type, { button: 0, bubbles: true, cancelable: true, ...extra }));
+  const rectangle = (r1: number, c1: number, r2: number, c2: number) => {
+    pointer(cell(r1,c1), 'mousedown'); pointer(cell(r2,c2), 'mousemove'); pointer(cell(r2,c2), 'mouseup');
+  };
+  const selected = () => [...host.querySelectorAll<HTMLElement>('td.is-selected,th.is-selected')].map(cell => [Number(cell.dataset.row),Number(cell.dataset.column)]);
+  const key = (key: string, shiftKey = false) => active().contentDOM.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
+  const clipboard = (type: string, supplied: Record<string,string> = {}) => {
+    const values = { ...supplied }, event = new dom.window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: { getData: (type: string) => values[type] ?? '', setData: (type: string, value: string) => { values[type] = value; }, clearData: () => { for (const key of Object.keys(values)) delete values[key]; } } });
+    active().contentDOM.dispatchEvent(event); return { values, event };
+  };
+  return { cell, pointer, rectangle, selected, key, clipboard };
+}
+
+test('pointer rectangles normalize reverse drag, suppress editing, and clear on ordinary click', t => {
+  const fixture = setup(t, selectionSource), tools = selectionTools(fixture);
+  tools.rectangle(3,2,1,1);
+  assert.deepEqual(tools.selected(), [[1,1],[1,2],[2,1],[2,2],[3,1],[3,2]]);
+  assert.equal(fixture.active().state.readOnly, true);
+  fixture.active().dispatch(fixture.active().state.replaceSelection('blocked'));
+  assert.equal(fixture.editor.getValue(), selectionSource);
+  assert.equal(tableSelectionAt(fixture.view, tools.cell(2,2)), true);
+  assert.deepEqual(tableSelectionRanges(fixture.view, tools.cell(2,2)).map(range => fixture.view.state.sliceDoc(range.from,range.to)), ['b','c','e','f','h','i']);
+  tools.pointer(tools.cell(2,1),'mousedown'); tools.pointer(tools.cell(2,1),'mouseup');
+  assert.deepEqual(tools.selected(), []); assert.equal(fixture.active().state.readOnly, false);
+});
+
+test('Shift click and boundary Shift arrows extend from the original cell and plain arrows collapse', t => {
+  const fixture = setup(t, selectionSource), tools = selectionTools(fixture), child = fixture.activate(1,1);
+  child.dispatch({ selection: { anchor: 1 } }); tools.key('ArrowRight',true); tools.key('ArrowDown',true);
+  assert.deepEqual(tools.selected(), [[1,1],[1,2],[2,1],[2,2]]);
+  tools.key('ArrowRight',true); assert.equal(tools.selected().length,4,'table edge clamps');
+  tools.key('ArrowLeft'); assert.deepEqual(tools.selected(),[]);
+  assert.equal(fixture.active().contentDOM.getAttribute('aria-label'),'Table row 2, column 2');
+  assert.equal(fixture.active().state.selection.main.head,0);
+  tools.pointer(tools.cell(3,0),'mousedown',{shiftKey:true}); tools.pointer(tools.cell(3,0),'mouseup');
+  assert.deepEqual(tools.selected(),[[1,0],[1,1],[2,0],[2,1],[3,0],[3,1]]);
+});
+
+test('whole-axis grips select rows and columns including degenerate axes; their menus stay distinct', t => {
+  const fixture = setup(t, selectionSource), tools = selectionTools(fixture);
+  const row = tools.cell(2,0).querySelector('.cm-table-grip-row')!;
+  tools.pointer(row,'mousedown'); tools.pointer(tools.cell(2,0),'mouseup');
+  assert.deepEqual(tools.selected(),[[2,0],[2,1],[2,2]]);
+  const rowMenu = tableMenuAt(fixture.view,tools.cell(2,0).querySelector<HTMLElement>('.cm-table-grip-row')!);
+  assert.ok(rowMenu.length); assert.ok(rowMenu.every(item => !('role' in item) && !('submenu' in item)));
+  const column = tools.cell(0,1).querySelector('.cm-table-grip-column')!;
+  tools.pointer(column,'mousedown'); tools.pointer(tools.cell(0,1),'mouseup');
+  assert.deepEqual(tools.selected(),[[0,1],[1,1],[2,1],[3,1]]);
+  assert.equal((tableMenuAt(fixture.view,tools.cell(0,1).querySelector<HTMLElement>('.cm-table-grip-column')!)[0] as TableAction).id,'sort-ascending');
+});
+
+test('rectangle menu replaces row/column actions and preserves readonly copy capability', t => {
+  const fixture = setup(t,selectionSource), tools = selectionTools(fixture); tools.rectangle(1,0,2,1);
+  const menu = tableMenuAt(fixture.view,tools.cell(1,0));
+  assert.deepEqual(menu.filter(item => 'role' in item).map(item => 'role' in item && item.role),['cut','copy','paste']);
+  assert.deepEqual(tableActionsAt(fixture.view,tools.cell(1,0)).map(action => action.id),['align-left','align-center','align-right','clear-cells','delete-cells']);
+  const mode = new Compartment(); fixture.view.dispatch({effects:StateEffect.appendConfig.of(mode.of(EditorState.readOnly.of(true)))});
+  const readonly = tableMenuAt(fixture.view,tools.cell(1,0));
+  assert.equal(readonly.find(item => 'role' in item && item.role === 'copy')!.enabled,true);
+  assert.ok(tableActionsAt(fixture.view,tools.cell(1,0)).every(action => !action.enabled && !action.run()));
+});
+
+test('partial rectangle Delete clears cells as one parent history operation', async t => {
+  const fixture=setup(t,selectionSource),tools=selectionTools(fixture);tools.rectangle(1,1,2,2);tools.key('Delete');
+  assert.deepEqual(currentTable(fixture.editor.getValue()).rows.map(row=>row.cells.map(cell=>cell.text)),[['A','B','C'],['a','',''],['d','',''],['g','h','i']]);
+  assert.equal(fixture.active().contentDOM.getAttribute('aria-label'),'Table row 3, column 3');
+  assert.equal(undo(fixture.view),true);await Promise.resolve();assert.equal(fixture.editor.getValue(),selectionSource);
+  assert.equal(redo(fixture.view),true);await Promise.resolve();assert.equal(currentTable(fixture.editor.getValue()).rows[2].cells[2].text,'');
+});
+
+test('multiple whole rows and columns delete structurally with directional focus', t => {
+  const fixture=setup(t,selectionSource),tools=selectionTools(fixture);tools.rectangle(1,0,2,2);tools.key('Backspace');
+  assert.deepEqual(currentTable(fixture.editor.getValue()).rows.map(row=>row.cells.map(cell=>cell.text)),[['A','B','C'],['g','h','i']]);
+  assert.equal(fixture.active().contentDOM.getAttribute('aria-label'),'Table row 1, column 3');
+  tools.rectangle(0,0,1,1);tools.key('Delete');
+  assert.deepEqual(currentTable(fixture.editor.getValue()).rows.map(row=>row.cells.map(cell=>cell.text)),[['C'],['i']]);
+});
+
+test('row-edge and entire-table deletion leave source focus and undo cleanly', async t => {
+  const fixture=setup(t,selectionSource),tools=selectionTools(fixture);tools.rectangle(0,0,1,2);tools.key('Delete');
+  assert.equal(fixture.editor.getValue().startsWith('\n| d | e | f |'),true);assert.equal(fixture.view.state.selection.main.head,0);
+  undo(fixture.view);await Promise.resolve();assert.equal(fixture.editor.getValue(),selectionSource);
+  tools.rectangle(0,0,3,2);tools.key('Backspace');assert.equal(fixture.editor.getValue(),'');
+  undo(fixture.view);await Promise.resolve();assert.equal(fixture.editor.getValue(),selectionSource);
+});
+
+test('clipboard copy emits four table formats and cut uses structural rectangle deletion', t => {
+  const fixture=setup(t,selectionSource),tools=selectionTools(fixture);tools.rectangle(1,1,2,2);
+  const copy=tools.clipboard('copy');assert.equal(copy.event.defaultPrevented,true);
+  assert.deepEqual(Object.keys(copy.values).sort(),['obsidian/table','text/html','text/markdown','text/plain']);
+  assert.deepEqual(JSON.parse(copy.values['obsidian/table']),{rows:[['b','c'],['e','f']],alignment:['right',null]});
+  assert.equal(copy.values['text/plain'],copy.values['text/markdown']);assert.match(copy.values['text/html'],/^<!-- obsidian --><table>/);
+  tools.rectangle(1,0,2,2);tools.clipboard('cut');assert.equal(currentTable(fixture.editor.getValue()).rows.length,2);
+});
+
+test('structured rectangle paste starts at top-left and expands once, rejecting malformed data', t => {
+  const fixture=setup(t,selectionSource),tools=selectionTools(fixture);tools.rectangle(3,2,2,1);
+  tools.clipboard('paste',{'obsidian/table':'{}'});assert.equal(fixture.editor.getValue(),selectionSource);
+  const data={rows:[['X','Y','Z'],['P','Q','R'],['S','T','U']],alignment:['center','left','right']};
+  const pasted=tools.clipboard('paste',{'obsidian/table':JSON.stringify(data)});assert.equal(pasted.event.defaultPrevented,true);
+  const model=currentTable(fixture.editor.getValue());assert.equal(model.rows.length,5);assert.equal(model.columnCount,4);
+  assert.deepEqual(model.rows[2].cells.map(cell=>cell.text),['d','X','Y','Z']);assert.deepEqual(model.rows[4].cells.map(cell=>cell.text),['','S','T','U']);
+  assert.equal(fixture.active().contentDOM.getAttribute('aria-label'),'Table row 5, column 4');
+});
+
+test('row grip drag reorders without losing data, keeps axis selected, and can undo', async t => {
+  const fixture=setup(t,selectionSource),tools=selectionTools(fixture);
+  const grip=tools.cell(1,0).querySelector('.cm-table-grip-row')!;tools.pointer(grip,'mousedown');
+  tools.pointer(tools.cell(3,0),'mousemove',{clientY:10});tools.pointer(tools.cell(3,0),'mouseup');
+  assert.deepEqual(currentTable(fixture.editor.getValue()).rows.map(row=>row.cells[0].text),['A','d','g','a']);
+  assert.deepEqual(tools.selected(),[[3,0],[3,1],[3,2]]);
+  undo(fixture.view);await Promise.resolve();assert.equal(fixture.editor.getValue(),selectionSource);
+});
+
+test('outside source selection and context click clear rectangles while inside context preserves them', async t => {
+  const fixture=setup(t,'Before\n\n'+selectionSource),tools=selectionTools(fixture);tools.rectangle(1,0,2,1);
+  tools.pointer(tools.cell(1,1),'mousedown',{button:2});tools.pointer(tools.cell(1,1),'contextmenu',{button:2});assert.equal(tools.selected().length,4);
+  tools.pointer(tools.cell(3,2),'contextmenu',{button:2});assert.deepEqual(tools.selected(),[]);
+  tools.rectangle(1,0,2,1);fixture.view.dispatch({selection:{anchor:0}});await Promise.resolve();assert.deepEqual(tools.selected(),[]);
+});
+
+test('one-cell table grips retain actionable whole-axis selection and grip hide is idempotent', t => {
+  const fixture = setup(t, '| A |\n| --- |'), tools = selectionTools(fixture);
+  tools.pointer(tools.cell(0,0).querySelector('.cm-table-grip-row')!, 'mousedown');
+  tools.pointer(tools.cell(0,0), 'mouseup');
+  assert.deepEqual(tools.selected(), [[0,0]]);
+  const grip = tools.cell(0,0).querySelector<HTMLElement>('.cm-table-grip-row')!;
+  const release = retainTableEditor(fixture.view, grip); release();
+  assert.deepEqual(tools.selected(), []);
+  tools.pointer(tools.cell(0,0).querySelector('.cm-table-grip-column')!, 'mousedown');
+  tools.pointer(tools.cell(0,0), 'mouseup'); release();
+  assert.deepEqual(tools.selected(), [[0,0]], 'releasing an old menu twice cannot clear a new range');
+  tools.key('Delete'); assert.equal(fixture.editor.getValue(), '');
+});
+
+test('Shift horizontal extension leaves mid-cell text selection to CM and honors RTL boundaries', async t => {
+  const fixture = setup(t, selectionSource.replace(' b ', ' long ')), tools = selectionTools(fixture);
+  const child = fixture.activate(1,1);
+  child.dispatch({ selection: { anchor: 2 } }); tools.key('ArrowRight', true);
+  assert.deepEqual(tools.selected(), []); assert.equal(child.state.selection.main.empty, false);
+  child.contentDOM.style.direction = 'rtl';
+  child.dispatch({ selection: { anchor: child.state.doc.length } });
+  await new Promise<void>(resolve => child.requestMeasure({ read: () => {}, write: () => resolve() }));
+  assert.equal(child.textDirection, 1);
+  tools.key('ArrowLeft', true);
+  assert.deepEqual(tools.selected(), [[1,1],[1,2]]);
+});
+
+test('column grip drag moves alignment and cancel leaves the source untouched', t => {
+  const fixture = setup(t, selectionSource), tools = selectionTools(fixture);
+  tools.pointer(tools.cell(0,0).querySelector('.cm-table-grip-column')!, 'mousedown');
+  tools.pointer(tools.cell(0,2), 'mousemove', { clientX: 10 });
+  fixture.dom.window.document.dispatchEvent(new fixture.dom.window.Event('pointercancel', { bubbles: true }));
+  assert.equal(fixture.editor.getValue(), selectionSource);
+  tools.pointer(tools.cell(0,0).querySelector('.cm-table-grip-column')!, 'mousedown');
+  tools.pointer(tools.cell(0,2), 'mousemove', { clientX: 10 }); tools.pointer(tools.cell(0,2), 'mouseup');
+  const model = currentTable(fixture.editor.getValue());
+  assert.deepEqual(model.rows[0].cells.map(cell => cell.text), ['B','C','A']);
+  assert.deepEqual(model.alignments, ['right',null,'left']);
+  assert.deepEqual(tools.selected(), [[0,2],[1,2],[2,2],[3,2]]);
+});
+
+test('selected alignment preserves range, menu snapshots reject changed selection, and prefix edits map ranges', t => {
+  const fixture = setup(t, selectionSource), tools = selectionTools(fixture);
+  tools.rectangle(1,0,2,1);
+  const stale = tableActionsAt(fixture.view, tools.cell(1,0));
+  tools.rectangle(2,1,3,2);
+  assert.ok(stale.every(action => !action.run()));
+  const align = tableActionsAt(fixture.view, tools.cell(2,1)).find(action => action.id === 'align-center')!;
+  assert.equal(align.run(), true);
+  assert.deepEqual(tools.selected(), [[2,1],[2,2],[3,1],[3,2]]);
+  assert.deepEqual(currentTable(fixture.editor.getValue()).alignments, ['left','center','center']);
+  const before = tableSelectionRanges(fixture.view, tools.cell(2,1));
+  fixture.editor.setValue('🙂 Prefix\n' + fixture.editor.getValue());
+  const after = tableSelectionRanges(fixture.view, tools.cell(2,1));
+  assert.deepEqual(after.map((range, index) => range.from - before[index].from), [10,10,10,10]);
+});
+
+test('outer capture can delegate structured paste before generic transfers and copying remains read-only', t => {
+  const fixture = setup(t, selectionSource), tools = selectionTools(fixture);
+  let handled = false;
+  fixture.view.dom.addEventListener('paste', event => { handled = handleTableClipboard(fixture.view, event as ClipboardEvent); }, true);
+  fixture.activate(1,0);
+  tools.clipboard('paste', { 'obsidian/table': JSON.stringify({ rows: [['changed']], alignment: [null] }), 'text/markdown': 'wrong ordinary paste' });
+  assert.equal(handled, true); assert.equal(currentTable(fixture.editor.getValue()).rows[1].cells[0].text, 'changed');
+  tools.rectangle(1,0,2,1);
+  fixture.view.dispatch({ effects: StateEffect.appendConfig.of(EditorState.readOnly.of(true)) });
+  assert.equal(tools.clipboard('copy').event.defaultPrevented, true);
+  const before = fixture.editor.getValue(); tools.clipboard('cut'); tools.key('Delete');
+  assert.equal(fixture.editor.getValue(), before);
+});
+
+
+test('oversized structured paste is consumed without allocating an expanded table or changing source', t => {
+  const fixture = setup(t, selectionSource), tools = selectionTools(fixture);
+  fixture.activate(1,0);
+  const payload = { rows: Array.from({ length: 40_000 }, () => ['x']), alignment: [null] };
+  const { event } = tools.clipboard('paste', { 'obsidian/table': JSON.stringify(payload) });
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(fixture.editor.getValue(), selectionSource);
+});
+
+
+test('a pending grip reorder follows prefix edits and reselects the moved axis', t => {
+  const fixture = setup(t, selectionSource), tools = selectionTools(fixture);
+  tools.pointer(tools.cell(1,0).querySelector('.cm-table-grip-row')!, 'mousedown');
+  fixture.view.dispatch({ changes: { from: 0, insert: 'Prefix\n\n' } });
+  tools.pointer(tools.cell(3,0), 'mousemove', { clientY: 10 }); tools.pointer(tools.cell(3,0), 'mouseup');
+  assert.deepEqual(currentTable(fixture.editor.getValue()).rows.map(row => row.cells[0].text), ['A','d','g','a']);
+  assert.deepEqual(tools.selected(), [[3,0],[3,1],[3,2]]);
 });
