@@ -61,6 +61,11 @@ Unrelated edits map folded ranges. Edits touching a hidden region or its header 
 
 The fold replacement owns visibility over contained render decorations. Existing table/embed source remains untouched; hidden widgets may unmount and release resources, then remount on unfolding. The module does not promise retained iframe/media/editor DOM identity while hidden. It does preserve the parent document and history. Callout source is hidden with the section even when a specialized callout renderer is absent. Host integration should verify any later callout renderer against these same replacement ranges.
 
+When a host fold command unmounts a focused table-cell editor, the parent editor
+recovers typing focus. A title or toolbar focus is left alone. The independent
+combined-editor probe caught the missing transfer and verified the repair with
+cell edits and parent undo intact.
+
 ## Discovery scope and performance
 
 The original index uses the host Markdown syntax tree, rejecting code/HTML/comment false heading/list starts. Heading ranges follow parsed headings with the described level boundary. List ranges begin at syntactic list-item headers and follow indentation width/blank-line rules. **The reference's broader generic indentation folding is not implemented for arbitrary non-list indented text.** Frontmatter folding remains with the existing properties feature.

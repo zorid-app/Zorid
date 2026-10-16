@@ -112,7 +112,15 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       if (Number.isFinite(saved?.scrollLeft)) view.scrollDOM.scrollLeft = Math.max(0, saved.scrollLeft);
     },
     refreshLinks() { view.dispatch({ effects: refreshLiveInline.of() }); },
-    fold(action) { return Object.hasOwn(foldCommands, action) ? foldCommands[action](view) : false; },
+    fold(action) {
+      if (!Object.hasOwn(foldCommands, action)) return false;
+      const child = activeTableEditor(view), childFocused = child?.hasFocus;
+      const changed = foldCommands[action](view);
+      // Folding can unmount the focused cell editor. Keep typing focus in its
+      // owning note, without taking focus from a title or toolbar control.
+      if (changed && childFocused && !child!.dom.isConnected) view.focus();
+      return changed;
+    },
     configureLists(listOptions) { view.dispatch({ effects: listConfiguration.reconfigure(markdownListKeymap(listOptions)) }); },
     setValue(value) {
       const previous = view.state.doc.toString();
