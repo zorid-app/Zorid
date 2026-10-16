@@ -12,6 +12,8 @@ export interface VaultAdapter {
   stat?(path: string): Promise<VaultEntry | null>;
   read(path: string): Promise<string>;
   write(path: string, content: string): Promise<void>;
+  /** Compare and write in one shared host queue; reject mismatches without writing. */
+  compareAndWrite?(path: string, expectedContent: string, content: string): Promise<void>;
   /** Binary APIs preserve every byte; implementations must not retain mutable caller buffers. */
   readBinary?(path: string): Promise<Uint8Array>;
   writeBinary?(path: string, data: Uint8Array): Promise<void>;

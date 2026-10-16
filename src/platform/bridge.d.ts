@@ -2,8 +2,12 @@ import type { VaultEntry } from '../core/types';
 import type { ContextMenuRequest } from './context-menu';
 
 export interface DesktopVault { path: string; name: string }
-export interface VaultChange { type: string; path?: string; message?: string }
+export interface DesktopWindowInfo { id: string; initialState: 'restore' | 'empty' }
+export interface VaultChange { vault?: string; type: string; path?: string; message?: string }
 export interface DesktopBridge {
+  getWindowInfo?(): Promise<DesktopWindowInfo>;
+  newWindow?(): Promise<{ id: string }>;
+  compareAndWrite?(vault: string, path: string, expectedContent: string, contents: string): Promise<void>;
   showContextMenu?(request: ContextMenuRequest): Promise<string | null>;
   dismissContextMenu?(): Promise<void>;
   getPathForFile?(file: File): string;

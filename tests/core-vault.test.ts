@@ -98,3 +98,40 @@ test('path normalization rejects Windows absolute paths, nulls, traversal and ro
   for (const path of ['C:\\outside.md', '../x', 'folder/../x', '\u0000file', '/', './']) assert.throws(() => normalizePath(path));
   assert.equal(normalizePath('./Folder\\Note.md'), 'Folder/Note.md');
 });
+
+test('host compare-and-write is preferred and conflict does not publish a snapshot', async () => {
+  class AtomicAdapter extends MemoryAdapter {
+    comparisons: string[][] = [];
+    async compareAndWrite(path: string, expected: string, content: string) {
+      this.comparisons.push([path, expected, content]);
+      if (await super.read(path) !== expected) throw new Error('File changed outside this editor');
+      await super.write(path, content);
+    }
+    async write(): Promise<void> { throw new Error('ordinary write must not run'); }
+  }
+  const adapter = new AtomicAdapter({ 'One.md': '# Old' });
+  const vault = new Vault(adapter); await vault.initialize();
+  const changes: string[] = []; vault.on('modify', change => changes.push(change.path));
+  await assert.rejects(vault.modify('One.md', '# Bad', { expectedContent: 'stale' }), /outside this editor/);
+  assert.deepEqual(changes, []);
+  assert.equal(await vault.read('One.md'), '# Old');
+  assert.equal(vault.metadata.get('One.md')?.headings[0].heading, 'Old');
+  await vault.modify('One.md', '# New', { expectedContent: '# Old' });
+  assert.equal(await vault.read('One.md'), '# New');
+  assert.deepEqual(changes, ['One.md']);
+  assert.deepEqual(adapter.comparisons, [['One.md', 'stale', '# Bad'], ['One.md', '# Old', '# New']]);
+});
+
+test('failed readback after successful host comparison preserves unpublished snapshot', async () => {
+  class AtomicAdapter extends MemoryAdapter {
+    failRead = false;
+    async compareAndWrite(path: string, _expected: string, content: string) { await super.write(path, content); this.failRead = true; }
+    async read(path: string) { if (this.failRead) throw new Error('readback unavailable'); return super.read(path); }
+  }
+  const adapter = new AtomicAdapter({ 'One.md': '# Old' });
+  const vault = new Vault(adapter); await vault.initialize();
+  const changes: string[] = []; vault.on('modify', change => changes.push(change.path));
+  await assert.rejects(vault.modify('One.md', '# New', { expectedContent: '# Old' }), /readback unavailable/);
+  assert.deepEqual(changes, []); assert.equal(vault.metadata.get('One.md')?.headings[0].heading, 'Old');
+  adapter.failRead = false; assert.equal(await adapter.read('One.md'), '# New');
+});
