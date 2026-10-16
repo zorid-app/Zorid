@@ -13,6 +13,8 @@ import { renderMarkdown } from './markdown.ts';
 import { destroyMarkdown } from './markdown-lifecycle.ts';
 import type { EditorHandle, EditorOptions, EditorViewState } from './editor.ts';
 import { NoteBuffer } from './note-buffer.ts';
+import { createCanvasMarkdownBufferSession, NoteBufferSubscriptions } from './canvas-markdown-session.ts';
+import type { CanvasMarkdownBufferSession } from './canvas-markdown-session.ts';
 import { MarkdownEmbeds } from './embeds.ts';
 import { renderProperties } from './properties.ts';
 import type { PropertiesView } from './properties.ts';
@@ -124,6 +126,8 @@ export class Workspace {
   private vaultGeneration = 0;
   private vaultRequest = 0;
   private vaultTransition: Promise<void> = Promise.resolve();
+  private canvasMarkdownEmbeds = new Set<MarkdownEmbeds>();
+  private bufferSubscriptions = new NoteBufferSubscriptions();
   private bufferRevisions = new WeakMap<NoteBuffer,number>();
   private initialized = false;
   private attachments?:AttachmentResources;
@@ -417,7 +421,7 @@ export class Workspace {
 
   private async bufferFor(path:string):Promise<NoteBuffer>{
     let buffer=this.buffers.get(path); if(buffer){await buffer.load();return buffer;}
-    buffer=new NoteBuffer(this.vault,path,{storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{this.renderStatus();}});
+    buffer=new NoteBuffer(this.vault,path,{storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{if(buffer)this.bufferSubscriptions.publish(buffer);this.renderStatus();}});
     this.buffers.set(path,buffer);
     try{await buffer.load();return buffer;}catch(error){this.buffers.delete(path);throw error;}
   }
@@ -503,7 +507,7 @@ export class Workspace {
         try{
           const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
           const generation=this.vaultGeneration;pane.canvasSource=buffer.text;
-          pane.canvasView=(this.viewFactories.canvas??createCanvasView)(host,{document:CanvasDocument.parse(buffer.text),onChange:async source=>{
+          pane.canvasView=(this.viewFactories.canvas??createCanvasView)(host,{...{openMarkdownFile:(target:string)=>this.openCanvasMarkdownSession(target,()=>pane,runtime)},document:CanvasDocument.parse(buffer.text),onChange:async source=>{
             if(generation!==this.vaultGeneration||version!==pane.renderVersion)throw new Error('The Canvas is no longer open.');
             if(buffer.text!==pane.canvasSource)throw new Error('The Canvas changed in another pane. Save or reload before editing it again.');
             buffer.update(source);runtime.touch();pane.canvasSource=source;await buffer.flush();
@@ -582,8 +586,62 @@ export class Workspace {
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
 
-  private updateMarkdownBuffer(buffer:NoteBuffer,next:string):void{
-    const previous=buffer.text;buffer.update(next);this.mapInactiveSelections(buffer.path,previous,next);
+  private async openCanvasMarkdownSession(path:string,owner:()=>Pane,runtime:TabViewRuntime):Promise<CanvasMarkdownBufferSession>{
+    const vault=this.vault,generation=this.vaultGeneration,token=this.treeEntryToken(path);
+    if(!isMarkdown(path)||vault.entries.get(path)?.type!=='file'||!token)throw new Error(`Markdown file not found: ${path}`);
+    const validateFile=()=>{
+      if(this.vault!==vault||this.vaultGeneration!==generation||this.treeEntryToken(path)!==token||vault.entries.get(path)?.type!=='file')throw new Error('The Canvas note file is no longer current. Your draft is retained.');
+    };
+    const validateSession=()=>{
+      if(owner().runtime!==runtime||runtime.phase==='disposed')throw new Error('The Canvas view is closed.');
+    };
+    validateSession();
+    const buffer=await this.bufferFor(path);validateFile();validateSession();
+    const validateWrite=()=>{validateFile();if(this.buffers.get(path)!==buffer||buffer.path!==path)throw new Error('The Canvas note buffer was replaced. Your draft is retained.');};
+    let disposed=false;
+    const available=()=>{try{if(disposed)return false;validateWrite();validateSession();return true;}catch{return false;}};
+    const open=(target:string,kind:'wiki'|'markdown'='wiki')=>{if(available())this.run(()=>this.followLink(path,target,owner(),kind));};
+    const embeds=new MarkdownEmbeds({vault,resources:this.attachments,
+      open:(source,target,kind)=>{if(available())this.run(()=>this.followLink(source,target,owner(),kind));},
+      read:async target=>{validateWrite();const loaded=this.buffers.get(target);if(loaded){await loaded.load();validateWrite();if(loaded.dirty)return loaded.text;}return vault.cachedRead(target);},
+      taskChange:(target,line,checked)=>{validateWrite();validateSession();return this.changeTask(target,line,checked);},
+      contextMenu:(event,request,source)=>{if(!available())return;const target=vault.metadata.resolveLink(source,request.target,request.kind),entry=target?vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},
+    });
+    this.canvasMarkdownEmbeds.add(embeds);
+    const workspace=this;
+    return createCanvasMarkdownBufferSession({buffer,validateWrite,validateSession,
+      subscribe:listener=>this.bufferSubscriptions.subscribe(buffer,listener),
+      update:(next,guard)=>{
+        this.updateMarkdownBuffer(buffer,next,guard);runtime.touch();
+        for(const pane of this.loadedViews()){
+          pane.embeds?.invalidate(path);
+          if(pane.viewPath===path){pane.editor?.setValue(next);pane.properties?.refresh();pane.refreshPreview?.();}
+        }
+      },
+      editorOptions:{paths:()=>available()?[...vault.entries.keys()]:[],open,
+        get listOptions(){return{useTab:workspace.settings.useTab,tabSize:workspace.settings.tabSize,smartIndentList:workspace.settings.smartIndentList};},
+        isUnresolved:(target,kind)=>!available()||!vault.metadata.resolveLink(path,target,kind),
+        wiki:{sourcePath:()=>available()?path:null,
+          metadata:target=>{if(!available())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:vault.entries.get(target)?.mtime};},
+          resolvePath:(target,source)=>available()?vault.metadata.resolveLink(source,target):null,
+          linkText:(target,source)=>{
+            if(!available())return target.replace(/\.md$/i,'');
+            let result=target;const filename=target.split('/').at(-1)!;
+            if(this.settings.newLinkFormat==='shortest'){const matches=vault.metadata.resolveLinkCandidates(source,filename);if(matches.length===1&&matches[0]===target)result=filename;}
+            else if(this.settings.newLinkFormat==='relative'){const from=parentOf(source).split('/').filter(Boolean),to=target.split('/');while(from.length&&to.length&&from[0]===to[0]){from.shift();to.shift();}result=from.length?[...from.map(()=>'..'),...to].join('/'):'./'+to.join('/');}
+            return result.replace(/\.md$/i,'');
+          }},
+        renderEmbed:request=>{validateWrite();validateSession();const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
+        transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>{validateWrite();validateSession();return this.importAttachment(file,path,generation);},nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
+      },
+      dispose:()=>{disposed=true;embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);},
+      onError:error=>notice(error instanceof Error?error.message:String(error)),
+    });
+  }
+
+  private updateMarkdownBuffer(buffer:NoteBuffer,next:string,validateWrite?:()=>void):void{
+    const previous=buffer.text;buffer.update(next,{validateWrite});this.mapInactiveSelections(buffer.path,previous,next);
+    for(const embeds of this.canvasMarkdownEmbeds)embeds.invalidate(buffer.path);
   }
 
   private mapInactiveSelections(path:string,previous:string,next:string):void{
@@ -1111,7 +1169,7 @@ export class Workspace {
         for(const[key,label]of choices){const option=el('option','',label);option.value=key;select.append(option);}
         select.value=value;select.onchange=()=>{change(select.value);this.saveSettings();};return select;
       };
-      const configureLists=()=>{for(const pane of this.loadedViews())pane.editor?.configureLists?.({useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList});};
+      const configureLists=()=>{for(const pane of this.loadedViews())pane.editor?.configureLists?.({useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList});for(const buffer of this.buffers.values())this.bufferSubscriptions.publish(buffer,true);};
       if(section==='Appearance'){
         const select=el('select');for(const[label,value]of[['Adapt to system','system'],['Dark','dark'],['Light','light']]){const option=el('option','',label);option.value=value;select.append(option);}select.value=this.settings.theme;select.setAttribute('aria-label','Base color scheme');select.onchange=()=>{this.settings.theme=select.value as Settings['theme'];this.saveSettings();};row('Base color scheme','Choose your default color scheme.',select);
         const size=el('input');size.type='range';size.min='12';size.max='26';size.value=String(this.settings.fontSize);size.setAttribute('aria-label','Font size');size.oninput=()=>{this.settings.fontSize=Number(size.value);this.saveSettings();};row('Font size','Font size in pixels for the editor and reading view.',size);
