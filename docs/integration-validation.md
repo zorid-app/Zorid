@@ -229,3 +229,13 @@ This source-row/caret/inline-layout issue remains open and is assigned separatel
 Screenshots were partially clipped by the capture surface, so this pass does not
 establish full-window pixel parity. All three agent-launched Electron sessions
 were closed and their process handles reported exit code zero after testing.
+
+The Canvas history repair was integrated as `c656637` after independent review.
+Its no-op reload check compares incoming source with both the rendered snapshot
+and mutable document. Native follow-up appended `Undo round trip.` through the
+card editor, saved with Cmd+Enter, and confirmed Undo stayed enabled. Cmd+Z
+removed the appended text while preserving the earlier checkpoint; reading the
+Canvas JSON confirmed the undo reached disk. Toolbar Redo restored the text,
+again verified on disk. A final Undo restored the pre-test fixture, and the test
+Electron process exited zero. This verifies the reported own-save history bug;
+it does not establish complete Canvas interaction parity.

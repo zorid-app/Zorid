@@ -167,3 +167,19 @@ test('unrelated sidebar rebuilds do not pull focus from another control',async t
  await ui.workspace.vault.createFolder('Other');
  assert.equal(ui.dom.window.document.activeElement,control);assert.equal(ui.root.querySelector('.tree-label[contenteditable]'),null);
 });
+
+test('file tree hides recognized suffixes, keeps unknown ones, and exposes distinct full paths',async t=>{
+ const paths=['Same.md','Same.pdf','Same.CANVAS','Same.base','Same.PNG','Same.mp3','Same.webm','Same.UNKNOWN','File.constructor','File.__proto__','Folder.pdf/Child.md'];
+ const ui=await setup(t,Object.fromEntries(paths.map(path=>[path,path.endsWith('.CANVAS')?'{}':''])));
+ for(const path of paths.slice(0,-1)){
+  const row=ui.row(path);
+  assert.equal(row.querySelector('.tree-label')!.textContent,path.endsWith('.UNKNOWN')||path.startsWith('File.')?path:'Same');
+  assert.equal(row.getAttribute('aria-label'),path);assert.equal(row.title,path);
+ }
+ assert.equal(ui.row('Folder.pdf').querySelector('.tree-label')!.textContent,'Folder.pdf');
+ ui.key(ui.row('Same.PNG'),'F2');await until(()=>!!ui.state.treeRename);
+ assert.equal(ui.row('Same.PNG').querySelector('.tree-label')!.textContent,'Same.PNG','rename still exposes the complete filename');
+ ui.key(ui.row('Same.PNG').querySelector<HTMLElement>('.tree-label')!,'Escape');
+ assert.equal(ui.row('Same.PNG').querySelector('.tree-label')!.textContent,'Same');
+ assert.ok(ui.workspace.vault.entries.has('Same.PNG'),'display policy does not rename files');
+});

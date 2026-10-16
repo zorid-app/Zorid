@@ -1,3 +1,4 @@
+import { fileTreeLabel } from './file-tree-label.ts';
 import { createFolderInline, FileTreeRenameSession } from './file-tree-create.ts';
 import { createFileTreeDrag, executeFileTreeMove } from './file-tree-drag.ts';
 import type { FileTreeDragRow } from './file-tree-drag.ts';
@@ -770,10 +771,10 @@ export class Workspace {
     const append=(parent:string,container:HTMLElement,depth:number)=>{
       for(const entry of children.get(parent)??[]){
         const folder=entry.type==='folder';const row=el('div',`tree-row${folder?' folder-row':''}${this.activePane&&this.current()?.path===entry.path?' is-active':''}`);
-        row.style.paddingLeft=`${10+depth*16}px`;row.role='treeitem';row.tabIndex=0;row.title=entry.path;row.dataset.path=entry.path;row.setAttribute('aria-selected',String(this.treeSelection.has(entry.path)));row.classList.toggle('is-selected',this.treeSelection.has(entry.path));
+        row.style.paddingLeft=`${10+depth*16}px`;row.role='treeitem';row.tabIndex=0;row.title=entry.path;row.setAttribute('aria-label',entry.path);row.dataset.path=entry.path;row.setAttribute('aria-selected',String(this.treeSelection.has(entry.path)));row.classList.toggle('is-selected',this.treeSelection.has(entry.path));
         if(folder){row.setAttribute('aria-expanded',String(!this.collapsed.has(entry.path)));row.append(icon(this.collapsed.has(entry.path)?'right':'down',14));}
         else row.append(el('span','file-indent'));
-        const label=el('span','tree-label',folder?entry.path.split('/').at(-1):nameOf(entry.path));row.append(label);
+        const label=el('span','tree-label',fileTreeLabel(entry));row.append(label);
         const activate=()=>{
           if(folder){
             if(this.collapsed.has(entry.path))this.collapsed.delete(entry.path);else this.collapsed.add(entry.path);
