@@ -113,3 +113,34 @@ test('measured virtual row boundaries include exact viewport edges and maintain 
   assert.ok(host.querySelector('[data-virtual-index="0"]'), 'one pixel before boundary keeps intersecting row');
   surface.destroy(); assert.equal(observed.size, 0);
 });
+
+for (const [name, create] of [['Cards', createBaseCardsView], ['List', createBaseListView]] as const) {
+  test(`${name} incomplete numeric draft cannot be mistaken for intentional null`, async t => {
+    const { dom, host, click } = setup(t); const edits: unknown[] = [];
+    const view = create(host, { result: result([row('A.md', { 'note.score': 7 })], ['note.score']), openFile() {}, editProperty(edit) { edits.push(edit.value); } });
+    t.after(() => view.destroy()); click(host.querySelector('[data-property="note.score"]')!);
+    const input = host.querySelector<HTMLInputElement>('input')!;
+    input.value = '1e';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick();
+    assert.deepEqual(edits, [], 'invalid numeric draft must not clear existing value');
+    assert.equal(host.querySelector('input'), input, 'invalid draft stays available to correct');
+    assert.equal(input.value, '1e');
+    input.value = ''; input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick();
+    assert.deepEqual(edits, [{ type: 'null' }], 'deliberately clearing valid numeric input writes typed null');
+  });
+
+  test(`${name} collapsed typed-null group stays distinct from false, zero and string null`, t => {
+    const { host, click } = setup(t);
+    const rows = ['Empty', 'False', 'Zero', 'Text'].map(name => row(`${name}.md`));
+    const data = { ...result(rows, ['file.name']), groups: [null, false, 0, 'null'].map((key, index) => ({ key: baseExpressionValue(key), rows: [rows[index]] })) };
+    const view = create(host, { result: data, openFile() {} }); t.after(() => view.destroy());
+    click(host.querySelector('.bases-group-heading')!);
+    const selector = name === 'Cards' ? '.bases-cards-item' : '.bases-list-item';
+    assert.deepEqual([...host.querySelectorAll<HTMLElement>(selector)].map(node => node.dataset.path), ['False.md', 'Zero.md', 'Text.md']);
+    view.update({ ...data, version: 2, groups: [...data.groups].reverse() });
+    assert.deepEqual([...host.querySelectorAll<HTMLElement>(selector)].map(node => node.dataset.path), ['Text.md', 'Zero.md', 'False.md']);
+    const last = [...host.querySelectorAll('.bases-group-heading')].at(-1)!;
+    assert.equal(last.getAttribute('aria-expanded'), 'false'); click(last);
+    assert.equal(host.querySelectorAll(selector).length, 4);
+  });
+}
