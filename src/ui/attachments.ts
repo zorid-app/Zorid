@@ -4,7 +4,8 @@ const mimeTypes: Record<string,string> = {
   png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp',
   svg:'image/svg+xml', bmp:'image/bmp', avif:'image/avif', pdf:'application/pdf',
   mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', m4a:'audio/mp4',
-  mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime',
+  '3gp':'audio/3gpp', flac:'audio/flac', oga:'audio/ogg', opus:'audio/ogg',
+  mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime', ogv:'video/ogg', mkv:'video/x-matroska',
 };
 export function attachmentType(path:string):string { return mimeTypes[path.split('.').at(-1)!.toLowerCase()] ?? 'application/octet-stream'; }
 export function isImage(path:string):boolean { return attachmentType(path).startsWith('image/'); }

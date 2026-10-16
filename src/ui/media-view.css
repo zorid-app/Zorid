@@ -1,0 +1,6 @@
+.zorid-media-view { display: block; max-width: 100%; }
+.zorid-media-view audio { width: 100%; max-width: 100%; height: 42px; }
+.zorid-media-view video { max-width: 100%; }
+.zorid-media-view .zorid-media-status { display: block; color: var(--text-muted); font-size: var(--font-smaller); }
+.zorid-media-view .zorid-media-status[hidden] { display: none; }
+.zorid-media-view.is-error .zorid-media-status { color: var(--text-error); }
