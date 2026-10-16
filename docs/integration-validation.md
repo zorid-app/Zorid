@@ -116,3 +116,27 @@ skipped tests. Independent host review reran all three original delayed-creation
 probes and both permanent delayed-save regressions after the activation fix.
 No Electron window was launched for this integration pass; native verification
 and closing the test app afterward remain with root.
+
+## Native chrome and folding checkpoint
+
+Root rebuilt `ee44810` and tested the actual Electron application with the saved
+`zorid-focus-verification-20261016` temporary vault. Startup restored its notes.
+The right control stayed at the outer top edge when expanded. Collapsing the left
+sidebar exposed duplicate legacy pane buttons: the older `:first-child` rule had
+higher specificity. The sidebar stylesheet now overrides that rule explicitly;
+after rebuild and restart, the native accessibility tree contains only the two
+persistent sidebar controls in the collapsed state.
+
+Right-clicking the empty file outline opened a native menu ordered New note,
+New folder, New canvas. New note created a real file and selected its title;
+after title submission, focus reached the note editor. A test note containing a
+heading and table rendered successfully. Clicking its heading fold control while
+a table cell was active removed the table and focused the parent editor; unfolding
+restored the content. Typing `[[` displayed the three current files and the
+heading/block/display-text footer with the corrected typography.
+
+Blank-titlebar double-click and drag were exercised and the captured window size
+changed, but exact movement, macOS preference variants, split/overflow geometry,
+and pixel comparison against the reference remain unproven. This pass establishes
+the listed interactions only. Electron exited with code zero; a fresh app
+inventory confirmed no Electron process remained. Unrelated apps were left open.

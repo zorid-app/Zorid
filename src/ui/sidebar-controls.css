@@ -32,6 +32,7 @@
   .workspace-sidebar-toggle.is-right { inset-inline-end: var(--sidebar-control-gap); }
 
   .workspace.has-sidebar-controls > .sidebar > .titlebar,
+  .workspace.has-sidebar-controls .pane:first-child .pane-sidebar-toggle,
   .workspace.has-sidebar-controls .pane-sidebar-toggle { display: none; }
   .workspace.has-sidebar-controls > .sidebar > .sidebar-tabs {
     padding-inline-start: calc(var(--sidebar-control-left-space) - var(--ribbon-width) + var(--sidebar-control-width) + var(--sidebar-control-gap));
