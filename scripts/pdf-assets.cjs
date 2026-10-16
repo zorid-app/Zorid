@@ -16,7 +16,10 @@ class PdfAssetsPlugin {
             for (const entry of (await fs.readdir(source)).sort()) await emit(path.join(relative, entry));
           } else if (!relative.endsWith('.map')) {
             compilation.emitAsset('lib/pdfjs/' + relative.split(path.sep).join('/'),
-              new compiler.webpack.sources.RawSource(await fs.readFile(source)));
+              new compiler.webpack.sources.RawSource(await fs.readFile(source)),
+              // Optimization is already handled by the vendor distribution.
+              // Also prevents minimizers that process late-added assets.
+              { minimized: true });
           }
         };
         for (const relative of ['LICENSE', 'build', 'web', 'cmaps', 'standard_fonts', 'wasm', 'iccs']) await emit(relative);
