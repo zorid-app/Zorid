@@ -745,7 +745,20 @@ export function tableActionsAt(view: EditorView, target: HTMLElement): TableActi
   return flatten(tableMenuAt(view, target));
 }
 
-export function liveTables(open: (target: string) => void, cellExtensions: Extension = []): Extension {
+export function liveTables(open: (target: string) => void, cellExtensions: Extension = [],
+  excludes?: (state: EditorState) => readonly { from: number; to: number }[]): Extension {
+  type ExcludedRange = { from: number; to: number };
+  const exclusions = (state: EditorState): ExcludedRange[] => {
+    const sorted = (excludes?.(state) ?? []).filter(range => range.from < range.to)
+      .map(({ from, to }) => ({ from, to })).sort((a, b) => a.from - b.from);
+    const merged: ExcludedRange[] = [];
+    for (const range of sorted) {
+      const previous = merged[merged.length - 1];
+      if (previous && range.from <= previous.to) previous.to = Math.max(previous.to, range.to);
+      else merged.push(range);
+    }
+    return merged;
+  };
   type CachedTable = { model: MarkdownTable; identity: object; changed: boolean };
   const shiftModel = (model: MarkdownTable, shift: number): MarkdownTable => !shift ? model : {
     ...model, from: model.from + shift, to: model.to + shift,
@@ -755,10 +768,13 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
         rawFrom: cell.rawFrom + shift, rawTo: cell.rawTo + shift,
         insertion: cell.insertion ? { at: cell.insertion.at + shift, get prefix() { return cell.insertion!.prefix; }, suffix: cell.insertion.suffix } : undefined })) })),
   };
-  const build = (state: EditorState, cached = new Map<number, CachedTable>()) => {
+  const build = (state: EditorState, excluded: readonly ExcludedRange[], cached = new Map<number, CachedTable>()) => {
+    let exclusionIndex = 0;
     const decorations: ReturnType<Decoration['range']>[] = [];
     syntaxTree(state).iterate({ enter(node) {
       if (node.name !== 'Table') return;
+      while (exclusionIndex < excluded.length && excluded[exclusionIndex].to <= node.from) exclusionIndex++;
+      if (excluded[exclusionIndex]?.from < node.to) return false;
       const previous = cached.get(node.from);
       const model = previous && !previous.changed && previous.model.to === node.to ? previous.model
         : parseTable(state.doc.sliceString(node.from, node.to), node.from);
@@ -767,11 +783,15 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
     } });
     return Decoration.set(decorations, true);
   };
-  const field = StateField.define<DecorationSet>({ create: state => build(state),
+  const field = StateField.define<{ decorations: DecorationSet; excluded: ExcludedRange[] }>({
+    create(state) { const excluded = exclusions(state); return { decorations: build(state, excluded), excluded }; },
     update(value, transaction) {
-      if (!transaction.docChanged && syntaxTree(transaction.startState) === syntaxTree(transaction.state)) return value;
+      const excluded = exclusions(transaction.state);
+      const sameExclusions = excluded.length === value.excluded.length && excluded.every((range, i) =>
+        range.from === value.excluded[i].from && range.to === value.excluded[i].to);
+      if (!transaction.docChanged && syntaxTree(transaction.startState) === syntaxTree(transaction.state) && sameExclusions) return value;
       const cached = new Map<number, CachedTable>();
-      value.between(0, transaction.startState.doc.length, (from, to, decoration) => {
+      value.decorations.between(0, transaction.startState.doc.length, (from, to, decoration) => {
         const start = transaction.changes.mapPos(from, 1), end = transaction.changes.mapPos(to, -1);
         if (start >= end || !(decoration.spec.widget instanceof TableWidget)) return;
         let changed = false;
@@ -779,8 +799,8 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
         const widget = decoration.spec.widget;
         cached.set(start, { model: shiftModel(widget.model, start - from), identity: widget.identity, changed });
       });
-      return build(transaction.state, cached);
-    }, provide: field => EditorView.decorations.from(field) });
+      return { decorations: build(transaction.state, excluded, cached), excluded };
+    }, provide: field => EditorView.decorations.from(field, value => value.decorations) });
   const selection = ViewPlugin.fromClass(class {
     private version = 0;
     update(update: ViewUpdate) {
