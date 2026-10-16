@@ -49,6 +49,19 @@ UI access request must not be bypassed with another automation mechanism.
 | Blocks | Headings/folding, blockquotes, callouts/folding, code blocks/language selection, comments, horizontal rules, footnotes, math, Mermaid, raw HTML, properties and attachment embeds. |
 | Viewports | Scroll anchoring, virtualized ranges, large files, resize, zoom, sidebar changes, split changes, tab switches, workspace restore and mobile keyboard occlusion. |
 
+## Split workspace views
+
+Verify split right and split below, nested combinations, divider dragging and
+keyboard resizing, minimum sizes in small windows, tab movement between groups,
+closing the last tab and collapsing empty groups, active-pane focus and command
+routing. Keep separate caret/selection, scroll, history and Reading/Live Edit
+state per view while shared note content stays synchronized. Splitting, resizing
+or moving another pane must preserve a surviving editor and any active selection
+or composition. Save and restore pane IDs, tree orientation, relative sizes,
+active pane and tab state, including migration from the earlier flat layout and
+malformed saved-state recovery. Pop-out windows and mobile/tablet behavior need
+their own comparisons; nested in-window splits do not establish those features.
+
 ## Table editor
 
 Verify table creation and Markdown round trips; enter/exit each cell; caret and
