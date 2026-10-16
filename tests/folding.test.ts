@@ -26,7 +26,8 @@ function setup(t: TestContext, value: string, live = false) {
   let destroyed = 0, rendered = 0;
   const handle = live ? createEditor(host, { value, mode: 'live', paths: () => [], open() {}, onChange: value => changes.push(value), renderEmbed: () => { rendered++; const child = document.createElement('div'); child.className = 'test-embed'; return { dom: child, destroy: () => { destroyed++; } }; } }) : null;
   const view = handle ? EditorView.findFromDOM(host.querySelector('.cm-editor')!)! : new EditorView({ parent: host, state: EditorState.create({ doc: value, extensions: [EditorState.allowMultipleSelections.of(true), markdown({ extensions: [liveInlineMarkdown] }), history()] }) });
-  view.dispatch({ effects: StateEffect.appendConfig.of(markdownFolding()) }); view.focus();
+  if (!handle) view.dispatch({ effects: StateEffect.appendConfig.of(markdownFolding()) });
+  view.focus();
   t.after(() => { if (handle) handle.destroy(); else view.destroy(); dom.window.close(); for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
   return { view, dom, host, changes, handle, get rendered() { return rendered; }, get destroyed() { return destroyed; } };
 }
@@ -35,6 +36,32 @@ test('heading hierarchy includes nested sections and stops before equal/lower he
   const value = state('# A\ntext\n## B\nchild\n# C\nlast');
   assert.deepEqual(ranges(value).map(({ line, text }) => ({ line, text })), [{ line: 1, text: '\ntext\n## B\nchild' }, { line: 3, text: '\nchild' }, { line: 5, text: '\nlast' }]);
   assert.deepEqual(ranges(state('# Alone')), []);
+});
+
+test('parent editor exposes folding controls and restores folded state without saving source changes', t => {
+  const ui = setup(t, '# Section\nbody\n# Next\nlast', true);
+  const editor = ui.handle!;
+  assert.ok(ui.host.querySelector('[aria-label="Collapse heading"]'));
+  assert.equal(ui.host.querySelectorAll('[aria-label="Collapse heading"]').length, 2, 'one control per heading');
+  assert.ok(editor.fold!('foldAll'));
+  const snapshot = editor.getViewState!();
+  assert.equal(snapshot.folds?.folds.length, 2);
+  assert.ok(editor.fold!('unfoldAll'));
+  editor.restoreViewState!(snapshot);
+  assert.deepEqual(getMarkdownFoldState(ui.view.state), snapshot.folds);
+  assert.deepEqual(ui.changes, []);
+  assert.equal(undoDepth(ui.view.state), 0);
+  editor.fold!('unfoldAll');
+  ui.view.dispatch({ selection: EditorSelection.range(0, ui.view.state.doc.length) });
+  editor.fold!('foldAll');
+  const spanning = editor.getViewState!();
+  editor.fold!('unfoldAll');
+  editor.restoreViewState!(spanning);
+  assert.deepEqual(getMarkdownFoldState(ui.view.state), spanning.folds, 'restoring a spanning selection must not erase its folded ranges');
+  assert.deepEqual(ui.changes, []);
+  editor.setValue('# Different');
+  assert.doesNotThrow(() => editor.restoreViewState!(snapshot));
+  assert.deepEqual(folds(ui.view), []);
 });
 
 test('setext headings and list indentation preserve headers, blanks and tab widths', () => {

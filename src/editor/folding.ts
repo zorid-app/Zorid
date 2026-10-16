@@ -4,6 +4,7 @@ import { codeFolding, ensureSyntaxTree, foldedRanges, foldEffect, foldService, s
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from '@codemirror/view';
 import type { Command, DecorationSet, KeyBinding, ViewUpdate } from '@codemirror/view';
 import { bodyStart } from './live-properties.ts';
+import { icon } from '../ui/icons.ts';
 
 export interface MarkdownFoldingOptions { headings?: boolean; lists?: boolean }
 export interface MarkdownFoldRange { kind: 'heading' | 'list'; line: number; from: number; to: number }
@@ -164,7 +165,7 @@ class FoldIndicator extends WidgetType {
     button.type = 'button'; button.className = `cm-markdown-fold-toggle${this.collapsed ? ' is-collapsed' : ''}`;
     button.setAttribute('aria-label', `${this.collapsed ? 'Expand' : 'Collapse'} ${this.kind}`);
     button.setAttribute('aria-expanded', String(!this.collapsed)); button.title = button.getAttribute('aria-label')!;
-    button.textContent = '›'; button.contentEditable = 'false';
+    button.append(icon('right', 16, wrapper.ownerDocument)); button.contentEditable = 'false';
     button.addEventListener('mousedown', event => event.preventDefault());
     button.addEventListener('click', event => {
       event.preventDefault(); event.stopPropagation();

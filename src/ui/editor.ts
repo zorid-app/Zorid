@@ -22,10 +22,17 @@ import { textChanges } from '../editor/text-changes.ts';
 import { wikiCompletion } from '../editor/wiki-completion.ts';
 import type { WikiCompletionOptions } from '../editor/wiki-completion.ts';
 import { installEmptyNoteFocus } from '../editor/empty-note-focus.ts';
+import { markdownFolding, getMarkdownFoldState, restoreMarkdownFoldState, toggleMarkdownFold, foldMarkdown, unfoldMarkdown, foldAllMarkdown, unfoldAllMarkdown, foldMoreMarkdown, foldLessMarkdown } from '../editor/folding.ts';
+import type { MarkdownFoldSnapshot } from '../editor/folding.ts';
+
+export type EditorFoldAction = 'toggle' | 'fold' | 'unfold' | 'foldAll' | 'unfoldAll' | 'foldMore' | 'foldLess';
+const foldCommands = { toggle: toggleMarkdownFold, fold: foldMarkdown, unfold: unfoldMarkdown,
+  foldAll: foldAllMarkdown, unfoldAll: unfoldAllMarkdown, foldMore: foldMoreMarkdown, foldLess: foldLessMarkdown };
 
 export interface EditorViewState {
   selection: { ranges: { anchor: number; head: number }[]; mainIndex: number };
   scrollTop: number; scrollLeft: number;
+  folds?: MarkdownFoldSnapshot;
 }
 
 export interface EditorHandle {
@@ -39,6 +46,7 @@ export interface EditorHandle {
   insert(text: string): void;
   configureLists?(options: MarkdownListOptions): void;
   refreshLinks?(): void;
+  fold?(action: EditorFoldAction): boolean;
 }
 export interface EditorOptions {
   value: string; mode: 'live' | 'source'; paths: () => string[];
@@ -66,6 +74,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[liveInlineMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, wiki,
+      markdownFolding(),
       EditorView.contentAttributes.of({'aria-label': 'Note editor', spellcheck: 'true'}),
       EditorView.updateListener.of(update => { if (update.transactions.some(transaction => transaction.docChanged && !transaction.annotation(externalChange))) options.onChange(update.state.doc.toString()); }),
       ...(options.mode === 'source' ? [EditorView.domEventHandlers({ click(event, sourceView) {
@@ -87,7 +96,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
   const disposeEmptyFocus = installEmptyNoteFocus(view, parent);
   return {
     getValue: () => view.state.doc.toString(),
-    getViewState: () => ({selection: {ranges:view.state.selection.ranges.map(range=>({anchor:range.anchor,head:range.head})),mainIndex:view.state.selection.mainIndex}, scrollTop: view.scrollDOM.scrollTop, scrollLeft: view.scrollDOM.scrollLeft}),
+    getViewState: () => ({selection: {ranges:view.state.selection.ranges.map(range=>({anchor:range.anchor,head:range.head})),mainIndex:view.state.selection.mainIndex}, scrollTop: view.scrollDOM.scrollTop, scrollLeft: view.scrollDOM.scrollLeft, folds: getMarkdownFoldState(view.state)}),
     restoreViewState(saved) {
       // Session data is untrusted and can refer to a longer, older file snapshot.
       const ranges = saved?.selection?.ranges;
@@ -96,10 +105,14 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
         const main = Number.isInteger(saved.selection.mainIndex) ? Math.max(0, Math.min(ranges.length - 1, saved.selection.mainIndex)) : 0;
         view.dispatch({ selection: EditorSelection.create(ranges.map(range => EditorSelection.range(clamp(range.anchor), clamp(range.head))), main), annotations: Transaction.addToHistory.of(false) });
       }
+      // Selection changes normally unfold entered ranges. Restore selection
+      // first so a saved spanning selection cannot erase the saved folds.
+      if (saved?.folds) restoreMarkdownFoldState(view, saved.folds);
       if (Number.isFinite(saved?.scrollTop)) view.scrollDOM.scrollTop = Math.max(0, saved.scrollTop);
       if (Number.isFinite(saved?.scrollLeft)) view.scrollDOM.scrollLeft = Math.max(0, saved.scrollLeft);
     },
     refreshLinks() { view.dispatch({ effects: refreshLiveInline.of() }); },
+    fold(action) { return Object.hasOwn(foldCommands, action) ? foldCommands[action](view) : false; },
     configureLists(listOptions) { view.dispatch({ effects: listConfiguration.reconfigure(markdownListKeymap(listOptions)) }); },
     setValue(value) {
       const previous = view.state.doc.toString();
