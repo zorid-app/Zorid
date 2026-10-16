@@ -11,6 +11,7 @@ import { forceParsing } from '@codemirror/language';
 import { liveFences, refreshLiveFences } from '../src/editor/live-fences.ts';
 import type { LiveFenceOptions } from '../src/editor/live-fences.ts';
 import { appendCodeBlock, destroyCodeBlocks, readCodeFence } from '../src/ui/code-block.ts';
+import { CodeTokenIndex } from '../src/editor/code-token-index.ts';
 import { codeCopyText, codeLanguage, createCodeHighlighter } from '../src/editor/code-highlight.ts';
 import type { CodeToken } from '../src/editor/code-highlight.ts';
 
@@ -163,4 +164,37 @@ test('unchanged selection refresh reuses extracted code and container cleanup ab
   let signal: AbortSignal | undefined;
   const handle = appendCodeBlock(nested, 'pending', 'js', { highlight: (_, __, abort) => { signal = abort; return new Promise(() => {}); } });
   await tick(); destroyCodeBlocks(parent); await handle.ready; assert.equal(signal!.aborted, true);
+});
+
+
+test('large token index seeks a narrow tail window without scanning preceding or overlapping ranges', () => {
+  let reads = 0;
+  const source = Array.from({ length: 100000 }, (_, index) => ({ from: index * 10, to: index * 10 + 5, classes: ['keyword'] }));
+  source[0].to = 1000000; // One ancestor-like range must not force a linear prefix scan.
+  const tokens = new Proxy(source, { get(target, key, receiver) { if (typeof key === 'string' && /^\d+$/.test(key)) reads++; return Reflect.get(target, key, receiver); } });
+  const index = new CodeTokenIndex(tokens); reads = 0; const found: number[] = [];
+  index.visit(999900, 999925, token => found.push(token.from));
+  assert.deepEqual(found, [0, 999900, 999910, 999920]); assert.ok(reads < 70, `indexed token reads: ${reads}`);
+});
+
+test('huge visible fence reuses its job and indexes token/segment work on selection refresh', async t => {
+  const lineCount = 12000, body = 'let value = 1;\n'.repeat(lineCount), source = '```js\n' + body + '```';
+  const start = source.lastIndexOf('let') - 30, visible = [{ from: start, to: start + 20 }, { from: start + 5, to: start + 25 }];
+  let calls = 0;
+  const ui = setup(t, source, { highlight: async code => { calls++; return Array.from({ length: lineCount }, (_, index) => ({ from: index * 15, to: index * 15 + 3, classes: ['keyword'] })); } }, visible);
+  forceParsing(ui.view, source.length, 500); ui.refresh(); await tick(20);
+  const originalVisit = CodeTokenIndex.prototype.visit; let tokenReads = 0, queries = 0, emitted = 0;
+  CodeTokenIndex.prototype.visit = function(from, to, callback) {
+    queries++; const originalTokens = this.tokens;
+    Object.defineProperty(this, 'tokens', { configurable: true, value: new Proxy(originalTokens, { get(target, key, receiver) { if (typeof key === 'string' && /^\d+$/.test(key)) tokenReads++; return Reflect.get(target, key, receiver); } }) });
+    try { return originalVisit.call(this, from, to, (token, index) => { emitted++; callback(token, index); }); }
+    finally { Object.defineProperty(this, 'tokens', { configurable: true, value: originalTokens }); }
+  };
+  try { ui.cursor(start); ui.refresh(); }
+  finally { CodeTokenIndex.prototype.visit = originalVisit; }
+  assert.equal(calls, 1); assert.ok(queries <= 4 && queries >= 2, `visible range queries: ${queries}`);
+  assert.ok(tokenReads < 100, `token reads for selection+refresh: ${tokenReads}`); assert.ok(emitted <= 8, `visited token runs: ${emitted}`);
+  assert.equal(ui.view.state.doc.toString(), source);
+  const previousCalls = calls; ui.view.dispatch({ changes: { from: start, to: start + 3, insert: 'var' } }); await tick(20);
+  assert.equal(calls, previousCalls + 1); assert.equal(ui.view.state.doc.sliceString(start, start + 3), 'var');
 });

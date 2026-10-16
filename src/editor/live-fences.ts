@@ -6,12 +6,13 @@ import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { bodyStart } from './live-properties.ts';
 import { codeCopyText, codeTokenColor, codeLanguage, defaultCodeHighlighter, validTokens } from './code-highlight.ts';
-import type { CodeHighlightOptions, CodeToken } from './code-highlight.ts';
+import type { CodeHighlightOptions } from './code-highlight.ts';
+import { CodeTokenIndex } from './code-token-index.ts';
 import { createCodeCopyButton } from '../ui/code-block.ts';
 
 type SyntaxNode = ReturnType<typeof syntaxTree>['topNode'];
 interface Segment { from: number; to: number; codeFrom: number }
-interface Fence { from: number; to: number; openingTo: number; closingFrom?: number; info: string; language: string; code: string; segments: Segment[] }
+interface Fence { from: number; to: number; openingTo: number; closingFrom?: number; info: string; language: string; code: string; segments: Segment[]; key: string; job?: HighlightJob; search?: { query: ReturnType<typeof getSearchQuery>; matched: boolean } }
 export interface LiveFenceOptions extends CodeHighlightOptions { /** Languages owned by specialized renderers (for example Mermaid). */ handledLanguages?: ReadonlySet<string> }
 export const refreshLiveFences = StateEffect.define<void>();
 
@@ -22,8 +23,9 @@ function fenceFromNode(state: EditorState, node: SyntaxNode): Fence {
   for (const text of node.getChildren('CodeText')) {
     segments.push({ from: text.from, to: text.to, codeFrom: code.length }); code += state.sliceDoc(text.from, text.to);
   }
+  const language = codeLanguage(info);
   return { from: node.from, to: node.to, openingTo, closingFrom: last.name === 'CodeMark' && last.from !== first.from ? last.from : undefined,
-    info, language: codeLanguage(info), code, segments };
+    info, language, code, segments, key: language + '\0' + code };
 }
 /** Seek only intersecting syntax branches, including a fence that starts above the viewport. */
 function visibleFences(view: EditorView, cache: Map<number, Fence>): Fence[] {
@@ -65,7 +67,7 @@ class CopyFlair extends WidgetType {
   ignoreEvent(): boolean { return true; }
   destroy(dom: HTMLElement): void { flairCleanup.get(dom)?.(); flairCleanup.delete(dom); }
 }
-interface HighlightJob { code: string; language: string; controller: AbortController; tokens?: readonly CodeToken[]; failed?: boolean }
+interface HighlightJob { code: string; language: string; controller: AbortController; tokens?: CodeTokenIndex; failed?: boolean }
 
 /** Ordinary fences remain editable source; only complete fence markers are concealed. */
 export function liveFences(options: LiveFenceOptions = {}): Extension {
@@ -106,29 +108,30 @@ export function liveFences(options: LiveFenceOptions = {}): Extension {
         this.settling = false; this.view.dispatch({ effects: refreshLiveFences.of() });
       }, delay);
     }
-    private tokens(fence: Fence, retained: Set<string>): readonly CodeToken[] {
-      if (!fence.language || !fence.code) return [];
-      const key = fence.language + '\0' + fence.code; retained.add(key);
+    private tokens(fence: Fence, retained: Set<HighlightJob>): CodeTokenIndex | undefined {
+      if (!fence.language || !fence.code) return undefined;
+      if (fence.job && !fence.job.controller.signal.aborted) { retained.add(fence.job); return fence.job.tokens; }
+      const key = fence.key;
       let job = this.jobs.get(key);
       if (!job) {
         job = { code: fence.code, language: fence.language, controller: new AbortController() }; this.jobs.set(key, job);
         const owned = job, highlight = options.highlight ?? defaultCodeHighlighter(this.view.dom.ownerDocument);
         // Promise entry also captures a synchronous host highlighter exception.
-        void Promise.resolve().then(() => highlight(owned.code, owned.language, owned.controller.signal)).then(tokens => {
+        void Promise.resolve().then(() => owned.controller.signal.aborted ? [] : highlight(owned.code, owned.language, owned.controller.signal)).then(tokens => {
           if (this.closed || owned.controller.signal.aborted || this.jobs.get(key) !== owned) return;
-          owned.tokens = validTokens(tokens, owned.code.length);
+          owned.tokens = new CodeTokenIndex(validTokens(tokens, owned.code.length));
           if (!this.pointer && !this.settling && !this.composition && !this.view.composing) this.schedule();
         }).catch(error => {
           if (this.closed || owned.controller.signal.aborted || this.jobs.get(key) !== owned) return;
           owned.failed = true; try { options.onError?.(error); } catch { /* Highlight failures leave editable source. */ }
         });
       }
-      return job.tokens ?? [];
+      fence.job = job; retained.add(job); return job.tokens;
     }
     private rebuild(): void {
       const view = this.view;
       if (!syntaxTreeAvailable(view.state, view.viewport.to)) return;
-      const ranges: ReturnType<Decoration['range']>[] = [], atomic: ReturnType<Decoration['range']>[] = [], retained = new Set<string>(), lines = new Set<number>();
+      const ranges: ReturnType<Decoration['range']>[] = [], atomic: ReturnType<Decoration['range']>[] = [], retained = new Set<HighlightJob>(), lines = new Set<number>();
       const query = searchPanelOpen(view.state) ? getSearchQuery(view.state) : null;
       const tree = syntaxTree(view.state);
       if (this.cachedDoc !== view.state.doc || this.cachedTree !== tree) { this.fenceCache.clear(); this.cachedDoc = view.state.doc; this.cachedTree = tree; }
@@ -138,7 +141,10 @@ export function liveFences(options: LiveFenceOptions = {}): Extension {
       for (const fence of visible) {
         if (options.handledLanguages?.has(fence.language)) continue;
         let reveal = view.hasFocus && view.state.selection.ranges.some(range => range.from <= fence.to && range.to >= fence.from);
-        if (!reveal && query?.valid) { const cursor = query.getCursor(view.state, fence.from, fence.to); reveal = !cursor.next().done; }
+        if (!reveal && query?.valid) {
+          if (fence.search?.query !== query) { const cursor = query.getCursor(view.state, fence.from, fence.to); fence.search = { query, matched: !cursor.next().done }; }
+          reveal = fence.search.matched;
+        }
         const firstLine = view.state.doc.lineAt(fence.from).number, lastLine = view.state.doc.lineAt(fence.to).number;
         for (const visible of view.visibleRanges) {
           const start = Math.max(firstLine, view.state.doc.lineAt(Math.max(visible.from, fence.from)).number), end = Math.min(lastLine, view.state.doc.lineAt(Math.min(visible.to, fence.to)).number);
@@ -153,20 +159,26 @@ export function liveFences(options: LiveFenceOptions = {}): Extension {
           }
           ranges.push(Decoration.widget({ widget: new CopyFlair(fence.language, options), side: 1 }).range(fence.openingTo));
         }
-        let segmentIndex = 0;
-        for (const token of this.tokens(fence, retained)) {
-          while (segmentIndex < fence.segments.length && fence.segments[segmentIndex].codeFrom + fence.segments[segmentIndex].to - fence.segments[segmentIndex].from <= token.from) segmentIndex++;
-          for (let index = segmentIndex; index < fence.segments.length && fence.segments[index].codeFrom < token.to; index++) {
-          const segment = fence.segments[index];
-          const from = Math.max(token.from, segment.codeFrom), to = Math.min(token.to, segment.codeFrom + segment.to - segment.from);
-          if (from >= to) continue;
-          const sourceFrom = segment.from + from - segment.codeFrom, sourceTo = segment.from + to - segment.codeFrom;
-          if (!view.visibleRanges.some(visible => visible.from <= sourceTo && visible.to >= sourceFrom)) continue;
-          ranges.push(Decoration.mark({ class: ['zorid-code-token', ...token.classes.map(name => `token-${name}`)].join(' '), attributes: { style: `color: ${codeTokenColor(token.classes) || 'inherit'}` } }).range(sourceFrom, sourceTo));
+        const tokens = this.tokens(fence, retained), emitted = new Set<string>();
+        if (tokens) for (const visible of view.visibleRanges) {
+          // Source segments and code-token ranges each have their own index:
+          // nested quote/list prefixes never force a scan from the fence start.
+          let low = 0, high = fence.segments.length;
+          while (low < high) { const middle = (low + high) >>> 1; if (fence.segments[middle].to <= visible.from) low = middle + 1; else high = middle; }
+          for (let index = low; index < fence.segments.length && fence.segments[index].from < visible.to; index++) {
+            const segment = fence.segments[index];
+            const codeFrom = segment.codeFrom + Math.max(0, visible.from - segment.from);
+            const codeTo = segment.codeFrom + Math.min(segment.to - segment.from, visible.to - segment.from);
+            tokens.visit(codeFrom, codeTo, (token, tokenIndex) => {
+              const identity = `${index}:${tokenIndex}`; if (emitted.has(identity)) return; emitted.add(identity);
+              const from = Math.max(token.from, segment.codeFrom), to = Math.min(token.to, segment.codeFrom + segment.to - segment.from);
+              const sourceFrom = segment.from + from - segment.codeFrom, sourceTo = segment.from + to - segment.codeFrom;
+              ranges.push(Decoration.mark({ class: ['zorid-code-token', ...token.classes.map(name => `token-${name}`)].join(' '), attributes: { style: `color: ${codeTokenColor(token.classes) || 'inherit'}` } }).range(sourceFrom, sourceTo));
+            });
           }
         }
       }
-      for (const [key, job] of this.jobs) if (!retained.has(key)) { job.controller.abort(); this.jobs.delete(key); }
+      for (const [key, job] of this.jobs) if (!retained.has(job)) { job.controller.abort(); this.jobs.delete(key); }
       this.decorations = Decoration.set(ranges, true); this.atomic = Decoration.set(atomic, true);
     }
     update(update: ViewUpdate): void {
