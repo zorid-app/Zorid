@@ -129,7 +129,7 @@ test('main IPC rejects a foreign sender, child frame and unexpected document bef
     constructor() {
       super(); window = this;
       this.webContents = Object.assign(new EventEmitter(), {
-        mainFrame: { url: packaged }, isDestroyed: () => false, getZoomFactor: () => 1,
+        id: 1, mainFrame: { url: packaged }, isDestroyed: () => false, getZoomFactor: () => 1,
         setWindowOpenHandler() {},
       });
     }
@@ -152,6 +152,7 @@ test('main IPC rejects a foreign sender, child frame and unexpected document bef
       if (name === './vault-service.cjs') return { VaultService: {} };
       if (name === './vault-dispatch.cjs') return { dispatchVaultOperation() {} };
       if (name === './context-menu.cjs') return { createContextMenuController };
+      if (name === './window-broker.cjs') return require('../desktop/window-broker.cjs');
       return require(name);
     },
   });
