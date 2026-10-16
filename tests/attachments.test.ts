@@ -85,3 +85,27 @@ test('wiki and Markdown images use lossless local resources with alt/dimensions 
   const [one,two]=root.querySelectorAll('img');assert.equal(one.alt,'caption');assert.equal(one.width,120);assert.equal(one.height,80);assert.equal(two.alt,'');
   assert.equal(textReads,0);assert.equal(blobs.size,1);embeds.destroy();assert.equal(blobs.size,0);
 });
+
+test('byte leases share one vault read but return independent transferable buffers',async t=>{
+  const {vault}=await fixture();const resources=new AttachmentResources(vault);t.after(()=>resources.destroy());
+  let reads=0;const read=vault.readBinary.bind(vault);vault.readBinary=async path=>{reads++;return read(path);};
+  const [one,two]=await Promise.all([resources.acquire('Picture.png'),resources.acquire('Picture.png')]);
+  const first=await one.arrayBuffer!(),second=await two.arrayBuffer!();assert.notEqual(first,second);assert.equal(reads,1);
+  new Uint8Array(first)[0]=42;assert.equal(new Uint8Array(second)[0],0);
+  structuredClone(first,{transfer:[first]});assert.equal(first.byteLength,0);
+  assert.deepEqual(new Uint8Array(await one.arrayBuffer!()),Uint8Array.of(0,255,128,10));assert.equal(reads,1);
+  await vault.modifyBinary('Picture.png',Uint8Array.of(9,8));const changed=await resources.acquire('Picture.png');
+  assert.deepEqual(new Uint8Array(await two.arrayBuffer!()),Uint8Array.of(0,255,128,10));assert.deepEqual(new Uint8Array(await changed.arrayBuffer!()),Uint8Array.of(9,8));assert.equal(reads,2);
+  one.release();await assert.rejects(one.arrayBuffer!(),/released/);assert.deepEqual(new Uint8Array(await two.arrayBuffer!()),Uint8Array.of(0,255,128,10));
+  resources.destroy();await assert.rejects(two.arrayBuffer!(),/closed/);await assert.rejects(changed.arrayBuffer!(),/closed/);two.release();changed.release();
+});
+
+test('byte reads reject when the lease or resource owner closes during Blob conversion',async t=>{
+  const {blobs}=dom(t),{vault}=await fixture();const resources=new AttachmentResources(vault);t.after(()=>resources.destroy());
+  for(const closeOwner of [false,true]){
+    const lease=await resources.acquire('Picture.png'),blob=blobs.get(lease.url)!;let finish!:(buffer:ArrayBuffer)=>void;
+    blob.arrayBuffer=()=>new Promise<ArrayBuffer>(resolve=>{finish=resolve;});
+    const read=lease.arrayBuffer!();if(closeOwner)resources.destroy();else lease.release();finish(Uint8Array.of(1).buffer);
+    await assert.rejects(read,closeOwner?/closed/:/released/);lease.release();
+  }
+});
