@@ -7,7 +7,7 @@ const mimeTypes: Record<string,string> = {
   '3gp':'audio/3gpp', flac:'audio/flac', oga:'audio/ogg', opus:'audio/ogg',
   mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime', ogv:'video/ogg', mkv:'video/x-matroska',
 };
-export function attachmentType(path:string):string { return mimeTypes[path.split('.').at(-1)!.toLowerCase()] ?? 'application/octet-stream'; }
+export function attachmentType(path:string):string { const extension=path.split('.').at(-1)!.toLowerCase();return Object.hasOwn(mimeTypes,extension)?mimeTypes[extension]:'application/octet-stream'; }
 export function isImage(path:string):boolean { return attachmentType(path).startsWith('image/'); }
 
 /** Dimensions in the final alt segment, matching the observed integer width[xheight] syntax. */
