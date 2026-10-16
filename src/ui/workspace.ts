@@ -422,7 +422,7 @@ export class Workspace {
   }
 
   private renderEmpty(pane:Pane):void{
-    const empty=el('div','empty-state');empty.append(el('h2','','No file is open'));
+    const empty=el('div','empty-state');
     const actions=el('div','empty-actions');
     for(const [label,shortcut,action]of [['Create new file','⌘ N',()=>this.run(()=>this.newNote())],['Go to file','⌘ O',()=>this.quickSwitcher()],['Open command palette','⌘ P',()=>this.commandPalette()]] as const){const row=textButton(label,action,'empty-action');row.append(el('kbd','',shortcut));actions.append(row);}empty.append(actions);pane.element.append(empty);
   }
