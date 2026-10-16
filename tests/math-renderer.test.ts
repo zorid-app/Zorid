@@ -189,3 +189,60 @@ test('a throwing onReady callback does not change successful rendering or repeat
   assert.equal(target.textContent, 'rendered'); assert.equal(notifications, 1);
   assert.equal(target.classList.contains('math-error'), false);
 });
+
+test('disposing all queued owners settles immediately and skips every unstarted unique conversion', async t => {
+  const { element, parent } = fixture(t), gate = deferred<HTMLElement>(), started = deferred<void>();
+  const calls: string[] = [];
+  const render = createMathRenderer(async () => ({ convert: async source => {
+    calls.push(source); if (source === 'formula-0') { started.resolve(); return gate.promise; } return element(source);
+  }, stylesheet: () => null }));
+  const handles = Array.from({ length: 16 }, (_, index) => render(parent(), `formula-${index}`));
+  await started.promise; assert.deepEqual(calls, ['formula-0']);
+  for (const handle of handles) handle.dispose();
+  // Ready settles on disposal, even before the already-running job releases.
+  assert.deepEqual(await Promise.all(handles.map(handle => handle.ready)), Array(16).fill(false));
+  gate.resolve(element('finished'));
+  await render(parent(), 'sentinel').ready;
+  assert.deepEqual(calls, ['formula-0', 'sentinel']);
+  assert.equal(await render(parent(), 'formula-1').ready, true);
+  assert.deepEqual(calls, ['formula-0', 'sentinel', 'formula-1']);
+});
+
+test('a queued duplicate converts once when any consumer remains active', async t => {
+  const { element, parent } = fixture(t), gate = deferred<HTMLElement>(), started = deferred<void>();
+  const calls: string[] = [];
+  const render = createMathRenderer(async () => ({ convert: async source => {
+    calls.push(source); if (source === 'blocker') { started.resolve(); return gate.promise; } return element(source);
+  }, stylesheet: () => null }));
+  const blocker = render(parent(), 'blocker'), first = render(parent(), 'shared'), second = render(parent(), 'shared');
+  await started.promise; first.dispose(); blocker.dispose();
+  gate.resolve(element('done'));
+  assert.deepEqual(await Promise.all([first.ready, second.ready]), [false, true]);
+  assert.deepEqual(calls, ['blocker', 'shared']);
+  await render(parent(), 'shared').ready; assert.equal(calls.length, 2);
+});
+
+test('new consumers revive pending shared work but superseded parent requests are skipped', async t => {
+  const { element, parent } = fixture(t), gate = deferred<HTMLElement>(), started = deferred<void>();
+  const calls: string[] = [];
+  const render = createMathRenderer(async () => ({ convert: async source => {
+    calls.push(source); if (source === 'blocker') { started.resolve(); return gate.promise; } return element(source);
+  }, stylesheet: () => null }));
+  const blocker = render(parent(), 'blocker'), disposed = render(parent(), 'shared'), target = parent();
+  const obsolete = render(target, 'obsolete');
+  await started.promise; disposed.dispose();
+  const current = render(target, 'current'), revived = render(parent(), 'shared');
+  gate.resolve(element('done')); await blocker.ready;
+  assert.deepEqual(await Promise.all([obsolete.ready, current.ready, revived.ready]), [false, true, true]);
+  assert.deepEqual(calls, ['blocker', 'shared', 'current']); assert.equal(target.textContent, 'current');
+});
+
+test('disposal while engine startup is pending prevents conversion after startup', async t => {
+  const { element, parent } = fixture(t), engine = deferred<MathEngine>(), loading = deferred<void>();
+  let conversions = 0;
+  const render = createMathRenderer(async () => { loading.resolve(); return engine.promise; });
+  const first = render(parent(), 'first'); await loading.promise; first.dispose();
+  assert.equal(await first.ready, false);
+  engine.resolve({ convert: async source => { conversions++; return element(source); }, stylesheet: () => null });
+  const second = render(parent(), 'second'); assert.equal(await second.ready, true); assert.equal(conversions, 1);
+});
