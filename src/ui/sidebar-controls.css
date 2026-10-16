@@ -1,0 +1,73 @@
+/* Workspace-owned edge controls never participate in a pane's tab scrolling. */
+.workspace-sidebar-controls { display: none; }
+.tab-strip { display: contents; }
+@media (min-width: 701px) {
+  .workspace.has-sidebar-controls {
+    position: relative;
+    --sidebar-control-width: 28px;
+    --sidebar-control-gap: 8px;
+    --sidebar-control-left-space: calc(var(--ribbon-width) + 8px);
+  }
+  .workspace.has-sidebar-controls.is-macos-desktop {
+    --sidebar-control-left-space: 88px;
+  }
+  .workspace-sidebar-controls {
+    display: block;
+    position: absolute;
+    inset: 0 0 auto;
+    height: var(--chrome-header-height, 40px);
+    z-index: 10;
+    pointer-events: none;
+  }
+  .workspace-sidebar-controls > .workspace-sidebar-toggle {
+    position: absolute;
+    top: 7px;
+    width: var(--sidebar-control-width);
+    height: 26px;
+    padding: 4px 5px;
+    pointer-events: auto;
+    -webkit-app-region: no-drag;
+  }
+  .workspace-sidebar-toggle.is-left { inset-inline-start: var(--sidebar-control-left-space); }
+  .workspace-sidebar-toggle.is-right { inset-inline-end: var(--sidebar-control-gap); }
+
+  .workspace.has-sidebar-controls > .sidebar > .titlebar,
+  .workspace.has-sidebar-controls .pane:first-child .pane-sidebar-toggle,
+  .workspace.has-sidebar-controls .pane-sidebar-toggle { display: none; }
+  .workspace.has-sidebar-controls > .sidebar > .sidebar-tabs {
+    padding-inline-start: calc(var(--sidebar-control-left-space) - var(--ribbon-width) + var(--sidebar-control-width) + var(--sidebar-control-gap));
+    padding-inline-end: 8px;
+  }
+  .workspace.has-sidebar-controls > .right-sidebar > .right-tabs {
+    padding-inline-end: calc(var(--sidebar-control-width) + 2 * var(--sidebar-control-gap));
+  }
+  .workspace.has-sidebar-controls.left-hidden .tab-bar[data-chrome-edge-left] {
+    padding-inline-start: calc(var(--sidebar-control-left-space) - var(--ribbon-width) + var(--sidebar-control-width) + var(--sidebar-control-gap));
+  }
+  .workspace.has-sidebar-controls.right-hidden .tab-bar[data-chrome-edge-right] {
+    padding-inline-end: calc(var(--sidebar-control-width) + 2 * var(--sidebar-control-gap));
+  }
+  .workspace.has-sidebar-controls .tab-bar {
+    overflow: hidden;
+    -webkit-app-region: no-drag;
+  }
+  .workspace.has-sidebar-controls .tab-strip {
+    display: flex;
+    align-self: stretch;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: 3px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .workspace.has-sidebar-controls .tab-strip::-webkit-scrollbar { display: none; }
+  .workspace.has-sidebar-controls .tab-bar > button { flex-shrink: 0; }
+  .workspace.has-sidebar-controls [data-window-drag-region],
+  .workspace.has-sidebar-controls [data-window-drag-region] > .tab-strip {
+    -webkit-app-region: drag;
+  }
+  .workspace.has-sidebar-controls [data-window-drag-region] :is(button, a, input, textarea, select, .tab, [role="tab"], [data-window-no-drag]) {
+    -webkit-app-region: no-drag;
+  }
+}

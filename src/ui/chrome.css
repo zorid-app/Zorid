@@ -79,7 +79,7 @@
     stroke-width: var(--chrome-icon-stroke);
   }
   /* Collapsing the sidebar moves the first tab group under window controls. */
-  .workspace.is-macos-desktop.left-hidden .pane:not(
+  .workspace.is-macos-desktop.left-hidden:not(.has-sidebar-controls) .pane:not(
     .split-layout-separator ~ .pane,
     .split-layout-separator ~ .split-layout-group .pane
   ) > .tab-bar {

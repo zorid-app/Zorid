@@ -10,21 +10,31 @@
   border: 1px solid var(--background-modifier-border) !important;
   border-radius: 8px !important;
   font-family: var(--font-interface);
+  font-size: 15px;
+  line-height: 1.3;
   color: var(--text-normal);
   box-shadow: 0 1px 2px rgb(0 0 0 / .121), 0 3.4px 6.7px rgb(0 0 0 / .179), 0 15px 30px rgb(0 0 0 / .3) !important;
 }
 html[data-theme="light"] .cm-tooltip.cm-tooltip-autocomplete.cm-wiki-completion { box-shadow: 0 1px 2px rgb(0 0 0 / .028), 0 3.4px 6.7px rgb(0 0 0 / .042), 0 15px 30px rgb(0 0 0 / .07) !important; }
-.cm-wiki-completion > ul[role="listbox"] { flex: 1; min-height: 0; max-height: none; padding: 6px; overflow-y: auto; font-family: inherit; }
-.cm-wiki-completion > ul > li[role="option"] { padding: 6px 12px; margin: 0 0 1px; border-radius: 4px; white-space: pre-wrap; font-size: 15px; line-height: 1.3; color: var(--text-normal); cursor: default; }
-.cm-tooltip.cm-wiki-completion > ul > li[aria-selected="true"] { background: var(--background-modifier-hover) !important; color: var(--text-normal) !important; }
+/* Include all tooltip classes so these rules outrank CM's generated base theme,
+   regardless of when its stylesheet is inserted. Reset its 250px/10em list box. */
+.cm-tooltip.cm-tooltip-autocomplete.cm-wiki-completion > ul[role="listbox"] {
+  flex: 1 1 auto; min-height: 0; min-width: 0; max-width: none; max-height: none; height: auto;
+  padding: 6px; margin: 0; overflow: hidden auto; list-style: none; font-family: inherit;
+}
+.cm-tooltip.cm-tooltip-autocomplete.cm-wiki-completion > ul > li[role="option"] { padding: 6px 12px; margin: 0 0 1px; border-radius: 4px; white-space: pre-wrap; font-size: 15px; line-height: 1.3; color: var(--text-normal); cursor: default; }
+.cm-tooltip.cm-tooltip-autocomplete.cm-wiki-completion > ul > li[aria-selected="true"] { background: var(--background-modifier-hover) !important; color: var(--text-normal) !important; }
 .cm-wiki-completion .cm-completionLabel, .cm-wiki-completion .cm-completionDetail { display: none; }
-.wiki-suggestion-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.wiki-suggestion-content { display: flex; flex-direction: column; min-width: 0; margin-inline-end: auto; }
+.wiki-suggestion-row { display: flex; align-items: baseline; justify-content: space-between; }
+.wiki-suggestion-content { display: flex; flex-direction: column; min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-inline-end: auto; }
 .wiki-suggestion-title, .wiki-suggestion-note { overflow-wrap: break-word; }
 .wiki-suggestion-note { font-size: .8em; color: var(--text-muted); }
-.wiki-suggestion-flair { align-self: center; flex-shrink: 0; color: var(--text-muted); }
-.cm-wiki-completion > ul > li.wiki-suggestion-downranked { color: var(--text-muted); }
+.wiki-suggestion-aux { display: flex; align-items: center; align-self: center; flex-shrink: 0; gap: 2px; }
+.wiki-suggestion-flair { display: flex; align-items: center; margin-inline: 12px 4px; color: var(--text-muted); opacity: .85; }
+.wiki-suggestion-placeholder { color: var(--text-faint); }
+.cm-tooltip.cm-tooltip-autocomplete.cm-wiki-completion > ul > li.wiki-suggestion-downranked { color: var(--text-muted) !important; }
 .wiki-suggestion-instructions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; flex-shrink: 0; padding: 8px; font-size: 12px; line-height: 1.3; color: var(--text-muted); text-align: center; user-select: none; }
+.wiki-suggestion-instructions b { margin-inline-end: 4px; font-weight: 700; }
 @media (max-width: 700px) {
   .cm-tooltip.cm-tooltip-autocomplete.cm-wiki-completion { max-height: 240px; }
   .wiki-suggestion-instructions { display: none; }

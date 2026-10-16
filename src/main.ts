@@ -4,6 +4,7 @@ import { el, textButton } from './ui/dom.ts';
 import './ui/styles.css';
 import './ui/reference-defaults.css';
 import './ui/chrome.css';
+import './ui/sidebar-controls.css';
 import './editor/table-controls.css';
 import './editor/live-lists.css';
 import './editor/live-inline.css';
