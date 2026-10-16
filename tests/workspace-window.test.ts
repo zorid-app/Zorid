@@ -17,7 +17,9 @@ function domSetup() {
   dom.window.HTMLElement.prototype.scrollIntoView = () => {};
   return { dom, restore() { dom.window.close(); for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } } };
 }
+const capturedEditors: EditorOptions[] = [];
 function editor(parent: HTMLElement, options: EditorOptions) {
+  capturedEditors.push(options);
   const input = document.createElement('textarea'); input.value = options.value; input.oninput = () => options.onChange(input.value); parent.append(input);
   return { getValue: () => input.value, setValue(value: string) { input.value = value; }, focus() { input.focus(); }, destroy() { input.remove(); }, insert(text: string) { input.value += text; options.onChange(input.value); } };
 }
@@ -148,4 +150,41 @@ test('a numbered-tab shortcut waiting on disk cannot overtake a later pane activ
     release!(); await tick(); await tick();
     assert.equal(workspace.activePane, second); assert.equal(first.tabs.find(tab => tab.id === first.active)?.path, 'B.md');
   } finally { release?.(); if (workspace) await workspace.destroy(); env.restore(); }
+});
+
+
+test('same-active numbered selection supersedes pending new-note and open-note intents without invalidating its title', async () => {
+  for (const operation of ['new', 'open']) {
+    const env = domSetup(); let workspace: Workspace | undefined, release: (() => void) | undefined;
+    try {
+      const adapter = new MemoryAdapter({ 'A.md': 'a', 'B.md': 'b' }), write = adapter.write.bind(adapter);
+      let armed = false, waiting = false;
+      adapter.write = async (path, value) => { if (armed) { armed = false; waiting = true; await new Promise<void>(resolve => { release = resolve; }); } await write(path, value); };
+      workspace = new Workspace(document.querySelector('#app')!, editor); await workspace.start({ adapter, label: 'Test', id: 'test:intents' }); await workspace.openNote('A.md');
+      const pane = workspace.activePane, originalEditor = pane.editor, title = pane.element.querySelector<HTMLInputElement>('.note-title')!;
+      if (operation === 'open') pane.editor!.insert(' dirty');
+      armed = true; const pending = operation === 'new' ? workspace.newNote() : workspace.openNote('B.md');
+      await tick(); assert.equal(waiting, true);
+      document.dispatchEvent(new env.dom.window.KeyboardEvent('keydown', { key: '1', ctrlKey: true, bubbles: true, cancelable: true })); await tick();
+      release!(); await pending; assert.equal(pane.tabs.find(tab => tab.id === pane.active)?.path, 'A.md', operation); assert.equal(pane.editor, originalEditor);
+      title.focus(); title.dispatchEvent(new env.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await tick();
+      assert.equal(document.activeElement?.tagName, 'TEXTAREA', 'retained title still routes Enter to its editor');
+    } finally { release?.(); if (workspace) await workspace.destroy(); env.restore(); }
+  }
+});
+
+test('wiki completion reads live aliases/headings, source-relative resolution and guarded owner metadata', async () => {
+  const env = domSetup(); let workspace: Workspace | undefined;
+  try {
+    const adapter = new MemoryAdapter({ 'Folder/Note.md': '---\naliases: [Initial]\n---\n# Original', 'Folder/Target.md': 'target', 'Elsewhere/Target.md': 'other', 'Unique.md': 'unique' });
+    workspace = new Workspace(document.querySelector('#app')!, editor); await workspace.start({ adapter, label: 'Test', id: 'test:wiki-owner' }); await workspace.openNote('Folder/Note.md');
+    const options = capturedEditors.at(-1)!, wiki = options.wiki!;
+    assert.equal(wiki.sourcePath!(), 'Folder/Note.md'); assert.deepEqual(wiki.metadata!('Folder/Note.md')?.aliases, ['Initial']);
+    workspace.buffers.get('Folder/Note.md')!.update('---\naliases: [Unsaved]\n---\n## Live heading');
+    assert.deepEqual(wiki.metadata!('Folder/Note.md')?.aliases, ['Unsaved']); assert.equal(wiki.metadata!('Folder/Note.md')?.headings?.[0].heading, 'Live heading');
+    assert.equal(wiki.resolvePath!('./Target', 'Folder/Note.md'), 'Folder/Target.md');
+    assert.equal(wiki.linkText!('Unique.md', 'Folder/Note.md'), 'Unique'); assert.equal(wiki.linkText!('Folder/Target.md', 'Folder/Note.md'), 'Folder/Target');
+    workspace.settings.newLinkFormat = 'relative'; assert.equal(wiki.linkText!('Folder/Target.md', 'Folder/Note.md'), './Target');
+    await workspace.openNote('Unique.md'); assert.equal(wiki.sourcePath!(), null); assert.equal(wiki.metadata!('Unique.md'), undefined); assert.equal(wiki.resolvePath!('Unique', 'Folder/Note.md'), null); assert.deepEqual(options.paths(), []);
+  } finally { if (workspace) await workspace.destroy(); env.restore(); }
 });
