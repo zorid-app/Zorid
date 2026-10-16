@@ -179,3 +179,53 @@ test('link-updating rename rejects a queued stale source before refreshing or mu
   assert.equal(await vault.read('Link.md'), '[[One]]');
   assert.equal(vault.entries.has('Moved.md'), false);
 });
+
+test('folder creation applies caller collision policy inside the queue against fresh entries', async () => {
+  class TrackedAdapter extends MemoryAdapter {
+    folders: string[] = [];
+    override async mkdir(path: string) { this.folders.push(path); return super.mkdir(path); }
+  }
+  const adapter = new TrackedAdapter();
+  const vault = new Vault(adapter); await vault.initialize();
+  const first = vault.createFolder('UNTITLED FOLDER');
+  const alias = vault.createFolder('Untitled folder', () => {
+    if ([...vault.entries.keys()].some(path => path.normalize('NFC').toLowerCase() === 'untitled folder')) {
+      throw new Error('folder alias collision');
+    }
+  });
+  await assert.rejects(alias, /folder alias collision/);
+  await first;
+  assert.deepEqual(adapter.folders, ['UNTITLED FOLDER']);
+  assert.equal(vault.entries.has('Untitled folder'), false);
+});
+
+test('folder creation rechecks refreshed parent policy before mkdir', async () => {
+  class ParentChangesAdapter extends MemoryAdapter {
+    invalidateParent = false;
+    folders: string[] = [];
+    override async list() {
+      if (this.invalidateParent) {
+        this.invalidateParent = false;
+        await super.trash('Parent');
+        await super.mkdir('Parent');
+        parentCurrent = false;
+      }
+      return super.list();
+    }
+    override async mkdir(path: string) { this.folders.push(path); return super.mkdir(path); }
+  }
+  let parentCurrent = true;
+  const adapter = new ParentChangesAdapter({ 'Parent/Keep.md': 'keep' });
+  const vault = new Vault(adapter); await vault.initialize();
+  adapter.invalidateParent = true;
+  let validations = 0;
+  await assert.rejects(vault.createFolder('Parent/New', () => {
+    validations++;
+    if (!parentCurrent) throw new Error('parent lifetime changed');
+  }), /parent lifetime changed/);
+  assert.equal(validations, 2);
+  assert.deepEqual(adapter.folders, []);
+  assert.equal(vault.entries.has('Parent/New'), false);
+  await vault.createFolder('Parent/Next');
+  assert.ok(vault.entries.has('Parent/Next'));
+});

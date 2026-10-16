@@ -1,3 +1,7 @@
+import { createFolderInline, FileTreeRenameSession } from './file-tree-create.ts';
+import { createFileTreeDrag, executeFileTreeMove } from './file-tree-drag.ts';
+import type { FileTreeDragRow } from './file-tree-drag.ts';
+import { shouldOverrideInputContextMenu } from '../platform/input-context-menu.ts';
 import { bindNoteTitleFocus } from './note-title-focus.ts';
 import { Vault, parseMetadata } from '../core/index.ts';
 import type { VaultEntry } from '../core/index.ts';
@@ -66,6 +70,14 @@ export class Workspace {
   private rightTab: 'backlinks' | 'outline' | 'tags' = 'backlinks';
   private collapsed = new Set<string>();
   private bookmarks = new Set<string>();
+  private treeRows: FileTreeDragRow[] = [];
+  private treeOrder: string[] = [];
+  private treeSelection = new Set<string>();
+  private treeSelectionAnchor?: string;
+  private entryTokens = new Map<string, symbol>();
+  private treeDrag?: ReturnType<typeof createFileTreeDrag>;
+  private treeRename?: { path: string; session: FileTreeRenameSession };
+  private folderCreationIntent = 0;
   private query = '';
   private searchGeneration = 0;
   private reverseSort = false;
@@ -81,7 +93,7 @@ export class Workspace {
     if(event.defaultPrevented||!this.initialized)return;
     const target=event.target as HTMLElement|null;
     const input=target?.closest<HTMLInputElement|HTMLTextAreaElement>('input,textarea');
-    if(!input||input.type==='checkbox'||input.type==='range')return;
+    if(!input||input.type==='checkbox'||input.type==='range'||!shouldOverrideInputContextMenu(input))return;
     const editable=!input.disabled&&!input.readOnly,selected=input.selectionStart!==input.selectionEnd;
     const pending=showContextMenu(event,[{role:'undo',enabled:editable},{role:'redo',enabled:editable},{type:'separator'},{role:'cut',enabled:editable&&selected},{role:'copy',enabled:selected},{role:'paste',enabled:editable},{role:'selectAll'}]);
     this.run(()=>pending);
@@ -168,12 +180,15 @@ export class Workspace {
     clearTimeout(this.reloadTimer);
     this.panes.forEach(pane => this.disposePaneViews(pane)); this.buffers.clear();
     this.attachments?.destroy();
+    this.treeDrag?.destroy(); this.treeDrag=undefined; this.treeRename?.session.dispose(); this.treeRename=undefined; this.folderCreationIntent++;
+    this.treeRows=[]; this.treeSelection.clear(); this.treeSelectionAnchor=undefined; this.entryTokens.clear();
     this.platform = platform; this.vault = next; this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
     this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};
     this.buildShell();
+    this.mountFileTreeDrag();
     let restored = false;
     try {
       const saved = JSON.parse(localStorage.getItem(this.sessionKey()) || 'null');
@@ -194,7 +209,12 @@ export class Workspace {
     this.activate(this.panes.find(pane=>pane.id===this.sessionState.activePaneId)??this.panes[0]);
     this.restoringLayout=false;
     for (const pane of this.panes) await this.renderPane(pane);
-    this.disposers.push(this.vault.on('create', () => this.renderSidebar()), this.vault.on('delete', change => {
+    this.disposers.push(this.vault.on('create', change => { this.invalidateTreeTokens(change.path); this.renderSidebar(); }), this.vault.on('delete', change => {
+      this.invalidateTreeTokens(change.path);
+      const removed=(path:string)=>path===change.path||path.startsWith(change.path+'/');
+      this.treeSelection=new Set([...this.treeSelection].filter(path=>!removed(path)));
+      if(this.treeSelectionAnchor&&removed(this.treeSelectionAnchor))this.treeSelectionAnchor=undefined;
+      if(this.treeRename&&(this.treeRename.path===change.path||this.treeRename.path.startsWith(change.path+'/')))this.treeRename.session.dispose();
       for (const pane of this.panes) for (const tab of [...pane.tabs]) if (tab.path === change.path || tab.path?.startsWith(change.path + '/')) {
         const buffer = this.buffers.get(tab.path);
         if (buffer?.dirty || (pane.active === tab.id && pane.canvasView?.hasPendingChanges())) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
@@ -203,6 +223,14 @@ export class Workspace {
       this.renderSidebar(); this.renderRight();
     }), this.vault.on('rename', change => {
       const oldPath = change.oldPath!;
+      this.invalidateTreeTokens(oldPath); this.invalidateTreeTokens(change.path);
+      const relocate=(path:string)=>path===oldPath||path.startsWith(oldPath+'/')?change.path+path.slice(oldPath.length):path;
+      this.bookmarks=new Set([...this.bookmarks].map(relocate));
+      this.collapsed=new Set([...this.collapsed].map(relocate));
+      this.treeSelection=new Set([...this.treeSelection].map(relocate));
+      if(this.treeSelectionAnchor)this.treeSelectionAnchor=relocate(this.treeSelectionAnchor);
+      if(this.treeRename)this.treeRename.path=relocate(this.treeRename.path);
+      for(const pane of this.panes)pane.history=pane.history.map(relocate);
       for (const [previous, buffer] of [...this.buffers]) if (previous === oldPath || previous.startsWith(oldPath + '/')) {
         const next = change.path + previous.slice(oldPath.length);
         this.buffers.delete(previous); this.buffers.set(next, buffer); this.run(() => buffer.relocate(next));
@@ -301,7 +329,7 @@ export class Workspace {
           actions:{newNote:()=>this.newNote(''),newFolder:()=>this.newFolder(''),newCanvas:()=>this.newCanvas('')},
         });
       },
-      clearSelection:()=>{const focused=surface.ownerDocument.activeElement;if(focused instanceof HTMLElement&&surface.contains(focused)&&focused.matches('[role="treeitem"]'))focused.blur();},
+      clearSelection:()=>{this.treeSelection.clear();this.treeSelectionAnchor=undefined;this.paintTreeSelection();const focused=surface.ownerDocument.activeElement;if(focused instanceof HTMLElement&&surface.contains(focused)&&focused.matches('[role="treeitem"]'))focused.blur();},
       onError:error=>notice(error instanceof Error?error.message:String(error)),
     });
   }
@@ -554,6 +582,8 @@ export class Workspace {
     const collapse=this.sidebar.querySelector<HTMLButtonElement>('[data-action="collapse-all"]');
     if(collapse){const label=allCollapsed?'Expand all folders':'Collapse all folders';collapse.title=label;collapse.setAttribute('aria-label',label);collapse.replaceChildren(icon(allCollapsed?'chevrons-up-down':'chevrons-down-up'));}
     this.sidebar.querySelectorAll<HTMLElement>('.sidebar-tabs button').forEach(node=>node.classList.toggle('is-active',node.dataset.type===this.treeTab));
+    const renameHadFocus=!!this.treeRename&&this.sidebarContent.contains(this.root.ownerDocument.activeElement)&&this.root.ownerDocument.activeElement?.getAttribute('contenteditable')==='true';
+    this.treeRows=[];
     this.sidebarContent.replaceChildren();
     if(this.treeTab==='search'){
       const input=el('input','search-box');input.placeholder='Search…';input.value=this.query;input.type='search';input.setAttribute('aria-label','Search all files');input.oninput=()=>{this.query=input.value;this.run(()=>this.search());};this.sidebarContent.append(input,el('div','search-results'));this.run(()=>this.search());return;
@@ -564,18 +594,33 @@ export class Workspace {
     }
     const tree=el('div','file-tree');tree.role='tree';tree.setAttribute('aria-label','Files');
     const entries=[...this.vault.entries.values()].sort((a,b)=>(a.type===b.type?0:a.type==='folder'?-1:1)||a.path.localeCompare(b.path,undefined,{numeric:true})*(this.reverseSort?-1:1));
+    const children=new Map<string,VaultEntry[]>();for(const entry of entries){const parent=parentOf(entry.path);let items=children.get(parent);if(!items){items=[];children.set(parent,items);}items.push(entry);}
+    this.treeOrder=[];const order=(parent:string)=>{for(const entry of children.get(parent)??[]){this.treeOrder.push(entry.path);if(entry.type==='folder')order(entry.path);}};order('');
     const append=(parent:string,container:HTMLElement,depth:number)=>{
-      for(const entry of entries.filter(entry=>parentOf(entry.path)===parent)){
+      for(const entry of children.get(parent)??[]){
         const folder=entry.type==='folder';const row=el('div',`tree-row${folder?' folder-row':''}${this.activePane&&this.current()?.path===entry.path?' is-active':''}`);
-        row.style.paddingLeft=`${10+depth*16}px`;row.role='treeitem';row.tabIndex=0;row.title=entry.path;
+        row.style.paddingLeft=`${10+depth*16}px`;row.role='treeitem';row.tabIndex=0;row.title=entry.path;row.dataset.path=entry.path;row.setAttribute('aria-selected',String(this.treeSelection.has(entry.path)));row.classList.toggle('is-selected',this.treeSelection.has(entry.path));
         if(folder){row.setAttribute('aria-expanded',String(!this.collapsed.has(entry.path)));row.append(icon(this.collapsed.has(entry.path)?'right':'down',14));}
         else row.append(el('span','file-indent'));
-        row.append(el('span','tree-label',folder?entry.path.split('/').at(-1):nameOf(entry.path)));
+        const label=el('span','tree-label',folder?entry.path.split('/').at(-1):nameOf(entry.path));row.append(label);
         const activate=()=>{if(folder){if(this.collapsed.has(entry.path))this.collapsed.delete(entry.path);else this.collapsed.add(entry.path);this.renderSidebar();this.saveSession();}else this.run(()=>this.openNote(entry.path));};
-        row.onclick=event=>{if(!folder&&(event.metaKey||event.ctrlKey))this.run(()=>this.openNote(entry.path,true));else activate();};row.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();activate();}if(event.key==='F2')this.run(()=>this.renameDialog(entry.path));};
-        row.oncontextmenu=event=>{event.preventDefault();this.fileMenu(entry,event.clientX,event.clientY);};
-        row.draggable=true;row.ondragstart=event=>event.dataTransfer?.setData('application/x-zorid-file',entry.path);
-        if(folder){row.ondragover=event=>event.preventDefault();row.ondrop=event=>{event.preventDefault();const path=event.dataTransfer?.getData('application/x-zorid-file');if(path)this.run(async()=>{await this.flush();await this.vault.rename(path,`${entry.path}/${path.split('/').at(-1)}`);});};}
+        row.onclick=event=>{
+          if(event.button!==0)return;
+          const mod=/Mac/i.test(window.navigator.platform)?event.metaKey:event.ctrlKey;
+          if(!mod&&(event.altKey||event.shiftKey)){
+            if(event.shiftKey)this.selectTreeRange(entry.path);
+            else{if(this.treeSelection.has(entry.path))this.treeSelection.delete(entry.path);else this.treeSelection.add(entry.path);this.treeSelectionAnchor=entry.path;this.paintTreeSelection();}
+            row.focus();return;
+          }
+          this.treeSelection.clear();this.treeSelectionAnchor=entry.path;this.paintTreeSelection();
+          if(!folder&&mod)this.run(()=>this.openNote(entry.path,true));else activate();
+        };
+        row.onauxclick=event=>{if(!folder&&event.button===1){event.preventDefault();this.run(()=>this.openNote(entry.path,true));}};
+        row.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();activate();}if(event.key==='F2'){event.preventDefault();this.run(()=>this.beginTreeRename(entry.path));}};
+        row.oncontextmenu=event=>{event.preventDefault();this.fileMenu(entry,event.clientX,event.clientY,true);};
+        row.draggable=true;
+        this.treeRows.push({path:entry.path,element:row,collapsed:folder&&this.collapsed.has(entry.path)});
+        if(this.treeRename?.path===entry.path)this.treeRename.session.attach(row,label,{focus:renameHadFocus});
         container.append(row);if(folder&&!this.collapsed.has(entry.path))append(entry.path,container,depth+1);
       }
     };append('',tree,0);this.sidebarContent.append(tree);if(this.autoRevealFiles)tree.querySelector<HTMLElement>('.tree-row.is-active')?.scrollIntoView({block:'nearest'});
@@ -636,7 +681,89 @@ export class Workspace {
     if(generation!==this.vaultGeneration||!this.panes.includes(pane)||pane.renderVersion!==version||this.navigationIntent.get(pane)!==intent||activation!==this.paneActivationRevision)return;
     await this.openNote(path,false,pane,true,'',activation);
   }
-  async newFolder(parent=''):Promise<void>{const vault=this.vault,generation=this.vaultGeneration;const name=await promptName('New folder','Untitled folder');if(name&&generation===this.vaultGeneration&&this.vault===vault)await vault.createFolder(`${parent?parent+'/':''}${name}`);}
+  async newFolder(parent=''):Promise<void>{
+    const vault=this.vault,generation=this.vaultGeneration,intent=++this.folderCreationIntent;
+    const pane=this.activePane,navigation=this.navigationIntent.get(pane),activation=this.paneActivationRevision,treeTab=this.treeTab,parentToken=parent?this.treeEntryToken(parent):undefined;
+    await this.treeRename?.session.commit('blur');
+    await createFolderInline({owner:vault,paths:()=>vault.entries.keys(),createFolder:path=>vault.createFolder(path,()=>{
+        this.requireAvailableTreePath(vault,path);
+        if(parent&&this.vault===vault&&this.treeEntryToken(parent)!==parentToken)throw new Error('The destination folder has changed.');
+      }),
+      isCurrent:()=>this.vault===vault&&this.vaultGeneration===generation,
+      revealAndEdit:path=>{if(intent!==this.folderCreationIntent||this.activePane!==pane||this.navigationIntent.get(pane)!==navigation||this.paneActivationRevision!==activation||this.treeTab!==treeTab)return;this.treeTab='files';let ancestor=parentOf(path);while(ancestor){this.collapsed.delete(ancestor);ancestor=parentOf(ancestor);}this.root.classList.remove('left-hidden');this.renderSidebar();this.saveSession();return this.beginTreeRename(path);}},parent);
+  }
+
+  private async beginTreeRename(path:string):Promise<void>{
+    const vault=this.vault,generation=this.vaultGeneration;
+    await this.treeRename?.session.commit('blur');
+    if(this.vault!==vault||generation!==this.vaultGeneration||!vault.entries.has(path))return;
+    const current=()=>this.vault===vault&&generation===this.vaultGeneration&&this.treeRename?.session===session;
+    const session=new FileTreeRenameSession({name:path.split('/').at(-1)!,isCurrent:current,
+      save:async name=>{
+        if(!current())return;
+        const previous=this.treeRename!.path,token=this.treeEntryToken(previous);
+        await this.flush();
+        if(!current()||this.treeRename!.path!==previous||this.treeEntryToken(previous)!==token)throw new Error('The item being renamed has changed.');
+        const suffix=vault.entries.get(previous)?.type==='file'&&previous.endsWith('.md')&&!name.endsWith('.md')?'.md':'';
+        const destination=(parentOf(previous)?parentOf(previous)+'/':'')+name+suffix;
+        await vault.rename(previous,destination,()=>{
+          if(!current()||this.treeRename!.path!==previous||this.treeEntryToken(previous)!==token)throw new Error('The item being renamed has changed.');
+          this.requireAvailableTreePath(vault,destination,previous);
+        });
+        return destination.split('/').at(-1)!;
+      },
+      onFinish:reason=>{if(this.treeRename?.session===session){
+        const finalPath=this.treeRename.path,ownedFocus=this.treeRows.find(row=>row.path===finalPath)?.element.contains(this.root.ownerDocument.activeElement);
+        this.treeRename=undefined;this.renderSidebar();
+        if(ownedFocus&&(reason==='enter'||reason==='escape'))this.treeRows.find(row=>row.path===finalPath)?.element.focus();
+      }},
+      onError:error=>notice(error instanceof Error?error.message:String(error))});
+    this.treeRename={path,session};
+    const row=this.treeRows.find(row=>row.path===path)?.element,label=row?.querySelector<HTMLElement>('.tree-label');
+    if(row&&label)session.attach(row,label);
+  }
+
+  private selectTreeRange(path:string):void{
+    const paths=this.treeOrder,end=paths.indexOf(path),savedAnchor=paths.indexOf(this.treeSelectionAnchor??path),anchor=savedAnchor<0?end:savedAnchor;
+    for(const selected of paths.slice(Math.min(anchor,end),Math.max(anchor,end)+1))this.treeSelection.add(selected);
+    if(!this.treeSelectionAnchor)this.treeSelectionAnchor=path;
+    this.paintTreeSelection();
+  }
+
+  private paintTreeSelection():void{
+    for(const row of this.treeRows){const selected=this.treeSelection.has(row.path);row.element.classList.toggle('is-selected',selected);row.element.setAttribute('aria-selected',String(selected));}
+  }
+
+  private requireAvailableTreePath(vault:Vault,destination:string,source?:string):void{
+    const normalized=destination.normalize('NFC').toLowerCase();
+    if([...vault.entries.keys()].some(path=>path!==source&&path.normalize('NFC').toLowerCase()===normalized))throw new Error(`Path already exists: ${destination}`);
+  }
+
+  private treeEntryToken(path:string):symbol|undefined{
+    if(!this.vault.entries.has(path))return;
+    let token=this.entryTokens.get(path);
+    if(!token){token=Symbol(path);this.entryTokens.set(path,token);}
+    return token;
+  }
+
+  private invalidateTreeTokens(path:string):void{
+    for(const key of this.entryTokens.keys())if(key===path||key.startsWith(path+'/'))this.entryTokens.delete(key);
+  }
+
+  private mountFileTreeDrag():void{
+    this.treeDrag?.destroy();
+    this.treeDrag=createFileTreeDrag({root:this.sidebarContent,getEntries:()=>[...this.vault.entries.values()],getRows:()=>this.treeRows,
+      getSelectedPaths:()=>[...this.treeSelection],getVaultToken:()=>this.vault,
+      getEntryToken:path=>this.treeEntryToken(path),
+      enabled:()=>this.treeTab==='files'&&!this.treeRename,
+      expandFolder:path=>{this.collapsed.delete(path);this.renderSidebar();this.saveSession();},
+      move:async(intent,context)=>{const vault=this.vault;await this.flush();await executeFileTreeMove(intent,{getEntries:()=>[...vault.entries.values()],isCurrent:context.isCurrent,isSourceCurrent:context.isSourceCurrent,
+        rename:async(source,destination)=>{if(!context.isCurrent()||!context.isSourceCurrent(source))throw new Error('The file move is no longer current');await vault.rename(source,destination,()=>{
+          if(!context.isCurrent()||!context.isSourceCurrent(source))throw new Error('The file move is no longer current');
+          this.requireAvailableTreePath(vault,destination,source);
+        });}});},
+      rootLabel:this.platform.label,onError:error=>notice(error instanceof Error?error.message:String(error))});
+  }
   private async renameDialog(path:string):Promise<void>{const name=await promptName('Rename',path.split('/').at(-1),'Rename');if(name)await this.renamePath(path,name);}
   private async renamePath(path:string,name:string):Promise<string>{
     if(/[\\/]/.test(name))throw new Error('Use the file menu to move files between folders.');const folder=parentOf(path);const suffix=this.vault.entries.get(path)?.type==='file'&&path.endsWith('.md')&&!name.endsWith('.md')?'.md':'';const next=`${folder?folder+'/':''}${name}${suffix}`;
@@ -698,9 +825,9 @@ export class Workspace {
       const match=/^action-(\d+)$/.exec(id);if(match)await items[Number(match[1])]?.action();
     });
   }
-  private fileMenu(entry:VaultEntry,x:number,y:number):void{const folder=entry.type==='folder';this.menu([
+  private fileMenu(entry:VaultEntry,x:number,y:number,inlineRename=false):void{const folder=entry.type==='folder';this.menu([
     ...(folder?[{name:'New note',action:()=>this.newNote(entry.path)},{name:'New folder',action:()=>this.newFolder(entry.path)}]:[{name:'Open in new tab',action:()=>this.openNote(entry.path,true)},{name:this.bookmarks.has(entry.path)?'Remove bookmark':'Bookmark',action:()=>{if(this.bookmarks.has(entry.path))this.bookmarks.delete(entry.path);else this.bookmarks.add(entry.path);this.saveSession();this.renderSidebar();}}]),
-    {name:'Rename…',action:()=>this.renameDialog(entry.path)}, {name:'Move to trash',action:()=>this.deletePath(entry.path)},
+    {name:'Rename…',action:()=>inlineRename?this.beginTreeRename(entry.path):this.renameDialog(entry.path)}, {name:'Move to trash',action:()=>this.deletePath(entry.path)},
   ],x,y,()=>this.vault.entries.get(entry.path)===entry);}
   private tabMenu(pane:Pane,tab=this.current(pane),x?:number,y?:number):void{
     this.activate(pane);
@@ -806,5 +933,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
   async flush():Promise<void>{for(const pane of this.panes)await pane.canvasView?.flush();for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
+  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
 }

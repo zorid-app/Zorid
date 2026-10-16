@@ -277,11 +277,13 @@ export class Vault {
     });
   }
 
-  createFolder(rawPath: string): Promise<VaultEntry> {
+  createFolder(rawPath: string, validate?: () => void): Promise<VaultEntry> {
     return this.enqueue(async () => {
+      validate?.();
       const path = normalizePath(rawPath);
       await this.refresh();
       this.requireDestination(path);
+      validate?.();
       await this.adapter.mkdir(path);
       await this.refresh();
       const entry = this.entries.get(path)!;
