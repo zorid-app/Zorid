@@ -1,4 +1,4 @@
-import { renderExclusions, sameRenderExclusions, intersectsRenderExclusion } from './render-exclusions.ts';
+import { renderExclusions, sameRenderExclusions, containsRenderExclusion } from './render-exclusions.ts';
 import type { RenderExclusionOptions } from './render-exclusions.ts';
 import { StateEffect } from '@codemirror/state';
 import type { EditorState, Extension } from '@codemirror/state';
@@ -176,7 +176,7 @@ function decorate(view: EditorView, options: LiveInlineOptions): { decorations: 
     if (from < to) ranges.push(Decoration.mark({ class: className, attributes }).range(from, to));
   };
   const visit = (node: SyntaxNode, inheritedReveal = false): void => {
-    if (node.to <= prefix || excluded.has(node.name) || intersectsRenderExclusion(blocked, node.from, node.to) && blocked.some(range => range.from <= node.from && range.to >= node.to)
+    if (node.to <= prefix || excluded.has(node.name) || containsRenderExclusion(blocked, node.from, node.to)
       || !view.visibleRanges.some(range => node.from <= range.to && node.to >= range.from)) return;
     const line = view.state.doc.lineAt(node.from);
     if (/^(ATX|Setext)Heading[1-6]$/.test(node.name)) {

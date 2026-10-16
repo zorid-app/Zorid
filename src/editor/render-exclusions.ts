@@ -33,3 +33,9 @@ export function intersectsRenderExclusion(ranges: readonly RenderRange[], from: 
   while (low < high) { const middle = (low + high) >>> 1; if (ranges[middle].to <= from) low = middle + 1; else high = middle; }
   return low < ranges.length && ranges[low].from < to;
 }
+
+export function containsRenderExclusion(ranges: readonly RenderRange[], from: number, to: number): boolean {
+  let low = 0, high = ranges.length;
+  while (low < high) { const middle = (low + high) >>> 1; if (ranges[middle].to <= from) low = middle + 1; else high = middle; }
+  return low < ranges.length && ranges[low].from <= from && ranges[low].to >= to;
+}
