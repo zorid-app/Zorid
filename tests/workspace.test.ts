@@ -642,3 +642,36 @@ test('session storage failure cannot bypass the unsaved-document unload guard',a
     assert.equal(event.defaultPrevented,true);
   }finally{prototype.setItem=original;}
 });
+
+function deferred(){let resolve!:()=>void;const promise=new Promise<void>(done=>resolve=done);return{promise,resolve};}
+
+test('background-tab caret maps through edits from the other split',async t=>{
+ const {workspace,type}=await setup(t,new MemoryAdapter({'Note.md':'0123456789','Other.md':'other'}));
+ await workspace.openNote('Note.md');const first=workspace.activePane;
+ await (workspace as any).split('right');const second=workspace.activePane;
+ currentEditor().setSelectionRange(7,7);
+ await workspace.openNote('Other.md',true,second);
+ type(first.element.querySelector('textarea')!,'ABC0123456789');
+ await workspace.flush();
+ await workspace.openNote('Note.md',false,second);
+ assert.equal(currentEditor().selectionStart,10,'saved caret before original 7 must follow inserted prefix');
+});
+
+test('superseded slow vault initialization cannot recreate the current panes or subscribe old adapter',async t=>{
+ const {workspace,destroy}=await setup(t,new MemoryAdapter({'Start.md':'start'}));
+ const started=deferred(),release=deferred();
+ class SlowVault extends MemoryAdapter{
+  subscriptions=0;
+  async list(){started.resolve();await release.promise;return super.list();}
+  subscribe(){this.subscriptions++;return()=>{this.subscriptions--;};}
+ }
+ const slow=new SlowVault({'Slow.md':'slow'}),fast=new MemoryAdapter({'Current.md':'current'});
+ const pending=workspace.openVault({adapter:slow,id:'slow',label:'slow'});
+ await started.promise;
+ await workspace.openVault({adapter:fast,id:'fast',label:'fast'});
+ await workspace.openNote('Current.md');
+ const pane=workspace.activePane,editor=pane.editor!;let destroyed=0;const dispose=editor.destroy;editor.destroy=()=>{destroyed++;dispose();};
+ release.resolve();await pending;
+ const result={oldWatchers:slow.subscriptions,paneStable:workspace.activePane===pane,editorStable:workspace.activePane.editor===editor};await destroy();
+ assert.deepEqual({...result,destroyed},{oldWatchers:0,paneStable:true,editorStable:true,destroyed:1},'superseded initialization must preserve pane ownership and eventual editor disposal');
+});

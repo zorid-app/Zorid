@@ -23,6 +23,7 @@ import { CanvasDocument } from '../canvas/document.ts';
 import { createCanvasView } from '../canvas/view.ts';
 import type { CanvasView } from '../canvas/view.ts';
 import { SplitLayout } from './split-layout.ts';
+import { ChangeSet, EditorSelection } from '@codemirror/state';
 
 type Mode = 'live' | 'reading';
 interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; subpath?: string; viewState?: { editor?: EditorViewState; scrollTop: number; scrollLeft: number }; }
@@ -78,6 +79,9 @@ export class Workspace {
   };
   private reloadTimer?: ReturnType<typeof setTimeout>;
   private vaultGeneration = 0;
+  private vaultRequest = 0;
+  private vaultTransition: Promise<void> = Promise.resolve();
+  private bufferRevisions = new WeakMap<NoteBuffer,number>();
   private initialized = false;
   private attachments?:AttachmentResources;
   private attachmentImporter?: AttachmentImporter;
@@ -122,6 +126,18 @@ export class Workspace {
   }
 
   async openVault(platform: PlatformVault): Promise<void> {
+    const request=++this.vaultRequest,next=new Vault(platform.adapter);
+    // Initialization is read-only and can overlap; only the latest request may
+    // enter the serialized teardown/install phase. Old views stay usable while
+    // a new adapter initializes, and a late request cannot acquire a watcher.
+    await next.initialize();
+    if(request!==this.vaultRequest)return;
+    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest)await this.replaceVault(platform,next);});
+    this.vaultTransition=transition.catch(()=>{});
+    await transition;
+  }
+
+  private async replaceVault(platform:PlatformVault,next:Vault):Promise<void>{
     this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
     await this.flush();
     this.saveSession();
@@ -130,8 +146,7 @@ export class Workspace {
     clearTimeout(this.reloadTimer);
     this.panes.forEach(pane => this.disposePaneViews(pane)); this.buffers.clear();
     this.attachments?.destroy();
-    this.platform = platform; this.vault = new Vault(platform.adapter); this.vaultGeneration++;
-    await this.vault.initialize();
+    this.platform = platform; this.vault = next; this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
@@ -190,7 +205,12 @@ export class Workspace {
       }
       if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)this.run(()=>this.renderPane(pane));return;}
       const buffer = this.buffers.get(change.path);
-      if (buffer && !buffer.dirty) this.run(async () => { await buffer.reload(); for (const pane of this.panes) if (this.current(pane)?.path === change.path) { if (this.current(pane).mode === 'reading') await this.renderPane(pane); else pane.editor?.setValue(buffer.text); } this.renderRight(); });
+      if (buffer && !buffer.dirty) this.run(async () => {
+        const previous=buffer.text,revision=this.bufferRevisions.get(buffer)??0,generation=this.vaultGeneration;
+        await buffer.reload();if(generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
+        if((this.bufferRevisions.get(buffer)??0)===revision)this.mapInactiveSelections(change.path,previous,buffer.text);
+        for (const pane of this.panes) if (this.current(pane)?.path === change.path) { if (this.current(pane).mode === 'reading') await this.renderPane(pane); else pane.editor?.setValue(buffer.text); } this.renderRight();
+      });
     }));
     const generation = this.vaultGeneration;
     const changedPaths = new Set<string>();
@@ -353,7 +373,7 @@ export class Workspace {
       {
         const host=el('div','properties-host');scroll.append(host);
         pane.properties=renderProperties(host,{getSource:()=>buffer.text,onChange:async next=>{
-          buffer.update(next);
+          this.updateMarkdownBuffer(buffer,next);
           for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
           await buffer.flush();
         },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
@@ -376,12 +396,35 @@ export class Workspace {
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:request=>{const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
           transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
-          onChange:value=>{buffer.update(value);this.renderStatus();for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);other.propertyTimer=setTimeout(()=>{other.properties?.refresh();other.refreshPreview?.();},150);}}},open:target=>this.run(()=>this.followLink(path,target,pane))});
+          onChange:value=>{this.updateMarkdownBuffer(buffer,value);this.renderStatus();for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);other.propertyTimer=setTimeout(()=>{other.properties?.refresh();other.refreshPreview?.();},150);}}},open:target=>this.run(()=>this.followLink(path,target,pane))});
       }
       if(tab.viewState){if(tab.viewState.editor)pane.editor?.restoreViewState?.(tab.viewState.editor);if(Number.isFinite(tab.viewState.scrollTop))scroll.scrollTop=Math.max(0,tab.viewState.scrollTop);if(Number.isFinite(tab.viewState.scrollLeft))scroll.scrollLeft=Math.max(0,tab.viewState.scrollLeft);}
       if(buffer.error)notice(buffer.error.message);
     }catch(error){scroll.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
     this.renderStatus();
+  }
+
+  private updateMarkdownBuffer(buffer:NoteBuffer,next:string):void{
+    const previous=buffer.text;buffer.update(next);this.mapInactiveSelections(buffer.path,previous,next);
+  }
+
+  private mapInactiveSelections(path:string,previous:string,next:string):void{
+    if(previous===next)return;
+    const buffer=this.buffers.get(path);if(buffer)this.bufferRevisions.set(buffer,(this.bufferRevisions.get(buffer)??0)+1);
+    const states=this.panes.flatMap(pane=>pane.tabs.filter(tab=>tab.path===path&&(tab.id!==pane.viewTabId||!pane.editor)).map(tab=>tab.viewState?.editor)).filter(state=>state&&Array.isArray(state.selection?.ranges));
+    if(!states.length)return;
+    let from=0;while(from<previous.length&&from<next.length&&previous[from]===next[from])from++;
+    let oldEnd=previous.length,newEnd=next.length;
+    while(oldEnd>from&&newEnd>from&&previous[oldEnd-1]===next[newEnd-1]){oldEnd--;newEnd--;}
+    const changes=ChangeSet.of({from,to:oldEnd,insert:next.slice(from,newEnd)},previous.length);
+    for(const state of states){
+      const saved=state!,ranges=saved.selection.ranges;
+      if(!ranges.length||ranges.length>1000||!ranges.every(range=>Number.isFinite(range?.anchor)&&Number.isFinite(range?.head)))continue;
+      const clamp=(position:number)=>Math.max(0,Math.min(previous.length,Math.trunc(position)));
+      const main=Number.isInteger(saved.selection.mainIndex)?Math.max(0,Math.min(ranges.length-1,saved.selection.mainIndex)):0;
+      const mapped=EditorSelection.create(ranges.map(range=>EditorSelection.range(clamp(range.anchor),clamp(range.head))),main).map(changes);
+      saved.selection={ranges:mapped.ranges.map(range=>({anchor:range.anchor,head:range.head})),mainIndex:mapped.mainIndex};
+    }
   }
 
   private capturePaneState(pane:Pane):void{
@@ -417,7 +460,7 @@ export class Workspace {
     const buffer=await this.bufferFor(path),lines=buffer.text.split('\n');
     const marker=lines[line]?.match(/^([ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])[ \t]+\[)([^\]\r\n])(\])(?=[ \t]|\r?$)/);
     if(!marker)throw new Error('The task changed. Reopen the note before toggling it.');
-    const at=marker[1].length;lines[line]=lines[line].slice(0,at)+(checked?'x':' ')+lines[line].slice(at+1);buffer.update(lines.join('\n'));await buffer.flush();
+    const at=marker[1].length;lines[line]=lines[line].slice(0,at)+(checked?'x':' ')+lines[line].slice(at+1);this.updateMarkdownBuffer(buffer,lines.join('\n'));await buffer.flush();
     for(const pane of this.panes){pane.embeds?.invalidate(path);if(this.current(pane)?.path===path){if(this.current(pane).mode==='reading')await this.renderPane(pane);else pane.editor?.setValue(buffer.text);}}
   }
 
@@ -634,5 +677,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
   async flush():Promise<void>{for(const pane of this.panes)await pane.canvasView?.flush();for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.root.replaceChildren();}
+  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.root.replaceChildren();}
 }
