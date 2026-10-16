@@ -1,4 +1,4 @@
-import { Annotation, EditorSelection, EditorState, Prec, StateField, Transaction } from '@codemirror/state';
+import { Annotation, Compartment, EditorSelection, EditorState, Prec, StateField, Transaction } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { Decoration, EditorView, keymap, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
@@ -20,6 +20,7 @@ class TableController {
   private active: { row: number; column: number; view: EditorView; from: number; to: number; insertion?: { readonly prefix: string; readonly suffix: string } } | null = null;
   private syncing = false;
   private destroyed = false;
+  private readOnly = new Compartment();
   readonly owner: EditorView;
   model: MarkdownTable;
   private open: (target: string) => void;
@@ -154,7 +155,7 @@ class TableController {
     const view = new EditorView({ parent: host,
       state: EditorState.create({ doc: value,
         selection: EditorSelection.single(selectAll ? 0 : Math.min(offset, value.length), selectAll ? value.length : Math.min(offset, value.length)),
-        extensions: [EditorView.lineWrapping,
+        extensions: [EditorView.lineWrapping, this.readOnly.of(EditorState.readOnly.of(this.owner.state.readOnly)),
           markdown({ base: markdownLanguage, addKeymap: false }), syntaxHighlighting(defaultHighlightStyle),
           EditorView.contentAttributes.of({ 'aria-label': `Table row ${row + 1}, column ${column + 1}`, spellcheck: 'true' }),
           Prec.highest(keymap.of([
@@ -170,6 +171,10 @@ class TableController {
           ])), keymap.of(defaultKeymap),
         ] }),
       dispatchTransactions: (transactions, child) => {
+        // Read-only commands normally stop at the child's facet. Also guard
+        // programmatic input/paste transactions, while allowing owner snapshots
+        // to synchronize the child through update()'s explicit syncing path.
+        if (!this.syncing && this.owner.state.readOnly && transactions.some(t => t.docChanged)) return;
         child.update(transactions);
         if (this.syncing || this.destroyed || !this.active || !transactions.some(t => t.docChanged || t.selection)) return;
         const active = this.active;
@@ -195,6 +200,13 @@ class TableController {
     view.focus();
   }
 
+  syncReadOnly() {
+    const child = this.active?.view;
+    if (child && child.state.readOnly !== this.owner.state.readOnly) {
+      child.dispatch({ effects: this.readOnly.reconfigure(EditorState.readOnly.of(this.owner.state.readOnly)) });
+    }
+  }
+
   private navigate(direction: 'next' | 'previous' | 'down') {
     if (!this.active) return false;
     let { row, column } = this.active;
@@ -202,6 +214,7 @@ class TableController {
     else if (direction === 'previous') { if (--column < 0) { column = this.model.columnCount - 1; row--; } }
     else row++;
     if (row < 0 || row === this.model.rows.length) {
+      if (this.owner.state.readOnly) return true;
       const index = Math.max(0, row), change = insertTableRow(this.model, index);
       this.close();
       this.owner.dispatch({ changes: change, annotations: [cellSync.of(true), Transaction.userEvent.of('input')] });
@@ -358,6 +371,9 @@ export function liveTables(open: (target: string) => void): Extension {
   const selection = ViewPlugin.fromClass(class {
     private version = 0;
     update(update: ViewUpdate) {
+      if (update.startState.readOnly !== update.state.readOnly) {
+        for (const dom of update.view.dom.querySelectorAll<HTMLElement>('.cm-live-table')) controllers.get(dom)?.syncReadOnly();
+      }
       if ((!update.selectionSet && !update.docChanged) || update.transactions.some(t => t.annotation(cellSync))) return;
       const version = ++this.version;
       const hadFocus = update.view.hasFocus || !!activeTableEditor(update.view);
