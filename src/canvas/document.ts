@@ -64,7 +64,7 @@ function stringField(value: Mapping, key: string, required: boolean, nonempty = 
   if (typeof value[key] !== 'string' || (nonempty && !value[key])) fail(`Canvas ${key} must be ${nonempty ? 'a nonempty' : 'a'} string`);
 }
 
-function validate(root: Mapping): void {
+function validate(root: Mapping, strictReferences = false): void {
   const nodeIds = new Set<string>();
   for (const key of ['nodes', 'edges']) {
     if (Object.hasOwn(root, key) && !Array.isArray(root[key])) fail(`Canvas ${key} must be an array`);
@@ -72,7 +72,7 @@ function validate(root: Mapping): void {
   for (const node of (root.nodes ?? []) as readonly CanvasValue[]) {
     mapping(node, 'Canvas node');
     stringField(node, 'id', true, true); stringField(node, 'type', true, true);
-    if (nodeIds.has(node.id as string)) fail(`Duplicate Canvas node id: ${node.id}`);
+    if (strictReferences && nodeIds.has(node.id as string)) fail(`Duplicate Canvas node id: ${node.id}`);
     nodeIds.add(node.id as string);
     for (const key of ['x', 'y', 'width', 'height']) if (typeof node[key] !== 'number' || !Number.isFinite(node[key])) fail(`Canvas node ${key} must be a finite number`);
     stringField(node, 'color', false);
@@ -85,10 +85,10 @@ function validate(root: Mapping): void {
   for (const edge of (root.edges ?? []) as readonly CanvasValue[]) {
     mapping(edge, 'Canvas edge');
     for (const key of ['id', 'fromNode', 'toNode']) stringField(edge, key, true, true);
-    if (edgeIds.has(edge.id as string)) fail(`Duplicate Canvas edge id: ${edge.id}`);
+    if (strictReferences && edgeIds.has(edge.id as string)) fail(`Duplicate Canvas edge id: ${edge.id}`);
     edgeIds.add(edge.id as string);
     for (const key of ['fromSide', 'toSide', 'fromEnd', 'toEnd', 'color', 'label']) stringField(edge, key, false);
-    if (!nodeIds.has(edge.fromNode as string) || !nodeIds.has(edge.toNode as string)) fail(`Dangling Canvas edge: ${edge.id}`);
+    if (strictReferences && (!nodeIds.has(edge.fromNode as string) || !nodeIds.has(edge.toNode as string))) fail(`Dangling Canvas edge: ${edge.id}`);
   }
 }
 
@@ -121,24 +121,27 @@ function set(object: Mapping, key: string, value: CanvasValue | undefined): void
 export class CanvasDocument {
   private source: string;
   private root: Mapping;
-  private readonly newline: string;
-  private readonly indent: string;
-  private readonly trailingNewline: boolean;
+  private newline: string;
+  private indent: string;
+  private trailingNewline: boolean;
 
-  private constructor(source: string, root: Mapping) {
+  private strictReferences: boolean;
+
+  private constructor(source: string, root: Mapping, strictReferences: boolean) {
+    this.strictReferences = strictReferences;
     this.source = source; this.root = freeze(root) as Mapping;
     this.newline = source.includes('\r\n') ? '\r\n' : '\n';
     this.indent = /\r?\n([\t ]+)"/.exec(source)?.[1].slice(0, 10) ?? '  ';
     this.trailingNewline = /\r?\n$/.test(source);
   }
 
-  static parse(source: string): CanvasDocument {
+  static parse(source: string, options: { strictReferences?: boolean } = {}): CanvasDocument {
     if (typeof source !== 'string') fail('Canvas source must be a string');
     try {
       // Only a truly empty source follows the reference's empty-file path.
       const root = copy(source === '' ? {} : JSON.parse(source));
-      mapping(root, 'Canvas document'); validate(root);
-      return new CanvasDocument(source, root);
+      mapping(root, 'Canvas document'); validate(root, options.strictReferences);
+      return new CanvasDocument(source, root, !!options.strictReferences);
     } catch (error) {
       throw error instanceof CanvasDocumentError ? error : new CanvasDocumentError(`Invalid Canvas JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -151,9 +154,24 @@ export class CanvasDocument {
   getRoot(key: string): CanvasValue | undefined { return Object.hasOwn(this.root, key) ? this.root[key] : undefined; }
   toString(): string { return this.source; }
 
+  /** Publish several edits together; exceptions leave this document unchanged. */
+  transaction(operation: (draft: CanvasDocument) => void): void {
+    const draft = CanvasDocument.parse(this.source, { strictReferences: this.strictReferences });
+    operation(draft);
+    if (draft.source !== this.source) this.replaceSource(draft.source);
+  }
+
+  /** Replace source atomically, used by view undo/redo and external reload. */
+  replaceSource(source: string): void {
+    const next = CanvasDocument.parse(source, { strictReferences: this.strictReferences });
+    if (source === this.source) return;
+    this.source = next.source; this.root = next.root;
+    this.newline = next.newline; this.indent = next.indent; this.trailingNewline = next.trailingNewline;
+  }
+
   private edit(operation: (root: Mapping) => void): void {
     const next = copy(this.root) as Mapping;
-    operation(next); validate(next);
+    operation(next); validate(next, this.strictReferences);
     // No-op edits retain formatting as well as the cached immutable snapshots.
     if (JSON.stringify(next) === JSON.stringify(this.root)) return;
     const source = JSON.stringify(next, null, this.indent).replace(/\n/g, this.newline) + (this.trailingNewline ? this.newline : '');
