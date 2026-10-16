@@ -2,6 +2,7 @@ import type { Vault } from '../core/vault.ts';
 import { selectMarkdownSubpath } from '../core/subpath.ts';
 import { el } from './dom.ts';
 import { renderMarkdown } from './markdown.ts';
+import { destroyMarkdown } from './markdown-lifecycle.ts';
 import type { EmbedRequest } from './markdown.ts';
 import { AttachmentResources, imageAlt, isImage } from './attachments.ts';
 import type { AttachmentLease } from './attachments.ts';
@@ -122,7 +123,9 @@ export class MarkdownEmbeds {
   }
 
   private release(state: EmbedState): void {
+    if (state.disposed) return;
     state.disposed = true; state.version++;
+    destroyMarkdown(state.node);
     state.pdfView?.destroy();state.pdfView=undefined;
     state.lease?.release();state.lease=undefined;
     this.observer?.unobserve(state.node); this.observed.delete(state.node);
@@ -139,6 +142,7 @@ export class MarkdownEmbeds {
   private async refresh(state: EmbedState): Promise<void> {
     if (this.disposed || state.disposed) return;
     const version = ++state.version;
+    destroyMarkdown(state.node);
     this.clearChildren(state);
     state.pdfView?.destroy();state.pdfView=undefined;
     state.lease?.release();state.lease=undefined;state.imageSource=undefined;
@@ -190,12 +194,13 @@ export class MarkdownEmbeds {
     const identity = `${path}${fragment}`;
     if (state.ancestors.includes(identity)) { fail('Recursive embed'); return; }
     if (state.ancestors.length >= 5) { fail('Embed nesting limit reached'); return; }
+    let content: HTMLElement | undefined;
     try {
       const sourceText = await this.read(path);
       if (!current()) return;
       const selection = selectMarkdownSubpath(sourceText, fragment);
       if (!selection) { fail('Heading or block not found'); return; }
-      const content = el('span', 'markdown-embed-content');
+      content = el('span', 'markdown-embed-content');
       renderMarkdown(content, selection.content,
         (target, kind = 'wiki') => this.options.open(path, target, kind),
         (line, checked) => {
@@ -205,8 +210,15 @@ export class MarkdownEmbeds {
             .catch(error => fail(error instanceof Error ? error.message : String(error)));
         },
         {embed: child => this.render(child, path, [...state.ancestors, identity], state)});
-      state.node.append(content);
-    } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
+      if (current()) state.node.append(content);
+      else destroyMarkdown(content);
+    } catch (error) {
+      // Rendering may have created async math/code owners before a later block
+      // failed. The detached content still needs the same teardown as a mounted view.
+      if (content) destroyMarkdown(content);
+      if (current()) this.clearChildren(state);
+      fail(error instanceof Error ? error.message : String(error));
+    }
   }
 
   destroy(): void {
