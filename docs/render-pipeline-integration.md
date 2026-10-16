@@ -77,3 +77,11 @@ source-reveal behavior and native IME remain unverified. Further interaction
 checks stopped after the app's state changed during use; existing note content
 was preserved. The agent-launched Electron process exited zero after save/quit,
 and a fresh app inventory confirmed it closed.
+
+The subsequent root build at `ef6e864` includes the independently reviewed quote
+container and inline-only parser repairs. Root reopened the same native fixture,
+switched to Reading, and confirmed both accessibility output and a screenshot now
+show the callout's superscript equation as rendered mathematics, with no literal
+`$$` delimiters. The 29 focused Reading/parser regressions, TypeScript and
+production build pass. Reading and Live callout styling still differs (Reading
+has the older border/title treatment); shared presentation work is assigned.

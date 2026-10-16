@@ -164,3 +164,12 @@ and actual filesystem behavior remain root verification work. Internal move plan
 execute sequentially and report partial completion; this does not establish an
 atomic filesystem transaction or eliminate external-process races. External drops,
 mobile touch dragging and exact visual parity remain outside this checkpoint.
+
+Root's native follow-up on `ef6e864` verified that New folder creates a selected
+inline name, Enter commits `Native folder check`, and Escape on a second creation
+retains `Untitled folder`. The test used the existing temporary verification vault.
+It also found a focus defect: ordinary folder activation replaces the focused row,
+leaving focus on the document, so subsequent F2 does not enter rename. This is
+assigned to the file-tree owner with a regression request; F2 is not counted as
+natively verified. Drag destinations, hover expansion and multi-selection remain
+pending. The agent-launched Electron process exited with code zero after save/quit.
