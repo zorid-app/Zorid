@@ -1,8 +1,11 @@
 import type { VaultEntry } from '../core/types';
+import type { ContextMenuRequest } from './context-menu';
 
 export interface DesktopVault { path: string; name: string }
 export interface VaultChange { type: string; path?: string; message?: string }
 export interface DesktopBridge {
+  showContextMenu?(request: ContextMenuRequest): Promise<string | null>;
+  dismissContextMenu?(): Promise<void>;
   getPathForFile?(file: File): string;
   getVault(): Promise<DesktopVault | null>;
   openVault(): Promise<DesktopVault | null>;
