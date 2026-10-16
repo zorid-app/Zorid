@@ -17,6 +17,15 @@
 - Report observed results and remaining gaps honestly. A passing isolated test
   does not establish integrated, native, mobile, visual, or reference parity.
 
+## Local resource use
+
+- The development machine is an 8 GB MacBook Air. Keep heavy builds and full
+  test suites serialized; use bounded test concurrency. Parallel agents should
+  coordinate local resource use rather than launch overlapping full checks.
+- Close the test Electron app opened by the agent after each native verification
+  pass, preserving any unsaved work. Do not leave test windows running between
+  passes or close unrelated user applications.
+
 ## Incoming user findings
 
 - The user will send frequent observations, screenshots, bugs, and feature requests.
