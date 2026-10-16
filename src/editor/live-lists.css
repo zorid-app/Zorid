@@ -1,0 +1,41 @@
+/* Original source-preserving list presentation; measurements are themeable. */
+.cm-editor .cm-list-line {
+  --zorid-list-indent: 2.25em;
+  --zorid-list-marker: var(--text-faint, #888);
+  position: relative;
+}
+.cm-editor .cm-list-prefix {
+  padding-inline-start: .75em;
+  color: var(--zorid-list-marker);
+  font-variant-numeric: tabular-nums;
+}
+.cm-editor .cm-list-bullet {
+  position: relative;
+  color: transparent;
+}
+.cm-editor .cm-list-bullet::after {
+  content: '';
+  position: absolute;
+  inline-size: .3em;
+  block-size: .3em;
+  inset-inline-end: .12em;
+  inset-block-start: calc(50% - .15em);
+  background: var(--zorid-list-marker);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.cm-editor .cm-list-unordered-task .cm-task-label { margin-inline-start: .75em; }
+.cm-editor .cm-list-indent {
+  display: inline-block;
+  min-inline-size: var(--zorid-list-indent);
+  position: relative;
+  white-space: pre;
+}
+.cm-editor .cm-list-indent::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: .85em;
+  inset-block: 0;
+  border-inline-start: 1px solid var(--background-modifier-border, #ddd);
+  pointer-events: none;
+}
