@@ -41,7 +41,7 @@ test('actual DOM projects four node types and connected edges without modifying 
 });
 
 test('drag updates existing DOM and connected edge during preview, then saves one atomic transaction', async () => {
-  const ui = setup(), beforeNode = ui.item('a'), edge = ui.container.querySelector('path[marker-end]')!, initialPath = edge.getAttribute('d');
+  const ui = setup(), beforeNode = ui.item('a'), edge = ui.container.querySelector('.zorid-canvas-edge-line')!, initialPath = edge.getAttribute('d');
   ui.pointer(beforeNode, 'pointerdown', 40, 40); ui.pointer(ui.viewport, 'pointermove', 90, 70);
   assert.equal(ui.item('a'), beforeNode); assert.equal(beforeNode.style.left, '50px'); assert.notEqual(edge.getAttribute('d'), initialPath);
   assert.equal(ui.document.toString(), fixture); assert.equal(ui.saves.length, 0);
@@ -126,7 +126,7 @@ test('background box selection and empty Delete use real event handlers without 
 
 test('add card and blur commit preserve empty canvas and support undo; Escape cancels text edits', async () => {
   const ui = setup('');
-  [...ui.container.querySelectorAll('button')].find(button => button.textContent === 'Add card')!.click();
+  ui.container.querySelector<HTMLButtonElement>('[aria-label="Add card"]')!.click();
   const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'New card'; input.blur(); await ui.view.flush();
   assert.equal(ui.document.nodes.length, 1); assert.equal(ui.document.nodes[0].text, 'New card');
   ui.item(ui.document.nodes[0].id).dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
@@ -323,4 +323,100 @@ test('menu transport rejection reports the failure without modifying the documen
   ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
   await new Promise(resolve => setImmediate(resolve)); assert.equal(ui.document.toString(), fixture); assert.equal(ui.saves.length, 0);
   assert.match(ui.container.textContent!, /menu unavailable/); assert.equal(ui.errors.length, 1); ui.close();
+});
+
+test('web page creation selects its new node and label edits follow an unchanged record after array insertion', async () => {
+  const ui = setup(), menu = menuDriver(ui);
+  await menu.open(ui.viewport); await menu.choose('add-web-page'); ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'https://selected.test/'; await ui.view.flush();
+  const link = ui.document.nodes.at(-1)!; assert.equal(ui.item(link.id).getAttribute('aria-selected'), 'true');
+  await menu.open(ui.container.querySelector('[data-edge-id="ab"] path')!); await menu.choose('edit-label');
+  ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'Changed original';
+  ui.document.setRoot('edges', [{ id: 'fresh', fromNode: 'a', toNode: 'b', label: 'Keep' }, ...ui.document.edges]); await ui.view.flush();
+  assert.equal(ui.document.getEdge('fresh')!.label, 'Keep'); assert.equal(ui.document.getEdge('ab')!.label, 'Changed original'); ui.close();
+});
+
+test('changed editor target retains its draft and makes flush reject instead of overwriting another record', async () => {
+  const ui = setup(), menu = menuDriver(ui);
+  await menu.open(ui.container.querySelector('[data-edge-id="ab"] path')!); await menu.choose('edit-label');
+  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Valuable draft';
+  ui.document.updateEdge('ab', { label: 'External revision' });
+  await assert.rejects(ui.view.flush(), /changed while editing/);
+  assert.equal(ui.document.getEdge('ab')!.label, 'External revision'); assert.equal(input.value, 'Valuable draft'); assert.equal(ui.view.hasPendingChanges(), true); assert.equal(ui.saves.length, 0);
+  const source = ui.document.toString(); ui.container.querySelector<HTMLButtonElement>('[aria-label="Add card"]')!.click();
+  assert.equal(ui.document.toString(), source); assert.equal(input.isConnected, true); assert.equal(input.value, 'Valuable draft');
+  ui.key('Escape', {}, input); await ui.view.flush(); assert.equal(ui.view.hasPendingChanges(), false); ui.close();
+});
+
+test('icon controls preserve ordered groups and create a centered default card in document coordinates', async () => {
+  const ui = setup();
+  Object.defineProperties(ui.viewport, { clientWidth: { value: 1000 }, clientHeight: { value: 700 } });
+  const groups = [...ui.container.querySelectorAll('.zorid-canvas-control-group')];
+  assert.deepEqual(groups.map(group => [...group.querySelectorAll('button')].map(button => button.getAttribute('aria-label'))), [['Zoom in', 'Reset zoom', 'Fit canvas', 'Zoom out'], ['Undo', 'Redo']]);
+  for (const button of ui.container.querySelectorAll('.zorid-canvas-toolbar button, .zorid-canvas-card-menu button')) {
+    assert.equal(button.textContent, ''); assert.equal(button.querySelectorAll('svg').length, 1); assert.equal(button.querySelector('svg')!.ownerDocument, ui.dom.window.document);
+  }
+  ui.container.querySelector<HTMLButtonElement>('[aria-label="Add card"]')!.click();
+  const card = ui.document.nodes.at(-1)!; assert.deepEqual([card.x, card.y, card.width, card.height], [335, 280, 250, 60]);
+  assert.equal(ui.item(card.id).getAttribute('aria-selected'), 'true'); assert.equal(ui.dom.window.document.activeElement?.tagName, 'TEXTAREA');
+  await ui.view.flush(); ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), fixture); ui.close();
+});
+
+test('dot grid stays screen sized and changes spacing with zoom without writing the document', () => {
+  const ui = setup(), pattern = ui.container.querySelector('pattern')!, circle = pattern.querySelector('circle')!;
+  const wheel = (deltaY: number) => ui.viewport.dispatchEvent(new ui.dom.window.WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY }));
+  assert.equal(pattern.getAttribute('width'), '20');
+  for (const [delta, zoom, spacing] of [[300, .5, 20], [300, .25, 10], [300, .125, 10], [300, .0625, 10], [300, .0625, 10]]) {
+    wheel(delta); assert.equal(Number(ui.viewport.dataset.zoom), zoom); assert.equal(Number(pattern.getAttribute('width')), spacing); assert.equal(circle.getAttribute('r'), '.7');
+  }
+  assert.equal(ui.view.element.style.getPropertyValue('--zc-zoom-compensation'), '4'); assert.equal(ui.view.element.classList.contains('is-zoomed-out'), true);
+  ui.container.querySelector<HTMLButtonElement>('[aria-label="Reset zoom"]')!.click(); assert.equal(ui.viewport.dataset.zoom, '1'); assert.equal(pattern.getAttribute('width'), '20');
+  ui.pointer(ui.viewport, 'pointerdown', 0, 0, { button: 1 }); ui.pointer(ui.viewport, 'pointermove', 13, 7);
+  assert.equal(pattern.getAttribute('x'), '13'); assert.equal(pattern.getAttribute('y'), '7'); assert.equal(ui.viewport.classList.contains('is-panning'), true);
+  ui.pointer(ui.viewport, 'pointerup', 13, 7); assert.equal(ui.viewport.classList.contains('is-panning'), false);
+  assert.equal(ui.document.toString(), fixture); assert.equal(ui.saves.length, 0); ui.close();
+});
+
+test('connection paths, arrowheads and HTML labels follow the same geometry during drag', async () => {
+  const source = JSON.stringify({ nodes: [node('a'), node('b', 'text', { x: 300 })], edges: [{ id: 'e', fromNode: 'a', toNode: 'b', fromSide: 'right', toSide: 'left', fromEnd: 'arrow', toEnd: 'arrow', color: '5', label: 'Two\nlines' }] });
+  const ui = setup(source), group = ui.container.querySelector<SVGGElement>('[data-edge-id="e"]')!, display = group.querySelector('.zorid-canvas-edge-line')!, hit = group.querySelector('.zorid-canvas-edge-hit')!, label = ui.container.querySelector<HTMLElement>('[data-edge-label-id="e"]')!;
+  assert.equal(display.getAttribute('d'), 'M 187 50 C 257 50 223 50 293 50'); assert.equal(hit.getAttribute('d'), display.getAttribute('d'));
+  assert.deepEqual([...group.querySelectorAll('[data-end]')].map(arrow => arrow.getAttribute('transform')), ['translate(180 50) rotate(270)', 'translate(300 50) rotate(90)']);
+  assert.equal(group.style.getPropertyValue('--canvas-edge-color'), 'var(--zc-color-5)'); assert.equal(label.textContent, 'Two\nlines'); assert.equal(label.style.left, '240px'); assert.equal(label.style.top, '50px');
+  ui.pointer(ui.item('a'), 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 20, 20);
+  assert.equal(ui.container.querySelector('[data-edge-label-id="e"]'), label); assert.equal(label.style.top, '60px'); assert.equal(hit.getAttribute('d'), display.getAttribute('d'));
+  assert.equal(ui.item('a').classList.contains('is-dragging'), true); ui.pointer(ui.viewport, 'pointercancel', 20, 20);
+  assert.equal(label.style.top, '50px'); assert.equal(ui.item('a').classList.contains('is-dragging'), false);
+  ui.pointer(label, 'pointerdown', 0, 0); assert.equal(group.classList.contains('is-selected'), true); ui.key('Delete'); await ui.view.flush(); assert.equal(ui.document.edges.length, 0);
+  ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), source); ui.close();
+});
+
+test('group and file captions remain outside clipped frames and invalid colors remain inert source data', () => {
+  const source = JSON.stringify({ nodes: [node('g', 'group', { label: 'Section', color: '#aabbcc' }), node('f', 'file', { file: 'Notes/Example.md', subpath: '#Part' }), node('bad', 'text', { color: '#12345' })], edges: [] });
+  const ui = setup(source), group = ui.item('g'), file = ui.item('f');
+  assert.equal(group.querySelector('.zorid-canvas-group-label')!.parentElement, group);
+  assert.equal(file.querySelector('.zorid-canvas-node-label')!.parentElement, file); assert.equal(file.querySelector('.zorid-canvas-node-label')!.textContent, 'Example › Part');
+  assert.equal(group.classList.contains('is-themed'), true); assert.equal(ui.item('bad').classList.contains('is-themed'), false);
+  assert.equal(group.querySelector<HTMLElement>('.zorid-canvas-group-label')!.style.getPropertyValue('--zc-label-foreground'), 'var(--text-on-accent-inverted, #000)');
+  assert.equal(ui.document.toString(), source); assert.equal(ui.saves.length, 0); ui.close();
+});
+
+test('source reordering before opening a projected card cannot redirect its text edit or later drag', async () => {
+  const ui = setup();
+  ui.document.setRoot('nodes', [node('fresh', 'text', { text: 'Keep', x: 1000 }), ...ui.document.nodes]);
+  ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
+  ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'Edit a'; await ui.view.flush();
+  assert.equal(ui.document.getNode('a')!.text, 'Edit a'); assert.equal(ui.document.getNode('fresh')!.text, 'Keep');
+  ui.document.setRoot('nodes', [node('another', 'text', { x: 2000 }), ...ui.document.nodes]);
+  ui.pointer(ui.item('a'), 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 20, 30); ui.pointer(ui.viewport, 'pointerup', 20, 30); await ui.view.flush();
+  assert.equal(ui.document.getNode('a')!.x, 20); assert.equal(ui.document.getNode('a')!.y, 30); assert.equal(ui.document.getNode('fresh')!.x, 1000); assert.equal(ui.document.getNode('another')!.x, 2000); ui.close();
+});
+
+test('changed projected card rejects edits and drag without overwriting current source', async () => {
+  const ui = setup(); ui.document.updateNode('a', { text: 'Current source' });
+  ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
+  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Old view draft';
+  await assert.rejects(ui.view.flush(), /changed while editing/); assert.equal(input.isConnected, true); assert.equal(ui.document.getNode('a')!.text, 'Current source');
+  ui.key('Escape', {}, input);
+  ui.pointer(ui.item('a'), 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 20, 30); ui.pointer(ui.viewport, 'pointerup', 20, 30);
+  assert.equal(ui.document.getNode('a')!.x, 0); assert.equal(ui.item('a').style.left, '0px'); assert.equal(ui.saves.length, 0); ui.close();
 });
