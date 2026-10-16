@@ -23,7 +23,7 @@ function fixture(t:TestContext,options:PdfViewOptions={}){
   const loading=deferred<{numPages:number;getPageLabels():Promise<string[]|null>;destroy():Promise<void>}>();
   const task:{promise:typeof loading.promise;destroy:()=>Promise<void>;onPassword?:((update:(password:string)=>void,reason:number)=>void)|null}={promise:loading.promise,async destroy(){disposed.push('task');}};
   const engine:PdfEngine={core:{GlobalWorkerOptions:{workerSrc:''},getDocument(config){opens.push(config);return task;}},viewer:{EventBus:Bus as never,PDFLinkService:Links as never,PDFFindController:class {} as never,PDFViewer:Viewer as never}};
-  let acquired=0;const resources={async acquire(){acquired++;return {url:'blob:owned-pdf',type:'application/pdf',release(){disposed.push('lease');}};}};
+  let acquired=0;const resources={async acquire(){acquired++;return {url:'blob:owned-pdf',type:'application/pdf',async arrayBuffer(){return Uint8Array.of(1,2,3).buffer;},release(){disposed.push('lease');}};}};
   const view=createPdfView(root,'Folder/Example.pdf',resources,{loadEngine:async()=>engine,...options});
   t.after(()=>view.destroy());
   const resolve=()=>loading.resolve({numPages:3,async getPageLabels(){return ['i','ii','iii'];},async destroy(){disposed.push('doc');}});
@@ -43,7 +43,7 @@ test('PDF subpath uses PDF destination coordinates and item/offset selection tup
 
 test('loads PDF.js with owned resource and continuous viewer; labels, zoom, rotation and teardown',async t=>{
   const f=fixture(t);f.resolve();await f.view.ready;
-  assert.equal(f.acquired,1);assert.equal(f.opens[0].url,'blob:owned-pdf');assert.equal(f.opens[0].isEvalSupported,false);
+  assert.equal(f.acquired,1);assert.equal(f.opens[0].url,undefined);assert.deepEqual(f.opens[0].data,Uint8Array.of(1,2,3));assert.equal(f.opens[0].isEvalSupported,false);
   assert.equal(f.opens[0].cMapUrl,'https://zorid.test/dist/lib/pdfjs/cmaps/');
   assert.equal(f.viewer.config.maxCanvasPixels,16777216);assert.equal(f.viewer.config.textLayerMode,1);
   assert.equal(f.root.querySelector<HTMLInputElement>('[aria-label="Page"]')!.value,'i');
@@ -146,8 +146,8 @@ test('real official viewer components initialize continuous page hosts through t
   t.after(async()=>{handle?.destroy();await ticks();env.window.close();for(const [name,descriptor]of before){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);}});
   const core=await import('pdfjs-dist/legacy/build/pdf.mjs'),components=await import('pdfjs-dist/web/pdf_viewer.mjs');
   const require=createRequire(import.meta.url);
-  const engine={core:{...core,getDocument(config:Record<string,unknown>){const {url,...rest}=config;return core.getDocument({...rest,data:samplePdf(),standardFontDataUrl:join(dirname(require.resolve('pdfjs-dist/package.json')),'standard_fonts/'),useSystemFonts:false});}},viewer:components} as unknown as PdfEngine;
-  handle=createPdfView(env.window.document.querySelector('main')!,'Example.pdf',{async acquire(){return {url:'blob:pdf-fixture',type:'application/pdf',release(){release=true;}};}},{loadEngine:async()=>engine});
+  const engine={core:{...core,getDocument(config:Record<string,unknown>){return core.getDocument({...config,standardFontDataUrl:join(dirname(require.resolve('pdfjs-dist/package.json')),'standard_fonts/'),useSystemFonts:false});}},viewer:components} as unknown as PdfEngine;
+  handle=createPdfView(env.window.document.querySelector('main')!,'Example.pdf',{async acquire(){return {url:'blob:pdf-fixture',type:'application/pdf',async arrayBuffer(){return samplePdf().buffer as ArrayBuffer;},release(){release=true;}};}},{loadEngine:async()=>engine});
   await handle.ready;
   assert.equal(env.window.document.querySelectorAll('.pdfViewer .page').length,2);
   assert.equal(env.window.document.querySelector<HTMLInputElement>('[aria-label="Page"]')!.value,'1');
@@ -182,4 +182,17 @@ test('destroy resolves ready during a pending document request and consumes its 
 
 test('destroy resolves ready while page labels are pending without updating disposed controls',async t=>{
   const f=fixture(t),labels=deferred<string[]|null>();f.loading.resolve({numPages:3,getPageLabels:()=>labels.promise,async destroy(){}});await ticks();let settled=false;void f.view.ready.then(()=>{settled=true;});f.view.destroy();await ticks();assert.equal(settled,true);const eventCount=f.events.length;labels.resolve(['I','II','III']);await ticks();assert.equal(f.events.length,eventCount);assert.equal(f.root.childElementCount,0);
+});
+
+test('closing during byte materialization releases the lease and prevents a late PDF open',async t=>{
+  const {root}=dom(t),bytes=deferred<ArrayBuffer>();let released=0,requested=0;
+  const view=createPdfView(root,'a.pdf',{async acquire(){return {url:'blob:file:///unfetchable',type:'application/pdf',arrayBuffer(){requested++;return bytes.promise;},release(){released++;}};}},{loadEngine:async()=>({} as PdfEngine)});
+  await ticks();assert.equal(requested,1);view.destroy();await view.ready;await ticks();assert.equal(released,1);
+  bytes.resolve(Uint8Array.of(1,2,3).buffer);await ticks();assert.equal(released,1);assert.equal(root.childElementCount,0);
+});
+
+test('failed byte materialization releases the lease and reports failure without fetching the URL',async t=>{
+  const {root}=dom(t);let released=0;
+  const view=createPdfView(root,'a.pdf',{async acquire(){return {url:'blob:file:///unfetchable',type:'application/pdf',async arrayBuffer(){throw new Error('Bytes unavailable');},release(){released++;}};}},{loadEngine:async()=>({} as PdfEngine)});
+  await assert.rejects(view.ready,/Bytes unavailable/);assert.equal(released,1);assert.match(root.textContent??'',/Bytes unavailable/);view.destroy();
 });

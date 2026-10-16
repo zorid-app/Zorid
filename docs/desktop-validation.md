@@ -149,3 +149,39 @@ preceding dashes and indentation guides. Ordinary list markers show circular
 bullets, but a small residual hyphen is also visible beneath them; that visual
 regression is assigned for repair. Native menu action execution, reference visual
 comparison, and split-view integration remain separate outstanding checks.
+
+### Bullet correction and native table history
+
+Commit `d96601a` hides nested syntax-highlighted list-marker text, enlarges the
+circle diameter from .3em to .375em, and makes it black in the light theme per
+the user's explicit correction. Dark-theme bullets retain readable text color.
+All 22 focused list/task tests and the production build pass. A clean desktop
+launch produced a complete screenshot showing the black circle with no visible
+underlying hyphen. Earlier reload observations still displayed the previous
+styling, so the clean launch is the visual evidence used for this checkpoint.
+
+A separate exclusively created `Native table verification 20261016.md` fixture
+was used for native interaction testing. Clicking Add row below created a body
+row and focused its first nested editor. Typing `Added` updated the Markdown;
+two native Undo shortcuts removed the typing and row insertion. Saving and
+checking disk bytes confirmed exact restoration of the original fixture.
+These actions do not establish the complete reference table interaction model.
+
+### Native PDF and Canvas integration
+
+The integrated renderer passed 523 tests and production build before native
+viewer checks. Opening an original two-page PDF initially failed with an
+unexpected response from its `blob:file://` resource. Commit `23bf02f` passes
+owned, independently transferable bytes to PDF.js instead; no CSP or Electron
+security settings were weakened. Its 38 focused tests and production build pass.
+
+After a clean launch, the same native PDF rendered its text and red rectangle;
+the accessibility tree exposed both pages. Setting Page to 2 navigated correctly.
+Searching `Zorid` returned `2 of 2`. A Live Edit Markdown embed targeting
+`#page=2&height=320` loaded the actual viewer and reported page 2 of 2. These are
+bounded native checks, not full PDF interaction or reference-UI certification.
+
+A separate Canvas fixture rendered two text cards and their connecting edge.
+The user subsequently moved those cards, so their changed positions were retained
+and no automated rollback was applied. Full Canvas editing, history and visual
+parity remain unverified natively.
