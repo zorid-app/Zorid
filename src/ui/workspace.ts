@@ -1,5 +1,5 @@
 import { bindNoteTitleFocus } from './note-title-focus.ts';
-import { Vault } from '../core/index.ts';
+import { Vault, parseMetadata } from '../core/index.ts';
 import type { VaultEntry } from '../core/index.ts';
 import { pickDesktopVault } from '../platform/index.ts';
 import type { PlatformVault } from '../platform/index.ts';
@@ -93,7 +93,7 @@ export class Workspace {
   private attachmentImporter?: AttachmentImporter;
   private sessionState: Record<string, unknown> = {};
   private storageScope = new WorkspaceStorageScope();
-  private tabSelectionRequest = new WeakMap<Pane, number>();
+  private navigationIntent = new WeakMap<Pane, number>();
   private paneActivationRevision = 0;
 
   constructor(root: HTMLElement, editorFactory?: EditorFactory, viewFactories: WorkspaceViewFactories = {}) { this.root = root; this.editorFactory = editorFactory; this.viewFactories = viewFactories; }
@@ -301,8 +301,11 @@ export class Workspace {
   private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
   async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath=''): Promise<void> {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
-    const navigation=(this.noteNavigation.get(pane)??0)+1;this.noteNavigation.set(pane,navigation);
-    await this.flushPane(pane);if(this.noteNavigation.get(pane)!==navigation)return;this.capturePaneState(pane);const current=this.current(pane);
+    const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
+    await this.flushPane(pane);
+    if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||pane.renderVersion!==version||!this.panes.includes(pane))return;
+    this.noteNavigation.set(pane,(this.noteNavigation.get(pane)??0)+1);
+    this.capturePaneState(pane);const current=this.current(pane);
     const existing=pane.tabs.find(tab=>tab.path===path&&tab.kind==='note');
     if(existing&&!newTab) pane.active=existing.id;
     else if(!newTab&&current){if(current.path!==path)current.viewState=undefined;if(current.kind==='graph')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
@@ -418,7 +421,18 @@ export class Workspace {
         const host=el('div','editor-host');scroll.append(host);
         const factory=this.editorFactory||(await import('./editor.ts')).createEditor;if(version!==pane.renderVersion)return;
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
-        pane.editor=factory(host,{value:buffer.text,mode:tab.mode,paths:()=>[...this.vault.entries.keys()],
+        const ownsEditor=()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path;
+        pane.editor=factory(host,{value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
+          wiki:{sourcePath:()=>ownsEditor()?path:null,
+            metadata:target=>{if(!ownsEditor())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):this.vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:this.vault.entries.get(target)?.mtime};},
+            resolvePath:(target,source)=>ownsEditor()?this.vault.metadata.resolveLink(source,target):null,
+            linkText:(target,source)=>{
+              if(!ownsEditor())return target.replace(/\.md$/i,'');
+              let result=target;const filename=target.split('/').at(-1)!;
+              if(this.settings.newLinkFormat==='shortest'){const matches=this.vault.metadata.resolveLinkCandidates(source,filename);if(matches.length===1&&matches[0]===target)result=filename;}
+              else if(this.settings.newLinkFormat==='relative'){const from=parentOf(source).split('/').filter(Boolean),to=target.split('/');while(from.length&&to.length&&from[0]===to[0]){from.shift();to.shift();}result=from.length?[...from.map(()=>'..'),...to].join('/'):'./'+to.join('/');}
+              return result.replace(/\.md$/i,'');
+            }},
           isUnresolved:(target,kind)=>generation!==this.vaultGeneration||!this.vault.metadata.resolveLink(path,target,kind),
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:request=>{const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
@@ -570,10 +584,10 @@ export class Workspace {
 
   async newNote(folder=''):Promise<void>{
     let index=0,path='';do{path=`${folder?folder+'/':''}Untitled${index?' '+index:''}.md`;index++;}while(this.vault.entries.has(path));
-    const generation=this.vaultGeneration,pane=this.activePane,version=pane.renderVersion,navigation=(this.noteNavigation.get(pane)??0)+1;
-    this.noteNavigation.set(pane,navigation);
-    await this.vault.create(path,'');if(generation!==this.vaultGeneration||!this.panes.includes(pane)||pane.renderVersion!==version||this.noteNavigation.get(pane)!==navigation)return;
-    await this.openNote(path,false,pane);if(generation!==this.vaultGeneration||this.activePane!==pane||this.current(pane)?.path!==path||this.noteNavigation.get(pane)!==navigation+1)return;
+    const generation=this.vaultGeneration,pane=this.activePane,version=pane.renderVersion,intent=(this.navigationIntent.get(pane)??0)+1,activation=this.paneActivationRevision;
+    this.navigationIntent.set(pane,intent);
+    await this.vault.create(path,'');if(generation!==this.vaultGeneration||!this.panes.includes(pane)||pane.renderVersion!==version||this.navigationIntent.get(pane)!==intent||activation!==this.paneActivationRevision)return;
+    await this.openNote(path,false,pane);if(generation!==this.vaultGeneration||this.activePane!==pane||this.current(pane)?.path!==path||this.navigationIntent.get(pane)!==intent+1)return;
     const title=pane.element.querySelector<HTMLInputElement>('.note-title');
     if(title&&!title.hidden){title.focus();title.select();}else pane.editor?.focus();
   }
@@ -728,14 +742,14 @@ export class Workspace {
       else if(this.vault&&action?.type==='new-tab')this.run(()=>this.newTab());
       else if(this.vault&&action?.type==='select-tab'){
         const pane=this.activePane,tab=pane.tabs[action.index],generation=this.vaultGeneration,previousActive=pane.active,previousPath=this.current(pane)?.path,version=pane.renderVersion,activation=this.paneActivationRevision;
-        const request=(this.tabSelectionRequest.get(pane)??0)+1;this.tabSelectionRequest.set(pane,request);
+        const request=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,request);
         if(tab)this.run(async()=>{
-          if(request!==this.tabSelectionRequest.get(pane)||activation!==this.paneActivationRevision)return;
+          if(request!==this.navigationIntent.get(pane)||activation!==this.paneActivationRevision)return;
           if(pane.active===tab.id){this.focusPane(pane);return;}
           await this.flushPane(pane);
-          if(request!==this.tabSelectionRequest.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab)||pane.active!==previousActive||this.current(pane)?.path!==previousPath||pane.renderVersion!==version||activation!==this.paneActivationRevision)return;
+          if(request!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab)||pane.active!==previousActive||this.current(pane)?.path!==previousPath||pane.renderVersion!==version||activation!==this.paneActivationRevision)return;
           pane.active=tab.id;this.activate(pane);await this.renderPane(pane);
-          if(request===this.tabSelectionRequest.get(pane)&&pane.active===tab.id&&activation===this.paneActivationRevision)this.focusPane(pane);this.saveSession();
+          if(request===this.navigationIntent.get(pane)&&pane.active===tab.id&&activation===this.paneActivationRevision)this.focusPane(pane);this.saveSession();
         });
       }
       return;
