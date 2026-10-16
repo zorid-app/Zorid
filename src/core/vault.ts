@@ -142,15 +142,17 @@ export class Vault {
     if (parent && this.entries.get(parent)?.type !== 'folder') throw new Error(`Parent folder does not exist: ${parent}`);
   }
 
-  async read(rawPath: string): Promise<string> {
+  async read(rawPath: string, validate?: () => void): Promise<string> {
     await this.pending;
+    validate?.();
     const path = normalizePath(rawPath);
     this.requireFile(path);
     return this.adapter.read(path);
   }
 
-  async readBinary(rawPath: string): Promise<Uint8Array> {
+  async readBinary(rawPath: string, validate?: () => void): Promise<Uint8Array> {
     await this.pending;
+    validate?.();
     const path = normalizePath(rawPath);
     this.requireFile(path);
     if (!this.adapter.readBinary) throw new Error('Vault adapter does not support binary reads');
@@ -206,9 +208,10 @@ export class Vault {
     });
   }
 
-  modifyBinary(rawPath: string, data: Uint8Array): Promise<void> {
+  modifyBinary(rawPath: string, data: Uint8Array, options: { validate?: () => void } = {}): Promise<void> {
     const bytes = new Uint8Array(data);
     return this.enqueue(async () => {
+      options.validate?.();
       const path = normalizePath(rawPath);
       this.requireFile(path);
       if (!this.adapter.writeBinary) throw new Error('Vault adapter does not support binary writes');
@@ -219,8 +222,9 @@ export class Vault {
   }
 
   /** Reuse the indexed Markdown snapshot for previews; watchers invalidate it. */
-  async cachedRead(rawPath: string): Promise<string> {
+  async cachedRead(rawPath: string, validate?: () => void): Promise<string> {
     await this.pending;
+    validate?.();
     const path = normalizePath(rawPath);
     this.requireFile(path);
     return this.contents.get(path) ?? this.adapter.read(path);
@@ -239,8 +243,9 @@ export class Vault {
     });
   }
 
-  modify(rawPath: string, text: string, options: { expectedContent?: string } = {}): Promise<void> {
+  modify(rawPath: string, text: string, options: { expectedContent?: string; validate?: () => void } = {}): Promise<void> {
     return this.enqueue(async () => {
+      options.validate?.();
       const path = normalizePath(rawPath);
       this.requireFile(path);
       if (options.expectedContent !== undefined && this.adapter.compareAndWrite) {
@@ -286,8 +291,8 @@ export class Vault {
   }
 
   /** Move an entry without rewriting any note contents. */
-  renameEntry(rawOld: string, rawNew: string): Promise<void> {
-    return this.renameInternal(rawOld, rawNew, false);
+  renameEntry(rawOld: string, rawNew: string, validate?: () => void): Promise<void> {
+    return this.renameInternal(rawOld, rawNew, false, validate);
   }
 
   /** Update links resolved against the pre-move index, including links inside moved notes. */
@@ -295,8 +300,9 @@ export class Vault {
     return this.renameInternal(rawOld, rawNew, true);
   }
 
-  private renameInternal(rawOld: string, rawNew: string, updateLinks: boolean): Promise<void> {
+  private renameInternal(rawOld: string, rawNew: string, updateLinks: boolean, validate?: () => void): Promise<void> {
     return this.enqueue(async () => {
+      validate?.();
       const oldPath = normalizePath(rawOld), newPath = normalizePath(rawNew);
       await this.refresh();
       if (!this.entries.has(oldPath)) throw new Error(`Path does not exist: ${oldPath}`);
@@ -330,6 +336,7 @@ export class Vault {
         }
         if (after !== before) changes.push({ old: source, path: newSource, before, after });
       }
+      validate?.();
       await this.adapter.rename(oldPath, newPath);
       const written: typeof changes = [];
       try {
@@ -355,16 +362,17 @@ export class Vault {
   }
 
   /** Permanently delete through an explicit adapter capability, preserving event ordering. */
-  deleteEntry(rawPath: string, force = false): Promise<void> {
-    return this.removeEntry(rawPath, force);
+  deleteEntry(rawPath: string, force = false, validate?: () => void): Promise<void> {
+    return this.removeEntry(rawPath, force, validate);
   }
 
-  trash(rawPath: string): Promise<void> {
-    return this.removeEntry(rawPath);
+  trash(rawPath: string, validate?: () => void): Promise<void> {
+    return this.removeEntry(rawPath, undefined, validate);
   }
 
-  private removeEntry(rawPath: string, force?: boolean): Promise<void> {
+  private removeEntry(rawPath: string, force?: boolean, validate?: () => void): Promise<void> {
     return this.enqueue(async () => {
+      validate?.();
       const path = normalizePath(rawPath);
       if (force !== undefined && !this.adapter.remove) throw new Error('Vault adapter does not support permanent deletion');
       const entry = this.entries.get(path);

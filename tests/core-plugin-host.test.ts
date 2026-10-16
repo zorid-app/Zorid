@@ -101,3 +101,32 @@ test('permanent deletion passes hidden-child policy to host and publishes descen
   assert.deepEqual(visibleDuringEvent, [false, false]);
   assert.equal(await vault.cachedRead('Keep.md'), '# Keep');
 });
+
+test('execution-time guards reject stale handles after queued deletion and replacement', async () => {
+  const actions = [
+    (vault: Vault, validate: () => void) => vault.modify('One.md', 'corrupt', { validate }),
+    (vault: Vault, validate: () => void) => vault.modifyBinary('One.md', new TextEncoder().encode('corrupt'), { validate }),
+    (vault: Vault, validate: () => void) => vault.renameEntry('One.md', 'Moved.md', validate),
+    (vault: Vault, validate: () => void) => vault.deleteEntry('One.md', false, validate),
+    (vault: Vault, validate: () => void) => vault.trash('One.md', validate),
+    (vault: Vault, validate: () => void) => vault.read('One.md', validate),
+    (vault: Vault, validate: () => void) => vault.readBinary('One.md', validate),
+    (vault: Vault, validate: () => void) => vault.cachedRead('One.md', validate),
+  ];
+  for (const action of actions) {
+    const adapter = new MemoryAdapter({ 'One.md': 'original' });
+    const vault = new Vault(adapter); await vault.initialize();
+    let stale = false;
+    vault.on('delete', () => { stale = true; });
+    const validate = () => { if (stale) throw new Error('stale handle'); };
+    const deletion = vault.trash('One.md');
+    const replacement = vault.create('One.md', 'replacement');
+    const guarded = action(vault, validate);
+    await assert.rejects(guarded, /stale handle/);
+    await Promise.all([deletion, replacement]);
+    assert.equal(await vault.read('One.md'), 'replacement');
+    assert.equal(vault.entries.has('Moved.md'), false);
+    await vault.modify('One.md', 'next edit');
+    assert.equal(await vault.read('One.md'), 'next edit');
+  }
+});
