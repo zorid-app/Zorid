@@ -4,7 +4,7 @@ Audit date: 2026-10-16. Baseline: `9ce67fe5e54423604c7eb9cb5e65c85f25f5e6ee` plu
 
 ## Reference boundary
 
-The explicitly selected artifact is `/Users/ctk/Downloads/Obsidian-1.14.4.apk`, SHA-256 `b3e5bfa107bb01c4c121d810622ff2de03fd298f55fcf6268b9db50186f192a3`. This report reuses [Android reference](android-reference.md) and [mobile integration reference](mobile-integration-reference.md), including their recorded REA inventory `ev_90bd2cb53a47511858df33ce3b4ad304c2af7a8d82c12035710bcabfeed4623d` and export `/private/tmp/zorid-reference-20261016/rea-apk-inventory.json`. It does not independently rehash the artifact or enlarge the reference evidence coverage.
+The explicitly selected artifact is `$HOME/Downloads/Obsidian-1.14.4.apk`, SHA-256 `b3e5bfa107bb01c4c121d810622ff2de03fd298f55fcf6268b9db50186f192a3`. This report reuses [Android reference](android-reference.md) and [mobile integration reference](mobile-integration-reference.md), including their recorded REA inventory `ev_90bd2cb53a47511858df33ce3b4ad304c2af7a8d82c12035710bcabfeed4623d` and export `/private/tmp/zorid-reference-20261016/rea-apk-inventory.json`. It does not independently rehash the artifact or enlarge the reference evidence coverage.
 
 The reference establishes selected web contracts, package configuration and native declarations. It does not establish native method semantics, exact Capacitor version, runtime menu/keyboard geometry, OS clipboard formats, or iOS behavior. Offsets below are the reference reports' zero-based Unicode character offsets in decoded APK `assets/public/app.js`, not DEX offsets. No proprietary implementation was copied.
 

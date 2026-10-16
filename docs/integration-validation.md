@@ -2,14 +2,14 @@
 
 2026-10-16, integration branch checkpoint `e479ddb`.
 
-The isolated Git worktree `/Users/ctk/Projects/Zorid/.worktrees/integration`
+The isolated Git worktree `$HOME/Projects/Zorid/.worktrees/integration`
 combines the editor preference checkpoint with independently reviewed worker
 branches. Recovered reference artifacts remain outside the repository. This is a
 Zorid integration result, not a declaration of Obsidian feature or visual parity.
 
 ## Verified checks
 
-- TypeScript: `node /Users/ctk/Projects/Zorid/node_modules/typescript/bin/tsc --noEmit --project ./tsconfig.json` passes.
+- TypeScript: `node $HOME/Projects/Zorid/node_modules/typescript/bin/tsc --noEmit --project ./tsconfig.json` passes.
 - Tests: `node --test tests/*.test.*` passes **540 tests**, with no failures,
   skips or cancellations. Log: `/private/tmp/zorid-integration-tests.txt`.
 - Production bundle: explicit worktree webpack configuration passes with three

@@ -4,7 +4,7 @@ Focused static audit of Obsidian 1.14.4. This document specifies requirements fo
 
 ## Evidence identity and bounds
 
-The restored archive is `/Users/ctk/Library/Application Support/obsidian/obsidian-1.14.4.asar`, SHA-256 `146ef8470d8cbb4a6db209bdc19bf2bad13350444186c0fd93c31087b142b92f`. REA extraction evidence `ev_ec268d4710d98bd994642c3a390b963e050880975c210f85226470c9360cd459` records 368 regular files, verified containment and no integrity contradictions. Nested archives were not recursively extracted. It restores the same source bytes used by earlier partial renderer analysis E3 `ev_a023c82af045a4b5acedab1eab958db521c3828491a6320c1f7ee85152573b37`; no broad reanalysis was repeated.
+The restored archive is `$HOME/Library/Application Support/obsidian/obsidian-1.14.4.asar`, SHA-256 `146ef8470d8cbb4a6db209bdc19bf2bad13350444186c0fd93c31087b142b92f`. REA extraction evidence `ev_ec268d4710d98bd994642c3a390b963e050880975c210f85226470c9360cd459` records 368 regular files, verified containment and no integrity contradictions. Nested archives were not recursively extracted. It restores the same source bytes used by earlier partial renderer analysis E3 `ev_a023c82af045a4b5acedab1eab958db521c3828491a6320c1f7ee85152573b37`; no broad reanalysis was repeated.
 
 Current compatibility path: `/private/tmp/zorid-reference-20261016/recovered/obsidian-1.14.4`, linking to `/var/folders/yc/__symlbx5zxd7v1vhwh84z180000gn/T/rea-extracted-88b35405-bc00-4fc9-96d6-6e81b279c0e2`. `/private/tmp/zorid-reference-restored.json` records the pointer and principal hashes. These temporary paths can expire; identities, rather than paths, bind the evidence.
 

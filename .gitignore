@@ -20,3 +20,26 @@ android/app/src/main/assets/public/
 *.jks
 *.mobileprovision
 *.asar
+
+# Local signing credentials and PEM material.
+*.p8
+*.pem
+*.provisionprofile
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+
+# Local reference applications, captures and scratch output (repository root).
+/reference/
+/reference-artifacts/
+/local-reference/
+/captures/
+/screenshots/
+/tmp/
+/temp/
+/*.apk
+/*.apks
+/*.aab
+/*.dmg
+/*.ipa

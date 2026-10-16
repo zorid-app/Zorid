@@ -1,4 +1,7 @@
 .zorid-media-view { display: block; max-width: 100%; }
+/* The standalone flex host must give percentage-sized native audio controls a
+   definite width; shrink-to-fit sizing can hide their play and mute buttons. */
+.attachment-view.media-attachment-view > .zorid-media-view { width: 100%; min-width: 0; text-align: center; }
 .zorid-media-view audio { width: 100%; max-width: 100%; height: 42px; }
 .zorid-media-view video { max-width: 100%; }
 .zorid-media-view .zorid-media-status { display: block; color: var(--text-muted); font-size: var(--font-smaller); }
