@@ -1,11 +1,12 @@
 import { showContextMenu, dismissContextMenu } from '../platform/context-menu.ts';
-import { createPdfDisplayMenu } from './pdf-menus.ts';
+import { createPdfSidebar, type PdfSidebar, type PdfSidebarDocument } from './pdf-sidebar.ts';
+import { createPdfDisplayMenu, createPdfSidebarMenu } from './pdf-menus.ts';
 import type { AttachmentLease, AttachmentResources } from './attachments.ts';
 
 /** Small boundary around the public PDF.js components; no recovered viewer code. */
 type EventData = { pageNumber?:number; pageLabel?:string; pagesCount?:number; source?:unknown; pageIndex?:number; matchesCount?:{current:number;total:number}; state?:number; error?:unknown };
 interface Bus { on(name:string,callback:(event:EventData)=>void):void; off(name:string,callback:(event:EventData)=>void):void; dispatch(name:string,event:Record<string,unknown>):void }
-interface PdfDocument { numPages:number; getPageLabels():Promise<string[]|null>; destroy():Promise<void> }
+interface PdfDocument extends PdfSidebarDocument { numPages:number; getPageLabels():Promise<string[]|null>; destroy():Promise<void> }
 interface LoadingTask { promise:Promise<PdfDocument>; destroy():Promise<void>; onPassword?:((update:(password:string)=>void,reason:number)=>void)|null }
 interface PageView { div:HTMLElement; viewport?:{height:number}; textLayer?:{highlighter?:{textDivs:Node[];textContentItemsStr:string[]}} }
 interface Viewer {
@@ -16,7 +17,7 @@ interface Viewer {
   firstPagePromise?:Promise<unknown>|null; pagesPromise?:Promise<unknown>|null; cleanup():void;
   increaseScale():void; decreaseScale():void; updateScale(options:{steps?:number;scaleFactor?:number;origin?:[number,number];drawingDelay?:number}):void;
 }
-interface LinkService { setViewer(viewer:Viewer):void; setDocument(doc:PdfDocument|null):void; setHash(hash:string):void; goToPage(page:string|number):void }
+interface LinkService { setViewer(viewer:Viewer):void; setDocument(doc:PdfDocument|null):void; setHash(hash:string):void; goToPage(page:string|number):void; goToDestination(destination:string|unknown[]):void }
 export interface PdfEngine {
   core:{ version?:string; GlobalWorkerOptions:{workerSrc:string}; getDocument(options:Record<string,unknown>):LoadingTask };
   viewer:{ EventBus:new()=>Bus; PDFLinkService:new(options:Record<string,unknown>)=>LinkService; PDFFindController:new(options:Record<string,unknown>)=>unknown; PDFViewer:new(options:Record<string,unknown>)=>Viewer };
@@ -81,16 +82,24 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   const doc=parent.ownerDocument,win=doc.defaultView!;
   const node=<K extends keyof HTMLElementTagNameMap>(tag:K,cls='',text=''):HTMLElementTagNameMap[K]=>{const e=doc.createElement(tag);e.className=cls;e.textContent=text;return e;};
   const root=node('div','zorid-pdf-view interactive-child'),toolbar=node('div','zorid-pdf-toolbar'),stage=node('div','zorid-pdf-stage'),scroller=node('div','zorid-pdf-scroll'),pages=node('div','pdfViewer');
-  root.classList.toggle('is-embed',!!options.embed);root.setAttribute('aria-label',path.split('/').at(-1)??path);root.tabIndex=-1;
+  root.classList.toggle('is-embed',!!options.embed);root.classList.toggle('is-mobile',!!options.mobile);root.setAttribute('aria-label',path.split('/').at(-1)??path);root.tabIndex=-1;
   toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','PDF controls');scroller.tabIndex=0;scroller.style.position='absolute';scroller.append(pages);stage.append(scroller);root.append(toolbar,stage);parent.append(root);
   let closed=false,lease:AttachmentLease|undefined,task:LoadingTask|undefined,pdf:PdfDocument|undefined,viewer:Viewer|undefined,links:LinkService|undefined,bus:Bus|undefined;
+  let sidebar:PdfSidebar|undefined;
   let loaded=false,labels:string[]|null=null,pendingSubpath=options.subpath??'',highlight:PdfLocation|undefined,searchTimer:ReturnType<typeof setTimeout>|undefined;
   let cancelReady!:()=>void;const cancelled=new Promise<void>(resolve=>{cancelReady=resolve;});
   const abort=new AbortController(),handlers:[string,(event:EventData)=>void][]=[];
   const status=node('div','zorid-pdf-status','Loading PDF…');status.setAttribute('role','status');stage.append(status);
-  const icons:Record<string,string>={minus:'M5 12h14',plus:'M5 12h14M12 5v14',chevron:'m6 9 6 6 6-6',more:'M12 5h.01M12 12h.01M12 19h.01',up:'m6 14 6-6 6 6',down:'m6 10 6 6 6-6',close:'m6 6 12 12M6 18 18 6',settings:'M4 7h16M4 17h16M8 4v6M16 14v6'};
+  const icons:Record<string,string>={minus:'M5 12h14',plus:'M5 12h14M12 5v14',chevron:'m6 9 6 6 6-6',more:'M12 5h.01M12 12h.01M12 19h.01',up:'m6 14 6-6 6 6',down:'m6 10 6 6 6-6',close:'m6 6 12 12M6 18 18 6',settings:'M4 7h16M4 17h16M8 4v6M16 14v6',sidebar:'M3 3h18v18H3zM9 3v18M13 7h4M13 12h4M13 17h4'};
   const button=(label:string,glyph:string,action:(event:MouseEvent)=>void)=>{const b=node('button','zorid-pdf-button');b.type='button';b.title=label;b.setAttribute('aria-label',label);const svg=doc.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');const path=doc.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',icons[glyph]??glyph);svg.append(path);b.append(svg);b.addEventListener('click',event=>{if(!closed)action(event);});return b;};
   const zoomOut=button('Zoom out','minus',()=>{viewer?.decreaseScale();updateScale();}),zoomIn=button('Zoom in','plus',()=>{viewer?.increaseScale();updateScale();});
+  const sidebarToggle=button('Toggle sidebar','sidebar',()=>sidebar?.toggle()),sidebarOptions=button('Sidebar options','chevron',()=>{void openSidebarMenu();});sidebarToggle.setAttribute('aria-expanded','false');sidebarOptions.setAttribute('aria-haspopup','menu');
+  let sidebarMenu:ReturnType<typeof createPdfSidebarMenu>|undefined;
+  async function openSidebarMenu(){
+    if(closed||!sidebar)return;sidebarMenu?.dispose();const current=sidebar;
+    const session=createPdfSidebarMenu(current.state,{switchSidebar:value=>current.switchView(value),revealCurrentOutlineItem:()=>current.revealCurrentOutlineItem(),isCurrent:()=>!closed&&sidebar===current&&sidebarMenu===session});sidebarMenu=session;const rect=sidebarOptions.getBoundingClientRect();
+    try{await session.run(await showContextMenu({clientX:rect.left,clientY:rect.bottom,target:sidebarOptions,view:win},session.items,{document:doc}));}catch(cause){if(!closed)options.onError?.(cause instanceof Error?cause:new Error(String(cause)));}finally{session.dispose();if(sidebarMenu===session)sidebarMenu=undefined;}
+  }
   let menuSession:ReturnType<typeof createPdfDisplayMenu>|undefined;
   const display=button('Display options','chevron',()=>{void openDisplayMenu();});display.setAttribute('aria-haspopup','menu');
   async function openDisplayMenu():Promise<void>{
@@ -104,7 +113,7 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   }
   const pageInput=node('input','zorid-pdf-page-input');pageInput.type='number';pageInput.min='1';pageInput.value='1';pageInput.setAttribute('aria-label','Page');pageInput.onclick=()=>{if(!closed)pageInput.select();};pageInput.onchange=()=>goToPage(pageInput.value);
   const pageCount=node('span','zorid-pdf-page-count'),left=node('div','zorid-pdf-toolbar-group'),right=node('div','zorid-pdf-toolbar-group');
-  left.append(zoomOut,node('span','zorid-pdf-divider'),zoomIn,display,node('span','zorid-pdf-spacer'),pageInput,pageCount);toolbar.append(left,right);
+  left.append(sidebarToggle,sidebarOptions,node('span','zorid-pdf-spacer'),zoomOut,node('span','zorid-pdf-divider'),zoomIn,display,node('span','zorid-pdf-spacer'),pageInput,pageCount);toolbar.append(left,right);
   if(options.onOpenMenu){const more=button('More options','more',event=>options.onOpenMenu?.(event));more.setAttribute('aria-haspopup','menu');right.append(node('span','zorid-pdf-spacer'),more);}
   const find=node('div','zorid-pdf-find');find.hidden=true;
   const query=node('input','zorid-pdf-query');query.type='search';query.placeholder='Search PDF';query.setAttribute('aria-label','Search PDF');
@@ -129,7 +138,7 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   function updatePage():void{
     if(!viewer||!pdf)return;const current=viewer.currentPageNumber;
     pageInput.type=labels?'text':'number';pageInput.value=labels?.[current-1]??String(current);pageInput.max=String(pdf.numPages);pageCount.textContent=labels?`(${current} of ${pdf.numPages})`:`of ${pdf.numPages}`;
-    options.onPageChange?.(current);updateHeight();
+    options.onPageChange?.(current);sidebar?.setPage(current);updateHeight();
   }
   function updateHeight():void{
     if(!options.embed)return;const height=options.height??'page';
@@ -177,7 +186,7 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
     if(closed)return;const focused=doc.activeElement===query;if(!find.hidden&&focused){closeSearch();return;}find.hidden=false;updateFindHeight();query.focus();query.select();bus?.dispatch('findbaropen',{source:root});
   }
   function closeSearch():void{if(closed)return;clearTimeout(searchTimer);find.hidden=true;preferences.hidden=true;preferencesButton.setAttribute('aria-expanded','false');updateFindHeight();bus?.dispatch('findbarclose',{source:root});if(doc.activeElement===query)scroller.focus();}
-  function updateFindHeight():void{scroller.style.top=find.hidden?'0':`${find.offsetHeight}px`;}
+  function updateFindHeight():void{const top=find.hidden?'0':`${find.offsetHeight}px`;scroller.style.top=top;if(sidebar)sidebar.element.style.top=top;}
   function getSelectionSubpath():string|null{
     if(closed)return null;const selection=doc.getSelection();if(!selection?.rangeCount||selection.isCollapsed||!viewer)return null;const range=selection.getRangeAt(0);
     const element=range.startContainer.nodeType===1?range.startContainer as Element:range.startContainer.parentElement;
@@ -211,12 +220,13 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   const resized=()=>{updateFindHeight();if(!closed&&viewer&&loaded){if(['page-width','page-height'].includes(viewer.currentScaleValue))viewer.currentScaleValue=viewer.currentScaleValue;viewer.update();updateHeight();}};
   const resize=typeof win.ResizeObserver==='function'?new win.ResizeObserver(resized):undefined;resize?.observe(stage);
   function destroy():void{
-    if(closed)return;closed=true;if(menuSession){menuSession.dispose();menuSession=undefined;void dismissContextMenu(doc);}cancelReady();clearTimeout(searchTimer);clearHighlight();abort.abort();resize?.disconnect();for(const [name,handler]of handlers)bus?.off(name,handler);
+    if(closed)return;closed=true;sidebar?.destroy();if(sidebarMenu){sidebarMenu.dispose();sidebarMenu=undefined;void dismissContextMenu(doc);}if(menuSession){menuSession.dispose();menuSession=undefined;void dismissContextMenu(doc);}cancelReady();clearTimeout(searchTimer);clearHighlight();abort.abort();resize?.disconnect();for(const [name,handler]of handlers)bus?.off(name,handler);
     root.removeEventListener('keydown',key);root.removeEventListener('keyup',keyup);scroller.removeEventListener('wheel',wheel);passwordCallback=undefined;root.remove();void release();
   }
   let releasing:Promise<void>|undefined;
   function release():Promise<void>{
     if(releasing)return releasing;
+    sidebar?.destroy();
     const currentTask=task,currentLease=lease;task=undefined;lease=undefined;
     // Keep page views until the worker's in-flight page requests stop. PDF.js 5.3.31's
     // eager page callbacks still index them; clearing first races those callbacks.
@@ -242,14 +252,15 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
       task=engine.core.getDocument({data,ownerDocument:doc,cMapUrl:new URL('cmaps/',assetBase).href,cMapPacked:true,standardFontDataUrl:new URL('standard_fonts/',assetBase).href,wasmUrl:new URL('wasm/',assetBase).href,iccUrl:new URL('iccs/',assetBase).href,isEvalSupported:false,enableXfa:true});
       task.onPassword=(update,reason)=>{if(closed)return;passwordCallback=update;passwordLabel.textContent=reason===2?'Incorrect password. Try again.':'This PDF requires a password.';password.hidden=false;passwordInput.focus();};
       pdf=await task.promise;if(closed)return;links.setDocument(pdf);viewer.setDocument(pdf);
+      sidebar=createPdfSidebar(stage,pdf,{onPage:goToPage,onDestination:destination=>{if(!closed)links?.goToDestination(destination);},onError:options.onError,onChange:state=>{if(closed)return;sidebarToggle.setAttribute('aria-expanded',String(state.open));scroller.style.insetInlineStart=state.open&&!options.embed&&!options.mobile?'140px':'0';resized();}});
       await Promise.race([viewer.firstPagePromise??Promise.resolve(),cancelled]);if(closed)return;
-      labels=await pdf.getPageLabels();if(closed)return;viewer.setPageLabels(labels);updatePage();await Promise.race([initialPages,cancelled]);
+      labels=await pdf.getPageLabels();if(closed)return;viewer.setPageLabels(labels);sidebar?.setPageLabels(labels);updatePage();await Promise.race([initialPages,cancelled]);
     }catch(error){if(!closed){report(error);abort.abort();await release();throw error;}}
   })();
   // Waiting callers are released on close even when an import or resource provider
   // cannot cancel its promise. The operation still handles and releases late results.
   const ready=Promise.race([operation,cancelled]);void ready.catch(()=>{});
-  return {ready,destroy,goToPage,setScale,showSearch,applySubpath,getSelectionSubpath,rotate(degrees){if(!closed&&loaded&&viewer&&Number.isFinite(degrees)&&degrees%90===0){viewer.pagesRotation=((viewer.pagesRotation+degrees)%360+360)%360;updateHeight();}}};
+  return {ready,destroy,goToPage,setScale,showSearch,applySubpath,getSelectionSubpath,rotate(degrees){if(!closed&&loaded&&viewer&&Number.isFinite(degrees)&&degrees%90===0){viewer.pagesRotation=((viewer.pagesRotation+degrees)%360+360)%360;sidebar?.setRotation(viewer.pagesRotation);updateHeight();}}};
 }
 let nextViewId=0;
 function textPoint(root:Node|undefined,offset:number):{node:Node;offset:number}|null{
