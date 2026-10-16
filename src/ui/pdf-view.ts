@@ -1,3 +1,5 @@
+import { showContextMenu, dismissContextMenu } from '../platform/context-menu.ts';
+import { createPdfDisplayMenu } from './pdf-menus.ts';
 import type { AttachmentLease, AttachmentResources } from './attachments.ts';
 
 /** Small boundary around the public PDF.js components; no recovered viewer code. */
@@ -26,6 +28,8 @@ export interface PdfViewOptions {
   loadEngine?:(document:Document,assetBase:string)=>Promise<PdfEngine>;
   onError?:(error:Error)=>void;
   onPageChange?:(page:number)=>void;
+  /** Host file/link actions shown at the right of an embedded viewer. */
+  onOpenMenu?:(event:MouseEvent)=>void;
 }
 export interface PdfView {
   /** Resolves after document/pages initialization or immediately on destroy; not a canvas-render guarantee. */
@@ -76,7 +80,7 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   const options={...configuration};
   const doc=parent.ownerDocument,win=doc.defaultView!;
   const node=<K extends keyof HTMLElementTagNameMap>(tag:K,cls='',text=''):HTMLElementTagNameMap[K]=>{const e=doc.createElement(tag);e.className=cls;e.textContent=text;return e;};
-  const root=node('div','zorid-pdf-view'),toolbar=node('div','zorid-pdf-toolbar'),stage=node('div','zorid-pdf-stage'),scroller=node('div','zorid-pdf-scroll'),pages=node('div','pdfViewer');
+  const root=node('div','zorid-pdf-view interactive-child'),toolbar=node('div','zorid-pdf-toolbar'),stage=node('div','zorid-pdf-stage'),scroller=node('div','zorid-pdf-scroll'),pages=node('div','pdfViewer');
   root.classList.toggle('is-embed',!!options.embed);root.setAttribute('aria-label',path.split('/').at(-1)??path);root.tabIndex=-1;
   toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','PDF controls');scroller.tabIndex=0;scroller.style.position='absolute';scroller.append(pages);stage.append(scroller);root.append(toolbar,stage);parent.append(root);
   let closed=false,lease:AttachmentLease|undefined,task:LoadingTask|undefined,pdf:PdfDocument|undefined,viewer:Viewer|undefined,links:LinkService|undefined,bus:Bus|undefined;
@@ -84,26 +88,36 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   let cancelReady!:()=>void;const cancelled=new Promise<void>(resolve=>{cancelReady=resolve;});
   const abort=new AbortController(),handlers:[string,(event:EventData)=>void][]=[];
   const status=node('div','zorid-pdf-status','Loading PDF…');status.setAttribute('role','status');stage.append(status);
-  const button=(label:string,text:string,action:()=>void)=>{const b=node('button','zorid-pdf-button',text);b.type='button';b.title=label;b.setAttribute('aria-label',label);b.addEventListener('click',()=>{if(!closed)action();});return b;};
-  const zoomOut=button('Zoom out','−',()=>{viewer?.decreaseScale();updateScale();}),zoomIn=button('Zoom in','+',()=>{viewer?.increaseScale();updateScale();});
-  const scale=node('select','zorid-pdf-scale');scale.setAttribute('aria-label','Zoom');
-  for(const [value,label] of [['page-width','Fit width'],['page-height','Fit height']]){const option=node('option','',label);option.value=value;scale.append(option);}
-  scale.onchange=()=>setScale(scale.value as 'page-width'|'page-height');
-  const spread=node('select','zorid-pdf-spread');spread.setAttribute('aria-label','Page spread');
-  for(const [value,label] of [['0','Single page'],['1','Odd pages'],['2','Even pages']]){const option=node('option','',label);option.value=value;spread.append(option);}
-  spread.onchange=()=>{if(!closed&&viewer)viewer.spreadMode=Number(spread.value);};
+  const icons:Record<string,string>={minus:'M5 12h14',plus:'M5 12h14M12 5v14',chevron:'m6 9 6 6 6-6',more:'M12 5h.01M12 12h.01M12 19h.01',up:'m6 14 6-6 6 6',down:'m6 10 6 6 6-6',close:'m6 6 12 12M6 18 18 6',settings:'M4 7h16M4 17h16M8 4v6M16 14v6'};
+  const button=(label:string,glyph:string,action:(event:MouseEvent)=>void)=>{const b=node('button','zorid-pdf-button');b.type='button';b.title=label;b.setAttribute('aria-label',label);const svg=doc.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');const path=doc.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',icons[glyph]??glyph);svg.append(path);b.append(svg);b.addEventListener('click',event=>{if(!closed)action(event);});return b;};
+  const zoomOut=button('Zoom out','minus',()=>{viewer?.decreaseScale();updateScale();}),zoomIn=button('Zoom in','plus',()=>{viewer?.increaseScale();updateScale();});
+  let menuSession:ReturnType<typeof createPdfDisplayMenu>|undefined;
+  const display=button('Display options','chevron',()=>{void openDisplayMenu();});display.setAttribute('aria-haspopup','menu');
+  async function openDisplayMenu():Promise<void>{
+    if(closed||!loaded||!viewer)return;
+    menuSession?.dispose();const active=viewer;
+    const session=createPdfDisplayMenu({scale:active.currentScaleValue,spread:active.spreadMode as 0|1|2},{setScale,setSpread:value=>{if(!closed&&viewer===active){active.spreadMode=value;updateHeight();}},isCurrent:()=>!closed&&viewer===active&&menuSession===session});menuSession=session;
+    const rect=display.getBoundingClientRect();display.setAttribute('aria-expanded','true');
+    try{const choice=await showContextMenu({clientX:rect.left,clientY:rect.bottom,target:display,view:win},session.items,{document:doc});await session.run(choice);}
+    catch(error){if(!closed)options.onError?.(error instanceof Error?error:new Error(String(error)));}
+    finally{session.dispose();if(menuSession===session){menuSession=undefined;display.setAttribute('aria-expanded','false');}}
+  }
   const pageInput=node('input','zorid-pdf-page-input');pageInput.type='number';pageInput.min='1';pageInput.value='1';pageInput.setAttribute('aria-label','Page');pageInput.onclick=()=>{if(!closed)pageInput.select();};pageInput.onchange=()=>goToPage(pageInput.value);
-  const pageCount=node('span','zorid-pdf-page-count');
-  toolbar.append(zoomOut,zoomIn,scale,spread,pageInput,pageCount,button('Find in PDF','Find',()=>showSearch()));
+  const pageCount=node('span','zorid-pdf-page-count'),left=node('div','zorid-pdf-toolbar-group'),right=node('div','zorid-pdf-toolbar-group');
+  left.append(zoomOut,node('span','zorid-pdf-divider'),zoomIn,display,node('span','zorid-pdf-spacer'),pageInput,pageCount);toolbar.append(left,right);
+  if(options.onOpenMenu){const more=button('More options','more',event=>options.onOpenMenu?.(event));more.setAttribute('aria-haspopup','menu');right.append(node('span','zorid-pdf-spacer'),more);}
   const find=node('div','zorid-pdf-find');find.hidden=true;
   const query=node('input','zorid-pdf-query');query.type='search';query.placeholder='Search PDF';query.setAttribute('aria-label','Search PDF');
   const matchCount=node('span','zorid-pdf-match-count');matchCount.setAttribute('aria-live','polite');
   const searchSettings={caseSensitive:false,entireWord:false,matchDiacritics:false,highlightAll:false};
-  find.append(query,button('Previous match','↑',()=>search(true)),button('Next match','↓',()=>search(false)),matchCount);
-  for(const [key,label] of [['caseSensitive','Match case'],['entireWord','Whole words'],['matchDiacritics','Match diacritics'],['highlightAll','Highlight all']] as const){
-    const wrapper=node('label','zorid-pdf-find-option'),input=node('input');input.type='checkbox';input.onchange=()=>{if(closed)return;searchSettings[key]=input.checked;search(undefined);};wrapper.append(input,doc.createTextNode(label));find.append(wrapper);
+  const preferences=node('div','zorid-pdf-find-preferences');preferences.hidden=true;
+  const preferencesButton=button('Search options','settings',()=>{preferences.hidden=!preferences.hidden;preferencesButton.setAttribute('aria-expanded',String(!preferences.hidden));});preferencesButton.setAttribute('aria-expanded','false');
+  const matchCase=button('Match case','',()=>{searchSettings.caseSensitive=!searchSettings.caseSensitive;matchCase.setAttribute('aria-pressed',String(searchSettings.caseSensitive));search(undefined);});matchCase.replaceChildren(doc.createTextNode('Aa'));matchCase.setAttribute('aria-pressed','false');
+  find.append(query,matchCase,button('Previous match','up',()=>search(true)),button('Next match','down',()=>search(false)),matchCount,preferencesButton,node('span','zorid-pdf-divider'));
+  for(const [key,label] of [['entireWord','Whole words'],['matchDiacritics','Match diacritics'],['highlightAll','Highlight all']] as const){
+    const wrapper=node('label','zorid-pdf-find-option'),input=node('input');input.type='checkbox';input.setAttribute('aria-label',label);input.onchange=()=>{if(closed)return;searchSettings[key]=input.checked;search(undefined);};wrapper.append(input,doc.createTextNode(label));preferences.append(wrapper);
   }
-  find.append(button('Close search','×',closeSearch));root.insertBefore(find,stage);
+  find.append(button('Close search','close',closeSearch),preferences);stage.prepend(find);
   query.oninput=()=>{if(closed)return;clearTimeout(searchTimer);searchTimer=setTimeout(()=>search(undefined),250);};
   query.onkeydown=event=>{if(closed)return;if(event.key==='Enter'&&!event.isComposing){event.preventDefault();event.stopPropagation();clearTimeout(searchTimer);search(event.shiftKey);}};
   const password=node('form','zorid-pdf-password'),passwordLabel=node('label','', 'This PDF requires a password.'),passwordInput=node('input');passwordInput.type='password';passwordInput.autocomplete='current-password';passwordInput.setAttribute('aria-label','PDF password');
@@ -119,15 +133,14 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   }
   function updateHeight():void{
     if(!options.embed)return;const height=options.height??'page';
-    if(typeof height==='number'&&height>0)stage.style.height=`${height}px`;
-    else if(height==='page'){const pixels=viewer?.getPageView((viewer.currentPageNumber??1)-1)?.viewport?.height;if(pixels)stage.style.height=`${pixels}px`;}
+    if(typeof height==='number'&&height>0){stage.style.height=`${height}px`;root.classList.add('has-page-height');}
+    else if(height==='page'){const pixels=viewer?.getPageView((viewer.currentPageNumber??1)-1)?.viewport?.height;if(pixels){stage.style.height=`${pixels}px`;root.classList.add('has-page-height');}}
   }
   function setScale(value:number|'page-width'|'page-height'):void{
     if(closed||!viewer||!loaded)return;viewer.currentScaleValue=typeof value==='number'?String(Math.max(.1,Math.min(10,value))):value;viewer.update();updateScale();updateHeight();
   }
   function updateScale():void{
-    if(!viewer)return;scale.querySelector('[data-custom]')?.remove();const value=viewer.currentScaleValue;
-    if(value!=='page-width'&&value!=='page-height'){const option=node('option','',`${Math.round(viewer.currentScale*100)}%`);option.value=value;option.dataset.custom='true';scale.append(option);}scale.value=value;
+    if(!viewer)return;display.title=`Display options (${Math.round(viewer.currentScale*100)}%)`;
     zoomOut.disabled=viewer.currentScale<=.1;zoomIn.disabled=viewer.currentScale>=10;
   }
   function goToPage(value:number|string):void{
@@ -161,9 +174,10 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
     if(closed||!bus||!loaded)return;clearHighlight();bus.dispatch('find',{source:root,type:previous===undefined?'':'again',query:query.value,findPrevious:!!previous,...searchSettings});
   }
   function showSearch():void{
-    if(closed)return;const focused=doc.activeElement===query;if(!find.hidden&&focused){closeSearch();return;}find.hidden=false;query.focus();query.select();bus?.dispatch('findbaropen',{source:root});
+    if(closed)return;const focused=doc.activeElement===query;if(!find.hidden&&focused){closeSearch();return;}find.hidden=false;updateFindHeight();query.focus();query.select();bus?.dispatch('findbaropen',{source:root});
   }
-  function closeSearch():void{if(closed)return;clearTimeout(searchTimer);find.hidden=true;bus?.dispatch('findbarclose',{source:root});if(doc.activeElement===query)scroller.focus();}
+  function closeSearch():void{if(closed)return;clearTimeout(searchTimer);find.hidden=true;preferences.hidden=true;preferencesButton.setAttribute('aria-expanded','false');updateFindHeight();bus?.dispatch('findbarclose',{source:root});if(doc.activeElement===query)scroller.focus();}
+  function updateFindHeight():void{scroller.style.top=find.hidden?'0':`${find.offsetHeight}px`;}
   function getSelectionSubpath():string|null{
     if(closed)return null;const selection=doc.getSelection();if(!selection?.rangeCount||selection.isCollapsed||!viewer)return null;const range=selection.getRangeAt(0);
     const element=range.startContainer.nodeType===1?range.startContainer as Element:range.startContainer.parentElement;
@@ -194,10 +208,10 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
       event.preventDefault();event.stopPropagation();event.key==='ArrowLeft'?viewer.previousPage():viewer.nextPage();updatePage();
     }
   };root.addEventListener('keydown',key);
-  const resized=()=>{if(!closed&&viewer&&loaded){if(['page-width','page-height'].includes(viewer.currentScaleValue))viewer.currentScaleValue=viewer.currentScaleValue;viewer.update();updateHeight();}};
+  const resized=()=>{updateFindHeight();if(!closed&&viewer&&loaded){if(['page-width','page-height'].includes(viewer.currentScaleValue))viewer.currentScaleValue=viewer.currentScaleValue;viewer.update();updateHeight();}};
   const resize=typeof win.ResizeObserver==='function'?new win.ResizeObserver(resized):undefined;resize?.observe(stage);
   function destroy():void{
-    if(closed)return;closed=true;cancelReady();clearTimeout(searchTimer);clearHighlight();abort.abort();resize?.disconnect();for(const [name,handler]of handlers)bus?.off(name,handler);
+    if(closed)return;closed=true;if(menuSession){menuSession.dispose();menuSession=undefined;void dismissContextMenu(doc);}cancelReady();clearTimeout(searchTimer);clearHighlight();abort.abort();resize?.disconnect();for(const [name,handler]of handlers)bus?.off(name,handler);
     root.removeEventListener('keydown',key);root.removeEventListener('keyup',keyup);scroller.removeEventListener('wheel',wheel);passwordCallback=undefined;root.remove();void release();
   }
   let releasing:Promise<void>|undefined;
