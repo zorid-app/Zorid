@@ -12,11 +12,11 @@ const fixture = JSON.stringify({ plugin: { keep: true }, nodes: [
   node('hidden', 'unknown', { config: { retain: true } }),
 ], edges: [{ id: 'ab', fromNode: 'a', toNode: 'b', label: 'Relationship' }, { id: 'orphan', fromNode: 'a', toNode: 'missing', plugin: true }] }, null, '\t');
 
-function setup(source = fixture, onChange?: (source: string) => Promise<void> | void) {
+function setup(source = fixture, onChange?: (source: string) => Promise<void> | void, menuHooks = false) {
   const dom = new JSDOM('<!doctype html><main></main>', { pretendToBeVisual: true });
-  const container = dom.window.document.querySelector('main')!, saves: string[] = [], files: string[] = [], links: string[] = [], errors: unknown[] = [];
+  const container = dom.window.document.querySelector('main')!, saves: string[] = [], files: string[] = [], links: string[] = [], errors: unknown[] = [], copies: string[] = [], newTabs: string[] = [];
   const document = CanvasDocument.parse(source);
-  const view = createCanvasView(container, { document, onChange: async source => { saves.push(source); await onChange?.(source); }, openFile: (path, subpath) => { files.push(path + (subpath ?? '')); }, openLink: url => { links.push(url); }, onError: error => { errors.push(error); } });
+  const view = createCanvasView(container, { document, onChange: async source => { saves.push(source); await onChange?.(source); }, openFile: (path, subpath) => { files.push(path + (subpath ?? '')); }, openLink: url => { links.push(url); }, onError: error => { errors.push(error); }, openFileInNewTab: menuHooks ? path => { newTabs.push(path); } : undefined, copyText: menuHooks ? text => { copies.push(text); } : undefined });
   const viewport = container.querySelector<HTMLElement>('.zorid-canvas-viewport')!;
   const item = (id: string) => [...container.querySelectorAll<HTMLElement>('[data-node-id]')].find(element => element.dataset.nodeId === id)!;
   const pointer = (target: Element, type: string, x: number, y: number, extra = {}) => {
@@ -26,7 +26,7 @@ function setup(source = fixture, onChange?: (source: string) => Promise<void> | 
   };
   const key = (key: string, extra = {}, target: Element = viewport) => target.dispatchEvent(new dom.window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, ...extra }));
   const close = () => { view.destroy(); dom.window.close(); };
-  return { dom, container, document, view, viewport, item, pointer, key, saves, files, links, errors, close };
+  return { dom, container, document, view, viewport, item, pointer, key, saves, files, links, errors, copies, newTabs, close };
 }
 
 test('actual DOM projects four node types and connected edges without modifying hidden records', () => {
@@ -196,4 +196,131 @@ test('pending changes tracks edited drafts, queued writes and failures until suc
   ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
   const next = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; next.value = 'cancel'; assert.equal(ui.view.hasPendingChanges(), true);
   ui.key('Escape', {}, next); assert.equal(ui.view.hasPendingChanges(), false); ui.close();
+});
+
+function menuDriver(ui: ReturnType<typeof setup>) {
+  const requests: { items: { id?: string; label?: string; type?: string }[] }[] = [];
+  const resolvers: ((id: string | null) => void)[] = [];
+  Object.defineProperty(ui.dom.window, 'zorid', { value: { showContextMenu: (request: typeof requests[number]) => { requests.push(request); return new Promise<string | null>(resolve => resolvers.push(resolve)); } } });
+  const settle = () => new Promise<void>(resolve => setImmediate(resolve));
+  return {
+    requests,
+    async open(target: Element, x = 50, y = 50) {
+      const event = new ui.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y }); target.dispatchEvent(event); await settle(); return event;
+    },
+    async choose(id: string | null, index = resolvers.length - 1) { resolvers[index](id); await settle(); },
+    labels: () => requests.at(-1)!.items.map(item => item.type === 'separator' ? '---' : item.label),
+  };
+}
+
+test('browser background menu preserves creation order and creates a card at the document pointer position', async () => {
+  const ui = setup();
+  ui.viewport.dispatchEvent(new ui.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 190 }));
+  await new Promise(resolve => setImmediate(resolve));
+  const menu = ui.dom.window.document.querySelector('[role="menu"]')!; assert.ok(menu);
+  assert.deepEqual([...menu.querySelectorAll('button')].map(button => button.textContent), ['Add card', 'Add web page', 'Create group']);
+  menu.querySelector<HTMLButtonElement>('button')!.click(); await new Promise(resolve => setImmediate(resolve));
+  const added = ui.document.nodes.at(-1)!; assert.equal(added.x, 100); assert.equal(added.y, 150); assert.equal(added.type, 'text');
+  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Menu card'; await ui.view.flush();
+  assert.equal(ui.document.nodes.at(-1)!.text, 'Menu card'); ui.view.undo(); ui.view.undo(); await ui.view.flush();
+  assert.equal(ui.document.toString(), fixture); ui.close();
+});
+
+test('single-node menus use ordered type actions and conditionally expose host capabilities', async () => {
+  const ui = setup(fixture, undefined, true), menu = menuDriver(ui);
+  await menu.open(ui.item('a')); assert.deepEqual(menu.labels(), ['Zoom to selection', 'Edit', '---', 'Remove']); await menu.choose(null);
+  await menu.open(ui.item('g')); assert.deepEqual(menu.labels(), ['Zoom to selection', 'Edit label', '---', 'Remove']); await menu.choose('edit-label');
+  ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'Renamed group'; await ui.view.flush(); assert.equal(ui.document.getNode('g')!.label, 'Renamed group');
+  await menu.open(ui.item('b')); assert.deepEqual(menu.labels(), ['Zoom to selection', '---', 'Open in new tab', '---', 'Remove']); await menu.choose('open-new-tab'); assert.deepEqual(ui.newTabs, ['Notes/B.md']);
+  await menu.open(ui.item('c')); assert.deepEqual(menu.labels(), ['Zoom to selection', 'Change URL...', 'Open external link', 'Copy URL', '---', 'Remove']); await menu.choose('copy-url'); assert.deepEqual(ui.copies, ['https://example.test/']);
+  await menu.open(ui.item('c')); await menu.choose('open-link'); assert.deepEqual(ui.links, ['https://example.test/']); ui.close();
+  const limited = setup(), limitedMenu = menuDriver(limited);
+  await limitedMenu.open(limited.item('b')); assert.deepEqual(limitedMenu.labels(), ['Zoom to selection', '---', 'Remove']); await limitedMenu.choose(null);
+  await limitedMenu.open(limited.item('c')); assert.equal(limitedMenu.labels().includes('Copy URL'), false); await limitedMenu.choose(null); limited.close();
+});
+
+test('node menu remove deletes incident edges atomically and background undo restores original bytes', async () => {
+  const ui = setup(), menu = menuDriver(ui);
+  await menu.open(ui.item('a')); await menu.choose('remove'); await ui.view.flush();
+  assert.equal(ui.document.getNode('a'), undefined); assert.deepEqual(ui.document.edges, []); assert.ok(ui.document.getNode('hidden'));
+  await menu.open(ui.viewport); assert.deepEqual(menu.labels(), ['Add card', 'Add web page', 'Create group', '---', 'Undo']); await menu.choose('undo'); await ui.view.flush();
+  assert.equal(ui.document.toString(), fixture);
+  await menu.open(ui.viewport); assert.deepEqual(menu.labels(), ['Add card', 'Add web page', 'Create group', '---', 'Redo']); await menu.choose(null); ui.close();
+});
+
+test('edge menu label edits retain metadata and follow connection changes only the viewport', async () => {
+  const ui = setup(), menu = menuDriver(ui), edge = () => ui.container.querySelector('[data-edge-id="ab"] path')!;
+  await menu.open(edge(), 220, 90); assert.deepEqual(menu.labels(), ['Edit label', 'Follow connection', '---', 'Remove']); await menu.choose('edit-label');
+  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; assert.equal(input.getAttribute('aria-label'), 'Edit connection label'); input.value = 'Changed connection'; await ui.view.flush();
+  assert.equal(ui.document.getEdge('ab')!.label, 'Changed connection'); assert.equal(ui.document.getEdge('orphan')!.plugin, true);
+  const source = ui.document.toString(), writes = ui.saves.length; await menu.open(edge(), 220, 90); await menu.choose('follow-connection'); await ui.view.flush();
+  assert.equal(ui.document.toString(), source); assert.equal(ui.saves.length, writes); assert.notEqual(ui.container.querySelector<HTMLElement>('.zorid-canvas-world')!.style.transform, 'translate(40px, 40px) scale(1)');
+  await menu.open(edge()); await menu.choose('remove'); await ui.view.flush(); assert.equal(ui.document.getEdge('ab'), undefined); assert.ok(ui.document.getNode('a')); ui.close();
+});
+
+test('selected-node context retains multiselection and creates a padded group or deletes the full selection', async () => {
+  const ui = setup(), menu = menuDriver(ui);
+  ui.pointer(ui.item('a'), 'pointerdown', 40, 40); ui.pointer(ui.viewport, 'pointerup', 40, 40);
+  ui.pointer(ui.item('b'), 'pointerdown', 340, 40, { shiftKey: true }); ui.pointer(ui.viewport, 'pointerup', 340, 40);
+  await menu.open(ui.item('a')); assert.deepEqual(menu.labels(), ['Zoom to selection', 'Create group', '---', 'Delete']); await menu.choose('create-group'); await ui.view.flush();
+  const group = ui.document.nodes.at(-1)!; assert.deepEqual([group.type, group.x, group.y, group.width, group.height], ['group', -20, -20, 520, 140]);
+  ui.view.undo(); await ui.view.flush();
+  ui.pointer(ui.item('a'), 'pointerdown', 40, 40); ui.pointer(ui.viewport, 'pointerup', 40, 40);
+  ui.pointer(ui.item('b'), 'pointerdown', 340, 40, { shiftKey: true }); ui.pointer(ui.viewport, 'pointerup', 340, 40);
+  await menu.open(ui.item('b')); await menu.choose('delete'); await ui.view.flush(); assert.equal(ui.document.getNode('a'), undefined); assert.equal(ui.document.getNode('b'), undefined);
+  ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), fixture); ui.close();
+});
+
+test('web page menu edits and creation use literal URLs without opening or fetching content', async () => {
+  const ui = setup(), menu = menuDriver(ui);
+  await menu.open(ui.item('c')); await menu.choose('change-url'); ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'https://other.test/a#b'; await ui.view.flush();
+  assert.equal(ui.document.getNode('c')!.url, 'https://other.test/a#b'); assert.deepEqual(ui.links, []);
+  await menu.open(ui.viewport, 240, 140); await menu.choose('add-web-page'); ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'https://new.test/'; await ui.view.flush();
+  const link = ui.document.nodes.at(-1)!; assert.deepEqual([link.type, link.x, link.y, link.url], ['link', 200, 100, 'https://new.test/']); assert.equal(ui.container.querySelector('iframe'), null); ui.close();
+});
+
+test('pending menu actions reject changed source, changed selection, replacement documents and destroyed owners', async () => {
+  for (const invalidation of ['source', 'selection', 'replace', 'destroy'] as const) {
+    const ui = setup(), menu = menuDriver(ui); await menu.open(ui.item('a'));
+    if (invalidation === 'source') ui.document.updateNode('a', { text: 'External' });
+    if (invalidation === 'selection') { ui.pointer(ui.item('b'), 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointerup', 0, 0); }
+    if (invalidation === 'replace') ui.view.setDocument(CanvasDocument.parse(fixture));
+    if (invalidation === 'destroy') ui.view.destroy();
+    await menu.choose('remove'); assert.ok(ui.document.getNode('a'), invalidation); assert.equal(ui.saves.length, 0); ui.close();
+  }
+});
+
+test('editor context menu stays native and pending text is saved before opening a different Canvas menu', async () => {
+  const ui = setup(), menu = menuDriver(ui);
+  ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
+  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Pending menu text';
+  const native = await menu.open(input); assert.equal(native.defaultPrevented, false); assert.equal(menu.requests.length, 0); assert.equal(ui.saves.length, 0);
+  await menu.open(ui.item('b')); assert.equal(ui.document.getNode('a')!.text, 'Pending menu text'); assert.equal(ui.saves.length, 1); await menu.choose('remove'); await ui.view.flush();
+  assert.equal(ui.document.getNode('a')!.text, 'Pending menu text'); assert.equal(ui.document.getNode('b'), undefined); ui.close();
+});
+
+test('save failure blocks the menu without discarding pending text; editor opened while menu waits invalidates action', async () => {
+  const failing = setup(fixture, () => { throw new Error('menu save failure'); }), blocked = menuDriver(failing);
+  failing.item('a').dispatchEvent(new failing.dom.window.MouseEvent('dblclick', { bubbles: true }));
+  failing.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'Retain me';
+  await blocked.open(failing.item('b')); assert.equal(blocked.requests.length, 0); assert.equal(failing.document.getNode('a')!.text, 'Retain me'); assert.equal(failing.view.hasPendingChanges(), true); failing.close();
+  const ui = setup(), menu = menuDriver(ui); await menu.open(ui.item('a'));
+  ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true })); const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'New draft';
+  await menu.choose('remove'); assert.ok(ui.document.getNode('a')); assert.equal(input.value, 'New draft'); await ui.view.flush(); assert.equal(ui.document.getNode('a')!.text, 'New draft'); ui.close();
+});
+
+test('source changes while awaiting an earlier save cancel menu presentation', async () => {
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  const ui = setup(fixture, () => gate), menu = menuDriver(ui);
+  ui.pointer(ui.item('a'), 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 10, 0); ui.pointer(ui.viewport, 'pointerup', 10, 0);
+  const opening = menu.open(ui.item('a')); await new Promise(resolve => setImmediate(resolve));
+  ui.document.updateNode('a', { text: 'External while saving' }); release(); await opening; await new Promise(resolve => setImmediate(resolve));
+  assert.equal(menu.requests.length, 0); assert.equal(ui.document.getNode('a')!.text, 'External while saving'); ui.close();
+});
+
+test('menu transport rejection reports the failure without modifying the document', async () => {
+  const ui = setup(); Object.defineProperty(ui.dom.window, 'zorid', { value: { showContextMenu: () => Promise.reject(new Error('menu unavailable')) } });
+  ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(ui.document.toString(), fixture); assert.equal(ui.saves.length, 0);
+  assert.match(ui.container.textContent!, /menu unavailable/); assert.equal(ui.errors.length, 1); ui.close();
 });
