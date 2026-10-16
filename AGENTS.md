@@ -2,6 +2,12 @@
 
 ## Parallel development and verification
 
+- `main` is the canonical integration branch and the primary workspace checkout.
+  Keep unfinished implementation in isolated branches/worktrees. After scoped
+  review and required validation pass, merge or cherry-pick coherent confirmed
+  changes into `main`; do not leave confirmed work only on a feature branch.
+  Integration does not establish unverified native/mobile/reference parity.
+
 - Maximize development velocity by using as many available agents in parallel
   as useful independent work allows. Do not leave agents idle when implementation,
   reference audits, integration, or verification can safely proceed independently.
