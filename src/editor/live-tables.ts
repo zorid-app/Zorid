@@ -6,6 +6,7 @@ import { defaultKeymap, insertNewline, isolateHistory, redo, undo } from '@codem
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { inline } from '../ui/markdown.ts';
+import { destroyMathRenders } from '../ui/reading-math.ts';
 import { liveInlineMarkdown } from './live-inline.ts';
 import { alignTableCells, clearTableCells, copyTableCells, deleteTableCells, parseTableClipboard, pasteTableCells, serializeTableClipboard, tableCellRange, decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
   encodeTableCellText, insertTableColumn, insertTableRow, moveTableColumn, moveTableRow, padTableCellBoundary, parseTable,
@@ -144,11 +145,14 @@ class TableController {
           // A currently edited cell contains a CM view rather than rendered
           // Markdown. Render its source independently to use the visible label.
           let node = this.cells[index][column];
-          if (this.active?.row === index && this.active.column === column) {
-            node = this.dom.ownerDocument.createElement('span');
-            inline(node, decodeTableCellText(data.cells[column].text).text, this.open);
+          try {
+            if (this.active?.row === index && this.active.column === column) {
+              node = this.dom.ownerDocument.createElement('span');
+              inline(node, decodeTableCellText(data.cells[column].text).text, this.open);
+            }
+            return node.innerText ?? node.textContent ?? '';
           }
-          return node.innerText ?? node.textContent ?? '';
+          finally { if (node !== this.cells[index][column]) destroyMathRenders(node); }
         });
         return this.applyStructure(sortTableRows(model, column, id === 'sort-ascending' ? 'ascending' : 'descending', values), row, column);
       }
@@ -261,15 +265,17 @@ class TableController {
     if (!range || event.type !== 'copy' && event.type !== 'cut' || event.type === 'cut' && this.owner.state.readOnly) return false;
     const data = copyTableCells(this.model, range), markdown = serializeTableClipboard(data);
     const table = this.dom.ownerDocument.createElement('table');
-    data.rows.forEach((row, r) => {
-      const tr = table.insertRow(); row.forEach((value, c) => {
-        const cell = this.dom.ownerDocument.createElement(r === 0 ? 'th' : 'td');
-        cell.style.textAlign = data.alignment[c] ?? ''; inline(cell, decodeTableCellText(value).text, this.open); tr.append(cell);
+    try {
+      data.rows.forEach((row, r) => {
+        const tr = table.insertRow(); row.forEach((value, c) => {
+          const cell = this.dom.ownerDocument.createElement(r === 0 ? 'th' : 'td');
+          cell.style.textAlign = data.alignment[c] ?? ''; tr.append(cell); inline(cell, decodeTableCellText(value).text, this.open);
+        });
       });
-    });
-    event.clipboardData.setData('text/plain', markdown); event.clipboardData.setData('text/markdown', markdown);
-    event.clipboardData.setData('text/html', '<!-- obsidian -->' + table.outerHTML);
-    event.clipboardData.setData('obsidian/table', JSON.stringify(data));
+      event.clipboardData.setData('text/plain', markdown); event.clipboardData.setData('text/markdown', markdown);
+      event.clipboardData.setData('text/html', '<!-- obsidian -->' + table.outerHTML);
+      event.clipboardData.setData('obsidian/table', JSON.stringify(data));
+    } finally { destroyMathRenders(table); }
     event.preventDefault(); event.stopPropagation();
     if (event.type === 'cut') this.deleteSelection(-1);
     return true;
@@ -369,6 +375,7 @@ class TableController {
 
   private renderCell(row: number, column: number) {
     const node = this.cells[row][column];
+    destroyMathRenders(node);
     node.replaceChildren();
     node.classList.remove('is-editing');
     // Decode breaks/pipe escapes without ever interpreting arbitrary HTML.
@@ -377,6 +384,7 @@ class TableController {
   }
 
   private render() {
+    destroyMathRenders(this.grid);
     this.grid.replaceChildren(); this.cells = [];
     const head = document.createElement('thead'), body = document.createElement('tbody');
     this.grid.append(head, body);
@@ -438,7 +446,8 @@ class TableController {
     this.deselectCells();
     this.close();
     const cell = this.model.rows[row]?.cells[column]; if (!cell) return;
-    const host = this.cells[row][column]; host.replaceChildren(); host.classList.add('is-editing');
+    const host = this.cells[row][column]; destroyMathRenders(host);
+    host.replaceChildren(); host.classList.add('is-editing');
     const value = decodeTableCellText(cell.text).text;
     const view = new EditorView({ parent: host,
       state: EditorState.create({ doc: value,
@@ -599,9 +608,12 @@ class TableController {
   close() {
     const active = this.active; if (!active) return;
     this.active = null; active.view.destroy();
-    if (this.cells[active.row]?.[active.column] && this.model.rows[active.row]?.cells[active.column]) this.renderCell(active.row, active.column);
+    if (!this.destroyed && this.cells[active.row]?.[active.column] && this.model.rows[active.row]?.cells[active.column]) this.renderCell(active.row, active.column);
   }
-  destroy() { this.destroyed = true; this.stopGesture?.(); this.close(); controllers.delete(this.dom); }
+  destroy() {
+    this.destroyed = true; this.stopGesture?.(); this.close();
+    destroyMathRenders(this.dom); controllers.delete(this.dom);
+  }
 }
 
 class TableWidget extends WidgetType {
