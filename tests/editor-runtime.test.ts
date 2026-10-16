@@ -6,6 +6,8 @@ import { EditorSelection, EditorState, StateEffect, Transaction } from '@codemir
 import { EditorView } from '@codemirror/view';
 import { redo, undo, undoDepth } from '@codemirror/commands';
 import { createEditor } from '../src/ui/editor.ts';
+import type { EditorOptions } from '../src/ui/editor.ts';
+import { completionStatus, currentCompletions, selectedCompletionIndex, startCompletion } from '@codemirror/autocomplete';
 import { editorTransfers } from '../src/editor/transfers.ts';
 import { tableSelectionRanges } from '../src/editor/live-tables.ts';
 import { renderMarkdown } from '../src/ui/markdown.ts';
@@ -13,7 +15,7 @@ import { renderMarkdown } from '../src/ui/markdown.ts';
 // Real CM6 state, transactions, plugins and DOM, under jsdom. Zero geometry
 // shims only satisfy CM's measurement scheduler; they prove no pixel, native
 // selection, OS keyboard, IME or clipboard parity.
-function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live') {
+function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live', completion: Partial<Pick<EditorOptions, 'paths' | 'wiki'>> = {}) {
   const dom = new JSDOM('<!doctype html><html><body><div id="host"></div></body></html>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, entry] of Object.entries({ window: dom.window, document: dom.window.document,
@@ -31,7 +33,7 @@ function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live') 
   const host = document.querySelector<HTMLElement>('#host')!;
   const changes: string[] = [];
   const opened: string[] = [];
-  const editor = createEditor(host, { value, mode, paths: () => ['Note.md'], onChange: text => changes.push(text), open: target => opened.push(target) });
+  const editor = createEditor(host, { value, mode, paths: () => ['Note.md'], onChange: text => changes.push(text), open: target => opened.push(target), ...completion });
   const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
   assert.ok(view, 'find real CodeMirror instance from its DOM');
   view.focus();
@@ -642,4 +644,133 @@ test('table clipboard listeners leave native controls alone without transfers in
     assert.equal(result.event.defaultPrevented,false,`${type} must preserve control ownership`);
     assert.equal(fixture.editor.getValue(),rectangleSource);
   }
+});
+
+
+async function awaitWiki(predicate: () => boolean) {
+  const deadline = Date.now() + 2000;
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, 'wiki completion did not settle');
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+function wikiKey(view: EditorView, dom: JSDOM, key: string, shiftKey = false) {
+  const event = new dom.window.KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true });
+  view.contentDOM.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
+test('createEditor wiki Tab preserves a suffix alias with custom grammar, host link policy and parent undo', async t => {
+  const calls: string[] = [];
+  const initial = '[[Fi|Already written]]';
+  const { editor, view, cursor, dom, changes } = setup(t, initial, 'live', {
+    paths: () => ['A/Alpha.md', 'B/Alpha.md'],
+    wiki: { sourcePath: () => 'Folder/Source.md',
+      metadata: path => ({ aliases: path === 'A/Alpha.md' ? ['First'] : [], mtime: 3 }),
+      linkText: (path, source) => { calls.push(source); return path.replace(/\.md$/, ''); } },
+  });
+  cursor(4); assert.equal(startCompletion(view), true);
+  await awaitWiki(() => completionStatus(view.state) === 'active' && selectedCompletionIndex(view.state) === 0);
+  assert.equal(currentCompletions(view.state)[0]?.label, 'First');
+  assert.ok(wikiKey(view, dom, 'Tab'));
+  assert.equal(editor.getValue(), '[[A/Alpha|Already written]]');
+  assert.equal(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to), 'Already written');
+  assert.deepEqual(changes, ['[[A/Alpha|Already written]]']);
+  assert.ok(calls.length > 0 && calls.every(source => source === 'Folder/Source.md'));
+  assert.equal(undoDepth(view.state), 1); assert.ok(undo(view)); assert.equal(editor.getValue(), initial);
+});
+
+test('createEditor wiki Enter outranks list continuation and heading continuation uses host resolver', async t => {
+  const resolved: [string, string][] = [];
+  const { editor, view, cursor, dom } = setup(t, '- [[No]]', 'live', {
+    wiki: { sourcePath: () => 'Source.md',
+      metadata: () => ({ headings: [{ heading: 'Overview', level: 1 }] }),
+      resolvePath: (target, source) => { resolved.push([target, source]); return target === 'Note' ? 'Note.md' : null; } },
+  });
+  cursor(6); startCompletion(view);
+  await awaitWiki(() => completionStatus(view.state) === 'active' && selectedCompletionIndex(view.state) === 0);
+  assert.ok(wikiKey(view, dom, '#'));
+  assert.equal(editor.getValue(), '- [[Note#]]'); assert.equal(view.state.selection.main.head, 9);
+  await awaitWiki(() => completionStatus(view.state) === 'active' && currentCompletions(view.state)[0]?.label === 'Overview');
+  // Empty heading query is intentionally unselected; arrow chooses its candidate.
+  assert.ok(wikiKey(view, dom, 'ArrowDown')); assert.ok(wikiKey(view, dom, 'Enter'));
+  assert.equal(editor.getValue(), '- [[Note#Overview]]');
+  assert.equal(view.state.selection.main.head, editor.getValue().length);
+  assert.ok(resolved.some(([target, source]) => target === 'Note' && source === 'Source.md'));
+  assert.equal(editor.getValue().includes('\n'), false, 'popup Enter does not continue the list');
+});
+
+test('createEditor wiki source rejects custom inline comments and late fenced-code context', async t => {
+  const { editor, view, cursor } = setup(t, '%% [[No]] %%');
+  cursor(7); startCompletion(view);
+  await awaitWiki(() => completionStatus(view.state) !== 'pending');
+  assert.equal(completionStatus(view.state), null);
+  assert.deepEqual(currentCompletions(view.state), []);
+  const prefix = 'plain\n\n'.repeat(2000);
+  editor.setValue(prefix + '```\n[[No]]\n```'); cursor(prefix.length + 8); startCompletion(view);
+  await awaitWiki(() => completionStatus(view.state) !== 'pending');
+  assert.equal(completionStatus(view.state), null);
+  assert.deepEqual(currentCompletions(view.state), []);
+});
+
+test('createEditor nested table wiki popup accepts alias before cell Tab navigation and shares parent undo', async t => {
+  const initial = '| A | B |\n| --- | --- |\n| [[Fi]] | stay |';
+  const { editor, view, host, dom, changes } = setup(t, initial, 'live', {
+    paths: () => ['Alpha.md'], wiki: { metadata: () => ({ aliases: ['First'] }) },
+  });
+  const child = activateCell(host, dom, 1, 0);
+  child.dispatch({ selection: { anchor: 4 } });
+  assert.equal(startCompletion(child), true, 'nested table editor installs wiki completion');
+  await awaitWiki(() => completionStatus(child.state) === 'active' && selectedCompletionIndex(child.state) === 0);
+  assert.equal(currentCompletions(child.state)[0]?.label, 'First');
+  assert.ok(wikiKey(child, dom, 'Tab'));
+  assert.equal(child.state.doc.toString(), '[[Alpha|First]]');
+  assert.equal(child.state.sliceDoc(child.state.selection.main.from, child.state.selection.main.to), 'First');
+  assert.equal(EditorView.findFromDOM(host.querySelector('.cm-live-table .cm-editor')!), child, 'popup Tab keeps ownership in the same cell');
+  assert.equal(editor.getValue(), initial.replace('[[Fi]]', '[[Alpha\\|First]]'));
+  assert.equal(changes.length, 1); assert.equal(undoDepth(view.state), 1); assert.equal(undoDepth(child.state), 0);
+  assert.ok(undo(view)); assert.equal(editor.getValue(), initial);
+});
+
+test('nested wiki popup survives a table source shift without stale selection or target ownership', async t => {
+  const initial = 'Before\n\n| A | B |\n| --- | --- |\n| [[No]] | stay |';
+  const { editor, view, host, dom } = setup(t, initial);
+  const child = activateCell(host, dom, 1, 0);
+  child.dispatch({ selection: { anchor: 4 } }); startCompletion(child);
+  await awaitWiki(() => completionStatus(child.state) === 'active' && selectedCompletionIndex(child.state) === 0);
+  editor.setValue('Intro\n' + initial);
+  await Promise.resolve();
+  assert.equal(EditorView.findFromDOM(host.querySelector('.cm-live-table .cm-editor')!), child);
+  assert.equal(child.state.selection.main.head, 4);
+  assert.equal(completionStatus(child.state), 'active', 'equivalent mapped selection does not cancel popup');
+  assert.ok(wikiKey(child, dom, 'Enter'));
+  assert.equal(editor.getValue(), 'Intro\n' + initial.replace('[[No]]', '[[Note]]'));
+  assert.equal(undoDepth(view.state), 1); assert.ok(undo(view));
+  assert.equal(editor.getValue(), 'Intro\n' + initial, 'completion undo preserves unrelated external prefix');
+});
+
+test('changing parent selection destroys the old table popup and stale clicks cannot edit a new cell', async t => {
+  const initial = '| A | B |\n| --- | --- |\n| [[No]] | stay |';
+  const { editor, host, dom, cursor } = setup(t, initial);
+  const child = activateCell(host, dom, 1, 0);
+  child.dispatch({ selection: { anchor: 4 } }); startCompletion(child);
+  await awaitWiki(() => completionStatus(child.state) === 'active');
+  const staleRow = child.dom.querySelector('[role="option"]')!; assert.ok(staleRow);
+  cursor(initial.indexOf('stay') + 4); await Promise.resolve();
+  const next = EditorView.findFromDOM(host.querySelector('.cm-live-table .cm-editor')!)!;
+  assert.notEqual(next, child); assert.equal(next.state.doc.toString(), 'stay');
+  staleRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(editor.getValue(), initial);
+  next.dispatch({ ...next.state.replaceSelection('!'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), initial.replace('stay', 'stay!'));
+});
+
+test('nested table wiki completion uses the same custom-comment exclusion as its owning editor', async t => {
+  const initial = '| A | B |\n| --- | --- |\n| %% [[No]] %% | stay |';
+  const { host, dom } = setup(t, initial);
+  const child = activateCell(host, dom, 1, 0);
+  child.dispatch({ selection: { anchor: 7 } }); startCompletion(child);
+  await awaitWiki(() => completionStatus(child.state) !== 'pending');
+  assert.equal(completionStatus(child.state), null);
+  assert.deepEqual(currentCompletions(child.state), []);
 });

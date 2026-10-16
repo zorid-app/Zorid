@@ -57,13 +57,14 @@ const markdownHighlightStyle = HighlightStyle.define(defaultHighlightStyle.specs
 
 export function createEditor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   const listConfiguration = new Compartment();
+  const wiki = wikiCompletion({ ...options.wiki, paths: options.paths });
   const view = new EditorView({
     parent,
     state: EditorState.create({ doc: options.value, extensions: [
       EditorState.allowMultipleSelections.of(true),
       history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[liveInlineMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
-      EditorView.lineWrapping, wikiCompletion({ ...options.wiki, paths: options.paths }),
+      EditorView.lineWrapping, wiki,
       EditorView.contentAttributes.of({'aria-label': 'Note editor', spellcheck: 'true'}),
       EditorView.updateListener.of(update => { if (update.transactions.some(transaction => transaction.docChanged && !transaction.annotation(externalChange))) options.onChange(update.state.doc.toString()); }),
       ...(options.mode === 'source' ? [EditorView.domEventHandlers({ click(event, sourceView) {
@@ -78,7 +79,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       } })] : []),
       ...(options.transfers ? [editorTransfers(options.transfers)] : []),
       editorContextMenu(),
-      ...(options.mode === 'live' ? [liveProperties(), liveTables(options.open), liveTasks(), liveLists(), ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed)] : []), liveInline({open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover})] : []),
+      ...(options.mode === 'live' ? [liveProperties(), liveTables(options.open, wiki), liveTasks(), liveLists(), ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed)] : []), liveInline({open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover})] : []),
     ]}),
   });
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
