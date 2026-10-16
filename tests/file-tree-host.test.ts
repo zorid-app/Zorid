@@ -6,12 +6,12 @@ import { Workspace } from '../src/ui/workspace.ts';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 
 async function until(check:()=>boolean){for(let i=0;i<100;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}assert.fail('Timed out waiting for workspace operation');}
-async function setup(t:TestContext,seed:Record<string,string>={},adapter=new MemoryAdapter(seed)){
+async function setup(t:TestContext,seed:Record<string,string>={},adapter=new MemoryAdapter(seed),editorFactory?:ConstructorParameters<typeof Workspace>[1]){
  const dom=new JSDOM('<body><div id="app"></div></body>',{url:'https://zorid.test/'}),saved=new Map<string,PropertyDescriptor|undefined>();
  const matchMedia=(media:string)=>({media,matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
  for(const[key,value]of Object.entries({window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,HTMLElement:dom.window.HTMLElement,Node:dom.window.Node,MutationObserver:dom.window.MutationObserver,matchMedia})){saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});}
  dom.window.matchMedia=matchMedia as typeof dom.window.matchMedia;dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
- const root=dom.window.document.querySelector<HTMLElement>('#app')!,workspace=new Workspace(root);
+ const root=dom.window.document.querySelector<HTMLElement>('#app')!,workspace=new Workspace(root,editorFactory);
  t.after(async()=>{try{await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
  await workspace.start({adapter,label:'Explorer test',id:'test:file-tree-host'});
  const state=workspace as any,row=(path:string)=>[...root.querySelectorAll<HTMLElement>('.tree-row')].find(row=>row.dataset.path===path)!;
@@ -182,4 +182,49 @@ test('file tree hides recognized suffixes, keeps unknown ones, and exposes disti
  ui.key(ui.row('Same.PNG').querySelector<HTMLElement>('.tree-label')!,'Escape');
  assert.equal(ui.row('Same.PNG').querySelector('.tree-label')!.textContent,'Same');
  assert.ok(ui.workspace.vault.entries.has('Same.PNG'),'display policy does not rename files');
+});
+
+for(const activation of ['click','Enter'] as const)test(`file ${activation} retains explorer keyboard focus for F2 after asynchronous open`,async t=>{
+ const ui=await setup(t,{'Tone.wav':'original audio bytes'}),original=ui.row('Tone.wav');original.focus();
+ if(activation==='click')original.querySelector('.tree-label')!.dispatchEvent(new ui.dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));else ui.key(original,activation);
+ await until(()=>ui.row('Tone.wav')!==original&&ui.workspace.activePane.tabs.some(tab=>tab.path==='Tone.wav'));
+ await Promise.resolve();
+ assert.equal(ui.dom.window.document.activeElement,ui.row('Tone.wav'));
+ ui.key(ui.dom.window.document.activeElement as HTMLElement,'F2');
+ await until(()=>ui.row('Tone.wav').querySelector('.tree-label')?.getAttribute('contenteditable')==='true');
+ assert.equal(ui.dom.window.document.activeElement,ui.row('Tone.wav').querySelector('.tree-label'));
+});
+
+test('delayed file opening does not reclaim explorer focus after another control receives focus',async t=>{
+ const ui=await setup(t,{'Tone.wav':'audio'});let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve),flush=ui.state.flushPane.bind(ui.workspace);let waiting=false;
+ ui.state.flushPane=async(pane:unknown)=>{waiting=true;await gate;await flush(pane);};
+ const original=ui.row('Tone.wav');original.focus();original.click();await until(()=>waiting);
+ const control=ui.dom.window.document.createElement('input');ui.root.append(control);control.focus();release();
+ await until(()=>ui.row('Tone.wav')!==original);await Promise.resolve();assert.equal(ui.dom.window.document.activeElement,control);
+});
+
+test('a newer file click keeps its own focus when the older file open finishes late',async t=>{
+ const ui=await setup(t,{'First.wav':'first','Second.wav':'second'});let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve),flush=ui.state.flushPane.bind(ui.workspace);let calls=0;
+ ui.state.flushPane=async(pane:unknown)=>{if(++calls===1)await gate;await flush(pane);};
+ ui.row('First.wav').click();await until(()=>calls===1);ui.row('Second.wav').click();
+ await until(()=>ui.workspace.activePane.tabs.some(tab=>tab.path==='Second.wav')&&ui.dom.window.document.activeElement===ui.row('Second.wav'));
+ release();await Promise.resolve();await Promise.resolve();assert.equal(ui.dom.window.document.activeElement,ui.row('Second.wav'));assert.equal(ui.state.current().path,'Second.wav');
+});
+
+test('an editor that explicitly acquires focus while opening keeps it instead of the explorer row',async t=>{
+ let input!:HTMLTextAreaElement;
+ const ui=await setup(t,{'Note.md':'body'},undefined,(parent,options)=>{
+  input=parent.ownerDocument.createElement('textarea');input.value=options.value;parent.append(input);input.focus();
+  return{getValue:()=>input.value,setValue:value=>input.value=value,focus:()=>input.focus(),destroy:()=>input.remove(),insert:value=>{input.value+=value;}};
+ });
+ const original=ui.row('Note.md');original.focus();original.click();await until(()=>!!input&&ui.row('Note.md')!==original);await Promise.resolve();
+ assert.equal(ui.dom.window.document.activeElement,input);
+});
+
+test('delayed explorer file opening cannot reactivate a pane after the user focuses another pane',async t=>{
+ const ui=await setup(t,{'Tone.wav':'audio'}),source=ui.workspace.activePane,other=ui.state.addPane();
+ let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve),flush=ui.state.flushPane.bind(ui.workspace);let waiting=false;
+ ui.state.flushPane=async(pane:unknown)=>{waiting=true;await gate;await flush(pane);};
+ ui.row('Tone.wav').click();await until(()=>waiting);other.element.focus();assert.equal(ui.workspace.activePane,other);release();
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(ui.workspace.activePane,other);assert.equal(ui.dom.window.document.activeElement,other.element);assert.equal(source.tabs.some(tab=>tab.path==='Tone.wav'),false);
 });

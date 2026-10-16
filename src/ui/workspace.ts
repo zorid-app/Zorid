@@ -797,7 +797,7 @@ export class Workspace {
             // activated by the user; unrelated sidebar rebuilds do not restore focus.
             this.treeRows.find(item=>item.path===entry.path)?.element.focus({preventScroll:true});
             this.saveSession();
-          }else this.run(()=>this.openNote(entry.path));
+          }else{const opening=this.openTreeFile(entry.path,row);this.run(()=>opening);}
         };
         row.onclick=event=>{
           if(event.button!==0)return;
@@ -819,6 +819,30 @@ export class Workspace {
         container.append(row);if(folder&&!this.collapsed.has(entry.path))append(entry.path,container,depth+1);
       }
     };append('',tree,0);this.sidebarContent.append(tree);if(this.autoRevealFiles)tree.querySelector<HTMLElement>('.tree-row.is-active')?.scrollIntoView({block:'nearest'});
+  }
+
+  private async openTreeFile(path:string,row:HTMLElement):Promise<void>{
+    if(!row.isConnected||this.treeTab!=='files')return;
+    const doc=this.root.ownerDocument,win=doc.defaultView,vault=this.vault,pane=this.activePane;
+    const generation=this.vaultGeneration,activation=this.paneActivationRevision,token=this.treeEntryToken(path),navigation=(this.navigationIntent.get(pane)??0)+1;
+    row.focus({preventScroll:true});
+    let relinquished=false;
+    const focus=(event:FocusEvent)=>{if(event.target!==row&&event.target!==doc.body&&event.target!==doc.documentElement)relinquished=true;};
+    const pointer=(event:PointerEvent)=>{if(event.target&&!row.contains(event.target as Node))relinquished=true;};
+    const blur=()=>{relinquished=true;};
+    doc.addEventListener('focusin',focus,true);doc.addEventListener('pointerdown',pointer,true);win?.addEventListener('blur',blur);
+    try{
+      await this.openNote(path,false,pane,true,'',activation);
+      // Opening a file replaces its explorer row. Restore only the originating
+      // action's focus, never a newer editor/control/window/navigation intent.
+      if(relinquished||vault!==this.vault||generation!==this.vaultGeneration||this.activePane!==pane||this.paneActivationRevision!==activation||this.navigationIntent.get(pane)!==navigation
+        ||this.current(pane).path!==path||this.treeEntryToken(path)!==token||this.treeTab!=='files'||this.root.classList.contains('left-hidden'))return;
+      const active=doc.activeElement;
+      if(active!==row&&active!==doc.body&&active!==doc.documentElement)return;
+      this.treeRows.find(item=>item.path===path)?.element.focus({preventScroll:true});
+    }finally{
+      doc.removeEventListener('focusin',focus,true);doc.removeEventListener('pointerdown',pointer,true);win?.removeEventListener('blur',blur);
+    }
   }
 
   private async search():Promise<void>{
