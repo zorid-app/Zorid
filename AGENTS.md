@@ -49,6 +49,13 @@
 
 ## Product priorities
 
+- Latest architecture discussion (2026-10-16): the user no longer requires
+  Obsidian plugin API compatibility and wants to discuss a clean Zorid API,
+  app-managed syncable plugin data, secret storage, and native mobile shells
+  around the web editor. These are discussion topics, not approved API designs.
+  Do not redesign or implement those APIs until the discussion resolves them.
+  Continue existing editor correctness and verification work. The mobile shell
+  choice remains open; do not replace Capacitor merely from this discussion.
 - Build an original open-source Obsidian recreation, with Electron desktop and
   Capacitor mobile apps. Keep recovered proprietary artifacts out of project source.
 - Prioritize the editor foundation, exact interactions, split views, and native
@@ -63,4 +70,6 @@
   current implementation immediately.
 - Defer discussion, design, and implementation of the requested LiveSync-style
   default sync and FullCalendar/TaskNotes-style calendar/task features until the
-  editor base is solid. See `docs/deferred-product-roadmap.md`.
+  editor base is solid, except the user has now explicitly opened discussion of
+  shared plugin-data/sync architecture. Implementation is still on hold, and the
+  calendar/task request remains deferred. See `docs/deferred-product-roadmap.md`.

@@ -197,3 +197,35 @@ appearance/folding, audio/video decoding and controls, media menus and dimension
 The media readiness promise indicates settlement, not successful playback. No
 native app or external plugin was launched for this batch; root owns verified
 promotion to main and subsequent runtime checks.
+
+## Native renderer follow-up and packaged media correction
+
+Root promoted the reviewed batch to `main` (`ed1b604`) and rebuilt it. Native
+Electron checks in the existing temporary verification vault confirmed folder
+click followed by F2 opens the inline rename field. Reading callouts show the
+shared blue note icon/title/background and rendered math/code. Canvas text cards
+render headings, inline math, bold text, highlighted JavaScript and list markers;
+double-click entered the text editor and Cmd+Enter saved an appended checkpoint,
+verified by reading the actual Canvas JSON. Canvas Undo/Redo then became disabled
+and Cmd+Z did nothing. This own-save/history defect is assigned for repair, not
+counted as a passing Canvas interaction.
+
+A valid original two-second PCM WAV initially failed in the packaged app.
+The content policy lacked `media-src`, so local media object URLs fell under
+`default-src 'self'`. Reviewed commit `02f3421` adds only `media-src blob:` and a
+test of the emitted packaged HTML. After rebuilding, native Reading controls
+changed from Play to Pause and back to Play, with the timeline advancing to
+0:02/0:02. Live Edit also retained the player; its source button revealed the
+embed Markdown while leaving the rendered controls present. This establishes
+the observed playback/control behavior, not subjective sound output, video
+codecs, exact reference styling, mobile playback or every media menu.
+
+The user then reported deletion of the apparent blank row above the audio hides
+the player. Native reproduction found the actual saved source had one newline
+between the heading and embed, despite the visual row before the player.
+Backspace joined the embed onto the heading without deleting its Markdown;
+the player lost normal control layout. Undo restored the source and controls.
+This source-row/caret/inline-layout issue remains open and is assigned separately.
+Screenshots were partially clipped by the capture surface, so this pass does not
+establish full-window pixel parity. All three agent-launched Electron sessions
+were closed and their process handles reported exit code zero after testing.
