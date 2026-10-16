@@ -16,6 +16,7 @@ import './editor/live-math.css';
 import './editor/live-fences.css';
 import './editor/live-callouts.css';
 import './ui/pdf-view.css';
+import './ui/media-view.css';
 import './canvas/view.css';
 import './ui/split-layout.css';
 

@@ -10,6 +10,8 @@ import { openImageLightbox } from './image-view.ts';
 import type { ImageView } from './image-view.ts';
 import { createPdfView } from './pdf-view.ts';
 import type { PdfView } from './pdf-view.ts';
+import { createMediaView, mediaKind } from './media-view.ts';
+import type { MediaView } from './media-view.ts';
 
 interface EmbedOptions {
   vault: Vault;
@@ -20,6 +22,8 @@ interface EmbedOptions {
   contextMenu?: (event: MouseEvent, request: EmbedRequest, source: string) => void;
   /** Test/host injection; the PDF view owns loading errors and its attachment lease. */
   pdfFactory?: typeof createPdfView;
+  /** Local media views own their resource lease and readiness/error UI. */
+  mediaFactory?: typeof createMediaView;
 }
 interface EmbedState {
   node: HTMLElement;
@@ -33,6 +37,7 @@ interface EmbedState {
   children: Set<EmbedState>;
   lease?: AttachmentLease;
   pdfView?: PdfView;
+  mediaView?: MediaView;
   imageSource?: () => Promise<AttachmentLease>;
 }
 
@@ -78,7 +83,14 @@ export class MarkdownEmbeds {
     node.setAttribute('role', 'group'); node.setAttribute('aria-label', `Embed ${request.target}`);
     node.dataset.embedTarget = request.target;
     const state: EmbedState = { node, request, source, ancestors, version:0, visible:!this.observer, disposed:false, children:new Set() };
-    node.addEventListener('contextmenu', event => { if(!state.disposed&&!event.defaultPrevented)this.options.contextMenu?.(event,request,source); });
+    node.addEventListener('contextmenu', event => {
+      if (state.disposed || event.defaultPrevented) return;
+      const target = event.target as Element | null;
+      // Native media controls retain their default menu. Stop the event from
+      // reaching either this attachment menu or an enclosing editor menu.
+      if (target?.closest?.('audio, video')) { event.stopPropagation(); return; }
+      this.options.contextMenu?.(event,request,source);
+    });
     if (this.disposed) return node;
     this.states.add(state); parent?.children.add(state);
     this.nodes.set(node, state);
@@ -127,6 +139,7 @@ export class MarkdownEmbeds {
     state.disposed = true; state.version++;
     destroyMarkdown(state.node);
     state.pdfView?.destroy();state.pdfView=undefined;
+    state.mediaView?.destroy();state.mediaView=undefined;
     state.lease?.release();state.lease=undefined;
     this.observer?.unobserve(state.node); this.observed.delete(state.node);
     this.clearChildren(state); this.states.delete(state);
@@ -145,6 +158,7 @@ export class MarkdownEmbeds {
     destroyMarkdown(state.node);
     this.clearChildren(state);
     state.pdfView?.destroy();state.pdfView=undefined;
+    state.mediaView?.destroy();state.mediaView=undefined;
     state.lease?.release();state.lease=undefined;state.imageSource=undefined;
     const current = () => !this.disposed && !state.disposed && state.version === version;
     const { request, source } = state;
@@ -155,6 +169,7 @@ export class MarkdownEmbeds {
     open.href = '#'; open.setAttribute('aria-label', `Open ${request.target || source}`);
     open.onclick = event => { event.preventDefault(); this.options.open(source, request.target, request.kind); };
     state.node.className='internal-embed markdown-embed';
+    for (const attribute of ['alt', 'width', 'height']) state.node.removeAttribute(attribute);
     state.node.replaceChildren(open);
     const fail = (message: string) => { if (current()) state.node.append(el('span', 'embed-error', message)); };
     if(external || (path&&isImage(path))){
@@ -186,6 +201,23 @@ export class MarkdownEmbeds {
         // stale errors to a replacement widget or duplicating the viewer's status UI.
         void view.ready.catch(()=>{});
       } catch(error) { fail(error instanceof Error?error.message:String(error)); }
+      return;
+    }
+    const media = mediaKind(path);
+    if (media) {
+      state.node.className=`internal-embed media-embed ${media}-embed`;
+      state.node.replaceChildren();
+      // The reference annotates the outer media embed, not the native player.
+      const details = imageAlt(request.label ?? '');
+      if (details.alt) state.node.setAttribute('alt', details.alt);
+      if (details.width) state.node.setAttribute('width', String(details.width));
+      if (details.height) state.node.setAttribute('height', String(details.height));
+      try {
+        const view = (this.options.mediaFactory ?? createMediaView)(state.node, path, this.resources);
+        if (!current()) { view.destroy(); return; }
+        state.mediaView = view;
+        void view.ready.catch(() => {});
+      } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
       return;
     }
     if (!/\.md$/i.test(path)) { fail('Attachment viewer is not implemented yet'); return; }
