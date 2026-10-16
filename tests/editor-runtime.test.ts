@@ -410,3 +410,71 @@ test('active table-cell context menu includes editor clipboard roles before tabl
   assert.equal(host.querySelectorAll('tbody tr').length,2);
   assert.ok(undo(view));assert.equal(editor.getValue(),before);
 });
+
+test('browser table menus retain the active child through formatting, structural actions and dismissal', async t => {
+  const {view,host,dom,editor}=setup(t,'| A | B |\n| --- | --- |\n| one | two |');
+  host.querySelector('td')!.dispatchEvent(new dom.window.MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true}));
+  const child=EditorView.findFromDOM(host.querySelector('td .cm-editor')!)!;
+  child.dispatch({selection:EditorSelection.range(3,0)});child.focus();
+  const open=()=>child.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  const item=(label:string)=>[...document.querySelectorAll<HTMLButtonElement>('.context-menu-item')].find(node=>node.textContent===label)!;
+  open();await Promise.resolve();
+  assert.equal(child.dom.isConnected,true,'menu focus must not dispose its clipboard/format target');
+  item('Format').click();item('Bold').click();await Promise.resolve();
+  assert.match(editor.getValue(),/\*\*one\*\*/);
+  assert.equal(child.hasFocus,true);
+  assert.equal(undo(view),true);await Promise.resolve();
+  open();await Promise.resolve();
+  item('Row').click();item('Duplicate row').click();await Promise.resolve();
+  assert.equal(host.querySelectorAll('tbody tr').length,2);
+  const next=EditorView.findFromDOM(host.querySelector('td .cm-editor')!)!;
+  next.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  await Promise.resolve();
+  document.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+  await Promise.resolve();assert.equal(next.hasFocus,true);
+  view.focus();await Promise.resolve();
+  assert.equal(next.dom.isConnected,false,'dismissal must release its temporary blur hold');
+});
+
+test('clipboard menu availability includes nonempty secondary selections', t => {
+  const {view,dom}=setup(t,'abcdef');
+  view.dispatch({selection:EditorSelection.create([EditorSelection.cursor(0),EditorSelection.range(2,4)],0)});
+  let items:Array<{role?:string;enabled?:boolean}>=[];
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:(request:{items:typeof items})=>{items=request.items;return Promise.resolve(null);}}});
+  view.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  assert.equal(items.find(item=>item.role==='copy')?.enabled,true);
+  assert.equal(items.find(item=>item.role==='cut')?.enabled,true);
+});
+
+test('late formatting menu results cannot apply to changed text or selections', async t => {
+  const {view,dom,editor}=setup(t,'abcdef');
+  let choose!:(id:string|null)=>void;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:()=>new Promise<string|null>(resolve=>choose=resolve)}});
+  for(const changeDocument of [false,true]){
+    view.dispatch({selection:EditorSelection.range(0,2)});
+    view.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+    if(changeDocument)view.dispatch({changes:{from:0,insert:'X'}});
+    else view.dispatch({selection:EditorSelection.range(3,5)});
+    const before=editor.getValue();choose('format-format-bold');await Promise.resolve();
+    assert.equal(editor.getValue(),before);
+  }
+});
+
+test('menu bridge failures release a held table editor on synchronous and asynchronous errors', async t => {
+  const reported:unknown[]=[];t.mock.method(console,'error',(error:unknown)=>reported.push(error));
+  const {view,host,dom}=setup(t,'| A | B |\n| --- | --- |\n| one | two |');
+  let asynchronous=false;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:()=>{
+    view.focus();const error=new Error('menu unavailable');
+    if(asynchronous)return Promise.reject(error);throw error;
+  }}});
+  for(const mode of [false,true]){
+    asynchronous=mode;
+    host.querySelector('td')!.dispatchEvent(new dom.window.MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true}));
+    const child=EditorView.findFromDOM(host.querySelector('td .cm-editor')!)!;child.focus();
+    child.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(child.dom.isConnected,false,'failed popup must not leave a persistent blur hold');
+  }
+  assert.equal(reported.length,2);
+});

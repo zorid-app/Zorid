@@ -17,7 +17,22 @@
 - Report observed results and remaining gaps honestly. A passing isolated test
   does not establish integrated, native, mobile, visual, or reference parity.
 
-## Current product priorities
+## Incoming user findings
+
+- The user will send frequent observations, screenshots, bugs, and feature requests.
+  Treat them as additions or corrections to the ongoing goal unless explicitly
+  told to stop, replace the goal, or change priorities.
+- Maintain a persistent queue in `docs/user-findings.md`. Record new findings,
+  group related work, and track implementation and verification separately.
+- Organize and choose the implementation sequence autonomously using dependencies,
+  correctness, user impact, and integration readiness. Do not interrupt a coherent
+  task for every incoming message or require the user to prioritize the queue.
+- Acknowledge relevant steering briefly, then continue useful work. Escalate only
+  genuinely missing information or consequential decisions that need user input.
+- Do not lose deferred requests, silently reduce scope, or mark a finding complete
+  based on an implementation plan or an isolated test alone.
+
+## Product priorities
 
 - Build an original open-source Obsidian recreation, with Electron desktop and
   Capacitor mobile apps. Keep recovered proprietary artifacts out of project source.
@@ -27,6 +42,10 @@
   ordering, labels, submenus, availability and action behavior. Tables include
   deleting rows/columns, selecting whole rows/columns, and multiple-row/column
   selections with selection-dependent commands.
+- Include Obsidian-style launch/onboarding and vault-selection flows: create a
+  vault, open an existing folder, and choose recent vaults. Sequence work by
+  dependencies and integration readiness; new requests need not interrupt the
+  current implementation immediately.
 - Defer discussion, design, and implementation of the requested LiveSync-style
   default sync and FullCalendar/TaskNotes-style calendar/task features until the
   editor base is solid. See `docs/deferred-product-roadmap.md`.

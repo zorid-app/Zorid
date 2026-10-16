@@ -3,8 +3,10 @@ import { EditorView, ViewPlugin } from '@codemirror/view';
 import { selectAll } from '@codemirror/commands';
 import { showContextMenu } from '../platform/context-menu.ts';
 import type { ContextMenuItem } from '../platform/context-menu.ts';
-import { tableMenuAt } from './live-tables.ts';
+import { retainTableEditor, tableMenuAt } from './live-tables.ts';
 import type { TableMenuItem } from './live-tables.ts';
+import { formatMenuForEditor } from './format-menu.ts';
+import type { FormatMenuItem } from './format-menu.ts';
 
 /** Renderer commands remain local; only bounded menu descriptors cross IPC. */
 export function editorContextMenu(show = showContextMenu, onError: (error: unknown) => void = console.error): Extension {
@@ -29,13 +31,22 @@ export function editorContextMenu(show = showContextMenu, onError: (error: unkno
       // A rendered cell supplies only its table menu. The active nested editor
       // contributes editor commands before the table sections.
       const editingText = !table.length || editor !== this.view;
+      const selected = editor.state.selection.ranges.some(range => !range.empty);
       const items: ContextMenuItem[] = editingText ? [
-        { role: 'cut', enabled: !readOnly && !editor.state.selection.main.empty },
-        { role: 'copy', enabled: !editor.state.selection.main.empty },
+        { role: 'cut', enabled: !readOnly && selected },
+        { role: 'copy', enabled: selected },
         { role: 'paste', enabled: !readOnly },
         { role: 'pasteAndMatchStyle', label: 'Paste as plain text', enabled: !readOnly },
         { id: 'select-all', label: 'Select all' },
       ] : [];
+      const describeFormat = (entries: FormatMenuItem[]): ContextMenuItem[] => entries.map(item => {
+        if ('type' in item) return { type: 'separator' };
+        if ('submenu' in item) return { label: item.label, enabled: !readOnly && item.enabled, submenu: describeFormat(item.submenu) };
+        const id = 'format-' + item.id; actions.set(id, item.run);
+        return { id, label: item.label, enabled: !readOnly && item.enabled,
+          ...(item.checked === undefined ? {} : { checked: item.checked }) };
+      });
+      if (editingText) items.unshift(...describeFormat(formatMenuForEditor(editor, { inTableCell: editor !== this.view })), { type: 'separator' });
       const describeTable = (entries: TableMenuItem[]): ContextMenuItem[] => entries.map(item => {
         if ('type' in item) return { type: 'separator' };
         if ('submenu' in item) return { label: item.label, submenu: describeTable(item.submenu) };
@@ -46,11 +57,17 @@ export function editorContextMenu(show = showContextMenu, onError: (error: unkno
         if (items.length) items.push({ type: 'separator' });
         items.push(...describeTable(table));
       }
-      void show(event, items).then(id => {
-        if (!id || !this.alive || version !== this.serial || !editor.dom.isConnected) return;
-        if (id !== 'select-all' && (this.view.state.readOnly || editor.state.readOnly)) return;
-        actions.get(id)?.();
-      }).catch(onError);
+      const doc = editor.state.doc, selection = editor.state.selection;
+      const release = retainTableEditor(this.view, target);
+      void (async () => {
+        try {
+          const id = await show(event, items);
+          if (!id || !this.alive || version !== this.serial || !editor.dom.isConnected) return;
+          if (editor.state.doc !== doc || !editor.state.selection.eq(selection)) return;
+          if (id !== 'select-all' && (this.view.state.readOnly || editor.state.readOnly)) return;
+          await actions.get(id)?.();
+        } finally { release(); }
+      })().catch(onError);
     };
     destroy() { this.alive = false; this.serial++; this.view.dom.removeEventListener('contextmenu', this.open); }
   });

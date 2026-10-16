@@ -6,7 +6,7 @@ import { Compartment, EditorState, StateEffect, Transaction } from '@codemirror/
 import { EditorView } from '@codemirror/view';
 import { redo, undo } from '@codemirror/commands';
 import { createEditor } from '../src/ui/editor.ts';
-import { tableActionsAt, tableMenuAt } from '../src/editor/live-tables.ts';
+import { retainTableEditor, tableActionsAt, tableMenuAt } from '../src/editor/live-tables.ts';
 import type { TableAction, TableMenuItem } from '../src/editor/live-tables.ts';
 import { parseTable } from '../src/editor/table-model.ts';
 
@@ -317,4 +317,89 @@ test('menu movement and alignment retain an unbordered cell ending in a literal 
   assert.equal(editor.getValue(), value);
   runCellAction(host, view, 'align-center', 1, 1);
   assert.deepEqual(currentTable(editor.getValue()).rows[1].cells.map(cell => cell.text), ['x', 'tail\\']);
+});
+
+test('typing a backslash in a compact cell preserves the delimiter, mapped caret and subsequent input', async t => {
+  const value = 'A|B\n---|---\nx|y';
+  const { editor, view, activate, active, host } = setup(t, value);
+  const child = activate(1, 0);
+  child.dispatch({ selection: { anchor: 1 } });
+  child.dispatch({ ...child.state.replaceSelection('\\'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), 'A|B\n---|---\nx\\ |y');
+  assert.equal(active(), child); assert.equal(child.state.doc.toString(), 'x\\');
+  assert.equal(child.state.selection.main.head, 2);
+  assert.equal(view.state.selection.main.head, editor.getValue().indexOf('x\\') + 2);
+  child.dispatch({ ...child.state.replaceSelection('z\\'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), 'A|B\n---|---\nx\\z\\ |y');
+  assert.equal(child.state.doc.toString(), 'x\\z\\'); assert.equal(host.querySelectorAll('td').length, 2);
+  assert.equal(view.state.selection.main.head, editor.getValue().indexOf('x\\') + 4);
+  assert.equal(undo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), value);
+  assert.equal(redo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), 'A|B\n---|---\nx\\z\\ |y');
+  assert.equal(active().state.doc.toString(), 'x\\z\\');
+});
+
+test('replacing a bordered last cell with a backslash keeps source padding outside its editor range', async t => {
+  const value = '|A|B|\n|---|---|\n|x|y|';
+  const { editor, view, activate, active } = setup(t, value);
+  const child = activate(1, 1);
+  child.dispatch({ selection: { anchor: 0, head: 1 } });
+  child.dispatch({ ...child.state.replaceSelection('tail\\'), annotations: Transaction.userEvent.of('input.paste') });
+  assert.equal(editor.getValue(), '|A|B|\n|---|---|\n|x|tail\\ |');
+  assert.equal(child.state.doc.toString(), 'tail\\'); assert.equal(child.state.selection.main.head, 5);
+  assert.equal(view.state.selection.main.head, editor.getValue().indexOf('tail') + 5);
+  child.dispatch({ selection: { anchor: 5, head: 0 } });
+  assert.equal(view.state.selection.main.anchor, editor.getValue().indexOf('tail') + 5);
+  assert.equal(view.state.selection.main.head, editor.getValue().indexOf('tail'));
+  assert.equal(undo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), value);
+  assert.equal(redo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), '|A|B|\n|---|---|\n|x|tail\\ |');
+  const restored = active();
+  restored.dispatch({ selection: { anchor: restored.state.doc.length } });
+  restored.dispatch({ ...restored.state.replaceSelection('!'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), '|A|B|\n|---|---|\n|x|tail\\! |');
+});
+
+
+test('table editor holds survive menu blur until the last idempotent release', async t => {
+  const { view, activate, host } = setup(t, source);
+  const child = activate(1, 0);
+  child.dispatch({ selection: { anchor: 1, head: 4 } });
+  const releaseA = retainTableEditor(view, child.contentDOM), releaseB = retainTableEditor(view, child.contentDOM);
+  view.focus(); await Promise.resolve();
+  assert.equal(child.dom.isConnected, true);
+  assert.equal(child.state.sliceDoc(child.state.selection.main.from, child.state.selection.main.to), 'lph');
+  releaseA(); releaseA(); await Promise.resolve();
+  assert.equal(child.dom.isConnected, true, 'a second menu still owns a hold');
+  releaseB();
+  assert.equal(host.querySelector('.cm-live-table .cm-editor'), null);
+  releaseB();
+});
+
+test('releasing a table editor hold preserves refocus and explicit structural actions', async t => {
+  const { view, activate, active } = setup(t, source);
+  const child = activate(1, 0), release = retainTableEditor(view, child.contentDOM);
+  view.focus(); await Promise.resolve(); child.focus(); release(); await Promise.resolve();
+  assert.equal(active(), child);
+  const releaseAction = retainTableEditor(view, child.contentDOM);
+  const action = tableActionsAt(view, child.contentDOM).find(action => action.id === 'row-after')!;
+  view.focus(); await Promise.resolve();
+  assert.equal(action.run(), true); releaseAction(); await Promise.resolve();
+  assert.equal(child.dom.isConnected, false, 'structural changes can replace a held child');
+  assert.equal(active().hasFocus, true);
+});
+
+test('table holds reject unrelated owners and release safely after destruction', async t => {
+  const { view, activate, dom, destroy } = setup(t, source);
+  const child = activate(1, 0);
+  const unrelated = retainTableEditor(view, dom.window.document.body);
+  const wrongOwner = retainTableEditor(child, child.contentDOM);
+  view.focus(); await Promise.resolve();
+  assert.equal(child.dom.isConnected, false, 'invalid holds do not suppress ordinary blur cleanup');
+  unrelated(); wrongOwner();
+  const next = activate(1, 1), release = retainTableEditor(view, next.contentDOM);
+  destroy(); release(); release(); await Promise.resolve();
+  assert.equal(next.dom.isConnected, false);
 });
