@@ -116,6 +116,10 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
     const finish = async () => {
       if (ended) return; ended = true;
       const raw = input.value;
+      if (input.validity.badInput) {
+        ended = false; input.setAttribute('aria-invalid', 'true');
+        reportPresentationError(options, new Error('Enter a valid value.')); return;
+      }
       if (raw === displayBaseProperty(value)) { draw(value); return; }
       const next: BaseExpressionValue = raw === '' ? BASE_NULL : value.type === 'number'
         ? { type: 'number', value: Number(raw) } : { type: 'string', value: raw };
