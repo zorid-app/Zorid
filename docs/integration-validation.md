@@ -140,3 +140,27 @@ changed, but exact movement, macOS preference variants, split/overflow geometry,
 and pixel comparison against the reference remain unproven. This pass establishes
 the listed interactions only. Electron exited with code zero; a fresh app
 inventory confirmed no Electron process remained. Unrelated apps were left open.
+
+## File-tree host integration checkpoint
+
+The reviewed file-tree batch at `0728a5b` is integrated on top of the verified
+plugin/renderer foundation. New folder creates a real unique folder and edits its
+label inline; file-tree selection and internal drag moves use guarded snapshots,
+case-aware destination checks and the serialized core queue. Rename updates
+bookmarks, collapsed folders, selection and pane history paths. Ordinary text
+controls retain their platform context menu unless their owning window exposes
+the native menu bridge. Reading renderer cleanup and delayed-create activation
+guards remain intact after the workspace merge.
+
+Verification passes 113 focused core/helper/host/workspace tests, then **1,200/1,200
+full-suite tests** with concurrency two (26.4 seconds), separate TypeScript and a
+production webpack build (4.1 seconds, three existing bundle/performance warnings).
+No tests were skipped. The core folder validation hook and final host delta were
+independently cleared before integration. The heavy checks ran serially; no native
+app was launched in this pass.
+
+Native inline-name focus, drag hover/destinations, multi-selection, menu handling
+and actual filesystem behavior remain root verification work. Internal move plans
+execute sequentially and report partial completion; this does not establish an
+atomic filesystem transaction or eliminate external-process races. External drops,
+mobile touch dragging and exact visual parity remain outside this checkpoint.
