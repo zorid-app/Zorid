@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  appendTableRow, decodeTableCellText, encodeTableCellText, insertTableColumn, insertTableRow, parseTable, replaceTableCell,
+  appendTableRow, decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
+  encodeTableCellText, insertTableColumn, insertTableRow, moveTableColumn, moveTableRow, parseTable, replaceTableCell,
+  setTableColumnAlignment, sortTableRows,
   type MarkdownTable, type TableEdit,
 } from '../src/editor/table-model.ts';
 
@@ -265,4 +267,109 @@ test('invalid column edits fail atomically without mutating the input model', ()
   for (const index of [-1, 3, 0.5, NaN]) assert.throws(() => insertTableColumn(model, index), RangeError);
   assert.throws(() => insertTableColumn(model, 0, ['header', 'extra']), RangeError);
   assert.equal(JSON.stringify(model), before);
+});
+
+test('row movement and duplication preserve encoded cells and permit moving the header', () => {
+  const source = '| Header | Value |\r\n| :--- | ---: |\r\n| a\\|b | `<br>` |\r\n| last | 2 |';
+  const model = table(source);
+  const moved = table(apply(source, moveTableRow(model, 1, 0)));
+  assert.deepEqual(moved.rows.map(row => row.cells.map(cell => cell.text)), [['a\\|b', '`<br>`'], ['Header', 'Value'], ['last', '2']]);
+  assert.deepEqual(moved.alignments, ['left', 'right']);
+  assert.equal(moved.lineEnding, '\r\n');
+  const copied = table(apply(source, duplicateTableRow(model, 1)));
+  assert.equal(copied.rows.length, 4);
+  assert.equal(copied.rows[1].source, model.rows[1].source);
+  assert.equal(copied.rows[2].source, model.rows[1].source);
+});
+
+test('row deletion promotes the next header and removes a table when no content row remains', () => {
+  const source = '| Header | Value |\n| --- | ---: |\n| next | 1 |\n\nAfter';
+  const next = apply(source, deleteTableRow(table(source), 0));
+  assert.equal(next, '| next | 1 |\n| --- | ---: |\n\nAfter');
+  assert.equal(apply(next, deleteTableRow(table(next), 0)), '\n\nAfter');
+});
+
+test('column movement, duplication and deletion carry alignments and original encoded data', () => {
+  const source = '| A | B | C |\n| :--- | :---: | ---: |\n| a\\|b | line<br>two | z |';
+  const model = table(source);
+  const moved = table(apply(source, moveTableColumn(model, 0, 2)));
+  assert.deepEqual(moved.alignments, ['center', 'right', 'left']);
+  assert.deepEqual(moved.rows[1].cells.map(cell => cell.text), ['line<br>two', 'z', 'a\\|b']);
+  const copied = table(apply(source, duplicateTableColumn(model, 0)));
+  assert.deepEqual(copied.alignments, ['left', 'left', 'center', 'right']);
+  assert.deepEqual(copied.rows[1].cells.map(cell => cell.text), ['a\\|b', 'a\\|b', 'line<br>two', 'z']);
+  const deleted = table(apply(source, deleteTableColumn(model, 1)));
+  assert.deepEqual(deleted.alignments, ['left', 'right']);
+  assert.deepEqual(deleted.rows[1].cells.map(cell => cell.text), ['a\\|b', 'z']);
+});
+
+test('deleting down to one unbordered column produces a valid bordered table, then removes it', () => {
+  const prefix = 'Before\n\n', source = 'A | B\n--- | ---\na | b', suffix = '\n\nAfter';
+  const remaining = apply(prefix + source + suffix, deleteTableColumn(table(source, prefix.length), 0));
+  const model = table(remaining.slice(prefix.length), prefix.length);
+  assert.equal(model.columnCount, 1);
+  assert.deepEqual(model.rows.map(row => row.cells[0].text), ['B', 'b']);
+  assert.equal(apply(remaining, deleteTableColumn(model, 0)), prefix + suffix);
+});
+
+test('alignment changes only syntax, retaining escaped source content and padding', () => {
+  const source = '| A | B |\n| --- | ---: |\n| x\\|y | z |';
+  for (const [alignment, marker] of [['left', ':---'], ['center', ':---:'], ['right', '---:'], [null, '---']] as const) {
+    const next = apply(source, setTableColumnAlignment(table(source), 0, alignment));
+    assert.equal(next, source.replace('| --- |', `| ${marker} |`));
+  }
+});
+
+test('column sorting retains the header, uses natural case-insensitive ordering and stable ties', () => {
+  const source = '| Header | Id |\n| --- | --- |\n| **Item 10** | a |\n| Item 2 | b |\n| item 2 | c |\n| Item 1 | d |';
+  const model = table(source), rendered = ['Header', 'Item 10', 'Item 2', 'item 2', 'Item 1'];
+  const ascending = table(apply(source, sortTableRows(model, 0, 'ascending', rendered)));
+  assert.deepEqual(ascending.rows.map(row => row.cells[1].text), ['Id', 'd', 'b', 'c', 'a']);
+  const descending = table(apply(source, sortTableRows(model, 0, 'descending', rendered)));
+  assert.deepEqual(descending.rows.map(row => row.cells[1].text), ['Id', 'a', 'b', 'c', 'd']);
+  assert.equal(descending.rows[1].cells[0].text, '**Item 10**');
+});
+
+test('structural operations reject invalid indices and sort keys without mutating the model', () => {
+  const model = table('| A | B |\n| --- | --- |'), original = JSON.stringify(model);
+  for (const action of [() => deleteTableRow(model, -1), () => duplicateTableRow(model, 1),
+    () => moveTableRow(model, 0, 1), () => deleteTableColumn(model, 2), () => duplicateTableColumn(model, NaN),
+    () => moveTableColumn(model, 0, -1), () => setTableColumnAlignment(model, 0.5, 'left'),
+    () => sortTableRows(model, 0, 'ascending', [])]) assert.throws(action, RangeError);
+  assert.equal(JSON.stringify(model), original);
+});
+
+test('structural delimiters preserve terminal backslashes in unbordered header and body cells', () => {
+  for (let count = 1; count <= 5; count++) for (const leading of ['', '|']) {
+    const slashes = '\\'.repeat(count), header = 'B' + slashes, tail = 'tail' + slashes;
+    const source = `${leading}A | ${header}\n${leading}--- | ---\n${leading}x | ${tail}\n${leading}other | end`;
+    const model = table(source), initial = [['A', header], ['x', tail], ['other', 'end']];
+    const cases: [TableEdit, string[][]][] = [
+      [moveTableColumn(model, 1, 0), initial.map(([a, b]) => [b, a])],
+      [duplicateTableColumn(model, 1), initial.map(([a, b]) => [a, b, b])],
+      [deleteTableColumn(model, 0), initial.map(([, b]) => [b])],
+      [moveTableRow(model, 1, 0), [initial[1], initial[0], initial[2]]],
+      [duplicateTableRow(model, 1), [initial[0], initial[1], initial[1], initial[2]]],
+      [deleteTableRow(model, 2), initial.slice(0, 2)],
+      [setTableColumnAlignment(model, 1, 'center'), initial],
+      [sortTableRows(model, 0, 'ascending', ['header', 'z', 'a']), [initial[0], initial[2], initial[1]]],
+      [insertTableColumn(model, 2), initial.map(([a, b]) => [a, b, ''])],
+    ];
+    for (const [edit, expected] of cases) {
+      const next = table(apply(source, edit));
+      assert.equal(next.malformed, false);
+      assert.deepEqual(next.rows.map(row => row.cells.map(cell => cell.text)), expected);
+    }
+  }
+});
+
+test('raw-cell serialization retains whitespace-only cells when adding or rearranging delimiters', () => {
+  const source = 'A | \n--- | ---\nx | ', model = table(source);
+  for (const [edit, expected] of [
+    [moveTableColumn(model, 1, 0), [['', 'A'], ['', 'x']]],
+    [duplicateTableColumn(model, 1), [['A', '', ''], ['x', '', '']]],
+    [insertTableColumn(model, 2), [['A', '', ''], ['x', '', '']]],
+  ] as [TableEdit, string[][]][]) {
+    assert.deepEqual(table(apply(source, edit)).rows.map(row => row.cells.map(cell => cell.text)), expected);
+  }
 });

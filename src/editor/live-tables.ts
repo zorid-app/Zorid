@@ -6,7 +6,9 @@ import { defaultKeymap, insertNewline, isolateHistory, redo, undo } from '@codem
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { inline } from '../ui/markdown.ts';
-import { decodeTableCellText, encodeTableCellText, insertTableColumn, insertTableRow, parseTable } from './table-model.ts';
+import { decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
+  encodeTableCellText, insertTableColumn, insertTableRow, moveTableColumn, moveTableRow, parseTable,
+  setTableColumnAlignment, sortTableRows } from './table-model.ts';
 import type { MarkdownTable, TableEdit } from './table-model.ts';
 
 const cellSync = Annotation.define<boolean>();
@@ -54,20 +56,40 @@ class TableController {
   }
 
   /** Structural edits share the note's history and reacquire the rebuilt widget. */
-  private applyStructure(change: TableEdit, row: number, column: number): boolean {
+  private applyStructure(change: TableEdit, row: number, column: number, preserveSelection = false): boolean {
     if (this.destroyed || this.owner.state.readOnly) return false;
     const from = this.model.from;
     const source = this.model.source.slice(0, change.from - from) + change.insert + this.model.source.slice(change.to - from);
-    const next = parseTable(source, from), cell = next?.rows[row]?.cells[column];
-    if (!cell) return false;
+    const next = parseTable(source, from);
+    if (!next && source) return false;
+    let anchor = 0, head = 0;
+    if (preserveSelection) {
+      const previous = this.model.rows[row]?.cells[column], range = this.owner.state.selection.main;
+      if (previous && range.from >= previous.rawFrom && range.to <= previous.rawTo) {
+        const decoded = decodeTableCellText(previous.text);
+        anchor = decoded.fromSource(Math.max(0, Math.min(previous.text.length, range.anchor - previous.from)));
+        head = decoded.fromSource(Math.max(0, Math.min(previous.text.length, range.head - previous.from)));
+      }
+    }
+    row = next ? Math.max(0, Math.min(row, next.rows.length - 1)) : 0;
+    column = next ? Math.max(0, Math.min(column, next.columnCount - 1)) : 0;
+    const cell = next?.rows[row]?.cells[column], decoded = cell ? decodeTableCellText(cell.text) : null;
+    const position = (offset: number) => cell && decoded ? cell.from + decoded.toSource(Math.min(offset, decoded.text.length)) : from;
     this.close();
-    this.owner.dispatch({ changes: change, selection: { anchor: cell.from },
+    this.owner.dispatch({ changes: change, selection: EditorSelection.single(position(anchor), position(head)),
       annotations: [cellSync.of(true), Transaction.userEvent.of('input'), isolateHistory.of('full')] });
+    if (!next) { this.owner.focus(); return true; }
     // Replacing the full table may replace its controller. Never activate the
     // old instance after dispatch or rely on its former DOM positions.
     for (const node of this.owner.dom.querySelectorAll<HTMLElement>('.cm-live-table')) {
       const controller = controllers.get(node);
-      if (controller?.model.from === from) { controller.activate(row, column); break; }
+      if (controller?.model.from === from) {
+        controller.activate(row, column, false, anchor);
+        if (anchor !== head && controller.active) {
+          controller.active.view.dispatch({ selection: EditorSelection.single(anchor, head) });
+        }
+        break;
+      }
     }
     return true;
   }
@@ -80,6 +102,43 @@ class TableController {
   addColumn(row: number, index: number, inheritFrom?: number): boolean {
     if (this.destroyed || this.owner.state.readOnly) return false;
     return this.applyStructure(insertTableColumn(this.model, index, [], inheritFrom === undefined ? null : this.model.alignments[inheritFrom]), row, index);
+  }
+
+  runAction(id: TableAction['id'], row: number, column: number): boolean {
+    if (this.destroyed || this.owner.state.readOnly) return false;
+    const model = this.model;
+    switch (id) {
+      case 'row-before': return this.addRow(row, column);
+      case 'row-after': return this.addRow(row + 1, column);
+      case 'row-up': return this.applyStructure(moveTableRow(model, row, row - 1), row - 1, column);
+      case 'row-down': return this.applyStructure(moveTableRow(model, row, row + 1), row + 1, column);
+      case 'row-duplicate': return this.applyStructure(duplicateTableRow(model, row), row + 1, column);
+      case 'row-delete': return this.applyStructure(deleteTableRow(model, row), row - 1, column);
+      case 'column-before': return this.addColumn(row, column, column);
+      case 'column-after': return this.addColumn(row, column + 1, column);
+      case 'column-left': return this.applyStructure(moveTableColumn(model, column, column - 1), row, column - 1);
+      case 'column-right': return this.applyStructure(moveTableColumn(model, column, column + 1), row, column + 1);
+      case 'column-duplicate': return this.applyStructure(duplicateTableColumn(model, column), row, column + 1);
+      case 'column-delete': return this.applyStructure(deleteTableColumn(model, column), row, column - 1);
+      case 'align-left': case 'align-center': case 'align-right': {
+        const rtl = this.dom.ownerDocument.defaultView?.getComputedStyle(this.grid).direction === 'rtl';
+        const alignment = id === 'align-center' ? 'center' : (id === 'align-left') !== rtl ? 'left' : 'right';
+        return this.applyStructure(setTableColumnAlignment(model, column, alignment), row, column, true);
+      }
+      case 'sort-ascending': case 'sort-descending': {
+        const values = model.rows.map((data, index) => {
+          // A currently edited cell contains a CM view rather than rendered
+          // Markdown. Render its source independently to use the visible label.
+          let node = this.cells[index][column];
+          if (this.active?.row === index && this.active.column === column) {
+            node = this.dom.ownerDocument.createElement('span');
+            inline(node, decodeTableCellText(data.cells[column].text).text, this.open);
+          }
+          return node.innerText ?? node.textContent ?? '';
+        });
+        return this.applyStructure(sortTableRows(model, column, id === 'sort-ascending' ? 'ascending' : 'descending', values), row, column);
+      }
+    }
   }
 
   private renderCell(row: number, column: number) {
@@ -304,32 +363,54 @@ export function activeTableEditor(view: EditorView): EditorView | undefined {
 }
 
 export interface TableAction {
-  id: 'row-before' | 'row-after' | 'column-before' | 'column-after';
+  id: 'row-before' | 'row-after' | 'row-up' | 'row-down' | 'row-duplicate' | 'row-delete'
+    | 'column-before' | 'column-after' | 'column-left' | 'column-right' | 'column-duplicate' | 'column-delete'
+    | 'align-left' | 'align-center' | 'align-right' | 'sort-ascending' | 'sort-descending';
   label: string;
   enabled: boolean;
   run(): boolean;
 }
 
+export type TableMenuItem = TableAction | { label: string; submenu: TableMenuItem[] } | { type: 'separator' };
+
 /** Resolve a clicked cell before opening an asynchronous menu. A closure is
- * invalidated by structural/content changes or teardown while the menu is open. */
-export function tableActionsAt(view: EditorView, target: HTMLElement): TableAction[] {
+ * invalidated by structural/content changes or teardown while the menu is open.
+ * This is the single-cell menu; rectangular cell selections are not modeled. */
+export function tableMenuAt(view: EditorView, target: HTMLElement): TableMenuItem[] {
   const tableDOM = target.closest<HTMLElement>('.cm-live-table'), cell = target.closest<HTMLElement>('th[data-row], td[data-row]');
   if (!tableDOM || !cell || !tableDOM.contains(cell) || !view.dom.contains(tableDOM)) return [];
   const controller = controllers.get(tableDOM);
   if (!controller || controller.owner !== view) return [];
   const row = Number(cell.dataset.row), column = Number(cell.dataset.column), source = controller.model.source;
   if (!controller.model.rows[row]?.cells[column]) return [];
-  const action = (id: TableAction['id'], label: string, run: () => boolean): TableAction => ({ id, label,
+  const action = (id: TableAction['id'], label: string): TableAction => ({ id, label,
     enabled: !view.state.readOnly,
     run: () => tableDOM.isConnected && tableDOM.contains(cell) && controllers.get(tableDOM) === controller
-      && controller.model.source === source && !view.state.readOnly && run(),
+      && controller.model.source === source && !view.state.readOnly && controller.runAction(id, row, column),
   });
+  const groups = (...groups: TableAction[][]): TableMenuItem[] => groups.filter(group => group.length)
+    .flatMap((group, index) => index ? [{ type: 'separator' } as TableMenuItem, ...group] : group);
+  const rowMoves: TableAction[] = [], columnMoves: TableAction[] = [];
+  if (row > 0) rowMoves.push(action('row-up', 'Move row up'));
+  if (row < controller.model.rows.length - 1) rowMoves.push(action('row-down', 'Move row down'));
+  if (column > 0) columnMoves.push(action('column-left', 'Move column left'));
+  if (column < controller.model.columnCount - 1) columnMoves.push(action('column-right', 'Move column right'));
   return [
-    action('row-before', 'Add row above', () => controller.addRow(row, column)),
-    action('row-after', 'Add row below', () => controller.addRow(row + 1, column)),
-    action('column-before', 'Add column to the left', () => controller.addColumn(row, column, column)),
-    action('column-after', 'Add column to the right', () => controller.addColumn(row, column + 1, column)),
+    { label: 'Row', submenu: groups(
+      [action('row-before', 'Add row above'), action('row-after', 'Add row below')], rowMoves,
+      [action('row-duplicate', 'Duplicate row'), action('row-delete', 'Delete row')]) },
+    { label: 'Column', submenu: groups(
+      [action('column-before', 'Add column to the left'), action('column-after', 'Add column to the right')], columnMoves,
+      [action('align-left', 'Align left'), action('align-center', 'Align center'), action('align-right', 'Align right')],
+      [action('column-duplicate', 'Duplicate column'), action('column-delete', 'Delete column')]) },
+    { type: 'separator' }, action('sort-ascending', 'Sort by column (A to Z)'), action('sort-descending', 'Sort by column (Z to A)'),
   ];
+}
+
+/** Flat compatibility/action lookup for callers that render their own menu. */
+export function tableActionsAt(view: EditorView, target: HTMLElement): TableAction[] {
+  const flatten = (items: TableMenuItem[]): TableAction[] => items.flatMap(item => 'submenu' in item ? flatten(item.submenu) : 'id' in item ? [item] : []);
+  return flatten(tableMenuAt(view, target));
 }
 
 export function liveTables(open: (target: string) => void): Extension {

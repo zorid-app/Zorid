@@ -6,7 +6,9 @@ import { Compartment, EditorState, StateEffect, Transaction } from '@codemirror/
 import { EditorView } from '@codemirror/view';
 import { redo, undo } from '@codemirror/commands';
 import { createEditor } from '../src/ui/editor.ts';
-import { tableActionsAt } from '../src/editor/live-tables.ts';
+import { tableActionsAt, tableMenuAt } from '../src/editor/live-tables.ts';
+import type { TableAction, TableMenuItem } from '../src/editor/live-tables.ts';
+import { parseTable } from '../src/editor/table-model.ts';
 
 // Actual CM widgets and DOM events. Geometry stubs do not establish browser
 // hover appearance, hit testing, touch, or reference runtime equivalence.
@@ -127,7 +129,7 @@ test('table add actions respect a read-only owner', t => {
   view.dispatch({ effects: StateEffect.appendConfig.of(EditorState.readOnly.of(true)) });
   click(button('row')); click(button('column'));
   const actions = tableActionsAt(view, host.querySelector('td')!);
-  assert.equal(actions.length, 4); assert.ok(actions.every(action => !action.enabled && !action.run()));
+  assert.equal(actions.length, 15); assert.ok(actions.every(action => !action.enabled && !action.run()));
   assert.equal(editor.getValue(), source);
 });
 
@@ -135,7 +137,7 @@ test('cell menu actions insert relative to that cell and inherit its column alig
   const { host, view, editor, active } = setup(t, source);
   const cell = host.querySelector<HTMLElement>('td[data-column="1"]')!;
   const actions = tableActionsAt(view, cell);
-  assert.deepEqual(actions.map(action => action.id), ['row-before', 'row-after', 'column-before', 'column-after']);
+  assert.ok(actions.some(action => action.id === 'column-before'));
   assert.equal(actions.find(action => action.id === 'column-before')!.run(), true);
   assert.equal(editor.getValue(), 'Before\n\n| A |  | B |\n| :--- | ---: | ---: |\n| alpha |  | beta |\n\nAfter');
   assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 2, column 2');
@@ -200,4 +202,119 @@ test('an open cell follows read-only changes for typing and paste but still rece
   child.dispatch({ ...child.state.replaceSelection('!'), annotations: Transaction.userEvent.of('input.type') });
   assert.equal(editor.getValue(), source.replace('alpha', 'external!'));
   assert.deepEqual(changes, [source.replace('alpha', 'external!')]);
+});
+
+function menuShape(items: TableMenuItem[]): unknown[] {
+  return items.map(item => 'submenu' in item ? { label: item.label, submenu: menuShape(item.submenu) }
+    : 'id' in item ? item.label : '|');
+}
+function runCellAction(host: HTMLElement, view: EditorView, id: TableAction['id'], row = 1, column = 1) {
+  const cell = host.querySelector<HTMLElement>(`.cm-live-table [data-row="${row}"][data-column="${column}"]`)!;
+  const action = tableActionsAt(view, cell).find(action => action.id === id);
+  assert.ok(action, `${id} is present`); assert.equal(action.enabled, true);
+  assert.equal(action.run(), true);
+}
+function currentTable(value: string) { const model = parseTable(value.slice(value.indexOf('|'))); assert.ok(model); return model; }
+
+test('single-cell menus expose the observed submenu order and omit unavailable edge moves', t => {
+  const { host, view } = setup(t, source);
+  const header = host.querySelector<HTMLElement>('th')!;
+  assert.deepEqual(menuShape(tableMenuAt(view, header)), [
+    { label: 'Row', submenu: ['Add row above', 'Add row below', '|', 'Move row down', '|', 'Duplicate row', 'Delete row'] },
+    { label: 'Column', submenu: ['Add column to the left', 'Add column to the right', '|', 'Move column right', '|', 'Align left', 'Align center', 'Align right', '|', 'Duplicate column', 'Delete column'] },
+    '|', 'Sort by column (A to Z)', 'Sort by column (Z to A)',
+  ]);
+  const last = host.querySelector<HTMLElement>('td[data-column="1"]')!;
+  const ids = tableActionsAt(view, last).map(item => item.id);
+  assert.ok(ids.includes('row-up')); assert.ok(ids.includes('column-left'));
+  assert.ok(!ids.includes('row-down')); assert.ok(!ids.includes('column-right'));
+  assert.ok(tableActionsAt(view, last).every(item => !('checked' in item)), 'alignment entries have no invented checked state');
+});
+
+test('row menu actions move and duplicate headers and focus the source-derived destination', async t => {
+  const { host, view, editor, active } = setup(t, source);
+  runCellAction(host, view, 'row-up');
+  assert.deepEqual(currentTable(editor.getValue()).rows.map(row => row.cells[0].text), ['alpha', 'A']);
+  assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 1, column 2');
+  assert.equal(undo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), source);
+  runCellAction(host, view, 'row-duplicate', 0, 0);
+  assert.deepEqual(currentTable(editor.getValue()).rows.map(row => row.cells[0].text), ['A', 'A', 'alpha']);
+  assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 2, column 1');
+  runCellAction(host, view, 'row-delete', 0, 0);
+  assert.deepEqual(currentTable(editor.getValue()).rows.map(row => row.cells[0].text), ['A', 'alpha']);
+  runCellAction(host, view, 'row-down', 0, 0);
+  assert.deepEqual(currentTable(editor.getValue()).rows.map(row => row.cells[0].text), ['alpha', 'A']);
+  assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 2, column 1');
+});
+
+test('column menu actions move alignment with cells, duplicate raw data and focus the remaining column', async t => {
+  const { host, view, editor, active } = setup(t, source);
+  runCellAction(host, view, 'column-left');
+  assert.deepEqual(currentTable(editor.getValue()).alignments, ['right', 'left']);
+  assert.deepEqual(currentTable(editor.getValue()).rows[1].cells.map(cell => cell.text), ['beta', 'alpha']);
+  assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 2, column 1');
+  runCellAction(host, view, 'column-right', 1, 0);
+  assert.equal(editor.getValue(), source);
+  runCellAction(host, view, 'column-duplicate');
+  assert.deepEqual(currentTable(editor.getValue()).alignments, ['left', 'right', 'right']);
+  assert.deepEqual(currentTable(editor.getValue()).rows[1].cells.map(cell => cell.text), ['alpha', 'beta', 'beta']);
+  assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 2, column 3');
+  runCellAction(host, view, 'column-delete', 1, 2);
+  assert.equal(editor.getValue(), source);
+  assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 2, column 2');
+  assert.equal(undo(view), true); await Promise.resolve();
+  assert.equal(currentTable(editor.getValue()).columnCount, 3);
+});
+
+test('deleting a sole row or column removes the table and supports note-level undo', async t => {
+  const single = 'Before\n\n| Only |\n| --- |\n\nAfter';
+  const { host, view, editor } = setup(t, single);
+  for (const id of ['row-delete', 'column-delete'] as const) {
+    runCellAction(host, view, id, 0, 0);
+    assert.equal(editor.getValue(), 'Before\n\n\n\nAfter');
+    assert.equal(host.querySelector('.cm-live-table'), null); assert.equal(view.hasFocus, true);
+    assert.equal(view.state.selection.main.head, 'Before\n\n'.length);
+    assert.equal(undo(view), true); await Promise.resolve();
+    assert.equal(editor.getValue(), single); assert.ok(host.querySelector('.cm-live-table'));
+  }
+});
+
+test('alignment actions preserve the active cell selection and use logical start/end in RTL', t => {
+  const { host, view, editor, activate, active } = setup(t, source);
+  const child = activate(1, 1);
+  child.dispatch({ selection: { anchor: 1, head: 3 } });
+  runCellAction(host, view, 'align-center');
+  assert.deepEqual(currentTable(editor.getValue()).alignments, ['left', 'center']);
+  assert.equal(active().state.selection.main.anchor, 1); assert.equal(active().state.selection.main.head, 3);
+  (host.querySelector('table') as HTMLElement).style.direction = 'rtl';
+  runCellAction(host, view, 'align-left');
+  assert.deepEqual(currentTable(editor.getValue()).alignments, ['left', 'right']);
+  (host.querySelector('table') as HTMLElement).style.direction = 'rtl';
+  runCellAction(host, view, 'align-right');
+  assert.deepEqual(currentTable(editor.getValue()).alignments, ['left', 'left']);
+});
+
+test('sort menu compares rendered text naturally, keeps stable ties and excludes the header', async t => {
+  const sortedSource = '| Name | Id |\n| --- | --- |\n| [Item 10](https://example.test) | a |\n| **Item 2** | b |\n| item 2 | c |\n| Item 1 | d |';
+  const { host, view, editor, activate, active } = setup(t, sortedSource);
+  activate(1, 0); // The active cell contains source punctuation rather than rendered text.
+  runCellAction(host, view, 'sort-ascending', 1, 0);
+  assert.deepEqual(currentTable(editor.getValue()).rows.map(row => row.cells[1].text), ['Id', 'd', 'b', 'c', 'a']);
+  assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 2, column 1');
+  runCellAction(host, view, 'sort-descending', 1, 0);
+  assert.deepEqual(currentTable(editor.getValue()).rows.map(row => row.cells[1].text), ['Id', 'a', 'b', 'c', 'd']);
+  assert.equal(undo(view), true); await Promise.resolve();
+  assert.deepEqual(currentTable(editor.getValue()).rows.map(row => row.cells[1].text), ['Id', 'd', 'b', 'c', 'a']);
+});
+
+test('menu movement and alignment retain an unbordered cell ending in a literal backslash', async t => {
+  const value = 'A | B\n--- | ---\nx | tail\\';
+  const { host, view, editor } = setup(t, value);
+  runCellAction(host, view, 'column-left', 1, 1);
+  assert.deepEqual(currentTable(editor.getValue()).rows[1].cells.map(cell => cell.text), ['tail\\', 'x']);
+  assert.equal(undo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), value);
+  runCellAction(host, view, 'align-center', 1, 1);
+  assert.deepEqual(currentTable(editor.getValue()).rows[1].cells.map(cell => cell.text), ['x', 'tail\\']);
 });

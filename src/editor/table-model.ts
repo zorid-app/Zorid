@@ -206,6 +206,18 @@ function serializeRow(table: MarkdownTable, values: readonly string[]): string {
   return (header.leadingPipe ? '| ' : ' ') + cells.join(' | ') + (header.trailingPipe ? ' |' : ' ');
 }
 
+/** Raw unbordered last cells may end in a literal backslash. Before adding a
+ * delimiter after one, padding prevents an odd slash run from escaping it. */
+function serializeRawCells(cells: readonly string[], leading: boolean, trailing: boolean): string {
+  const safe = cells.map((cell, index) => {
+    if (!trailing && index === cells.length - 1) return cell;
+    let slashes = 0;
+    for (let at = cell.length - 1; at >= 0 && cell[at] === '\\'; at--) slashes++;
+    return slashes % 2 ? cell + ' ' : cell;
+  });
+  return (leading ? '|' : '') + safe.join('|') + (trailing ? '|' : '');
+}
+
 /**
  * Insert a content row. At index 0 the new row becomes the header and the old
  * header moves below the unchanged separator. Reparse before further edits.
@@ -235,11 +247,10 @@ export function insertTableColumn(table: MarkdownTable, index: number, values: r
   if (!Number.isInteger(index) || index < 0 || index > table.columnCount) throw new RangeError('Table column is out of range');
   if (values.length > table.rows.length) throw new RangeError('Too many values for the table column');
   if (alignment !== null && !['left', 'center', 'right'].includes(alignment)) throw new RangeError('Invalid table alignment');
-  const serialize = (cells: string[], leading: boolean, trailing: boolean) => (leading ? '|' : '') + cells.join('|') + (trailing ? '|' : '');
   const edits = table.rows.map((row, rowIndex): TableEdit => {
     const cells = row.cells.map(cell => cell.virtual ? '  ' : row.source.slice(cell.rawFrom - row.from, cell.rawTo - row.from));
     cells.splice(index, 0, ` ${encodeTableCellText(values[rowIndex] ?? '')} `);
-    return { from: row.from, to: row.to, insert: serialize(cells, row.leadingPipe, row.trailingPipe) };
+    return { from: row.from, to: row.to, insert: serializeRawCells(cells, row.leadingPipe, row.trailingPipe) };
   });
   const separator = splitRow({ from: table.separator.from, to: table.separator.to, text: table.separator.source, newline: '' });
   const alignmentCells = separator.cells.map(cell => separator.line.text.slice(cell.from, cell.to));
@@ -248,7 +259,7 @@ export function insertTableColumn(table: MarkdownTable, index: number, values: r
   const marker = alignment === 'center' ? ':---:' : alignment === 'left' ? ':---' : alignment === 'right' ? '---:' : '---';
   alignmentCells.splice(index, 0, ` ${marker} `);
   edits.push({ from: table.separator.from, to: table.separator.to,
-    insert: serialize(alignmentCells, separator.leadingPipe, separator.trailingPipe) + trailingPadding });
+    insert: serializeRawCells(alignmentCells, separator.leadingPipe, separator.trailingPipe) + trailingPadding });
   const pieces: string[] = [];
   let previous = 0;
   for (const edit of edits.sort((a, b) => a.from - b.from)) {
@@ -257,4 +268,94 @@ export function insertTableColumn(table: MarkdownTable, index: number, values: r
   }
   pieces.push(table.source.slice(previous));
   return { from: table.from, to: table.to, insert: pieces.join('') };
+}
+
+function checkedIndex(index: number, length: number, kind: string): void {
+  if (!Number.isInteger(index) || index < 0 || index >= length) throw new RangeError(`Table ${kind} is out of range`);
+}
+
+/** Reorder/duplicate/remove existing encoded cells without decoding their data. */
+function arrangeTable(table: MarkdownTable, rows: readonly number[], columns: readonly number[]): TableEdit {
+  if (!rows.length || !columns.length) return { from: table.from, to: table.to, insert: '' };
+  // Structural serialization uses explicit borders, including single-column
+  // tables and moved cells whose padding could otherwise look like code indent.
+  const rowText = (rowIndex: number) => {
+    const row = table.rows[rowIndex];
+    const cells = columns.map(column => {
+      const cell = row.cells[column];
+      return cell.virtual ? '  ' : row.source.slice(cell.rawFrom - row.from, cell.rawTo - row.from);
+    });
+    return serializeRawCells(cells, true, true);
+  };
+  const separator = splitRow({ from: 0, to: table.separator.source.length, text: table.separator.source, newline: '' });
+  const oldAlignments = separator.cells.map(cell => separator.line.text.slice(cell.from, cell.to));
+  const tail = !separator.trailingPipe && /^\s*$/.test(oldAlignments.at(-1) ?? '') ? oldAlignments.pop() : undefined;
+  const separatorText = '|' + columns.map(column => oldAlignments[column] ?? ' --- ').join('|') + '|' + (tail ?? '');
+  const lines = [rowText(rows[0]), separatorText, ...rows.slice(1).map(rowText)];
+  return { from: table.from, to: table.to, insert: lines.join(table.lineEnding) };
+}
+
+const indices = (length: number) => Array.from({ length }, (_, index) => index);
+
+export function deleteTableRow(table: MarkdownTable, row: number): TableEdit {
+  checkedIndex(row, table.rows.length, 'row');
+  return arrangeTable(table, indices(table.rows.length).filter(index => index !== row), indices(table.columnCount));
+}
+
+export function duplicateTableRow(table: MarkdownTable, row: number): TableEdit {
+  checkedIndex(row, table.rows.length, 'row');
+  const rows = indices(table.rows.length); rows.splice(row, 0, row);
+  return arrangeTable(table, rows, indices(table.columnCount));
+}
+
+export function moveTableRow(table: MarkdownTable, row: number, destination: number): TableEdit {
+  checkedIndex(row, table.rows.length, 'row'); checkedIndex(destination, table.rows.length, 'row');
+  const rows = indices(table.rows.length); rows.splice(destination, 0, rows.splice(row, 1)[0]);
+  return arrangeTable(table, rows, indices(table.columnCount));
+}
+
+export function deleteTableColumn(table: MarkdownTable, column: number): TableEdit {
+  checkedIndex(column, table.columnCount, 'column');
+  return arrangeTable(table, indices(table.rows.length), indices(table.columnCount).filter(index => index !== column));
+}
+
+export function duplicateTableColumn(table: MarkdownTable, column: number): TableEdit {
+  checkedIndex(column, table.columnCount, 'column');
+  const columns = indices(table.columnCount); columns.splice(column, 0, column);
+  return arrangeTable(table, indices(table.rows.length), columns);
+}
+
+export function moveTableColumn(table: MarkdownTable, column: number, destination: number): TableEdit {
+  checkedIndex(column, table.columnCount, 'column'); checkedIndex(destination, table.columnCount, 'column');
+  const columns = indices(table.columnCount); columns.splice(destination, 0, columns.splice(column, 1)[0]);
+  return arrangeTable(table, indices(table.rows.length), columns);
+}
+
+export function setTableColumnAlignment(table: MarkdownTable, column: number, alignment: TableAlignment): TableEdit {
+  checkedIndex(column, table.columnCount, 'column');
+  if (alignment !== null && !['left', 'center', 'right'].includes(alignment)) throw new RangeError('Invalid table alignment');
+  // Materialize malformed rows/alignments before changing their separator.
+  const normalized = arrangeTable(table, indices(table.rows.length), indices(table.columnCount));
+  const model = parseTable(normalized.insert)!;
+  const separator = splitRow({ from: 0, to: model.separator.source.length, text: model.separator.source, newline: '' });
+  const cell = separator.cells[column], raw = separator.line.text.slice(cell.from, cell.to);
+  const next = raw.replace(/:?-+:?/, marker => {
+    const dashes = marker.replace(/:/g, '');
+    return (alignment === 'left' || alignment === 'center' ? ':' : '') + dashes + (alignment === 'right' || alignment === 'center' ? ':' : '');
+  });
+  const at = model.separator.from + cell.from;
+  return { from: table.from, to: table.to, insert: normalized.insert.slice(0, at) + next + normalized.insert.slice(at + raw.length) };
+}
+
+/** Header stays fixed; caller supplies the rendered text of each row's target cell. */
+export function sortTableRows(table: MarkdownTable, column: number, direction: 'ascending' | 'descending', renderedValues: readonly string[]): TableEdit {
+  checkedIndex(column, table.columnCount, 'column');
+  if (renderedValues.length !== table.rows.length) throw new RangeError('Sort values must cover every table row');
+  if (direction !== 'ascending' && direction !== 'descending') throw new RangeError('Invalid table sort direction');
+  const compare = new Intl.Collator(undefined, { usage: 'sort', sensitivity: 'base', numeric: true }).compare;
+  const rows = indices(table.rows.length).slice(1).sort((a, b) => {
+    const order = compare(renderedValues[a], renderedValues[b]);
+    return (direction === 'ascending' ? order : -order) || a - b;
+  });
+  return arrangeTable(table, [0, ...rows], indices(table.columnCount));
 }
