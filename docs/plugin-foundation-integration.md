@@ -35,3 +35,15 @@ The focused integration/module/core/desktop suite passes 76 tests at concurrency
 one. Native/mobile behavior, external plugin execution and complete API parity are
 not established by this checkpoint. See the individual plugin API, loader and UI
 reference documents for bounded source evidence and unsupported methods.
+
+## Combined checkpoint verification
+
+After merging renderer checkpoint `9ec259a` and the independently reviewed optional
+core rename validation hook, implementation `a99a968` passes **1,146/1,146 tests**
+with concurrency two (23.4 seconds), a separate TypeScript check and production
+webpack build (4.3 seconds; three existing bundle/performance warnings). No tests
+were skipped. These checks were serialized on the 8 GB development machine. The
+hook passes file-tree caller validation through the existing link-updating rename
+queue; this foundation checkpoint does not include the file-tree host UI changes.
+The native main-handler and cross-module integration delta was independently
+reviewed before the full run. No Electron window or external plugin was launched.
