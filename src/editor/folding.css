@@ -1,0 +1,41 @@
+.cm-markdown-fold-control { display: inline-block; position: relative; width: 0; height: 1em; vertical-align: baseline; }
+.cm-markdown-fold-toggle {
+  display: inline-flex;
+  position: absolute;
+  inset-inline-end: 1px;
+  top: 0;
+  align-items: center;
+  justify-content: center;
+  vertical-align: baseline;
+  width: 18px;
+  height: 1em;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  opacity: 0;
+  font: inherit;
+  font-size: 16px;
+  transform: rotate(90deg);
+  transition: opacity 100ms, transform 100ms;
+}
+.cm-markdown-fold-toggle.is-collapsed { opacity: 1; transform: rotate(0deg); }
+@media (hover: hover) {
+  .cm-line:hover .cm-markdown-fold-toggle { opacity: 1; }
+}
+.cm-markdown-fold-toggle:focus-visible { opacity: 1; outline: 2px solid var(--interactive-accent, #7f6df2); outline-offset: 3px; }
+.cm-editor .cm-markdown-fold-placeholder {
+  background: transparent;
+  border: 0;
+  color: var(--text-faint, #888);
+  margin-inline-start: 8px;
+  padding: 0 2px;
+  font: inherit;
+  cursor: pointer;
+  user-select: none;
+}
+.cm-editor[dir="rtl"] .cm-markdown-fold-toggle { transform: rotate(90deg); }
+.cm-editor[dir="rtl"] .cm-markdown-fold-toggle.is-collapsed { transform: rotate(180deg); }
+@media (hover: none) { .cm-markdown-fold-toggle { opacity: 1; } }
