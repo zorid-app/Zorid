@@ -8,8 +8,10 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { history, undo, redo } from '@codemirror/commands';
 import { liveTasks } from '../src/editor/live-tasks.ts';
 import { liveLists } from '../src/editor/live-lists.ts';
+import { createEditor } from '../src/ui/editor.ts';
+import { readFileSync } from 'node:fs';
 
-function setup(t: TestContext, doc: string, showIndentGuide = true) {
+function setup(t: TestContext, doc: string, showIndentGuide = true, integrated = false) {
   const dom = new JSDOM('<!doctype html><html><body><main></main></body></html>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document,
@@ -25,7 +27,9 @@ function setup(t: TestContext, doc: string, showIndentGuide = true) {
   dom.window.Range.prototype.getBoundingClientRect = rect;
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const readonly = new Compartment(), transactions: Transaction[] = [];
-  const view = new EditorView({ parent: document.querySelector('main')!, state: EditorState.create({ doc,
+  const host = document.querySelector('main')!;
+  const editor = integrated ? createEditor(host, { value: doc, mode: 'live', paths: () => [], onChange() {}, open() {} }) : null;
+  const view = editor ? EditorView.findFromDOM(host.querySelector('.cm-editor')!)! : new EditorView({ parent: host, state: EditorState.create({ doc,
     extensions: [markdown({base: markdownLanguage}), liveLists({showIndentGuide}), liveTasks(), history(), EditorState.allowMultipleSelections.of(true),
       readonly.of(EditorState.readOnly.of(false)), EditorView.updateListener.of(update => transactions.push(...update.transactions))] }) });
   t.after(() => {
@@ -168,4 +172,26 @@ test('empty nested task items have a checkbox without a visible dash and preserv
   assert.equal(view.state.doc.toString(), source);
   inputs()[0].click();
   assert.equal(view.state.doc.toString(), '- parent\n\t- [x]\n\t- [?]');
+});
+
+test('full editor syntax highlighting cannot expose a dash inside a painted bullet', t => {
+  const source = '- parent\n\t- child\n- [ ] task';
+  const { view, dom } = setup(t, source, true, true);
+  const style = dom.window.document.createElement('style');
+  style.textContent = readFileSync(new URL('../src/editor/live-lists.css', import.meta.url), 'utf8');
+  dom.window.document.head.append(style);
+  const bullets = [...view.dom.querySelectorAll<HTMLElement>('.cm-list-bullet')];
+  assert.equal(bullets.length, 2);
+  for (const bullet of bullets) {
+    assert.equal(bullet.textContent, '-');
+    assert.ok(bullet.children.length > 0, 'real syntax highlighter nests a styled source span');
+    for (const glyph of [bullet, ...bullet.querySelectorAll<HTMLElement>('*')]) {
+      assert.equal(dom.window.getComputedStyle(glyph).color, 'rgba(0, 0, 0, 0)');
+    }
+  }
+  assert.equal(view.state.doc.toString(), source);
+  view.focus(); view.dispatch({ selection: { anchor: 0 } });
+  const revealed = view.dom.querySelector<HTMLElement>('.cm-list-prefix:not(.cm-list-bullet)')!;
+  assert.equal(revealed.textContent, '-');
+  assert.notEqual(dom.window.getComputedStyle(revealed).color, 'rgba(0, 0, 0, 0)');
 });

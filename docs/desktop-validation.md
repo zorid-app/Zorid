@@ -129,3 +129,23 @@ Screenshot capture returned a partial frame with a large blank region. Visible
 portions showed the task controls and embedded note, but this cannot establish
 complete layout or visual parity. No reference runtime or native image-clipboard
 comparison was performed.
+
+### Native menus and list-marker checkpoint
+
+Root integration `2c10c8a` passes all 430 tests and the production build (three
+bundle/performance warnings). All 232 emitted PDF.js runtime assets were compared
+byte-for-byte with the installed official package and match. This packaging check
+does not establish PDF viewer integration or reference parity.
+
+After saving all note buffers, Zorid was fully restarted to load the new main
+process IPC. Native right-click on a rendered table cell displayed an actual
+macOS menu with Undo/Redo, Cut/Copy/Paste, Paste and Match Style, Select all, and
+four row/column insertion commands. Escape dismissed the menu. No insertion was
+performed in the user's now-edited fixture during this observation.
+
+The live editor accessibility tree exposes Add row below and Add column to the
+right controls. A complete native screenshot confirms task checkboxes without
+preceding dashes and indentation guides. Ordinary list markers show circular
+bullets, but a small residual hyphen is also visible beneath them; that visual
+regression is assigned for repair. Native menu action execution, reference visual
+comparison, and split-view integration remain separate outstanding checks.
