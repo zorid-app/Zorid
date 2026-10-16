@@ -1,0 +1,22 @@
+/* Original overlay using audited geometry; see docs/tab-docking-reference.md. */
+.tab-docking-preview {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 5;
+  pointer-events: none;
+  transition: transform 100ms ease-in-out, width 100ms ease-in-out, height 100ms ease-in-out;
+  will-change: transform, width, height;
+}
+.tab-docking-preview[hidden] { display: none; }
+.tab-docking-preview::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  background: var(--interactive-accent, var(--accent));
+  border-radius: 8px;
+  opacity: .5;
+}
+.is-tab-dragging { cursor: grabbing; }
