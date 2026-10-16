@@ -8,6 +8,7 @@ import type { EditorHandle, EditorOptions } from '../src/ui/editor.ts';
 
 // These integration tests exercise workspace wiring and storage using an injected
 // DOM editor. They do not test CodeMirror, layout/pixels, or Obsidian parity.
+const editorOptions = new WeakMap<HTMLElement, EditorOptions>();
 function editor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   const input = document.createElement('textarea');
   input.setAttribute('aria-label', 'Test note editor');
@@ -15,12 +16,14 @@ function editor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   input.value = options.value;
   input.oninput = () => options.onChange(input.value);
   parent.append(input);
+  editorOptions.set(input, options);
   return {
     getValue: () => input.value,
     setValue: value => { input.value = value; },
     focus: () => input.focus(),
     destroy: () => input.remove(),
     insert: text => { input.value += text; options.onChange(input.value); },
+    configureLists: value => { options.listOptions = value; },
   };
 }
 
@@ -390,4 +393,29 @@ test('nested quoted custom tasks toggle only their original status character', a
   await until(async()=>(await adapter.read('Tasks.md'))===source.replace('[?]','[ ]'),'custom status saved');
   key(document,'e',{metaKey:true});await until(()=>!!currentEditor(),'live restored');
   assert.equal(currentEditor().value,source.replace('[?]','[ ]'));
+});
+
+test('editor settings reconfigure current editors and attachment preferences reach imported links', async t => {
+  const {workspace,adapter,click,dom}=await setup(t,new MemoryAdapter({'Folder/Note.md':'- item'}));
+  await workspace.openNote('Folder/Note.md');
+  const original=currentEditor(), options=editorOptions.get(original)!;
+  workspace.showSettings();
+  const tabs=document.querySelector<HTMLInputElement>('[aria-label="Indent using tabs"]')!;tabs.click();
+  const size=document.querySelector<HTMLInputElement>('[aria-label="Tab size"]')!;size.value='8';size.dispatchEvent(new dom.window.Event('change'));
+  const smart=document.querySelector<HTMLInputElement>('[aria-label="Smart indent lists"]')!;smart.click();
+  assert.equal(currentEditor(),original);
+  assert.deepEqual(options.listOptions,{useTab:false,tabSize:8,smartIndentList:false});
+  click('Files and links');
+  document.querySelector<HTMLInputElement>('[aria-label="Use Wikilinks"]')!.click();
+  const format=document.querySelector<HTMLSelectElement>('[aria-label="New link format"]')!;format.value='relative';format.dispatchEvent(new dom.window.Event('change'));
+  const location=document.querySelector<HTMLSelectElement>('[aria-label="Default location for new attachments"]')!;location.value='subfolder';location.dispatchEvent(new dom.window.Event('change'));
+  const folder=document.querySelector<HTMLInputElement>('[aria-label="Attachment folder path"]')!;folder.value='Media';folder.dispatchEvent(new dom.window.Event('change'));
+  const bytes=new Uint8Array([0,255,17,42]);
+  const link=await options.transfers!.importFile({name:'capture.bin',type:'application/octet-stream',read:async()=>bytes});
+  assert.equal(link,'![](./Media/capture.bin)');
+  assert.deepEqual(await adapter.readBinary('Folder/Media/capture.bin'),bytes);
+  const saved=JSON.parse(localStorage.getItem('zorid:settings')!);
+  assert.equal(saved.attachmentFolderPath,'./Media');assert.equal(saved.useMarkdownLinks,true);
+  assert.equal(saved.tabSize,8);assert.equal(saved.useTab,false);assert.equal(saved.smartIndentList,false);
+  assert.equal(await adapter.read('Folder/Note.md'),'- item');
 });

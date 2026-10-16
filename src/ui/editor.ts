@@ -1,4 +1,4 @@
-import { Annotation, EditorState, StateEffect, Transaction } from '@codemirror/state';
+import { Annotation, Compartment, EditorState, StateEffect, Transaction } from '@codemirror/state';
 import { Decoration, EditorView, keymap, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, isolateHistory } from '@codemirror/commands';
@@ -25,6 +25,7 @@ export interface EditorHandle {
   focus(): void;
   destroy(): void;
   insert(text: string): void;
+  configureLists?(options: MarkdownListOptions): void;
 }
 export interface EditorOptions {
   value: string; mode: 'live' | 'source'; paths: () => string[];
@@ -100,6 +101,7 @@ function decorations(view: EditorView): DecorationSet {
 }
 
 export function createEditor(parent: HTMLElement, options: EditorOptions): EditorHandle {
+  const listConfiguration = new Compartment();
   const completion = (context: CompletionContext) => {
     const match = context.matchBefore(/\[\[[^\]\n]*/); if (!match) return null;
     return { from: match.from + 2, options: options.paths().filter(p => p.endsWith('.md')).map(path => ({ label: path.replace(/\.md$/, ''), type: 'text', apply: `${path.replace(/\.md$/, '')}]]` })) };
@@ -161,7 +163,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     parent,
     state: EditorState.create({ doc: options.value, extensions: [
       EditorState.allowMultipleSelections.of(true),
-      history(), markdownListKeymap(options.listOptions), markdown({base: markdownLanguage,addKeymap:false}), syntaxHighlighting(markdownHighlightStyle),
+      history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, autocompletion({override: [completion]}),
       EditorView.contentAttributes.of({'aria-label': 'Note editor', spellcheck: 'true'}),
@@ -182,6 +184,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
   return {
     getValue: () => view.state.doc.toString(),
+    configureLists(listOptions) { view.dispatch({ effects: listConfiguration.reconfigure(markdownListKeymap(listOptions)) }); },
     setValue(value) {
       const previous = view.state.doc.toString();
       if (value === previous) return;

@@ -480,14 +480,37 @@ export class Workspace {
       nav.querySelectorAll('button').forEach(node=>node.classList.toggle('is-active',node.textContent===section));body.replaceChildren(el('h2','',section));
       const row=(name:string,description:string,control:HTMLElement)=>{const wrapper=el('div','setting-row');const info=el('div','setting-info');info.append(el('div','setting-name',name),el('div','setting-description',description));wrapper.append(info,control);body.append(wrapper);};
       const toggle=(checked:boolean,change:(value:boolean)=>void)=>{const input=el('input','toggle');input.type='checkbox';input.checked=checked;input.onchange=()=>{change(input.checked);this.saveSettings();};return input;};
+      const selectControl=(name:string,value:string,choices:readonly(readonly[string,string])[],change:(value:string)=>void)=>{
+        const select=el('select');select.setAttribute('aria-label',name);
+        for(const[key,label]of choices){const option=el('option','',label);option.value=key;select.append(option);}
+        select.value=value;select.onchange=()=>{change(select.value);this.saveSettings();};return select;
+      };
+      const configureLists=()=>{for(const pane of this.panes)pane.editor?.configureLists?.({useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList});};
       if(section==='Appearance'){
         const select=el('select');for(const[label,value]of[['Adapt to system','system'],['Dark','dark'],['Light','light']]){const option=el('option','',label);option.value=value;select.append(option);}select.value=this.settings.theme;select.setAttribute('aria-label','Base color scheme');select.onchange=()=>{this.settings.theme=select.value as Settings['theme'];this.saveSettings();};row('Base color scheme','Choose your default color scheme.',select);
         const size=el('input');size.type='range';size.min='12';size.max='26';size.value=String(this.settings.fontSize);size.setAttribute('aria-label','Font size');size.oninput=()=>{this.settings.fontSize=Number(size.value);this.saveSettings();};row('Font size','Font size in pixels for the editor and reading view.',size);
         const title=toggle(this.settings.showInlineTitle,value=>{this.settings.showInlineTitle=value;this.panes.forEach(pane=>void this.renderPane(pane));});title.setAttribute('aria-label','Show inline title');row('Show inline title','Display the file name at the top of each note.',title);
       }else if(section==='Editor'){
         const width=toggle(this.settings.readableWidth,value=>{this.settings.readableWidth=value;this.panes.forEach(pane=>void this.renderPane(pane));});width.setAttribute('aria-label','Readable line length');row('Readable line length','Limit the maximum line length for comfortable reading.',width);
+        const tabs=toggle(this.settings.useTab,value=>{this.settings.useTab=value;configureLists();});tabs.setAttribute('aria-label','Indent using tabs');row('Indent using tabs','Use tab characters for indentation. Turn off to use spaces.',tabs);
+        const tabSize=el('input');tabSize.type='number';tabSize.min='1';tabSize.max='32';tabSize.value=String(this.settings.tabSize);tabSize.setAttribute('aria-label','Tab size');
+        tabSize.onchange=()=>{const value=Number(tabSize.value);if(!Number.isInteger(value)||value<1||value>32){tabSize.value=String(this.settings.tabSize);return;}this.settings.tabSize=value;configureLists();this.saveSettings();};row('Tab size','Number of spaces used to display a tab.',tabSize);
+        const smart=toggle(this.settings.smartIndentList,value=>{this.settings.smartIndentList=value;configureLists();});smart.setAttribute('aria-label','Smart indent lists');row('Smart indent lists','Continue list items when pressing Enter.',smart);
       }else if(section==='Hotkeys'){for(const command of this.commands())if(command.shortcut)row(command.name,'',el('kbd','',command.shortcut));}
-      else if(section==='Files and links'){row('Vault',this.platform.label,textButton('Open another',()=>{close();this.run(()=>this.chooseVault());}));row('Deleted files','Deleted files are moved to a .trash folder in the vault.',el('span','','Vault trash'));row('Internal links','Resolved links are updated when files are renamed.',el('span','','Automatic'));}
+      else if(section==='Files and links'){
+        row('Vault',this.platform.label,textButton('Open another',()=>{close();this.run(()=>this.chooseVault());}));row('Deleted files','Deleted files are moved to a .trash folder in the vault.',el('span','','Vault trash'));row('Internal links','Resolved links are updated when files are renamed.',el('span','','Automatic'));
+        const wiki=toggle(!this.settings.useMarkdownLinks,value=>{this.settings.useMarkdownLinks=!value;});wiki.setAttribute('aria-label','Use Wikilinks');row('Use Wikilinks','Use [[links]] for imported attachments.',wiki);
+        row('New link format','Choose how paths are written for imported attachments.',selectControl('New link format',this.settings.newLinkFormat,[['shortest','Shortest path when possible'],['relative','Relative path to file'],['absolute','Absolute path in vault']],value=>{this.settings.newLinkFormat=value as Settings['newLinkFormat'];}));
+        const folder=this.settings.attachmentFolderPath;
+        const location=folder==='/'?'root':folder==='.'||folder==='./'?'current':folder.startsWith('./')?'subfolder':'folder';
+        row('Default location for new attachments','Choose where pasted and dropped files are saved.',selectControl('Default location for new attachments',location,[['root','Vault folder'],['folder','In the folder specified below'],['current','Same folder as current file'],['subfolder','In subfolder under current folder']],value=>{
+          this.settings.attachmentFolderPath=value==='root'?'/':value==='current'?'.':value==='subfolder'?'./attachments':'attachments';render(section);
+        }));
+        if(location==='folder'||location==='subfolder'){
+          const path=el('input');path.value=location==='subfolder'?folder.slice(2):folder;path.setAttribute('aria-label','Attachment folder path');
+          path.onchange=()=>{this.settings.attachmentFolderPath=location==='subfolder'?'./'+path.value:path.value;this.saveSettings();};row('Attachment folder path','A folder will be created if it does not exist.',path);
+        }
+      }
       else{body.append(el('p','','Zorid'),el('p','muted','Version 0.1.0'),el('p','','An open-source Markdown workspace.'));}
     };
     nav.append(el('div','settings-nav-label','Options'));for(const name of['Editor','Files and links','Appearance','Hotkeys','About'])nav.append(textButton(name,()=>render(name),'settings-nav-item'));render('Editor');

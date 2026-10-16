@@ -107,3 +107,25 @@ This checkpoint has no additional native UI observations. Canvas document tests
 do not establish Canvas UI parity. Reference source audits for search, PDF,
 plugins, mobile, themes, workspace shortcuts, Bases queries and performance are
 static and retain their individual coverage limitations.
+
+### Native follow-up on the checkpoint
+
+The rebuilt Electron app was reloaded and a new disposable `Editor integration
+checkpoint.md` was opened in the fixture vault. Its Live Edit accessibility tree
+included interactive checked/unchecked tasks, a rendered note with headings and
+its own task, and a rendered SVG image. Clicking the first task checked it;
+clicking again restored it. Clicking `FinalTarget` below both embeds and typing
+`CLICK` inserted on that line (`FinalTCLICKarget`); undo restored it.
+
+Clicking the nested `child` item, moving to line end and pressing Enter produced
+another four-space-indented list marker. A subsequent Enter outdented the empty
+item without adding a line. Two undos restored the source. Reading mode exposed
+nested list structure and the custom `[?]` checkbox as checked. The note was
+returned to Live Edit, and its disk bytes were verified identical to the original
+fixture. AX selectText did not reliably move the CM caret, so the list scenario
+used an actual element click followed by the native line-end shortcut instead.
+
+Screenshot capture returned a partial frame with a large blank region. Visible
+portions showed the task controls and embedded note, but this cannot establish
+complete layout or visual parity. No reference runtime or native image-clipboard
+comparison was performed.

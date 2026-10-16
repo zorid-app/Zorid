@@ -331,3 +331,17 @@ test('Reading mode uses escaped-pipe boundaries, cell breaks, alignment and ragg
   assert.equal((reading.querySelectorAll('td')[1] as HTMLElement).style.textAlign, 'right');
   assert.equal(reading.querySelector('p')?.textContent, 'After');
 });
+
+test('live list preference changes retain selection, history and editor instance', t => {
+  const {editor,view,dom,cursor}=setup(t,'- item','source');
+  cursor(6);editor.insert('!');
+  const selection=view.state.selection.toJSON(),depth=undoDepth(view.state);
+  editor.configureLists!({useTab:false,tabSize:8,smartIndentList:true});
+  assert.equal(view.state.tabSize,8);assert.equal(undoDepth(view.state),depth);
+  assert.deepEqual(view.state.selection.toJSON(),selection);
+  const tab=new dom.window.KeyboardEvent('keydown',{key:'Tab',code:'Tab',bubbles:true,cancelable:true});
+  view.contentDOM.dispatchEvent(tab);
+  assert.ok(tab.defaultPrevented);assert.equal(editor.getValue(),'    - item!');
+  assert.ok(undo(view));assert.equal(editor.getValue(),'- item!');
+  assert.ok(undo(view));assert.equal(editor.getValue(),'- item');
+});
