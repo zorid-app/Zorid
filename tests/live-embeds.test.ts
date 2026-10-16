@@ -86,19 +86,22 @@ test('unchanged widgets survive cursor movement and edits that move their source
   assert.equal(host.querySelector('.cm-live-embed'), widget);
 });
 
-test('source action selects mapped syntax, reveals it and restores render after leaving', t => {
+test('source action selects mapped syntax and keeps the same rendered instance through reveal and rehide', t => {
   const { view, host, renders, click } = setup(t, 'before\n![[photo.png]]\nafter');
   view.dispatch({ changes: { from: 0, insert: 'prefix\n' } });
   const text = view.state.doc.toString(), start = text.indexOf('![[');
+  const widget = host.querySelector('.cm-live-embed')!;
   click(host.querySelector('.cm-live-embed-edit')!);
   assert.equal(view.state.selection.main.from, start);
   assert.equal(view.state.selection.main.to, start + '![[photo.png]]'.length);
-  assert.equal(host.querySelector('.cm-live-embed'), null);
-  assert.equal(renders[0].destroys, 1);
+  assert.equal(host.querySelector('.cm-live-embed'), widget);
+  assert.equal(renders[0].destroys, 0);
+  assert.match(view.contentDOM.textContent!, /!\[\[photo\.png\]\]/);
   assert.equal(view.state.doc.toString(), text);
   view.dispatch({ selection: { anchor: 0 } });
-  assert.ok(host.querySelector('.cm-live-embed'));
-  assert.equal(renders.length, 2);
+  assert.equal(host.querySelector('.cm-live-embed'), widget);
+  assert.equal(renders.length, 1);
+  assert.doesNotMatch(view.contentDOM.textContent!, /!\[\[photo\.png\]\]/);
 });
 
 test('generic widget click reveals source but interactive child clicks keep their own behavior', t => {
@@ -112,7 +115,8 @@ test('generic widget click reveals source but interactive child clicks keep thei
   assert.ok(host.querySelector('.cm-live-embed'));
   click(renders[0].node);
   assert.equal(view.state.selection.main.from, 'before\n'.length);
-  assert.equal(host.querySelector('.cm-live-embed'), null);
+  assert.ok(host.querySelector('.cm-live-embed'));
+  assert.match(view.contentDOM.textContent!, /!\[\[Note\]\]/);
 });
 
 test('changing/removing embeds releases each mounted renderer once and undo remounts safely', t => {
@@ -155,7 +159,10 @@ test('editing revealed syntax preserves source mode until the selection leaves t
   const { view, host, click, renders } = setup(t, '![[old.png]]\nend');
   click(host.querySelector('.cm-live-embed-edit')!);
   view.dispatch({ changes: { from: 3, to: 6, insert: 'new' }, selection: { anchor: 6 } });
-  assert.equal(host.querySelector('.cm-live-embed'), null);
+  assert.ok(host.querySelector('.cm-live-embed'));
+  assert.equal(renders[0].destroys, 1);
+  assert.equal(renders.at(-1)!.request.target, 'new.png');
+  assert.match(view.contentDOM.textContent!, /!\[\[new\.png\]\]/);
   assert.equal(view.state.doc.toString(), '![[new.png]]\nend');
   view.dispatch({ selection: { anchor: view.state.doc.length } });
   assert.equal(renders.at(-1)!.request.target, 'new.png');
@@ -171,7 +178,7 @@ test('duplicate targets keep distinct renderer ownership and click ranges after 
   assert.equal(host.querySelectorAll('.cm-live-embed')[1], original);
   click(original.querySelector('.cm-live-embed-edit')!);
   assert.equal(view.state.selection.main.from, view.state.doc.toString().lastIndexOf('![['));
-  assert.equal(renders[0].destroys, 1);
+  assert.equal(renders[0].destroys, 0);
   assert.equal(renders[1].destroys, 0);
 });
 
@@ -198,7 +205,7 @@ test('merging source ranges does not transfer revealed ownership to the resultin
   const source = '![[first]] tail ![[second]]\nend';
   const { view, host, click, renders } = setup(t, source);
   click(host.querySelector('.cm-live-embed-edit')!);
-  assert.equal(host.querySelectorAll('.cm-live-embed').length, 1);
+  assert.equal(host.querySelectorAll('.cm-live-embed').length, 2);
   view.dispatch({ changes: { from: source.indexOf(']]'), to: source.indexOf('second') },
     selection: { anchor: 4 } });
   assert.equal(view.state.doc.toString(), '![[firstsecond]]\nend');
@@ -233,4 +240,63 @@ test('removed widgets cannot dispatch source edits through retained DOM referenc
   click(action); click(wrapper);
   assert.equal(view.state.selection.main.from, view.state.doc.length);
   assert.equal(renders[0].destroys, 1);
+});
+
+for (const syntax of ['![[Note#Heading]]', '![[image.png|240]]', '![alt](image.png)', '![[document.pdf#page=2]]', '![[board.canvas]]']) {
+  test(`source reveal preserves the rendered child and editable DOM offsets for ${syntax}`, t => {
+    const source = `before\n${syntax}\nafter`;
+    const { view, host, renders, click, destroy } = setup(t, source);
+    const widget = host.querySelector('.cm-live-embed')!, child = renders[0].node;
+    // Stand in for state owned by a nested note/PDF/Canvas/image renderer.
+    child.dataset.retainedState = 'page-or-pan-or-selection';
+    click(widget.querySelector('.cm-live-embed-edit')!);
+    const position = source.indexOf(syntax) + 4;
+    view.dispatch({ selection: { anchor: position } });
+    const point = view.domAtPos(position);
+    assert.equal(view.posAtDOM(point.node, point.offset), position);
+    assert.equal((point.node.nodeType === 1 ? point.node as Element : point.node.parentElement)!.closest('.cm-live-embed'), null);
+    assert.equal(host.querySelector('.cm-live-embed'), widget);
+    assert.equal(widget.contains(child), true);
+    assert.equal(child.dataset.retainedState, 'page-or-pan-or-selection');
+    assert.equal(view.contentDOM.querySelector('.cm-line')?.nextElementSibling?.textContent, syntax);
+    assert.equal(renders.length, 1);
+    assert.equal(renders[0].destroys, 0);
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    assert.equal(host.querySelector('.cm-live-embed'), widget);
+    assert.equal(renders.length, 1);
+    assert.equal(view.state.doc.toString(), source);
+    destroy(); assert.equal(renders[0].destroys, 1);
+  });
+}
+
+test('inline reveal leaves source before the same point widget and hides only source on exit', t => {
+  const source = 'before ![[Note]] after\nend';
+  const { view, host, renders, click } = setup(t, source);
+  const widget = host.querySelector('.cm-live-embed')!;
+  click(widget.querySelector('.cm-live-embed-edit')!);
+  assert.equal(widget.parentElement?.classList.contains('cm-line'), true);
+  assert.match(widget.parentElement!.textContent!, /^before !\[\[Note\]\]Rendered Note/);
+  assert.match(widget.parentElement!.textContent!, / after$/);
+  view.dispatch({ selection: { anchor: view.state.doc.length } });
+  assert.equal(host.querySelector('.cm-live-embed'), widget);
+  assert.doesNotMatch(widget.parentElement!.textContent!, /!\[\[Note\]\]/);
+  assert.equal(renders.length, 1);
+});
+
+test('editing revealed source remaps the caret, updates target and does not remount again on rehide', t => {
+  const source = 'start\n![[old.pdf#page=2]]\nend';
+  const { view, host, renders, click } = setup(t, source);
+  click(host.querySelector('.cm-live-embed-edit')!);
+  const from = source.indexOf('old');
+  view.dispatch({ changes: { from, to: from + 3, insert: 'new-long' }, selection: { anchor: from + 8 }, userEvent: 'input' });
+  assert.equal(view.state.doc.toString(), source.replace('old', 'new-long'));
+  assert.equal(view.state.selection.main.head, from + 8);
+  const point = view.domAtPos(from + 8);
+  assert.equal(view.posAtDOM(point.node, point.offset), from + 8);
+  assert.equal(renders.length, 2); assert.equal(renders[0].destroys, 1);
+  assert.equal(renders[1].request.target, 'new-long.pdf#page=2');
+  const replacement = host.querySelector('.cm-live-embed');
+  view.dispatch({ selection: { anchor: view.state.doc.length } });
+  assert.equal(host.querySelector('.cm-live-embed'), replacement);
+  assert.equal(renders.length, 2); assert.equal(renders[1].destroys, 0);
 });
