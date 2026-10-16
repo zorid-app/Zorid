@@ -64,6 +64,24 @@ test('parent editor exposes folding controls and restores folded state without s
   assert.deepEqual(folds(ui.view), []);
 });
 
+test('folding a focused table cell keeps typing focus in the owning note without stealing title focus', async t => {
+  const ui = setup(t, '# Section\n\n| Name |\n| --- |\n| value |\n\n# Next\nlast', true);
+  const cell = ui.host.querySelector('td')!;
+  cell.dispatchEvent(new ui.dom.window.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+  const child = EditorView.findFromDOM(cell.querySelector('.cm-editor')!)!;
+  child.focus();
+  child.dispatch({ changes: { from: 0, insert: 'new ' }, userEvent: 'input.type' });
+  await Promise.resolve();
+  assert.ok(child.hasFocus);
+  assert.ok(ui.handle!.fold!('foldAll'));
+  assert.ok(ui.view.hasFocus);
+  assert.match(ui.handle!.getValue(), /new value/);
+  ui.handle!.fold!('unfoldAll');
+  const title = ui.dom.window.document.createElement('input'); ui.host.before(title); title.focus();
+  ui.handle!.fold!('foldAll');
+  assert.equal(ui.dom.window.document.activeElement, title);
+});
+
 test('setext headings and list indentation preserve headers, blanks and tab widths', () => {
   assert.deepEqual(ranges(state('Title\n=====\nbody\nNext\n----\nend')).map(range => range.text), ['\n=====\nbody\nNext\n----\nend', '\n----\nend']);
   const value = state('- parent\n\n\t- child\n\t  continuation\n- sibling');
