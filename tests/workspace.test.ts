@@ -20,6 +20,8 @@ function editor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   editorOptions.set(input, options);
   return {
     getValue: () => input.value,
+    getViewState:()=>({selection:{ranges:[{anchor:input.selectionDirection==='backward'?input.selectionEnd:input.selectionStart,head:input.selectionDirection==='backward'?input.selectionStart:input.selectionEnd}],mainIndex:0},scrollTop:input.scrollTop,scrollLeft:input.scrollLeft}),
+    restoreViewState:state=>{const range=state.selection.ranges[0];input.setSelectionRange(Math.min(range.anchor,range.head),Math.max(range.anchor,range.head),range.anchor>range.head?'backward':'forward');input.scrollTop=state.scrollTop;input.scrollLeft=state.scrollLeft;},
     setValue: value => { input.value = value; },
     focus: () => input.focus(),
     destroy: () => input.remove(),
@@ -571,4 +573,72 @@ test('Canvas text typed during an external reload remains visible after the read
   assert.equal(input.value, 'Local typed during read');
   assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text, 'External');
   key(input, 'Escape'); // Deliberately cancel this draft so teardown can complete.
+});
+
+
+test('nested workspace splits preserve surviving editor DOM, per-pane state and saved geometry', async t => {
+  const {workspace,root,dom,key}=await setup(t,new MemoryAdapter({'Note.md':'0123456789','Other.md':'second note'}));
+  await workspace.openNote('Note.md');
+  const original=workspace.activePane,first=currentEditor(),firstHandle=original.editor;
+  first.focus();first.setSelectionRange(2,5,'backward');
+  original.element.querySelector<HTMLElement>('.note-scroll')!.scrollTop=45;
+  await (workspace as any).split('right');
+  const second=workspace.activePane,secondEditor=currentEditor();
+  assert.equal(original.editor,firstHandle);assert.equal(original.element.querySelector('textarea'),first);
+  assert.equal(first.selectionStart,2);assert.equal(first.selectionEnd,5);assert.equal(first.selectionDirection,'backward');
+  assert.equal(secondEditor.selectionStart,2);assert.equal(secondEditor.selectionEnd,5);
+  secondEditor.setSelectionRange(7,8);second.element.querySelector<HTMLElement>('.note-scroll')!.scrollTop=91;
+  await workspace.openNote('Other.md',true,second);
+  // Opening another tab saves the first tab's caret, selection direction and scroll.
+  const noteTab=[...second.element.querySelectorAll<HTMLElement>('[role=tab]')].find(node=>node.textContent==='Note')!;
+  noteTab.click();await until(()=>currentEditor()?.value==='0123456789','return to saved tab');
+  assert.equal(currentEditor().selectionStart,7);assert.equal(currentEditor().selectionEnd,8);
+  assert.equal(second.element.querySelector<HTMLElement>('.note-scroll')!.scrollTop,91);
+  const secondHandle=second.editor;
+  await (workspace as any).split('bottom');
+  const third=workspace.activePane;
+  assert.equal(original.editor,firstHandle);assert.equal(second.editor,secondHandle);
+  assert.equal(root.querySelectorAll('.split-layout-group').length,2);
+  const divider=root.querySelector<HTMLElement>('.split-layout-separator[data-direction=vertical]')!;
+  divider.parentElement!.getBoundingClientRect=()=>({width:1000,height:600,x:0,y:0,top:0,left:0,right:1000,bottom:600,toJSON(){return{};}});
+  key(divider,'ArrowRight');
+  assert.equal(original.editor,firstHandle);assert.equal(second.editor,secondHandle);
+  const state=JSON.parse(localStorage.getItem('zorid:workspace:test:vault')!);
+  assert.equal(state.layout.direction,'vertical');assert.notEqual(state.layout.sizes[0],state.layout.sizes[1]);
+  assert.equal(state.layout.children[1].direction,'horizontal');
+  assert.equal(state.activePaneId,third.id);
+  assert.equal(state.panes[0].id,original.id);
+  await workspace.openVault(workspace.platform);
+  assert.deepEqual(JSON.parse(localStorage.getItem('zorid:workspace:test:vault')!).layout,state.layout);
+  assert.equal(workspace.activePane.id,third.id);
+  assert.equal(workspace.panes[0].id,original.id);
+  const restoredFirst=workspace.panes[0].element.querySelector('textarea')!;
+  assert.equal(restoredFirst.selectionStart,2);assert.equal(restoredFirst.selectionEnd,5);assert.equal(restoredFirst.selectionDirection,'backward');
+  assert.equal(workspace.panes[0].element.querySelector<HTMLElement>('.note-scroll')!.scrollTop,45);
+  assert.equal(workspace.panes[1].tabs.length,2);
+  const survivor=workspace.panes[0],survivorEditor=survivor.editor;
+  await (workspace as any).closeTab(workspace.activePane,workspace.activePane.tabs[0]);
+  assert.equal(workspace.panes.length,2);assert.equal(root.querySelectorAll('.split-layout-group').length,1);
+  assert.equal(survivor.editor,survivorEditor);
+});
+
+test('split a background tab uses its owning pane without changing the current tab', async t => {
+  const {workspace}=await setup(t,new MemoryAdapter({'A.md':'aaaa','B.md':'bbbb'}));
+  await workspace.openNote('A.md');const pane=workspace.activePane,tab=pane.tabs[0];
+  await workspace.openNote('B.md',true);const existing=pane.editor,active=pane.active;
+  await (workspace as any).split('bottom',pane,tab);
+  assert.equal(pane.active,active);assert.equal(pane.editor,existing);
+  assert.equal(workspace.activePane.editor?.getValue(),'aaaa');
+});
+
+test('session storage failure cannot bypass the unsaved-document unload guard',async t=>{
+  const {workspace,dom,type}=await setup(t,new MemoryAdapter({'Note.md':'old'}));
+  await workspace.openNote('Note.md');type(currentEditor(),'unsaved');
+  const prototype=Object.getPrototypeOf(localStorage),original=prototype.setItem;
+  prototype.setItem=function(key:string,value:string){if(key.startsWith('zorid:workspace:'))throw new Error('Quota exceeded');return original.call(this,key,value);};
+  try{
+    const event=new dom.window.Event('beforeunload',{cancelable:true});
+    assert.doesNotThrow(()=>(workspace as any).unloadListener(event));
+    assert.equal(event.defaultPrevented,true);
+  }finally{prototype.setItem=original;}
 });

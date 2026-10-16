@@ -373,3 +373,20 @@ test('closed editors ignore late context menu command results', async t => {
   assert.ok(finish);destroy();finish('select-all');await Promise.resolve();
   assert.equal(view.state.selection.main.empty,true);
 });
+
+
+test('editor view snapshots restore multiple reversed selections and scroll without editing history', t => {
+  const {editor,view,changes}=setup(t,'0123456789\nabcdefghij');
+  view.dispatch({selection:EditorSelection.create([EditorSelection.range(5,2),EditorSelection.range(12,16)],1)});
+  view.scrollDOM.scrollTop=83;view.scrollDOM.scrollLeft=12;
+  const snapshot=editor.getViewState!();
+  view.dispatch({selection:{anchor:0}});view.scrollDOM.scrollTop=0;view.scrollDOM.scrollLeft=0;
+  editor.restoreViewState!(snapshot);
+  assert.equal(view.state.selection.mainIndex,1);
+  assert.deepEqual(view.state.selection.ranges.map(range=>[range.anchor,range.head]),[[5,2],[12,16]]);
+  assert.equal(view.scrollDOM.scrollTop,83);assert.equal(view.scrollDOM.scrollLeft,12);
+  assert.equal(undoDepth(view.state),0);assert.deepEqual(changes,[]);
+  editor.setValue('short');editor.restoreViewState!(snapshot);
+  assert.ok(view.state.selection.ranges.every(range=>range.to<=5));
+  assert.doesNotThrow(()=>editor.restoreViewState!({selection:{ranges:[{anchor:NaN,head:Infinity}],mainIndex:99},scrollTop:-3,scrollLeft:NaN}));
+});

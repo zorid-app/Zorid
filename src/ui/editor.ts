@@ -1,4 +1,4 @@
-import { Annotation, Compartment, EditorState, StateEffect, Transaction } from '@codemirror/state';
+import { Annotation, Compartment, EditorSelection, EditorState, StateEffect, Transaction } from '@codemirror/state';
 import { Decoration, EditorView, keymap, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, isolateHistory } from '@codemirror/commands';
@@ -20,8 +20,15 @@ import { markdownListKeymap } from '../editor/list-commands.ts';
 import type { MarkdownListOptions } from '../editor/list-commands.ts';
 import { editorContextMenu } from '../editor/context-menu.ts';
 
+export interface EditorViewState {
+  selection: { ranges: { anchor: number; head: number }[]; mainIndex: number };
+  scrollTop: number; scrollLeft: number;
+}
+
 export interface EditorHandle {
   getValue(): string;
+  getViewState?(): EditorViewState;
+  restoreViewState?(state: EditorViewState): void;
   /** Apply an external snapshot without recording it as a user edit. Existing undo entries are mapped through the change, not conflict-merged. */
   setValue(value: string): void;
   focus(): void;
@@ -187,6 +194,18 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
   return {
     getValue: () => view.state.doc.toString(),
+    getViewState: () => ({selection: {ranges:view.state.selection.ranges.map(range=>({anchor:range.anchor,head:range.head})),mainIndex:view.state.selection.mainIndex}, scrollTop: view.scrollDOM.scrollTop, scrollLeft: view.scrollDOM.scrollLeft}),
+    restoreViewState(saved) {
+      // Session data is untrusted and can refer to a longer, older file snapshot.
+      const ranges = saved?.selection?.ranges;
+      if (Array.isArray(ranges) && ranges.length && ranges.length <= 1000 && ranges.every(range => Number.isFinite(range?.anchor) && Number.isFinite(range?.head))) {
+        const clamp = (position: number) => Math.max(0, Math.min(view.state.doc.length, Math.trunc(position)));
+        const main = Number.isInteger(saved.selection.mainIndex) ? Math.max(0, Math.min(ranges.length - 1, saved.selection.mainIndex)) : 0;
+        view.dispatch({ selection: EditorSelection.create(ranges.map(range => EditorSelection.range(clamp(range.anchor), clamp(range.head))), main), annotations: Transaction.addToHistory.of(false) });
+      }
+      if (Number.isFinite(saved?.scrollTop)) view.scrollDOM.scrollTop = Math.max(0, saved.scrollTop);
+      if (Number.isFinite(saved?.scrollLeft)) view.scrollDOM.scrollLeft = Math.max(0, saved.scrollLeft);
+    },
     configureLists(listOptions) { view.dispatch({ effects: listConfiguration.reconfigure(markdownListKeymap(listOptions)) }); },
     setValue(value) {
       const previous = view.state.doc.toString();
