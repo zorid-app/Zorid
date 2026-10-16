@@ -420,3 +420,32 @@ test('changed projected card rejects edits and drag without overwriting current 
   ui.pointer(ui.item('a'), 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 20, 30); ui.pointer(ui.viewport, 'pointerup', 20, 30);
   assert.equal(ui.document.getNode('a')!.x, 0); assert.equal(ui.item('a').style.left, '0px'); assert.equal(ui.saves.length, 0); ui.close();
 });
+
+test('identical source acknowledgements preserve draft and drag ownership; genuinely changed source still resets', async () => {
+  const ui = setup(), originalCard = ui.item('a');
+  originalCard.dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
+  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Uncommitted draft';
+  const originalDocument = ui.view.document;
+  ui.view.setDocument(CanvasDocument.parse(fixture));
+  assert.equal(ui.view.document, originalDocument); assert.equal(ui.item('a'), originalCard); assert.equal(ui.container.querySelector('textarea'), input);
+  assert.equal(input.value, 'Uncommitted draft'); assert.equal(ui.view.hasPendingChanges(), true); assert.equal(ui.saves.length, 0);
+  ui.key('Escape', {}, input);
+  ui.pointer(originalCard, 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 25, 10);
+  ui.view.setDocument(CanvasDocument.parse(fixture)); assert.equal(ui.item('a'), originalCard); assert.equal(originalCard.style.left, '25px');
+  ui.pointer(ui.viewport, 'pointerup', 25, 10); await ui.view.flush(); assert.equal(ui.document.getNode('a')?.x, 25); assert.equal(ui.saves.length, 1);
+  const changed = CanvasDocument.parse(ui.document.toString()); changed.setRoot('plugin', { externallyChanged: true });
+  ui.view.setDocument(changed); assert.equal(ui.view.document, changed); assert.notEqual(ui.item('a'), originalCard);
+  assert.equal(ui.container.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.disabled, true);
+  ui.view.undo(); await ui.view.flush(); assert.deepEqual(ui.view.document.getRoot('plugin'), { externallyChanged: true }); assert.equal(ui.saves.length, 1); ui.close();
+});
+
+test('reload of an externally mutated model refreshes its stale projection even when model strings match', async () => {
+  const ui = setup(), oldCard = ui.item('a');
+  ui.document.updateNode('a', { text: '**External rendered change**' });
+  assert.equal(oldCard.textContent, 'a');
+  const replacement = CanvasDocument.parse(ui.document.toString());
+  ui.view.setDocument(replacement);
+  assert.equal(ui.view.document, replacement); assert.notEqual(ui.item('a'), oldCard);
+  assert.equal(ui.item('a').querySelector('strong')?.textContent, 'External rendered change');
+  await ui.view.flush(); assert.equal(ui.saves.length, 0); ui.close();
+});

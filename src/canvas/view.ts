@@ -23,6 +23,7 @@ export interface CanvasViewOptions {
 export interface CanvasView {
   readonly element: HTMLElement;
   readonly document: CanvasDocument;
+  /** Identical source is a reload acknowledgement; changed source resets local history. */
   setDocument(document: CanvasDocument): void;
   undo(): void;
   redo(): void;
@@ -72,6 +73,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const status = dom.createElement('div'); status.className = 'zorid-canvas-status'; status.setAttribute('role', 'status');
   element.append(viewport, toolbar, cardMenu, status); parent.append(element);
   let document = options.document, projection = projectCanvas(document), closed = false;
+  let renderedSource = document.toString();
   let tx = 40, ty = 40, scale = 1, space = false, saveQueue = Promise.resolve();
   const undoStack: string[] = [], redoStack: string[] = [], selectedNodes = new Set<string>(), selectedEdges = new Set<string>();
   const nodeEls = new Map<string, HTMLElement>(), edgeEls = new Map<string, { group: SVGGElement; path: SVGPathElement; hit: SVGPathElement; label: HTMLDivElement; arrows: SVGGElement[] }>();
@@ -230,7 +232,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   }
   function render(): void {
     menuVersion++;
-    finishEditing?.(false); clearMarkdown(); projection = projectCanvas(document);
+    finishEditing?.(false); clearMarkdown(); projection = projectCanvas(document); renderedSource = document.toString();
     for (const item of nodeEls.values()) item.remove(); for (const item of edgeEls.values()) { item.group.remove(); item.label.remove(); } nodeEls.clear(); edgeEls.clear();
     for (const id of selectedNodes) if (!projection.nodes.has(id)) selectedNodes.delete(id);
     for (const id of selectedEdges) if (!projection.edges.has(id)) selectedEdges.delete(id);
@@ -557,7 +559,17 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   return {
     element, get document() { return document; }, undo, redo, flush,
     hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave,
-    setDocument(next) { if (closed) return; finishEditing?.(false); clearDrag(); document = next; undoStack.length = redoStack.length = 0; selectedNodes.clear(); selectedEdges.clear(); render(); },
+    setDocument(next) {
+      // File watchers also report our own completed writes. Replacing identical
+      // source would discard undo/redo, active drafts and rich renderer owners.
+      if (closed) return;
+      menuVersion++; // A host refresh still invalidates already-open menu actions.
+      // The model is public and mutable: equal model strings alone do not prove
+      // the rendered projection already represents this source.
+      const source = next.toString();
+      if (source === renderedSource && source === document.toString()) return;
+      finishEditing?.(false); clearDrag(); document = next; undoStack.length = redoStack.length = 0; selectedNodes.clear(); selectedEdges.clear(); render();
+    },
     destroy() { if (closed) return; closed = true; finishEditing?.(false); clearDrag(); clearMarkdown(); win.removeEventListener('blur', windowBlur); element.remove(); },
   };
 }
