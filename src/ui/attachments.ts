@@ -19,8 +19,14 @@ export function imageAlt(value = ''): {alt:string; width?:number; height?:number
   return {alt:split<0?'':value.slice(0,split),width,...(height?{height}:{})};
 }
 
-export interface AttachmentLease { url:string; type:string; release():void }
-interface Resource { refs:number; url?:string; stale:boolean; promise:Promise<string> }
+export interface AttachmentLease {
+  url:string;
+  type:string;
+  /** Fresh transferable bytes on each call, valid only while this lease and owner remain live. */
+  arrayBuffer?():Promise<ArrayBuffer>;
+  release():void;
+}
+interface Resource { refs:number; url?:string; blob?:Blob; stale:boolean; promise:Promise<string> }
 
 /** Shared per-vault object URLs: bounded reads, duplicate-load coalescing and explicit ownership. */
 export class AttachmentResources {
@@ -55,7 +61,8 @@ export class AttachmentResources {
       created.promise=this.read(path).then(bytes=>{
         if(this.disposed)throw new Error('Attachment view closed');
         const copy=new Uint8Array(bytes.byteLength);copy.set(bytes);
-        created.url=URL.createObjectURL(new Blob([copy.buffer],{type}));
+        created.blob=new Blob([copy.buffer],{type});
+        created.url=URL.createObjectURL(created.blob);
         return created.url;
       });
       this.current.set(path,created);this.resources.add(created);
@@ -66,7 +73,13 @@ export class AttachmentResources {
       const url=await selected.promise;
       if(this.disposed)throw new Error('Attachment view closed');
       let released=false;
-      return {url,type,release:()=>{if(released)return;released=true;this.release(path,selected);}};
+      return {url,type,arrayBuffer:async()=>{
+        const ensureLive=()=>{if(this.disposed)throw new Error('Attachment view closed');if(released||!selected.blob)throw new Error('Attachment lease released');};
+        ensureLive();
+        // Blob is immutable and shared with the object URL. Every returned buffer is
+        // independent, so transferring it to a PDF worker cannot detach another lease.
+        const bytes=await selected.blob!.arrayBuffer();ensureLive();return bytes;
+      },release:()=>{if(released)return;released=true;this.release(path,selected);}};
     } catch(error){ this.release(path,selected);throw error; }
   }
   private release(path:string,resource:Resource):void{
@@ -74,7 +87,7 @@ export class AttachmentResources {
     if(resource.refs>0)return;
     if(this.current.get(path)===resource)this.current.delete(path);
     if(resource.url){URL.revokeObjectURL(resource.url);resource.url=undefined;}
-    this.resources.delete(resource);
+    resource.blob=undefined;this.resources.delete(resource);
   }
   invalidate(path?:string):void{
     if(path){const entry=this.current.get(path);if(entry)entry.stale=true;this.current.delete(path);}
@@ -82,7 +95,7 @@ export class AttachmentResources {
   }
   destroy():void{
     if(this.disposed)return;this.disposed=true;this.off.forEach(off=>off());
-    for(const entry of this.resources)if(entry.url){URL.revokeObjectURL(entry.url);entry.url=undefined;}
+    for(const entry of this.resources){if(entry.url){URL.revokeObjectURL(entry.url);entry.url=undefined;}entry.blob=undefined;}
     this.resources.clear();this.current.clear();this.drain();
   }
 }

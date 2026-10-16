@@ -213,6 +213,10 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
       const assetBase=new URL(options.assetBase??'./lib/pdfjs/',doc.baseURI).href;
       const engine=await (options.loadEngine??loadPdfEngine)(doc,assetBase);if(closed)return;
       const acquired=await resources.acquire(path);if(closed){acquired.release();return;}lease=acquired;
+      if(!acquired.arrayBuffer)throw new Error('Attachment provider does not expose PDF bytes');
+      // File-origin Electron blob URLs cannot reliably be fetched by PDF.js. Pass
+      // owned bytes directly; the lease returns a fresh transferable buffer.
+      const data=new Uint8Array(await acquired.arrayBuffer());if(closed)return;
       bus=new engine.viewer.EventBus();links=new engine.viewer.PDFLinkService({eventBus:bus,externalLinkTarget:2,externalLinkRel:'noopener noreferrer'});
       const findController=new engine.viewer.PDFFindController({eventBus:bus,linkService:links});
       viewer=new engine.viewer.PDFViewer({container:scroller,viewer:pages,eventBus:bus,linkService:links,findController,textLayerMode:1,annotationMode:2,annotationEditorMode:-1,removePageBorders:!!options.embed||!!options.mobile,enableScripting:false,maxCanvasPixels:options.mobile?5242880:16777216,abortSignal:abort.signal,imageResourcesPath:new URL('web/images/',assetBase).href});
@@ -221,7 +225,7 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
       on('updatefindmatchescount',event=>{const count=event.matchesCount;matchCount.textContent=count?.total?`${count.current} of ${count.total>1000?'1000+':count.total}`:'';});
       on('updatefindcontrolstate',event=>{query.setAttribute('aria-invalid',String(event.state===1));if(event.matchesCount)matchCount.textContent=`${event.matchesCount.current} of ${event.matchesCount.total}`;});
       const initialPages=new Promise<void>(resolve=>on('pagesinit',()=>{if(closed)return;loaded=true;viewer!.currentScaleValue='page-width';updatePage();updateScale();applySubpath(pendingSubpath);resolve();}));
-      task=engine.core.getDocument({url:lease.url,ownerDocument:doc,cMapUrl:new URL('cmaps/',assetBase).href,cMapPacked:true,standardFontDataUrl:new URL('standard_fonts/',assetBase).href,wasmUrl:new URL('wasm/',assetBase).href,iccUrl:new URL('iccs/',assetBase).href,isEvalSupported:false,enableXfa:true});
+      task=engine.core.getDocument({data,ownerDocument:doc,cMapUrl:new URL('cmaps/',assetBase).href,cMapPacked:true,standardFontDataUrl:new URL('standard_fonts/',assetBase).href,wasmUrl:new URL('wasm/',assetBase).href,iccUrl:new URL('iccs/',assetBase).href,isEvalSupported:false,enableXfa:true});
       task.onPassword=(update,reason)=>{if(closed)return;passwordCallback=update;passwordLabel.textContent=reason===2?'Incorrect password. Try again.':'This PDF requires a password.';password.hidden=false;passwordInput.focus();};
       pdf=await task.promise;if(closed)return;links.setDocument(pdf);viewer.setDocument(pdf);
       await Promise.race([viewer.firstPagePromise??Promise.resolve(),cancelled]);if(closed)return;
