@@ -179,3 +179,21 @@ test('retained controls and editor handlers cannot mutate, open or save after de
   ui.key('Enter', { ctrlKey: true }, input); ui.pointer(card, 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 10, 0); ui.pointer(ui.viewport, 'pointerup', 10, 0);
   await ui.view.flush(); assert.equal(ui.document.toString(), fixture); assert.equal(ui.saves.length, 0); assert.equal(ui.files.length, 0); ui.close();
 });
+
+test('pending changes tracks edited drafts, queued writes and failures until successful retry', async () => {
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); let failing = true;
+  const ui = setup(fixture, async () => { await gate; if (failing) throw new Error('pending save failed'); });
+  assert.equal(ui.view.hasPendingChanges(), false);
+  ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
+  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!;
+  assert.equal(ui.view.hasPendingChanges(), false); input.value = 'draft'; assert.equal(ui.view.hasPendingChanges(), true);
+  input.value = 'a'; assert.equal(ui.view.hasPendingChanges(), false); input.value = 'draft';
+  const flushing = ui.view.flush(); assert.equal(ui.container.querySelector('textarea'), null); assert.equal(ui.view.hasPendingChanges(), true);
+  const rejected = assert.rejects(flushing, /pending save failed/); release(); await rejected;
+  assert.equal(ui.view.hasPendingChanges(), true);
+  failing = false; const retry = ui.view.flush(); assert.equal(ui.view.hasPendingChanges(), true); await retry;
+  assert.equal(ui.view.hasPendingChanges(), false); assert.equal(ui.document.getNode('a')!.text, 'draft');
+  ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
+  const next = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; next.value = 'cancel'; assert.equal(ui.view.hasPendingChanges(), true);
+  ui.key('Escape', {}, next); assert.equal(ui.view.hasPendingChanges(), false); ui.close();
+});

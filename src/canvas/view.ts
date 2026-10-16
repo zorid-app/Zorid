@@ -16,6 +16,8 @@ export interface CanvasView {
   redo(): void;
   /** Commit the active editor and await persistence; rejects on failure, retries on a later call. */
   flush(): Promise<void>;
+  /** True for an edited card draft, queued persistence or the latest failed write. */
+  hasPendingChanges(): boolean;
   destroy(): void;
 }
 interface ProjectedNode { data: CanvasNode; index: number }
@@ -61,6 +63,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const nodeEls = new Map<string, HTMLElement>(), edgeEls = new Map<string, { group: SVGGElement; path: SVGPathElement; label: SVGTextElement }>();
   let drag: { id: number; mode: 'move' | 'pan' | 'select'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
   let editor: HTMLTextAreaElement | undefined;
+  let editorOriginal = '';
   let finishEditing: ((save: boolean) => void) | undefined;
   let saveVersion = 0, completedSaveVersion = 0;
   let failedSave: { error: unknown; version: number } | undefined;
@@ -192,7 +195,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (editor || closed) return;
     const node = projection.nodes.get(id)!; if (node.data.type !== 'text') return;
     const input = dom.createElement('textarea'); input.className = 'zorid-canvas-text-editor'; input.setAttribute('aria-label', 'Edit card text'); input.value = String(node.data.text ?? '');
-    const item = nodeEls.get(id)!; item.append(input); editor = input; input.focus();
+    const item = nodeEls.get(id)!; item.append(input); editor = input; editorOriginal = input.value; input.focus();
     let finished = false;
     const finish = (save: boolean) => {
       if (finished) return; finished = true; editor = undefined; finishEditing = undefined;
@@ -285,6 +288,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   render();
   return {
     element, get document() { return document; }, undo, redo, flush,
+    hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave,
     setDocument(next) { if (closed) return; finishEditing?.(false); clearDrag(); document = next; undoStack.length = redoStack.length = 0; selectedNodes.clear(); selectedEdges.clear(); render(); },
     destroy() { if (closed) return; closed = true; finishEditing?.(false); clearDrag(); win.removeEventListener('blur', windowBlur); element.remove(); },
   };
