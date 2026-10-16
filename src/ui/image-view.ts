@@ -1,19 +1,43 @@
 import type { AttachmentLease, AttachmentResources } from './attachments.ts';
 import { button, el } from './dom.ts';
+import { showAttachmentMenu } from './attachment-menus.ts';
 
 export interface ImageSource { alt:string; load:()=>Promise<AttachmentLease> }
 export interface ImageView { destroy():void }
+export interface ImageViewOptions {
+  /** Explicit host capability; the viewer supplies bytes, never a transient URL. */
+  copyImage?: (bytes:ArrayBuffer,type:string,path:string)=>void|Promise<void>;
+  openExternal?: (path:string)=>void|Promise<void>;
+  reveal?: (path:string)=>void|Promise<void>;
+  isMac?: boolean;
+  onError?: (error:unknown)=>void;
+}
 
 /** Standalone file view; gallery gestures belong to the shared lightbox. */
-export function createImageView(parent:HTMLElement,path:string,resources:AttachmentResources):ImageView{
+export function createImageView(parent:HTMLElement,path:string,resources:AttachmentResources,options:ImageViewOptions={}):ImageView{
   const container=el('div','image-container'),img=el('img');img.alt=path.split('/').at(-1)!;img.draggable=false;
   container.append(img);parent.append(container);
-  let closed=false,lease:AttachmentLease|undefined,lightbox:ImageView|undefined;
+  let closed=false,lease:AttachmentLease|undefined,lightbox:ImageView|undefined,menuVersion=0;
   const load=()=>resources.acquire(path);
   void load().then(result=>{if(closed){result.release();return;}lease=result;img.src=result.url;})
     .catch(error=>{if(!closed)container.append(el('p','error-message',error instanceof Error?error.message:String(error)));});
   img.onerror=()=>{if(!closed&&!container.querySelector('.error-message'))container.append(el('p','error-message','Unable to display this image.'));};
   img.onclick=()=>{lightbox?.destroy();lightbox=openImageLightbox([{alt:img.alt,load}]);};
+  img.addEventListener('contextmenu',event=>{
+    const version=++menuVersion;
+    const isAlive=()=>!closed&&version===menuVersion&&container.isConnected;
+    void showAttachmentMenu(event,{surface:'standalone',image:true,local:true,isMac:options.isMac,isAlive},{
+      copyImage:options.copyImage&&lease?.arrayBuffer?async()=>{
+        const current=lease!;
+        const bytes=await current.arrayBuffer!();
+        if(!isAlive()||lease!==current)return;
+        await options.copyImage!(bytes,current.type,path);
+      }:undefined,
+      openExternal:options.openExternal?()=>options.openExternal!(path):undefined,
+      reveal:options.reveal?()=>options.reveal!(path):undefined,
+      onError:options.onError??(error=>{if(isAlive())container.append(el('p','error-message',error instanceof Error?error.message:String(error)));}),
+    });
+  });
   return {destroy(){closed=true;lightbox?.destroy();lease?.release();img.removeAttribute('src');container.remove();}};
 }
 
