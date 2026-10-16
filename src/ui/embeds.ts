@@ -14,6 +14,7 @@ interface EmbedOptions {
   read?: (path: string) => Promise<string>;
   taskChange?: (path: string, line: number, checked: boolean) => Promise<void>;
   resources?: AttachmentResources;
+  contextMenu?: (event: MouseEvent, request: EmbedRequest, source: string) => void;
 }
 interface EmbedState {
   node: HTMLElement;
@@ -71,6 +72,7 @@ export class MarkdownEmbeds {
     node.setAttribute('role', 'group'); node.setAttribute('aria-label', `Embed ${request.target}`);
     node.dataset.embedTarget = request.target;
     const state: EmbedState = { node, request, source, ancestors, version:0, visible:!this.observer, disposed:false, children:new Set() };
+    node.addEventListener('contextmenu', event => { if(!state.disposed&&!event.defaultPrevented)this.options.contextMenu?.(event,request,source); });
     if (this.disposed) return node;
     this.states.add(state); parent?.children.add(state);
     this.nodes.set(node, state);

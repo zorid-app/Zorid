@@ -18,6 +18,7 @@ import { liveTasks } from '../editor/live-tasks.ts';
 import { liveLists } from '../editor/live-lists.ts';
 import { markdownListKeymap } from '../editor/list-commands.ts';
 import type { MarkdownListOptions } from '../editor/list-commands.ts';
+import { editorContextMenu } from '../editor/context-menu.ts';
 
 export interface EditorHandle {
   getValue(): string;
@@ -179,6 +180,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
         return false;
       }}),
       ...(options.transfers ? [editorTransfers(options.transfers)] : []),
+      editorContextMenu(),
       ...(options.mode === 'live' ? [liveProperties(), liveTables(options.open), liveTasks(), liveLists(), ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed)] : []), preview] : []),
     ]}),
   });

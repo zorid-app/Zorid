@@ -443,3 +443,17 @@ test('a pending attachment import cannot allocate into a vault after it is repla
   assert.deepEqual((await first.list()).map(entry => entry.path).sort(), ['Old', 'Old/Note.md']);
   assert.deepEqual((await second.list()).map(entry => entry.path).sort(), ['New', 'New/Note.md']);
 });
+
+test('native file menus cannot apply actions to a replacement vault', async t => {
+  const {workspace,root,dom,adapter}=await setup(t,new MemoryAdapter({'Same.md':'original'}));
+  let finish!: (id:string|null)=>void;
+  let items:Array<{id?:string;label?:string}>=[];
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:(request:{items:typeof items})=>{items=request.items;return new Promise<string|null>(resolve=>finish=resolve);},dismissContextMenu:async()=>{}}});
+  const file=root.querySelector<HTMLElement>('[role=treeitem][title="Same.md"]')!;
+  file.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  assert.ok(finish);const remove=items.find(item=>item.label==='Move to trash')!;assert.ok(remove);
+  const other=new MemoryAdapter({'Same.md':'replacement'});
+  await workspace.openVault({adapter:other,id:'test:replacement',label:'Replacement'});
+  finish(remove.id!);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(await adapter.read('Same.md'),'original');assert.equal(await other.read('Same.md'),'replacement');
+});

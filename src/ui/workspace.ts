@@ -16,6 +16,7 @@ import { isMarkdown } from '../core/types.ts';
 import { AttachmentImporter, DEFAULT_ATTACHMENT_IMPORT_SETTINGS } from '../core/attachment-import.ts';
 import type { AttachmentImportSettings } from '../core/attachment-import.ts';
 import type { TransferFile } from '../editor/transfers.ts';
+import { showContextMenu, dismissContextMenu } from '../platform/context-menu.ts';
 
 type Mode = 'live' | 'reading';
 interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; }
@@ -54,7 +55,16 @@ export class Workspace {
   private unloadListener = (event: BeforeUnloadEvent) => {
     if ([...this.buffers.values()].some(buffer => buffer.dirty)) { event.preventDefault(); event.returnValue = ''; }
   };
-  private context?: HTMLElement;
+  private menuSerial = 0;
+  private inputContextListener=(event:MouseEvent)=>{
+    if(event.defaultPrevented||!this.initialized)return;
+    const target=event.target as HTMLElement|null;
+    const input=target?.closest<HTMLInputElement|HTMLTextAreaElement>('input,textarea');
+    if(!input||input.type==='checkbox'||input.type==='range')return;
+    const editable=!input.disabled&&!input.readOnly,selected=input.selectionStart!==input.selectionEnd;
+    const pending=showContextMenu(event,[{role:'undo',enabled:editable},{role:'redo',enabled:editable},{type:'separator'},{role:'cut',enabled:editable&&selected},{role:'copy',enabled:selected},{role:'paste',enabled:editable},{role:'selectAll'}]);
+    this.run(()=>pending);
+  };
   private reloadTimer?: ReturnType<typeof setTimeout>;
   private vaultGeneration = 0;
   private initialized = false;
@@ -69,6 +79,7 @@ export class Workspace {
   async start(platform: PlatformVault | null): Promise<void> {
     if (!this.initialized) {
       document.addEventListener('keydown', this.keyListener);
+      document.addEventListener('contextmenu',this.inputContextListener);
       window.addEventListener('beforeunload', this.unloadListener);
       this.initialized = true;
     }
@@ -100,6 +111,7 @@ export class Workspace {
   }
 
   async openVault(platform: PlatformVault): Promise<void> {
+    this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
     await this.flush();
     for (const buffer of this.buffers.values()) await buffer.dispose();
     for (const dispose of this.disposers) dispose(); this.disposers = [];
@@ -242,6 +254,7 @@ export class Workspace {
       node.append(icon(item.kind==='graph'?'graph':'file',15),el('span','tab-title',item.kind==='graph'?'Graph view':item.path?nameOf(item.path):'New tab'));
       const close=button('close','Close tab',event=>{event.stopPropagation();this.run(()=>this.closeTab(pane,item));},'tab-close');node.append(close);
       const select=()=>this.run(async()=>{if(tab.path)await this.buffers.get(tab.path)?.flush();pane.active=item.id;this.activate(pane);await this.renderPane(pane);this.saveSession();});node.onclick=select;
+      node.oncontextmenu=event=>{event.preventDefault();event.stopPropagation();this.tabMenu(pane,item,event.clientX,event.clientY);};
       node.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')select();if(event.key==='ArrowRight'||event.key==='ArrowLeft'){event.preventDefault();const index=pane.tabs.indexOf(item);pane.active=pane.tabs[(index+(event.key==='ArrowRight'?1:pane.tabs.length-1))%pane.tabs.length].id;this.run(()=>this.renderPane(pane));}};
       node.ondragstart=event=>event.dataTransfer?.setData('application/x-zorid-tab',JSON.stringify({pane:pane.id,tab:item.id}));
       node.ondragover=event=>event.preventDefault();node.ondrop=event=>{event.preventDefault();try{const data=JSON.parse(event.dataTransfer?.getData('application/x-zorid-tab')||'null');const from=this.panes.find(p=>p.id===data.pane);const moving=from?.tabs.find(t=>t.id===data.tab);if(!from||!moving||moving===item)return;from.tabs=from.tabs.filter(t=>t!==moving);pane.tabs.splice(pane.tabs.indexOf(item),0,moving);pane.active=moving.id;if(!from.tabs.length)from.tabs.push({id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'});if(!from.tabs.some(t=>t.id===from.active))from.active=from.tabs[0].id;this.run(async()=>{await this.renderPane(from);if(from!==pane)await this.renderPane(pane);this.saveSession();});}catch{/* Not an app tab. */}};
@@ -261,6 +274,7 @@ export class Workspace {
     const path=tab.path;
     if(!isMarkdown(path)){
       const host=el('div','attachment-view');pane.element.append(host);
+      host.oncontextmenu=event=>{event.preventDefault();const entry=this.vault.entries.get(path);if(entry)this.fileMenu(entry,event.clientX,event.clientY);};
       if(isImage(path))pane.imageView=createImageView(host,path,this.attachments!);
       else host.append(el('p','muted',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
       this.renderStatus();return;
@@ -280,7 +294,7 @@ export class Workspace {
           await buffer.flush();
         },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
       }
-      const createEmbeds=()=>new MarkdownEmbeds({vault:this.vault,resources:this.attachments,open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
+      const createEmbeds=()=>new MarkdownEmbeds({vault:this.vault,resources:this.attachments,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){event.preventDefault();event.stopPropagation();this.fileMenu(entry,event.clientX,event.clientY);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
       if(tab.mode==='reading'){
         const preview=el('div','markdown-preview');scroll.append(preview);
         pane.refreshPreview=()=>{
@@ -449,24 +463,28 @@ export class Workspace {
     content.append(input,list,el('div','command-footer','↑↓ to navigate  ↵ to open  esc to dismiss'));render();input.focus();
   }
 
-  private menu(items:{name:string;action:()=>void|Promise<void>}[],x=window.innerWidth/2,y=100):void{
-    this.context?.remove();const menu=el('div','context-menu');menu.role='menu';menu.style.left=`${Math.min(x,window.innerWidth-240)}px`;menu.style.top=`${Math.min(y,window.innerHeight-items.length*34-20)}px`;
-    for(const item of items){const row=textButton(item.name,()=>{menu.remove();this.run(item.action);},'context-menu-item');row.role='menuitem';menu.append(row);}document.body.append(menu);this.context=menu;
-    const dismiss=(event:Event)=>{if(!menu.contains(event.target as Node)){menu.remove();document.removeEventListener('pointerdown',dismiss);}};document.addEventListener('pointerdown',dismiss);
-    menu.addEventListener('keydown',event=>{if(event.key==='Escape')menu.remove();});menu.querySelector('button')?.focus();
+  private menu(items:{name:string;action:()=>void|Promise<void>}[],x=window.innerWidth/2,y=100,valid=()=>true):void{
+    const generation=this.vaultGeneration,serial=++this.menuSerial;
+    const pending=showContextMenu({clientX:x,clientY:y},items.map((item,index)=>({id:`action-${index}`,label:item.name})),{document:this.root.ownerDocument});
+    this.run(async()=>{
+      const id=await pending;
+      if(!id||generation!==this.vaultGeneration||serial!==this.menuSerial||!this.initialized||!valid())return;
+      const match=/^action-(\d+)$/.exec(id);if(match)await items[Number(match[1])]?.action();
+    });
   }
   private fileMenu(entry:VaultEntry,x:number,y:number):void{const folder=entry.type==='folder';this.menu([
     ...(folder?[{name:'New note',action:()=>this.newNote(entry.path)},{name:'New folder',action:()=>this.newFolder(entry.path)}]:[{name:'Open in new tab',action:()=>this.openNote(entry.path,true)},{name:this.bookmarks.has(entry.path)?'Remove bookmark':'Bookmark',action:()=>{if(this.bookmarks.has(entry.path))this.bookmarks.delete(entry.path);else this.bookmarks.add(entry.path);this.saveSession();this.renderSidebar();}}]),
     {name:'Rename…',action:()=>this.renameDialog(entry.path)}, {name:'Move to trash',action:()=>this.deletePath(entry.path)},
-  ],x,y);}
-  private tabMenu(pane:Pane):void{
-    this.activate(pane);const tab=this.current(pane);
+  ],x,y,()=>this.vault.entries.get(entry.path)===entry);}
+  private tabMenu(pane:Pane,tab=this.current(pane),x?:number,y?:number):void{
+    this.activate(pane);
     const markdown=tab.kind==='note'&&(!tab.path||isMarkdown(tab.path));
     const modes:Command[]=markdown?(['reading','live'] as const).map((mode,index)=>({
       name:['Reading view','Live Edit'][index],
-      action:async()=>{tab.mode=mode;await this.renderPane(pane);this.saveSession();},
+      action:async()=>{tab.mode=mode;pane.active=tab.id;await this.renderPane(pane);this.saveSession();},
     })):[];
-    this.menu([{name:'Split right',action:()=>this.split()},...modes,...(tab.path?[{name:'Rename…',action:()=>this.renameDialog(tab.path!)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}]);
+    const path=tab.path;
+    this.menu([{name:'Split right',action:()=>{pane.active=tab.id;this.split();}},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
   }
   private modeMenu():void{this.tabMenu(this.activePane);}
 
@@ -532,5 +550,5 @@ export class Workspace {
     if(action){event.preventDefault();this.run(action);}
   }
   async flush():Promise<void>{for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{await this.flush();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.root.replaceChildren();}
+  async destroy():Promise<void>{this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.root.replaceChildren();}
 }

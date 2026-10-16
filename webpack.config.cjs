@@ -1,5 +1,6 @@
 const path = require('node:path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const { PdfAssetsPlugin } = require('./scripts/pdf-assets.cjs');
 
 module.exports = {
   entry: './src/main.ts',
@@ -27,6 +28,6 @@ module.exports = {
       { test: /\.css$/, use: ['style-loader', 'css-loader'] },
     ],
   },
-  plugins: [new HtmlWebpackPlugin({ template: './index.html' })],
+  plugins: [new HtmlWebpackPlugin({ template: './index.html' }), new PdfAssetsPlugin()],
   devServer: { host: '127.0.0.1', port: 5173, hot: false, liveReload: true },
 };

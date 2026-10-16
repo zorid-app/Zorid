@@ -345,3 +345,31 @@ test('live list preference changes retain selection, history and editor instance
   assert.ok(undo(view));assert.equal(editor.getValue(),'- item!');
   assert.ok(undo(view));assert.equal(editor.getValue(),'- item');
 });
+
+test('editor context menu offers native roles and table commands without applying dismissed actions', async t => {
+  const {view,host,dom,editor}=setup(t,'| One | Two |\n| --- | --- |\n| a | b |\nend');
+  let request: {items:Array<{id?:string;role?:string;label?:string}>}|undefined;
+  let select!: (id:string|null)=>void;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:(value:typeof request)=>{request=value;return new Promise<string|null>(resolve=>select=resolve);}}});
+  const cell=host.querySelector<HTMLElement>('td')!;
+  const event=new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:12,clientY:20});
+  cell.dispatchEvent(event);
+  assert.ok(event.defaultPrevented);assert.ok(request);
+  assert.ok(request.items.some(item=>item.role==='paste'));
+  assert.ok(request.items.some(item=>item.id==='table-column-after'));
+  const before=editor.getValue();select(null);await Promise.resolve();
+  assert.equal(editor.getValue(),before);
+  cell.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  select('table-column-after');await Promise.resolve();
+  assert.equal(host.querySelectorAll('th').length,3);
+  assert.ok(undo(view));assert.equal(editor.getValue(),before);
+});
+
+test('closed editors ignore late context menu command results', async t => {
+  const {view,dom,destroy}=setup(t,'hello');
+  let finish!: (id:string|null)=>void;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:()=>new Promise<string|null>(resolve=>finish=resolve)}});
+  view.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  assert.ok(finish);destroy();finish('select-all');await Promise.resolve();
+  assert.equal(view.state.selection.main.empty,true);
+});
