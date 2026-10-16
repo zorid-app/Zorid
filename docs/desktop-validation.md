@@ -200,3 +200,29 @@ In the earlier Live Edit PDF fixture, clicking the paragraph below the embed and
 typing inserted at the clicked text position (`AfterCLICKPDF`); native Undo and
 Save restored the exact original fixture. This verifies that one PDF-adjacent
 caret case, not general variable-height hit testing.
+
+### Native checkpoint 592a238
+
+The complete root checkpoint passed 778 tests, TypeScript, and a production
+webpack build (three existing bundle/performance warnings). Lucide 1.57.0 passes
+the existing package release-age policy. A pnpm automatic reinstallation had
+removed dependencies; the locked dependencies were restored without relaxing
+that policy. Electron's Node installer exited after partial extraction, so its
+cached official archive was checked against the package's SHA-256 manifest
+(`dec23ecc15f4d0503163c5f65f59114127ce6d2518af8e6547ea787372575fcb`)
+and extracted with macOS ditto before restarting the app at the user's request.
+
+The restarted native window exposes the new Lucide file-toolbar controls,
+including Auto-reveal, and the compact PDF toolbar with Display options, Page,
+and More options. A screenshot confirms the updated icon shapes and chrome;
+the user continued changing panes during observations, so these are bounded
+observations rather than a paired reference pixel comparison.
+
+Opening the exclusive `Native checkpoint integration 20261016.md` fixture left
+its heading rendered without a visible source marker. Clicking the image's Edit
+embed source button selected and exposed `![[Pattern.svg]]` while the rendered
+image remained present in the same accessibility tree. The screenshot also shows
+source above the retained image. No fixture text was changed by these actions.
+PDF source toggling, native rectangle clipboard, new focus repairs, and new-window
+behavior still need their separate native checks; the latter patches are not in
+this running checkpoint.
