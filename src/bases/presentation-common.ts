@@ -26,6 +26,12 @@ export interface BasePresentationHandle {
   refreshLayout(): void;
   destroy(): void;
 }
+export function displayBaseProperty(value: BaseExpressionValue): string {
+  if (value.type === 'null') return '';
+  if (value.type === 'namespace') return value.name;
+  try { return baseValueToString(value); }
+  catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}`; }
+}
 export function propertyValue(row: BaseQueryRow, property: string): BaseExpressionValue {
   return Object.hasOwn(row.values, property) ? row.values[property] : BASE_NULL;
 }
@@ -56,7 +62,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
   let pending = false;
   const editable = !!options.editProperty && property.startsWith('note.') && /\.md$/i.test(row.path);
   const commit = async (next: BaseExpressionValue): Promise<boolean> => {
-    if (disposed || pending || !isCurrent()) return false;
+    if (!editable || disposed || pending || !isCurrent()) return false;
     pending = true;
     try {
       await options.editProperty?.({ version: result.version, path: row.path, property, value: next });
@@ -70,7 +76,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
       const link = element.ownerDocument.createElement('a');
       link.className = 'internal-link';
       link.href = '#';
-      link.textContent = baseValueToString(current);
+      link.textContent = displayBaseProperty(current);
       const open = (event: MouseEvent) => {
         if (event.defaultPrevented || (event.button !== 0 && event.button !== 1) || disposed || !isCurrent()) return;
         event.preventDefault(); options.openFile(row.path, event);
@@ -93,7 +99,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
       });
       element.append(input);
     } else {
-      element.textContent = baseValueToString(current);
+      element.textContent = displayBaseProperty(current);
       if (current.type === 'error') { element.classList.add('mod-error'); element.title = current.error.message; }
     }
   };
@@ -103,16 +109,20 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
     if (element.querySelector('input')) return;
     event.preventDefault(); event.stopPropagation();
     const input = element.ownerDocument.createElement('input');
-    input.type = value.type === 'number' ? 'number' : 'text'; input.value = baseValueToString(value);
+    input.type = 'text'; input.value = displayBaseProperty(value);
     input.setAttribute('aria-label', options.getPropertyLabel?.(property) ?? property.replace(/^note\./, ''));
     element.replaceChildren(input); input.focus(); input.select();
     let ended = false;
     const finish = async () => {
       if (ended) return; ended = true;
       const raw = input.value;
+      if (raw === displayBaseProperty(value)) { draw(value); return; }
       const next: BaseExpressionValue = raw === '' ? BASE_NULL : value.type === 'number'
         ? { type: 'number', value: Number(raw) } : { type: 'string', value: raw };
-      if (next.type === 'number' && !Number.isFinite(next.value)) { draw(value); return; }
+      if (next.type === 'number' && (!raw.trim() || !Number.isFinite(next.value))) {
+        ended = false; input.setAttribute('aria-invalid', 'true');
+        reportPresentationError(options, new Error('Enter a valid number.')); return;
+      }
       input.disabled = true;
       const accepted = await commit(next);
       if (!disposed && isCurrent()) {
@@ -250,7 +260,7 @@ export function createGroupUnit(document: Document, group: BaseQueryGroup, index
     button.type = 'button'; button.setAttribute('aria-expanded', String(!collapsed));
     const indicator = document.createElement('span'); indicator.className = 'bases-group-collapse'; indicator.setAttribute('aria-hidden', 'true');
     indicator.append(icon(collapsed ? 'right' : 'down', 16, document));
-    const label = document.createElement('span'); label.textContent = group.key?.type === 'null' ? 'No value' : group.key ? baseValueToString(group.key) : '';
+    const label = document.createElement('span'); label.textContent = group.key?.type === 'null' ? 'No value' : group.key ? displayBaseProperty(group.key) : '';
     button.append(indicator, label); button.addEventListener('click', toggle);
     return { element: button, dispose() { button.removeEventListener('click', toggle); } };
   } };

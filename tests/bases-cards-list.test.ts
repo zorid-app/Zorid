@@ -219,3 +219,34 @@ test('Failed text draft can be retried without losing edits', async () => {
   assert.equal(cell.textContent, 'Saved draft'); assert.equal(calls, 2);
   view.destroy(); d.window.close();
 });
+
+test('Null cards are blank, unchanged empty drafts do not write, unsupported values cannot crash views', async () => {
+  const { dom: d, container, win } = dom(); let writes = 0;
+  const data = result([row('A.md', { 'note.empty': null, 'note.blank': '' })], {}, ['note.empty', 'note.blank']);
+  const view = createBaseCardsView(container, { result: data, openFile() {}, editProperty() { writes++; } });
+  for (const property of ['note.empty', 'note.blank']) {
+    const line = container.querySelector<HTMLElement>(`[data-property="${property}"]`)!;
+    assert.equal(line.textContent, ''); line.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+    const input = line.querySelector('input')!; assert.equal(input.value, '');
+    input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter' })); await tick();
+  }
+  assert.equal(writes, 0);
+  const unsupported = { type: 'duration', years: 0, months: 0, days: 1, hours: 0, minutes: 0, seconds: 0, milliseconds: 0 } as const;
+  const file = { type: 'namespace', name: 'Folder/A.md', get() { throw new Error('must not call'); } } as const;
+  const next = { ...data, properties: ['note.duration', 'file.file'], groups: [{ key: unsupported, rows: [{ path: 'Folder/A.md', values: { 'note.duration': unsupported, 'file.file': file } }] }] };
+  view.update(next); assert.match(container.textContent!, /Error: Text conversion for duration/); assert.match(container.textContent!, /Folder\/A.md/);
+  view.destroy(); d.window.close();
+});
+
+test('Invalid numeric drafts remain editable and never coerce whitespace to zero', async () => {
+  const { dom: d, container, win } = dom(); let writes = 0;
+  const view = createBaseListView(container, { result: result([row('A.md', { 'note.count': 1 })], {}, ['note.count']), openFile() {}, editProperty() { writes++; } });
+  const line = container.querySelector<HTMLElement>('[data-property="note.count"]')!;
+  line.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  const input = line.querySelector('input')!;
+  for (const invalid of ['bad', ' ']) {
+    input.value = invalid; input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter' })); await tick();
+    assert.equal(input.value, invalid); assert.equal(input.disabled, false); assert.equal(input.getAttribute('aria-invalid'), 'true');
+  }
+  assert.equal(writes, 0); view.destroy(); d.window.close();
+});

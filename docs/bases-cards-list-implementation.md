@@ -103,8 +103,8 @@ performance or a matching reference latency/memory budget.
   here; loading is an explicit host capability. No browser network request occurs
   without a URL supplied by that capability.
 
-Validation: 14 focused serial tests cover settings, ordered properties, event
+Validation: 16 focused serial tests cover settings, ordered properties, event
 modifiers, text selection/editor protection, List omissions and numbering, nested
 markers, group collapse, asynchronous thumbnail retirement, 10,000-row virtual
-mounting, write-version boundaries, edit failures, repeated edits, bounded observer
+mounting, write-version boundaries, edit failures, repeated edits, null/unsupported values, invalid numeric drafts, bounded observer
 subscriptions, and measured scroll anchoring. Focused strict TypeScript passes.
