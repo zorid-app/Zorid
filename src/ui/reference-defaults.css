@@ -1,0 +1,97 @@
+/* Independently authored defaults; load after styles.css.
+   Source identities, offsets and unresolved runtime details:
+   docs/theme-layout-reference.md. This is not a copied reference stylesheet. */
+:root {
+  --background-primary: #1c1c1c;
+  --background-primary-alt: #232323;
+  --background-secondary: #282828;
+  --background-modifier-hover: color-mix(in oklch, white 6.7%, transparent);
+  --background-modifier-active: var(--background-modifier-hover);
+  --background-modifier-border: #333;
+  --background-input: #2e2e2e;
+  --text-muted: #b3b3b3;
+  --text-faint: #666;
+  --interactive-accent: hsl(258 88% 66%);
+  --interactive-accent-hover: hsl(255 89.76% 75.9%);
+  --text-accent: var(--interactive-accent-hover);
+  --text-selection: color-mix(in oklch, var(--interactive-accent) 33%, transparent);
+  --font-default: ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", "Google Sans Flex", Roboto, "Inter Variable", Inter, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+  --font-interface: var(--font-default);
+  --font-text: var(--font-default);
+  --font-monospace: ui-monospace, SFMono-Regular, "Cascadia Mono", "Roboto Mono", "DejaVu Sans Mono", "Liberation Mono", Menlo, Monaco, Consolas, "Source Code Pro", monospace;
+  --line-height-normal: 1.5;
+  --line-height-tight: 1.3;
+  --file-margins: 32px;
+  --h2-weight: 600;
+  --h3-weight: 600;
+  --h4-weight: 600;
+  --h5-weight: 600;
+  font-size: var(--font-text-size);
+}
+html[data-theme="light"] {
+  --background-primary: #fff;
+  --background-primary-alt: #fafafa;
+  --background-secondary: #f6f6f6;
+  --background-modifier-hover: color-mix(in oklch, black 6.7%, transparent);
+  --background-modifier-active: var(--background-modifier-hover);
+  --background-modifier-border: #e4e4e4;
+  --background-input: #fff;
+  --text-muted: #5c5c5c;
+  --text-faint: #ababab;
+  --text-accent: hsl(258 88% 66%);
+  --interactive-accent: hsl(257 88.88% 70.95%);
+  --interactive-accent-hover: hsl(255 89.76% 75.9%);
+  --text-selection: color-mix(in oklch, var(--interactive-accent) 20%, transparent);
+}
+@supports (font-variation-settings: normal) {
+  :root { --h2-weight: 680; --h3-weight: 660; --h4-weight: 640; --h5-weight: 620; }
+}
+body { font-size: 15px; line-height: var(--line-height-tight); }
+::selection { background: var(--text-selection); }
+.editor-host .cm-selectionBackground,
+.editor-host .cm-focused .cm-selectionBackground { background: var(--text-selection); }
+
+/* Heading sizes apply in both presentation modes, without changing CM's
+   measured vertical padding or the editor-owned list/table decorations. */
+.editor-host .cm-heading-1, .markdown-preview h1 { font-size: 1.618em; font-weight: 700; line-height: 1.2; letter-spacing: -.015em; }
+.editor-host .cm-heading-2, .markdown-preview h2 { font-size: 1.462em; font-weight: var(--h2-weight); line-height: 1.2; letter-spacing: -.011em; }
+.editor-host .cm-heading-3, .markdown-preview h3 { font-size: 1.318em; font-weight: var(--h3-weight); line-height: 1.3; letter-spacing: -.008em; }
+.editor-host .cm-heading-4, .markdown-preview h4 { font-size: 1.188em; font-weight: var(--h4-weight); line-height: 1.4; letter-spacing: -.005em; }
+.editor-host .cm-heading-5, .markdown-preview h5 { font-size: 1.076em; font-weight: var(--h5-weight); line-height: var(--line-height-normal); letter-spacing: -.002em; }
+.editor-host .cm-heading-6, .markdown-preview h6 { font-size: 1em; font-weight: 600; line-height: var(--line-height-normal); color: inherit; letter-spacing: 0; }
+
+/* Desktop geometry only: keep the existing touch drawer, larger controls,
+   safe-area padding, mobile toolbar and in-flow status bar below 701px. */
+@media (min-width: 701px) {
+  .workspace { grid-template-rows: minmax(0, 1fr); }
+  .note-scroll, .note-scroll:not(.readable-width) { padding: var(--file-margins); scrollbar-gutter: stable; }
+  .note-scroll.readable-width > :is(.note-title, .editor-host, .markdown-preview, .properties-host) { max-width: var(--file-line-width); margin-inline: auto; }
+  .note-title { font-size: calc(var(--font-text-size) * 1.618); font-weight: 700; line-height: 1.2; letter-spacing: -.015em; margin-bottom: .5em; }
+  .pane-toolbar { height: 40px; min-height: 40px; flex-shrink: 0; padding: 0 12px; gap: 8px; }
+  .breadcrumbs { justify-content: flex-start; }
+  .view-actions { gap: 0; }
+  .ribbon { padding: 48px 4px 12px; gap: 4px; }
+  .ribbon-top, .ribbon-bottom { gap: 6px; }
+  .ribbon .icon-button { width: 28px; height: 24px; padding: 4px 6px; border-radius: 4px; }
+  .ribbon .icon-button svg { width: 16px; height: 16px; }
+  /* The clone has a separate toggle row. Overlay its control in the existing
+     40px tab row, keeping the control reachable without a second blank row. */
+  .sidebar > .titlebar { position: absolute; top: 0; right: 0; z-index: 1; width: 40px; height: 40px; min-height: 40px; justify-content: center; }
+  .sidebar-tabs { padding-right: 40px; }
+  .tab-bar { padding: 5px 8px 0; gap: 0; flex-shrink: 0; border-bottom: 1px solid var(--background-modifier-border); }
+  .tab { flex: 0 1 200px; min-width: 0; max-width: 320px; gap: 2px; padding: 0 6px; border-radius: 10px 10px 0 0; color: var(--text-faint); }
+  .tab.is-active { color: var(--text-muted); }
+  .pane.is-active .tab.is-active { color: var(--text-normal); }
+  .tab-title { min-width: 0; }
+  .tree-row { margin-bottom: 2px; border-radius: 8px; }
+  .tree-row.is-active { background: var(--background-modifier-hover); }
+  .status-bar { position: fixed; bottom: 0; right: 0; width: max-content; max-width: calc(100% - var(--ribbon-width)); min-height: 18px; padding: 4px 8px 4px 4px; gap: 4px; border: 1px solid var(--background-modifier-border); border-width: 1px 0 0 1px; border-radius: 8px 0 0 0; z-index: 15; }
+  .status-bar > * { padding: 3px 4px; line-height: 1; flex-shrink: 0; }
+  .status-bar > :empty { display: none; }
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
+  ::-webkit-scrollbar-thumb { border-width: 3px 3px 3px 2px; border-radius: 12px; }
+}
+/* Keep the existing 701–800px compact dock fallback and resize overrides. */
+@media (min-width: 801px) {
+  :root { --sidebar-width: 300px; --right-sidebar-width: 300px; }
+}
