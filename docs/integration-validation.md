@@ -44,3 +44,24 @@ The PDF byte-loading fix and root native evidence through `661adbc` are included
 See `desktop-validation.md` for the precise native checks. Later commits must be
 checked against their actual merged state. Passing these tests does not establish native rendering, pointer hit
 geometry, device behavior, full stack equivalence or complete parity.
+
+## Coherent desktop checkpoint, 2026-10-16
+
+Checkpoint `0ddb137` merges root `f5f57f7` with Lucide icons and chrome layout,
+working file auto-reveal/collapse controls, compact PDF toolbar and embed menu
+anchoring, source-aware live links, sparse inactive caret mapping, and the reviewed
+menu foundations. The root live-inline, retained embed-source view and rectangular
+table host changes are included. The complete suite passes **747 tests**, TypeScript
+passes, and the production webpack build passes with its three bundle/performance
+warnings. The initial full run exposed an obsolete integration assertion requiring
+embed destruction during source editing; the updated test checks retained DOM,
+visible editable source and single final disposal. Its seven-test file and the full
+suite then pass. No runtime change was needed for that assertion.
+
+This checkpoint has not yet received root's native visual verification. The new PDF
+sidebar, Canvas style refinement, wiki completion, browser-menu hardening and focus
+repairs remain separate branches. Workspace/attachment/link menu builders do not
+imply complete host wiring. Native popouts, tab dragging, window-scoped recovery and
+serialized cross-window writes remain pending. Earlier table/list/inline rows above
+are historical checkpoint descriptions; current native and exact parity gaps remain
+tracked in the feature-specific evidence documents and user findings queue.
