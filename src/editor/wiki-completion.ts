@@ -1,3 +1,4 @@
+import { Forward } from 'lucide';
 import { EditorSelection, Prec, Transaction } from '@codemirror/state';
 import type { EditorState, Extension } from '@codemirror/state';
 import { EditorView, keymap, ViewPlugin } from '@codemirror/view';
@@ -26,7 +27,7 @@ type Mode = 'file' | 'heading' | 'block' | 'display';
 type Kind = Mode | 'alias' | 'unresolved' | 'none';
 type AcceptKey = 'Enter' | 'Tab' | '#' | '^' | 'raw';
 interface WikiOption extends Completion {
-  wiki: { kind: Kind; mode: Mode; target: string; alias?: string; note: string; flair?: string; score: number; matches: number[]; ignored?: boolean };
+  wiki: { kind: Kind; mode: Mode; target: string; alias?: string; note: string; flair?: string; score: number; matches: number[]; noteMatches?: number[]; placeholder?: boolean; ignored?: boolean };
 }
 interface WikiContext { from: number; to: number; query: string }
 const withoutMd = (path: string) => path.replace(/\.md$/i, '');
@@ -54,9 +55,27 @@ function contextAt(state: EditorState, pos = state.selection.main.head): WikiCon
 /** Original bounded fuzzy matcher. Exact proprietary scores are not reproduced. */
 function match(query: string, label: string): { score: number; matches: number[] } | null {
   const needle = query.toLowerCase(), haystack = label.toLowerCase();
+  // Lowercasing can expand a source character (İ -> i + combining dot).
+  // Scores use the folded string, but render spans must index original UTF-16.
+  const sourceMatches = (spans: number[]): number[] => {
+    if (haystack.length === label.length) return spans;
+    const starts: number[] = [], ends: number[] = [];
+    let offset = 0;
+    for (const character of label) {
+      for (let unit = 0; unit < character.toLowerCase().length; unit++) { starts.push(offset); ends.push(offset + character.length); }
+      offset += character.length;
+    }
+    const mapped: number[] = [];
+    for (let index = 0; index < spans.length; index += 2) {
+      const from = starts[spans[index]], to = ends[spans[index + 1] - 1];
+      if (mapped.length && from <= mapped[mapped.length - 1]) mapped[mapped.length - 1] = Math.max(to, mapped[mapped.length - 1]);
+      else mapped.push(from, to);
+    }
+    return mapped;
+  };
   if (!needle) return { score: 0, matches: [] };
   const contiguous = haystack.indexOf(needle);
-  if (contiguous >= 0) return { score: (haystack === needle ? 100 : 80) - contiguous / 100 - label.length / 1000, matches: [contiguous, contiguous + needle.length] };
+  if (contiguous >= 0) return { score: (haystack === needle ? 100 : 80) - contiguous / 100 - label.length / 1000, matches: sourceMatches([contiguous, contiguous + needle.length]) };
   const matches: number[] = [];
   let cursor = 0, gap = 0;
   for (const character of needle) {
@@ -67,7 +86,7 @@ function match(query: string, label: string): { score: number; matches: number[]
     else matches.push(found, found + character.length);
     cursor = found + character.length;
   }
-  return { score: 40 - gap / 100 - label.length / 1000, matches };
+  return { score: 40 - gap / 100 - label.length / 1000, matches: sourceMatches(matches) };
 }
 function resolve(options: WikiCompletionOptions, target: string, paths: readonly string[]): string | null {
   const source = options.sourcePath?.() ?? '';
@@ -131,8 +150,8 @@ export function wikiCompletionSource(options: WikiCompletionOptions): Completion
     const nameCounts = new Map<string, number>();
     for (const path of paths) { const name = basename(path).toLowerCase(); nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1); }
     let mode: Mode = 'file';
-    const add = (label: string, kind: Kind, target: string, note: string, score: number, matches: number[], alias?: string, flair?: string, ignored?: boolean) => {
-      const option: WikiOption = { label, wiki: { kind, mode, target, note, score, matches, alias, flair, ignored } };
+    const add = (label: string, kind: Kind, target: string, note: string, score: number, matches: number[], alias?: string, flair?: string, ignored?: boolean, presentation: { noteMatches?: number[]; placeholder?: boolean } = {}) => {
+      const option: WikiOption = { label, wiki: { kind, mode, target, note, score, matches, alias, flair, ignored, ...presentation } };
       option.apply = view => { apply(view, option, 'Enter'); };
       results.push(option);
     };
@@ -145,7 +164,7 @@ export function wikiCompletionSource(options: WikiCompletionOptions): Completion
         const matched = match(query, alias);
         if (matched) add(alias, 'alias', link(options, path!, nameCounts) + (hash < 0 ? '' : target.slice(hash)), target, matched.score, matched.matches, alias, '↪');
       }
-      if (!results.length) add(query || 'Display text', 'alias', target, target, 0, [], query, '↪');
+      if (!results.length) add(query || 'Display text', 'alias', target, target, 0, [], query, '↪', undefined, { placeholder: !query });
     } else if (raw.includes('#') || raw.includes('^')) {
       const globalHeading = raw.startsWith('##'), globalBlock = raw.startsWith('^^');
       const hash = raw.indexOf('#'), caret = raw.indexOf('^'), block = globalBlock || caret >= 0 && (hash < 0 || raw[hash + 1] === '^');
@@ -178,7 +197,7 @@ export function wikiCompletionSource(options: WikiCompletionOptions): Completion
           }
         }
       }
-      if (!results.length && !global && !block && resolved) add(query || 'Heading', 'heading', raw, '', 0, []);
+      if (!results.length && !global && !block && resolved) add(query || 'Heading', 'heading', raw, '', 0, [], undefined, undefined, undefined, { placeholder: !query });
     } else {
       for (const path of paths) {
         const metadata = options.metadata?.(path), ignored = metadata?.ignored;
@@ -187,7 +206,9 @@ export function wikiCompletionSource(options: WikiCompletionOptions): Completion
         const matchedName = match(raw, name), matchedPath = matchedName ? null : match(raw, displayPath);
         const target = link(options, path, nameCounts), alias = target.includes('/') && !imagePath(path) ? withoutMd(basename(path)) : undefined;
         const matched = matchedName ?? matchedPath;
-        if (matched) add(name, 'file', target, folder, raw ? matched.score - (matchedPath ? 1 : 0) - (ignored ? 10 : 0) : metadata?.mtime ?? 0, matchedName?.matches ?? [], alias, undefined, ignored);
+        if (matched) add(name, 'file', target, folder, raw ? matched.score - (matchedPath ? 1 : 0) - (ignored ? 10 : 0) : metadata?.mtime ?? 0,
+          matchedName?.matches ?? clipMatches(matchedPath?.matches ?? [], folder.length, displayPath.length), alias, undefined, ignored,
+          { noteMatches: clipMatches(matchedPath?.matches ?? [], 0, folder.length) });
         for (const alias of metadata?.aliases ?? []) {
           const matched = match(raw, alias);
           if (matched) add(alias, 'alias', target, displayPath, raw ? matched.score - (ignored ? 10 : 0) : metadata?.mtime ?? 0, matched.matches, alias, '↪', ignored);
@@ -207,20 +228,56 @@ export function wikiCompletionSource(options: WikiCompletionOptions): Completion
   };
 }
 
+/** Project UTF-16 match spans into a displayed title or folder without splitting
+ * the source/insertion identity of a completion. */
+function clipMatches(matches: readonly number[], from: number, to: number): number[] {
+  const clipped: number[] = [];
+  for (let index = 0; index < matches.length; index += 2) {
+    const start = Math.max(from, matches[index]), end = Math.min(to, matches[index + 1]);
+    if (start < end) clipped.push(start - from, end - from);
+  }
+  return clipped;
+}
+function appendHighlighted(element: HTMLElement, text: string, matches: readonly number[]) {
+  let offset = 0;
+  for (let index = 0; index < matches.length; index += 2) {
+    const from = Math.max(offset, matches[index]), to = Math.min(text.length, matches[index + 1]);
+    if (from >= to) continue;
+    element.append(element.ownerDocument.createTextNode(text.slice(offset, from)));
+    const highlight = element.ownerDocument.createElement('strong');
+    highlight.textContent = text.slice(from, to); element.append(highlight); offset = to;
+  }
+  element.append(element.ownerDocument.createTextNode(text.slice(offset)));
+}
 function renderRow(completion: Completion, _state: EditorState, view: EditorView): Node | null {
   if (!isWiki(completion)) return null;
   const doc = view.dom.ownerDocument, row = doc.createElement('span'), content = doc.createElement('span'), title = doc.createElement('span');
   row.className = 'wiki-suggestion-row'; content.className = 'wiki-suggestion-content'; title.className = 'wiki-suggestion-title';
-  let offset = 0;
-  for (let index = 0; index < completion.wiki.matches.length; index += 2) {
-    const [from, to] = completion.wiki.matches.slice(index, index + 2);
-    title.append(doc.createTextNode(completion.label.slice(offset, from)));
-    const highlight = doc.createElement('strong'); highlight.textContent = completion.label.slice(from, to); title.append(highlight); offset = to;
+  if (completion.wiki.placeholder) title.classList.add('wiki-suggestion-placeholder');
+  appendHighlighted(title, completion.label, completion.wiki.matches); content.append(title);
+  if (completion.wiki.note) {
+    const note = doc.createElement('span'); note.className = 'wiki-suggestion-note';
+    appendHighlighted(note, completion.wiki.note, completion.wiki.noteMatches ?? []); content.append(note);
   }
-  title.append(doc.createTextNode(completion.label.slice(offset))); content.append(title);
-  if (completion.wiki.note) { const note = doc.createElement('span'); note.className = 'wiki-suggestion-note'; note.textContent = completion.wiki.note; content.append(note); }
   row.append(content);
-  if (completion.wiki.flair) { const flair = doc.createElement('span'); flair.className = 'wiki-suggestion-flair'; flair.textContent = completion.wiki.flair; if (completion.wiki.kind === 'alias') flair.setAttribute('aria-label', 'Alias'); row.append(flair); }
+  if (completion.wiki.flair) {
+    const aux = doc.createElement('span'), flair = doc.createElement('span');
+    aux.className = 'wiki-suggestion-aux'; flair.className = 'wiki-suggestion-flair';
+    if (completion.wiki.kind === 'alias') {
+      flair.setAttribute('aria-label', 'Alias'); flair.title = 'Alias';
+      // Licensed project icon data, created in the editor's own document.
+      const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', width: '16', height: '16', fill: 'none', stroke: 'currentColor',
+        'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' })) svg.setAttribute(key, value);
+      for (const [tag, attributes] of Forward) {
+        const child = doc.createElementNS(svg.namespaceURI, tag);
+        for (const [key, value] of Object.entries(attributes)) if (value !== undefined) child.setAttribute(key, String(value));
+        svg.append(child);
+      }
+      flair.append(svg);
+    } else flair.textContent = completion.wiki.flair;
+    aux.append(flair); row.append(aux);
+  }
   return row;
 }
 
@@ -296,7 +353,7 @@ export function wikiCompletion(options: WikiCompletionOptions): Extension {
             const instructions = mode === 'file' ? [['Type #', 'to link heading'], ['Type ^', 'to link blocks'], ['Type |', 'to change display text']] : [['↵', 'to accept']];
             for (const [key, purpose] of instructions) {
               const item = footer.ownerDocument.createElement('span'), command = footer.ownerDocument.createElement('b');
-              command.textContent = key; item.append(command, footer.ownerDocument.createTextNode(` ${purpose}`)); footer.append(item);
+              command.textContent = key; item.append(command, footer.ownerDocument.createTextNode(purpose)); footer.append(item);
             }
           }
         });
