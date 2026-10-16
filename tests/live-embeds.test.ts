@@ -1,17 +1,19 @@
 import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { history, undo } from '@codemirror/commands';
+import { history, redo, undo } from '@codemirror/commands';
 import { liveEmbeds } from '../src/editor/live-embeds.ts';
+import { createEditor } from '../src/ui/editor.ts';
 import type { EmbedRequest } from '../src/ui/markdown.ts';
 
 // These tests exercise real CM fields/widgets/lifecycle. jsdom geometry cannot
 // certify native pointer coordinates, image sizing, IME, or visual parity.
-function setup(t: TestContext, source: string) {
+function setup(t: TestContext, source: string, integrated = false) {
   const dom = new JSDOM('<!doctype html><body><div id="host"></div>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   const observers: { target?: Element; disconnected: boolean; callback: () => void }[] = [];
@@ -34,23 +36,30 @@ function setup(t: TestContext, source: string) {
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const renders: { request: EmbedRequest; node: HTMLElement; destroys: number }[] = [];
   const compartment = new Compartment();
-  const extension = liveEmbeds(request => {
+  const renderer = (request: EmbedRequest) => {
     const node = document.createElement('span'); node.textContent = `Rendered ${request.target}`;
+    if (request.target.endsWith('.wav')) {
+      node.className = 'internal-embed media-embed audio-embed';
+      const media = document.createElement('div'); media.className = 'zorid-media-view media-embed audio-embed';
+      const audio = document.createElement('audio'); audio.controls = true; media.append(audio); node.append(media);
+    }
     const link = document.createElement('a'); link.href = '#'; link.textContent = 'Open'; node.append(link);
     const record = { request, node, destroys: 0 }; renders.push(record);
     return { dom: node, destroy() { record.destroys++; } };
-  });
+  };
+  const extension = liveEmbeds(renderer);
   const host = document.querySelector<HTMLElement>('#host')!;
-  const view = new EditorView({ parent: host, state: EditorState.create({ doc: source,
+  const editor = integrated ? createEditor(host, { value: source, mode: 'live', paths: () => [], open() {}, onChange() {}, renderEmbed: renderer }) : undefined;
+  const view = editor ? EditorView.findFromDOM(host.querySelector('.cm-editor')!)! : new EditorView({ parent: host, state: EditorState.create({ doc: source,
     extensions: [markdown({ base: markdownLanguage }), history(), compartment.of(extension)] }) });
   let closed = false;
-  const destroy = () => { if (!closed) { closed = true; view.destroy(); } };
+  const destroy = () => { if (!closed) { closed = true; if (editor) editor.destroy(); else view.destroy(); } };
   t.after(() => {
     destroy(); dom.window.close();
     for (const [key, value] of saved) { if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key); }
   });
   const click = (node: Element) => node.dispatchEvent(new dom.window.MouseEvent('click', { button: 0, bubbles: true, cancelable: true }));
-  return { view, host, renders, destroy, compartment, extension, click, observers };
+  return { view, host, renders, destroy, compartment, extension, click, observers, dom };
 }
 
 test('whole-line and inline embeds render without altering the Markdown document', t => {
@@ -299,4 +308,55 @@ test('editing revealed source remaps the caret, updates target and does not remo
   view.dispatch({ selection: { anchor: view.state.doc.length } });
   assert.equal(host.querySelector('.cm-live-embed'), replacement);
   assert.equal(renders.length, 2); assert.equal(renders[1].destroys, 0);
+});
+
+const mediaFixture = '# Media verification\n\n![[Native media tone.wav]]\n\nAfter audio.\n';
+for (const line of [2, 4]) for (const key of ['Backspace', 'Delete']) test(`actual editor ${key} on blank line ${line} preserves media source and balanced rendered ownership`, async t => {
+  const { view, host, renders, dom } = setup(t, mediaFixture, true);
+  const position = view.state.doc.line(line).from;
+  view.focus(); view.dispatch({ selection: { anchor: position } }); await Promise.resolve();
+  const event = new dom.window.KeyboardEvent('keydown', { key, code: key, bubbles: true, cancelable: true });
+  view.contentDOM.dispatchEvent(event);
+  assert.equal(event.defaultPrevented, true);
+  const removed = key === 'Backspace' ? position - 1 : position;
+  assert.equal(view.state.doc.toString(), mediaFixture.slice(0, removed) + mediaFixture.slice(removed + 1));
+  assert.ok(host.querySelector('.cm-live-embed'), 'media remains rendered');
+  assert.ok(host.querySelector('audio[controls]'));
+  assert.equal(renders.filter(record => record.destroys === 0).length, 1);
+  assert.ok(renders.every(record => record.destroys <= 1));
+  assert.equal(undo(view), true); assert.equal(view.state.doc.toString(), mediaFixture);
+  assert.ok(host.querySelector('audio[controls]'));
+  assert.equal(redo(view), true); assert.ok(host.querySelector('audio[controls]'));
+  assert.equal(renders.filter(record => record.destroys === 0).length, 1);
+});
+
+for (const prefix of ['# Media verification', 'Media verification']) for (const key of ['Backspace', 'Delete']) test(`actual editor ${key} joining audio to ${prefix.startsWith('#') ? 'heading' : 'prose'} retains embed source and controls`, async t => {
+  const source = prefix + '\n![[Native media tone.wav]]\n\nAfter audio.\n';
+  const { view, host, renders, dom } = setup(t, source, true);
+  const position = key === 'Backspace' ? view.state.doc.line(2).from : view.state.doc.line(1).to;
+  view.focus(); view.dispatch({ selection: { anchor: position } }); await Promise.resolve();
+  view.contentDOM.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, code: key, bubbles: true, cancelable: true }));
+  assert.equal(view.state.doc.toString(), source.replace('verification\n', 'verification'));
+  assert.ok(host.querySelector('.cm-live-embed-inline'), 'joined source still renders its embed');
+  assert.equal(renders.at(-1)!.request.target, 'Native media tone.wav');
+  assert.equal(renders.at(-1)!.destroys, 0);
+  assert.ok(host.querySelector('.cm-live-embed-inline audio[controls]'));
+  assert.equal(renders.filter(record => record.destroys === 0).length, 1);
+  assert.equal(undo(view), true); assert.equal(view.state.doc.toString(), source);
+  assert.ok(host.querySelector('.cm-live-embed-block audio[controls]'));
+  assert.equal(redo(view), true); assert.ok(host.querySelector('.cm-live-embed-inline audio[controls]'));
+  assert.equal(renders.filter(record => record.destroys === 0).length, 1);
+});
+
+
+test('inline audio gets available width while image embeds keep their existing sizing rules', t => {
+  const { view, host, renders } = setup(t, 'Text ![[Native media tone.wav]] and ![[image.png|240]]', true);
+  const style = document.createElement('style'); style.textContent = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8'); document.head.append(style);
+  const audio = host.querySelector<HTMLElement>('.cm-live-embed-inline:has(.audio-embed)')!;
+  const imageRecord = renders.find(record => record.request.target === 'image.png')!;
+  const image = document.createElement('img'); image.width = 240; imageRecord.node.append(image);
+  const imageWrapper = image.closest<HTMLElement>('.cm-live-embed-inline')!;
+  assert.equal(getComputedStyle(audio).width, '100%'); assert.equal(getComputedStyle(audio).maxWidth, '100%');
+  assert.notEqual(getComputedStyle(imageWrapper).width, '100%'); assert.equal(image.getAttribute('width'), '240');
+  assert.equal(view.state.doc.toString(), 'Text ![[Native media tone.wav]] and ![[image.png|240]]');
 });
