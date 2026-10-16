@@ -296,8 +296,8 @@ export class Vault {
   }
 
   /** Update links resolved against the pre-move index, including links inside moved notes. */
-  rename(rawOld: string, rawNew: string): Promise<void> {
-    return this.renameInternal(rawOld, rawNew, true);
+  rename(rawOld: string, rawNew: string, validate?: () => void): Promise<void> {
+    return this.renameInternal(rawOld, rawNew, true, validate);
   }
 
   private renameInternal(rawOld: string, rawNew: string, updateLinks: boolean, validate?: () => void): Promise<void> {

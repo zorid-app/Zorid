@@ -130,3 +130,52 @@ test('execution-time guards reject stale handles after queued deletion and repla
     assert.equal(await vault.read('One.md'), 'next edit');
   }
 });
+
+test('link-updating rename revalidates caller policy against the freshly read destination inventory', async () => {
+  class DestinationAppearsAdapter extends MemoryAdapter {
+    injectDestination = false;
+    moves = 0;
+    override async list() {
+      if (this.injectDestination) {
+        this.injectDestination = false;
+        await super.write('Renamed.md', 'external destination');
+      }
+      return super.list();
+    }
+    override async rename(from: string, to: string) { this.moves++; return super.rename(from, to); }
+  }
+  const adapter = new DestinationAppearsAdapter({ 'One.md': '# Original', 'Link.md': '[[One]]' });
+  const vault = new Vault(adapter); await vault.initialize();
+  adapter.injectDestination = true;
+  let validations = 0;
+  await assert.rejects(vault.rename('One.md', 'renamed.md', () => {
+    validations++;
+    if ([...vault.entries.keys()].some(path => path.normalize('NFC').toLocaleLowerCase() === 'renamed.md')) {
+      throw new Error('case-insensitive destination conflict');
+    }
+  }), /case-insensitive destination conflict/);
+  assert.equal(validations, 2);
+  assert.equal(adapter.moves, 0);
+  assert.equal(await vault.read('One.md'), '# Original');
+  assert.equal(await vault.read('Link.md'), '[[One]]');
+  assert.equal(await vault.read('Renamed.md'), 'external destination');
+  // No global case-insensitive rename restriction: callers choose their policy.
+  await vault.rename('One.md', 'ONE.md');
+  assert.equal(await vault.read('ONE.md'), '# Original');
+  assert.equal(await vault.read('Link.md'), '[[ONE]]');
+});
+
+test('link-updating rename rejects a queued stale source before refreshing or mutating it', async () => {
+  const adapter = new MemoryAdapter({ 'One.md': '# Original', 'Link.md': '[[One]]' });
+  const vault = new Vault(adapter); await vault.initialize();
+  let stale = false;
+  vault.on('delete', () => { stale = true; });
+  const deletion = vault.trash('One.md');
+  const replacement = vault.create('One.md', '# Replacement');
+  const rename = vault.rename('One.md', 'Moved.md', () => { if (stale) throw new Error('stale drag source'); });
+  await assert.rejects(rename, /stale drag source/);
+  await Promise.all([deletion, replacement]);
+  assert.equal(await vault.read('One.md'), '# Replacement');
+  assert.equal(await vault.read('Link.md'), '[[One]]');
+  assert.equal(vault.entries.has('Moved.md'), false);
+});
