@@ -1,7 +1,7 @@
 import { EditorSelection, Transaction } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { EditorView, ViewPlugin } from '@codemirror/view';
-import { activeTableEditor } from './live-tables.ts';
+import { activeTableEditor, handleTableClipboard } from './live-tables.ts';
 import { htmlToMarkdown, isOwnClipboardHTML, isSingleImageHTML } from './clipboard-html.ts';
 
 export interface TransferFile {
@@ -98,6 +98,7 @@ export function editorTransfers(options: TransferOptions): Extension {
     }
     private paste = (event: ClipboardEvent) => {
       if (event.defaultPrevented || !event.clipboardData) return;
+      if (handleTableClipboard(this.view, event)) return;
       const view = this.target(event); if (!view || view.state.readOnly) return;
       const transfer = event.clipboardData, plain = transfer.getData('text/plain'), html = transfer.getData('text/html');
       const ownCopy = !!plain && isOwnClipboardHTML(html);

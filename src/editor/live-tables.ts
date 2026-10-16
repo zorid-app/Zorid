@@ -235,6 +235,14 @@ class TableController {
   }
   clipboard(event: ClipboardEvent): boolean {
     if (event.defaultPrevented || this.destroyed || !event.clipboardData) return false;
+    const node = event.target as Node | null;
+    const element = node?.nodeType === 1 ? node as Element : node?.parentElement;
+    const editorRoot = element?.closest<HTMLElement>('.cm-editor');
+    const editor = editorRoot ? EditorView.findFromDOM(editorRoot) : null;
+    if (!element || !editor || editor !== this.active?.view || !editor.contentDOM.contains(element)) return false;
+    for (let current: Element | null = element; current && current !== editor.contentDOM; current = current.parentElement) {
+      if (current.matches('input, textarea, select, button, [contenteditable="false"]')) return false;
+    }
     const range = this.selectionRange;
     if (event.type === 'paste') {
       if (this.owner.state.readOnly) return false;
