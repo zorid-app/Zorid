@@ -3,13 +3,16 @@ import type { Extension, Transaction } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
-import { markdownLanguage } from '@codemirror/lang-markdown';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { getSearchQuery, searchPanelOpen } from '@codemirror/search';
 import { Bug, Check, ChevronDown, CircleCheck, CircleHelp, ClipboardList, CodeXml, Flame, Info, List, Pencil, Quote, TriangleAlert, X, Zap } from 'lucide';
 import type { IconNode } from 'lucide';
 import { inline, renderMarkdown } from '../ui/markdown.ts';
 import type { EmbedRequest, LinkHandler } from '../ui/markdown.ts';
-import { destroyMathRenders } from '../ui/reading-math.ts';
+import { renderReadingMath } from '../ui/reading-math.ts';
+import { destroyMarkdown } from '../ui/markdown-lifecycle.ts';
+import { appendCodeBlock } from '../ui/code-block.ts';
+import { mathMarkdown, mathSpan } from './math-syntax.ts';
 import { bodyStart } from './live-properties.ts';
 
 export interface LiveCalloutOptions {
@@ -28,6 +31,7 @@ export function parseCalloutHeader(text: string): CalloutHeader | null {
 
 interface Span { from: number; to: number; source: string; identity: object; folds: Map<string, boolean> }
 interface CalloutState { spans: readonly Span[]; decorations: DecorationSet; rendered: readonly { from: number; to: number }[]; focused: boolean; held: boolean; searched: ReadonlySet<object> }
+const calloutParser = markdown({ base: markdownLanguage, addKeymap: false, completeHTMLTags: false, extensions: mathMarkdown }).language.parser;
 const optionsFacet = Facet.define<LiveCalloutOptions, LiveCalloutOptions>({ combine: values => values[0] ?? {} });
 const refresh = StateEffect.define<{ focused?: boolean; held?: boolean }>();
 const resources = new WeakMap<HTMLElement, () => void>();
@@ -88,7 +92,7 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
   const renderInline = (parent: HTMLElement, source: string) => {
     // Inline renderers may allocate math before a later embed throws, while
     // their parent has not yet been attached to the widget subtree.
-    cleanup.push(() => destroyMathRenders(parent));
+    cleanup.push(() => destroyMarkdown(parent));
     inline(parent, source, open, { embed });
   };
   const listen = <K extends keyof HTMLElementEventMap>(node: HTMLElement, type: K, handler: (event: HTMLElementEventMap[K]) => void) => {
@@ -103,7 +107,7 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
     const position = line.from + marker[0].lastIndexOf('[') + 1;
     view.dispatch({ changes: { from: position, to: position + 1, insert: marker[1] === ' ' ? 'x' : ' ' }, userEvent: 'input' });
   };
-  type Node = ReturnType<typeof markdownLanguage.parser.parse>['topNode'];
+  type Node = ReturnType<typeof calloutParser.parse>['topNode'];
   const children = (node: Node): Node[] => { const result: Node[] = []; for (let child = node.firstChild; child; child = child.nextSibling) result.push(child); return result; };
   let remainingParseUnits = Math.min(1_000_000, Math.max(32_768, span.source.length * 8)), renderDepth = 0;
   const blocks = (parent: HTMLElement, source: string, lineMap: readonly number[], path: string): void => {
@@ -118,6 +122,13 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
     const lineAt = (position: number) => { let low = 0, high = starts.length; while (low + 1 < high) { const mid = (low + high) >>> 1; if (starts[mid] <= position) low = mid; else high = mid; } return low; };
     const text = (node: Node) => source.slice(node.from, node.to);
     const render = (into: HTMLElement, node: Node): void => {
+      const math = mathSpan(node, (from, to) => source.slice(from, to));
+      if (math?.block) {
+        const block = document.createElement(math.closed ? 'div' : 'p'); into.append(block);
+        if (math.closed) { cleanup.push(() => destroyMarkdown(block)); renderReadingMath(block, math.tex, { display: true }); }
+        else block.textContent = text(node);
+        return;
+      }
       if (node.name === 'Blockquote') {
         const raw = text(node), lines = raw.split('\n').map(line => line.replace(/^[ \t]*>[ \t]?/, ''));
         const maps = lineMap.slice(lineAt(node.from), lineAt(node.from) + lines.length);
@@ -151,17 +162,16 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
         renderInline(heading, source.slice(from, to).trim()); into.append(heading); return;
       }
       if (node.name === 'FencedCode' || node.name === 'CodeBlock') {
-        const pre = document.createElement('pre'), code = document.createElement('code');
-        code.textContent = children(node).filter(child => child.name === 'CodeText').map(text).join('\n');
-        const info = node.getChild('CodeInfo'); if (info) code.dataset.language = text(info);
-        pre.append(code); into.append(pre); return;
+        const source = children(node).filter(child => child.name === 'CodeText').map(text).join('\n');
+        const info = node.getChild('CodeInfo'), handle = appendCodeBlock(into, source, info ? text(info) : '');
+        cleanup.push(() => handle.destroy()); return;
       }
       if (node.name === 'HorizontalRule') { into.append(document.createElement('hr')); return; }
       if (['ListMark', 'QuoteMark', 'LinkReference'].includes(node.name)) return;
-      const fragment = document.createElement('div'); cleanup.push(() => destroyMathRenders(fragment)); renderMarkdown(fragment, text(node), open, undefined, { embed, properties: false });
+      const fragment = document.createElement('div'); cleanup.push(() => destroyMarkdown(fragment)); renderMarkdown(fragment, text(node), open, undefined, { embed, properties: false });
       into.append(...fragment.childNodes);
     };
-    for (const node of children(markdownLanguage.parser.parse(source).topNode)) render(parent, node);
+    for (const node of children(calloutParser.parse(source).topNode)) render(parent, node);
     } finally { renderDepth--; }
   };
   const quote = (parent: HTMLElement, source: string, lineMap: readonly number[], path: string): void => {
@@ -210,7 +220,7 @@ class CalloutWidget extends WidgetType {
     catch {
       // A later embedded child may fail after earlier children allocated resources.
       // Release every completed mount and retain usable source editing.
-      destroyMathRenders(wrapper); releaseResources(cleanup);
+      destroyMarkdown(wrapper); releaseResources(cleanup);
       const literal = wrapper.ownerDocument.createElement('pre'); literal.className = 'callout-source-fallback'; literal.textContent = this.span.source; wrapper.replaceChildren(literal);
     }
     const cancelActivation = () => { clearTimeout(timer); pendingActivations.get(view)?.delete(cancelActivation); };
@@ -240,7 +250,7 @@ class CalloutWidget extends WidgetType {
     edit.addEventListener('click', editClick); wrapper.addEventListener('click', click); wrapper.addEventListener('mousedown', down);
     const Observer = view.dom.ownerDocument.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
     const observer = typeof Observer === 'function' ? new Observer(() => { if (!disposed) view.requestMeasure(); }) : undefined; observer?.observe(wrapper);
-    resources.set(wrapper, () => { if (disposed) return; disposed = true; cancelActivation(); observer?.disconnect(); destroyMathRenders(wrapper); edit.removeEventListener('click', editClick); wrapper.removeEventListener('click', click); wrapper.removeEventListener('mousedown', down); releaseResources(cleanup); });
+    resources.set(wrapper, () => { if (disposed) return; disposed = true; cancelActivation(); observer?.disconnect(); destroyMarkdown(wrapper); edit.removeEventListener('click', editClick); wrapper.removeEventListener('click', click); wrapper.removeEventListener('mousedown', down); releaseResources(cleanup); });
     return wrapper;
   }
   ignoreEvent(): boolean { return true; }

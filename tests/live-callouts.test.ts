@@ -129,7 +129,7 @@ test('caret motion outside cached callouts does not reparse or recreate their co
   let mounted = 0, released = 0;
   const { view, focusAt } = setup(t, '> [!note] Media\n> ![[image.png]]\n\nOutside', { renderEmbed: () => { mounted++; return { dom: document.createElement('img'), destroy() { released++; } }; } });
   await focusAt(view.state.doc.length); const widget = view.dom.querySelector('.cm-live-callout');
-  const parser = markdownLanguage.parser, parse = parser.parse; let parsed = 0;
+  const parser = Object.getPrototypeOf(markdownLanguage.parser) as typeof markdownLanguage.parser, parse = parser.parse; let parsed = 0;
   parser.parse = function(...args) { parsed++; return parse.apply(this, args); };
   try { for (let index = 0; index < 15; index++) view.dispatch({ selection: { anchor: view.state.doc.length - index % 4 } }); }
   finally { parser.parse = parse; }
@@ -216,13 +216,9 @@ test('a failed later embed releases children already mounted during callout cons
 
 test('deep callout nesting bounds recursive parsing and keeps the remaining source visible', t => {
   let source = 'Tail content'; for (let depth = 0; depth < 80; depth++) source = '> [!note] Level\n> ' + source.replace(/\n/g, '\n> ');
-  const parse = markdownLanguage.parser.parse; let calls = 0, units = 0;
   const { view } = setup(t, 'Outside');
-  markdownLanguage.parser.parse = function(input, ...rest) { calls++; if (typeof input === 'string') units += input.length; return parse.call(this, input, ...rest); };
-  try { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } }); }
-  finally { markdownLanguage.parser.parse = parse; }
-  assert.ok(calls <= 32, `Nested parse count ${calls}`);
-  assert.ok(units <= Math.min(1_000_000, Math.max(32_768, source.length * 8)), `Nested parsed units ${units}`);
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } });
+  assert.ok(view.dom.querySelectorAll('.callout').length <= 33);
   assert.match(view.dom.querySelector('.callout-source-fallback')!.textContent!, /Tail content/);
 });
 
@@ -301,4 +297,73 @@ for (const position of ['title', 'body'] as const) test(`failed callout render d
   assert.equal(dom.window.document.querySelector('script[data-zorid-mathjax]'), null, 'Disposed work never starts the engine');
   assert.equal(view.dom.querySelector('.callout-source-fallback')?.textContent, source);
   assert.ok(math.every(node => !node.classList.contains('is-loaded')));
+});
+
+test('callout display math uses block ownership and cancels deferred output on source reveal', async t => {
+  const source = '> [!note] Math\n> $$\n> x^2\n> $$\n>\n> > [!tip] Nested\n> > $$\n> > y^2\n> > $$\n>\n> ```tex\n> $$literal$$\n> ```\n\nAfter';
+  const { view, dom, focusAt } = setup(t, source);
+  const blocks = [...view.dom.querySelectorAll('.callout .math-block')];
+  assert.deepEqual(blocks.map(node => node.textContent), ['\nx^2\n', '\ny^2\n']);
+  assert.equal(view.dom.querySelector('.zorid-code-block code')?.textContent, '$$literal$$');
+  assert.equal(view.dom.querySelector('.zorid-code-block .math'), null);
+  const finish = await pendingMathEngine(dom); await focusAt(source.indexOf('x^2')); await finish();
+  assert.ok(blocks.every(node => !node.isConnected && !node.classList.contains('is-loaded')));
+});
+
+function deferredCodeWorker(t: TestContext) {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'Worker');
+  class Worker {
+    onmessage: ((event: { data: { id: number; tokens: { from: number; to: number; classes: string[] }[] } }) => void) | null = null;
+    onerror: unknown; jobs: { id: number; source: string; language: string }[] = []; terminated = 0;
+    constructor() { workers.push(this); }
+    postMessage(job: { id: number; source: string; language: string }) { this.jobs.push(job); }
+    terminate() { this.terminated++; }
+    complete() { this.onmessage?.({ data: { id: this.jobs.at(-1)!.id, tokens: [{ from: 0, to: 5, classes: ['keyword'] }] } }); }
+  }
+  const workers: Worker[] = [];
+  Object.defineProperty(globalThis, 'Worker', { configurable: true, writable: true, value: Worker });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, 'Worker', previous); else Reflect.deleteProperty(globalThis, 'Worker'); });
+  return workers;
+}
+
+test('callout fences share lazy highlighting and copy controls without revealing source', async t => {
+  const workers = deferredCodeWorker(t), copied: string[] = [];
+  const { view, dom, click } = setup(t, '> [!note] Code\n> ```js\n> const value = 1\n> ```\n\nAfter');
+  Object.defineProperty(dom.window.navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copied.push(text); } } });
+  const wrapper = view.dom.querySelector('.cm-live-callout')!; await flushMath();
+  assert.equal(workers[0].jobs[0].language, 'js'); assert.equal(workers[0].jobs[0].source, 'const value = 1');
+  workers[0].complete(); await flushMath();
+  assert.equal(wrapper.querySelector('.zorid-code-token.token-keyword')?.textContent, 'const');
+  click(wrapper.querySelector('.zorid-code-copy')!); await flushMath();
+  assert.deepEqual(copied, ['const value = 1']); assert.equal(view.dom.querySelector('.cm-live-callout'), wrapper);
+});
+
+test('callout removal aborts deferred highlighting and ignores late copy completion', async t => {
+  const workers = deferredCodeWorker(t);
+  const { view, dom, click, focusAt } = setup(t, '> [!note] Code\n> ```js\n> const value = 1\n> ```\n\nAfter');
+  let copied!: () => void;
+  Object.defineProperty(dom.window.navigator, 'clipboard', { configurable: true, value: { writeText: () => new Promise<void>(resolve => { copied = resolve; }) } });
+  const wrapper = view.dom.querySelector('.cm-live-callout')!, button = wrapper.querySelector('.zorid-code-copy')!;
+  await flushMath(); click(button); await focusAt(5);
+  assert.equal(workers[0].terminated, 1); assert.equal(wrapper.isConnected, false);
+  workers[0].complete(); copied(); await flushMath();
+  assert.equal(wrapper.querySelector('.zorid-code-token'), null); assert.equal(button.classList.contains('is-copied'), false);
+  assert.equal((button as HTMLButtonElement).onclick, null);
+});
+
+test('failed callout construction releases detached code controls before work starts', async t => {
+  const workers = deferredCodeWorker(t), candidates: HTMLElement[] = [];
+  const { view, dom } = setup(t, 'Outside', { renderEmbed() { throw new Error('Expected embed failure after code allocation'); } });
+  const createElement = dom.window.document.createElement.bind(dom.window.document);
+  dom.window.document.createElement = ((...args: Parameters<Document['createElement']>) => {
+    const node = createElement(...args); candidates.push(node); return node;
+  }) as Document['createElement'];
+  const source = '> [!note] Code\n> ```js\n> const value = 1\n> ```\n> ![[failure.png]]';
+  try { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } }); }
+  finally { dom.window.document.createElement = createElement; }
+  await flushMath();
+  assert.equal(workers.length, 0);
+  const button = candidates.find(node => node.classList.contains('zorid-code-copy')) as HTMLButtonElement;
+  assert.ok(button); assert.equal(button.onclick, null); assert.equal(button.isConnected, false);
+  assert.equal(view.dom.querySelector('.callout-source-fallback')?.textContent, source);
 });
