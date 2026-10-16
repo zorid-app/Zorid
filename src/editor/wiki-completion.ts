@@ -44,7 +44,7 @@ function contextAt(state: EditorState, pos = state.selection.main.head): WikiCon
   const tree = ensureSyntaxTree(state, line.to, 20);
   if (!tree) return null;
   for (let node = tree.resolveInner(pos, -1); node; node = node.parent!) {
-    if (['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'Comment'].includes(node.name)) return null;
+    if (['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'Comment', 'LiveInlineComment'].includes(node.name)) return null;
   }
   const query = before.slice(open + 2);
   if (query.includes('|') && imagePath(query.split('|')[0].split('#')[0])) return null;

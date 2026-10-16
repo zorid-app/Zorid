@@ -5,8 +5,6 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { searchKeymap } from '@codemirror/search';
-import { autocompletion } from '@codemirror/autocomplete';
-import type { CompletionContext } from '@codemirror/autocomplete';
 import { activeTableEditor, liveTables } from '../editor/live-tables.ts';
 import { bodyStart, liveProperties, propertyUpdate } from '../editor/live-properties.ts';
 import { liveEmbeds } from '../editor/live-embeds.ts';
@@ -21,6 +19,8 @@ import { editorContextMenu } from '../editor/context-menu.ts';
 import { liveInline, liveInlineMarkdown, refreshLiveInline } from '../editor/live-inline.ts';
 import type { LiveInlineOptions } from '../editor/live-inline.ts';
 import { textChanges } from '../editor/text-changes.ts';
+import { wikiCompletion } from '../editor/wiki-completion.ts';
+import type { WikiCompletionOptions } from '../editor/wiki-completion.ts';
 
 export interface EditorViewState {
   selection: { ranges: { anchor: number; head: number }[]; mainIndex: number };
@@ -44,6 +44,7 @@ export interface EditorOptions {
   onChange: (value: string) => void; open: (target: string, kind?: 'wiki' | 'markdown', event?: MouseEvent) => void;
   isUnresolved?: LiveInlineOptions['isUnresolved'];
   onLinkHover?: LiveInlineOptions['onHover'];
+  wiki?: Omit<WikiCompletionOptions, 'paths'>;
   transfers?: TransferOptions;
   listOptions?: MarkdownListOptions;
   renderEmbed?: (request: EmbedRequest) => { dom: HTMLElement; destroy(): void };
@@ -56,17 +57,13 @@ const markdownHighlightStyle = HighlightStyle.define(defaultHighlightStyle.specs
 
 export function createEditor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   const listConfiguration = new Compartment();
-  const completion = (context: CompletionContext) => {
-    const match = context.matchBefore(/\[\[[^\]\n]*/); if (!match) return null;
-    return { from: match.from + 2, options: options.paths().filter(p => p.endsWith('.md')).map(path => ({ label: path.replace(/\.md$/, ''), type: 'text', apply: `${path.replace(/\.md$/, '')}]]` })) };
-  };
   const view = new EditorView({
     parent,
     state: EditorState.create({ doc: options.value, extensions: [
       EditorState.allowMultipleSelections.of(true),
       history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[liveInlineMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
-      EditorView.lineWrapping, autocompletion({override: [completion]}),
+      EditorView.lineWrapping, wikiCompletion({ ...options.wiki, paths: options.paths }),
       EditorView.contentAttributes.of({'aria-label': 'Note editor', spellcheck: 'true'}),
       EditorView.updateListener.of(update => { if (update.transactions.some(transaction => transaction.docChanged && !transaction.annotation(externalChange))) options.onChange(update.state.doc.toString()); }),
       ...(options.mode === 'source' ? [EditorView.domEventHandlers({ click(event, sourceView) {
