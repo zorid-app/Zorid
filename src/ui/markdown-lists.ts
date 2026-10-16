@@ -23,7 +23,7 @@ export function renderMarkdownList(parent: HTMLElement, source: string, startLin
  * Create a new renderer when the document changes; returned renderers share no
  * mutable DOM or checkbox state, and may render into different documents.
  */
-export function createMarkdownListRenderer(source: string, options: { quotes?: boolean } = {}): ListRenderer {
+export function createMarkdownListRenderer(source: string, options: { quotes?: boolean; renderQuoteBody?: (parent: HTMLElement, source: string, startLine: number) => void } = {}): ListRenderer {
   source = source.replace(/\r\n/g, '\n');
   const starts = [0];
   for (let index = 0; index < source.length; index++) if (source[index] === '\n') starts.push(index + 1);
@@ -74,6 +74,23 @@ export function createMarkdownListRenderer(source: string, options: { quotes?: b
       if (node.name === 'QuoteMark' || node.name === 'ListMark' || node.name === 'LinkReference') return;
       if (node.name === 'Blockquote') {
         const quote = document.createElement('blockquote');
+        if (options.renderQuoteBody) {
+          // Remove exactly one parser-owned quote layer, keeping each physical
+          // line and its source mapping. Nested quotes are parsed recursively.
+          const sourceLines = source.slice(node.from, node.to).split('\n').map(line => line.replace(/^[ \t]*>[ \t]?/, ''));
+          const callout = /^[ \t]*\[!([^\]]+)\][ \t]*(.*)$/.exec(sourceLines[0]);
+          let firstLine = lineAt(node.from);
+          if (callout) {
+            quote.className = 'callout';
+            const title = document.createElement('div'); title.className = 'callout-title';
+            title.textContent = callout[2] || callout[1]; quote.append(title);
+            sourceLines.shift(); firstLine++;
+          }
+          // The callback appends to this owner without replacing its title.
+          // Keep async renderer parents stable instead of moving their nodes.
+          options.renderQuoteBody(quote, sourceLines.join('\n'), firstLine);
+          container.append(quote); return;
+        }
         const callout = /^>[ \t]*\[!([^\]]+)\][ \t]*([^\n]*)/.exec(source.slice(node.from, node.to));
         let firstParagraph = true;
         if (callout) {

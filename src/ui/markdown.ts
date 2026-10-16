@@ -18,14 +18,29 @@ import { renderMarkdownInline as inline } from './markdown-inline.ts';
 const blockParser = markdownLanguageSupport({ base: markdownLanguage, addKeymap: false, completeHTMLTags: false, extensions: mathMarkdown }).language.parser;
 
 export function renderMarkdown(container: HTMLElement, markdown: string, open: LinkHandler, taskChange?: (line: number, checked: boolean) => void, options: MarkdownRenderOptions = {}): void {
-  destroyMarkdown(container);
-  container.replaceChildren();
+  renderMarkdownBlocks(container, markdown, open, taskChange, options,
+    { remaining: Math.min(1_000_000, Math.max(32_768, markdown.length * 8)), depth: 0 }, false);
+}
+
+function renderMarkdownBlocks(container: HTMLElement, markdown: string, open: LinkHandler,
+  taskChange: ((line: number, checked: boolean) => void) | undefined, options: MarkdownRenderOptions,
+  budget: { remaining: number; depth: number }, nested: boolean): void {
+  // Nested quotes are new containers and may already hold a callout title.
+  if (!nested) { destroyMarkdown(container); container.replaceChildren(); }
   const document = container.ownerDocument;
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] => {
     const node = document.createElement(tag); node.className = className;
     if (text !== undefined) node.textContent = text;
     return node;
   };
+  // Bound repeated parsing only; an ordinary large top-level note still uses
+  // the normal renderer. Exhausted recursive work remains visible as source.
+  if (nested) {
+    if (budget.depth >= 32 || markdown.length > budget.remaining) {
+      container.append(el('pre', 'markdown-source-fallback', markdown)); return;
+    }
+    budget.remaining -= markdown.length;
+  }
   markdown = markdown.replace(/\r\n/g, '\n');
   const lines = markdown.split('\n');
   const starts = [0];
@@ -41,7 +56,7 @@ export function renderMarkdown(container: HTMLElement, markdown: string, open: L
   let parsingSource = markdown;
   let renderList: ReturnType<typeof createMarkdownListRenderer> | undefined;
   let position = 0;
-  if (/^\uFEFF?---[ \t]*(?:#.*)?$/.test(lines[0])) {
+  if (!nested && /^\uFEFF?---[ \t]*(?:#.*)?$/.test(lines[0])) {
     const end = lines.findIndex((line,index) => index > 0 && /^(?:---|\.\.\.)[ \t]*(?:#.*)?$/.test(line));
     if (end > 0) {
       const properties = el('details', 'properties'); properties.append(el('summary', '', 'Properties'));
@@ -93,7 +108,16 @@ export function renderMarkdown(container: HTMLElement, markdown: string, open: L
     }
     if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { container.append(el('hr')); continue; }
     if (/^\s*(?:>|[-*+]\s|\d+[.)]\s)/.test(line)) {
-      renderList ??= createMarkdownListRenderer(parsingSource, { quotes: true });
+      renderList ??= createMarkdownListRenderer(parsingSource, { quotes: true,
+        renderQuoteBody(parent, source, startLine) {
+          budget.depth++;
+          try {
+            renderMarkdownBlocks(parent, source, open, taskChange ? (line, checked) => taskChange(startLine + line, checked) : undefined,
+              options, budget, true);
+          } catch (error) { destroyMarkdown(parent); throw error; }
+          finally { budget.depth--; }
+        },
+      });
       const consumed = renderList(container, position, (parent, source) => inline(parent, source, open, options), taskChange);
       if (consumed !== null) { position += consumed - 1; continue; }
     }
