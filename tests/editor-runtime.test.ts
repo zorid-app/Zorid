@@ -28,9 +28,12 @@ function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live') 
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const host = document.querySelector<HTMLElement>('#host')!;
   const changes: string[] = [];
-  const editor = createEditor(host, { value, mode, paths: () => ['Note.md'], onChange: text => changes.push(text), open() {} });
+  const opened: string[] = [];
+  const editor = createEditor(host, { value, mode, paths: () => ['Note.md'], onChange: text => changes.push(text), open: target => opened.push(target) });
   const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
   assert.ok(view, 'find real CodeMirror instance from its DOM');
+  view.focus();
+  view.dispatch({ selection: view.state.selection });
   let destroyed = false;
   const destroy = () => { if (!destroyed) { editor.destroy(); destroyed = true; } };
   t.after(() => {
@@ -43,8 +46,54 @@ function setup(t: TestContext, value: string, mode: 'live' | 'source' = 'live') 
   });
   const line = (index: number) => [...host.querySelectorAll<HTMLElement>('.cm-line')][index];
   const cursor = (position: number) => view.dispatch({ selection: { anchor: position } });
-  return { editor, view, host, changes, line, cursor, dom, destroy };
+  return { editor, view, host, changes, opened, line, cursor, dom, destroy };
 }
+
+for (const mode of ['live', 'source'] as const) test(`${mode} external separated edits preserve the unchanged middle caret and undo`, t => {
+  const { editor, view, changes, cursor } = setup(t, 'aaa\nKEEP\nzzz', mode);
+  cursor(5);
+  editor.setValue('!aaa\nKEEP\nzzz!');
+  assert.equal(view.state.selection.main.head, 6, 'original separated-edit regression');
+  assert.deepEqual(changes, []);
+  editor.insert('?');
+  editor.setValue('!!aaa\nK?EEP\nzzz!!');
+  assert.equal(view.state.selection.main.head, 8);
+  assert.equal(changes.length, 1, 'external snapshots never publish user edits');
+  assert.equal(undoDepth(view.state), 1);
+  assert.ok(undo(view));
+  assert.equal(editor.getValue(), '!!aaa\nKEEP\nzzz!!');
+  assert.ok(redo(view));
+  assert.equal(editor.getValue(), '!!aaa\nK?EEP\nzzz!!');
+});
+
+test('source mode retains modifier-click wiki navigation without hiding source', t => {
+  const { view, dom, opened, line } = setup(t, '[[Note|Alias]]', 'source');
+  t.mock.method(view, 'posAtCoords', () => 8);
+  view.contentDOM.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+  assert.deepEqual(opened, ['Note']);
+  assert.equal(line(0).textContent, '[[Note|Alias]]');
+  assert.equal(view.state.doc.toString(), '[[Note|Alias]]');
+});
+
+test('creating and refreshing an unfocused live editor preserves title focus and renders the initial heading', t => {
+  setup(t, 'existing');
+  const title = document.createElement('input'), host = document.createElement('div');
+  document.body.append(title, host); title.focus();
+  const changes: string[] = [];
+  const editor = createEditor(host, { value: '# Heading\n**bold**', mode: 'live', paths: () => [], open() {}, onChange: text => changes.push(text) });
+  try {
+    const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
+    assert.equal(document.activeElement, title);
+    assert.equal(host.querySelector('.cm-line')?.textContent, 'Heading');
+    editor.restoreViewState!({ selection: { ranges: [{ anchor: 2, head: 2 }], mainIndex: 0 }, scrollTop: 0, scrollLeft: 0 });
+    editor.refreshLinks!(); editor.setValue('# Heading\n**changed**');
+    assert.equal(document.activeElement, title);
+    assert.equal(host.querySelector('.cm-line')?.textContent, 'Heading');
+    assert.deepEqual(changes, []); assert.equal(undoDepth(view.state), 0);
+    editor.focus(); view.dispatch({ selection: view.state.selection });
+    assert.equal(host.querySelector('.cm-line')?.textContent, '# Heading');
+  } finally { editor.destroy(); }
+});
 
 test('real source editor retains literal syntax; live editor hides only inactive markup', t => {
   const { editor, line, cursor } = setup(t, '# Heading\n**bold** ~~gone~~ ==marked==\nplain');
@@ -54,7 +103,7 @@ test('real source editor retains literal syntax; live editor hides only inactive
   cursor(editor.getValue().length);
   assert.equal(line(0).textContent, 'Heading');
   cursor('# Heading\n'.length);
-  assert.equal(line(1).textContent, '**bold** ~~gone~~ ==marked==');
+  assert.equal(line(1).textContent, '**bold** gone marked');
   assert.equal(editor.getValue(), '# Heading\n**bold** ~~gone~~ ==marked==\nplain');
 });
 
@@ -66,13 +115,13 @@ test('source mode never replaces Markdown punctuation', t => {
   assert.equal(line(1).querySelector('.cm-strong'), null);
 });
 
-test('live preview preserves syntax inside inline and fenced code, and escaped emphasis', t => {
+test('live preview renders inline code and escapes while preserving literal code contents', t => {
   const value = 'plain\n`**literal** ~~code~~ ==code==` **real**\n```md\n# code\n**fenced** ==fenced==\n```\n\\**escaped** \\==escaped==\nplain';
   const { line } = setup(t, value);
-  assert.equal(line(1).textContent, '`**literal** ~~code~~ ==code==` real');
+  assert.equal(line(1).textContent, '**literal** ~~code~~ ==code== real');
   assert.equal(line(3).textContent, '# code');
   assert.equal(line(4).textContent, '**fenced** ==fenced==');
-  assert.equal(line(6).textContent, '\\**escaped** \\==escaped==');
+  assert.equal(line(6).textContent, '*escaped* ==escaped==');
 });
 
 test('all cursors and full selected ranges reveal their intersecting lines', t => {
@@ -238,6 +287,31 @@ test('external snapshots update an active cell without a second save and remove 
   editor.setValue('Just text');
   assert.equal(host.querySelector('.cm-live-table'), null);
   assert.equal(child.dom.isConnected, false);
+});
+
+test('two-ended external updates preserve table-cell ownership, literal inline source and parent undo', async t => {
+  const value = tableNote.replace('alpha', '**alpha**');
+  const { host, dom, editor, view, changes, opened } = setup(t, value);
+  let child = activateCell(host, dom, 1, 0);
+  child.dispatch({ selection: { anchor: 4 } });
+  assert.equal(child.contentDOM.textContent, '**alpha**');
+  assert.equal(child.dom.querySelector('.cm-strong,.cm-live-inline-link'), null, 'parent inline decorations must not enter the cell editor');
+  t.mock.method(view, 'posAtCoords', () => 0);
+  child.contentDOM.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+  assert.deepEqual(opened, []);
+  const external = `before\n\n${value}\n\nafter`;
+  editor.setValue(external); await Promise.resolve();
+  const active = host.querySelector('.cm-live-table .cm-editor');
+  assert.ok(active, 'active cell survives changes on both sides of its table');
+  child = EditorView.findFromDOM(active)!;
+  assert.equal(child.state.doc.toString(), '**alpha**');
+  assert.equal(child.state.selection.main.head, 4);
+  editor.focus(); assert.equal(child.hasFocus, true);
+  child.dispatch({ ...child.state.replaceSelection('!'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), external.replace('**alpha**', '**al!pha**'));
+  assert.equal(changes.length, 1);
+  assert.ok(undo(view));
+  assert.equal(editor.getValue(), external);
 });
 
 test('source mode and fenced table examples retain literal table Markdown', t => {

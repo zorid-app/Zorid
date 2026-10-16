@@ -7,7 +7,7 @@ import { Decoration, EditorView, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { bodyStart } from './live-properties.ts';
 
-type MarkdownExtension = NonNullable<Parameters<typeof markdown>[0]>['extensions'];
+type MarkdownExtension = NonNullable<NonNullable<Parameters<typeof markdown>[0]>['extensions']>;
 type SyntaxNode = ReturnType<typeof syntaxTree>['topNode'];
 const highlight = { resolve: 'LiveInlineHighlight', mark: 'LiveInlineHighlightMark' };
 
