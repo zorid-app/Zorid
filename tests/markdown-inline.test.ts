@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { renderMarkdownInline } from '../src/ui/markdown-inline.ts';
 import type { EmbedRequest } from '../src/ui/markdown.ts';
+import { destroyMathRenders } from '../src/ui/reading-math.ts';
 
 function render(source: string, withEmbeds = false) {
   const document = new JSDOM('<!doctype html><main></main>').window.document;
@@ -11,6 +12,9 @@ function render(source: string, withEmbeds = false) {
   renderMarkdownInline(parent, source, (target, kind) => opened.push([target, kind]), withEmbeds ? {
     embed(request) { embeds.push(request); const image = document.createElement('span'); image.className = 'test-embed'; image.textContent = request.label ?? request.target; return image; },
   } : {});
+  // Parsing tests inspect the synchronous safe source placeholder. Cancel the
+  // asynchronous engine load; real conversion is tested separately.
+  destroyMathRenders(parent);
   return { parent, opened, embeds, document };
 }
 
@@ -97,11 +101,40 @@ test('raw HTML, entities, code and unsafe URLs cannot create active note DOM', (
 });
 
 test('unsupported document syntax remains literal and inline containers stay inline', () => {
-  const source = '# title [reference][id] [^footnote] $math$\n\n[id]: note.md';
+  const source = '# title [reference][id] [^footnote]\n\n[id]: note.md';
   const { parent } = render(source);
   assert.equal(parent.textContent, source);
   assert.equal(parent.querySelector('h1,p,a'), null);
   assert.equal(render('😀 &amp; &#x1f680;').parent.textContent, '😀 & 🚀');
+});
+
+test('math follows nested formatting and link labels without interpreting TeX as Markdown', () => {
+  const { parent, opened } = render('**$x_1$** *$a*b$* ==$x$== [value $y^2$](note.md) $$z$$');
+  assert.equal(parent.querySelector('strong > .math-inline')?.textContent, 'x_1');
+  assert.equal(parent.querySelector('em > .math-inline')?.textContent, 'a*b');
+  assert.equal(parent.querySelector('mark > .math-inline')?.textContent, 'x');
+  assert.equal(parent.querySelector('a > .math-inline')?.textContent, 'y^2');
+  assert.equal(parent.querySelector('span.math-block')?.textContent, 'z');
+  parent.querySelector('a')!.click();
+  assert.deepEqual(opened, [['note.md', 'markdown']]);
+});
+
+test('code, escapes, wiki aliases, comments, destinations and image alt text own their dollar signs', () => {
+  const { parent, embeds } = render('\\$escaped$ `$code$` [[Note|$alias$]] %%$hidden$%% [label](path/$destination$.md) ![$alt$](image.png) $visible$', true);
+  assert.deepEqual([...parent.querySelectorAll('.math')].map(node => node.textContent), ['visible']);
+  assert.equal(parent.querySelector('code')?.textContent, '$code$');
+  assert.equal(parent.querySelector('.internal-link')?.textContent, '$alias$');
+  assert.deepEqual(embeds, [{ target: 'image.png', kind: 'markdown', label: '$alt$' }]);
+});
+
+test('math boundary guards keep money, whitespace and incomplete syntax literal', () => {
+  const source = '$5 and $10 / $ x$ / $x $ / $x$2 / $$unclosed / $$$x$$$';
+  const { parent } = render(source);
+  assert.equal(parent.querySelector('.math'), null);
+  assert.equal(parent.textContent, source);
+  const even = render(String.raw`\\$x$`);
+  assert.equal(even.parent.textContent, '\\x');
+  assert.equal(even.parent.querySelector('.math-inline')?.textContent, 'x');
 });
 
 test('autolinks and image placeholders use safe navigation and owning document', () => {
