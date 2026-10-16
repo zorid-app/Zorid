@@ -1,0 +1,42 @@
+name: Update Zorid cask
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Metadata checks only. App builds run in Zorid's version-tag workflow.
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-zorid-cask
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.repository == 'zorid-app/homebrew-tap' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Validate the stable release and generate its cask
+        run: node scripts/update-cask.mjs
+      - name: Commit a changed cask
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f Casks/zorid.rb ]; then
+            exit 0
+          fi
+          git add -- Casks/zorid.rb
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Update Zorid cask'
+          git push origin HEAD:main
