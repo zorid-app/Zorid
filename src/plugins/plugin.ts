@@ -31,7 +31,8 @@ export interface SettingTab {
 
 /** The host owns UI and persistence. This does not claim to implement Obsidian's App. */
 export interface PluginHost {
-  registerCommand(command: Command, plugin: Plugin): () => void;
+  registerCommand(command: Command, plugin: Plugin): void;
+  removeCommand(commandId: string, plugin: Plugin): void;
   registerSettingTab(tab: SettingTab, plugin: Plugin): () => void;
   loadPluginData(pluginId: string): Promise<unknown>;
   savePluginData(pluginId: string, data: unknown): Promise<void>;
@@ -43,33 +44,32 @@ export class Plugin extends Component {
   app: PluginHost;
   manifest: PluginManifest;
   settings?: unknown;
-  private commands = new Map<string, () => void>();
 
   constructor(app: PluginHost, manifest: PluginManifest) {
-    super(app.reportError);
-    if (!manifest.id || /[\s:/\\]/.test(manifest.id)) throw new Error('A plugin manifest needs a valid ID');
+    super();
     this.app = app;
-    this.manifest = { ...manifest };
+    this.manifest = manifest;
+  }
+
+  override async load(): Promise<void> {
+    if (this.loaded) return;
+    this.loaded = true;
+    await this.onload();
+    // Plugin loading waits for its own hook, but does not await child loads.
+    for (const child of this.children.slice()) child.load();
   }
 
   addCommand(command: Command): Command {
-    if (!command.id || command.id.includes(':')) throw new Error('Command IDs must be nonempty and local to the plugin');
-    if (this.commands.has(command.id)) throw new Error(`Command already registered: ${command.id}`);
-    const registered = { ...command, id: `${this.manifest.id}:${command.id}`, name: `${this.manifest.name}: ${command.name}` };
-    const release = this.app.registerCommand(registered, this);
-    let active = true;
-    const cleanup = () => {
-      if (!active) return;
-      active = false;
-      this.commands.delete(command.id);
-      release();
-    };
-    this.commands.set(command.id, cleanup);
-    this.register(cleanup);
-    return registered;
+    command.id = `${this.manifest.id}:${command.id}`;
+    command.name = `${this.manifest.name}: ${command.name}`;
+    this.app.registerCommand(command, this);
+    this.register(() => this.app.removeCommand(command.id, this));
+    return command;
   }
 
-  removeCommand(commandId: string): void { this.commands.get(commandId)?.(); }
+  removeCommand(commandId: string): void {
+    this.app.removeCommand(`${this.manifest.id}:${commandId}`, this);
+  }
 
   addSettingTab(tab: SettingTab): void {
     const release = this.app.registerSettingTab(tab, this);
