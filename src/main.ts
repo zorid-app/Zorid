@@ -2,6 +2,12 @@ import { createPlatformAdapter } from './platform/index.ts';
 import { Workspace } from './ui/workspace.ts';
 import { el, textButton } from './ui/dom.ts';
 import './ui/styles.css';
+import './ui/reference-defaults.css';
+import './editor/table-controls.css';
+import './editor/live-lists.css';
+import './ui/pdf-view.css';
+import './canvas/view.css';
+import './ui/split-layout.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
 async function start(): Promise<void> {

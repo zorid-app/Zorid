@@ -23,8 +23,14 @@ export class MobileAdapter implements VaultAdapter {
   private async exists(path: string): Promise<boolean> {
     try { await this.filesystem.stat({ path, directory: this.directory }); return true; }
     catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      // Filesystem 8 identifies missing entries separately from denied access,
+      // invalid paths, unavailable bridges and unsupported provider operations.
+      if (code === 'OS-PLUG-FILE-0008' || code === 'ENOENT') return false;
+      if (typeof code === 'string' && (code.startsWith('OS-PLUG-FILE-') ||
+          ['EACCES', 'EPERM', 'UNAVAILABLE', 'UNIMPLEMENTED'].includes(code))) throw error;
       // Filesystem versions/platforms use differing missing-file codes. Verify
-      // the parent directory listing so permission failures are not swallowed.
+      // an uncoded missing-entry error using its parent directory listing.
       const slash = path.lastIndexOf('/');
       const parent = slash < 0 ? '' : path.slice(0, slash);
       if (parent && !(await this.exists(parent))) return false;
@@ -78,8 +84,10 @@ export class MobileAdapter implements VaultAdapter {
     }
     const slash = destination.lastIndexOf('/');
     const temporary = `${destination.slice(0, slash)}/.zorid-write-${crypto.randomUUID()}`;
-    await this.filesystem.writeFile({ path: temporary, directory: this.directory, data, ...(encoding ? { encoding } : {}), recursive: true });
-    try { await this.filesystem.rename({ from: temporary, to: destination, directory: this.directory }); }
+    try {
+      await this.filesystem.writeFile({ path: temporary, directory: this.directory, data, ...(encoding ? { encoding } : {}), recursive: true });
+      await this.filesystem.rename({ from: temporary, to: destination, directory: this.directory });
+    }
     catch (error) { await this.filesystem.deleteFile({ path: temporary, directory: this.directory }).catch(() => {}); throw error; }
     this.changed([vaultPath(path)]);
   }

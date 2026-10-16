@@ -107,3 +107,81 @@ This checkpoint has no additional native UI observations. Canvas document tests
 do not establish Canvas UI parity. Reference source audits for search, PDF,
 plugins, mobile, themes, workspace shortcuts, Bases queries and performance are
 static and retain their individual coverage limitations.
+
+### Native follow-up on the checkpoint
+
+The rebuilt Electron app was reloaded and a new disposable `Editor integration
+checkpoint.md` was opened in the fixture vault. Its Live Edit accessibility tree
+included interactive checked/unchecked tasks, a rendered note with headings and
+its own task, and a rendered SVG image. Clicking the first task checked it;
+clicking again restored it. Clicking `FinalTarget` below both embeds and typing
+`CLICK` inserted on that line (`FinalTCLICKarget`); undo restored it.
+
+Clicking the nested `child` item, moving to line end and pressing Enter produced
+another four-space-indented list marker. A subsequent Enter outdented the empty
+item without adding a line. Two undos restored the source. Reading mode exposed
+nested list structure and the custom `[?]` checkbox as checked. The note was
+returned to Live Edit, and its disk bytes were verified identical to the original
+fixture. AX selectText did not reliably move the CM caret, so the list scenario
+used an actual element click followed by the native line-end shortcut instead.
+
+Screenshot capture returned a partial frame with a large blank region. Visible
+portions showed the task controls and embedded note, but this cannot establish
+complete layout or visual parity. No reference runtime or native image-clipboard
+comparison was performed.
+
+### Native menus and list-marker checkpoint
+
+Root integration `2c10c8a` passes all 430 tests and the production build (three
+bundle/performance warnings). All 232 emitted PDF.js runtime assets were compared
+byte-for-byte with the installed official package and match. This packaging check
+does not establish PDF viewer integration or reference parity.
+
+After saving all note buffers, Zorid was fully restarted to load the new main
+process IPC. Native right-click on a rendered table cell displayed an actual
+macOS menu with Undo/Redo, Cut/Copy/Paste, Paste and Match Style, Select all, and
+four row/column insertion commands. Escape dismissed the menu. No insertion was
+performed in the user's now-edited fixture during this observation.
+
+The live editor accessibility tree exposes Add row below and Add column to the
+right controls. A complete native screenshot confirms task checkboxes without
+preceding dashes and indentation guides. Ordinary list markers show circular
+bullets, but a small residual hyphen is also visible beneath them; that visual
+regression is assigned for repair. Native menu action execution, reference visual
+comparison, and split-view integration remain separate outstanding checks.
+
+### Bullet correction and native table history
+
+Commit `d96601a` hides nested syntax-highlighted list-marker text, enlarges the
+circle diameter from .3em to .375em, and makes it black in the light theme per
+the user's explicit correction. Dark-theme bullets retain readable text color.
+All 22 focused list/task tests and the production build pass. A clean desktop
+launch produced a complete screenshot showing the black circle with no visible
+underlying hyphen. Earlier reload observations still displayed the previous
+styling, so the clean launch is the visual evidence used for this checkpoint.
+
+A separate exclusively created `Native table verification 20261016.md` fixture
+was used for native interaction testing. Clicking Add row below created a body
+row and focused its first nested editor. Typing `Added` updated the Markdown;
+two native Undo shortcuts removed the typing and row insertion. Saving and
+checking disk bytes confirmed exact restoration of the original fixture.
+These actions do not establish the complete reference table interaction model.
+
+### Native PDF and Canvas integration
+
+The integrated renderer passed 523 tests and production build before native
+viewer checks. Opening an original two-page PDF initially failed with an
+unexpected response from its `blob:file://` resource. Commit `23bf02f` passes
+owned, independently transferable bytes to PDF.js instead; no CSP or Electron
+security settings were weakened. Its 38 focused tests and production build pass.
+
+After a clean launch, the same native PDF rendered its text and red rectangle;
+the accessibility tree exposed both pages. Setting Page to 2 navigated correctly.
+Searching `Zorid` returned `2 of 2`. A Live Edit Markdown embed targeting
+`#page=2&height=320` loaded the actual viewer and reported page 2 of 2. These are
+bounded native checks, not full PDF interaction or reference-UI certification.
+
+A separate Canvas fixture rendered two text cards and their connecting edge.
+The user subsequently moved those cards, so their changed positions were retained
+and no automated rollback was applied. Full Canvas editing, history and visual
+parity remain unverified natively.

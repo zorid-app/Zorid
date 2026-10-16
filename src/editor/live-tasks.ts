@@ -1,29 +1,11 @@
 import type { Extension, EditorState } from '@codemirror/state';
-import { syntaxTree } from '@codemirror/language';
-import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view';
-import type { DecorationSet, ViewUpdate } from '@codemirror/view';
-import { bodyStart } from './live-properties.ts';
+import { Decoration, EditorView, WidgetType } from '@codemirror/view';
+import type { DecorationSet } from '@codemirror/view';
+import { listMarkers, revealListMarker, stableListDecorations } from './live-lists.ts';
 
-interface TaskMarker { from: number; to: number; lineFrom: number; status: string }
-const excluded = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'Comment', 'Table', 'LinkReference']);
-
-/** Syntax owns list membership; the lexical check only extends status support
- * beyond the parser's built-in space/x task recognition. */
-function markers(state: EditorState, from: number, to: number): TaskMarker[] {
-  const found: TaskMarker[] = [], prefix = bodyStart(state);
-  syntaxTree(state).iterate({ from, to, enter(node) {
-    if (excluded.has(node.name)) return false;
-    if (node.name !== 'ListItem') return;
-    const mark = node.node.getChild('ListMark');
-    if (!mark || mark.from < prefix) return;
-    const line = state.doc.lineAt(mark.from);
-    const match = /^[ \t]+\[([^\r\n])\](?=[ \t]|$)/.exec(state.doc.sliceString(mark.to, line.to));
-    if (!match) return;
-    const start = mark.to + match[0].length - 3;
-    if (start + 3 < from || start > to) return;
-    found.push({ from: start, to: start + 3, lineFrom: line.from, status: match[1] });
-  } });
-  return found;
+function markers(state: EditorState, from: number, to: number) {
+  return listMarkers(state, from, to).flatMap(marker => marker.task
+    ? [{ ...marker.task, lineFrom: marker.lineFrom, list: marker }] : []);
 }
 
 class TaskWidget extends WidgetType {
@@ -67,8 +49,7 @@ function decorate(view: EditorView): DecorationSet {
       seen.add(marker.from);
       decorations.push(Decoration.line({ attributes: { 'data-task': marker.status,
         class: `cm-task-line${/^[xX]$/.test(marker.status) ? ' cm-task-done' : ''}` } }).range(marker.lineFrom));
-      const reveal = view.hasFocus && view.state.selection.ranges.some(selection =>
-        selection.from <= marker.to && selection.to >= marker.from);
+      const reveal = revealListMarker(view, marker.list);
       if (!reveal) decorations.push(Decoration.replace({ widget: new TaskWidget(marker.status, view.state.readOnly), inclusive: false }).range(marker.from, marker.to));
     }
   }
@@ -79,14 +60,5 @@ function decorate(view: EditorView): DecorationSet {
  * marker-selection reveal boundary is an original bounded approximation of
  * the reference's grouped-formatting reveal behavior; see list-fold-reference. */
 export function liveTasks(): Extension {
-  return ViewPlugin.fromClass(class {
-    decorations: DecorationSet;
-    constructor(view: EditorView) { this.decorations = decorate(view); }
-    update(update: ViewUpdate): void {
-      if (update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged
-        || syntaxTree(update.startState) !== syntaxTree(update.state) || update.startState.readOnly !== update.state.readOnly) {
-        this.decorations = decorate(update.view);
-      }
-    }
-  }, { decorations: plugin => plugin.decorations });
+  return stableListDecorations(decorate);
 }

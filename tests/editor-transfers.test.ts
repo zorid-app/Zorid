@@ -5,6 +5,7 @@ import { JSDOM } from 'jsdom';
 import { EditorSelection } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { undo } from '@codemirror/commands';
+import { openSearchPanel } from '@codemirror/search';
 import { createEditor } from '../src/ui/editor.ts';
 import type { TransferOptions } from '../src/editor/transfers.ts';
 
@@ -237,4 +238,75 @@ test('pending file paste follows the current active table cell when import compl
   assert.equal(editor.getValue(), tableNote.replace('beta', '![[image.png\\|200]]'));
   assert.equal(second.state.doc.toString(), '![[image.png|200]]');
   assert.equal(host.querySelectorAll('.cm-live-table td').length, 2);
+});
+
+
+test('search inputs own paste and file drag events without changing the note selection', async t => {
+  const { view, host, dom, paste, file, editor, imports } = setup(t, 'original note');
+  view.dispatch({ selection: { anchor: 0, head: 8 } });
+  openSearchPanel(view);
+  const field = host.querySelector<HTMLInputElement>('.cm-search input[name="search"]')!;
+  assert.ok(field); field.focus();
+  for (const data of [{ 'text/plain': 'https://example.test' }, { 'text/markdown': '**query**' }, {}]) {
+    const { event } = paste(data, [file('image.png', [42])], field);
+    assert.equal(event.defaultPrevented, false);
+  }
+  for (const type of ['dragover', 'drop']) {
+    const event = new dom.window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { types: ['Files'], files: [file('image.png', [42])], items: [] } });
+    field.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false);
+  }
+  await settle();
+  assert.equal(editor.getValue(), 'original note');
+  assert.deepEqual(imports, []);
+});
+
+test('native controls inside editor content retain their own clipboard handling', async t => {
+  const { view, paste, file, editor, imports } = setup(t, 'original note');
+  const input = document.createElement('input');
+  view.contentDOM.append(input);
+  view.dispatch({ selection: { anchor: 0, head: 8 } });
+  const { event } = paste({ 'text/markdown': '**query**' }, [file('image.png', [42])], input);
+  assert.equal(event.defaultPrevented, false);
+  await settle();
+  assert.equal(editor.getValue(), 'original note');
+  assert.deepEqual(imports, []);
+});
+
+
+test('HTML paste converts before files and respects the current conversion preference', async t => {
+  let enabled = true;
+  const { paste, file, editor, imports, view } = setup(t, '', { autoConvertHtml: () => enabled });
+  paste({ 'text/html': '<p>Rich <strong>text</strong></p>', 'text/plain': 'Rich text' }, [file('image.png', [42])]);
+  assert.equal(editor.getValue(), 'Rich **text**');
+  assert.equal(undo(view), true);
+  enabled = false;
+  paste({ 'text/html': '<strong>formatted</strong>', 'text/plain': 'plain' });
+  assert.equal(editor.getValue(), 'plain');
+  await settle();
+  assert.deepEqual(imports, []);
+});
+
+test('own-copy marker with plain text bypasses conflicting Markdown and HTML formats', t => {
+  const { paste, editor, view } = setup(t, '');
+  paste({ 'text/html': '<!-- obsidian --><strong>rendered</strong>', 'text/plain': 'original', 'text/markdown': '**different**' });
+  assert.equal(editor.getValue(), 'original');
+  assert.equal(undo(view), true);
+  paste({ 'text/html': '<!-- obsidian --><strong>rendered</strong>', 'text/markdown': '**different**' });
+  assert.equal(editor.getValue(), '**different**', 'marker without plain text does not discard Markdown');
+});
+
+test('an image-only HTML fragment with files imports the binary and ignores its source URL', async t => {
+  const { paste, file, editor, imports } = setup(t, '');
+  paste({ 'text/html': '<!--StartFragment--><img src="file:///outside/image.png">' }, [file('image.png', [0, 255])]);
+  await settle();
+  assert.equal(editor.getValue(), '![[image.png]]');
+  assert.deepEqual(imports[0].bytes, [0, 255]);
+});
+
+test('HTML conversion remains inert and falls back to plain text for excluded content', t => {
+  const { paste, editor } = setup(t, '');
+  paste({ 'text/html': '<script>throw new Error("executed")</script>', 'text/plain': 'safe fallback' });
+  assert.equal(editor.getValue(), 'safe fallback');
 });

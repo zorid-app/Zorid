@@ -7,41 +7,9 @@ export type LinkHandler = (target: string, kind?: 'wiki' | 'markdown') => void;
 export interface EmbedRequest { target: string; kind: 'wiki' | 'markdown'; label?: string }
 export interface MarkdownRenderOptions { embed?: (request: EmbedRequest) => HTMLElement; properties?: boolean }
 
-/** Render with DOM APIs: note contents never become executable HTML. */
-export function inline(parent: HTMLElement, source: string, open: LinkHandler, options: MarkdownRenderOptions = {}): void {
-  const expression = /(!?\[\[([^\]]+)\]\])|(`([^`]+)`)|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(~~([^~]+)~~)|(==([^=]+)==)|(!?\[([^\]]*)\]\(\s*(<[^>\n]*>|(?:[^\s()\\]|\\.|\([^()]*\))+)(?:\s+["'][^\n]*?["'])?\s*\))/g;
-  let cursor = 0;
-  for (const match of source.matchAll(expression)) {
-    if (match.index! > 0 && source[match.index! - 1] === '\\') continue;
-    parent.append(document.createTextNode(source.slice(cursor, match.index)));
-    if (match[1]) {
-      const divider=match[2].indexOf('|'),target=divider<0?match[2]:match[2].slice(0,divider),alias=divider<0?undefined:match[2].slice(divider+1);
-      if (match[1].startsWith('!') && options.embed) parent.append(options.embed({target, kind:'wiki', label:alias}));
-      else {
-        const link = el('a', match[1].startsWith('!') ? 'internal-link embed-placeholder' : 'internal-link', alias || target);
-        link.href = '#'; link.onclick = event => { event.preventDefault(); open(target, 'wiki'); }; parent.append(link);
-      }
-    } else if (match[3]) parent.append(el('code', '', match[4]));
-    else if (match[5]) parent.append(el('strong', '', match[6]));
-    else if (match[7]) parent.append(el('em', '', match[8]));
-    else if (match[9]) parent.append(el('s', '', match[10]));
-    else if (match[11]) parent.append(el('mark', '', match[12]));
-    else if (match[13]) {
-      const link = el('a', '', match[14]); const target = match[15].replace(/^<|>$/g,'').replace(/\\([\\() ])/g,'$1');
-      if (match[13].startsWith('!') && options.embed) {
-        parent.append(options.embed({target, kind:'markdown', label:match[14]}));
-        cursor = match.index! + match[0].length;
-        continue;
-      }
-      // External navigation is delegated to the platform in a later parity pass.
-      if (/^https?:\/\//i.test(target)) { link.href = target; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
-      else { link.href = '#'; link.onclick = event => { event.preventDefault(); open(target, 'markdown'); }; }
-      parent.append(link);
-    }
-    cursor = match.index! + match[0].length;
-  }
-  parent.append(document.createTextNode(source.slice(cursor)));
-}
+/** Parser-owned inline rendering shared by Reading mode and live table cells. */
+export { renderMarkdownInline as inline } from './markdown-inline.ts';
+import { renderMarkdownInline as inline } from './markdown-inline.ts';
 
 export function renderMarkdown(container: HTMLElement, markdown: string, open: LinkHandler, taskChange?: (line: number, checked: boolean) => void, options: MarkdownRenderOptions = {}): void {
   container.replaceChildren();

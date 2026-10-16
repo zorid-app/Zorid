@@ -3,11 +3,13 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { Workspace } from '../src/ui/workspace.ts';
+import type { WorkspaceViewFactories } from '../src/ui/workspace.ts';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import type { EditorHandle, EditorOptions } from '../src/ui/editor.ts';
 
 // These integration tests exercise workspace wiring and storage using an injected
 // DOM editor. They do not test CodeMirror, layout/pixels, or Obsidian parity.
+const editorOptions = new WeakMap<HTMLElement, EditorOptions>();
 function editor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   const input = document.createElement('textarea');
   input.setAttribute('aria-label', 'Test note editor');
@@ -15,12 +17,16 @@ function editor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   input.value = options.value;
   input.oninput = () => options.onChange(input.value);
   parent.append(input);
+  editorOptions.set(input, options);
   return {
     getValue: () => input.value,
+    getViewState:()=>({selection:{ranges:[{anchor:input.selectionDirection==='backward'?input.selectionEnd:input.selectionStart,head:input.selectionDirection==='backward'?input.selectionStart:input.selectionEnd}],mainIndex:0},scrollTop:input.scrollTop,scrollLeft:input.scrollLeft}),
+    restoreViewState:state=>{const range=state.selection.ranges[0];input.setSelectionRange(Math.min(range.anchor,range.head),Math.max(range.anchor,range.head),range.anchor>range.head?'backward':'forward');input.scrollTop=state.scrollTop;input.scrollLeft=state.scrollLeft;},
     setValue: value => { input.value = value; },
     focus: () => input.focus(),
     destroy: () => input.remove(),
     insert: text => { input.value += text; options.onChange(input.value); },
+    configureLists: value => { options.listOptions = value; },
   };
 }
 
@@ -32,7 +38,7 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
   }
 }
 
-async function setup(t: TestContext, adapter = new MemoryAdapter(), id = 'test:vault', stored: Record<string, unknown> = {}) {
+async function setup(t: TestContext, adapter = new MemoryAdapter(), id = 'test:vault', stored: Record<string, unknown> = {}, views: WorkspaceViewFactories = {}) {
   const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', { url: 'https://zorid.test/' });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   const matchMedia = (query: string) => ({ matches: false, media: query, onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } });
@@ -44,7 +50,7 @@ async function setup(t: TestContext, adapter = new MemoryAdapter(), id = 'test:v
   dom.window.HTMLElement.prototype.scrollIntoView = () => {};
   for (const [key, value] of Object.entries(stored)) localStorage.setItem(key, JSON.stringify(value));
   const root = document.querySelector<HTMLElement>('#app')!;
-  const workspace = new Workspace(root, editor);
+  const workspace = new Workspace(root, editor, views);
   let destroyed = false;
   const destroy = async () => { if (!destroyed) { await workspace.destroy(); destroyed = true; } };
   t.after(async () => {
@@ -326,7 +332,7 @@ test('legacy source-mode settings and tabs migrate to live without discarding ot
   });
   assert.equal(workspace.settings.defaultMode, 'live');
   assert.deepEqual(JSON.parse(localStorage.getItem('zorid:settings')!), { ...settings, defaultMode: 'live',
-    useTab:true, tabSize:4, smartIndentList:true, attachmentFolderPath:'/', useMarkdownLinks:false, newLinkFormat:'shortest' });
+    useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, attachmentFolderPath:'/', useMarkdownLinks:false, newLinkFormat:'shortest' });
   assert.deepEqual(workspace.activePane.tabs.map(tab => tab.mode), ['live', 'reading']);
   assert.equal(currentEditor().dataset.editorMode, 'live');
   assert.ok(root.querySelector('.properties-host'));
@@ -390,4 +396,249 @@ test('nested quoted custom tasks toggle only their original status character', a
   await until(async()=>(await adapter.read('Tasks.md'))===source.replace('[?]','[ ]'),'custom status saved');
   key(document,'e',{metaKey:true});await until(()=>!!currentEditor(),'live restored');
   assert.equal(currentEditor().value,source.replace('[?]','[ ]'));
+});
+
+test('editor settings reconfigure current editors and attachment preferences reach imported links', async t => {
+  const {workspace,adapter,click,dom}=await setup(t,new MemoryAdapter({'Folder/Note.md':'- item'}));
+  await workspace.openNote('Folder/Note.md');
+  const original=currentEditor(), options=editorOptions.get(original)!;
+  workspace.showSettings();
+  const tabs=document.querySelector<HTMLInputElement>('[aria-label="Indent using tabs"]')!;tabs.click();
+  const size=document.querySelector<HTMLInputElement>('[aria-label="Tab size"]')!;size.value='8';size.dispatchEvent(new dom.window.Event('change'));
+  const smart=document.querySelector<HTMLInputElement>('[aria-label="Smart indent lists"]')!;smart.click();
+  assert.equal(currentEditor(),original);
+  assert.deepEqual(options.listOptions,{useTab:false,tabSize:8,smartIndentList:false});
+  click('Files and links');
+  document.querySelector<HTMLInputElement>('[aria-label="Use Wikilinks"]')!.click();
+  const format=document.querySelector<HTMLSelectElement>('[aria-label="New link format"]')!;format.value='relative';format.dispatchEvent(new dom.window.Event('change'));
+  const location=document.querySelector<HTMLSelectElement>('[aria-label="Default location for new attachments"]')!;location.value='subfolder';location.dispatchEvent(new dom.window.Event('change'));
+  const folder=document.querySelector<HTMLInputElement>('[aria-label="Attachment folder path"]')!;folder.value='Media';folder.dispatchEvent(new dom.window.Event('change'));
+  const bytes=new Uint8Array([0,255,17,42]);
+  const link=await options.transfers!.importFile({name:'capture.bin',type:'application/octet-stream',read:async()=>bytes});
+  assert.equal(link,'![](./Media/capture.bin)');
+  assert.deepEqual(await adapter.readBinary('Folder/Media/capture.bin'),bytes);
+  const saved=JSON.parse(localStorage.getItem('zorid:settings')!);
+  assert.equal(saved.attachmentFolderPath,'./Media');assert.equal(saved.useMarkdownLinks,true);
+  assert.equal(saved.tabSize,8);assert.equal(saved.useTab,false);assert.equal(saved.smartIndentList,false);
+  assert.equal(await adapter.read('Folder/Note.md'),'- item');
+});
+
+
+test('a pending attachment import cannot allocate into a vault after it is replaced', async t => {
+  const first = new MemoryAdapter({ 'Old/Note.md': 'old' });
+  const { workspace } = await setup(t, first, 'test:first');
+  await workspace.openNote('Old/Note.md');
+  workspace.settings.attachmentFolderPath = '.';
+  const options = editorOptions.get(currentEditor())!;
+  let release!: (bytes: Uint8Array) => void;
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const pending = options.transfers!.importFile({
+    name: 'capture.bin', type: 'application/octet-stream',
+    read: () => { started(); return new Promise(resolve => { release = resolve; }); },
+  });
+  await reading;
+  const second = new MemoryAdapter({ 'New/Note.md': 'new' });
+  await workspace.openVault({ adapter: second, label: 'Second vault', id: 'test:second' });
+  await workspace.openNote('New/Note.md');
+  release(new Uint8Array([42]));
+  await assert.rejects(pending, /destination vault is no longer open/);
+  assert.deepEqual((await first.list()).map(entry => entry.path).sort(), ['Old', 'Old/Note.md']);
+  assert.deepEqual((await second.list()).map(entry => entry.path).sort(), ['New', 'New/Note.md']);
+});
+
+test('native file menus cannot apply actions to a replacement vault', async t => {
+  const {workspace,root,dom,adapter}=await setup(t,new MemoryAdapter({'Same.md':'original'}));
+  let finish!: (id:string|null)=>void;
+  let items:Array<{id?:string;label?:string}>=[];
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:(request:{items:typeof items})=>{items=request.items;return new Promise<string|null>(resolve=>finish=resolve);},dismissContextMenu:async()=>{}}});
+  const file=root.querySelector<HTMLElement>('[role=treeitem][title="Same.md"]')!;
+  file.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  assert.ok(finish);const remove=items.find(item=>item.label==='Move to trash')!;assert.ok(remove);
+  const other=new MemoryAdapter({'Same.md':'replacement'});
+  await workspace.openVault({adapter:other,id:'test:replacement',label:'Replacement'});
+  finish(remove.id!);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(await adapter.read('Same.md'),'original');assert.equal(await other.read('Same.md'),'replacement');
+});
+
+
+test('fresh right dock is collapsed and its toggled state survives vault restoration', async t => {
+  const { workspace, root, click } = await setup(t);
+  assert.equal(root.classList.contains('right-hidden'), true);
+  click('Toggle right sidebar');
+  assert.equal(root.classList.contains('right-hidden'), false);
+  await workspace.openVault(workspace.platform);
+  assert.equal(root.classList.contains('right-hidden'), false);
+});
+
+test('HTML conversion preference updates the existing editor transfer callback', async t => {
+  const { workspace, click, dom } = await setup(t, new MemoryAdapter({ 'Note.md': 'text' }));
+  await workspace.openNote('Note.md');
+  const options = editorOptions.get(currentEditor())!, original = currentEditor();
+  assert.equal((options.transfers!.autoConvertHtml as () => boolean)(), true);
+  workspace.showSettings();
+  const toggle = document.querySelector<HTMLInputElement>('input[aria-label="Auto convert HTML"]')!;
+  toggle.checked = false; toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  click('Close settings');
+  assert.equal(currentEditor(), original);
+  assert.equal((options.transfers!.autoConvertHtml as () => boolean)(), false);
+  assert.equal(JSON.parse(localStorage.getItem('zorid:settings')!).autoConvertHtml, false);
+});
+
+
+const canvasSource = JSON.stringify({ nodes: [{ id: 'a', type: 'text', x: 0, y: 0, width: 200, height: 100, text: 'Original', custom: 42 }], edges: [], unknown: { keep: true } });
+function editCanvas(dom: JSDOM, value: string): HTMLTextAreaElement {
+  document.querySelector<HTMLElement>('[data-node-id="a"]')!.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true }));
+  const input = document.querySelector<HTMLTextAreaElement>('.zorid-canvas-text-editor')!;
+  input.value = value;
+  return input;
+}
+
+test('Canvas tabs persist active text before note navigation and retain unknown document data', async t => {
+  const { workspace, adapter, dom, root } = await setup(t, new MemoryAdapter({ 'Board.canvas': canvasSource, 'Note.md': 'note' }));
+  await workspace.openNote('Board.canvas');
+  assert.ok(root.querySelector('.zorid-canvas'));
+  editCanvas(dom, 'Edited before blur');
+  await workspace.openNote('Note.md');
+  const saved = JSON.parse(await adapter.read('Board.canvas'));
+  assert.equal(saved.nodes[0].text, 'Edited before blur');
+  assert.equal(saved.nodes[0].custom, 42); assert.deepEqual(saved.unknown, { keep: true });
+  assert.equal(currentEditor().value, 'note');
+  await workspace.openNote('Board.canvas');
+  assert.equal(root.querySelector('[data-node-id="a"] .zorid-canvas-node-content')?.textContent, 'Edited before blur');
+});
+
+test('failed Canvas save blocks navigation and keeps the editable view and recovery draft', async t => {
+  class FailingAdapter extends MemoryAdapter { fail = false; override async write(path: string, value: string) { if (this.fail) throw new Error('disk unavailable'); return super.write(path, value); } }
+  const adapter = new FailingAdapter({ 'Board.canvas': canvasSource, 'Note.md': 'note' });
+  const { workspace, dom, root } = await setup(t, adapter);
+  await workspace.openNote('Board.canvas');
+  const surface = root.querySelector('.zorid-canvas'); editCanvas(dom, 'Keep this edit');
+  adapter.fail = true;
+  await assert.rejects(workspace.openNote('Note.md'), /disk unavailable/);
+  assert.equal(root.querySelector('.zorid-canvas'), surface);
+  assert.equal(workspace.activePane.tabs.find(tab => tab.id === workspace.activePane.active)?.path, 'Board.canvas');
+  assert.match(localStorage.getItem('zorid:draft:test:vault:Board.canvas')!, /Keep this edit/);
+  adapter.fail = false; await workspace.openNote('Note.md');
+  assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text, 'Keep this edit');
+});
+
+test('Canvas external changes refresh a clean view and conflict with uncommitted card text', async t => {
+  const { workspace, adapter, dom, root } = await setup(t, new MemoryAdapter({ 'Board.canvas': canvasSource }));
+  await workspace.openNote('Board.canvas');
+  const changed = JSON.parse(canvasSource); changed.nodes[0].text = 'External';
+  await adapter.write('Board.canvas', JSON.stringify(changed)); await workspace.vault.reload(['Board.canvas']);
+  await until(() => root.querySelector('[data-node-id="a"]')?.textContent === 'External', 'external Canvas refresh');
+  editCanvas(dom, 'Local pending');
+  changed.nodes[0].text = 'Concurrent'; await adapter.write('Board.canvas', JSON.stringify(changed)); await workspace.vault.reload(['Board.canvas']);
+  await until(() => Boolean(workspace.buffers.get('Board.canvas')?.dirty), 'conflicting Canvas buffer');
+  assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text, 'Concurrent');
+  assert.equal(JSON.parse(workspace.buffers.get('Board.canvas')!.text).nodes[0].text, 'Local pending');
+  await assert.rejects(workspace.flush(), /changed outside/);
+  // Restore the prior disk revision only to resolve this deliberate test conflict.
+  await adapter.write('Board.canvas', workspace.buffers.get('Board.canvas')!.savedText);
+  await workspace.flush();
+});
+
+test('PDF tabs receive link subpaths, route Find and release their view without text buffers', async t => {
+  const opened: { path: string; subpath?: string }[] = []; let destroyed = 0, searches = 0;
+  const { workspace, key, click } = await setup(t, new MemoryAdapter({ 'Paper.pdf': new Uint8Array([37, 80, 68, 70]), 'Note.md': 'note' }), 'test:pdf', {}, {
+    pdf(parent, path, _resources, options) {
+      opened.push({ path, subpath: options?.subpath }); parent.append(document.createElement('canvas'));
+      return { ready: Promise.resolve(), destroy() { destroyed++; }, goToPage() {}, setScale() {}, rotate() {}, showSearch() { searches++; }, applySubpath() {}, getSelectionSubpath() { return null; } };
+    },
+  });
+  await workspace.openNote('Paper.pdf', false, workspace.activePane, true, '#page=2');
+  assert.deepEqual(opened, [{ path: 'Paper.pdf', subpath: '#page=2' }]);
+  assert.equal(workspace.buffers.has('Paper.pdf'), false);
+  const event = key(document, 'f', { metaKey: true }); assert.equal(event.defaultPrevented, true); await until(() => searches === 1, 'PDF find command');
+  await workspace.openNote('Note.md'); assert.equal(destroyed, 1);
+});
+
+
+test('Canvas text typed during an external reload remains visible after the read completes', async t => {
+  const { workspace, adapter, dom, root, key } = await setup(t, new MemoryAdapter({ 'Board.canvas': canvasSource }));
+  await workspace.openNote('Board.canvas');
+  let release!: () => void, started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const original = workspace.vault.read.bind(workspace.vault);
+  workspace.vault.read = async path => { const result = await original(path); started(); await gate; return result; };
+  const changed = JSON.parse(canvasSource); changed.nodes[0].text = 'External';
+  await adapter.write('Board.canvas', JSON.stringify(changed)); await workspace.vault.reload(['Board.canvas']);
+  await entered;
+  const input = editCanvas(dom, 'Local typed during read');
+  release();
+  await until(() => workspace.buffers.get('Board.canvas')?.text === JSON.stringify(changed), 'external read completed');
+  assert.equal(root.querySelector<HTMLTextAreaElement>('.zorid-canvas-text-editor'), input);
+  assert.equal(input.value, 'Local typed during read');
+  assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text, 'External');
+  key(input, 'Escape'); // Deliberately cancel this draft so teardown can complete.
+});
+
+
+test('nested workspace splits preserve surviving editor DOM, per-pane state and saved geometry', async t => {
+  const {workspace,root,dom,key}=await setup(t,new MemoryAdapter({'Note.md':'0123456789','Other.md':'second note'}));
+  await workspace.openNote('Note.md');
+  const original=workspace.activePane,first=currentEditor(),firstHandle=original.editor;
+  first.focus();first.setSelectionRange(2,5,'backward');
+  original.element.querySelector<HTMLElement>('.note-scroll')!.scrollTop=45;
+  await (workspace as any).split('right');
+  const second=workspace.activePane,secondEditor=currentEditor();
+  assert.equal(original.editor,firstHandle);assert.equal(original.element.querySelector('textarea'),first);
+  assert.equal(first.selectionStart,2);assert.equal(first.selectionEnd,5);assert.equal(first.selectionDirection,'backward');
+  assert.equal(secondEditor.selectionStart,2);assert.equal(secondEditor.selectionEnd,5);
+  secondEditor.setSelectionRange(7,8);second.element.querySelector<HTMLElement>('.note-scroll')!.scrollTop=91;
+  await workspace.openNote('Other.md',true,second);
+  // Opening another tab saves the first tab's caret, selection direction and scroll.
+  const noteTab=[...second.element.querySelectorAll<HTMLElement>('[role=tab]')].find(node=>node.textContent==='Note')!;
+  noteTab.click();await until(()=>currentEditor()?.value==='0123456789','return to saved tab');
+  assert.equal(currentEditor().selectionStart,7);assert.equal(currentEditor().selectionEnd,8);
+  assert.equal(second.element.querySelector<HTMLElement>('.note-scroll')!.scrollTop,91);
+  const secondHandle=second.editor;
+  await (workspace as any).split('bottom');
+  const third=workspace.activePane;
+  assert.equal(original.editor,firstHandle);assert.equal(second.editor,secondHandle);
+  assert.equal(root.querySelectorAll('.split-layout-group').length,2);
+  const divider=root.querySelector<HTMLElement>('.split-layout-separator[data-direction=vertical]')!;
+  divider.parentElement!.getBoundingClientRect=()=>({width:1000,height:600,x:0,y:0,top:0,left:0,right:1000,bottom:600,toJSON(){return{};}});
+  key(divider,'ArrowRight');
+  assert.equal(original.editor,firstHandle);assert.equal(second.editor,secondHandle);
+  const state=JSON.parse(localStorage.getItem('zorid:workspace:test:vault')!);
+  assert.equal(state.layout.direction,'vertical');assert.notEqual(state.layout.sizes[0],state.layout.sizes[1]);
+  assert.equal(state.layout.children[1].direction,'horizontal');
+  assert.equal(state.activePaneId,third.id);
+  assert.equal(state.panes[0].id,original.id);
+  await workspace.openVault(workspace.platform);
+  assert.deepEqual(JSON.parse(localStorage.getItem('zorid:workspace:test:vault')!).layout,state.layout);
+  assert.equal(workspace.activePane.id,third.id);
+  assert.equal(workspace.panes[0].id,original.id);
+  const restoredFirst=workspace.panes[0].element.querySelector('textarea')!;
+  assert.equal(restoredFirst.selectionStart,2);assert.equal(restoredFirst.selectionEnd,5);assert.equal(restoredFirst.selectionDirection,'backward');
+  assert.equal(workspace.panes[0].element.querySelector<HTMLElement>('.note-scroll')!.scrollTop,45);
+  assert.equal(workspace.panes[1].tabs.length,2);
+  const survivor=workspace.panes[0],survivorEditor=survivor.editor;
+  await (workspace as any).closeTab(workspace.activePane,workspace.activePane.tabs[0]);
+  assert.equal(workspace.panes.length,2);assert.equal(root.querySelectorAll('.split-layout-group').length,1);
+  assert.equal(survivor.editor,survivorEditor);
+});
+
+test('split a background tab uses its owning pane without changing the current tab', async t => {
+  const {workspace}=await setup(t,new MemoryAdapter({'A.md':'aaaa','B.md':'bbbb'}));
+  await workspace.openNote('A.md');const pane=workspace.activePane,tab=pane.tabs[0];
+  await workspace.openNote('B.md',true);const existing=pane.editor,active=pane.active;
+  await (workspace as any).split('bottom',pane,tab);
+  assert.equal(pane.active,active);assert.equal(pane.editor,existing);
+  assert.equal(workspace.activePane.editor?.getValue(),'aaaa');
+});
+
+test('session storage failure cannot bypass the unsaved-document unload guard',async t=>{
+  const {workspace,dom,type}=await setup(t,new MemoryAdapter({'Note.md':'old'}));
+  await workspace.openNote('Note.md');type(currentEditor(),'unsaved');
+  const prototype=Object.getPrototypeOf(localStorage),original=prototype.setItem;
+  prototype.setItem=function(key:string,value:string){if(key.startsWith('zorid:workspace:'))throw new Error('Quota exceeded');return original.call(this,key,value);};
+  try{
+    const event=new dom.window.Event('beforeunload',{cancelable:true});
+    assert.doesNotThrow(()=>(workspace as any).unloadListener(event));
+    assert.equal(event.defaultPrevented,true);
+  }finally{prototype.setItem=original;}
 });

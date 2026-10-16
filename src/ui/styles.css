@@ -392,3 +392,5 @@ button.search-snippet { white-space: normal; overflow-wrap: anywhere; }
 .image-lightbox-close { position: absolute; right: 18px; top: 18px; color: white; }
 .image-lightbox-status { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); color: #ddd; font-size: 12px; pointer-events: none; }
 .image-lightbox-error { position: absolute; left: 20%; right: 20%; top: 45%; color: #eee; text-align: center; }
+
+.attachment-view.pdf-attachment-view, .attachment-view.canvas-attachment-view { display: flex; align-items: stretch; justify-content: stretch; padding: 0; overflow: hidden; }

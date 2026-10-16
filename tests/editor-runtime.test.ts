@@ -331,3 +331,82 @@ test('Reading mode uses escaped-pipe boundaries, cell breaks, alignment and ragg
   assert.equal((reading.querySelectorAll('td')[1] as HTMLElement).style.textAlign, 'right');
   assert.equal(reading.querySelector('p')?.textContent, 'After');
 });
+
+test('live list preference changes retain selection, history and editor instance', t => {
+  const {editor,view,dom,cursor}=setup(t,'- item','source');
+  cursor(6);editor.insert('!');
+  const selection=view.state.selection.toJSON(),depth=undoDepth(view.state);
+  editor.configureLists!({useTab:false,tabSize:8,smartIndentList:true});
+  assert.equal(view.state.tabSize,8);assert.equal(undoDepth(view.state),depth);
+  assert.deepEqual(view.state.selection.toJSON(),selection);
+  const tab=new dom.window.KeyboardEvent('keydown',{key:'Tab',code:'Tab',bubbles:true,cancelable:true});
+  view.contentDOM.dispatchEvent(tab);
+  assert.ok(tab.defaultPrevented);assert.equal(editor.getValue(),'    - item!');
+  assert.ok(undo(view));assert.equal(editor.getValue(),'- item!');
+  assert.ok(undo(view));assert.equal(editor.getValue(),'- item');
+});
+
+test('rendered table context menu offers nested table commands without applying dismissed actions', async t => {
+  const {view,host,dom,editor}=setup(t,'| One | Two |\n| --- | --- |\n| a | b |\nend');
+  type MenuEntry={id?:string;role?:string;label?:string;submenu?:MenuEntry[]};
+  let request: {items:MenuEntry[]}|undefined;
+  let select!: (id:string|null)=>void;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:(value:typeof request)=>{request=value;return new Promise<string|null>(resolve=>select=resolve);}}});
+  const cell=host.querySelector<HTMLElement>('td')!;
+  const event=new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:12,clientY:20});
+  cell.dispatchEvent(event);
+  assert.ok(event.defaultPrevented);assert.ok(request);
+  assert.equal(request.items.some(item=>item.role),false);
+  assert.deepEqual(request.items.filter(item=>item.label).map(item=>item.label),['Row','Column','Sort by column (A to Z)','Sort by column (Z to A)']);
+  assert.ok(request.items.find(item=>item.label==='Column')?.submenu?.some(item=>item.id==='table-column-after'));
+  assert.ok(request.items.find(item=>item.label==='Row')?.submenu?.some(item=>item.id==='table-row-delete'));
+  const before=editor.getValue();select(null);await Promise.resolve();
+  assert.equal(editor.getValue(),before);
+  cell.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  select('table-column-after');await Promise.resolve();
+  assert.equal(host.querySelectorAll('th').length,3);
+  assert.ok(undo(view));assert.equal(editor.getValue(),before);
+});
+
+test('closed editors ignore late context menu command results', async t => {
+  const {view,dom,destroy}=setup(t,'hello');
+  let finish!: (id:string|null)=>void;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:()=>new Promise<string|null>(resolve=>finish=resolve)}});
+  view.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  assert.ok(finish);destroy();finish('select-all');await Promise.resolve();
+  assert.equal(view.state.selection.main.empty,true);
+});
+
+test('editor view snapshots restore multiple reversed selections and scroll without editing history', t => {
+  const {editor,view,changes}=setup(t,'0123456789\nabcdefghij');
+  view.dispatch({selection:EditorSelection.create([EditorSelection.range(5,2),EditorSelection.range(12,16)],1)});
+  view.scrollDOM.scrollTop=83;view.scrollDOM.scrollLeft=12;
+  const snapshot=editor.getViewState!();
+  view.dispatch({selection:{anchor:0}});view.scrollDOM.scrollTop=0;view.scrollDOM.scrollLeft=0;
+  editor.restoreViewState!(snapshot);
+  assert.equal(view.state.selection.mainIndex,1);
+  assert.deepEqual(view.state.selection.ranges.map(range=>[range.anchor,range.head]),[[5,2],[12,16]]);
+  assert.equal(view.scrollDOM.scrollTop,83);assert.equal(view.scrollDOM.scrollLeft,12);
+  assert.equal(undoDepth(view.state),0);assert.deepEqual(changes,[]);
+  editor.setValue('short');editor.restoreViewState!(snapshot);
+  assert.ok(view.state.selection.ranges.every(range=>range.to<=5));
+  assert.doesNotThrow(()=>editor.restoreViewState!({selection:{ranges:[{anchor:NaN,head:Infinity}],mainIndex:99},scrollTop:-3,scrollLeft:NaN}));
+});
+
+test('active table-cell context menu includes editor clipboard roles before table submenus', async t => {
+  const {view,host,dom,editor}=setup(t,'| One | Two |\n| --- | --- |\n| a | b |\nend');
+  type Entry={id?:string;role?:string;label?:string;enabled?:boolean;submenu?:Entry[]};
+  let items:Entry[]=[];let choose!:(id:string|null)=>void;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:(request:{items:Entry[]})=>{items=request.items;return new Promise<string|null>(resolve=>choose=resolve);}}});
+  host.querySelector('td')!.dispatchEvent(new dom.window.MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true}));
+  const child=EditorView.findFromDOM(host.querySelector('td .cm-editor')!)!;
+  child.dispatch({selection:EditorSelection.single(0,1)});
+  child.contentDOM.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  assert.ok(items.find(item=>item.role==='copy')?.enabled);
+  assert.equal(items.find(item=>item.role==='pasteAndMatchStyle')?.label,'Paste as plain text');
+  assert.ok(items.findIndex(item=>item.role==='paste')<items.findIndex(item=>item.label==='Row'));
+  assert.ok(!items.some(item=>item.id==='undo'||item.id==='redo'));
+  const before=editor.getValue();choose('table-row-duplicate');await Promise.resolve();
+  assert.equal(host.querySelectorAll('tbody tr').length,2);
+  assert.ok(undo(view));assert.equal(editor.getValue(),before);
+});

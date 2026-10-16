@@ -2,6 +2,7 @@ import { EditorSelection, Transaction } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { EditorView, ViewPlugin } from '@codemirror/view';
 import { activeTableEditor } from './live-tables.ts';
+import { htmlToMarkdown, isOwnClipboardHTML, isSingleImageHTML } from './clipboard-html.ts';
 
 export interface TransferFile {
   name: string;
@@ -12,6 +13,7 @@ export interface TransferFile {
 export interface TransferOptions {
   importFile(file: TransferFile): Promise<string>;
   nativePath?: (file: File) => string;
+  autoConvertHtml?: boolean | (() => boolean);
   onError?: (error: unknown) => void;
 }
 
@@ -68,9 +70,18 @@ export function editorTransfers(options: TransferOptions): Extension {
       view.dom.addEventListener('drop', this.drop, true);
       view.dom.addEventListener('dragover', this.dragOver, true);
     }
-    private target(event: Event): EditorView {
-      const element = (event.target as Element | null)?.nodeType === 1 ? (event.target as Element).closest('.cm-editor') : null;
-      return element ? EditorView.findFromDOM(element as HTMLElement) ?? this.view : this.view;
+    private target(event: Event): EditorView | null {
+      const target = event.target as Node | null;
+      const element = target?.nodeType === 1 ? target as Element : target?.parentElement;
+      const root = element?.closest('.cm-editor');
+      const view = root ? EditorView.findFromDOM(root as HTMLElement) : null;
+      if (!view || !element || !view.contentDOM.contains(element)) return null;
+      // Search panels and controls inside embeds own their input. Stop at the
+      // resolved contentDOM so a nested table editor remains a valid target.
+      for (let node: Element | null = element; node && node !== view.contentDOM; node = node.parentElement) {
+        if (node.matches('input, textarea, select, button, [contenteditable="false"]')) return null;
+      }
+      return view;
     }
     private insertFiles(files: TransferFile[]) {
       this.pending = this.pending.then(async () => {
@@ -87,9 +98,17 @@ export function editorTransfers(options: TransferOptions): Extension {
     }
     private paste = (event: ClipboardEvent) => {
       if (event.defaultPrevented || !event.clipboardData) return;
-      const view = this.target(event); if (view.state.readOnly) return;
-      const transfer = event.clipboardData, markdown = transfer.getData('text/markdown');
-      const text = markdown || transfer.getData('text/plain');
+      const view = this.target(event); if (!view || view.state.readOnly) return;
+      const transfer = event.clipboardData, plain = transfer.getData('text/plain'), html = transfer.getData('text/html');
+      const ownCopy = !!plain && isOwnClipboardHTML(html);
+      let converted = ownCopy ? '' : transfer.getData('text/markdown');
+      const convertHTML = typeof options.autoConvertHtml === 'function' ? options.autoConvertHtml() : options.autoConvertHtml !== false;
+      if (!ownCopy && !converted && html && convertHTML) {
+        const hasFiles = !!transfer.files?.length || Array.from(transfer.items ?? []).some(item => item.kind === 'file');
+        const document = view.dom.ownerDocument;
+        if (!hasFiles || !isSingleImageHTML(html, { document })) converted = htmlToMarkdown(html, { document }) ?? '';
+      }
+      const text = converted || plain;
       if (text && pasteURLs(view, text)) { event.preventDefault(); event.stopPropagation(); return; }
       // The Markdown extension has its own URL-over-selection paste handler.
       // Consume rejected label shapes here so it cannot wrap multiline labels.
@@ -97,7 +116,7 @@ export function editorTransfers(options: TransferOptions): Extension {
         && text.trim().split(/\r?\n/).every(url => /^(?:https?:\/\/|mailto:)[^\s<>]+$/i.test(url))) {
         event.preventDefault(); event.stopPropagation(); replace(view, text, 'input.paste'); return;
       }
-      if (markdown) { event.preventDefault(); event.stopPropagation(); replace(view, markdown, 'input.paste'); return; }
+      if (converted) { event.preventDefault(); event.stopPropagation(); replace(view, converted, 'input.paste'); return; }
       let files: TransferFile[];
       try { files = transferFiles(transfer, options.nativePath); }
       catch (error) { event.preventDefault(); options.onError?.(error); return; }
@@ -105,12 +124,13 @@ export function editorTransfers(options: TransferOptions): Extension {
       event.preventDefault(); event.stopPropagation(); this.insertFiles(files);
     };
     private dragOver = (event: DragEvent) => {
-      if (event.defaultPrevented || !event.dataTransfer?.types.includes('Files') || this.target(event).state.readOnly) return;
+      if (event.defaultPrevented || !event.dataTransfer?.types.includes('Files')) return;
+      const view = this.target(event); if (!view || view.state.readOnly) return;
       event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
     };
     private drop = (event: DragEvent) => {
       if (event.defaultPrevented || !event.dataTransfer) return;
-      const view = this.target(event); if (view.state.readOnly) return;
+      const view = this.target(event); if (!view || view.state.readOnly) return;
       let files: TransferFile[];
       try { files = transferFiles(event.dataTransfer, options.nativePath); }
       catch (error) { event.preventDefault(); options.onError?.(error); return; }
