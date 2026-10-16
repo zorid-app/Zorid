@@ -27,6 +27,10 @@
   ordering, labels, submenus, availability and action behavior. Tables include
   deleting rows/columns, selecting whole rows/columns, and multiple-row/column
   selections with selection-dependent commands.
+- Include Obsidian-style launch/onboarding and vault-selection flows: create a
+  vault, open an existing folder, and choose recent vaults. Sequence work by
+  dependencies and integration readiness; new requests need not interrupt the
+  current implementation immediately.
 - Defer discussion, design, and implementation of the requested LiveSync-style
   default sync and FullCalendar/TaskNotes-style calendar/task features until the
   editor base is solid. See `docs/deferred-product-roadmap.md`.
