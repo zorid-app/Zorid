@@ -1,4 +1,5 @@
 import { markdownLanguage } from '@codemirror/lang-markdown';
+import { appendCodeBlock } from './code-block.ts';
 
 type SyntaxNode = ReturnType<typeof markdownLanguage.parser.parse>['topNode'];
 
@@ -22,7 +23,7 @@ export function renderMarkdownList(parent: HTMLElement, source: string, startLin
  * Create a new renderer when the document changes; returned renderers share no
  * mutable DOM or checkbox state, and may render into different documents.
  */
-export function createMarkdownListRenderer(source: string): ListRenderer {
+export function createMarkdownListRenderer(source: string, options: { quotes?: boolean } = {}): ListRenderer {
   source = source.replace(/\r\n/g, '\n');
   const starts = [0];
   for (let index = 0; index < source.length; index++) if (source[index] === '\n') starts.push(index + 1);
@@ -49,9 +50,9 @@ export function createMarkdownListRenderer(source: string): ListRenderer {
     if (!Number.isInteger(startLine) || startLine < 0 || startLine >= starts.length) return null;
     const root = roots.get(startLine);
     if (!root) return null;
-    if (!listTypes.has(root.name) && (root.name !== 'Blockquote' || !hasList(root))) return null;
+    if (!listTypes.has(root.name) && (root.name !== 'Blockquote' || (!options.quotes && !hasList(root)))) return null;
     // Existing callout rendering owns this syntax, including any contained lists.
-    if (root.name === 'Blockquote' && /^\s*>\s*\[!/.test(source.slice(starts[startLine], root.to))) return null;
+    if (!options.quotes && root.name === 'Blockquote' && /^\s*>\s*\[!/.test(source.slice(starts[startLine], root.to))) return null;
     const document = parent.ownerDocument;
     const text = (from: number, to: number, code = false): string => {
       const column = from - starts[lineAt(from)];
@@ -73,19 +74,30 @@ export function createMarkdownListRenderer(source: string): ListRenderer {
       if (node.name === 'QuoteMark' || node.name === 'ListMark' || node.name === 'LinkReference') return;
       if (node.name === 'Blockquote') {
         const quote = document.createElement('blockquote');
-        for (const child of children(node)) renderBlock(quote, child);
+        const callout = /^>[ \t]*\[!([^\]]+)\][ \t]*([^\n]*)/.exec(source.slice(node.from, node.to));
+        let firstParagraph = true;
+        if (callout) {
+          quote.className = 'callout';
+          const title = document.createElement('div'); title.className = 'callout-title';
+          title.textContent = callout[2] || callout[1]; quote.append(title);
+        }
+        for (const child of children(node)) {
+          if (callout && firstParagraph && child.name === 'Paragraph') {
+            firstParagraph = false;
+            const value = text(child.from, child.to), newline = value.indexOf('\n');
+            if (newline >= 0) { const paragraph = document.createElement('p'); inline(paragraph, value.slice(newline + 1)); quote.append(paragraph); }
+          } else renderBlock(quote, child);
+        }
         container.append(quote); return;
       }
       if (node.name === 'Paragraph' || node.name === 'Task') {
         const paragraph = document.createElement('p'); inline(paragraph, text(node.from, node.to)); container.append(paragraph); return;
       }
       if (node.name === 'CodeBlock' || node.name === 'FencedCode') {
-        const pre = document.createElement('pre'), code = document.createElement('code');
         const chunks = children(node).filter(child => child.name === 'CodeText');
-        code.textContent = chunks.map(child => text(child.from, child.to, true)).join('');
+        const value = chunks.map(child => text(child.from, child.to, true)).join('');
         const info = node.getChild('CodeInfo');
-        if (info) code.dataset.language = source.slice(info.from, info.to).trim();
-        pre.append(code); container.append(pre); return;
+        appendCodeBlock(container, value, info ? source.slice(info.from, info.to) : ''); return;
       }
       const literal = document.createElement('pre');
       literal.className = 'markdown-list-unsupported'; literal.textContent = text(node.from, node.to);
