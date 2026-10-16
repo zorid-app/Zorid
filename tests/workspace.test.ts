@@ -552,3 +552,23 @@ test('PDF tabs receive link subpaths, route Find and release their view without 
   const event = key(document, 'f', { metaKey: true }); assert.equal(event.defaultPrevented, true); await until(() => searches === 1, 'PDF find command');
   await workspace.openNote('Note.md'); assert.equal(destroyed, 1);
 });
+
+
+test('Canvas text typed during an external reload remains visible after the read completes', async t => {
+  const { workspace, adapter, dom, root, key } = await setup(t, new MemoryAdapter({ 'Board.canvas': canvasSource }));
+  await workspace.openNote('Board.canvas');
+  let release!: () => void, started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const original = workspace.vault.read.bind(workspace.vault);
+  workspace.vault.read = async path => { const result = await original(path); started(); await gate; return result; };
+  const changed = JSON.parse(canvasSource); changed.nodes[0].text = 'External';
+  await adapter.write('Board.canvas', JSON.stringify(changed)); await workspace.vault.reload(['Board.canvas']);
+  await entered;
+  const input = editCanvas(dom, 'Local typed during read');
+  release();
+  await until(() => workspace.buffers.get('Board.canvas')?.text === JSON.stringify(changed), 'external read completed');
+  assert.equal(root.querySelector<HTMLTextAreaElement>('.zorid-canvas-text-editor'), input);
+  assert.equal(input.value, 'Local typed during read');
+  assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text, 'External');
+  key(input, 'Escape'); // Deliberately cancel this draft so teardown can complete.
+});

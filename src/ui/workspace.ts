@@ -167,7 +167,19 @@ export class Workspace {
       }
       this.renderSidebar(); this.renderRight(); this.panes.forEach(pane => this.run(()=>this.renderPane(pane))); this.saveSession();
     }), this.vault.on('modify', change => {
-      if(/\.canvas$/i.test(change.path)){const buffer=this.buffers.get(change.path);if(buffer&&!buffer.dirty)this.run(async()=>{for(const pane of this.panes)if(this.current(pane)?.path===change.path)await pane.canvasView?.flush();await buffer.reload();for(const pane of this.panes)if(this.current(pane)?.path===change.path&&pane.canvasView){pane.canvasSource=buffer.text;pane.canvasView.setDocument(CanvasDocument.parse(buffer.text));}});return;}
+      if(/\.canvas$/i.test(change.path)){
+        const buffer=this.buffers.get(change.path),generation=this.vaultGeneration;
+        const targets=this.panes.filter(pane=>this.current(pane)?.path===change.path&&pane.canvasView).map(pane=>({pane,view:pane.canvasView!}));
+        if(buffer&&!buffer.dirty)this.run(async()=>{
+          for(const {view} of targets)await view.flush();
+          if(generation!==this.vaultGeneration)return;
+          await buffer.reload();
+          if(generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
+          for(const {pane,view} of targets)if(pane.canvasView===view&&!view.hasPendingChanges()){
+            pane.canvasSource=buffer.text;view.setDocument(CanvasDocument.parse(buffer.text));
+          }
+        });return;
+      }
       if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)this.run(()=>this.renderPane(pane));return;}
       const buffer = this.buffers.get(change.path);
       if (buffer && !buffer.dirty) this.run(async () => { await buffer.reload(); for (const pane of this.panes) if (this.current(pane)?.path === change.path) { if (this.current(pane).mode === 'reading') await this.renderPane(pane); else pane.editor?.setValue(buffer.text); } this.renderRight(); });
