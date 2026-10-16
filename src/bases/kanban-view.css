@@ -1,0 +1,17 @@
+.bases-kanban-view { position: relative; box-sizing: border-box; height: 100%; min-height: 180px; overflow: auto hidden; padding: 12px; outline: none; color: var(--text-normal, #222); }
+.bases-kanban-board { position: relative; height: 100%; min-height: 156px; }
+.bases-kanban-column { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column; box-sizing: border-box; border: 1px solid var(--background-modifier-border, #ddd); border-radius: var(--radius-m, 8px); background: var(--background-primary-alt, #f7f7f7); overflow: hidden; }
+.bases-kanban-column-header { height: 40px; flex: 0 0 40px; display: flex; align-items: center; gap: 8px; padding: 0 8px; font-weight: 600; overflow: hidden; white-space: nowrap; }
+.bases-kanban-column-count { color: var(--text-muted, #777); font-size: .85em; font-weight: normal; }
+.bases-kanban-column-body { flex: 1; min-height: 0; overflow: auto; padding: 0 8px; }
+.bases-kanban-column-space { position: relative; }
+.bases-kanban-card { position: absolute; left: 0; right: 0; box-sizing: border-box; padding: 12px; border: 1px solid var(--background-modifier-border, #ddd); border-radius: var(--radius-m, 8px); box-shadow: 0 1px 2px #0003; background: var(--background-primary, #fff); cursor: pointer; overflow: hidden; }
+.bases-kanban-card:hover { border-color: var(--background-modifier-border-hover, #bbb); }
+.bases-kanban-card.is-selected { outline: 2px solid var(--interactive-accent, #7c5ce0); outline-offset: -2px; }
+.bases-kanban-card.is-pending { opacity: .6; cursor: progress; }
+.bases-kanban-card-title, .bases-kanban-card-property { height: 24px; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bases-kanban-card-title { font-weight: 500; }
+.bases-kanban-card-property { color: var(--text-muted, #777); }
+.bases-kanban-status { position: sticky; bottom: 0; left: 0; color: var(--text-error, #b33); background: var(--background-primary, #fff); }
+.bases-kanban-status:empty { display: none; }
+.bases-kanban-empty { padding: 24px; color: var(--text-muted, #777); }
