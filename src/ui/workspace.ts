@@ -28,6 +28,8 @@ import { ChangeSet, EditorSelection } from '@codemirror/state';
 import { textChanges } from '../editor/text-changes.ts';
 import { WorkspaceStorageScope, validateWorkspaceWindowInfo, workspaceWindowBridge } from './workspace-window.ts';
 import { resolveWorkspaceShortcut } from './workspace-keymap.ts';
+import { createSidebarControls } from './sidebar-controls.ts';
+import { buildFileListBackgroundMenu, installFileListBackgroundMenu } from './file-list-background-menu.ts';
 
 type Mode = 'live' | 'reading';
 interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; subpath?: string; viewState?: { editor?: EditorViewState; scrollTop: number; scrollLeft: number }; }
@@ -95,6 +97,8 @@ export class Workspace {
   private storageScope = new WorkspaceStorageScope();
   private navigationIntent = new WeakMap<Pane, number>();
   private paneActivationRevision = 0;
+  private sidebarControls?: ReturnType<typeof createSidebarControls>;
+  private disposeFileListMenu?: () => void;
 
   constructor(root: HTMLElement, editorFactory?: EditorFactory, viewFactories: WorkspaceViewFactories = {}) { this.root = root; this.editorFactory = editorFactory; this.viewFactories = viewFactories; }
   private run(operation: () => unknown | Promise<unknown>): void { Promise.resolve().then(operation).catch(error => notice(error instanceof Error ? error.message : String(error))); }
@@ -124,6 +128,7 @@ export class Workspace {
   }
 
   private showVaultPicker(): void {
+    this.disposeShell();
     this.root.replaceChildren();
     const screen = el('div', 'vault-picker'); const panel = el('div', 'vault-picker-panel');
     panel.append(el('div', 'app-symbol', '◈'), el('h1', '', 'Zorid'), el('p', 'muted', 'Your notes, on your device.'));
@@ -248,7 +253,13 @@ export class Workspace {
     this.renderSidebar(); this.renderRight(); this.saveSession();
   }
 
+  private disposeShell(): void {
+    this.disposeFileListMenu?.(); this.disposeFileListMenu=undefined;
+    this.sidebarControls?.destroy(); this.sidebarControls=undefined;
+  }
+
   private buildShell(): void {
+    this.disposeShell();
     this.root.replaceChildren(); this.root.className = 'workspace right-hidden';
     this.root.classList.toggle('is-macos-desktop',!!window.zorid&&/Mac/i.test(window.navigator.platform));
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
@@ -273,10 +284,25 @@ export class Workspace {
     this.right = el('aside','right-sidebar'); this.right.setAttribute('aria-label','Right sidebar');
     const rightTabs = el('div','right-tabs');
     for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.rightTab=type;this.renderRight();}));
-    rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight())); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
+    rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
     this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
     this.root.append(ribbon,this.sidebar,center,this.right,this.status);
     this.addResizeHandle(this.sidebar,'left'); this.addResizeHandle(this.right,'right');
+    this.sidebarControls=createSidebarControls(this.root,{onToggleLeft:()=>this.toggleLeft(),onToggleRight:()=>this.toggleRight()});
+    const surface=this.sidebarContent;
+    this.disposeFileListMenu=installFileListBackgroundMenu(surface,{
+      isAvailable:()=>this.initialized&&!!this.vault&&this.treeTab==='files',
+      getTree:()=>surface.querySelector<HTMLElement>(':scope > .file-tree'),
+      buildMenu:()=>{
+        const generation=this.vaultGeneration,serial=++this.menuSerial;
+        return buildFileListBackgroundMenu({hasVault:!!this.vault,
+          isValid:()=>this.initialized&&generation===this.vaultGeneration&&serial===this.menuSerial,
+          actions:{newNote:()=>this.newNote(''),newFolder:()=>this.newFolder(''),newCanvas:()=>this.newCanvas('')},
+        });
+      },
+      clearSelection:()=>{const focused=surface.ownerDocument.activeElement;if(focused instanceof HTMLElement&&surface.contains(focused)&&focused.matches('[role="treeitem"]'))focused.blur();},
+      onError:error=>notice(error instanceof Error?error.message:String(error)),
+    });
   }
 
   private addResizeHandle(sidebar: HTMLElement, side: 'left'|'right'): void {
@@ -299,11 +325,11 @@ export class Workspace {
   }
   private focusPane(pane:Pane):void{if(pane.editor)pane.editor.focus();else pane.element.focus({preventScroll:true});}
   private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
-  async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath=''): Promise<void> {
+  async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath='',expectedActivation?:number): Promise<void> {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
     await this.flushPane(pane);
-    if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||pane.renderVersion!==version||!this.panes.includes(pane))return;
+    if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||pane.renderVersion!==version||!this.panes.includes(pane)||(expectedActivation!==undefined&&expectedActivation!==this.paneActivationRevision))return;
     this.noteNavigation.set(pane,(this.noteNavigation.get(pane)??0)+1);
     this.capturePaneState(pane);const current=this.current(pane);
     const existing=pane.tabs.find(tab=>tab.path===path&&tab.kind==='note');
@@ -328,7 +354,8 @@ export class Workspace {
     const version=++pane.renderVersion; this.disposePaneViews(pane);pane.element.replaceChildren();
     const tab=this.current(pane); if(!tab)return;pane.viewTabId=tab.id;pane.viewPath=tab.path;
     const bar=el('div','tab-bar'); bar.setAttribute('role','tablist');
-    bar.append(button('sidebar','Toggle left sidebar',()=>this.toggleLeft(),'pane-sidebar-toggle'));
+    const strip=el('div','tab-strip');
+    bar.append(button('sidebar','Toggle left sidebar',()=>this.toggleLeft(),'pane-sidebar-toggle'),strip);
     for(const item of pane.tabs){
       const node=el('div',`tab${item.id===tab.id?' is-active':''}`);node.role='tab';node.tabIndex=item.id===tab.id?0:-1;node.setAttribute('aria-selected',String(item.id===tab.id));node.draggable=true;
       node.append(icon(item.kind==='graph'?'graph':'file',15),el('span','tab-title',item.kind==='graph'?'Graph view':item.path?nameOf(item.path):'New tab'));
@@ -347,7 +374,7 @@ export class Workspace {
           if(!from.tabs.some(t=>t.id===from.active))from.active=from.tabs[0].id;
           await this.renderPane(from);if(from!==pane)await this.renderPane(pane);this.saveSession();});
       }catch{/* Not an app tab. */}};
-      bar.append(node);
+      strip.append(node);
     }
     bar.append(button('plus','New tab (⌘T)',()=>this.run(()=>this.newTab(pane)),'tab-add'),button('down','Tab menu',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)));
     pane.element.append(bar);
@@ -357,7 +384,7 @@ export class Workspace {
     toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.md$/,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
     if(!tab.path||isMarkdown(tab.path))actions.append(button(tab.mode==='reading'?'edit':'book',tab.mode==='reading'?'Switch to Live Edit (⌘E)':'Switch to reading view (⌘E)',()=>this.run(()=>this.toggleReading(pane))));
-    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight()));toolbar.append(actions);pane.element.append(toolbar);
+    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);pane.element.append(toolbar);
     if(tab.kind==='graph'){this.renderGraph(pane.element);return;}
     if(!tab.path){this.renderEmpty(pane);return;}
     const path=tab.path;
@@ -587,11 +614,19 @@ export class Workspace {
     const generation=this.vaultGeneration,pane=this.activePane,version=pane.renderVersion,intent=(this.navigationIntent.get(pane)??0)+1,activation=this.paneActivationRevision;
     this.navigationIntent.set(pane,intent);
     await this.vault.create(path,'');if(generation!==this.vaultGeneration||!this.panes.includes(pane)||pane.renderVersion!==version||this.navigationIntent.get(pane)!==intent||activation!==this.paneActivationRevision)return;
-    await this.openNote(path,false,pane);if(generation!==this.vaultGeneration||this.activePane!==pane||this.current(pane)?.path!==path||this.navigationIntent.get(pane)!==intent+1)return;
+    await this.openNote(path,false,pane,true,'',activation);if(generation!==this.vaultGeneration||this.activePane!==pane||this.current(pane)?.path!==path||this.navigationIntent.get(pane)!==intent+1)return;
     const title=pane.element.querySelector<HTMLInputElement>('.note-title');
     if(title&&!title.hidden){title.focus();title.select();}else pane.editor?.focus();
   }
-  async newFolder(parent=''):Promise<void>{const name=await promptName('New folder','Untitled folder');if(name)await this.vault.createFolder(`${parent?parent+'/':''}${name}`);}
+  private async newCanvas(folder=''):Promise<void>{
+    let index=0,path='';do{path=`${folder?folder+'/':''}Untitled${index?' '+index:''}.canvas`;index++;}while(this.vault.entries.has(path));
+    const vault=this.vault,generation=this.vaultGeneration,pane=this.activePane,version=pane.renderVersion,intent=(this.navigationIntent.get(pane)??0)+1,activation=this.paneActivationRevision;
+    this.navigationIntent.set(pane,intent);
+    await vault.create(path,JSON.stringify({nodes:[],edges:[]}));
+    if(generation!==this.vaultGeneration||!this.panes.includes(pane)||pane.renderVersion!==version||this.navigationIntent.get(pane)!==intent||activation!==this.paneActivationRevision)return;
+    await this.openNote(path,false,pane,true,'',activation);
+  }
+  async newFolder(parent=''):Promise<void>{const vault=this.vault,generation=this.vaultGeneration;const name=await promptName('New folder','Untitled folder');if(name&&generation===this.vaultGeneration&&this.vault===vault)await vault.createFolder(`${parent?parent+'/':''}${name}`);}
   private async renameDialog(path:string):Promise<void>{const name=await promptName('Rename',path.split('/').at(-1),'Rename');if(name)await this.renamePath(path,name);}
   private async renamePath(path:string,name:string):Promise<string>{
     if(/[\\/]/.test(name))throw new Error('Use the file menu to move files between folders.');const folder=parentOf(path);const suffix=this.vault.entries.get(path)?.type==='file'&&path.endsWith('.md')&&!name.endsWith('.md')?'.md':'';const next=`${folder?folder+'/':''}${name}${suffix}`;
@@ -761,5 +796,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
   async flush():Promise<void>{for(const pane of this.panes)await pane.canvasView?.flush();for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.root.replaceChildren();}
+  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
 }

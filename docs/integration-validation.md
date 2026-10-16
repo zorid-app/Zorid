@@ -88,3 +88,21 @@ empty-note focus helper still needs installation in `createEditor`; title and
 navigation safeguards are integrated. Tab docking and handoff contracts exist,
 but state-preserving docking and actual cross-window transfer remain separate
 implementation work. No full parity or mobile runtime certification is implied.
+
+## Fixed sidebar controls and file-list background menu host
+
+The workspace now mounts one persistent pair of sidebar controls, keeps tab nodes
+inside a separate scrolling strip, and disposes observers and menu ownership when
+the shell is replaced. The reviewed wiki suggestion styling is included. Bare
+file-list surfaces offer real New note, New folder and New canvas actions; Canvas
+creation writes a valid empty document and opens the existing viewer. Pending
+folder prompts cannot create in a replacement vault. Creation also carries its
+activation revision through the pending source save, so a later pane activation
+prevents both new-note and new-Canvas navigation from stealing focus.
+
+The 42 workspace tests and a separate TypeScript check pass, including persistent
+control identity across splits/rebuilds, actual menu dispatch and creation, stale
+vault/prompt rejection, and both delayed-save activation regressions. Native edge
+positions, overflowing tabs, macOS drag/double-click behavior and popup placement
+remain root verification work. Full Explorer inline naming, menu icons and Bases
+creation remain explicit gaps; the current New folder action still uses a dialog.

@@ -730,3 +730,74 @@ test('live link ownership uses source-relative metadata and external URLs never 
   options.open('Should not exist','wiki');await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(workspace.vault.entries.has('Should not exist.md'),false);
 });
+
+test('workspace sidebar controls persist outside scrolling tabs and retire with their shell',async t=>{
+  const {workspace,root,destroy}=await setup(t,new MemoryAdapter({'Note.md':'note'}));
+  await workspace.openNote('Note.md');
+  const controls=root.querySelector<HTMLElement>(':scope > .workspace-sidebar-controls')!;
+  const left=controls.querySelector<HTMLButtonElement>('.is-left')!,right=controls.querySelector<HTMLButtonElement>('.is-right')!;
+  left.click();right.click();assert.ok(root.classList.contains('left-hidden'));assert.ok(!root.classList.contains('right-hidden'));
+  assert.equal(left.getAttribute('aria-expanded'),'false');assert.equal(right.getAttribute('aria-expanded'),'true');
+  await (workspace as any).split('right');await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(root.querySelector('.workspace-sidebar-controls')===controls);
+  assert.equal(root.querySelectorAll('.workspace-sidebar-controls').length,1);
+  assert.equal(root.querySelectorAll('.tab-bar[data-chrome-edge-left]').length,1);
+  assert.equal(root.querySelectorAll('.tab-bar[data-chrome-edge-right]').length,1);
+  for(const pane of workspace.panes){const bar=pane.element.querySelector('.tab-bar')!;assert.equal(bar.querySelectorAll(':scope > .tab-strip > .tab').length,pane.tabs.length);assert.ok(bar.querySelector(':scope > .tab-add'));}
+  await workspace.openVault(workspace.platform);
+  assert.ok(root.classList.contains('left-hidden'));assert.ok(!root.classList.contains('right-hidden'));
+  left.click();right.click();assert.ok(root.classList.contains('left-hidden'));assert.ok(!root.classList.contains('right-hidden'));
+  assert.equal(root.querySelectorAll('.workspace-sidebar-controls').length,1);
+  await destroy();assert.equal(root.querySelector('.workspace-sidebar-controls'),null);assert.ok(!root.classList.contains('has-sidebar-controls'));
+});
+
+test('file-list background menu offers root creation and opens a valid new Canvas',async t=>{
+  const {workspace,root,dom,adapter}=await setup(t,new MemoryAdapter({'Note.md':'note'}));
+  await workspace.openNote('Note.md');let request:any;let choice='file-list.new-canvas';
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:async(value:any)=>{request=value;return choice;},dismissContextMenu:async()=>{}}});
+  const active=root.querySelector<HTMLElement>('[role=treeitem][title="Note.md"]')!;active.focus();
+  const surface=root.querySelector<HTMLElement>('.sidebar-content')!;
+  const event=new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:52,clientY:311});surface.dispatchEvent(event);
+  assert.equal(event.defaultPrevented,true);assert.equal(request.x,52);assert.equal(request.y,311);
+  assert.deepEqual(request.items.map((item:any)=>item.label),['New note','New folder','New canvas']);assert.ok(active.classList.contains('is-active'));assert.notEqual(document.activeElement,active);
+  await until(()=>workspace.activePane.tabs.find(tab=>tab.id===workspace.activePane.active)?.path==='Untitled.canvas'&&!!root.querySelector('.zorid-canvas'),'new Canvas mounted');
+  assert.deepEqual(JSON.parse(await adapter.read('Untitled.canvas')),{nodes:[],edges:[]});
+  choice='file-list.new-note';root.querySelector('.file-tree')!.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  await until(()=>workspace.vault.entries.has('Untitled.md')&&!!currentEditor(),'root note created');
+});
+
+test('a background popup and pending folder prompt cannot create into a replacement vault',async t=>{
+  const {workspace,root,dom,adapter,click}=await setup(t,new MemoryAdapter({'Note.md':'note'}));
+  let finish!:(id:string)=>void;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:()=>new Promise<string>(resolve=>finish=resolve),dismissContextMenu:async()=>{}}});
+  root.querySelector('.file-tree')!.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));assert.ok(finish);
+  const prompt=workspace.newFolder();const input=document.querySelector<HTMLInputElement>('[aria-label="New folder"]')!;input.value='Old prompt folder';
+  const other=new MemoryAdapter({'Other.md':'other'});await workspace.openVault({adapter:other,id:'other',label:'Other'});
+  finish('file-list.new-note');click('Create');await prompt;await new Promise(resolve=>setImmediate(resolve));
+  assert.equal((await adapter.list()).some(entry=>entry.path==='Untitled.md'||entry.path==='Old prompt folder'),false);
+  assert.equal((await other.list()).some(entry=>entry.path==='Untitled.md'||entry.path==='Old prompt folder'),false);
+});
+
+for(const kind of ['note','canvas'] as const)test(`new ${kind} waiting on a save preserves a later pane activation`,async t=>{
+  class SlowSaveAdapter extends MemoryAdapter {
+    enabled=false;waiting=false;release!:()=>void;
+    gate=new Promise<void>(resolve=>this.release=resolve);
+    override async write(path:string,content:string):Promise<void>{
+      if(this.enabled&&path==='Note.md'){this.waiting=true;await this.gate;}
+      await super.write(path,content);
+    }
+  }
+  const adapter=new SlowSaveAdapter({'Note.md':'note'});
+  const {workspace,type}=await setup(t,adapter);
+  await workspace.openNote('Note.md');await (workspace as any).split('right');
+  const target=workspace.activePane,other=workspace.panes.find(pane=>pane!==target)!;
+  adapter.enabled=true;type(currentEditor(),'dirty');
+  const creating=kind==='note'?workspace.newNote():(workspace as any).newCanvas();
+  await until(()=>adapter.waiting,'source save pending');
+  other.element.focus();assert.ok(workspace.activePane===other);
+  adapter.release();await creating;
+  assert.ok(workspace.activePane===other);
+  assert.equal(target.tabs.find(tab=>tab.id===target.active)?.path,'Note.md');
+  assert.equal(await adapter.read('Note.md'),'dirty');
+  assert.ok(workspace.vault.entries.has(`Untitled.${kind==='note'?'md':'canvas'}`));
+});
