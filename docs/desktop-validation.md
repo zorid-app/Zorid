@@ -149,3 +149,20 @@ preceding dashes and indentation guides. Ordinary list markers show circular
 bullets, but a small residual hyphen is also visible beneath them; that visual
 regression is assigned for repair. Native menu action execution, reference visual
 comparison, and split-view integration remain separate outstanding checks.
+
+### Bullet correction and native table history
+
+Commit `d96601a` hides nested syntax-highlighted list-marker text, enlarges the
+circle diameter from .3em to .375em, and makes it black in the light theme per
+the user's explicit correction. Dark-theme bullets retain readable text color.
+All 22 focused list/task tests and the production build pass. A clean desktop
+launch produced a complete screenshot showing the black circle with no visible
+underlying hyphen. Earlier reload observations still displayed the previous
+styling, so the clean launch is the visual evidence used for this checkpoint.
+
+A separate exclusively created `Native table verification 20261016.md` fixture
+was used for native interaction testing. Clicking Add row below created a body
+row and focused its first nested editor. Typing `Added` updated the Markdown;
+two native Undo shortcuts removed the typing and row insertion. Saving and
+checking disk bytes confirmed exact restoration of the original fixture.
+These actions do not establish the complete reference table interaction model.
