@@ -1,3 +1,4 @@
+import { bindNoteTitleFocus } from './note-title-focus.ts';
 import { Vault } from '../core/index.ts';
 import type { VaultEntry } from '../core/index.ts';
 import { pickDesktopVault } from '../platform/index.ts';
@@ -48,6 +49,7 @@ export class Workspace {
   buffers = new Map<string, NoteBuffer>();
   settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
   private editorFactory?: EditorFactory;
+  private noteNavigation = new WeakMap<Pane, number>();
   private viewFactories: WorkspaceViewFactories;
   private sidebar = el('aside', 'sidebar');
   private sidebarContent = el('div', 'sidebar-content');
@@ -299,7 +301,8 @@ export class Workspace {
   private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
   async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath=''): Promise<void> {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
-    await this.flushPane(pane); this.capturePaneState(pane); const current=this.current(pane);
+    const navigation=(this.noteNavigation.get(pane)??0)+1;this.noteNavigation.set(pane,navigation);
+    await this.flushPane(pane);if(this.noteNavigation.get(pane)!==navigation)return;this.capturePaneState(pane);const current=this.current(pane);
     const existing=pane.tabs.find(tab=>tab.path===path&&tab.kind==='note');
     if(existing&&!newTab) pane.active=existing.id;
     else if(!newTab&&current){if(current.path!==path)current.viewState=undefined;if(current.kind==='graph')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
@@ -384,8 +387,12 @@ export class Workspace {
     }
     const scroll=el('div','note-scroll');scroll.classList.toggle('readable-width',this.settings.readableWidth);
     const title=el('input','note-title');title.value=nameOf(path);title.setAttribute('aria-label','Note title');title.hidden=!this.settings.showInlineTitle;
-    title.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();title.blur();pane.editor?.focus();}};
-    title.onblur=()=>{if(title.value.trim()&&title.value.trim()!==nameOf(path))this.run(()=>this.renamePath(path,title.value.trim()));};
+    const titleGeneration=this.vaultGeneration,titleNavigation=this.noteNavigation.get(pane);let titlePath=path;
+    bindNoteTitleFocus(title,{
+      save:async name=>{if(titleGeneration!==this.vaultGeneration||!this.panes.includes(pane)||this.current(pane)!==tab||tab.path!==titlePath)return;if(name!==nameOf(titlePath))titlePath=await this.renamePath(titlePath,name);},
+      isCurrent:()=>this.initialized&&titleGeneration===this.vaultGeneration&&this.activePane===pane&&this.current(pane)===tab&&tab.path===titlePath&&this.noteNavigation.get(pane)===titleNavigation&&pane.element.isConnected,
+      focusBody:()=>pane.editor?.focus(),onError:error=>notice(error instanceof Error?error.message:String(error)),
+    });
     scroll.append(title);pane.element.append(scroll);
     try{
       const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
@@ -563,13 +570,18 @@ export class Workspace {
 
   async newNote(folder=''):Promise<void>{
     let index=0,path='';do{path=`${folder?folder+'/':''}Untitled${index?' '+index:''}.md`;index++;}while(this.vault.entries.has(path));
-    await this.vault.create(path,'');await this.openNote(path);const title=this.activePane.element.querySelector<HTMLInputElement>('.note-title');title?.focus();title?.select();
+    const generation=this.vaultGeneration,pane=this.activePane,version=pane.renderVersion,navigation=(this.noteNavigation.get(pane)??0)+1;
+    this.noteNavigation.set(pane,navigation);
+    await this.vault.create(path,'');if(generation!==this.vaultGeneration||!this.panes.includes(pane)||pane.renderVersion!==version||this.noteNavigation.get(pane)!==navigation)return;
+    await this.openNote(path,false,pane);if(generation!==this.vaultGeneration||this.activePane!==pane||this.current(pane)?.path!==path||this.noteNavigation.get(pane)!==navigation+1)return;
+    const title=pane.element.querySelector<HTMLInputElement>('.note-title');
+    if(title&&!title.hidden){title.focus();title.select();}else pane.editor?.focus();
   }
   async newFolder(parent=''):Promise<void>{const name=await promptName('New folder','Untitled folder');if(name)await this.vault.createFolder(`${parent?parent+'/':''}${name}`);}
   private async renameDialog(path:string):Promise<void>{const name=await promptName('Rename',path.split('/').at(-1),'Rename');if(name)await this.renamePath(path,name);}
-  private async renamePath(path:string,name:string):Promise<void>{
+  private async renamePath(path:string,name:string):Promise<string>{
     if(/[\\/]/.test(name))throw new Error('Use the file menu to move files between folders.');const folder=parentOf(path);const suffix=this.vault.entries.get(path)?.type==='file'&&path.endsWith('.md')&&!name.endsWith('.md')?'.md':'';const next=`${folder?folder+'/':''}${name}${suffix}`;
-    if(next===path)return;await this.flush();const buffer=this.buffers.get(path);if(buffer)await buffer.rename(next);else await this.vault.rename(path,next);for(const pane of this.panes)await this.renderPane(pane);
+    if(next===path)return next;await this.flush();const buffer=this.buffers.get(path);if(buffer)await buffer.rename(next);else await this.vault.rename(path,next);for(const pane of this.panes)await this.renderPane(pane);return next;
   }
   private async deletePath(path:string):Promise<void>{await this.flush();await this.vault.trash(path);this.buffers.delete(path);notice('Moved to vault trash.');}
   private async newTab(pane=this.activePane):Promise<void>{await this.flushPane(pane);const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.run(()=>this.renderPane(pane));this.saveSession();}
