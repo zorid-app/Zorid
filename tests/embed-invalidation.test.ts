@@ -75,3 +75,15 @@ test('new competing file resolution updates a parked shorthand embed', async t =
   await f.vault.create('Near/Note.md', 'Near'); assert.equal(f.observers(), 1);
   f.parent.append(node); await flush(); assert.equal(node.querySelector('.markdown-embed-content')!.textContent, 'Near');
 });
+
+test('sequential parked widget teardown does not repeatedly traverse retained siblings', async t => {
+  const f = await setup(t, { 'Paper.pdf': '' });
+  const nodes = Array.from({ length: 128 }, () => f.render('Paper.pdf'));
+  f.parent.remove(); f.embeds.invalidate(); assert.equal(f.observers(), 1);
+  const states = (f.embeds as any).states as Set<unknown>;
+  const iterate = states[Symbol.iterator].bind(states); let visits = 0;
+  states[Symbol.iterator] = function* () { for (const state of iterate()) { visits++; yield state; } };
+  for (const node of nodes) f.embeds.releaseEmbed(node);
+  assert.ok(visits <= nodes.length, `teardown traversed retained siblings ${visits} times`);
+  assert.equal(f.observers(), 0); assert.equal(f.views.filter(view => view.destroyed === 1).length, nodes.length);
+});

@@ -36,6 +36,7 @@ interface EmbedState {
   visible: boolean;
   disposed: boolean;
   dirty: boolean;
+  reconnectDocument?: Document;
   children: Set<EmbedState>;
   lease?: AttachmentLease;
   pdfView?: PdfView;
@@ -50,6 +51,7 @@ export class MarkdownEmbeds {
   private nodes = new WeakMap<HTMLElement, EmbedState>();
   private observer?: IntersectionObserver;
   private observed = new Map<Element, EmbedState>();
+  private reconnectStates = new Map<Document, Set<EmbedState>>();
   private reconnectObservers = new Map<Document, MutationObserver>();
   private reads = new Map<string, Promise<string>>();
   private queue: (() => void)[] = [];
@@ -129,16 +131,21 @@ export class MarkdownEmbeds {
     state.version++; // Suppress in-flight output from the previous dependency.
     if (!state.visible) return; // The initial intersection callback will refresh.
     if (state.node.isConnected) void this.refresh(state);
-    else this.watchReconnect(state.node.ownerDocument);
+    else this.watchReconnect(state);
   }
 
-  private watchReconnect(document: Document): void {
-    if (this.disposed || this.reconnectObservers.has(document)) return;
+  private watchReconnect(state: EmbedState): void {
+    if (this.disposed) return;
+    const document = state.node.ownerDocument;
+    let pending = this.reconnectStates.get(document);
+    if (!pending) this.reconnectStates.set(document, pending = new Set());
+    pending.add(state); state.reconnectDocument = document;
+    if (this.reconnectObservers.has(document)) return;
     const Observer = document.defaultView?.MutationObserver;
     if (!Observer) return;
     const observer = new Observer(() => {
-      for (const state of [...this.states]) {
-        if (state.dirty && state.visible && !state.disposed && state.node.ownerDocument === document && state.node.isConnected) void this.refresh(state);
+      for (const state of [...(this.reconnectStates.get(document) ?? [])]) {
+        if (state.node.isConnected) void this.refresh(state);
       }
       this.pruneReconnectObserver(document);
     });
@@ -146,11 +153,19 @@ export class MarkdownEmbeds {
     observer.observe(document, { childList: true, subtree: true });
   }
 
+  private stopWaiting(state: EmbedState): Document {
+    const document = state.reconnectDocument ?? state.node.ownerDocument;
+    this.reconnectStates.get(document)?.delete(state);
+    state.reconnectDocument = undefined;
+    return document;
+  }
+
   private pruneReconnectObserver(document: Document): void {
     if (!this.reconnectObservers.has(document)) return;
-    if ([...this.states].some(state => state.dirty && state.visible && !state.disposed && state.node.ownerDocument === document && !state.node.isConnected)) return;
+    if (this.reconnectStates.get(document)?.size) return;
     this.reconnectObservers.get(document)?.disconnect();
     this.reconnectObservers.delete(document);
+    this.reconnectStates.delete(document);
   }
 
   private read(path: string): Promise<string> {
@@ -182,6 +197,7 @@ export class MarkdownEmbeds {
   private release(state: EmbedState, prune = true): void {
     if (state.disposed) return;
     state.disposed = true; state.version++;
+    const reconnectDocument = this.stopWaiting(state);
     destroyMarkdown(state.node);
     state.pdfView?.destroy();state.pdfView=undefined;
     state.mediaView?.destroy();state.mediaView=undefined;
@@ -189,7 +205,7 @@ export class MarkdownEmbeds {
     this.observer?.unobserve(state.node); this.observed.delete(state.node);
     this.clearChildren(state); this.states.delete(state);
     this.nodes.delete(state.node);
-    if (prune) this.pruneReconnectObserver(state.node.ownerDocument);
+    if (prune) this.pruneReconnectObserver(reconnectDocument);
   }
 
   /** A live editor can unmount one widget without disposing its other embeds. */
@@ -202,9 +218,10 @@ export class MarkdownEmbeds {
     if (this.disposed || state.disposed) return;
     const version = ++state.version;
     state.dirty = false;
+    const reconnectDocument = this.stopWaiting(state);
     destroyMarkdown(state.node);
     this.clearChildren(state);
-    this.pruneReconnectObserver(state.node.ownerDocument);
+    this.pruneReconnectObserver(reconnectDocument);
     state.pdfView?.destroy();state.pdfView=undefined;
     state.mediaView?.destroy();state.mediaView=undefined;
     state.lease?.release();state.lease=undefined;state.imageSource=undefined;
@@ -306,7 +323,7 @@ export class MarkdownEmbeds {
     this.lightbox?.destroy();
     this.observer?.disconnect(); this.observed.clear();
     for (const observer of this.reconnectObservers.values()) observer.disconnect();
-    this.reconnectObservers.clear();
+    this.reconnectObservers.clear(); this.reconnectStates.clear();
     this.unsubscribers.forEach(unsubscribe => unsubscribe());
     for (const state of [...this.states]) this.release(state);
     this.reads.clear();
