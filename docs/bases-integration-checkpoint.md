@@ -40,3 +40,17 @@ An invalidated draft remains recoverable rather than being silently redirected.
 This does not replace native compare-and-write guarantees or establish protection
 against external replacements not observed by the vault. Controllers must flush
 accepted changes before disposal or preserve the resulting recovery error.
+
+## Combined verification
+
+After merging canonical `main` checkpoint `02f3421` (including the reviewed local
+media CSP correction), the assembled branch passes all 1,397 repository tests
+with test concurrency limited to two: 32.3 seconds, zero failures or skipped tests.
+The final TypeScript check and production webpack build also pass. The build
+reports the existing three asset/entrypoint performance warnings. These checks
+were serialized on the development machine; no dependency changes or native app
+launches were part of this integration pass.
+
+The controller, NoteBuffer and workspace focused suite additionally passed all
+90 tests. These results establish the combined source checkpoint, not production
+Bases routing, complete view/controller interoperability, or native/mobile parity.
