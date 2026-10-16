@@ -1,4 +1,5 @@
 import type { Vault } from '../core/vault.ts';
+import type { VaultChange } from '../core/types.ts';
 import { selectMarkdownSubpath } from '../core/subpath.ts';
 import { el } from './dom.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -34,6 +35,7 @@ interface EmbedState {
   version: number;
   visible: boolean;
   disposed: boolean;
+  dirty: boolean;
   children: Set<EmbedState>;
   lease?: AttachmentLease;
   pdfView?: PdfView;
@@ -48,6 +50,7 @@ export class MarkdownEmbeds {
   private nodes = new WeakMap<HTMLElement, EmbedState>();
   private observer?: IntersectionObserver;
   private observed = new Map<Element, EmbedState>();
+  private reconnectObservers = new Map<Document, MutationObserver>();
   private reads = new Map<string, Promise<string>>();
   private queue: (() => void)[] = [];
   private reading = 0;
@@ -74,7 +77,7 @@ export class MarkdownEmbeds {
     }
     this.unsubscribers = [
       options.vault.on('modify', change => this.invalidate(change.path)),
-      ...(['create', 'delete', 'rename'] as const).map(event => options.vault.on(event, () => this.invalidate())),
+      ...(['create', 'delete', 'rename'] as const).map(event => options.vault.on(event, change => this.invalidateTopology(change))),
     ];
   }
 
@@ -82,7 +85,7 @@ export class MarkdownEmbeds {
     const node = el('span', 'internal-embed markdown-embed');
     node.setAttribute('role', 'group'); node.setAttribute('aria-label', `Embed ${request.target}`);
     node.dataset.embedTarget = request.target;
-    const state: EmbedState = { node, request, source, ancestors, version:0, visible:!this.observer, disposed:false, children:new Set() };
+    const state: EmbedState = { node, request, source, ancestors, version:0, visible:!this.observer, disposed:false, dirty:true, children:new Set() };
     node.addEventListener('contextmenu', event => {
       if (state.disposed || event.defaultPrevented) return;
       const target = event.target as Element | null;
@@ -104,8 +107,50 @@ export class MarkdownEmbeds {
   invalidate(path?: string): void {
     if (path) this.reads.delete(path); else this.reads.clear();
     for (const state of [...this.states]) {
-      if (!state.disposed && state.visible && (!path || state.path === path)) void this.refresh(state);
+      if (!state.disposed && (!path || state.path === path)) this.markDirty(state);
     }
+  }
+
+  private invalidateTopology(change: VaultChange): void {
+    const affected = (path: string) => [change.path, change.oldPath].some(changed =>
+      changed !== undefined && (path === changed || path.startsWith(`${changed}/`)));
+    for (const path of this.reads.keys()) if (affected(path)) this.reads.delete(path);
+    for (const state of [...this.states]) {
+      if (state.disposed) continue;
+      const resolved = this.options.vault.metadata.resolveLink(state.source, state.request.target, state.request.kind) ?? undefined;
+      // New competing names can change resolution even when neither changed path
+      // was the previous target. Unrelated topology must preserve warm viewers.
+      if (resolved !== state.path || (state.path !== undefined && affected(state.path))) this.markDirty(state);
+    }
+  }
+
+  private markDirty(state: EmbedState): void {
+    state.dirty = true;
+    state.version++; // Suppress in-flight output from the previous dependency.
+    if (!state.visible) return; // The initial intersection callback will refresh.
+    if (state.node.isConnected) void this.refresh(state);
+    else this.watchReconnect(state.node.ownerDocument);
+  }
+
+  private watchReconnect(document: Document): void {
+    if (this.disposed || this.reconnectObservers.has(document)) return;
+    const Observer = document.defaultView?.MutationObserver;
+    if (!Observer) return;
+    const observer = new Observer(() => {
+      for (const state of [...this.states]) {
+        if (state.dirty && state.visible && !state.disposed && state.node.ownerDocument === document && state.node.isConnected) void this.refresh(state);
+      }
+      this.pruneReconnectObserver(document);
+    });
+    this.reconnectObservers.set(document, observer);
+    observer.observe(document, { childList: true, subtree: true });
+  }
+
+  private pruneReconnectObserver(document: Document): void {
+    if (!this.reconnectObservers.has(document)) return;
+    if ([...this.states].some(state => state.dirty && state.visible && !state.disposed && state.node.ownerDocument === document && !state.node.isConnected)) return;
+    this.reconnectObservers.get(document)?.disconnect();
+    this.reconnectObservers.delete(document);
   }
 
   private read(path: string): Promise<string> {
@@ -130,11 +175,11 @@ export class MarkdownEmbeds {
   }
 
   private clearChildren(state: EmbedState): void {
-    for (const child of state.children) this.release(child);
+    for (const child of state.children) this.release(child, false);
     state.children.clear();
   }
 
-  private release(state: EmbedState): void {
+  private release(state: EmbedState, prune = true): void {
     if (state.disposed) return;
     state.disposed = true; state.version++;
     destroyMarkdown(state.node);
@@ -144,6 +189,7 @@ export class MarkdownEmbeds {
     this.observer?.unobserve(state.node); this.observed.delete(state.node);
     this.clearChildren(state); this.states.delete(state);
     this.nodes.delete(state.node);
+    if (prune) this.pruneReconnectObserver(state.node.ownerDocument);
   }
 
   /** A live editor can unmount one widget without disposing its other embeds. */
@@ -155,8 +201,10 @@ export class MarkdownEmbeds {
   private async refresh(state: EmbedState): Promise<void> {
     if (this.disposed || state.disposed) return;
     const version = ++state.version;
+    state.dirty = false;
     destroyMarkdown(state.node);
     this.clearChildren(state);
+    this.pruneReconnectObserver(state.node.ownerDocument);
     state.pdfView?.destroy();state.pdfView=undefined;
     state.mediaView?.destroy();state.mediaView=undefined;
     state.lease?.release();state.lease=undefined;state.imageSource=undefined;
@@ -248,7 +296,7 @@ export class MarkdownEmbeds {
       // Rendering may have created async math/code owners before a later block
       // failed. The detached content still needs the same teardown as a mounted view.
       if (content) destroyMarkdown(content);
-      if (current()) this.clearChildren(state);
+      if (current()) { this.clearChildren(state); this.pruneReconnectObserver(state.node.ownerDocument); }
       fail(error instanceof Error ? error.message : String(error));
     }
   }
@@ -257,6 +305,8 @@ export class MarkdownEmbeds {
     this.disposed = true;
     this.lightbox?.destroy();
     this.observer?.disconnect(); this.observed.clear();
+    for (const observer of this.reconnectObservers.values()) observer.disconnect();
+    this.reconnectObservers.clear();
     this.unsubscribers.forEach(unsubscribe => unsubscribe());
     for (const state of [...this.states]) this.release(state);
     this.reads.clear();

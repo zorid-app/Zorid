@@ -129,6 +129,7 @@ test('parent note replacement and media deletion destroy nested media without st
   assert.equal(calls[0].destroyed, 1); calls[0].reject(new Error('stale read')); await tick();
   assert.equal(parent.querySelector('.embed-error'), null); assert.match(parent.textContent!, /Replacement/);
   const media = f.embeds.render({ target: 'sound.wav', kind: 'wiki', label: '320x180' }, 'Home.md');
+  f.container.append(media);
   await f.vault.trash('sound.wav');
   assert.equal(calls[1].destroyed, 1); assert.match(media.textContent!, /File not found/);
   assert.equal(media.hasAttribute('width'), false); assert.equal(media.hasAttribute('height'), false);
