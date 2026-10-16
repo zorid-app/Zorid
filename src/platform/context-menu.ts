@@ -40,37 +40,82 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
   return new Promise(resolve => {
     const prior = doc.activeElement as HTMLElement | null;
     const selection = doc.getSelection();
-    const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange()) : [];
+    // DOM Ranges are live: cloning one does not freeze its endpoints through a
+    // render. Keep node/offset values, and never guess where detached text moved.
+    const point = (node: Node | null, offset: number) => node ? {
+      node, offset, parent: node.parentNode, text: node.textContent,
+    } : null;
+    const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, index) => {
+      const range = selection.getRangeAt(index);
+      return { start: point(range.startContainer, range.startOffset)!, end: point(range.endContainer, range.endOffset)! };
+    }) : [];
+    const anchor = point(selection?.anchorNode ?? null, selection?.anchorOffset ?? 0);
+    const focusPoint = point(selection?.focusNode ?? null, selection?.focusOffset ?? 0);
     const input = prior && ('selectionStart' in prior) ? prior as HTMLInputElement : null;
     const inputSelection = input ? [input.selectionStart, input.selectionEnd, input.selectionDirection] as const : null;
+    const inputState = input ? { value: input.value, type: input.type, disabled: input.disabled, readOnly: input.readOnly } : null;
+    const owner = prior;
+    const ownerParent = prior?.parentNode;
+    const editable = prior?.contentEditable;
     const root = doc.createElement('div');
+    const ownerText = () => owner ? Array.from(owner.childNodes).filter(node => node !== root).map(node => node.textContent ?? '').join('') : '';
+    const originalText = ownerText();
+    const validPoint = (value: NonNullable<ReturnType<typeof point>>) => value.node.isConnected &&
+      value.node.ownerDocument === doc && value.node.parentNode === value.parent && value.node.textContent === value.text &&
+      value.offset <= (value.node.nodeValue !== null ? value.node.nodeValue.length : value.node.childNodes.length);
+    const ownsState = () => !!prior?.isConnected && prior.ownerDocument === doc &&
+      prior.parentNode === ownerParent && prior.contentEditable === editable &&
+      (input && inputState ? input.value === inputState.value && input.type === inputState.type &&
+        input.disabled === inputState.disabled && input.readOnly === inputState.readOnly :
+        ownerText() === originalText && ranges.every(range => validPoint(range.start) && validPoint(range.end)));
     root.className = 'context-menu';
     root.role = 'menu';
     root.setAttribute('aria-label', 'Context menu');
     root.style.position = 'fixed';
     root.style.zIndex = '1500';
     let done = false;
-    const restore = () => {
-      if (!prior?.isConnected) return;
-      prior.focus({ preventScroll: true });
+    const restoreSelection = () => {
+      if ((!root.contains(doc.activeElement) && doc.activeElement !== prior) || !ownsState()) return false;
+      // Reconstruct before changing focus/selection so invalid endpoints cannot
+      // partially clear a newer selection.
+      const restored = input ? [] : ranges.map(({ start, end }) => {
+        const range = doc.createRange();
+        range.setStart(start.node, start.offset); range.setEnd(end.node, end.offset);
+        return range;
+      });
+      prior!.focus({ preventScroll: true });
+      // A Reading selection can have BODY as its owner; BODY is normally not
+      // focusable, so release the menu button rather than requiring a tabindex.
+      if (prior === doc.body && root.contains(doc.activeElement)) (doc.activeElement as HTMLElement).blur();
+      // Focus handlers can synchronously replace a document or input value.
+      if (doc.activeElement !== prior || !ownsState()) return false;
       if (input && inputSelection && inputSelection[0] !== null && inputSelection[1] !== null) {
         try { input.setSelectionRange(inputSelection[0], inputSelection[1], inputSelection[2] || undefined); } catch { /* Non-text input. */ }
-      } else if (selection && ranges.every(range => range.startContainer.isConnected && range.endContainer.isConnected)) {
+      } else if (selection && restored.length) {
         selection.removeAllRanges();
-        for (const range of ranges) selection.addRange(range);
+        for (const range of restored) selection.addRange(range);
+        if (restored.length === 1 && anchor && focusPoint && validPoint(anchor) && validPoint(focusPoint)) {
+          selection.setBaseAndExtent(anchor.node, anchor.offset, focusPoint.node, focusPoint.offset);
+        }
       }
+      return true;
+    };
+    const restore = () => {
+      try { return restoreSelection(); } catch { return false; }
     };
     const finish = (id: string | null = null, restoreFocus = true) => {
       if (done) return;
       done = true;
       if (openMenus.get(doc) === dismiss) openMenus.delete(doc);
-      if (restoreFocus) restore();
-      root.remove();
-      doc.removeEventListener('pointerdown', outside, true);
-      doc.removeEventListener('contextmenu', outside, true);
-      doc.removeEventListener('keydown', keydown, true);
-      doc.defaultView?.removeEventListener('blur', dismiss);
-      resolve(id);
+      try { if (restoreFocus) restore(); }
+      finally {
+        root.remove();
+        doc.removeEventListener('pointerdown', outside, true);
+        doc.removeEventListener('contextmenu', outside, true);
+        doc.removeEventListener('keydown', keydown, true);
+        doc.defaultView?.removeEventListener('blur', dismiss);
+        resolve(id);
+      }
     };
     const dismiss = () => finish();
     const outside = (event: Event) => { if (!root.contains(event.target as Node)) finish(null, false); };
@@ -79,6 +124,7 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
     const focus = (index: number) => {
       const buttons = panels[current].buttons;
       if (buttons.length) buttons[(index + buttons.length) % buttons.length].focus({ preventScroll: true });
+      else panels[current].menu.focus({ preventScroll: true });
     };
     const closeChildren = (index: number) => {
       while (panels.length > index + 1) {
@@ -96,6 +142,7 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
       menu.style.overflowY = 'auto';
     };
     const fill = (menu: HTMLElement, entries: ContextMenuItem[], parent?: HTMLButtonElement) => {
+      menu.tabIndex = -1;
       const panel = { menu, buttons: [] as HTMLButtonElement[], parent };
       const level = panels.push(panel) - 1;
       for (const item of entries) {
@@ -118,7 +165,7 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
         if ('submenu' in item) {
           row.setAttribute('aria-haspopup', 'menu'); row.setAttribute('aria-expanded', 'false');
           const open = () => {
-            if (row.disabled) return;
+            if (done || row.disabled) return;
             closeChildren(level);
             const sub = doc.createElement('div'); sub.className = 'context-menu'; sub.role = 'menu';
             sub.setAttribute('aria-label', item.label); sub.style.position = 'fixed';
@@ -129,16 +176,24 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
           row.addEventListener('click', open);
           row.addEventListener('pointerenter', open);
         } else {
-          row.addEventListener('pointerenter', () => { closeChildren(level); });
+          row.addEventListener('pointerenter', () => {
+            if (done) return;
+            // Move focus before removing a focused descendant submenu.
+            if (!row.disabled) row.focus({ preventScroll: true });
+            else menu.focus({ preventScroll: true });
+            closeChildren(level);
+          });
           row.addEventListener('click', () => {
-            if (row.disabled) return;
+            if (done || row.disabled) return;
             if ('role' in item) {
-              restore();
-              if (item.role === 'selectAll' && input) input.select();
-              else if (item.role !== 'pasteAndMatchStyle') doc.execCommand?.(item.role);
-              // Browser plain-text paste cannot be emulated synchronously without
-              // privileged clipboard access; use its native paste menu instead.
-              finish(null, false);
+              if (!root.contains(doc.activeElement) || !restore()) { finish(null, false); return; }
+              try {
+                if (item.role === 'selectAll' && input) input.select();
+                else if (item.role !== 'pasteAndMatchStyle') doc.execCommand?.(item.role);
+                // Browser plain-text paste cannot be emulated synchronously without
+                // privileged clipboard access; use its native paste menu instead.
+              } catch { /* Unsupported or denied browser commands dismiss normally. */ }
+              finally { finish(null, false); }
             } else finish(item.id);
           });
           if ('role' in item && item.role === 'pasteAndMatchStyle') row.disabled = true;
@@ -147,8 +202,12 @@ function showBrowserMenu(doc: Document, request: ContextMenuRequest): Promise<st
       panel.buttons = panel.buttons.filter(row => !row.disabled);
     };
     const keydown = (event: KeyboardEvent) => {
+      // Programmatic focus changes also end menu ownership; do not swallow a
+      // key now intended for another control or restore the previous editor.
+      if (!root.contains(doc.activeElement)) { finish(null, false); return; }
       // A menu owns keyboard context until dismissal; application shortcuts
       // must not fire behind it while focus is on a menu item.
+      event.preventDefault();
       event.stopPropagation();
       const panelIndex = panels.findIndex(panel => panel.buttons.includes(doc.activeElement as HTMLButtonElement));
       if (panelIndex >= 0) current = panelIndex;

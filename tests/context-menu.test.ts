@@ -91,3 +91,134 @@ test('explicit workspace teardown dismisses browser menus and forwards native ca
   Object.defineProperty(dom.window, 'zorid', { value: { dismissContextMenu: async () => { canceled++; } } });
   await dismissContextMenu(doc); assert.equal(canceled, 1); dom.window.close();
 });
+
+function editableSelection() {
+  const fixture = setup();
+  const editor = fixture.doc.createElement('div');
+  editor.tabIndex = 0; editor.contentEditable = 'true'; editor.textContent = 'abcdef';
+  fixture.doc.body.append(editor); editor.focus();
+  const text = editor.firstChild!;
+  fixture.doc.getSelection()!.setBaseAndExtent(text, 5, text, 1);
+  return { ...fixture, editor, text };
+}
+
+test('browser restoration preserves backward DOM selection endpoints', async () => {
+  const { dom, doc, text, show, key } = editableSelection();
+  const result = show([{ id: 'action', label: 'Action' }]);
+  key('Escape'); await result;
+  const selection = doc.getSelection()!;
+  assert.equal(selection.anchorNode, text); assert.equal(selection.focusNode, text);
+  assert.equal(selection.anchorOffset, 5); assert.equal(selection.focusOffset, 1);
+  assert.equal(selection.toString(), 'bcde'); dom.window.close();
+});
+
+test('browser stale DOM endpoints neither overwrite newer selection nor execute edit roles', async () => {
+  for (const command of ['Escape', 'Enter']) {
+    const { dom, doc, editor, show, key } = editableSelection();
+    let executions = 0; doc.execCommand = () => { executions++; return true; };
+    const result = show([{ role: 'cut' }]);
+    // Replacing a render with identical text still invalidates its node ownership.
+    editor.replaceChildren(doc.createTextNode('abcdef'));
+    const replacement = editor.firstChild!;
+    doc.getSelection()!.setBaseAndExtent(replacement, 2, replacement, 4);
+    key(command); assert.equal(await result, null);
+    assert.equal(executions, 0); assert.equal(doc.getSelection()!.toString(), 'cd');
+    assert.equal(doc.getSelection()!.anchorNode, replacement); dom.window.close();
+  }
+});
+
+test('browser roles reject replacement input values, changed editability and changed DOM content', async () => {
+  for (const mutate of [
+    (input: HTMLTextAreaElement) => { input.value = 'NEW DOCUMENT'; },
+    (input: HTMLTextAreaElement) => { input.readOnly = true; },
+    (input: HTMLTextAreaElement) => { input.disabled = true; },
+  ]) {
+    const { dom, doc, input, show, key } = setup();
+    let executions = 0; doc.execCommand = () => { executions++; return true; };
+    const result = show([{ role: 'cut' }]); mutate(input); key('Enter'); await result;
+    assert.equal(executions, 0); dom.window.close();
+  }
+  const { dom, doc, text, show, key } = editableSelection();
+  let executions = 0; doc.execCommand = () => { executions++; return true; };
+  const result = show([{ role: 'cut' }]); text.nodeValue = 'NEW DOCUMENT'; key('Enter'); await result;
+  assert.equal(executions, 0); dom.window.close();
+});
+
+test('disabled-only browser menus own focus and prevent printable key defaults until dismissed', async () => {
+  const { dom, doc, input, show, key } = setup();
+  const result = show([{ id: 'disabled', label: 'Disabled', enabled: false }]);
+  assert.equal(doc.activeElement?.getAttribute('role'), 'menu');
+  const event = new dom.window.KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true });
+  doc.activeElement!.dispatchEvent(event); assert.equal(event.defaultPrevented, true);
+  key('Escape'); await result; assert.equal(doc.activeElement, input);
+  const after = new dom.window.KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true });
+  input.dispatchEvent(after); assert.equal(after.defaultPrevented, false); dom.window.close();
+});
+
+test('hovering a sibling closes the submenu while retaining actionable focus', async () => {
+  const { dom, doc, show, key } = setup();
+  const result = show([{ label: 'Submenu', submenu: [{ id: 'child', label: 'Child' }] }, { id: 'other', label: 'Other' }]);
+  key('ArrowRight'); assert.equal(doc.activeElement?.textContent, 'Child');
+  const other = [...doc.querySelectorAll('button.context-menu-item')].find(row => row.textContent === 'Other')!;
+  other.dispatchEvent(new dom.window.Event('pointerenter'));
+  assert.equal(doc.activeElement, other); assert.equal(doc.querySelectorAll('[role=menu]').length, 1);
+  key('Enter'); assert.equal(await result, 'other'); dom.window.close();
+});
+
+test('dismissed browser role handlers cannot execute late and roles reject external focus changes', async () => {
+  const { dom, doc, show, key } = setup();
+  let executions = 0; doc.execCommand = () => { executions++; return true; };
+  const first = show([{ role: 'cut' }]);
+  const oldButton = doc.querySelector<HTMLButtonElement>('button.context-menu-item')!;
+  key('Escape'); await first; oldButton.click(); assert.equal(executions, 0);
+  const second = show([{ role: 'cut' }]);
+  const button = doc.querySelector<HTMLButtonElement>('button.context-menu-item')!;
+  doc.querySelector<HTMLButtonElement>('#other')!.focus(); button.click(); await second;
+  assert.equal(executions, 0); dom.window.close();
+});
+
+test('browser roles revalidate when restoring focus synchronously changes the source', async () => {
+  const { dom, doc, input, show, key } = setup();
+  let executions = 0; doc.execCommand = () => { executions++; return true; };
+  const result = show([{ role: 'cut' }]);
+  input.addEventListener('focus', () => { input.value = 'replacement on focus'; }, { once: true });
+  key('Enter'); assert.equal(await result, null);
+  assert.equal(executions, 0); assert.equal(input.value, 'replacement on focus'); dom.window.close();
+});
+
+test('browser Copy can restore a Reading selection whose original focus owner is BODY', async () => {
+  const { dom, doc, show, key } = setup();
+  const paragraph = doc.createElement('p'); paragraph.textContent = 'reading text'; doc.body.append(paragraph);
+  (doc.activeElement as HTMLElement).blur();
+  doc.getSelection()!.setBaseAndExtent(paragraph.firstChild!, 7, paragraph.firstChild!, 0);
+  const copied: string[] = []; doc.execCommand = command => { copied.push(command, doc.getSelection()!.toString()); return true; };
+  const result = show([{ role: 'copy' }]); key('Enter'); await result;
+  assert.deepEqual(copied, ['copy', 'reading']); assert.equal(doc.activeElement, doc.body);
+  assert.equal(doc.getSelection()!.anchorOffset, 7); dom.window.close();
+});
+
+test('browser menu releases keyboard ownership when another control receives focus', async () => {
+  const { dom, doc, show } = setup();
+  const result = show([{ id: 'action', label: 'Action' }]);
+  const other = doc.querySelector<HTMLButtonElement>('#other')!; other.focus();
+  const event = new dom.window.KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true });
+  other.dispatchEvent(event); assert.equal(await result, null);
+  assert.equal(event.defaultPrevented, false); assert.equal(doc.activeElement, other);
+  const second = show([{ id: 'action', label: 'Action' }]);
+  const input = doc.querySelector('textarea')!; input.focus();
+  await dismissContextMenu(doc); await second; assert.equal(doc.activeElement, input); dom.window.close();
+});
+
+test('browser command and selection-restoration failures still settle and release keyboard capture', async () => {
+  for (const failRestore of [false, true]) {
+    const { dom, doc, show, key } = failRestore ? editableSelection() : setup();
+    let executions = 0;
+    doc.execCommand = () => { executions++; throw new Error('Command denied'); };
+    const result = show([{ role: 'cut' }]);
+    if (failRestore) doc.getSelection()!.setBaseAndExtent = () => { throw new Error('Selection unavailable'); };
+    key('Enter'); assert.equal(await result, null);
+    assert.equal(executions, failRestore ? 0 : 1); assert.equal(doc.querySelector('[role=menu]'), null);
+    const event = new dom.window.KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true });
+    doc.dispatchEvent(event); assert.equal(event.defaultPrevented, false); dom.window.close();
+  }
+});
