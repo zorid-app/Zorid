@@ -1,6 +1,6 @@
 # Zorid
 
-An original, MIT-licensed Markdown workspace pursuing full feature, UI, UX, vault,
+An original, AGPLv3-licensed Markdown workspace pursuing full feature, UI, UX, vault,
 and plugin compatibility with a fresh Obsidian 1.14.4 installation. Desktop uses
 Electron; the mobile target uses Capacitor; the editor uses CodeMirror 6. The
 renderer is TypeScript and DOM/CSS, built with Webpack following REA's bundle
@@ -79,5 +79,18 @@ interaction comparison remains outstanding.
 
 The proprietary Obsidian bundles used for inspection are outside this repository.
 REA analysis is evidence about the reference, not source for this project. No
-recovered Obsidian implementation, fonts, icons, or CSS are part of the MIT-licensed
+recovered Obsidian implementation, fonts, icons, or CSS are part of the AGPLv3-licensed
 source. Zorid is independent of Obsidian and is not an official Obsidian product.
+
+## License
+
+Copyright (c) 2026 Zorid contributors. Zorid is licensed under the
+[GNU Affero General Public License, version 3 only](LICENSE)
+(`AGPL-3.0-only`), without any additional plugin exception. Third-party
+dependencies retain their own licenses and notices.
+
+Zorid is distributed without any warranty. Distributors must provide corresponding
+source as required by the license. Modified versions used over a network must
+offer corresponding source to the users interacting with them, as specified in
+section 13. This license applies to the program, not ordinary notes or other user
+data created or stored with it.

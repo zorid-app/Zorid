@@ -4,7 +4,7 @@
   "private": true,
   "description": "An original open-source Markdown workspace pursuing Obsidian parity",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "main": "desktop/main.cjs",
   "scripts": {
     "dev": "webpack serve --mode development --host 127.0.0.1",
