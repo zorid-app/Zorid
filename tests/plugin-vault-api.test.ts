@@ -196,15 +196,16 @@ test('unsupported mutations fail before touching data, and root deletion is harm
 });
 
 test('host capabilities receive paths/options and real stats without changing namespace identity', async () => {
-  const { core } = await fixture({ 'note.md': 'original' });
+  const { core, vault: initialFacade } = await fixture({ 'note.md': 'original' });
+  initialFacade.dispose();
   const calls: unknown[][] = [];
   const compatibleAdapter = {};
   const vault = new Vault(core, {
     name: 'Host', configDir: '.config', adapter: compatibleAdapter,
     getFileStats: entry => ({ ctime: 123, mtime: entry.mtime, size: entry.size }),
-    rename: async (...args) => { calls.push(['rename', ...args]); },
-    delete: async (...args) => { calls.push(['delete', ...args]); },
-    trash: async (...args) => { calls.push(['trash', ...args]); },
+    rename: async (oldPath, newPath, validate) => { validate(); calls.push(['rename', oldPath, newPath]); },
+    delete: async (path, force, validate) => { validate(); calls.push(['delete', path, force]); },
+    trash: async (path, system, validate) => { validate(); calls.push(['trash', path, system]); },
     getResourcePath: path => `fixture-resource:${path}`,
   });
   const file = vault.getFileByPath('note.md')!;
@@ -237,4 +238,59 @@ test('adapter failures preserve data and do not emit success events; disposed fa
   assert.deepEqual(events, []);
   await assert.rejects(vault.read(file), /disposed/);
   await assert.rejects(vault.create('new.md', ''), /disposed/);
+});
+
+for (const operation of ['modify', 'modifyBinary', 'read', 'readBinary'] as const) {
+  test(`queued ${operation} rejects a deleted handle before accessing its replacement`, async () => {
+    const { adapter, core, vault } = await fixture({ 'note.md': 'original' });
+    const file = vault.getFileByPath('note.md')!;
+    const removal = core.trash('note.md');
+    const creation = core.create('note.md', 'replacement');
+    const pending = operation === 'modify' ? vault.modify(file, 'CORRUPTED')
+      : operation === 'modifyBinary' ? vault.modifyBinary(file, new Uint8Array([1, 2]).buffer)
+      : operation === 'readBinary' ? vault.readBinary(file) : vault.read(file);
+    const results = await Promise.allSettled([removal, creation, pending]);
+    assert.equal(results[0].status, 'fulfilled');
+    assert.equal(results[1].status, 'fulfilled');
+    assert.equal(results[2].status, 'rejected');
+    assert.equal(await adapter.read('note.md'), 'replacement');
+    vault.dispose();
+  });
+}
+
+test('queued writes reject disposal and host-renamed paths at execution time', async () => {
+  for (const dispose of [true, false]) {
+    const { core, adapter, vault } = await fixture({ 'note.md': 'original' });
+    const file = vault.getFileByPath('note.md')!;
+    const rename = dispose ? Promise.resolve() : core.rename('note.md', 'moved.md');
+    const write = vault.modify(file, 'changed');
+    if (dispose) vault.dispose();
+    const results = await Promise.allSettled([rename, write]);
+    assert.equal(results[1].status, 'rejected');
+    assert.equal(await adapter.read(dispose ? 'note.md' : 'moved.md'), 'original');
+    vault.dispose();
+  }
+});
+
+test('real low-level host rename preserves references and guards replaced handles', async () => {
+  const adapter = new MemoryAdapter({ 'note.md': 'body', 'source.md': '[[note]]' });
+  const core = new CoreVault(adapter);
+  await core.initialize();
+  const vault = new Vault(core, { name: 'Fixture', configDir: '.zorid', rename: core.renameEntry.bind(core) });
+  const file = vault.getFileByPath('note.md')!;
+  const seen: unknown[][] = [];
+  vault.on('rename', (changed: TAbstractFile, oldPath: string) => seen.push([changed, oldPath]));
+  await vault.rename(file, 'moved.md');
+  assert.equal(file.path, 'moved.md');
+  assert.equal(vault.getFileByPath('moved.md'), file);
+  assert.deepEqual(seen, [[file, 'note.md']]);
+  assert.equal(await adapter.read('source.md'), '[[note]]');
+  const removal = core.trash('moved.md');
+  const creation = core.create('moved.md', 'replacement');
+  const rename = vault.rename(file, 'wrong.md');
+  const results = await Promise.allSettled([removal, creation, rename]);
+  assert.equal(results[2].status, 'rejected');
+  assert.equal(await adapter.read('moved.md'), 'replacement');
+  assert.equal(await adapter.stat('wrong.md'), null);
+  vault.dispose();
 });

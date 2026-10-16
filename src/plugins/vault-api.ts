@@ -30,7 +30,8 @@ export class TFolder extends TAbstractFile {
 
 /**
  * These callbacks must operate in the host vault's queue and publish its normal
- * events before resolving. They are intentionally separate from core.rename
+ * events before resolving. They must invoke validate inside that queue before I/O.
+ * They are intentionally separate from core.rename
  * (which rewrites links) and core.trash (which cannot select the trash policy).
  */
 export interface VaultApiHost {
@@ -39,9 +40,9 @@ export interface VaultApiHost {
   /** Supply a compatible adapter only once the host has implemented that surface. */
   adapter?: unknown;
   getFileStats?(entry: VaultEntry): FileStats;
-  rename?(oldPath: string, newPath: string): Promise<void>;
-  delete?(path: string, force: boolean): Promise<void>;
-  trash?(path: string, system: boolean): Promise<void>;
+  rename?(oldPath: string, newPath: string, validate: () => void): Promise<void>;
+  delete?(path: string, force: boolean, validate: () => void): Promise<void>;
+  trash?(path: string, system: boolean, validate: () => void): Promise<void>;
   getResourcePath?(path: string): string;
   reportError?: ErrorReporter;
 }
@@ -98,7 +99,9 @@ export class Vault extends Events {
         file = entry.type === 'file' ? new TFile(this, path) : new TFolder(this, path);
         this.files.set(path, file);
       }
-      if (file instanceof TFile) file.stat = this.host.getFileStats?.(entry) ?? { mtime: entry.mtime, size: entry.size };
+      if (file instanceof TFile) file.stat = this.host.getFileStats?.(entry) ?? {
+        ...(entry.ctime === undefined ? {} : { ctime: entry.ctime }), mtime: entry.mtime, size: entry.size,
+      };
     }
     for (const [path, file] of this.files) {
       if (!live.has(path)) {
@@ -183,6 +186,11 @@ export class Vault extends Events {
     if (file.vault !== this || this.files.get(file.path) !== file) throw new Error('File does not belong to this live vault');
     return file.path;
   }
+  private guard(file: TAbstractFile, path: string): () => void {
+    return () => {
+      if (this.requireLive(file) !== path) throw new Error('File moved before the operation could run');
+    };
+  }
   private requireFile(file: TFile): string {
     const path = this.requireLive(file);
     if (!(file instanceof TFile)) throw new Error('Expected a file');
@@ -198,7 +206,8 @@ export class Vault extends Events {
   }
   async read(file: TFile): Promise<string> {
     const path = this.requireFile(file), revision = this.revision;
-    const text = (await this.core.read(path)).replace(/^\uFEFF/, '');
+    const text = (await this.core.read(path, this.guard(file, path))).replace(/^\uFEFF/, '');
+    this.guard(file, path)();
     if (!this.disposed && this.revision === revision && this.files.get(path) === file) this.cache(file, text);
     return text;
   }
@@ -208,7 +217,8 @@ export class Vault extends Events {
   }
   async readBinary(file: TFile): Promise<ArrayBuffer> {
     const path = this.requireFile(file), revision = this.revision;
-    const bytes = await this.core.readBinary(path);
+    const bytes = await this.core.readBinary(path, this.guard(file, path));
+    this.guard(file, path)();
     if (!this.disposed && this.revision === revision && this.files.get(path) === file && file.extension === 'md' && bytes.byteLength <= 65536) {
       this.cache(file, new TextDecoder().decode(bytes));
     }
@@ -236,30 +246,32 @@ export class Vault extends Events {
   }
   async modify(file: TFile, data: string, options?: DataWriteOptions): Promise<void> {
     this.requireWritable(options);
-    await this.core.modify(this.requireFile(file), data);
+    const path = this.requireFile(file);
+    await this.core.modify(path, data, { validate: this.guard(file, path) });
   }
   async modifyBinary(file: TFile, data: ArrayBuffer, options?: DataWriteOptions): Promise<void> {
     this.requireWritable(options);
-    await this.core.modifyBinary(this.requireFile(file), new Uint8Array(data));
+    const path = this.requireFile(file);
+    await this.core.modifyBinary(path, new Uint8Array(data), { validate: this.guard(file, path) });
   }
   async rename(file: TAbstractFile, newPath: string): Promise<void> {
     const oldPath = this.requireLive(file), path = normalizePath(newPath);
     if (oldPath === path) return;
     if (file === this.root) throw new Error('Cannot rename the vault root');
     if (!this.host.rename) throw new Error('Host does not support Vault.rename without link rewriting');
-    await this.host.rename(oldPath, path);
+    await this.host.rename(oldPath, path, this.guard(file, oldPath));
   }
   async delete(file: TAbstractFile, force = false): Promise<void> {
     const path = this.requireLive(file);
     if (file === this.root) return;
     if (!this.host.delete) throw new Error('Host does not support permanent deletion');
-    await this.host.delete(path, force);
+    await this.host.delete(path, force, this.guard(file, path));
   }
   async trash(file: TAbstractFile, system: boolean): Promise<void> {
     const path = this.requireLive(file);
     if (file === this.root) return;
     if (!this.host.trash) throw new Error('Host does not support selecting system or local trash');
-    await this.host.trash(path, system);
+    await this.host.trash(path, system, this.guard(file, path));
   }
   getResourcePath(file: TFile): string {
     const path = this.requireFile(file);
