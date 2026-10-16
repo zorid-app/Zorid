@@ -204,3 +204,30 @@ test('ordinary aliases remain valid and deleting an anchor still in use fails ex
   assert.match(updated, /\*shared/);
   assert.throws(() => removeProperty(source, 'original'), /anchor|alias/i);
 });
+
+test('header property sorting preserves YAML node styles, comments, delimiters and body bytes', async () => {
+  const { sortProperties, clearProperties } = await import('../src/ui/property-menus.ts');
+  const body = '\r\n# Body 🌱\r\n\nexact tail';
+  const source = '\uFEFF--- # opening\r\nz: "last" # keep inline\r\nitem10: [a, b]\r\n# attached to item2\r\nitem2: |\r\n  multiline\r\na: {nested: true}\r\n... # closing\r\n' + body;
+  const sorted = sortProperties(source);
+  assert.deepEqual(readProperties(sorted).map(property => property.key), ['a', 'item2', 'item10', 'z']);
+  assert.ok(sorted.startsWith('\uFEFF--- # opening\r\n'));
+  assert.ok(sorted.endsWith('... # closing\r\n' + body));
+  assert.match(sorted, /z: "last" # keep inline/);
+  assert.match(sorted, /# attached to item2\r\nitem2: \|\r\n  multiline/);
+  assert.deepEqual(readProperties(sortProperties(sorted, true)).map(property => property.key), ['z', 'item10', 'item2', 'a']);
+  assert.equal(sortProperties(sorted), sorted);
+  assert.equal(clearProperties(source), '\uFEFF' + body);
+  assert.equal(clearProperties('# No metadata\n'), '# No metadata\n');
+});
+
+test('header property operations refuse malformed YAML and invalid alias reordering', async () => {
+  const { sortProperties, clearProperties } = await import('../src/ui/property-menus.ts');
+  const invalid = '---\nbroken: [\n---\nbody';
+  assert.throws(() => sortProperties(invalid));
+  assert.throws(() => clearProperties(invalid));
+  const alias = '---\nz: &shared [one, two]\na: *shared\n---\nbody';
+  assert.throws(() => sortProperties(alias), /alias|anchor/i);
+  assert.deepEqual(readProperties(alias).map(property => property.value), [['one', 'two'], ['one', 'two']]);
+  assert.equal(clearProperties(alias), 'body');
+});
