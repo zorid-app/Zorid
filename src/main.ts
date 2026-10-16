@@ -2,6 +2,7 @@ import { createPlatformAdapter } from './platform/index.ts';
 import { Workspace } from './ui/workspace.ts';
 import { el, textButton } from './ui/dom.ts';
 import './ui/styles.css';
+import './ui/reference-defaults.css';
 import './editor/table-controls.css';
 import './editor/live-lists.css';
 
