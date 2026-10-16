@@ -3,12 +3,19 @@ import type { CanvasEdge, CanvasNode, CanvasValue } from './document.ts';
 import { showContextMenu } from '../platform/context-menu.ts';
 import type { ContextMenuItem } from '../platform/context-menu.ts';
 import { icon } from '../ui/dom.ts';
+import { renderMarkdown } from '../ui/markdown.ts';
+import type { EmbedRequest } from '../ui/markdown.ts';
+import { destroyMarkdown } from '../ui/markdown-lifecycle.ts';
 
 export interface CanvasViewOptions {
   document: CanvasDocument;
   onChange(source: string, document: CanvasDocument): void | Promise<void>;
   openFile?(path: string, subpath?: string): void | Promise<void>;
   openLink?(url: string): void | Promise<void>;
+  /** Resolve Markdown targets relative to the containing Canvas file. */
+  openMarkdownLink?(target: string, kind: 'wiki' | 'markdown'): void | Promise<void>;
+  /** Each returned owner is destroyed once when its card refreshes or closes. */
+  renderMarkdownEmbed?(request: EmbedRequest, nodeId: string): { element: HTMLElement; destroy(): void };
   openFileInNewTab?(path: string): void | Promise<void>;
   copyText?(text: string): void | Promise<void>;
   onError?(error: unknown): void;
@@ -68,6 +75,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   let tx = 40, ty = 40, scale = 1, space = false, saveQueue = Promise.resolve();
   const undoStack: string[] = [], redoStack: string[] = [], selectedNodes = new Set<string>(), selectedEdges = new Set<string>();
   const nodeEls = new Map<string, HTMLElement>(), edgeEls = new Map<string, { group: SVGGElement; path: SVGPathElement; hit: SVGPathElement; label: HTMLDivElement; arrows: SVGGElement[] }>();
+  const markdownOwners = new Set<() => void>();
   let drag: { id: number; mode: 'move' | 'pan' | 'select'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let editorOriginal = '';
@@ -164,9 +172,65 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     for (const [id, item] of nodeEls) { item.classList.toggle('is-selected', selectedNodes.has(id)); item.setAttribute('aria-selected', String(selectedNodes.has(id))); }
     for (const [id, item] of edgeEls) item.group.classList.toggle('is-selected', selectedEdges.has(id));
   }
+  function ownsInput(target: Element): boolean {
+    return !!target.closest('button,input,textarea,select,a,video,audio') || hasEditableOwner(target);
+  }
+  function hasEditableOwner(target: Element): boolean {
+    // Resolve inherited editable state, including plaintext-only and explicit
+    // false islands, without relying on globals from the main window.
+    for (let owner: Element | null = target; owner && owner !== viewport; owner = owner.parentElement) {
+      const editable = owner.getAttribute('contenteditable')?.toLowerCase();
+      if (editable === 'false') return false;
+      if (editable === '' || editable === 'true' || editable === 'plaintext-only') return true;
+    }
+    return false;
+  }
+  function clearMarkdown(): void {
+    for (const dispose of markdownOwners) dispose();
+    markdownOwners.clear();
+  }
+  function renderText(content: HTMLElement, item: HTMLElement, node: CanvasNode): void {
+    const owner = document, original = projection.nodes.get(node.id)!.original;
+    let active = true;
+    const embeds: { destroy(): void }[] = [];
+    const current = () => active && !closed && owner === document && nodeEls.get(node.id) === item && document.nodes.includes(original);
+    const open = (target: string, kind: 'wiki' | 'markdown' = 'markdown') => {
+      if (!current()) return;
+      if (options.openMarkdownLink) invoke(() => options.openMarkdownLink!(target, kind));
+      else if (options.openFile) {
+        const separator = target.indexOf('#');
+        invoke(() => options.openFile!(separator < 0 ? target : target.slice(0, separator), separator < 0 ? undefined : target.slice(separator)));
+      }
+    };
+    const dispose = () => {
+      if (!active) return; active = false;
+      destroyMarkdown(content);
+      for (const embed of embeds) try { embed.destroy(); } catch (error) { report(error); }
+      embeds.length = 0;
+    };
+    markdownOwners.add(dispose);
+    content.classList.add('markdown-preview');
+    // Capture also protects retained external anchors and embed controls after
+    // refresh. Current external links keep normal navigation without a hook.
+    content.addEventListener('click', event => {
+      if (!current()) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+      const anchor = (event.target as Element).closest<HTMLAnchorElement>('a.external-link');
+      if (anchor && options.openLink) { event.preventDefault(); event.stopPropagation(); invoke(() => options.openLink!(anchor.href)); }
+    }, true);
+    try {
+      renderMarkdown(content, String(node.text ?? ''), open, undefined, {
+        properties: false,
+        embed: options.renderMarkdownEmbed ? request => {
+          const embed = options.renderMarkdownEmbed!(request, node.id); embeds.push(embed); return embed.element;
+        } : undefined,
+      });
+    } catch (error) {
+      dispose(); content.textContent = String(node.text ?? ''); content.classList.add('has-render-error'); report(error);
+    }
+  }
   function render(): void {
     menuVersion++;
-    finishEditing?.(false); projection = projectCanvas(document);
+    finishEditing?.(false); clearMarkdown(); projection = projectCanvas(document);
     for (const item of nodeEls.values()) item.remove(); for (const item of edgeEls.values()) { item.group.remove(); item.label.remove(); } nodeEls.clear(); edgeEls.clear();
     for (const id of selectedNodes) if (!projection.nodes.has(id)) selectedNodes.delete(id);
     for (const id of selectedEdges) if (!projection.edges.has(id)) selectedEdges.delete(id);
@@ -175,7 +239,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       item.style.setProperty('--canvas-node-color', color(node.color) || 'var(--zc-border)'); item.classList.toggle('is-themed', !!color(node.color));
       const frame = dom.createElement('div'); frame.className = 'zorid-canvas-node-frame';
       const content = dom.createElement('div'); content.className = 'zorid-canvas-node-content';
-      if (node.type === 'text') { content.textContent = String(node.text ?? ''); item.setAttribute('aria-label', 'Text card'); }
+      if (node.type === 'text') { renderText(content, item, node); item.setAttribute('aria-label', 'Text card'); }
       else if (node.type === 'group') {
         const label = dom.createElement('div'); label.className = 'zorid-canvas-group-label'; label.textContent = String(node.label ?? ''); label.hidden = !label.textContent;
         label.style.setProperty('--zc-label-foreground', groupForeground(node.color));
@@ -191,7 +255,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         item.append(label);
       }
       frame.append(content); item.append(frame); world.append(item); nodeEls.set(id, item); drawNode(id);
-      item.ondblclick = event => { if (node.type === 'text') { event.preventDefault(); startEditing(id); } };
+      item.ondblclick = event => { if (!event.defaultPrevented && node.type === 'text' && nodeEls.get(id) === item && !ownsInput(event.target as Element)) { event.preventDefault(); startEditing(id); } };
     }
     for (const [id, edge] of projection.edges) {
       const group = dom.createElementNS(svgNS, 'g'), path = dom.createElementNS(svgNS, 'path'), hit = dom.createElementNS(svgNS, 'path'), label = dom.createElement('div'), arrows: SVGGElement[] = [];
@@ -253,13 +317,14 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (editor || closed) return;
     menuVersion++;
     const input = dom.createElement('textarea'); input.className = 'zorid-canvas-text-editor'; input.setAttribute('aria-label', label); input.value = value;
+    const initialValue = input.value; // Native textarea normalizes CRLF/CR on assignment.
     input.title = 'Ctrl/⌘ Enter to save; Escape to cancel';
     host.append(input); editor = input; editorOriginal = input.value; editorFailure = undefined; input.focus();
     let finished = false;
     const finish = (save: boolean) => {
       if (finished) return;
       let next: CanvasDocument | undefined;
-      if (save && !closed && input.value !== value) {
+      if (save && !closed && input.value !== initialValue) {
         try { next = CanvasDocument.parse(document.toString()); change(next, input.value); }
         catch (error) { editorFailure = error; report(error); return; }
       }
@@ -295,10 +360,10 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   }
   function clearDrag(): void { drag = undefined; box.remove(); viewport.classList.remove('is-panning'); }
   const pointerDown = (event: PointerEvent) => {
-    if (closed || editor || event.isPrimary === false) return;
+    if (closed || editor || event.defaultPrevented || event.isPrimary === false) return;
     menuVersion++;
     const target = event.target as Element;
-    if (target.closest('button,input,textarea,a')) return;
+    if (ownsInput(target)) return;
     const node = target.closest<HTMLElement>('[data-node-id]'), edge = target.closest<HTMLElement | SVGElement>('[data-edge-id],[data-edge-label-id]');
     const pan = event.button === 1 || (event.button === 0 && space); if (!pan && event.button !== 0) return;
     event.preventDefault(); viewport.focus();
@@ -354,13 +419,13 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   viewport.addEventListener('pointerdown', pointerDown); viewport.addEventListener('pointermove', pointerMove);
   viewport.addEventListener('pointerup', event => finishDrag(event)); viewport.addEventListener('pointercancel', event => finishDrag(event, true)); viewport.addEventListener('lostpointercapture', event => finishDrag(event, true));
   viewport.addEventListener('wheel', event => {
-    if (closed || editor || drag) return; event.preventDefault();
+    if (closed || editor || drag || event.defaultPrevented || ownsInput(event.target as Element)) return; event.preventDefault();
     const factor = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 800 : 1;
     if (event.ctrlKey || event.metaKey || space) { const rect = viewport.getBoundingClientRect(); zoom(scale * Math.pow(2, -event.deltaY * factor / 300), event.clientX - rect.left, event.clientY - rect.top); }
     else { tx -= (event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX) * factor * 0.93; if (!event.shiftKey || event.deltaX) ty -= event.deltaY * factor * 0.93; transform(); }
   }, { passive: false });
   viewport.onkeydown = event => {
-    if (closed || editor || (event.target as Element).closest('textarea,input,button')) return;
+    if (closed || editor || event.defaultPrevented || ownsInput(event.target as Element)) return;
     if (event.key === ' ') { event.preventDefault(); space = true; }
     else if (event.key === 'Escape') { if (drag) finishDrag({ pointerId: drag.id } as PointerEvent, true); selectedNodes.clear(); selectedEdges.clear(); paintSelection(); }
     else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.stopPropagation(); if (event.shiftKey) redo(); else undo(); }
@@ -399,7 +464,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (closed || drag || event.defaultPrevented) return;
     const target = event.target as Element;
     // Active text editors keep the platform's spelling/selection/clipboard menu.
-    if (target.closest('textarea,input,select,[contenteditable="true"]')) return;
+    if (target.closest('textarea,input,select') || hasEditableOwner(target)) return;
     event.preventDefault(); event.stopPropagation();
     const nodeId = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId;
     const edgeTarget = target.closest<HTMLElement | SVGElement>('[data-edge-id],[data-edge-label-id]');
@@ -493,6 +558,6 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     element, get document() { return document; }, undo, redo, flush,
     hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave,
     setDocument(next) { if (closed) return; finishEditing?.(false); clearDrag(); document = next; undoStack.length = redoStack.length = 0; selectedNodes.clear(); selectedEdges.clear(); render(); },
-    destroy() { if (closed) return; closed = true; finishEditing?.(false); clearDrag(); win.removeEventListener('blur', windowBlur); element.remove(); },
+    destroy() { if (closed) return; closed = true; finishEditing?.(false); clearDrag(); clearMarkdown(); win.removeEventListener('blur', windowBlur); element.remove(); },
   };
 }

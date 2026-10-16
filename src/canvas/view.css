@@ -165,10 +165,15 @@ html[data-theme="light"] .zorid-canvas-card-menu, .theme-light .zorid-canvas-car
 .zorid-canvas-node.is-themed .zorid-canvas-node-content, .zorid-canvas-node.is-group .zorid-canvas-node-content { background: color-mix(in oklch, var(--canvas-node-color, var(--zc-border)) 7%, transparent); }
 .zorid-canvas-node.is-text .zorid-canvas-node-content {
   padding: 16px;
-  white-space: pre-wrap;
+  box-sizing: border-box;
+  white-space: normal;
   overflow-wrap: anywhere;
   overflow: auto;
+  pointer-events: auto;
 }
+.zorid-canvas-node-content.markdown-preview > :last-child { margin-bottom: 0; }
+.zorid-canvas-node-content.markdown-preview pre { white-space: pre; }
+.zorid-canvas-node-content.has-render-error { white-space: pre-wrap; }
 .zorid-canvas-node.is-group { z-index: 0; }
 .zorid-canvas-node.is-group .zorid-canvas-node-frame { background: transparent; }
 .zorid-canvas-node-label, .zorid-canvas-group-label {
