@@ -1,0 +1,31 @@
+.file-tree .is-file-drag-source {
+  color: var(--text-on-accent, white);
+  background-color: var(--interactive-accent, var(--accent, #7c5cff));
+}
+.file-tree .is-file-drop-target,
+.file-tree.is-file-drop-target {
+  border-radius: var(--radius-s, 4px);
+  background: color-mix(in oklch, var(--interactive-accent, var(--accent, #7c5cff)) 10%, transparent);
+}
+.file-tree .is-file-drop-target > .tree-row,
+.file-tree .tree-row.is-file-drop-target {
+  color: var(--nav-item-color-highlighted, var(--interactive-accent, #7c5cff));
+}
+.file-tree-drag-ghost {
+  position: fixed;
+  pointer-events: none;
+  z-index: 10000;
+  max-width: 300px;
+  padding: 6px 8px;
+  border-radius: var(--radius-s, 4px);
+  font-size: var(--font-ui-small, 13px);
+  font-weight: var(--font-medium, 500);
+  background: var(--drag-ghost-background, rgba(0, 0, 0, .85));
+  color: var(--drag-ghost-text-color, white);
+  box-shadow: 0 2px 8px var(--background-modifier-box-shadow, rgba(0, 0, 0, .3));
+}
+.file-tree-drag-ghost > div { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.file-tree-drag-action { padding-top: 2px; font-size: var(--font-ui-smaller, 12px); opacity: .7; }
+.file-tree-drag-action:empty { display: none; }
+
+.file-tree-drag-native-image { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
