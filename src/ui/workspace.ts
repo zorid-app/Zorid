@@ -26,6 +26,8 @@ import type { TransferFile } from '../editor/transfers.ts';
 import { showContextMenu, dismissContextMenu } from '../platform/context-menu.ts';
 import { createPdfView } from './pdf-view.ts';
 import type { PdfView } from './pdf-view.ts';
+import { createMediaView, mediaKind } from './media-view.ts';
+import type { MediaView } from './media-view.ts';
 import { CanvasDocument } from '../canvas/document.ts';
 import { createCanvasView } from '../canvas/view.ts';
 import type { CanvasView } from '../canvas/view.ts';
@@ -54,14 +56,14 @@ interface Pane {
   content?:HTMLElement; runtime?:TabViewRuntime; rebindView?:(pane:Pane)=>void;
   viewReady?:boolean; viewMode?:Mode; viewKind?:Tab['kind']; viewSettings?:string;
   viewTabId?:string; viewPath?:string|null; renderVersion:number;
-  editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; canvasView?:CanvasView;
+  editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; mediaView?:MediaView; canvasView?:CanvasView;
   canvasSource?:string; embeds?:MarkdownEmbeds; properties?:PropertiesView;
   propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void;
   history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
 }
 interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; autoConvertHtml: boolean; }
 interface Command { name: string; shortcut?: string; icon?: string; action: () => void | Promise<void>; }
-export interface WorkspaceViewFactories { pdf?: typeof createPdfView; canvas?: typeof createCanvasView }
+export interface WorkspaceViewFactories { pdf?: typeof createPdfView; media?: typeof createMediaView; canvas?: typeof createCanvasView }
 type EditorFactory = (parent: HTMLElement, options: EditorOptions) => EditorHandle;
 const nameOf = (path: string) => path.split('/').at(-1)!.replace(/\.md$/i, '');
 const parentOf = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
@@ -481,8 +483,17 @@ export class Workspace {
     const path=tab.path;
     if(!isMarkdown(path)){
       const host=el('div','attachment-view');content.append(host);
-      host.oncontextmenu=event=>{event.preventDefault();const entry=this.vault.entries.get(path);if(entry)this.fileMenu(entry,event.clientX,event.clientY);};
+      host.oncontextmenu=event=>{
+        // Preserve the browser's playback menu on native controls.
+        if((event.target as Element|null)?.closest?.('audio, video')){event.stopPropagation();return;}
+        event.preventDefault();const entry=this.vault.entries.get(path);if(entry)this.fileMenu(entry,event.clientX,event.clientY);
+      };
       if(isImage(path))pane.imageView=createImageView(host,path,this.attachments!);
+      else if(mediaKind(path)){
+        host.classList.add('media-attachment-view');
+        const view=(this.viewFactories.media??createMediaView)(host,path,this.attachments!);
+        pane.mediaView=view;void view.ready.catch(error=>{if(pane.mediaView===view&&version===pane.renderVersion)notice(error instanceof Error?error.message:String(error));});
+      }
       else if(/\.pdf$/i.test(path)){
         host.classList.add('pdf-attachment-view');
         const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches,onOpenMenu:event=>{const entry=this.vault.entries.get(path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}}});
@@ -687,7 +698,7 @@ export class Workspace {
   private viewSettings():string{return JSON.stringify([this.settings.readableWidth,this.settings.showInlineTitle,this.settings.useTab,this.settings.tabSize,this.settings.smartIndentList]);}
   private clearPaneViewFields(pane:Pane):void{
     pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
-    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.canvasView=undefined;pane.canvasSource=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
+    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.canvasSource=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
     pane.renderVersion=++this.viewSequence;
   }
   private parkPaneView(pane:Pane,keepConnected=false):void{
@@ -705,7 +716,7 @@ export class Workspace {
     const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
     const connected=cached.content.isConnected;
     cached.runtime.attach(pane.element,this.viewOwner(pane));
-    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','canvasView','canvasSource','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
+    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','canvasSource','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
     for(const key of fields)(pane as unknown as Record<string,unknown>)[key]=cached[key];
     pane.history=tab.history??cached.history;pane.historyIndex=tab.historyIndex??cached.historyIndex;
     pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);
@@ -723,7 +734,7 @@ export class Workspace {
   private async clearCachedViews():Promise<void>{for(const [tab,pane] of this.cachedViews){await this.disposePaneViews(pane);this.cachedViews.delete(tab);}}
   private releasePaneView(pane:Pane,content:HTMLElement):void{
     this.capturePaneState(pane);destroyMarkdown(content);
-    clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.canvasView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
+    clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
   }
   private async disposePaneViews(pane:Pane):Promise<void>{
     if(pane.runtime){await pane.canvasView?.flush();await pane.runtime.destroy();}
