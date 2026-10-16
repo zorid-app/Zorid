@@ -716,3 +716,17 @@ test('file toolbar auto-reveal and collapse controls persist real tree state',as
   assert.equal(root.querySelector('[data-action="auto-reveal"]')?.getAttribute('aria-pressed'),'true');
   assert.ok(root.querySelector('[role=treeitem][title="Folder/Note.md"]'));
 });
+
+test('live link ownership uses source-relative metadata and external URLs never create notes',async t=>{
+  const {workspace}=await setup(t,new MemoryAdapter({'Folder/Note.md':'links','Folder/Target.md':'target','Target.md':'root'}));
+  await workspace.openNote('Folder/Note.md');const options=editorOptions.get(currentEditor())!;
+  assert.equal(options.isUnresolved?.('Target.md','markdown'),false);
+  assert.equal(options.isUnresolved?.('Missing','wiki'),true);
+  const opened:string[]=[];window.open=((url:unknown)=>{opened.push(String(url));return null;}) as typeof window.open;
+  await (workspace as any).followLink('Folder/Note.md','https://example.test',workspace.activePane,'markdown');
+  await (workspace as any).followLink('Folder/Note.md','javascript:alert(1)',workspace.activePane,'markdown');
+  assert.deepEqual(opened,['https://example.test']);assert.equal(workspace.vault.entries.size,4);
+  await workspace.openVault({adapter:new MemoryAdapter({'Current.md':'current'}),label:'new',id:'new'});
+  options.open('Should not exist','wiki');await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(workspace.vault.entries.has('Should not exist.md'),false);
+});
