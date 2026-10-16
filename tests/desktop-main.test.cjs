@@ -36,7 +36,7 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
     if (name === './window-broker.cjs') return { WindowBroker };
     if (name === './context-menu.cjs') return { createContextMenuController: () => ({ close() {}, popup() {} }) };
     if (name === './vault-service.cjs') return { VaultService: { open: async root => {
-      if (!services.has(root)) services.set(root, { root, subscribe: () => () => {}, read: async () => 'base', write: async () => {} });
+      if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {} });
       return services.get(root);
     } } };
     return require(name);
@@ -65,5 +65,18 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   windows[0].webContents.mainFrame.url = `${savedURL}#note`;
   assert.equal(invoke(windows[0], 'getVault').path, '/first');
   windows[1].destroy(); assert.throws(() => invoke(windows[1], 'getVault'), /Untrusted sender/);
+  // Electron emits before-quit before the renderer's cancellable beforeunload.
+  // A cancelled quit leaves windows open, so their grants/watchers must survive.
+  assert.equal(services.get('/first').watchers, 1);
   app.emit('before-quit');
+  assert.equal(services.get('/first').watchers, 1);
+  assert.equal(invoke(windows[0], 'getVault').path, '/first');
+  assert.equal(await invoke(windows[0], 'read', '/first', 'Note.md'), 'base');
+  await invoke(windows[0], 'compareAndWrite', '/first', 'Note.md', 'base', 'saved');
+  app.emit('will-quit');
+  assert.equal(services.get('/first').watchers, 0);
+  assert.equal(services.get('/first').stops, 1);
+  app.emit('will-quit');
+  assert.equal(services.get('/first').stops, 1);
+  assert.throws(() => invoke(windows[0], 'getVault'), /Untrusted sender/);
 });
