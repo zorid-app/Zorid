@@ -233,3 +233,25 @@ test('one throwing embed disposer does not skip sibling resources or retry clean
   } });
   destroy(); destroy(); assert.deepEqual(released.sort(), [1, 2]);
 });
+
+test('embedded image handlers and nested editor controls retain interaction ownership', async t => {
+  let opened = 0;
+  const { view, click } = setup(t, '> [!note] Media\n> ![[picture.png]]\n\nAfter', { renderEmbed() {
+    const host = document.createElement('div'), image = document.createElement('img'); image.onclick = () => { opened++; };
+    const editor = document.createElement('div'); editor.className = 'cm-editor'; editor.append(document.createElement('span'));
+    const editable = document.createElement('div'); editable.setAttribute('contenteditable', 'true'); editable.append(document.createElement('span'));
+    host.append(image, editor, editable); return { dom: host, destroy() {} };
+  } });
+  const wrapper = view.dom.querySelector('.cm-live-callout')!;
+  click(wrapper.querySelector('img')!); click(wrapper.querySelector('.cm-editor')!.querySelector('span')!); click(wrapper.querySelector('[contenteditable="true"]')!.querySelector('span')!);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(opened, 1); assert.equal(view.dom.querySelector('.cm-live-callout'), wrapper); assert.equal(view.state.selection.main.head, 0);
+});
+
+test('an image without its own click action can still reveal callout source', async t => {
+  const source = '> [!note] Media\n> ![[picture.png]]\n\nAfter';
+  const { view, click } = setup(t, source, { renderEmbed() { return { dom: document.createElement('img'), destroy() {} }; } });
+  click(view.dom.querySelector('.callout img')!); await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(view.dom.querySelector('.cm-live-callout'), null);
+  assert.equal(view.state.selection.main.head, 0); assert.equal(view.state.selection.main.anchor, source.indexOf('\n\nAfter'));
+});

@@ -34,7 +34,11 @@ const pendingActivations = new WeakMap<EditorView, Set<() => void>>();
 function cancelPendingActivation(view: EditorView): void { pendingActivations.get(view)?.forEach(cancel => cancel()); }
 function releaseResources(cleanup: (() => void)[]): void { for (const dispose of cleanup.splice(0).reverse()) { try { dispose(); } catch { /* Continue releasing sibling resources. */ } } }
 const ignored = new Set(['FencedCode', 'CodeBlock', 'HTMLBlock', 'CommentBlock', 'LiveInlineComment', 'Table', 'BulletList', 'OrderedList']);
-const interactive = 'a,button,input,textarea,select,audio,video,iframe,.interactive-child,[role="button"]';
+const interactive = 'a,button,input,textarea,select,audio,video,iframe,object,embed,summary,.cm-editor,.interactive-child,[contenteditable]:not([contenteditable="false"]),[role="button"]';
+function ownsInteraction(target: EventTarget | null, boundary: HTMLElement): boolean {
+  const element = target as Element | null, control = element?.closest?.(interactive);
+  return !!control && boundary.contains(control) || element?.tagName === 'IMG' && typeof (element as HTMLElement).onclick === 'function';
+}
 
 function discover(state: EditorState, previous: readonly Span[] = [], transaction?: Transaction): Span[] {
   const tree = syntaxTree(state), prefix = bodyStart(state), old = new Map<number, Span>();
@@ -178,7 +182,7 @@ function renderCallout(view: EditorView, span: Span, options: LiveCalloutOptions
       let titleTimer: ReturnType<typeof setTimeout> | undefined;
       cleanup.push(() => clearTimeout(titleTimer));
       listen(title, 'click', event => {
-        if (event.button !== 0 || event.defaultPrevented || (event.target as Element).closest(interactive)) return;
+        if (event.button !== 0 || event.defaultPrevented || ownsInteraction(event.target, title)) return;
         clearTimeout(titleTimer); titleTimer = setTimeout(() => { if (!event.defaultPrevented) { event.preventDefault(); toggle(); } }, 0);
       });
       apply();
@@ -212,7 +216,7 @@ class CalloutWidget extends WidgetType {
     const edit = view.dom.ownerDocument.createElement('button'); edit.type = 'button'; edit.className = 'edit-block-button cm-callout-edit'; edit.setAttribute('aria-label', 'Edit callout source'); edit.title = 'Edit block'; edit.append(icon(wrapper.ownerDocument, CodeXml)); wrapper.append(edit);
     const editClick = (event: MouseEvent) => { event.preventDefault(); event.stopPropagation(); reveal(); };
     const click = (event: MouseEvent) => {
-      if (event.button !== 0 || event.defaultPrevented || event.detail > 1 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || (event.target as Element).closest(interactive + ',.is-collapsible > .callout-title')) return;
+      if (event.button !== 0 || event.defaultPrevented || event.detail > 1 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || ownsInteraction(event.target, wrapper) || (event.target as Element).closest('.is-collapsible > .callout-title')) return;
       const selection = wrapper.ownerDocument.getSelection();
       if (selection && !selection.isCollapsed && (wrapper.contains(selection.anchorNode) || wrapper.contains(selection.focusNode))) return;
       let textHit = false;
