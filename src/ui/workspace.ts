@@ -5,6 +5,7 @@ import { pickDesktopVault } from '../platform/index.ts';
 import type { PlatformVault } from '../platform/index.ts';
 import { el, icon, button, textButton, modal, notice, promptName } from './dom.ts';
 import { renderMarkdown } from './markdown.ts';
+import { destroyMarkdown } from './markdown-lifecycle.ts';
 import type { EditorHandle, EditorOptions, EditorViewState } from './editor.ts';
 import { NoteBuffer } from './note-buffer.ts';
 import { MarkdownEmbeds } from './embeds.ts';
@@ -411,10 +412,14 @@ export class Workspace {
       if(tab.mode==='reading'){
         const preview=el('div','markdown-preview');scroll.append(preview);
         pane.refreshPreview=()=>{
+          if(version!==pane.renderVersion||pane.viewPath!==path||!this.panes.includes(pane))return;
+          destroyMarkdown(preview);
           pane.embeds?.destroy();
           const embeds=createEmbeds();
           pane.embeds=embeds;
-          renderMarkdown(preview,buffer.text,(target,kind)=>this.run(()=>this.followLink(path,target,pane,kind)),(line,checked)=>this.run(()=>this.changeTask(path,line,checked)),{embed:request=>embeds.render(request,path),properties:false});
+          try{
+            renderMarkdown(preview,buffer.text,(target,kind)=>this.run(()=>this.followLink(path,target,pane,kind)),(line,checked)=>this.run(()=>this.changeTask(path,line,checked)),{embed:request=>embeds.render(request,path),properties:false});
+          }catch(error){destroyMarkdown(preview);embeds.destroy();if(pane.embeds===embeds)pane.embeds=undefined;throw error;}
         };
         pane.refreshPreview();
       }else{
@@ -441,7 +446,11 @@ export class Workspace {
       }
       if(tab.viewState){if(tab.viewState.editor)pane.editor?.restoreViewState?.(tab.viewState.editor);if(Number.isFinite(tab.viewState.scrollTop))scroll.scrollTop=Math.max(0,tab.viewState.scrollTop);if(Number.isFinite(tab.viewState.scrollLeft))scroll.scrollLeft=Math.max(0,tab.viewState.scrollLeft);}
       if(buffer.error)notice(buffer.error.message);
-    }catch(error){scroll.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
+    }catch(error){
+      if(version!==pane.renderVersion)return;
+      destroyMarkdown(scroll);pane.embeds?.destroy();pane.embeds=undefined;pane.refreshPreview=undefined;
+      scroll.append(el('p','error-message',error instanceof Error?error.message:String(error)));
+    }
     this.renderStatus();
   }
 
@@ -475,6 +484,7 @@ export class Workspace {
 
   private disposePaneViews(pane:Pane):void{
     this.capturePaneState(pane);pane.viewTabId=undefined;pane.viewPath=undefined;
+    destroyMarkdown(pane.element);
     clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.editor=undefined;pane.imageView?.destroy();pane.imageView=undefined;pane.pdfView?.destroy();pane.pdfView=undefined;pane.canvasView?.destroy();pane.canvasView=undefined;pane.canvasSource=undefined;pane.embeds?.destroy();pane.embeds=undefined;pane.properties?.destroy();pane.properties=undefined;pane.refreshPreview=undefined;
   }
 
