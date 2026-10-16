@@ -6,6 +6,7 @@ import { defaultKeymap, insertNewline, isolateHistory, redo, undo } from '@codem
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { inline } from '../ui/markdown.ts';
+import { liveInlineMarkdown } from './live-inline.ts';
 import { alignTableCells, clearTableCells, copyTableCells, deleteTableCells, parseTableClipboard, pasteTableCells, serializeTableClipboard, tableCellRange, decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
   encodeTableCellText, insertTableColumn, insertTableRow, moveTableColumn, moveTableRow, padTableCellBoundary, parseTable,
   setTableColumnAlignment, sortTableRows } from './table-model.ts';
@@ -29,10 +30,12 @@ class TableController {
   readonly owner: EditorView;
   model: MarkdownTable;
   private open: (target: string) => void;
+  private cellExtensions: Extension;
   readonly identity: object;
 
-  constructor(owner: EditorView, model: MarkdownTable, open: (target: string) => void, identity: object) {
+  constructor(owner: EditorView, model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension) {
     this.owner = owner; this.model = model; this.open = open; this.identity = identity;
+    this.cellExtensions = cellExtensions;
     this.dom.className = 'cm-live-table';
     this.dom.contentEditable = 'false';
     const wrapper = document.createElement('div'); wrapper.className = 'cm-table-wrapper';
@@ -441,8 +444,9 @@ class TableController {
       state: EditorState.create({ doc: value,
         selection: EditorSelection.single(selectAll ? 0 : Math.min(offset, value.length), selectAll ? value.length : Math.min(offset, value.length)),
         extensions: [EditorView.lineWrapping, this.readOnly.of(EditorState.readOnly.of(this.owner.state.readOnly)),
-          markdown({ base: markdownLanguage, addKeymap: false }), syntaxHighlighting(defaultHighlightStyle),
+          markdown({ base: markdownLanguage, addKeymap: false, extensions: liveInlineMarkdown }), syntaxHighlighting(defaultHighlightStyle),
           EditorView.contentAttributes.of({ 'aria-label': `Table row ${row + 1}, column ${column + 1}`, spellcheck: 'true' }),
+          this.cellExtensions,
           Prec.highest(keymap.of([
             { key: 'Tab', run: () => this.navigate('next'), shift: () => this.navigate('previous') },
             { key: 'Enter', run: () => this.navigate('down'), shift: insertNewline },
@@ -561,7 +565,10 @@ class TableController {
         const child = this.active?.view;
         if (child) {
           this.syncing = true;
-          try { child.dispatch({ selection: EditorSelection.single(local(range.anchor), local(range.head)) }); }
+          try {
+            const selection = EditorSelection.single(local(range.anchor), local(range.head));
+            if (!child.state.selection.eq(selection)) child.dispatch({ selection });
+          }
           finally { this.syncing = false; }
           child.focus();
         }
@@ -601,9 +608,10 @@ class TableWidget extends WidgetType {
   readonly model: MarkdownTable;
   readonly open: (target: string) => void;
   readonly identity: object;
-  constructor(model: MarkdownTable, open: (target: string) => void, identity: object) { super(); this.model = model; this.open = open; this.identity = identity; }
+  readonly cellExtensions: Extension;
+  constructor(model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension) { super(); this.model = model; this.open = open; this.identity = identity; this.cellExtensions = cellExtensions; }
   eq(other: TableWidget) { return this.identity === other.identity && this.model.from === other.model.from && this.model.source === other.model.source; }
-  toDOM(view: EditorView) { return new TableController(view, this.model, this.open, this.identity).dom; }
+  toDOM(view: EditorView) { return new TableController(view, this.model, this.open, this.identity, this.cellExtensions).dom; }
   updateDOM(dom: HTMLElement) { const controller = controllers.get(dom); if (!controller || controller.identity !== this.identity) return false; controller.update(this.model); return true; }
   ignoreEvent() { return true; }
   destroy(dom: HTMLElement) { controllers.get(dom)?.destroy(); }
@@ -725,7 +733,7 @@ export function tableActionsAt(view: EditorView, target: HTMLElement): TableActi
   return flatten(tableMenuAt(view, target));
 }
 
-export function liveTables(open: (target: string) => void): Extension {
+export function liveTables(open: (target: string) => void, cellExtensions: Extension = []): Extension {
   type CachedTable = { model: MarkdownTable; identity: object; changed: boolean };
   const shiftModel = (model: MarkdownTable, shift: number): MarkdownTable => !shift ? model : {
     ...model, from: model.from + shift, to: model.to + shift,
@@ -742,7 +750,7 @@ export function liveTables(open: (target: string) => void): Extension {
       const previous = cached.get(node.from);
       const model = previous && !previous.changed && previous.model.to === node.to ? previous.model
         : parseTable(state.doc.sliceString(node.from, node.to), node.from);
-      if (model) decorations.push(Decoration.replace({ widget: new TableWidget(model, open, previous?.identity ?? {}), block: true }).range(node.from, node.to));
+      if (model) decorations.push(Decoration.replace({ widget: new TableWidget(model, open, previous?.identity ?? {}, cellExtensions), block: true }).range(node.from, node.to));
       return false;
     } });
     return Decoration.set(decorations, true);

@@ -8,13 +8,13 @@ import { EditorView } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { history, undo } from '@codemirror/commands';
 import { openSearchPanel, search, SearchQuery, setSearchQuery } from '@codemirror/search';
-import { syntaxTree } from '@codemirror/language';
+import { forceParsing, syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
 import { liveInline, liveInlineMarkdown, refreshLiveInline } from '../src/editor/live-inline.ts';
 import type { LiveInlineOptions } from '../src/editor/live-inline.ts';
 
 // Real editor state, parsing, DOM and event routing. Geometry stubs only let
 // jsdom run CodeMirror; these tests do not measure browser pointer hit testing.
-function setup(t: TestContext, source: string, options: LiveInlineOptions = {}) {
+function setup(t: TestContext, source: string, options: LiveInlineOptions = {}, parseControl?: { paused: boolean }, visible?: { from: number; to: number }[]) {
   const dom = new JSDOM('<!doctype html><html><body><main></main><button id="outside">Outside</button></body></html>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document,
@@ -31,8 +31,20 @@ function setup(t: TestContext, source: string, options: LiveInlineOptions = {}) 
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const opened: { target: string; kind: string; button: number; ctrl: boolean; meta: boolean; shift: boolean }[] = [];
   const transactions: Transaction[] = [];
-  const view = new EditorView({ parent: document.querySelector('main')!, state: EditorState.create({ doc: source,
-    extensions: [markdown({ base: markdownLanguage, addKeymap: false, extensions: liveInlineMarkdown }),
+  class TestEditorView extends EditorView {
+    get visibleRanges() { return visible ?? super.visibleRanges; }
+  }
+  const view = new TestEditorView({ parent: document.querySelector('main')!, state: EditorState.create({ doc: source,
+    extensions: [markdown({ base: markdownLanguage, addKeymap: false, extensions: [liveInlineMarkdown, {
+      wrap(inner) {
+        if (!parseControl) return inner;
+        // A stopped partial parse must still finish at its current position:
+        // CodeMirror's takeTree() relies on that PartialParse contract.
+        return { advance: () => parseControl.paused && (inner.stoppedAt == null || inner.stoppedAt > inner.parsedPos) ? null : inner.advance(),
+          get parsedPos() { return inner.parsedPos; },
+          get stoppedAt() { return inner.stoppedAt; }, stopAt: position => inner.stopAt(position) };
+      },
+    }] }),
       liveInline({ ...options, open(target, kind, event) { opened.push({ target, kind, button: event.button, ctrl: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey }); } }),
       history(), search(), EditorState.allowMultipleSelections.of(true),
       EditorView.updateListener.of(update => transactions.push(...update.transactions))] }) });
@@ -318,4 +330,106 @@ test('stylesheet applies theme-controlled link decoration only to rendered label
   assert.equal(getComputedStyle(label()).textDecorationLine, '');
   assert.equal(getComputedStyle(label()).cursor, 'text');
   assert.equal(getComputedStyle(view.contentDOM.querySelector('.cm-live-link-marker')!).color, 'var(--text-faint)');
+});
+
+function inlineDecorations(view: EditorView) {
+  const ranges: { from: number; to: number; className: string }[] = [];
+  for (const provider of view.state.facet(EditorView.decorations)) {
+    const decorations = typeof provider === 'function' ? provider(view) : provider;
+    decorations.between(0, view.state.doc.length, (from, to, value) => {
+      ranges.push({ from, to, className: value.spec.class ?? '' });
+    });
+  }
+  return ranges;
+}
+
+// Count public syntax navigation during one synchronous refresh, not wall time
+// or parser work. This catches both full-document and full-paragraph scans.
+function navigationCount(view: EditorView, action: () => void): number {
+  const prototypes = new Set<object>();
+  for (let node = syntaxTree(view.state).topNode; node; node = node.firstChild!) prototypes.add(Object.getPrototypeOf(node));
+  const restore: (() => void)[] = [];
+  let calls = 0;
+  for (const prototype of prototypes) {
+    for (const key of ['firstChild', 'lastChild', 'nextSibling', 'prevSibling', 'childAfter', 'childBefore']) {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
+      if (!descriptor) continue;
+      const replacement = descriptor.get ? { ...descriptor, get(this: unknown) { calls++; return descriptor.get!.call(this); } }
+        : { ...descriptor, value(this: unknown, ...args: unknown[]) { calls++; return descriptor.value.apply(this, args); } };
+      Object.defineProperty(prototype, key, replacement);
+      restore.push(() => Object.defineProperty(prototype, key, descriptor));
+    }
+  }
+  try { action(); } finally { for (const undo of restore) undo(); }
+  return calls;
+}
+
+function setVisibleRanges(view: EditorView, ranges: { from: number; to: number }[]): void {
+  // A controlled viewport avoids pretending jsdom has scrolling/font geometry.
+  // Parser/state/decoration code remains the real CodeMirror implementation.
+  Object.defineProperty(view, 'visibleRanges', { configurable: true, get: () => ranges });
+  view.dispatch({ effects: refreshLiveInline.of() });
+}
+
+test('visible traversal stays bounded near the end of a 100000-block document', t => {
+  const block = '**one**\n\n', count = 100000, source = block.repeat(count);
+  const from = block.length * (count - 3);
+  const { view } = setup(t, source, {}, undefined, [{ from, to: from + block.length }]);
+  assert.equal(forceParsing(view, source.length, 2000), true);
+  setVisibleRanges(view, [{ from, to: from + block.length }]);
+  const operations = navigationCount(view, () => view.dispatch({ effects: refreshLiveInline.of() }));
+  assert.ok(operations < 120, `visible refresh used ${operations} syntax navigation operations`);
+  const strong = inlineDecorations(view).filter(range => range.className === 'cm-strong');
+  assert.deepEqual(strong.map(range => range.from), [from + 2, from + block.length + 2]);
+  assert.equal(view.state.doc.toString(), source);
+});
+
+test('visible traversal skips unrelated inline children in a long single paragraph and link label', t => {
+  const content = '**one** '.repeat(2000);
+  const source = `[${content}](Target)\nplain`;
+  const from = 1 + content.length - 3 * '**one** '.length;
+  const { view } = setup(t, source, {}, undefined, [{ from, to: from + 6 }]);
+  assert.equal(forceParsing(view, source.length, 2000), true);
+  setVisibleRanges(view, [{ from, to: from + 6 }, { from: from + 2, to: from + 5 }]);
+  const operations = navigationCount(view, () => view.dispatch({ effects: refreshLiveInline.of() }));
+  assert.ok(operations < 150, `visible refresh used ${operations} syntax navigation operations`);
+  const marks = inlineDecorations(view);
+  assert.equal(marks.filter(range => range.className.includes('cm-live-inline-link')).length, 1);
+  assert.deepEqual(marks.filter(range => range.className === 'cm-strong').map(range => range.from), [from + 2]);
+});
+
+test('a formatting ancestor spanning the viewport retains nested reveal and deduplicates visible ranges', t => {
+  const source = '**start\n' + 'text\n'.repeat(300) + '*inside*\n' + 'text\n'.repeat(300) + 'end**';
+  const { view, cursor } = setup(t, source);
+  assert.equal(forceParsing(view, source.length, 2000), true);
+  const from = source.indexOf('inside');
+  setVisibleRanges(view, [{ from, to: from + 3 }, { from: from + 2, to: from + 5 }]);
+  let marks = inlineDecorations(view);
+  assert.equal(marks.filter(range => range.className === 'cm-strong').length, 1);
+  assert.equal(marks.filter(range => range.className === 'cm-live-emphasis').length, 1);
+  assert.ok(marks.some(range => range.from === from - 1 && range.to === from && range.className === ''));
+  view.focus(); cursor(3); // Focused part of the ancestor is outside the viewport.
+  marks = inlineDecorations(view);
+  assert.equal(marks.filter(range => range.className === 'cm-strong').length, 1);
+  assert.equal(marks.filter(range => range.className === 'cm-live-emphasis').length, 1);
+  assert.equal(marks.some(range => range.className === ''), false);
+  assert.equal(view.state.doc.toString(), source);
+  assert.equal(view.state.selection.main.head, 3);
+});
+
+test('an incomplete parser maps existing decorations until the viewport is parsed again', t => {
+  const control = { paused: false }, source = '**first**\n\n*last*';
+  const { view } = setup(t, source, {}, control);
+  const initial = inlineDecorations(view);
+  assert.ok(initial.some(range => range.className === 'cm-strong'));
+  control.paused = true;
+  view.dispatch({ changes: { from: 0, insert: 'prefix\n\n' } });
+  assert.equal(syntaxTreeAvailable(view.state, view.viewport.to), false);
+  const mapped = inlineDecorations(view);
+  assert.deepEqual(mapped, initial.map(range => ({ ...range, from: range.from + 8, to: range.to + 8 })));
+  control.paused = false;
+  assert.equal(forceParsing(view, view.state.doc.length, 2000), true);
+  assert.equal(syntaxTreeAvailable(view.state, view.viewport.to), true);
+  assert.deepEqual(inlineDecorations(view), mapped);
+  assert.equal(view.state.doc.toString(), 'prefix\n\n' + source);
 });

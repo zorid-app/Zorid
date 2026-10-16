@@ -60,11 +60,6 @@ const formatClasses: Record<string, string> = { Emphasis: 'cm-live-emphasis', St
   Strikethrough: 'cm-strike', LiveInlineHighlight: 'cm-highlight' };
 /** Dispatch after metadata changes that can affect existing link resolution. */
 export const refreshLiveInline = StateEffect.define<void>();
-const children = (node: SyntaxNode): SyntaxNode[] => {
-  const result: SyntaxNode[] = [];
-  for (let child = node.firstChild; child; child = child.nextSibling) result.push(child);
-  return result;
-};
 
 function decodeTarget(value: string, document: Document): string {
   value = value.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, '$1');
@@ -82,9 +77,9 @@ function safeTarget(target: string): boolean {
 }
 
 function linkSpan(state: EditorState, node: SyntaxNode, document: Document): LinkSpan | null {
-  const source = state.doc.sliceString(node.from, node.to), nodes = children(node);
   let target: string, labelFrom: number, labelTo: number, kind: 'wiki' | 'markdown' = 'markdown';
   if (node.name === 'LiveInlineWiki') {
+    const source = state.doc.sliceString(node.from, node.to);
     const content = source.slice(2, -2), divider = content.indexOf('|');
     const rawTarget = divider > 0 ? content.slice(0, divider) : content;
     target = rawTarget.trim().replace(/\\$/, '').replace(/\u00a0/g, ' ').normalize('NFC');
@@ -94,12 +89,20 @@ function linkSpan(state: EditorState, node: SyntaxNode, document: Document): Lin
     if (divider <= 0 && label.trimStart().startsWith('#') && labelTo > labelFrom + 1) labelFrom++;
     kind = 'wiki';
   } else if (node.name === 'Link') {
-    const url = nodes.find(child => child.name === 'URL');
-    const closing = nodes.find(child => child.name === 'LinkMark' && state.doc.sliceString(child.from, child.to) === ']');
-    if (!url || !closing || source.startsWith('[^')) return null;
+    // Direct destinations are near the end of a Link. Do not enumerate a
+    // potentially long formatted label or unsupported reference-link label.
+    const last = node.lastChild;
+    if (!last || state.doc.sliceString(last.from, last.to) !== ')') return null;
+    let url: SyntaxNode | null = null, closing: SyntaxNode | null = null;
+    for (let child: SyntaxNode | null = last; child; child = child.prevSibling) {
+      if (child.name === 'URL') url = child;
+      if (child.name === 'LinkMark' && state.doc.sliceString(child.from, child.to) === ']') { closing = child; break; }
+    }
+    if (!url || !closing || state.doc.sliceString(node.from, node.from + 2) === '[^') return null;
     target = decodeTarget(state.doc.sliceString(url.from, url.to).replace(/^<|>$/g, ''), document);
-    labelFrom = nodes[0].to; labelTo = closing.from;
+    labelFrom = node.firstChild!.to; labelTo = closing.from;
   } else if (node.name === 'Autolink' || node.name === 'URL') {
+    const source = state.doc.sliceString(node.from, node.to);
     target = source;
     labelFrom = node.from; labelTo = node.to;
     if (node.name === 'Autolink') { target = source.slice(1, -1); labelFrom++; labelTo--; }
@@ -132,7 +135,19 @@ function linkAt(view: EditorView, position: number): LinkSpan | null {
 
 function decorate(view: EditorView, options: LiveInlineOptions): { decorations: DecorationSet; atomic: DecorationSet } {
   const ranges: ReturnType<Decoration['range']>[] = [], hidden: ReturnType<Decoration['range']>[] = [];
-  const prefix = bodyStart(view.state), tree = syntaxTree(view.state), seen = new Set<number>(), headingLines = new Set<number>();
+  const prefix = bodyStart(view.state), tree = syntaxTree(view.state), headingLines = new Set<number>();
+  const visibleChildren = (parent: SyntaxNode, callback: (child: SyntaxNode) => void): void => {
+    const seen = new Set<number>();
+    for (const visible of view.visibleRanges) {
+      // childAfter seeks through Lezer's balanced tree, including a child
+      // ending at the visible boundary. Starting at the parent keeps outer
+      // formatting/heading ownership when only its middle is visible.
+      for (let child = parent.childAfter(visible.from - 1); child && child.from <= visible.to; child = child.nextSibling) {
+        if (seen.has(child.from)) continue;
+        seen.add(child.from); callback(child);
+      }
+    }
+  };
   const matches: { from: number; to: number }[] = [];
   const query = getSearchQuery(view.state);
   if (searchPanelOpen(view.state) && query.valid && query.search) {
@@ -160,33 +175,37 @@ function decorate(view: EditorView, options: LiveInlineOptions): { decorations: 
   const visit = (node: SyntaxNode, inheritedReveal = false): void => {
     if (node.to <= prefix || excluded.has(node.name)
       || !view.visibleRanges.some(range => node.from <= range.to && node.to >= range.from)) return;
-    const nodes = children(node), line = view.state.doc.lineAt(node.from);
+    const line = view.state.doc.lineAt(node.from);
     if (/^(ATX|Setext)Heading[1-6]$/.test(node.name)) {
       const level = node.name.slice(-1), reveal = active(line.from, view.state.doc.lineAt(node.to).to);
       if (!headingLines.has(line.from)) {
         headingLines.add(line.from);
         ranges.push(Decoration.line({ class: `cm-heading cm-heading-${level} cm-live-heading` }).range(line.from));
       }
-      if (!reveal) for (const marker of nodes.filter(child => child.name === 'HeaderMark')) {
+      const markers = [node.firstChild, node.lastChild].filter((child, index, both): child is SyntaxNode =>
+        !!child && child.name === 'HeaderMark' && (index === 0 || child.from !== both[0]?.from));
+      if (!reveal) for (const marker of markers) {
         const markerLine = view.state.doc.lineAt(marker.from);
         if (marker.from === node.from && node.name.startsWith('ATX')) {
           const after = view.state.doc.sliceString(marker.to, markerLine.to).match(/^[ \t]*/)?.[0].length ?? 0;
           replace(marker.from, marker.to + after);
         } else replace(marker.from, marker.to);
       }
-      for (const child of nodes) if (child.name !== 'HeaderMark') visit(child, inheritedReveal || reveal);
+      visibleChildren(node, child => { if (child.name !== 'HeaderMark') visit(child, inheritedReveal || reveal); });
       return;
     }
     const reveal = inheritedReveal || active(node.from, node.to);
-    if (formatClasses[node.name] && nodes.length >= 2) {
-      mark(nodes[0].to, nodes[nodes.length - 1].from, formatClasses[node.name]);
-      if (!reveal) { replace(nodes[0].from, nodes[0].to); replace(nodes[nodes.length - 1].from, nodes[nodes.length - 1].to); }
-      for (const child of nodes.slice(1, -1)) visit(child, reveal);
+    if (formatClasses[node.name] && node.firstChild && node.lastChild && node.firstChild.from !== node.lastChild.from) {
+      const first = node.firstChild, last = node.lastChild;
+      mark(first.to, last.from, formatClasses[node.name]);
+      if (!reveal) { replace(first.from, first.to); replace(last.from, last.to); }
+      visibleChildren(node, child => { if (child.from >= first.to && child.to <= last.from) visit(child, reveal); });
       return;
     }
-    if (node.name === 'InlineCode' && nodes.length >= 2) {
-      mark(nodes[0].to, nodes[nodes.length - 1].from, 'cm-live-code');
-      if (!reveal) { replace(nodes[0].from, nodes[0].to); replace(nodes[nodes.length - 1].from, nodes[nodes.length - 1].to); }
+    if (node.name === 'InlineCode' && node.firstChild && node.lastChild && node.firstChild.from !== node.lastChild.from) {
+      const first = node.firstChild, last = node.lastChild;
+      mark(first.to, last.from, 'cm-live-code');
+      if (!reveal) { replace(first.from, first.to); replace(last.from, last.to); }
       return;
     }
     if (node.name === 'Escape') {
@@ -217,21 +236,14 @@ function decorate(view: EditorView, options: LiveInlineOptions): { decorations: 
         ...(link.safe ? { role: 'link' } : {}),
       });
       if (!reveal) { replace(node.from, link.labelFrom); replace(link.labelTo, node.to); }
-      for (const child of nodes) if (child.from >= link.labelFrom && child.to <= link.labelTo && child.name !== 'URL') visit(child, reveal);
+      visibleChildren(node, child => { if (child.from >= link.labelFrom && child.to <= link.labelTo && child.name !== 'URL') visit(child, reveal); });
       return;
     }
     // Reference-style links and footnotes have no document resolution here.
     if (node.name === 'Link') return;
-    for (const child of nodes) visit(child, inheritedReveal);
+    visibleChildren(node, child => visit(child, inheritedReveal));
   };
-  for (const visible of view.visibleRanges) {
-    // Start traversal at top-level blocks that intersect visible coverage. This
-    // retains outer grouping when only an inner token is in the viewport.
-    for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
-      if (node.to < visible.from || node.from > visible.to || seen.has(node.from)) continue;
-      seen.add(node.from); visit(node);
-    }
-  }
+  visibleChildren(tree.topNode, node => visit(node));
   return { decorations: Decoration.set(ranges, true), atomic: Decoration.set(hidden, true) };
 }
 
