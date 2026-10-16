@@ -36,6 +36,9 @@ export class NoteBuffer {
   // its intent until a successful completion or an explicit disk read resolves it.
   private writeIntent?: string;
   private conflict = false;
+  private writeValidators = new Set<() => void>();
+
+  private validateWrite(): void { for (const validate of this.writeValidators) validate(); }
 
   constructor(vault: Vault, path: string, options: NoteBufferOptions = {}) {
     this.vault = vault;
@@ -165,11 +168,15 @@ export class NoteBuffer {
     });
   }
 
-  update(text: string): void {
+  update(text: string, options: { validateWrite?: () => void } = {}): void {
     this.requireLoaded();
+    // Guards belong to the accepted draft, including failed writes and later retries.
+    // Ordinary typing cannot discard the lifetime protection of an earlier edit.
+    if (options.validateWrite) { options.validateWrite(); this.writeValidators.add(options.validateWrite); }
     const changed = text !== this.text;
     this.text = text;
     this.updateDirty();
+    if (!this.dirty) this.writeValidators.clear();
     this.persist();
     if (changed) this.cancelTimer();
     // Repeated delivery of the same snapshot must not postpone a pending save.
@@ -185,19 +192,23 @@ export class NoteBuffer {
 
   private async save(): Promise<void> {
     this.requireLoaded();
+    this.validateWrite();
     if (this.writeIntent !== undefined || this.conflict) {
-      this.reconcileWrite(await this.readForReconciliation());
-      if (!this.dirty) { this.persist(); this.notify(); return; }
+      const disk = await this.readForReconciliation();
+      this.validateWrite();
+      this.reconcileWrite(disk);
+      if (!this.dirty) { this.writeValidators.clear(); this.persist(); this.notify(); return; }
     }
     // Retry cleanup after a successful file save. Dirty states below checkpoint
     // the latest text and write intent before attempting another file write.
     if (!this.dirty && this.recoveryPending) this.persist();
     while (this.dirty) {
+      this.validateWrite();
       const content = this.text;
       this.writeIntent = content;
       this.updateDirty();
       this.persist();
-      await this.vault.modify(this.path, content, { expectedContent: this.savedText });
+      await this.vault.modify(this.path, content, { expectedContent: this.savedText, validate: () => this.validateWrite() });
       this.savedText = content;
       this.writeIntent = undefined;
       this.conflict = false;
@@ -207,6 +218,7 @@ export class NoteBuffer {
       this.notify();
       // Edits made during the write use the just-committed content as their base.
     }
+    this.writeValidators.clear();
   }
 
   flush(): Promise<void> {

@@ -1,0 +1,21 @@
+.zorid-bases-table { position: relative; overflow: auto; height: 100%; min-height: 120px; color: var(--text-normal, #222); background: var(--background-primary, #fff); font-size: var(--font-smaller, 14px); --bases-table-row-height: 30px; }
+.zorid-bases-table-header { display: grid; position: sticky; top: 0; height: 30px; z-index: 2; background: var(--background-primary, #fff); color: var(--text-muted, #666); }
+.zorid-bases-table-column, .zorid-bases-table-cell { box-sizing: border-box; min-width: 0; overflow: hidden; padding: 4px 8px; border-inline-end: 1px solid var(--background-modifier-border, #ddd); border-bottom: 1px solid var(--background-modifier-border, #ddd); }
+.zorid-bases-table-column { white-space: nowrap; text-overflow: ellipsis; }
+.zorid-bases-table-body { position: relative; }
+.zorid-bases-table-row { position: absolute; inset-inline: 0; display: grid; }
+.zorid-bases-table-cell { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 22px; }
+.zorid-bases-table-row:hover { background: var(--background-modifier-hover, #f5f5f5); }
+.zorid-bases-table-cell:focus { outline: 2px solid var(--interactive-accent, #7f5af0); outline-offset: -2px; border-radius: 2px; }
+.zorid-bases-table-cell .internal-link { color: var(--link-color, #705dcf); cursor: pointer; text-decoration: none; }
+.zorid-bases-table-cell .internal-link:hover { text-decoration: underline; }
+.zorid-bases-table-cell.is-error { color: var(--text-error, #c33); }
+.zorid-bases-table-group { background: var(--background-secondary, #f6f6f6); align-items: center; }
+.zorid-bases-table-group button { text-align: start; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; padding: 4px 8px; }
+.zorid-bases-table-input { box-sizing: border-box; width: 100%; min-width: 0; font: inherit; color: inherit; background: var(--background-primary, #fff); border: 0; padding: 0; outline: none; }
+.zorid-bases-table-input[type=checkbox] { width: auto; }
+.zorid-bases-table-input[aria-invalid=true] { outline: 1px solid var(--text-error, #c33); }
+.zorid-bases-table-status { color: var(--text-muted, #666); font-size: var(--font-smaller, 14px); }
+.zorid-bases-table-status:empty { display: none; }
+
+textarea.zorid-bases-table-input { height: 100%; resize: none; }

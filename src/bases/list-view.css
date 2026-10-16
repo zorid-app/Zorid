@@ -1,0 +1,16 @@
+/* Original flow layout; row heights are measured by the bounded virtual surface. */
+.bases-list-container { color: var(--text-normal, #222); cursor: text; user-select: text; }
+.bases-list-item { box-sizing: border-box; padding: var(--list-spacing, 3px) 8px var(--list-spacing, 3px) 2em; line-height: var(--line-height-normal, 1.5); overflow-wrap: anywhere; }
+.bases-list-item-properties { position: relative; }
+.bases-list-item-properties.nested { padding-inline-start: var(--list-indent, 2em); }
+.bases-list-item-properties.nested .bases-list-property { display: block; }
+.bases-list-item .list-bullet, .bases-list-item .list-number { display: inline-block; text-align: end; padding-inline-end: 0.3em; box-sizing: border-box; color: var(--list-marker-color, #555); }
+.bases-list-item .list-bullet { width: 1em; margin-inline-start: -1em; }
+.bases-list-item .list-number { width: 3em; margin-inline-start: -3em; font-variant-numeric: tabular-nums; }
+.bases-list-separator { color: var(--text-muted, #777); }
+.bases-list-item .bases-rendered-value { padding: 0; }
+.bases-list-item .internal-link { color: var(--link-color, #7554d4); cursor: pointer; }
+.bases-list-item input:not([type='checkbox']) { max-width: 100%; }
+.bases-list-container .bases-group-heading { display: flex; align-items: center; gap: 8px; height: 36px; padding: 4px 0 8px; background: transparent; box-shadow: none; border: 0; text-align: start; color: inherit; font: inherit; cursor: pointer; }
+.bases-list-container.show-indentation-guide .bases-list-item-properties.nested::before { content: ''; position: absolute; inset-inline-start: 0.5em; top: 0; bottom: 0; border-inline-start: 1px solid var(--indentation-guide-color, #ddd); }
+.bases-list-container .mod-error { color: var(--text-error, #c44); }
