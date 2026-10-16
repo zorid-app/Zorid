@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { EditorSelection, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { isolateHistory, undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
+import { historyField, isolateHistory, undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
+import { foldState } from '@codemirror/language';
 import { createEditor } from '../src/ui/editor.ts';
 import { createTabViewRuntime } from '../src/ui/tab-view-runtime.ts';
 import type { TabViewOwner, TabViewRuntime, TabViewRuntimeOptions } from '../src/ui/tab-view-runtime.ts';
@@ -38,20 +39,38 @@ function setup(t: TestContext, doc = 'first line\n# A\nbody\n# B\nlast') {
 }
 function deferred() { let resolve!: () => void, reject!: (error: Error) => void; const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 
-test('same-window attach retains actual CM undo/redo, reversed multicarets, folds and scroll', t => {
+test('same-window attach retains actual CM undo/redo, reversed multicarets, folds and scroll through focus effects', async t => {
   const f = setup(t), runtime = f.create(), { view } = f;
   view.dispatch({ changes: { from: 0, insert: 'X' }, annotations: [Transaction.userEvent.of('input.type'), isolateHistory.of('full')] });
   view.dispatch({ changes: { from: view.state.doc.length, insert: 'Y' }, annotations: [Transaction.userEvent.of('input.type'), isolateHistory.of('full')] });
   assert.ok(undo(view));
   view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(0), EditorSelection.range(8, 2)], 1) });
   f.handle.fold!('foldAll'); view.focus(); view.scrollDOM.scrollTop = 45; view.scrollDOM.scrollLeft = 3;
-  const state = view.state, folded = f.handle.getViewState!().folds, lease = runtime.captureOwnership();
-  assert.equal(runtime.attach(f.b, owner('b'), lease.revision), true);
-  assert.equal(EditorView.findFromDOM(f.element.querySelector('.cm-editor')!), view); assert.equal(view.state, state);
+  const state = view.state, selected = state.selection.toJSON(), folded = f.handle.getViewState!().folds, lease = runtime.captureOwnership();
+  const transactions: Transaction[] = [], dispatch = view.dispatchTransactions, changesBefore = f.changes.length;
+  view.dispatchTransactions = (updates, source) => { transactions.push(...updates); dispatch(updates, source); };
+  try {
+    assert.equal(runtime.attach(f.b, owner('b'), lease.revision), true);
+    // Focus listeners in live math dispatch synchronously; callouts also queue
+    // focus effects. Those valid transactions can replace EditorState without
+    // reconstructing the editor or changing its document/history/selection.
+    await Promise.resolve(); await Promise.resolve();
+  } finally { view.dispatchTransactions = dispatch; }
+  assert.equal(EditorView.findFromDOM(f.element.querySelector('.cm-editor')!), view);
+  assert.equal(view.state.doc, state.doc);
+  assert.deepEqual(view.state.selection.toJSON(), selected);
+  assert.equal(view.state.field(historyField), state.field(historyField));
+  assert.equal(view.state.field(foldState), state.field(foldState));
+  assert.ok(transactions.every(transaction => !transaction.docChanged && transaction.startState.selection.eq(transaction.state.selection)), 'attachment and focus must not edit text or selection');
+  assert.equal(f.changes.length, changesBefore, 'attachment cannot publish a document edit');
   assert.deepEqual(f.handle.getViewState!().folds, folded); assert.equal(view.hasFocus, true);
   assert.equal(view.scrollDOM.scrollTop, 45); assert.equal(view.scrollDOM.scrollLeft, 3);
   assert.equal(undoDepth(view.state), 1); assert.equal(redoDepth(view.state), 1); assert.ok(redo(view));
   assert.equal(view.state.doc.toString().endsWith('Y'), true); assert.equal(f.changes.at(-1)?.owner, 'b');
+  assert.ok(undo(view)); assert.equal(view.state.doc.toString(), state.doc.toString());
+  assert.ok(undo(view)); assert.equal(view.state.doc.toString(), state.doc.toString().slice(1));
+  assert.ok(redo(view)); assert.ok(redo(view)); assert.equal(view.state.doc.toString(), state.doc.toString() + 'Y');
+  assert.ok(f.changes.slice(changesBefore).every(change => change.owner === 'b'), 'retained history continues editing through the destination owner');
   assert.equal(runtime.isCurrent(lease), false); assert.equal(f.flushes, 0); assert.equal(f.disposals, 0);
 });
 
