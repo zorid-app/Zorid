@@ -127,3 +127,28 @@ test('collapsing a focused group keeps keyboard focus and moves the grid tab sto
   const active=ui.dom.window.document.activeElement!;assert.equal(active.getAttribute('data-group-button'),'0');assert.equal(active.getAttribute('aria-expanded'),'false');
   assert.equal(ui.cell('file.name','Note 1.md').tabIndex,0);ui.close();
 });
+
+test('untouched multiline text retains LF, CRLF and CR values without writes', async () => {
+  for (const text of ['first\nsecond','first\r\nsecond','first\rsecond']) {
+    const data=result(1),row={...data.rows[0],values:{...data.rows[0].values,'note.score':{type:'string' as const,value:text}}};
+    const ui=setup({...data,rows:[row],groups:[{key:null,rows:[row]}]});ui.key(ui.cell('note.score'),'Enter');
+    const input=ui.cell('note.score').querySelector('textarea')!;assert.ok(input);ui.key(input,'Enter');await tick();assert.equal(ui.writes.length,0);
+    ui.key(ui.cell('note.score'),'Enter');const edited=ui.cell('note.score').querySelector('textarea')!;edited.value='changed\nlines';ui.key(edited,'Enter');await tick();assert.deepEqual(ui.writes[0].value,{type:'string',value:'changed\nlines'});ui.close();
+  }
+});
+
+test('pinned draft follows changed row geometry during resize', async () => {
+  const dom=new JSDOM('<body><main></main></body>',{pretendToBeVisual:true});let resize!:()=>void;
+  Object.defineProperty(dom.window,'ResizeObserver',{value:class {constructor(callback:()=>void){resize=callback;} observe(){} disconnect(){}}});
+  const container=dom.window.document.querySelector('main')!,view=createBaseTableView(container,{result:result(100),openFile:()=>{},editProperty:async()=>{}});
+  const cell=Array.from(container.querySelectorAll<HTMLElement>('[role=gridcell]')).find(el=>el.dataset.path==='Note 10.md'&&el.dataset.property==='note.score')!;
+  cell.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));const input=cell.querySelector('input')!;input.value='draft';const row=cell.parentElement!;
+  assert.equal(row.style.top,'300px');container.querySelector<HTMLElement>('[role=grid]')!.style.setProperty('--bases-table-row-height','60px');resize();await new Promise(done=>setTimeout(done,30));
+  assert.equal(input.isConnected,true);assert.equal(row.style.top,'600px');assert.equal(row.style.height,'60px');assert.equal(input.value,'draft');view.destroy();dom.window.close();
+});
+
+test('empty replacement preserves cancellation notice and old group buttons stay inert', () => {
+  const data=result(),ui=setup({...data,groups:[{key:{type:'string',value:'A'},rows:data.rows}]});const old=ui.container.querySelector<HTMLButtonElement>('[data-group-button]')!;
+  ui.view.update({...data,version:2,groups:[{key:{type:'string',value:'B'},rows:data.rows}]});old.click();assert.equal(ui.container.querySelector('[data-group-button]')!.getAttribute('aria-expanded'),'true');
+  ui.key(ui.cell('note.score'),'Enter');ui.view.update({...result(0),version:3});assert.match(ui.container.querySelector('[role=status]')!.textContent!,/edit was cancelled.*No results/);ui.close();
+});

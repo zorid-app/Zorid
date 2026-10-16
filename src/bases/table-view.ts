@@ -99,14 +99,17 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
   function startEdit(cell: HTMLElement, row: BaseQueryRow, property: string, value: BaseExpressionValue, toggle = false) {
     if (destroyed || editing || !editable(row, property, value)) return;
     const token = revision, version = result.version;
-    editing = cell; const input = doc.createElement('input'); input.className = 'zorid-bases-table-input';
+    const multiline = value.type === 'string' && /[\r\n]/.test(value.value);
+    editing = cell; const input = multiline ? doc.createElement('textarea') : doc.createElement('input');
+    input.className = 'zorid-bases-table-input';
     input.setAttribute('aria-label', options.getPropertyLabel?.(property) ?? property);
     // Keep number text uncoerced while editing, so malformed input cannot become null/zero.
-    input.type = value.type === 'boolean' ? 'checkbox' : 'text';
-    if (value.type === 'boolean') input.checked = toggle ? !value.value : value.value;
+    if (!multiline) (input as HTMLInputElement).type = value.type === 'boolean' ? 'checkbox' : 'text';
+    if (value.type === 'boolean') (input as HTMLInputElement).checked = toggle ? !value.value : value.value;
     else input.value = value.type === 'null' ? '' : display(value);
-    const originalText = value.type === 'null' ? '' : display(value);
-    cell.replaceChildren(input); input.focus(); if (input.type === 'text') input.select();
+    // Compare the control baseline, so untouched CRLF values survive textarea normalization.
+    const originalText = input.value;
+    cell.replaceChildren(input); input.focus(); if (value.type !== 'boolean') input.select();
     let saving = false, restoreAfterSave = true;
     const cancel = (restoreFocus = true) => { if (editing !== cell) return; editing = undefined; renderRows(); if (restoreFocus) focusCell(row.path, property); };
     async function save(restoreFocus = true) {
@@ -114,7 +117,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       if (saving || destroyed || revision !== token || editing !== cell) return;
       if (value.type !== 'boolean' && input.value === originalText) { cancel(restoreFocus); return; }
       let next: BaseExpressionValue;
-      if (value.type === 'boolean') next = { type: 'boolean', value: input.checked };
+      if (value.type === 'boolean') next = { type: 'boolean', value: (input as HTMLInputElement).checked };
       else if (!input.value) next = BASE_NULL;
       else if (value.type === 'number') {
         const n = Number(input.value);
@@ -133,8 +136,9 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
         saving = false; input.disabled = false; cell.removeAttribute('aria-busy'); input.setAttribute('aria-invalid', 'true'); report(error); if (restoreAfterSave) input.focus();
       }
     }
-    input.addEventListener('keydown', event => {
-      if (event.isComposing) return;
+    input.addEventListener('keydown', rawEvent => {
+      const event = rawEvent as KeyboardEvent;
+      if (event.isComposing || (multiline && event.key === 'Enter' && event.shiftKey)) return;
       if (event.key === 'Escape' && !saving) { event.preventDefault(); event.stopPropagation(); cancel(); }
       else if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void save(); }
     });
@@ -194,6 +198,11 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     if (destroyed) return;
     // Keep an active draft mounted during scrolling. Its position stays in the virtual body.
     const activeRow = editing?.parentElement;
+    if (activeRow) {
+      activeRow.style.top = `${Number(activeRow.dataset.index) * rowHeight}px`;
+      activeRow.style.height = `${rowHeight}px`;
+      activeRow.style.gridTemplateColumns = template;
+    }
     const focused = doc.activeElement as HTMLElement | null;
     const preserveFocus = focused?.getAttribute('role') === 'gridcell' && body.contains(focused);
     const focusedGroup = focused && body.contains(focused) ? focused.dataset.groupButton : undefined;
@@ -206,10 +215,10 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       el.className = 'zorid-bases-table-row'; el.setAttribute('role', 'row'); el.setAttribute('aria-rowindex', String(index + 2));
       if (item.row) { el.style.gridTemplateColumns = template; result.properties.forEach((property, i) => el.append(renderCell(item.row!, property, i))); }
       else {
-        el.classList.add('zorid-bases-table-group'); const button = doc.createElement('button'), group = result.groups[item.group];
+        el.classList.add('zorid-bases-table-group'); const button = doc.createElement('button'), group = result.groups[item.group], token = revision;
         button.type = 'button'; button.dataset.groupButton = String(item.group); button.setAttribute('aria-expanded', String(!collapsed.has(item.group)));
         button.textContent = `${collapsed.has(item.group) ? '▸' : '▾'} ${group.key?.type === 'null' ? 'Empty' : display(group.key!)} (${group.rows.length})`;
-        button.addEventListener('click', () => { if (editing) return; collapsed.has(item.group) ? collapsed.delete(item.group) : collapsed.add(item.group); rebuildItems();
+        button.addEventListener('click', () => { if (destroyed || token !== revision || !body.contains(button) || editing) return; collapsed.has(item.group) ? collapsed.delete(item.group) : collapsed.add(item.group); rebuildItems();
           if (selection && !items.some(item => item.row?.path === selection!.path)) {
             const first = items.find(item => item.row)?.row;
             selection = first && result.properties[0] ? { path: first.path, property: result.properties[0] } : undefined;
@@ -239,7 +248,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     root.setAttribute('aria-label', result.view.name);
     if (!selection || !result.rows.some(row => row.path === selection!.path) || !result.properties.includes(selection.property)) selection = result.rows[0] && result.properties[0] ? { path: result.rows[0].path, property: result.properties[0] } : undefined;
     dimensions(); rebuildItems(); renderHeader(); renderRows();
-    if (!result.rows.length) status.textContent = 'No results';
+    if (!result.rows.length) status.textContent += `${status.textContent ? ' ' : ''}No results`;
   }
   update(result);
   return { update, destroy() { if (destroyed) return; destroyed = true; revision++; editing = undefined; if (frame !== undefined) win?.cancelAnimationFrame(frame); resize?.disconnect(); root.removeEventListener('scroll', schedule); root.remove(); status.remove(); } };

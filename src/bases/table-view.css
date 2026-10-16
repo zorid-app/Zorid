@@ -17,3 +17,5 @@
 .zorid-bases-table-input[aria-invalid=true] { outline: 1px solid var(--text-error, #c33); }
 .zorid-bases-table-status { color: var(--text-muted, #666); font-size: var(--font-smaller, 14px); }
 .zorid-bases-table-status:empty { display: none; }
+
+textarea.zorid-bases-table-input { height: 100%; resize: none; }
