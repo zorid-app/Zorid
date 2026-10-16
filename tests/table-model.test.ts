@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  appendTableRow, decodeTableCellText, encodeTableCellText, insertTableRow, parseTable, replaceTableCell,
+  appendTableRow, decodeTableCellText, encodeTableCellText, insertTableColumn, insertTableRow, parseTable, replaceTableCell,
   type MarkdownTable, type TableEdit,
 } from '../src/editor/table-model.ts';
 
@@ -222,5 +222,47 @@ test('invalid edits fail without mutating model', () => {
     () => insertTableRow(model, 2), () => insertTableRow(model, 0.5), () => appendTableRow(model, ['a', 'b', 'c'])]) {
     assert.throws(action, RangeError);
   }
+  assert.equal(JSON.stringify(model), before);
+});
+
+test('column insertion retains existing raw cell text, alignment and surrounding document bytes', () => {
+  const prefix = 'Before 😀\r\n', source = '|  A\t| B |\r\n| :---\t| ---: |\r\n| x\\|y | `<br>` |\r\n\r\nAfter';
+  const model = table(source, prefix.length);
+  const next = apply(prefix + source, insertTableColumn(model, 1, ['New', 'a|b\nc'], 'center'));
+  assert.equal(next, prefix + '|  A\t| New | B |\r\n| :---\t| :---: | ---: |\r\n| x\\|y | a\\|b<br>c | `<br>` |\r\n\r\nAfter');
+  assert.deepEqual(table(next.slice(prefix.length)).alignments, ['left', 'center', 'right']);
+});
+
+test('empty columns can be inserted at every position for supported border styles', () => {
+  for (const source of ['A | B\n-- | --\nx | y', '| A | B |\n| -- | -- |\n| x | y |',
+    'A | B |\n-- | -- |\nx | y |', '| A | B\n| -- | --\n| x | y']) {
+    for (let index = 0; index <= 2; index++) {
+      const next = table(apply(source, insertTableColumn(table(source), index)));
+      assert.equal(next.columnCount, 3); assert.equal(next.malformed, false);
+      assert.deepEqual(next.rows[0].cells.map(cell => cell.text), index === 0 ? ['', 'A', 'B'] : index === 1 ? ['A', '', 'B'] : ['A', 'B', '']);
+      assert.deepEqual(next.rows[1].cells.map(cell => cell.text), index === 0 ? ['', 'x', 'y'] : index === 1 ? ['x', '', 'y'] : ['x', 'y', '']);
+    }
+  }
+});
+
+test('inserting a column materializes ragged gaps without dropping extra cell contents', () => {
+  const source = '| A | B |\n| -- | -- |\n| x |\n| one | two | extra |';
+  const next = table(apply(source, insertTableColumn(table(source), 3)));
+  assert.equal(next.columnCount, 4); assert.equal(next.malformed, false);
+  assert.deepEqual(next.rows.map(row => row.cells.map(cell => cell.text)), [
+    ['A', 'B', '', ''], ['x', '', '', ''], ['one', 'two', 'extra', ''],
+  ]);
+});
+
+test('column insertion keeps mixed line endings and separator trailing padding', () => {
+  const source = '| A | B |\r\n| -- | -- |  \n| x | y |';
+  const next = apply(source, insertTableColumn(table(source), 2));
+  assert.equal(next, '| A | B |  |\r\n| -- | -- | --- |  \n| x | y |  |');
+});
+
+test('invalid column edits fail atomically without mutating the input model', () => {
+  const model = table('| A | B |\n| --- | --- |'), before = JSON.stringify(model);
+  for (const index of [-1, 3, 0.5, NaN]) assert.throws(() => insertTableColumn(model, index), RangeError);
+  assert.throws(() => insertTableColumn(model, 0, ['header', 'extra']), RangeError);
   assert.equal(JSON.stringify(model), before);
 });

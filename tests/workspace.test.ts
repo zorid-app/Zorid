@@ -419,3 +419,27 @@ test('editor settings reconfigure current editors and attachment preferences rea
   assert.equal(saved.tabSize,8);assert.equal(saved.useTab,false);assert.equal(saved.smartIndentList,false);
   assert.equal(await adapter.read('Folder/Note.md'),'- item');
 });
+
+
+test('a pending attachment import cannot allocate into a vault after it is replaced', async t => {
+  const first = new MemoryAdapter({ 'Old/Note.md': 'old' });
+  const { workspace } = await setup(t, first, 'test:first');
+  await workspace.openNote('Old/Note.md');
+  workspace.settings.attachmentFolderPath = '.';
+  const options = editorOptions.get(currentEditor())!;
+  let release!: (bytes: Uint8Array) => void;
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const pending = options.transfers!.importFile({
+    name: 'capture.bin', type: 'application/octet-stream',
+    read: () => { started(); return new Promise(resolve => { release = resolve; }); },
+  });
+  await reading;
+  const second = new MemoryAdapter({ 'New/Note.md': 'new' });
+  await workspace.openVault({ adapter: second, label: 'Second vault', id: 'test:second' });
+  await workspace.openNote('New/Note.md');
+  release(new Uint8Array([42]));
+  await assert.rejects(pending, /destination vault is no longer open/);
+  assert.deepEqual((await first.list()).map(entry => entry.path).sort(), ['Old', 'Old/Note.md']);
+  assert.deepEqual((await second.list()).map(entry => entry.path).sort(), ['New', 'New/Note.md']);
+});

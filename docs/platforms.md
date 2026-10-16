@@ -58,8 +58,20 @@ The mobile adapter uses `@capacitor/filesystem` with `Directory.Documents`,
 keeping notes under `Zorid/`. It does not use browser local storage on native
 platforms. Writes use a sibling temporary file and the plugin's rename operation;
 deletions retain files under the vault's `.trash/`. Native rename/crash-recovery
-semantics still require device testing. A two-second metadata poll detects
+semantics still require device testing. A write or rename rejection attempts to
+remove the temporary file, preserves the original error, and emits no successful
+change notification. Cleanup can itself fail if storage access is lost. Known
+native permission, unsupported-operation and unavailable-bridge errors propagate
+to the caller; they are not converted into a missing-file result or a browser
+storage fallback. A two-second metadata poll detects
 changes made outside the renderer while its subscription remains active.
+
+This target currently opens only `Documents/Zorid`. It has no native vault-folder
+picker, persisted external-provider grants, incoming share/URL handler or custom
+keyboard bridge. The reference's extended Filesystem/App/Keyboard contracts in
+[mobile integration reference](mobile-integration-reference.md) are still open
+implementation work. Registering the stock Filesystem plugin does not supply
+those extensions.
 
 The iOS Info.plist enables `UIFileSharingEnabled` and
 `LSSupportsOpeningDocumentsInPlace` for Files integration. Its
@@ -84,16 +96,34 @@ document-provider behavior still need device validation.
   and the Xcode project; `swiftc -frontend -parse` accepts AppDelegate,
   SceneDelegate, and the generated Package.swift. Android XML and generated
   configuration parse successfully. This is not compilation.
-- **iOS compile not performed:** Xcode 26.2 is present, but this new SPM project
-  references uncached remote `capacitor-swift-pm` 8.5.3 and
-  `ion-ios-filesystem` 2.0.1 packages. No resolved package lock or native dependency
-  checkout exists in this project. Resolving/building requires dependency access.
-- **Android compile not performed:** `ANDROID_HOME` points to
+- **Adapter regression checks:** three focused tests and TypeScript checking pass.
+  They exercise binary byte preservation, failed partial-write/rename cleanup,
+  permission/capability errors despite empty parent listings, and the native
+  missing-file error. These mocks do not demonstrate native atomic replacement.
+- **Renderer build:** production build passes with webpack bundle-size warnings;
+  final log is `/private/tmp/zorid-mobile-web-build-final.log`. Native sync also
+  completed in the isolated verification checkout; log is
+  `/private/tmp/zorid-mobile-sync.log`.
+- **iOS compile attempted, blocked before compilation:** Xcode 26.2, iOS and iOS
+  Simulator SDK 26.2, and Swift 6.2.3 are installed. An unsigned generic simulator
+  build with automatic dependency resolution disabled and derived data/package
+  checkout output under `/private/tmp` failed during package resolution: SwiftPM
+  attempted to create its default cache outside the permitted writable roots.
+  The log is `/private/tmp/zorid-mobile-xcode-build.log`. The inspected existing
+  Xcode package cache contains Capacitor 8.3.4, whereas this project requires
+  `capacitor-swift-pm` 8.5.3 and `ion-ios-filesystem` 2.0.1; those exact dependencies
+  were not available there. Completing a build requires writable SwiftPM caches
+  and the exact package/binary dependencies. No dependencies were substituted,
+  signing credentials copied, or simulator launched.
+- **Android compile blocked by missing prerequisites:** `ANDROID_HOME` points to
   `/Users/ctk/Library/Android/sdk`, which does not exist. No Gradle distribution or
   dependency cache was found in the standard user locations. Installed Java
   versions top out at 17; the generated app/plugin require Java 21. The Gradle
   wrapper would need its 8.14.3 distribution before it can run, even with
-  `--offline`. No toolchain download or global configuration change was made.
+  `--offline`, so it was not invoked to trigger a download. After provisioning
+  Java 21, Android SDK/platform 36 and compatible build tools, Gradle 8.14.3, and
+  the declared Maven dependencies, run `./gradlew :app:assembleDebug` in
+  `android/`. No toolchain download or global configuration change was made.
 
 Generation, synchronization, parsing, compilation, device execution, and parity
 are distinct validation stages. The first three are established here; the last
