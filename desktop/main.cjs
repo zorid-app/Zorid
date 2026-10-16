@@ -5,6 +5,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { VaultService } = require('./vault-service.cjs');
 const { dispatchVaultOperation } = require('./vault-dispatch.cjs');
+const { createContextMenuController } = require('./context-menu.cjs');
+const contextMenus = createContextMenuController(Menu);
 app.setName('Zorid');
 let window;
 let vault;
@@ -30,6 +32,8 @@ function handle(name, callback) {
   ipcMain.handle(`zorid:${name}`, (event, ...args) => { assertSender(event); return callback(...args); });
 }
 function registerIPC() {
+  handle('showContextMenu', request => contextMenus.popup(window, request));
+  handle('dismissContextMenu', () => contextMenus.close(window));
   handle('getVault', describeVault);
   handle('openVault', async () => {
     const selection = await dialog.showOpenDialog(window, { title: 'Open folder as vault', properties: ['openDirectory', 'createDirectory'] });

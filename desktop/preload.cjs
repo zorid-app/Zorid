@@ -2,6 +2,8 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const invoke = (name, ...args) => ipcRenderer.invoke(`zorid:${name}`, ...args);
 contextBridge.exposeInMainWorld('zorid', Object.freeze({
+  showContextMenu: request => invoke('showContextMenu', request),
+  dismissContextMenu: () => invoke('dismissContextMenu'),
   getPathForFile: file => webUtils.getPathForFile(file),
   getVault: () => invoke('getVault'),
   openVault: () => invoke('openVault'),
