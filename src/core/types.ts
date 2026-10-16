@@ -1,6 +1,8 @@
 export interface VaultEntry {
   path: string;
   type: 'file' | 'folder';
+  /** Creation time in milliseconds, only when the adapter can provide it. */
+  ctime?: number;
   mtime: number;
   size: number;
 }
@@ -20,6 +22,10 @@ export interface VaultAdapter {
   mkdir(path: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   trash(path: string): Promise<void>;
+  /** Permanently remove an entry. Force permits deleting hidden children; never substitute trash. */
+  remove?(path: string, force: boolean): Promise<void>;
+  /** A host-provided URL usable by rendered media; unavailable adapters must omit it. */
+  getResourcePath?(path: string): string;
   /** Changed vault-relative paths, or undefined when the watcher requires a full rescan. */
   subscribe?(listener: (paths?: readonly string[]) => void): () => void;
 }

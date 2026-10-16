@@ -285,8 +285,17 @@ export class Vault {
     });
   }
 
+  /** Move an entry without rewriting any note contents. */
+  renameEntry(rawOld: string, rawNew: string): Promise<void> {
+    return this.renameInternal(rawOld, rawNew, false);
+  }
+
   /** Update links resolved against the pre-move index, including links inside moved notes. */
   rename(rawOld: string, rawNew: string): Promise<void> {
+    return this.renameInternal(rawOld, rawNew, true);
+  }
+
+  private renameInternal(rawOld: string, rawNew: string, updateLinks: boolean): Promise<void> {
     return this.enqueue(async () => {
       const oldPath = normalizePath(rawOld), newPath = normalizePath(rawNew);
       await this.refresh();
@@ -296,7 +305,7 @@ export class Vault {
       if (newPath.startsWith(`${oldPath}/`)) throw new Error('Cannot move a folder inside itself');
       const moved = (path: string): string => path === oldPath || path.startsWith(`${oldPath}/`) ? newPath + path.slice(oldPath.length) : path;
       const changes: { old: string; path: string; before: string; after: string }[] = [];
-      for (const [source, note] of this.metadata.entries()) {
+      for (const [source, note] of updateLinks ? this.metadata.entries() : []) {
         const before = this.contents.get(source)!;
         let after = before;
         const newSource = moved(source);
@@ -345,13 +354,27 @@ export class Vault {
     });
   }
 
+  /** Permanently delete through an explicit adapter capability, preserving event ordering. */
+  deleteEntry(rawPath: string, force = false): Promise<void> {
+    return this.removeEntry(rawPath, force);
+  }
+
   trash(rawPath: string): Promise<void> {
+    return this.removeEntry(rawPath);
+  }
+
+  private removeEntry(rawPath: string, force?: boolean): Promise<void> {
     return this.enqueue(async () => {
       const path = normalizePath(rawPath);
+      if (force !== undefined && !this.adapter.remove) throw new Error('Vault adapter does not support permanent deletion');
       const entry = this.entries.get(path);
       if (!entry) throw new Error(`Path does not exist: ${path}`);
       const removed = [...this.entries.values()].filter(item => item.path === path || item.path.startsWith(`${path}/`));
-      await this.adapter.trash(path);
+      if (force !== undefined) {
+        await this.adapter.remove!(path, force);
+      } else {
+        await this.adapter.trash(path);
+      }
       await this.refresh();
       for (const item of removed) this.emit('delete', { path: item.path, entry: item });
     });
