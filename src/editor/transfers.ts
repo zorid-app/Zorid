@@ -68,9 +68,18 @@ export function editorTransfers(options: TransferOptions): Extension {
       view.dom.addEventListener('drop', this.drop, true);
       view.dom.addEventListener('dragover', this.dragOver, true);
     }
-    private target(event: Event): EditorView {
-      const element = (event.target as Element | null)?.nodeType === 1 ? (event.target as Element).closest('.cm-editor') : null;
-      return element ? EditorView.findFromDOM(element as HTMLElement) ?? this.view : this.view;
+    private target(event: Event): EditorView | null {
+      const target = event.target as Node | null;
+      const element = target?.nodeType === 1 ? target as Element : target?.parentElement;
+      const root = element?.closest('.cm-editor');
+      const view = root ? EditorView.findFromDOM(root as HTMLElement) : null;
+      if (!view || !element || !view.contentDOM.contains(element)) return null;
+      // Search panels and controls inside embeds own their input. Stop at the
+      // resolved contentDOM so a nested table editor remains a valid target.
+      for (let node: Element | null = element; node && node !== view.contentDOM; node = node.parentElement) {
+        if (node.matches('input, textarea, select, button, [contenteditable="false"]')) return null;
+      }
+      return view;
     }
     private insertFiles(files: TransferFile[]) {
       this.pending = this.pending.then(async () => {
@@ -87,7 +96,7 @@ export function editorTransfers(options: TransferOptions): Extension {
     }
     private paste = (event: ClipboardEvent) => {
       if (event.defaultPrevented || !event.clipboardData) return;
-      const view = this.target(event); if (view.state.readOnly) return;
+      const view = this.target(event); if (!view || view.state.readOnly) return;
       const transfer = event.clipboardData, markdown = transfer.getData('text/markdown');
       const text = markdown || transfer.getData('text/plain');
       if (text && pasteURLs(view, text)) { event.preventDefault(); event.stopPropagation(); return; }
@@ -105,12 +114,13 @@ export function editorTransfers(options: TransferOptions): Extension {
       event.preventDefault(); event.stopPropagation(); this.insertFiles(files);
     };
     private dragOver = (event: DragEvent) => {
-      if (event.defaultPrevented || !event.dataTransfer?.types.includes('Files') || this.target(event).state.readOnly) return;
+      if (event.defaultPrevented || !event.dataTransfer?.types.includes('Files')) return;
+      const view = this.target(event); if (!view || view.state.readOnly) return;
       event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
     };
     private drop = (event: DragEvent) => {
       if (event.defaultPrevented || !event.dataTransfer) return;
-      const view = this.target(event); if (view.state.readOnly) return;
+      const view = this.target(event); if (!view || view.state.readOnly) return;
       let files: TransferFile[];
       try { files = transferFiles(event.dataTransfer, options.nativePath); }
       catch (error) { event.preventDefault(); options.onError?.(error); return; }
