@@ -82,6 +82,17 @@ The embed teardown owner reviewed this plan read-only against `ed3b84f` and foun
 
 `src/ui/media-view.ts` now implements `mediaKind(path)` and `createMediaView(container, path, resources)` with a `{ ready, destroy }` handle. No fourth options argument is currently needed. It accepts resolved local paths only, creates elements through the destination document, owns one attachment lease through video-to-audio fallback, and displays loading/decoder/read errors as text. `ready` resolves on metadata, native error, acquisition failure, five seconds after source acquisition, or destroy; it does not certify playback. Destroy settles immediately during pending acquisition, releases any eventual late lease without mounting, clears timers/listeners/native media sources, then releases the active lease. The scoped stylesheet adds native audio sizing and bounded media width. The attachment MIME map now includes the six previously missing extensions.
 
-Nine module tests use fake acquisition/events and original RIFF marker bytes, including two-player sharing through the real `AttachmentResources` class. Eight existing attachment regressions and a scoped strict TypeScript check pass. No native decoding was exercised. The module is not yet imported into the application or called by `MarkdownEmbeds`; host state/factory integration, stylesheet import, media context-menu ownership, parser-to-player integration tests, and native verification remain pending.
+Nine module tests use fake acquisition/events and original RIFF marker bytes, including two-player sharing through the real `AttachmentResources` class. Eight existing attachment regressions and a scoped strict TypeScript check pass. No native decoding was exercised. The module was initially isolated; the host integration below now supplies Markdown embed wiring. Native verification remains pending.
 
 Independent module review found no ownership blocker and passed additional destination-document and late-rejection-after-destroy probes. The fallback deliberately retains one overall five-second readiness deadline: switching to audio near that deadline does not restart it. In the inspected reference, the video timer likewise remains live while its separate audio helper starts another timer; the original outer readiness can therefore settle first. Zorid does not retain that extra inner timer. Both early settlement and late metadata/fallback continue to be distinct from playback success.
+
+## Reviewed Markdown embed host integration
+
+`MarkdownEmbeds` now dispatches resolved local audio/video paths to `createMediaView`,
+imports the scoped stylesheet, and destroys the owned view before refreshing or
+releasing its subtree. The media view alone owns its attachment lease. Wiki and
+Markdown embed fixtures cover the supported formats, dimensions, replacement and
+late-acquisition cleanup. Native media controls retain their default context menu
+without bubbling into the generic file menu. Standalone media tabs, provider
+iframes, native decoding/playback/seek behavior and exact platform menu appearance
+remain outside this verification; `ready` remains settlement rather than success.
