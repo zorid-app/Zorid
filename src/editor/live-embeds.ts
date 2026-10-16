@@ -20,7 +20,7 @@ interface EmbedSpan {
 interface EmbedState { exclusions: ReturnType<typeof renderExclusions>; spans: readonly EmbedSpan[]; revealed: object | null; decorations: DecorationSet }
 type Renderer = (request: EmbedRequest) => { dom: HTMLElement; destroy: () => void };
 
-const excludedNodes = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock', 'LiveInlineComment', 'Table', 'LinkReference', 'URL', 'LinkTitle']);
+const excludedNodes = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock', 'LiveInlineComment', 'Table', 'LinkReference', 'URL', 'LinkTitle', 'ZoridFrontmatter', 'ZoridMathInline', 'ZoridMathDisplay', 'ZoridMathBlock']);
 const interactive = 'a, button, input, select, textarea, audio, video, iframe, object, embed, summary, .cm-editor, .interactive-child, [contenteditable]:not([contenteditable="false"]), [role="button"]';
 
 function unescape(value: string): string {

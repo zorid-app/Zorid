@@ -7,6 +7,7 @@ import { tags } from '@lezer/highlight';
 import { searchKeymap } from '@codemirror/search';
 import { activeTableEditor, liveTables } from '../editor/live-tables.ts';
 import { bodyStart, liveProperties, propertyUpdate } from '../editor/live-properties.ts';
+import { frontmatterMarkdown } from '../editor/frontmatter-syntax.ts';
 import { liveCallouts, renderedCalloutRanges } from '../editor/live-callouts.ts';
 import { liveMath, liveMathMarkdown } from '../editor/live-math.ts';
 import { liveFences } from '../editor/live-fences.ts';
@@ -74,7 +75,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     parent,
     state: EditorState.create({ doc: options.value, extensions: [
       EditorState.allowMultipleSelections.of(true),
-      history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
+      history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, wiki,
       markdownFolding(),
