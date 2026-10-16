@@ -56,3 +56,26 @@
   .cm-live-table .cm-table-add { pointer-events: none; }
   .cm-live-table:focus-within .cm-table-add { opacity: 1; pointer-events: auto; }
 }
+
+.cm-live-table { --table-grip-size: 16px; --table-selection-border: 2px; padding-inline-start: var(--table-grip-size); padding-top: var(--table-grip-size); }
+.cm-live-table th, .cm-live-table td { position: relative; }
+.cm-table-grip { position: absolute; display: block; z-index: 3; opacity: 0; cursor: grab; border-radius: 3px; background: var(--background-modifier-hover); }
+.cm-table-grip::after { content: ''; position: absolute; inset: 4px; background: radial-gradient(circle, var(--text-muted) 1px, transparent 1px) 0 0 / 4px 4px; pointer-events: none; }
+.cm-table-grip-row { inset-block-start: 0; inset-inline-end: 100%; width: calc(var(--table-grip-size) - var(--table-selection-border)); height: 100%; }
+.cm-table-grip-column { inset-block-end: 100%; inset-inline-start: 0; width: 100%; height: calc(var(--table-grip-size) - var(--table-selection-border)); }
+.cm-table-grip:hover, .cm-live-table .is-editing > .cm-table-grip, .cm-live-table .is-selected > .cm-table-grip { opacity: 1; }
+.cm-live-table.mod-dragging .cm-table-grip { cursor: grabbing; }
+.cm-live-table .is-selected { user-select: none; }
+.cm-live-table .is-selected::after { content: ''; position: absolute; inset: 0; background: color-mix(in srgb, var(--interactive-accent) 14%, transparent); pointer-events: none; z-index: 2; border: 0 solid var(--interactive-accent); }
+.cm-live-table .selection-top::after { border-block-start-width: var(--table-selection-border); }
+.cm-live-table .selection-bottom::after { border-block-end-width: var(--table-selection-border); }
+.cm-live-table .selection-start::after { border-inline-start-width: var(--table-selection-border); }
+.cm-live-table .selection-end::after { border-inline-end-width: var(--table-selection-border); }
+.cm-live-table.has-selection .cm-content { caret-color: transparent; }
+.cm-live-table.has-selection .cm-selectionLayer, .cm-live-table.has-selection .cm-cursorLayer { visibility: hidden; }
+.cm-live-table.has-selection ::selection { background: transparent; }
+.cm-live-table .drop-before-row { box-shadow: inset 0 3px var(--interactive-accent); }
+.cm-live-table .drop-after-row { box-shadow: inset 0 -3px var(--interactive-accent); }
+.cm-live-table .drop-before-column { border-inline-start: 3px solid var(--interactive-accent); }
+.cm-live-table .drop-after-column { border-inline-end: 3px solid var(--interactive-accent); }
+@media (hover: none) { .cm-live-table { --table-grip-size: 24px; } }

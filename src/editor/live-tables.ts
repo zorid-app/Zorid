@@ -6,10 +6,10 @@ import { defaultKeymap, insertNewline, isolateHistory, redo, undo } from '@codem
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { inline } from '../ui/markdown.ts';
-import { decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
+import { alignTableCells, clearTableCells, copyTableCells, deleteTableCells, parseTableClipboard, pasteTableCells, serializeTableClipboard, tableCellRange, decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
   encodeTableCellText, insertTableColumn, insertTableRow, moveTableColumn, moveTableRow, padTableCellBoundary, parseTable,
   setTableColumnAlignment, sortTableRows } from './table-model.ts';
-import type { MarkdownTable, TableEdit } from './table-model.ts';
+import type { MarkdownTable, TableEdit, TableCellPosition, TableCellRange } from './table-model.ts';
 
 const cellSync = Annotation.define<boolean>();
 const controllers = new WeakMap<HTMLElement, TableController>();
@@ -23,6 +23,8 @@ class TableController {
   private syncing = false;
   private destroyed = false;
   private editorRetainers = 0;
+  private selected: { anchor: TableCellPosition; head: TableCellPosition } | null = null;
+  private stopGesture: (() => void) | null = null;
   private readOnly = new Compartment();
   readonly owner: EditorView;
   model: MarkdownTable;
@@ -52,11 +54,19 @@ class TableController {
     controllers.set(this.dom, this);
     this.render();
     this.dom.addEventListener('focusout', () => queueMicrotask(() => this.closeIfUnfocused()));
+    this.dom.addEventListener('contextmenu', event => {
+      const cell = (event.target as HTMLElement).closest<HTMLElement>('th[data-row],td[data-row]');
+      if (!cell || (event.target as HTMLElement).closest('.cm-table-grip')) return;
+      const row = Number(cell.dataset.row), column = Number(cell.dataset.column);
+      if (this.selected && !this.includesCell(row, column)) { this.deselectCells(); this.activate(row, column); }
+    });
+    for (const type of ['copy', 'cut', 'paste']) this.dom.addEventListener(type, event => this.clipboard(event as ClipboardEvent), true);
   }
 
   /** Structural edits share the note's history and reacquire the rebuilt widget. */
   private applyStructure(change: TableEdit, row: number, column: number, preserveSelection = false): boolean {
     if (this.destroyed || this.owner.state.readOnly) return false;
+    this.deselectCells();
     const from = this.model.from;
     const source = this.model.source.slice(0, change.from - from) + change.insert + this.model.source.slice(change.to - from);
     const next = parseTable(source, from);
@@ -107,6 +117,8 @@ class TableController {
     if (this.destroyed || this.owner.state.readOnly) return false;
     const model = this.model;
     switch (id) {
+      case 'clear-cells': return this.clearSelection();
+      case 'delete-cells': return this.deleteSelection(-1);
       case 'row-before': return this.addRow(row, column);
       case 'row-after': return this.addRow(row + 1, column);
       case 'row-up': return this.applyStructure(moveTableRow(model, row, row - 1), row - 1, column);
@@ -140,12 +152,217 @@ class TableController {
     }
   }
 
+  get selectionRange(): TableCellRange | null { return this.selected ? tableCellRange(this.model, this.selected.anchor, this.selected.head) : null; }
+  includesCell(row: number, column: number) {
+    const range = this.selectionRange;
+    return !!range && row >= range.top && row <= range.bottom && column >= range.left && column <= range.right;
+  }
+  deselectCells() {
+    if (!this.selected) return;
+    this.selected = null; this.paintSelection(); this.syncReadOnly();
+  }
+  selectCells(anchor: TableCellPosition, head: TableCellPosition, wholeAxis = false) {
+    if (this.destroyed) return;
+    tableCellRange(this.model, anchor, head);
+    if (!this.active) this.activate(anchor.row, anchor.column);
+    this.selected = wholeAxis || anchor.row !== head.row || anchor.column !== head.column ? { anchor: { ...anchor }, head: { ...head } } : null;
+    this.paintSelection(); this.syncReadOnly();
+    this.active?.view.focus();
+  }
+  private paintSelection() {
+    this.dom.classList.toggle('has-selection', !!this.selected);
+    const range = this.selectionRange;
+    this.cells.forEach((row, r) => row.forEach((cell, c) => {
+      const selected = !!range && r >= range.top && r <= range.bottom && c >= range.left && c <= range.right;
+      cell.classList.toggle('is-selected', selected);
+      cell.setAttribute('aria-selected', String(selected));
+      for (const [name, edge] of [['top', r === range?.top], ['bottom', r === range?.bottom], ['start', c === range?.left], ['end', c === range?.right]] as const) cell.classList.toggle(`selection-${name}`, selected && edge);
+    }));
+  }
+  private extendSelection(view: EditorView, rowDelta: number, columnDelta: number): boolean {
+    if (!this.active || !view.state.selection.main.empty && !this.selected) return false;
+    if (!this.selected) {
+      const range = view.state.selection.main;
+      if (columnDelta && range.head !== (columnDelta < 0 ? 0 : view.state.doc.length)) return false;
+      if (rowDelta && view.moveToLineBoundary(range, rowDelta > 0, true).head !== (rowDelta < 0 ? 0 : view.state.doc.length)) return false;
+    }
+    const anchor = this.selected?.anchor ?? { row: this.active.row, column: this.active.column };
+    const previous = this.selected?.head ?? anchor;
+    const head = { row: Math.max(0, Math.min(this.model.rows.length - 1, previous.row + rowDelta)), column: Math.max(0, Math.min(this.model.columnCount - 1, previous.column + columnDelta)) };
+    this.selectCells(anchor, head);
+    this.cells[head.row][head.column].scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    return true;
+  }
+  private collapseSelection(direction: -1 | 1): boolean {
+    const range = this.selectionRange; if (!range) return false;
+    const row = direction < 0 ? range.top : range.bottom, column = direction < 0 ? range.left : range.right;
+    this.activate(row, column, false, direction < 0 ? 0 : decodeTableCellText(this.model.rows[row].cells[column].text).text.length);
+    return true;
+  }
+  private currentController(from = this.model.from): TableController | undefined {
+    for (const node of this.owner.dom.querySelectorAll<HTMLElement>('.cm-live-table')) {
+      const controller = controllers.get(node); if (controller?.model.from === from) return controller;
+    }
+  }
+  clearSelection(): boolean {
+    const range = this.selectionRange;
+    return !!range && this.applyStructure(clearTableCells(this.model, range), range.top, range.left);
+  }
+  deleteSelection(direction: -1 | 1): boolean {
+    const range = this.selectionRange; if (!range) return false;
+    if (this.owner.state.readOnly) return true;
+    const head = this.selected!.head, edit = deleteTableCells(this.model, range);
+    const fullWidth = range.left === 0 && range.right === this.model.columnCount - 1;
+    const fullHeight = range.top === 0 && range.bottom === this.model.rows.length - 1;
+    if (fullWidth && !fullHeight && (range.top === 0 || range.bottom === this.model.rows.length - 1)) {
+      const top = range.top === 0, insert = top ? '\n' + edit.insert : edit.insert + '\n';
+      this.deselectCells(); this.close();
+      this.owner.dispatch({ changes: { ...edit, insert }, selection: { anchor: top ? edit.from : edit.from + insert.length },
+        annotations: [cellSync.of(true), Transaction.userEvent.of('delete'), isolateHistory.of('full')] });
+      this.owner.focus(); return true;
+    }
+    const row = fullWidth ? range.top + (direction < 0 ? -1 : 0) : fullHeight ? head.row : direction < 0 ? range.top : range.bottom;
+    const column = fullHeight && !fullWidth ? range.left + (direction < 0 ? -1 : 0) : fullWidth ? head.column : direction < 0 ? range.left : range.right;
+    return this.applyStructure(edit, row, column);
+  }
+  alignSelection(alignment: 'left' | 'center' | 'right'): boolean {
+    const range = this.selectionRange, selected = this.selected;
+    if (!range || !selected || this.owner.state.readOnly) return false;
+    const from = this.model.from;
+    if (!this.applyStructure(alignTableCells(this.model, range, alignment), selected.anchor.row, selected.anchor.column)) return false;
+    this.currentController(from)?.selectCells(selected.anchor, selected.head, true);
+    return true;
+  }
+  clipboard(event: ClipboardEvent): boolean {
+    if (event.defaultPrevented || this.destroyed || !event.clipboardData) return false;
+    const range = this.selectionRange;
+    if (event.type === 'paste') {
+      if (this.owner.state.readOnly) return false;
+      const data = parseTableClipboard(event.clipboardData.getData('obsidian/table'));
+      if (!data || !this.active) return false;
+      const start = range ? { row: range.top, column: range.left } : { row: this.active.row, column: this.active.column };
+      event.preventDefault(); event.stopPropagation();
+      let edit: TableEdit;
+      try { edit = pasteTableCells(this.model, start, data); }
+      catch (error) { if (error instanceof RangeError) return true; throw error; }
+      return this.applyStructure(edit, start.row + data.rows.length - 1, start.column + data.alignment.length - 1);
+    }
+    if (!range || event.type !== 'copy' && event.type !== 'cut' || event.type === 'cut' && this.owner.state.readOnly) return false;
+    const data = copyTableCells(this.model, range), markdown = serializeTableClipboard(data);
+    const table = this.dom.ownerDocument.createElement('table');
+    data.rows.forEach((row, r) => {
+      const tr = table.insertRow(); row.forEach((value, c) => {
+        const cell = this.dom.ownerDocument.createElement(r === 0 ? 'th' : 'td');
+        cell.style.textAlign = data.alignment[c] ?? ''; inline(cell, decodeTableCellText(value).text, this.open); tr.append(cell);
+      });
+    });
+    event.clipboardData.setData('text/plain', markdown); event.clipboardData.setData('text/markdown', markdown);
+    event.clipboardData.setData('text/html', '<!-- obsidian -->' + table.outerHTML);
+    event.clipboardData.setData('obsidian/table', JSON.stringify(data));
+    event.preventDefault(); event.stopPropagation();
+    if (event.type === 'cut') this.deleteSelection(-1);
+    return true;
+  }
+  private decorateCell(row: number, column: number) {
+    const cell = this.cells[row][column];
+    const grip = (axis: 'row' | 'column') => {
+      const node = this.dom.ownerDocument.createElement('span'); node.className = `cm-table-grip cm-table-grip-${axis}`;
+      node.dataset.axis = axis; node.role = 'button'; node.tabIndex = -1;
+      node.setAttribute('aria-label', `Select or move ${axis}`);
+      node.addEventListener('mousedown', event => {
+        if (event.button !== 0) return;
+        event.preventDefault(); event.stopPropagation(); this.startGrip(event, axis, axis === 'row' ? row : column);
+      });
+      cell.append(node);
+    };
+    if (row === 0) grip('column');
+    if (column === 0) grip('row');
+  }
+  private nearestCell(event: MouseEvent): TableCellPosition {
+    const direct = (event.target as HTMLElement | null)?.closest?.<HTMLElement>('th[data-row],td[data-row]');
+    if (direct && this.grid.contains(direct)) return { row: Number(direct.dataset.row), column: Number(direct.dataset.column) };
+    let result = { row: 0, column: 0 }, distance = Infinity;
+    this.cells.forEach((row, r) => row.forEach((cell, c) => {
+      const rect = cell.getBoundingClientRect();
+      const dx = Math.max(rect.left - event.clientX, 0, event.clientX - rect.right), dy = Math.max(rect.top - event.clientY, 0, event.clientY - rect.bottom);
+      const next = dx * dx + dy * dy; if (next < distance) { distance = next; result = { row: r, column: c }; }
+    }));
+    return result;
+  }
+  private trackGesture(move: (event: MouseEvent) => void, finish: (cancelled: boolean) => void) {
+    this.stopGesture?.();
+    const doc = this.dom.ownerDocument, win = doc.defaultView;
+    let done = false;
+    const stop = (cancelled: boolean) => {
+      if (done) return; done = true;
+      doc.removeEventListener('mousemove', moving, true); doc.removeEventListener('mouseup', up, true);
+      doc.removeEventListener('pointercancel', cancel, true); win?.removeEventListener('blur', cancel);
+      this.stopGesture = null; this.dom.classList.remove('mod-dragging');
+      for (const cell of this.cells.flat()) cell.classList.remove('drop-before-row', 'drop-after-row', 'drop-before-column', 'drop-after-column');
+      finish(cancelled);
+    };
+    const moving = (event: MouseEvent) => {
+      event.preventDefault(); move(event);
+      const scroll = this.owner.scrollDOM, rect = scroll.getBoundingClientRect();
+      if (rect.height) scroll.scrollTop += event.clientY < rect.top + 20 ? -20 : event.clientY > rect.bottom - 20 ? 20 : 0;
+      if (rect.width) scroll.scrollLeft += event.clientX < rect.left + 20 ? -20 : event.clientX > rect.right - 20 ? 20 : 0;
+    };
+    const up = () => stop(false), cancel = () => stop(true);
+    this.stopGesture = cancel; this.dom.classList.add('mod-dragging');
+    doc.addEventListener('mousemove', moving, true); doc.addEventListener('mouseup', up, true);
+    doc.addEventListener('pointercancel', cancel, true); win?.addEventListener('blur', cancel);
+  }
+  private cellPointer(event: MouseEvent, row: number, column: number) {
+    if (event.button === 2 && this.includesCell(row, column)) { event.preventDefault(); return; }
+    if (event.button !== 0 || (event.target as HTMLElement).closest('a, button, input, .cm-table-grip')) return;
+    const anchor = event.shiftKey && this.active ? { row: this.active.row, column: this.active.column } : { row, column };
+    const sameActive = this.active?.row === row && this.active.column === column;
+    if (event.shiftKey) { event.preventDefault(); this.selectCells(anchor, { row, column }); }
+    else {
+      this.deselectCells();
+      if (!sameActive) {
+        event.preventDefault(); this.activate(row, column);
+        const view = this.active?.view, position = view?.posAtCoords({ x: event.clientX, y: event.clientY });
+        if (view && position != null) view.dispatch({ selection: { anchor: position } });
+      }
+    }
+    this.trackGesture(move => { this.selectCells(anchor, this.nearestCell(move)); }, () => { if (!this.destroyed) this.active?.view.focus(); });
+  }
+  private startGrip(event: MouseEvent, axis: 'row' | 'column', index: number) {
+    this.activate(axis === 'row' ? index : 0, axis === 'column' ? index : 0);
+    const selectAxis = (controller: TableController, at: number) => controller.selectCells(
+      { row: axis === 'row' ? at : 0, column: axis === 'column' ? at : 0 },
+      { row: axis === 'row' ? at : controller.model.rows.length - 1, column: axis === 'column' ? at : controller.model.columnCount - 1 }, true);
+    selectAxis(this, index);
+    let destination = index;
+    const source = this.model.source;
+    this.trackGesture(move => {
+      if (this.owner.state.readOnly) return;
+      const cell = this.nearestCell(move), target = axis === 'row' ? cell.row : cell.column;
+      const rect = this.cells[cell.row][cell.column].getBoundingClientRect();
+      const rtl = this.dom.ownerDocument.defaultView?.getComputedStyle(this.grid).direction === 'rtl';
+      const after = axis === 'row' ? move.clientY > (rect.top + rect.bottom) / 2 : rtl ? move.clientX < (rect.left + rect.right) / 2 : move.clientX > (rect.left + rect.right) / 2;
+      const boundary = target + (after ? 1 : 0); destination = boundary > index ? boundary - 1 : boundary;
+      for (const node of this.cells.flat()) node.classList.remove(`drop-before-${axis}`, `drop-after-${axis}`);
+      const nodes = axis === 'row' ? this.cells[target] : this.cells.map(row => row[target]);
+      nodes.forEach(node => node.classList.add(`drop-${after ? 'after' : 'before'}-${axis}`));
+    }, cancelled => {
+      if (cancelled || this.destroyed || this.owner.state.readOnly || this.model.source !== source || destination === index) return;
+      const from = this.model.from;
+      const edit = axis === 'row' ? moveTableRow(this.model, index, destination) : moveTableColumn(this.model, index, destination);
+      if (this.applyStructure(edit, axis === 'row' ? destination : 0, axis === 'column' ? destination : 0)) {
+        const controller = this.currentController(from); if (controller) selectAxis(controller, destination);
+      }
+    });
+  }
+
   private renderCell(row: number, column: number) {
     const node = this.cells[row][column];
     node.replaceChildren();
     node.classList.remove('is-editing');
     // Decode breaks/pipe escapes without ever interpreting arbitrary HTML.
     inline(node, decodeTableCellText(this.model.rows[row].cells[column].text).text, this.open);
+    this.decorateCell(row, column);
   }
 
   private render() {
@@ -159,13 +376,9 @@ class TableController {
         td.dataset.row = String(rowIndex); td.dataset.column = String(column);
         td.style.textAlign = this.model.alignments[column] ?? '';
         this.cells[rowIndex].push(td); tr.append(td); this.renderCell(rowIndex, column);
-        td.addEventListener('mousedown', event => {
-          if (event.button !== 0 || (event.target as HTMLElement).closest('a, button, input')) return;
-          if (this.active?.row === rowIndex && this.active.column === column) return;
-          event.preventDefault(); this.activate(rowIndex, column);
-          const view = this.active?.view;
-          const position = view?.posAtCoords({ x: event.clientX, y: event.clientY });
-          if (view && position != null) view.dispatch({ selection: { anchor: position } });
+        td.addEventListener('mousedown', event => this.cellPointer(event, rowIndex, column));
+        td.addEventListener('click', event => {
+          if (event.detail === 4) { event.preventDefault(); this.selectCells({ row: 0, column: 0 }, { row: this.model.rows.length - 1, column: this.model.columnCount - 1 }, true); }
         });
       });
       (rowIndex === 0 ? head : body).append(tr);
@@ -181,7 +394,12 @@ class TableController {
     }
     const sameShape = model.rows.length === this.model.rows.length && model.columnCount === this.model.columnCount;
     const previous = this.model; this.model = model;
-    if (!sameShape) { this.close(); this.render(); return; }
+    if (!sameShape) {
+      const selection = this.selected; this.close(); this.render();
+      if (selection && model.rows[selection.anchor.row]?.cells[selection.anchor.column] && model.rows[selection.head.row]?.cells[selection.head.column]) this.selectCells(selection.anchor, selection.head, true);
+      else this.deselectCells();
+      return;
+    }
     model.rows.forEach((row, r) => row.cells.forEach((cell, c) => {
       this.cells[r][c].style.textAlign = model.alignments[c] ?? '';
       if (this.active?.row === r && this.active.column === c) {
@@ -206,6 +424,7 @@ class TableController {
 
   activate(row: number, column: number, selectAll = false, offset = 0) {
     if (this.destroyed) return;
+    this.deselectCells();
     this.close();
     const cell = this.model.rows[row]?.cells[column]; if (!cell) return;
     const host = this.cells[row][column]; host.replaceChildren(); host.classList.add('is-editing');
@@ -222,17 +441,19 @@ class TableController {
             { key: 'Mod-z', run: () => undo(this.owner), shift: () => redo(this.owner) },
             { key: 'Mod-y', run: () => redo(this.owner) },
             { key: 'Escape', run: () => this.exit(1) },
-            { key: 'ArrowLeft', run: view => this.horizontal(view, -1) },
-            { key: 'ArrowRight', run: view => this.horizontal(view, 1) },
-            { key: 'ArrowUp', run: view => this.vertical(view, -1) },
-            { key: 'ArrowDown', run: view => this.vertical(view, 1) },
+            { key: 'ArrowLeft', run: view => this.collapseSelection(view.textDirection === 1 ? 1 : -1) || this.horizontal(view, -1), shift: view => this.extendSelection(view, 0, view.textDirection === 1 ? 1 : -1) },
+            { key: 'ArrowRight', run: view => this.collapseSelection(view.textDirection === 1 ? -1 : 1) || this.horizontal(view, 1), shift: view => this.extendSelection(view, 0, view.textDirection === 1 ? -1 : 1) },
+            { key: 'ArrowUp', run: view => this.collapseSelection(-1) || this.vertical(view, -1), shift: view => this.extendSelection(view, -1, 0) },
+            { key: 'ArrowDown', run: view => this.collapseSelection(1) || this.vertical(view, 1), shift: view => this.extendSelection(view, 1, 0) },
+            { key: 'Backspace', run: () => this.deleteSelection(-1) },
+            { key: 'Delete', run: () => this.deleteSelection(1) },
           ])), keymap.of(defaultKeymap),
         ] }),
       dispatchTransactions: (transactions, child) => {
         // Read-only commands normally stop at the child's facet. Also guard
         // programmatic input/paste transactions, while allowing owner snapshots
         // to synchronize the child through update()'s explicit syncing path.
-        if (!this.syncing && this.owner.state.readOnly && transactions.some(t => t.docChanged)) return;
+        if (!this.syncing && (this.owner.state.readOnly || this.selected) && transactions.some(t => t.docChanged)) return;
         child.update(transactions);
         if (this.syncing || this.destroyed || !this.active || !transactions.some(t => t.docChanged || t.selection)) return;
         const active = this.active;
@@ -256,6 +477,7 @@ class TableController {
         } finally { this.syncing = false; }
       },
     });
+    this.decorateCell(row, column);
     this.active = { row, column, view, from: cell.from, to: cell.to, insertion: cell.insertion };
     const mapping = decodeTableCellText(cell.text);
     this.owner.dispatch({ selection: EditorSelection.single(cell.from + mapping.toSource(view.state.selection.main.anchor), cell.from + mapping.toSource(view.state.selection.main.head)), annotations: cellSync.of(true) });
@@ -264,8 +486,9 @@ class TableController {
 
   syncReadOnly() {
     const child = this.active?.view;
-    if (child && child.state.readOnly !== this.owner.state.readOnly) {
-      child.dispatch({ effects: this.readOnly.reconfigure(EditorState.readOnly.of(this.owner.state.readOnly)) });
+    const readOnly = this.owner.state.readOnly || !!this.selected;
+    if (child && child.state.readOnly !== readOnly) {
+      child.dispatch({ effects: this.readOnly.reconfigure(EditorState.readOnly.of(readOnly)) });
     }
   }
 
@@ -314,8 +537,13 @@ class TableController {
 
   /** Called after outer transactions, outside CodeMirror's update stack. */
   receiveSelection(restoreFocus = false) {
-    if (this.destroyed || (!restoreFocus && !this.owner.hasFocus && !this.active?.view.hasFocus)) return;
+    if (this.destroyed) return;
     const range = this.owner.state.selection.main;
+    if (this.selected) {
+      if (range.from >= this.model.from && range.to <= this.model.to) return;
+      this.deselectCells();
+    }
+    if (!restoreFocus && !this.owner.hasFocus && !this.active?.view.hasFocus) return;
     for (let r = 0; r < this.model.rows.length; r++) for (let c = 0; c < this.model.columnCount; c++) {
       const cell = this.model.rows[r].cells[c];
       if (range.from >= cell.rawFrom && range.to <= cell.rawTo) {
@@ -358,7 +586,7 @@ class TableController {
     this.active = null; active.view.destroy();
     if (this.cells[active.row]?.[active.column] && this.model.rows[active.row]?.cells[active.column]) this.renderCell(active.row, active.column);
   }
-  destroy() { this.destroyed = true; this.close(); controllers.delete(this.dom); }
+  destroy() { this.destroyed = true; this.stopGesture?.(); this.close(); controllers.delete(this.dom); }
 }
 
 class TableWidget extends WidgetType {
@@ -386,23 +614,51 @@ export function retainTableEditor(view: EditorView, target: HTMLElement): () => 
   const tableDOM = target.closest<HTMLElement>('.cm-live-table');
   if (!tableDOM || !view.dom.contains(tableDOM)) return () => {};
   const controller = controllers.get(tableDOM);
-  return controller?.owner === view ? controller.retainEditor() : () => {};
+  if (controller?.owner !== view) return () => {};
+  const release = controller.retainEditor();
+  if (!target.closest('.cm-table-grip')) return release;
+  let released = false;
+  return () => { if (!released) { released = true; release(); controller.deselectCells(); } };
+}
+
+/** Annotate one parent transaction that deliberately operates on selected cells. */
+export const tableSelectionAnnotation = cellSync.of(true);
+
+function tableControllerAt(view: EditorView, target: HTMLElement): TableController | undefined {
+  const dom = target.closest<HTMLElement>('.cm-live-table');
+  const controller = dom && view.dom.contains(dom) ? controllers.get(dom) : undefined;
+  return controller?.owner === view ? controller : undefined;
+}
+export function tableSelectionAt(view: EditorView, target: HTMLElement): boolean {
+  const cell = target.closest<HTMLElement>('th[data-row],td[data-row]');
+  return !!cell && !target.closest('.cm-table-grip') && !!tableControllerAt(view, target)?.includesCell(Number(cell.dataset.row), Number(cell.dataset.column));
+}
+export function tableSelectionRanges(view: EditorView, target: HTMLElement): readonly { from: number; to: number }[] {
+  if (!tableSelectionAt(view, target)) return [];
+  const controller = tableControllerAt(view, target)!, range = controller.selectionRange!;
+  return controller.model.rows.slice(range.top, range.bottom + 1).flatMap(row => row.cells.slice(range.left, range.right + 1).map(cell => ({ from: cell.from, to: cell.to })));
+}
+/** Delegate before generic outer-editor transfer handling, which otherwise sees
+ * Markdown text before the table-specific payload. */
+export function handleTableClipboard(view: EditorView, event: ClipboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  return !!target && typeof target.closest === 'function' && !!tableControllerAt(view, target)?.clipboard(event);
 }
 
 export interface TableAction {
   id: 'row-before' | 'row-after' | 'row-up' | 'row-down' | 'row-duplicate' | 'row-delete'
     | 'column-before' | 'column-after' | 'column-left' | 'column-right' | 'column-duplicate' | 'column-delete'
-    | 'align-left' | 'align-center' | 'align-right' | 'sort-ascending' | 'sort-descending';
+    | 'align-left' | 'align-center' | 'align-right' | 'sort-ascending' | 'sort-descending' | 'clear-cells' | 'delete-cells';
   label: string;
   enabled: boolean;
   run(): boolean;
 }
 
-export type TableMenuItem = TableAction | { label: string; submenu: TableMenuItem[] } | { type: 'separator' };
+export type TableMenuItem = TableAction | { role: 'cut' | 'copy' | 'paste'; label: string; enabled: boolean } | { label: string; submenu: TableMenuItem[] } | { type: 'separator' };
 
 /** Resolve a clicked cell before opening an asynchronous menu. A closure is
  * invalidated by structural/content changes or teardown while the menu is open.
- * This is the single-cell menu; rectangular cell selections are not modeled. */
+ * The clicked cell, rectangle or grip determines the applicable menu. */
 export function tableMenuAt(view: EditorView, target: HTMLElement): TableMenuItem[] {
   const tableDOM = target.closest<HTMLElement>('.cm-live-table'), cell = target.closest<HTMLElement>('th[data-row], td[data-row]');
   if (!tableDOM || !cell || !tableDOM.contains(cell) || !view.dom.contains(tableDOM)) return [];
@@ -410,6 +666,24 @@ export function tableMenuAt(view: EditorView, target: HTMLElement): TableMenuIte
   if (!controller || controller.owner !== view) return [];
   const row = Number(cell.dataset.row), column = Number(cell.dataset.column), source = controller.model.source;
   if (!controller.model.rows[row]?.cells[column]) return [];
+  const grip = target.closest<HTMLElement>('.cm-table-grip');
+  const selection = !grip && controller.includesCell(row, column) ? controller.selectionRange : null;
+  if (selection) {
+    const unchanged = () => tableDOM.isConnected && controllers.get(tableDOM) === controller && controller.model.source === source
+      && JSON.stringify(controller.selectionRange) === JSON.stringify(selection);
+    const selectedAction = (id: TableAction['id'], label: string, run: () => boolean): TableAction => ({ id, label, enabled: !view.state.readOnly,
+      run: () => unchanged() && !view.state.readOnly && run() });
+    const align = (value: 'left' | 'center' | 'right') => {
+      const rtl = tableDOM.ownerDocument.defaultView?.getComputedStyle(tableDOM.querySelector('table')!).direction === 'rtl';
+      return controller.alignSelection(value === 'center' ? value : rtl ? value === 'left' ? 'right' : 'left' : value);
+    };
+    return [
+      { role: 'cut', label: 'Cut', enabled: !view.state.readOnly }, { role: 'copy', label: 'Copy', enabled: true }, { role: 'paste', label: 'Paste', enabled: !view.state.readOnly },
+      { type: 'separator' },
+      selectedAction('align-left', 'Align left', () => align('left')), selectedAction('align-center', 'Align center', () => align('center')), selectedAction('align-right', 'Align right', () => align('right')),
+      { type: 'separator' }, selectedAction('clear-cells', 'Clear cells', () => controller.clearSelection()), selectedAction('delete-cells', 'Delete cells', () => controller.deleteSelection(-1)),
+    ];
+  }
   const action = (id: TableAction['id'], label: string): TableAction => ({ id, label,
     enabled: !view.state.readOnly,
     run: () => tableDOM.isConnected && tableDOM.contains(cell) && controllers.get(tableDOM) === controller
@@ -422,7 +696,7 @@ export function tableMenuAt(view: EditorView, target: HTMLElement): TableMenuIte
   if (row < controller.model.rows.length - 1) rowMoves.push(action('row-down', 'Move row down'));
   if (column > 0) columnMoves.push(action('column-left', 'Move column left'));
   if (column < controller.model.columnCount - 1) columnMoves.push(action('column-right', 'Move column right'));
-  return [
+  const menu: TableMenuItem[] = [
     { label: 'Row', submenu: groups(
       [action('row-before', 'Add row above'), action('row-after', 'Add row below')], rowMoves,
       [action('row-duplicate', 'Duplicate row'), action('row-delete', 'Delete row')]) },
@@ -432,6 +706,9 @@ export function tableMenuAt(view: EditorView, target: HTMLElement): TableMenuIte
       [action('column-duplicate', 'Duplicate column'), action('column-delete', 'Delete column')]) },
     { type: 'separator' }, action('sort-ascending', 'Sort by column (A to Z)'), action('sort-descending', 'Sort by column (Z to A)'),
   ];
+  if (grip?.dataset.axis === 'row') return (menu[0] as { submenu: TableMenuItem[] }).submenu;
+  if (grip?.dataset.axis === 'column') return [menu[3], menu[4], { type: 'separator' }, ...(menu[1] as { submenu: TableMenuItem[] }).submenu];
+  return menu;
 }
 
 /** Flat compatibility/action lookup for callers that render their own menu. */
