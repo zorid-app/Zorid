@@ -675,3 +675,21 @@ test('superseded slow vault initialization cannot recreate the current panes or 
  const result={oldWatchers:slow.subscriptions,paneStable:workspace.activePane===pane,editorStable:workspace.activePane.editor===editor};await destroy();
  assert.deepEqual({...result,destroyed},{oldWatchers:0,paneStable:true,editorStable:true,destroyed:1},'superseded initialization must preserve pane ownership and eventual editor disposal');
 });
+
+
+test('toolbar menus anchor below their controls while right-click menus retain pointer coordinates',async t=>{
+  const {workspace,root,dom}=await setup(t,new MemoryAdapter({'Note.md':'note'}));
+  await workspace.openNote('Note.md');
+  const positions:{x:number;y:number}[]=[];
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:async(request:{x:number;y:number})=>{positions.push({x:request.x,y:request.y});return null;},dismissContextMenu:async()=>{}}});
+  for(const label of ['More options','Tab menu']){
+    const button=root.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+    button.getBoundingClientRect=()=>({x:880,y:45,left:880,right:910,top:45,bottom:75,width:30,height:30,toJSON(){return{};}});
+    button.click();assert.deepEqual(positions.at(-1),{x:880,y:75});
+  }
+  const status=root.querySelector<HTMLButtonElement>('.status-mode')!;
+  status.getBoundingClientRect=()=>({x:900,y:650,left:900,right:980,top:650,bottom:680,width:80,height:30,toJSON(){return{};}});
+  status.click();assert.deepEqual(positions.at(-1),{x:900,y:680});
+  root.querySelector<HTMLElement>('[role=tab]')!.dispatchEvent(new dom.window.MouseEvent('contextmenu',{clientX:315,clientY:27,bubbles:true,cancelable:true}));
+  assert.deepEqual(positions.at(-1),{x:315,y:27});
+});

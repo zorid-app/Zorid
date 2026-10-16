@@ -324,7 +324,7 @@ export class Workspace {
       }catch{/* Not an app tab. */}};
       bar.append(node);
     }
-    bar.append(button('plus','New tab (⌘T)',()=>this.run(()=>this.newTab(pane)),'tab-add'),button('down','Tab menu',()=>this.tabMenu(pane)));
+    bar.append(button('plus','New tab (⌘T)',()=>this.run(()=>this.newTab(pane)),'tab-add'),button('down','Tab menu',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)));
     pane.element.append(bar);
     const toolbar=el('div','pane-toolbar');
     const back=button('left','Navigate back',()=>this.run(()=>this.navigate(-1,pane)));back.disabled=pane.historyIndex<=0;
@@ -332,7 +332,7 @@ export class Workspace {
     toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.md$/,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
     if(!tab.path||isMarkdown(tab.path))actions.append(button(tab.mode==='reading'?'edit':'book',tab.mode==='reading'?'Switch to Live Edit (⌘E)':'Switch to reading view (⌘E)',()=>this.run(()=>this.toggleReading(pane))));
-    actions.append(button('more','More options',()=>this.tabMenu(pane)),button('rightbar','Toggle right sidebar',()=>this.toggleRight()));toolbar.append(actions);pane.element.append(toolbar);
+    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight()));toolbar.append(actions);pane.element.append(toolbar);
     if(tab.kind==='graph'){this.renderGraph(pane.element);return;}
     if(!tab.path){this.renderEmpty(pane);return;}
     const path=tab.path;
@@ -534,7 +534,7 @@ export class Workspace {
     this.status.replaceChildren();
     if(tab?.path&&!isMarkdown(tab.path)){this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
     this.status.append(el('span','save-state',buffer?.error?'Save failed — draft retained':buffer?.dirty?'Saving…':''));
-    const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(),'status-mode');
+    const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(mode),'status-mode');
     this.status.append(mode,el('span','',`${text.trim()?text.trim().split(/\s+/u).length:0} words`),el('span','',`${[...text].length} characters`));
   }
 
@@ -611,7 +611,10 @@ export class Workspace {
     const path=tab.path;
     this.menu([{name:'Split right',action:()=>this.split('right',pane,tab)},{name:'Split down',action:()=>this.split('bottom',pane,tab)},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
   }
-  private modeMenu():void{this.tabMenu(this.activePane);}
+  private tabMenuAt(pane:Pane,anchor:HTMLElement):void{
+    const bounds=anchor.getBoundingClientRect();this.tabMenu(pane,this.current(pane),bounds.left,bounds.bottom);
+  }
+  private modeMenu(anchor:HTMLElement):void{this.tabMenuAt(this.activePane,anchor);}
 
   private async openGraph():Promise<void>{await this.flushPane(this.activePane);const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'graph'};this.activePane.tabs.push(tab);this.activePane.active=tab.id;this.run(()=>this.renderPane(this.activePane));this.saveSession();}
   private renderGraph(parent:HTMLElement):void{
