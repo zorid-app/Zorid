@@ -11,16 +11,21 @@
 }
 .cm-editor .cm-list-bullet {
   position: relative;
+}
+/* Syntax highlighting can nest a colored span around the retained source
+   glyph. Hide that text as well; the circle uses its own background color. */
+.cm-editor .cm-list-bullet,
+.cm-editor .cm-list-bullet * {
   color: transparent;
 }
 .cm-editor .cm-list-bullet::after {
   content: '';
   position: absolute;
-  inline-size: .3em;
-  block-size: .3em;
+  inline-size: .375em;
+  block-size: .375em;
   inset-inline-end: .12em;
-  inset-block-start: calc(50% - .15em);
-  background: var(--zorid-list-marker);
+  inset-block-start: calc(50% - .1875em);
+  background: var(--zorid-bullet-color, #000);
   border-radius: 50%;
   pointer-events: none;
 }
@@ -39,3 +44,6 @@
   border-inline-start: 1px solid var(--background-modifier-border, #ddd);
   pointer-events: none;
 }
+
+/* Keep bullets legible when the workspace uses its dark theme. */
+html[data-theme="dark"] .cm-editor .cm-list-line { --zorid-bullet-color: var(--text-normal, #dadada); }
