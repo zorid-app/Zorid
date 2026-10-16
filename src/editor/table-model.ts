@@ -228,3 +228,33 @@ export function insertTableRow(table: MarkdownTable, index: number, values: read
 export function appendTableRow(table: MarkdownTable, values: readonly string[] = []): TableEdit {
   return insertTableRow(table, table.rows.length, values);
 }
+
+/** Insert a column while retaining existing encoded cells, padding and line breaks.
+ * Ragged rows are padded so the new header and separator remain a valid table. */
+export function insertTableColumn(table: MarkdownTable, index: number, values: readonly string[] = [], alignment: TableAlignment = null): TableEdit {
+  if (!Number.isInteger(index) || index < 0 || index > table.columnCount) throw new RangeError('Table column is out of range');
+  if (values.length > table.rows.length) throw new RangeError('Too many values for the table column');
+  if (alignment !== null && !['left', 'center', 'right'].includes(alignment)) throw new RangeError('Invalid table alignment');
+  const serialize = (cells: string[], leading: boolean, trailing: boolean) => (leading ? '|' : '') + cells.join('|') + (trailing ? '|' : '');
+  const edits = table.rows.map((row, rowIndex): TableEdit => {
+    const cells = row.cells.map(cell => cell.virtual ? '  ' : row.source.slice(cell.rawFrom - row.from, cell.rawTo - row.from));
+    cells.splice(index, 0, ` ${encodeTableCellText(values[rowIndex] ?? '')} `);
+    return { from: row.from, to: row.to, insert: serialize(cells, row.leadingPipe, row.trailingPipe) };
+  });
+  const separator = splitRow({ from: table.separator.from, to: table.separator.to, text: table.separator.source, newline: '' });
+  const alignmentCells = separator.cells.map(cell => separator.line.text.slice(cell.from, cell.to));
+  const trailingPadding = !separator.trailingPipe && /^\s*$/.test(alignmentCells.at(-1) ?? '') ? '|' + alignmentCells.pop() : '';
+  while (alignmentCells.length < table.columnCount) alignmentCells.push(' --- ');
+  const marker = alignment === 'center' ? ':---:' : alignment === 'left' ? ':---' : alignment === 'right' ? '---:' : '---';
+  alignmentCells.splice(index, 0, ` ${marker} `);
+  edits.push({ from: table.separator.from, to: table.separator.to,
+    insert: serialize(alignmentCells, separator.leadingPipe, separator.trailingPipe) + trailingPadding });
+  const pieces: string[] = [];
+  let previous = 0;
+  for (const edit of edits.sort((a, b) => a.from - b.from)) {
+    pieces.push(table.source.slice(previous, edit.from - table.from), edit.insert);
+    previous = edit.to - table.from;
+  }
+  pieces.push(table.source.slice(previous));
+  return { from: table.from, to: table.to, insert: pieces.join('') };
+}

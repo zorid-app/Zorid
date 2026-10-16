@@ -2,12 +2,12 @@ import { Annotation, EditorSelection, EditorState, Prec, StateField, Transaction
 import type { Extension } from '@codemirror/state';
 import { Decoration, EditorView, keymap, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
-import { defaultKeymap, insertNewline, redo, undo } from '@codemirror/commands';
+import { defaultKeymap, insertNewline, isolateHistory, redo, undo } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { inline } from '../ui/markdown.ts';
-import { decodeTableCellText, encodeTableCellText, insertTableRow, parseTable } from './table-model.ts';
-import type { MarkdownTable } from './table-model.ts';
+import { decodeTableCellText, encodeTableCellText, insertTableColumn, insertTableRow, parseTable } from './table-model.ts';
+import type { MarkdownTable, TableEdit } from './table-model.ts';
 
 const cellSync = Annotation.define<boolean>();
 const controllers = new WeakMap<HTMLElement, TableController>();
@@ -29,12 +29,56 @@ class TableController {
     this.owner = owner; this.model = model; this.open = open; this.identity = identity;
     this.dom.className = 'cm-live-table';
     this.dom.contentEditable = 'false';
-    this.dom.append(this.grid);
+    const wrapper = document.createElement('div'); wrapper.className = 'cm-table-wrapper';
+    wrapper.append(this.grid);
+    const add = (kind: 'row' | 'column', label: string) => {
+      const button = document.createElement('button'); button.type = 'button';
+      button.className = `cm-table-add cm-table-add-${kind}`;
+      button.textContent = '+'; button.title = label; button.setAttribute('aria-label', label);
+      button.addEventListener('mousedown', event => { if (event.button === 0) event.preventDefault(); });
+      button.addEventListener('click', event => {
+        event.preventDefault(); event.stopPropagation();
+        if (kind === 'row') this.addRow(this.model.rows.length, 0);
+        else this.addColumn(0, this.model.columnCount);
+      });
+      wrapper.append(button);
+    };
+    add('row', 'Add row below'); add('column', 'Add column to the right');
+    this.dom.append(wrapper);
     controllers.set(this.dom, this);
     this.render();
     this.dom.addEventListener('focusout', () => queueMicrotask(() => {
       if (!this.destroyed && !this.dom.contains(document.activeElement)) this.close();
     }));
+  }
+
+  /** Structural edits share the note's history and reacquire the rebuilt widget. */
+  private applyStructure(change: TableEdit, row: number, column: number): boolean {
+    if (this.destroyed || this.owner.state.readOnly) return false;
+    const from = this.model.from;
+    const source = this.model.source.slice(0, change.from - from) + change.insert + this.model.source.slice(change.to - from);
+    const next = parseTable(source, from), cell = next?.rows[row]?.cells[column];
+    if (!cell) return false;
+    this.close();
+    this.owner.dispatch({ changes: change, selection: { anchor: cell.from },
+      annotations: [cellSync.of(true), Transaction.userEvent.of('input'), isolateHistory.of('full')] });
+    // Replacing the full table may replace its controller. Never activate the
+    // old instance after dispatch or rely on its former DOM positions.
+    for (const node of this.owner.dom.querySelectorAll<HTMLElement>('.cm-live-table')) {
+      const controller = controllers.get(node);
+      if (controller?.model.from === from) { controller.activate(row, column); break; }
+    }
+    return true;
+  }
+
+  addRow(index: number, column: number): boolean {
+    if (this.destroyed || this.owner.state.readOnly) return false;
+    return this.applyStructure(insertTableRow(this.model, index), index, column);
+  }
+
+  addColumn(row: number, index: number, inheritFrom?: number): boolean {
+    if (this.destroyed || this.owner.state.readOnly) return false;
+    return this.applyStructure(insertTableColumn(this.model, index, [], inheritFrom === undefined ? null : this.model.alignments[inheritFrom]), row, index);
   }
 
   private renderCell(row: number, column: number) {
@@ -244,6 +288,35 @@ export function activeTableEditor(view: EditorView): EditorView | undefined {
     const editor = controllers.get(dom)?.editor; if (editor?.hasFocus) return editor;
   }
   return undefined;
+}
+
+export interface TableAction {
+  id: 'row-before' | 'row-after' | 'column-before' | 'column-after';
+  label: string;
+  enabled: boolean;
+  run(): boolean;
+}
+
+/** Resolve a clicked cell before opening an asynchronous menu. A closure is
+ * invalidated by structural/content changes or teardown while the menu is open. */
+export function tableActionsAt(view: EditorView, target: HTMLElement): TableAction[] {
+  const tableDOM = target.closest<HTMLElement>('.cm-live-table'), cell = target.closest<HTMLElement>('th[data-row], td[data-row]');
+  if (!tableDOM || !cell || !tableDOM.contains(cell) || !view.dom.contains(tableDOM)) return [];
+  const controller = controllers.get(tableDOM);
+  if (!controller || controller.owner !== view) return [];
+  const row = Number(cell.dataset.row), column = Number(cell.dataset.column), source = controller.model.source;
+  if (!controller.model.rows[row]?.cells[column]) return [];
+  const action = (id: TableAction['id'], label: string, run: () => boolean): TableAction => ({ id, label,
+    enabled: !view.state.readOnly,
+    run: () => tableDOM.isConnected && tableDOM.contains(cell) && controllers.get(tableDOM) === controller
+      && controller.model.source === source && !view.state.readOnly && run(),
+  });
+  return [
+    action('row-before', 'Add row above', () => controller.addRow(row, column)),
+    action('row-after', 'Add row below', () => controller.addRow(row + 1, column)),
+    action('column-before', 'Add column to the left', () => controller.addColumn(row, column, column)),
+    action('column-after', 'Add column to the right', () => controller.addColumn(row, column + 1, column)),
+  ];
 }
 
 export function liveTables(open: (target: string) => void): Extension {
