@@ -373,3 +373,18 @@ test('raw-cell serialization retains whitespace-only cells when adding or rearra
     assert.deepEqual(table(apply(source, edit)).rows.map(row => row.cells.map(cell => cell.text)), expected);
   }
 });
+
+test('cell replacement preserves literal terminal backslashes before compact delimiters', () => {
+  for (let count = 1; count <= 5; count++) for (const source of ['A|B\n---|---\nx|y', '|A|B|\n|---|---|\n|x|y|']) {
+    const value = 'tail' + '\\'.repeat(count), model = table(source);
+    for (const row of [0, 1]) for (const column of [0, 1]) {
+      const next = apply(source, replaceTableCell(model, row, column, value));
+      const parsed = table(next);
+      assert.equal(parsed.rows.length, 2); assert.equal(parsed.columnCount, 2);
+      assert.equal(parsed.rows[row].cells[column].text, value);
+      assert.equal(parsed.rows[row].cells[1 - column].text, model.rows[row].cells[1 - column].text);
+      const repeat = apply(next, replaceTableCell(parsed, row, column, value));
+      assert.equal(repeat, next, 'replacement reuses existing source padding');
+    }
+  }
+});

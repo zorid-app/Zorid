@@ -195,7 +195,17 @@ export function replaceTableCell(table: MarkdownTable, row: number, column: numb
     throw new RangeError('Table cell is out of range');
   }
   const cell = table.rows[row].cells[column], text = encodeTableCellText(newText);
-  return { from: cell.from, to: cell.to, insert: cell.insertion ? cell.insertion.prefix + text + cell.insertion.suffix : text };
+  const insert = cell.insertion ? cell.insertion.prefix + text + cell.insertion.suffix : text;
+  return { from: cell.from, to: cell.to, insert: padTableCellBoundary(insert, table.source[cell.to - table.from] === '|') };
+}
+
+/** Keep a literal terminal backslash from consuming the next cell delimiter.
+ * The added space is source padding, not part of the editable cell text. */
+export function padTableCellBoundary(raw: string, followedByDelimiter: boolean): string {
+  if (!followedByDelimiter) return raw;
+  let slashes = 0;
+  for (let at = raw.length - 1; at >= 0 && raw[at] === '\\'; at--) slashes++;
+  return slashes % 2 ? raw + ' ' : raw;
 }
 
 function serializeRow(table: MarkdownTable, values: readonly string[]): string {
@@ -209,12 +219,7 @@ function serializeRow(table: MarkdownTable, values: readonly string[]): string {
 /** Raw unbordered last cells may end in a literal backslash. Before adding a
  * delimiter after one, padding prevents an odd slash run from escaping it. */
 function serializeRawCells(cells: readonly string[], leading: boolean, trailing: boolean): string {
-  const safe = cells.map((cell, index) => {
-    if (!trailing && index === cells.length - 1) return cell;
-    let slashes = 0;
-    for (let at = cell.length - 1; at >= 0 && cell[at] === '\\'; at--) slashes++;
-    return slashes % 2 ? cell + ' ' : cell;
-  });
+  const safe = cells.map((cell, index) => padTableCellBoundary(cell, trailing || index < cells.length - 1));
   return (leading ? '|' : '') + safe.join('|') + (trailing ? '|' : '');
 }
 

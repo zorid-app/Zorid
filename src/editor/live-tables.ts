@@ -7,7 +7,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { inline } from '../ui/markdown.ts';
 import { decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
-  encodeTableCellText, insertTableColumn, insertTableRow, moveTableColumn, moveTableRow, parseTable,
+  encodeTableCellText, insertTableColumn, insertTableRow, moveTableColumn, moveTableRow, padTableCellBoundary, parseTable,
   setTableColumnAlignment, sortTableRows } from './table-model.ts';
 import type { MarkdownTable, TableEdit } from './table-model.ts';
 
@@ -240,12 +240,16 @@ class TableController {
         const text = child.state.doc.toString();
         const changed = transactions.some(t => t.docChanged);
         const encoded = encodeTableCellText(text);
-        const change = { from: active.from, to: active.to, insert: (active.insertion?.prefix ?? '') + encoded + (active.insertion?.suffix ?? '') };
+        const inserted = (active.insertion?.prefix ?? '') + encoded + (active.insertion?.suffix ?? '');
+        const change = { from: active.from, to: active.to,
+          insert: padTableCellBoundary(inserted, this.owner.state.doc.sliceString(active.to, active.to + 1) === '|') };
         const selection = child.state.selection.main;
         const start = active.from + (changed ? active.insertion?.prefix.length ?? 0 : 0);
         const map = (position: number) => start + encodeTableCellText(text.slice(0, position)).length;
         // Parent update happens after child.update, avoiding nested CM updates.
         this.syncing = true;
+        // Any boundary padding stays outside the child range. This keeps the
+        // caret before it and lets later edits reuse it without adding spaces.
         if (changed) { active.from = start; active.to = start + encoded.length; active.insertion = undefined; }
         try { this.owner.dispatch({ ...(changed ? { changes: change } : {}),
           selection: EditorSelection.single(map(selection.anchor), map(selection.head)),

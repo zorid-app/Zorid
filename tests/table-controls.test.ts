@@ -318,3 +318,46 @@ test('menu movement and alignment retain an unbordered cell ending in a literal 
   runCellAction(host, view, 'align-center', 1, 1);
   assert.deepEqual(currentTable(editor.getValue()).rows[1].cells.map(cell => cell.text), ['x', 'tail\\']);
 });
+
+test('typing a backslash in a compact cell preserves the delimiter, mapped caret and subsequent input', async t => {
+  const value = 'A|B\n---|---\nx|y';
+  const { editor, view, activate, active, host } = setup(t, value);
+  const child = activate(1, 0);
+  child.dispatch({ selection: { anchor: 1 } });
+  child.dispatch({ ...child.state.replaceSelection('\\'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), 'A|B\n---|---\nx\\ |y');
+  assert.equal(active(), child); assert.equal(child.state.doc.toString(), 'x\\');
+  assert.equal(child.state.selection.main.head, 2);
+  assert.equal(view.state.selection.main.head, editor.getValue().indexOf('x\\') + 2);
+  child.dispatch({ ...child.state.replaceSelection('z\\'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), 'A|B\n---|---\nx\\z\\ |y');
+  assert.equal(child.state.doc.toString(), 'x\\z\\'); assert.equal(host.querySelectorAll('td').length, 2);
+  assert.equal(view.state.selection.main.head, editor.getValue().indexOf('x\\') + 4);
+  assert.equal(undo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), value);
+  assert.equal(redo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), 'A|B\n---|---\nx\\z\\ |y');
+  assert.equal(active().state.doc.toString(), 'x\\z\\');
+});
+
+test('replacing a bordered last cell with a backslash keeps source padding outside its editor range', async t => {
+  const value = '|A|B|\n|---|---|\n|x|y|';
+  const { editor, view, activate, active } = setup(t, value);
+  const child = activate(1, 1);
+  child.dispatch({ selection: { anchor: 0, head: 1 } });
+  child.dispatch({ ...child.state.replaceSelection('tail\\'), annotations: Transaction.userEvent.of('input.paste') });
+  assert.equal(editor.getValue(), '|A|B|\n|---|---|\n|x|tail\\ |');
+  assert.equal(child.state.doc.toString(), 'tail\\'); assert.equal(child.state.selection.main.head, 5);
+  assert.equal(view.state.selection.main.head, editor.getValue().indexOf('tail') + 5);
+  child.dispatch({ selection: { anchor: 5, head: 0 } });
+  assert.equal(view.state.selection.main.anchor, editor.getValue().indexOf('tail') + 5);
+  assert.equal(view.state.selection.main.head, editor.getValue().indexOf('tail'));
+  assert.equal(undo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), value);
+  assert.equal(redo(view), true); await Promise.resolve();
+  assert.equal(editor.getValue(), '|A|B|\n|---|---|\n|x|tail\\ |');
+  const restored = active();
+  restored.dispatch({ selection: { anchor: restored.state.doc.length } });
+  restored.dispatch({ ...restored.state.replaceSelection('!'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), '|A|B|\n|---|---|\n|x|tail\\! |');
+});
