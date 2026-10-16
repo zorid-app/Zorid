@@ -243,7 +243,21 @@ export class Workspace {
       for (const pane of this.panes) for (const tab of [...pane.tabs]) if (tab.path === change.path || tab.path?.startsWith(change.path + '/')) {
         const buffer = this.buffers.get(tab.path);
         if (buffer?.dirty || (pane.active === tab.id ? pane.canvasView : this.cachedViews.get(tab)?.canvasView)?.hasPendingChanges()) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
-        tab.path = null; this.run(()=>this.renderPane(pane));
+        const cached=this.cachedViews.get(tab);
+        if(cached){
+          const path=tab.path,generation=this.vaultGeneration;
+          this.run(async()=>{
+            if(generation!==this.vaultGeneration||this.cachedViews.get(tab)!==cached||tab.path!==path||buffer?.dirty||cached.canvasView?.hasPendingChanges())return;
+            // Keep the original path until the runtime's flush gate succeeds.
+            // A rejected write must leave the recoverable tab and owner intact.
+            await this.disposePaneViews(cached);
+            if(this.cachedViews.get(tab)===cached)this.cachedViews.delete(tab);
+            if(generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab)||tab.path!==path||this.vault.entries.has(path))return;
+            tab.path=null;
+            if(pane.active===tab.id)await this.renderPane(pane);else this.renderTabBar(pane);
+            this.saveSession();
+          });
+        }else{tab.path = null; this.run(()=>this.renderPane(pane));}
       }
       this.renderSidebar(); this.renderRight();
     }), this.vault.on('rename', change => {

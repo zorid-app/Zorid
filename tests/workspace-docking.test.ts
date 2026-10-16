@@ -212,3 +212,45 @@ test('navigation history travels with a moved tab and its toolbar follows the de
   for(let i=0;i<30&&target.tabs.find(tab=>tab.id===target.active)?.path!=='A.md';i++)await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(target.tabs.find(tab=>tab.id===target.active)?.path,'A.md');assert.equal(source.tabs.find(tab=>tab.id===source.active)?.path,'B.md');assert.deepEqual(target.history,['A.md','C.md']);
 });
+
+test('external deletion promptly releases a clean parked PDF without rebuilding the active editor',async t=>{
+  let retired=0;
+  const {workspace,adapter}=await setup(t,new MemoryAdapter({'Paper.pdf':new Uint8Array([37,80,68,70]),'B.md':'Bravo'}),{
+    pdf(parent){parent.append(document.createElement('canvas'));return{ready:Promise.resolve(),destroy(){retired++;},goToPage(){},setScale(){},rotate(){},showSearch(){},applySubpath(){},getSelectionSubpath(){return null;}};},
+  });
+  await workspace.openNote('Paper.pdf');const pane=workspace.activePane,tab=pane.tabs[0],runtime=pane.runtime!;
+  await workspace.openNote('B.md',true);const editor=pane.editor!;
+  await adapter.trash('Paper.pdf');await workspace.vault.reload();
+  for(let i=0;i<30&&tab.path!==null;i++)await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(tab.path,null);assert.equal(retired,1);assert.equal(runtime.phase,'disposed');assert.equal((workspace as any).cachedViews.has(tab),false);assert.equal(pane.editor,editor);
+  await (workspace as any).closeTab(pane,tab);assert.equal(retired,1,'closing the now-empty tab does not dispose its former viewer twice');
+});
+
+test('external deletion retains a parked Markdown editor with dirty text and its recovery draft',async t=>{
+  const {workspace,adapter,destroyed}=await setup(t);await workspace.openNote('A.md');const pane=workspace.activePane,tab=pane.tabs[0],handle=pane.editor!,view=live(pane);
+  await workspace.openNote('B.md',true);view.dispatch({changes:{from:0,insert:'Recover '},annotations:Transaction.userEvent.of('input.type')});
+  await adapter.trash('A.md');await workspace.vault.reload();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(tab.path,'A.md');assert.equal(destroyed.has(handle),false);assert.equal((workspace as any).cachedViews.get(tab)?.editor,handle);assert.match(localStorage.getItem('zorid:draft:test:docking:A.md')!,/Recover Alpha/);
+  await adapter.write('A.md','Alpha');await workspace.vault.reload();await workspace.flush();assert.equal(await adapter.read('A.md'),'Recover Alpha');
+});
+
+test('external deletion retains an uncommitted parked Canvas card draft',async t=>{
+  const sourceText=JSON.stringify({nodes:[{id:'a',type:'text',x:0,y:0,width:200,height:100,text:'Original'}],edges:[]});
+  const {workspace,adapter,dom}=await setup(t,new MemoryAdapter({'Board.canvas':sourceText,'B.md':'Bravo'}));
+  await workspace.openNote('Board.canvas');const pane=workspace.activePane,tab=pane.tabs[0],view=pane.canvasView!;
+  await workspace.openNote('B.md',true);
+  view.element.querySelector<HTMLElement>('[data-node-id="a"]')!.dispatchEvent(new dom.window.MouseEvent('dblclick',{bubbles:true}));
+  const input=view.element.querySelector<HTMLTextAreaElement>('textarea')!;input.value='Retained card draft';
+  await adapter.trash('Board.canvas');await workspace.vault.reload();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(tab.path,'Board.canvas');assert.equal((workspace as any).cachedViews.get(tab)?.canvasView,view);assert.equal(view.hasPendingChanges(),true);assert.equal(input.value,'Retained card draft');
+  await adapter.write('Board.canvas',sourceText);await workspace.vault.reload();await workspace.flush();assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text,'Retained card draft');
+});
+
+test('rejected cached retirement keeps the deleted tab path and live owner available for recovery',async t=>{
+  const {workspace,adapter}=await setup(t);await workspace.openNote('A.md');const pane=workspace.activePane,tab=pane.tabs[0],editor=pane.editor!,runtime=pane.runtime!,buffer=workspace.buffers.get('A.md')!;
+  await workspace.openNote('B.md',true);const flush=buffer.flush.bind(buffer);buffer.flush=async()=>{throw new Error('retirement write guard rejected');};
+  await adapter.trash('A.md');await workspace.vault.reload();
+  for(let i=0;i<30&&!document.body.textContent?.includes('retirement write guard rejected');i++)await new Promise(resolve=>setTimeout(resolve,0));
+  assert.match(document.body.textContent!,/retirement write guard rejected/);assert.equal(tab.path,'A.md');assert.equal((workspace as any).cachedViews.get(tab)?.editor,editor);assert.equal(runtime.phase,'active');
+  buffer.flush=flush;
+});
