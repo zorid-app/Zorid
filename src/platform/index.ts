@@ -17,6 +17,7 @@ function desktopVault(bridge: DesktopBridge, info: DesktopVault): PlatformVault 
       mkdir: path => bridge.mkdir(info.path, path),
       rename: (from, to) => bridge.rename(info.path, from, to),
       trash: path => bridge.trash(info.path, path),
+      ...(bridge.remove ? { remove: (path: string, force: boolean) => bridge.remove!(info.path, path, force) } : {}),
       subscribe: listener => bridge.onChange(change => { if (!change.vault || change.vault === info.path) listener(change.path ? [change.path] : undefined); }),
     },
   };

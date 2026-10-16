@@ -93,7 +93,7 @@ class WindowBroker {
         check();
         await entry.service.write(file, contents);
       } else result = await dispatchVaultOperation(entry.service, expectedRoot, method, captured);
-      if (['write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash'].includes(method)) {
+      if (['write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash', 'remove'].includes(method)) {
         this.broadcast(entry, method === 'rename' ? { type: 'rename' } : { type: 'change', path: captured[0] });
       }
       return result;

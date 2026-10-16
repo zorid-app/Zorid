@@ -111,3 +111,43 @@ test('single-entry stats report UTF-8 bytes, missing paths and reject symlinks',
   await assert.rejects(vault.stat('Linked/Note.md'), /Symbolic links/);
   await assert.rejects(vault.stat('../Escape'), /Invalid/);
 });
+
+test('permanent removal uses explicit recursive force and never creates a recovery copy', async t => {
+  const { directory, vault } = await fixture(t);
+  await vault.write('Folder/Visible.md', 'visible');
+  await vault.write('Folder/.hidden', 'hidden');
+  await assert.rejects(vault.remove('Folder'));
+  assert.equal(await vault.read('Folder/Visible.md'), 'visible');
+  assert.equal(await vault.read('Folder/.hidden'), 'hidden');
+  await assert.rejects(vault.remove('Folder', 'yes'), /boolean/);
+  await vault.remove('Folder', true);
+  assert.equal(await vault.stat('Folder'), null);
+  await vault.write('One.md', 'one');
+  await vault.remove('One.md');
+  assert.equal(await vault.stat('One.md'), null);
+  assert.deepEqual(await fs.readdir(directory), []);
+  await assert.rejects(vault.remove('Missing.md'));
+});
+
+test('permanent removal refuses traversal and symlinks before deleting original fixture contents', async t => {
+  const { directory, vault } = await fixture(t);
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'zorid-remove-outside-'));
+  t.after(() => fs.rm(outside, { recursive: true, force: true }));
+  await fs.writeFile(path.join(outside, 'Keep.md'), 'outside');
+  await vault.write('Folder/Keep.md', 'inside');
+  await fs.symlink(outside, path.join(directory, 'Folder/Link'), 'dir');
+  for (const name of ['../Keep.md', outside, 'Folder/Link/Keep.md', 'Folder/Link', 'Folder']) {
+    await assert.rejects(vault.remove(name, true));
+  }
+  assert.equal(await fs.readFile(path.join(outside, 'Keep.md'), 'utf8'), 'outside');
+  assert.equal(await vault.read('Folder/Keep.md'), 'inside');
+});
+
+test('desktop stats expose the filesystem birth time without substituting modification time', async t => {
+  const { directory, vault } = await fixture(t);
+  await vault.write('Note.md', 'note');
+  const raw = await fs.stat(path.join(directory, 'Note.md'));
+  const stat = await vault.stat('Note.md');
+  assert.equal(stat.ctime, raw.birthtimeMs);
+  assert.equal((await vault.list()).find(entry => entry.path === 'Note.md').ctime, raw.birthtimeMs);
+});

@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
   mkdir: (vault, path) => invoke('mkdir', vault, path),
   rename: (vault, from, to) => invoke('rename', vault, from, to),
   trash: (vault, path) => invoke('trash', vault, path),
+  remove: (vault, path, force) => invoke('remove', vault, path, force),
   onChange: callback => {
     const listener = (_event, change) => callback(change);
     ipcRenderer.on('zorid:change', listener);

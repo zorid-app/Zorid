@@ -22,6 +22,7 @@ export interface DesktopBridge {
   mkdir(vault: string, path: string): Promise<void>;
   rename(vault: string, from: string, to: string): Promise<void>;
   trash(vault: string, path: string): Promise<void>;
+  remove?(vault: string, path: string, force: boolean): Promise<void>;
   onChange(callback: (change: VaultChange) => void): () => void;
 }
 declare global { interface Window { zorid?: DesktopBridge } }

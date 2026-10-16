@@ -32,3 +32,12 @@ test('binary operations retain the stale-vault boundary and structured bytes', a
   assert.deepEqual(calls, [['image.png', data]]);
   assert.deepEqual(await dispatchVaultOperation(vault, '/notes/current', 'readBinary', ['image.png']), data);
 });
+
+test('permanent removal retains the selected-vault guard and forwards the force policy', async () => {
+  const calls = [];
+  const vault = { root: '/notes/current', remove: async (...args) => calls.push(args) };
+  assert.throws(() => dispatchVaultOperation(vault, '/notes/old', 'remove', ['Folder', true]), /selected vault changed/);
+  assert.deepEqual(calls, []);
+  await dispatchVaultOperation(vault, '/notes/current', 'remove', ['Folder', true]);
+  assert.deepEqual(calls, [['Folder', true]]);
+});

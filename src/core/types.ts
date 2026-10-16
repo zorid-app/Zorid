@@ -22,7 +22,7 @@ export interface VaultAdapter {
   mkdir(path: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   trash(path: string): Promise<void>;
-  /** Permanently remove an entry. Force permits deleting hidden children; never substitute trash. */
+  /** Permanently remove an entry. Forward force to the host deletion policy; never substitute trash. */
   remove?(path: string, force: boolean): Promise<void>;
   /** A host-provided URL usable by rendered media; unavailable adapters must omit it. */
   getResourcePath?(path: string): string;

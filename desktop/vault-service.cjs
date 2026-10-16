@@ -46,7 +46,7 @@ class VaultService {
         const absolute = await this.resolve(itemPath);
         const stat = await fs.lstat(absolute);
         if (!stat.isFile() && !stat.isDirectory()) continue;
-        entries.push({ path: itemPath, type: stat.isDirectory() ? 'folder' : 'file', mtime: stat.mtimeMs, size: stat.size });
+        entries.push({ path: itemPath, type: stat.isDirectory() ? 'folder' : 'file', ctime: stat.birthtimeMs, mtime: stat.mtimeMs, size: stat.size });
         if (stat.isDirectory()) await walk(absolute, itemPath);
       }
     };
@@ -60,7 +60,7 @@ class VaultService {
       const stat = await fs.lstat(target);
       if (stat.isSymbolicLink()) throw new Error('Symbolic links are not supported in vault paths');
       if (!stat.isFile() && !stat.isDirectory()) throw new Error('Unsupported vault entry');
-      return { path: relative, type: stat.isDirectory() ? 'folder' : 'file', mtime: stat.mtimeMs, size: stat.size };
+      return { path: relative, type: stat.isDirectory() ? 'folder' : 'file', ctime: stat.birthtimeMs, mtime: stat.mtimeMs, size: stat.size };
     } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   }
   async read(input) {
@@ -114,6 +114,29 @@ class VaultService {
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await this.resolve(to);
     await fs.rename(source, destination);
+  }
+  async remove(input, force = false) {
+    if (typeof force !== 'boolean') throw new TypeError('Force must be a boolean');
+    const relative = normalizePath(input);
+    const target = await this.resolve(relative);
+    const stat = await fs.lstat(target);
+    if (!stat.isFile() && !stat.isDirectory()) throw new Error('Unsupported vault entry');
+    // Inspect recursive removals before deleting anything, preserving the
+    // scoped resolver's rejection of symlinks and unsupported entry types.
+    const inspect = async directory => {
+      for (const item of await fs.readdir(await this.resolve(directory), { withFileTypes: true })) {
+        const child = `${directory}/${item.name}`;
+        const childStat = await fs.lstat(await this.resolve(child));
+        if (childStat.isDirectory()) await inspect(child);
+        else if (!childStat.isFile()) throw new Error('Unsupported vault entry');
+      }
+    };
+    if (stat.isDirectory() && force) await inspect(relative);
+    // Recheck ancestors after preflight, using the same scoped resolver as
+    // reads, writes and trash. Never route permanent removal through recovery.
+    await this.resolve(relative);
+    if (stat.isDirectory()) await fs.rm(target, { maxRetries: 5, recursive: force });
+    else await fs.unlink(target);
   }
   async trash(input) {
     const relative = normalizePath(input);
