@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EditorState } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
-import { mathMarkdown, mathSpan } from '../src/editor/math-syntax.ts';
+import { mathInlineMarkdown, mathMarkdown, mathSpan } from '../src/editor/math-syntax.ts';
 import type { MathSpan } from '../src/editor/math-syntax.ts';
 import { liveInlineMarkdown } from '../src/editor/live-inline.ts';
 
@@ -84,4 +84,16 @@ test('editing the closing fence changes incomplete ownership without source muta
   assert.equal(span?.tex, '\nx\n');
   assert.equal(complete.doc.toString(), '$$\nx\n$$');
   assert.equal(mathSpan(tree.topNode, () => ''), null);
+});
+
+test('inline-only math grammar never registers display blocks or interrupts multiline code', () => {
+  const parser = markdown({ base: markdownLanguage, extensions: mathInlineMarkdown }).language.parser;
+  for (const source of ['`\n$$\ny\n$$\n`', '``\n$$\n$x$\n$$\n``']) {
+    assert.match(parser.parse(source).toString(), /InlineCode/);
+    assert.doesNotMatch(parser.parse(source).toString(), /ZoridMath/);
+  }
+  assert.doesNotMatch(parser.parse('$$\ny\n$$').toString(), /ZoridMathBlock/);
+  assert.match(parser.parse('**$x$** $$y$$').toString(), /ZoridMathInline/);
+  assert.match(parser.parse('**$x$** $$y$$').toString(), /ZoridMathDisplay/);
+  assert.match(parse('$$\ny\n$$').tree.toString(), /ZoridMathBlock/);
 });

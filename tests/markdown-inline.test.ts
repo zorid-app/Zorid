@@ -45,6 +45,16 @@ test('code delimiter runs and whitespace are parsed before other inline syntax',
   assert.equal(render('unclosed `code **bold**').parent.querySelector('strong')?.textContent, 'bold');
 });
 
+test('multiline inline code owns dollar fences inside inline render containers', () => {
+  for (const source of ['`\n$$\ny\n$$\n`', '**`\n$$\n$x$\n$$\n`**', '[`\n$$\ny\n$$\n`](note.md)']) {
+    const { parent } = render(source);
+    assert.equal(parent.querySelectorAll('code').length, 1, source);
+    assert.equal(parent.querySelectorAll('.math').length, 0, source);
+    assert.ok(parent.querySelector('code')?.textContent?.includes('$$'), source);
+  }
+  assert.equal(render('`\n$$\ny\n$$\n`').parent.querySelector('code')?.textContent, '$$ y $$');
+});
+
 test('Markdown links preserve nested labels, escaped destinations, titles and clicks', () => {
   const { parent, opened } = render('[**Go** *now*](folder/a\\(b\\).md "A &amp; B") [web](https://example.com/a?q=1&amp;x=2)');
   const local = parent.querySelector('a')!;

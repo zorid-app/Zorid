@@ -28,12 +28,8 @@ export function mathSpan(node: SyntaxNode, read: (from: number, to: number) => s
     block: node.name === 'ZoridMathBlock', closed };
 }
 
-/** An original, source-preserving Markdown extension. Escape, code, HTML tag,
- * wiki and comment parsers consume their tokens before math is considered.
- * Exact standalone $$ fences are supported at document level. Container
- * fences and runs of three or more dollars deliberately remain literal. */
-export const mathMarkdown: MarkdownExtension = {
-  defineNodes: ['ZoridMathInline', 'ZoridMathDisplay', 'ZoridMathMark', { name: 'ZoridMathBlock', block: true }],
+const mathBlocks: MarkdownExtension = {
+  defineNodes: [{ name: 'ZoridMathBlock', block: true }],
   parseBlock: [{ name: 'ZoridMathBlock', after: 'HTMLBlock',
     parse(context, line) {
       if (context.depth !== 1 || line.indent >= 4 || !/^\$\$[ \t]*$/.test(line.text.slice(line.pos))) return false;
@@ -56,6 +52,13 @@ export const mathMarkdown: MarkdownExtension = {
       return context.depth === 1 && line.indent < 4 && /^\$\$[ \t]*$/.test(line.text.slice(line.pos));
     },
   }],
+};
+
+/** Inline hosts must never register the block rule: a later `remove` config
+ * does not remove a custom parser added in the same configuration pass.
+ * Keeping this extension separate preserves multiline inline-code ownership. */
+export const mathInlineMarkdown: MarkdownExtension = {
+  defineNodes: ['ZoridMathInline', 'ZoridMathDisplay', 'ZoridMathMark'],
   parseInline: [{ name: 'ZoridMath', after: 'Image', parse(context, next, from) {
     if (next !== 36 || context.char(from - 1) === 36) return -1;
     const display = context.char(from + 1) === 36, width = display ? 2 : 1;
@@ -81,3 +84,9 @@ export const mathMarkdown: MarkdownExtension = {
     return -1;
   } }],
 };
+
+/** An original, source-preserving Markdown extension. Escape, code, HTML tag,
+ * wiki and comment parsers consume their tokens before math is considered.
+ * Exact standalone $$ fences are supported at document level. Container
+ * fences and runs of three or more dollars deliberately remain literal. */
+export const mathMarkdown: MarkdownExtension = [mathInlineMarkdown, mathBlocks];

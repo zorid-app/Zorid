@@ -1,6 +1,6 @@
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import type { EmbedRequest, LinkHandler, MarkdownRenderOptions } from './markdown.ts';
-import { mathMarkdown, mathSpan } from '../editor/math-syntax.ts';
+import { mathInlineMarkdown, mathSpan } from '../editor/math-syntax.ts';
 import { renderReadingMath } from './reading-math.ts';
 
 const highlight = { resolve: 'ZoridHighlight', mark: 'ZoridHighlightMark' };
@@ -44,7 +44,7 @@ const parser = markdown({ base: markdownLanguage, addKeymap: false, completeHTML
       },
     },
   ],
-}, mathMarkdown, { remove: ['ZoridMathBlock'] }] }).language.parser;
+}, mathInlineMarkdown] }).language.parser;
 
 type SyntaxNode = ReturnType<typeof parser.parse>['topNode'];
 const formatting: Record<string, string> = {
