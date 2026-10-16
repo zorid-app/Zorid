@@ -58,3 +58,22 @@ reported three bundle/performance warnings (large PDF.js/MathJax/Prism and main
 assets, entrypoint size, and runtime-chunk guidance); there were no compilation
 errors. These checks ran serially on the constrained development machine. No
 Electron or mobile app was launched by this integration pass.
+
+## Native follow-up
+
+Root launched this reviewed worktree's production build in Electron and created
+`Native math and callouts.md` in the existing temporary verification vault.
+Native accessibility and screenshot inspection showed inline superscripts,
+display fractions/radicals, JavaScript token colors, and a callout containing
+inline math, display math and a highlighted code block in Live Edit. No remote
+renderer was needed; the packaged engines loaded in the native file-based app.
+Submitting the new note title moved focus to the editor before text was pasted.
+
+Switching to Reading rendered the ordinary inline/display math and highlighted
+code, but exposed a real gap: the callout's quoted multiline display math remained
+literal `$$` text. This is assigned to the Reading block owner and independent
+reviewer, and is not counted as verified parity. Exact reference font/spacing,
+source-reveal behavior and native IME remain unverified. Further interaction
+checks stopped after the app's state changed during use; existing note content
+was preserved. The agent-launched Electron process exited zero after save/quit,
+and a fresh app inventory confirmed it closed.
