@@ -230,3 +230,15 @@ test('automatic Kanban places empty-value column first without changing query or
   assert.match(el.querySelector('.bases-kanban-column-header')!.textContent!, /^No value/);
   assert.deepEqual(initial.groups[0].key, value('Todo')); view.destroy();
 });
+
+test('real query output keeps configured empty columns as drop destinations', async () => {
+  const { BaseDocument } = await import('../src/bases/document.ts');
+  const { executeBaseQuery } = await import('../src/bases/query.ts');
+  const result = executeBaseQuery(BaseDocument.parse('views:\n  - type: kanban\n    name: Tasks\n    groupBy: {property: status, direction: ASC}\n    groupOrder: [Todo, Done]\n'), { version: 'vault-1', files: [{ path: 'Task.md', properties: { status: 'Todo' } }] });
+  assert.equal(result.groups.length, 1);
+  const { el } = setup(); let request: BaseKanbanMoveRequest | undefined;
+  const view = createBaseKanbanView(el, { result, openFile() {}, requestMove: async input => { request = input; } });
+  assert.equal(el.querySelectorAll('.bases-kanban-column').length, 2);
+  assert.equal(await view.move('Task.md', value('Done')), true);
+  assert.equal(request?.version, 'vault-1'); assert.equal(request?.property, 'note.status'); view.destroy();
+});
