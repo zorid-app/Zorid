@@ -150,3 +150,20 @@ test('new folder cannot target a parent deleted and recreated by earlier queued 
  const rejected=assert.rejects(creating,/destination folder has changed/);await Promise.resolve();await Promise.resolve();adapter.release();await Promise.all([blocking,deleting,recreating,rejected]);
  assert.ok(ui.workspace.vault.entries.has('Parent'));assert.equal(ui.workspace.vault.entries.has('Parent/Untitled folder'),false);
 });
+
+for(const activation of ['click','Enter',' '] as const)test(`folder ${JSON.stringify(activation)} preserves row focus for the following F2 rename`,async t=>{
+ const ui=await setup(t,{'Folder/Child.md':'child'}),original=ui.row('Folder');original.focus();
+ if(activation==='click')original.querySelector('.tree-label')!.dispatchEvent(new ui.dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));
+ else ui.key(original,activation);
+ const current=ui.row('Folder');assert.notEqual(current,original,'folder toggle rebuilds the row');assert.equal(current.getAttribute('aria-expanded'),'false');
+ assert.equal(ui.dom.window.document.activeElement,current,'folder activation transfers focus to its rebuilt row');
+ ui.key(ui.dom.window.document.activeElement as HTMLElement,'F2');
+ await until(()=>ui.row('Folder').querySelector('.tree-label')?.getAttribute('contenteditable')==='true');
+ assert.equal(ui.dom.window.document.activeElement,ui.row('Folder').querySelector('.tree-label'));
+});
+
+test('unrelated sidebar rebuilds do not pull focus from another control',async t=>{
+ const ui=await setup(t,{'Folder/Child.md':'child'}),control=ui.dom.window.document.createElement('input');ui.root.append(control);control.focus();
+ await ui.workspace.vault.createFolder('Other');
+ assert.equal(ui.dom.window.document.activeElement,control);assert.equal(ui.root.querySelector('.tree-label[contenteditable]'),null);
+});

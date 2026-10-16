@@ -603,7 +603,16 @@ export class Workspace {
         if(folder){row.setAttribute('aria-expanded',String(!this.collapsed.has(entry.path)));row.append(icon(this.collapsed.has(entry.path)?'right':'down',14));}
         else row.append(el('span','file-indent'));
         const label=el('span','tree-label',folder?entry.path.split('/').at(-1):nameOf(entry.path));row.append(label);
-        const activate=()=>{if(folder){if(this.collapsed.has(entry.path))this.collapsed.delete(entry.path);else this.collapsed.add(entry.path);this.renderSidebar();this.saveSession();}else this.run(()=>this.openNote(entry.path));};
+        const activate=()=>{
+          if(folder){
+            if(this.collapsed.has(entry.path))this.collapsed.delete(entry.path);else this.collapsed.add(entry.path);
+            this.renderSidebar();
+            // A toggle replaces this row. Keep keyboard commands on the folder
+            // activated by the user; unrelated sidebar rebuilds do not restore focus.
+            this.treeRows.find(item=>item.path===entry.path)?.element.focus({preventScroll:true});
+            this.saveSession();
+          }else this.run(()=>this.openNote(entry.path));
+        };
         row.onclick=event=>{
           if(event.button!==0)return;
           const mod=/Mac/i.test(window.navigator.platform)?event.metaKey:event.ctrlKey;
