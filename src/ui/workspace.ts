@@ -62,6 +62,7 @@ export class Workspace {
   private query = '';
   private searchGeneration = 0;
   private reverseSort = false;
+  private autoRevealFiles = false;
   private disposers: (() => void)[] = [];
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
@@ -151,13 +152,13 @@ export class Workspace {
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
-    this.panes = []; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};
+    this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};
     this.buildShell();
     let restored = false;
     try {
       const saved = JSON.parse(localStorage.getItem(this.sessionKey()) || 'null');
       if (saved) {
-        this.sessionState = saved;
+        this.sessionState = saved;this.autoRevealFiles=saved.autoRevealFiles===true;
         this.root.classList.toggle('right-hidden', saved.rightHidden !== false);
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
@@ -234,6 +235,7 @@ export class Workspace {
 
   private buildShell(): void {
     this.root.replaceChildren(); this.root.className = 'workspace right-hidden';
+    this.root.classList.toggle('is-macos-desktop',!!window.zorid&&/Mac/i.test(window.navigator.platform));
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
     const top = el('div', 'ribbon-top');
     top.append(button('search', 'Open quick switcher (⌘O)', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.run(() => this.openGraph())), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), button('terminal', 'Open command palette (⌘P)', () => this.commandPalette()));
@@ -244,7 +246,10 @@ export class Workspace {
     for (const [type, glyph, label] of [['files','folder','Files'],['search','search','Search'],['bookmarks','bookmark','Bookmarks']] as const) {
       const control = button(glyph, label, () => { this.treeTab = type; this.renderSidebar(); }); control.dataset.type = type; tabs.append(control);
     }
-    const tools = el('div', 'sidebar-toolbar'); tools.append(button('file','New note',() => this.run(() => this.newNote())),button('folder','New folder',() => this.run(() => this.newFolder())),button('sort','Change sort order',() => {this.reverseSort = !this.reverseSort; this.renderSidebar();}),button('collapse','Collapse all folders',() => {this.collapsed = new Set([...this.vault.entries.values()].filter(e=>e.type==='folder').map(e=>e.path)); this.renderSidebar();}));
+    const tools = el('div', 'sidebar-toolbar');
+    const autoReveal=button('gallery-vertical','Auto-reveal active file',()=>{this.autoRevealFiles=!this.autoRevealFiles;this.renderSidebar();this.saveSession();});autoReveal.dataset.action='auto-reveal';
+    const collapse=button('chevrons-down-up','Collapse all folders',()=>{const folders=[...this.vault.entries.values()].filter(entry=>entry.type==='folder').map(entry=>entry.path);if(folders.every(path=>this.collapsed.has(path)))this.collapsed.clear();else this.collapsed=new Set(folders);this.renderSidebar();this.saveSession();});collapse.dataset.action='collapse-all';
+    tools.append(button('square-pen','New note',() => this.run(() => this.newNote())),button('folder-plus','New folder',() => this.run(() => this.newFolder())),button('arrow-up-narrow-wide','Change sort order',() => {this.reverseSort = !this.reverseSort; this.renderSidebar();}),autoReveal,collapse);
     this.sidebarContent = el('div','sidebar-content');
     const switcher = textButton(this.platform.label, () => this.run(() => this.chooseVault()), 'vault-switcher'); switcher.prepend(icon('folder')); switcher.append(icon('down',14));
     this.sidebar.append(title,tabs,tools,this.sidebarContent,switcher);
@@ -278,7 +283,7 @@ export class Workspace {
     this.panes.push(pane); this.paneContainer.append(pane.element); return pane;
   }
   private focusPane(pane:Pane):void{if(pane.editor)pane.editor.focus();else pane.element.focus({preventScroll:true});}
-  private activate(pane: Pane): void { this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane)); this.renderRight(); this.renderStatus(); }
+  private activate(pane: Pane): void { const changed=this.activePane!==pane;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
   async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath=''): Promise<void> {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     await this.flushPane(pane); this.capturePaneState(pane); const current=this.current(pane);
@@ -470,6 +475,12 @@ export class Workspace {
 
   private renderSidebar():void{
     if(!this.vault)return;
+    const activePath=this.activePane&&this.current()?.path;
+    if(this.autoRevealFiles&&activePath){let folder=parentOf(activePath);while(folder){this.collapsed.delete(folder);folder=parentOf(folder);}}
+    const autoReveal=this.sidebar.querySelector<HTMLButtonElement>('[data-action="auto-reveal"]');autoReveal?.classList.toggle('is-active',this.autoRevealFiles);autoReveal?.setAttribute('aria-pressed',String(this.autoRevealFiles));
+    const folders=[...this.vault.entries.values()].filter(entry=>entry.type==='folder'),allCollapsed=folders.length>0&&folders.every(entry=>this.collapsed.has(entry.path));
+    const collapse=this.sidebar.querySelector<HTMLButtonElement>('[data-action="collapse-all"]');
+    if(collapse){const label=allCollapsed?'Expand all folders':'Collapse all folders';collapse.title=label;collapse.setAttribute('aria-label',label);collapse.replaceChildren(icon(allCollapsed?'chevrons-up-down':'chevrons-down-up'));}
     this.sidebar.querySelectorAll<HTMLElement>('.sidebar-tabs button').forEach(node=>node.classList.toggle('is-active',node.dataset.type===this.treeTab));
     this.sidebarContent.replaceChildren();
     if(this.treeTab==='search'){
@@ -495,7 +506,7 @@ export class Workspace {
         if(folder){row.ondragover=event=>event.preventDefault();row.ondrop=event=>{event.preventDefault();const path=event.dataTransfer?.getData('application/x-zorid-file');if(path)this.run(async()=>{await this.flush();await this.vault.rename(path,`${entry.path}/${path.split('/').at(-1)}`);});};}
         container.append(row);if(folder&&!this.collapsed.has(entry.path))append(entry.path,container,depth+1);
       }
-    };append('',tree,0);this.sidebarContent.append(tree);
+    };append('',tree,0);this.sidebarContent.append(tree);if(this.autoRevealFiles)tree.querySelector<HTMLElement>('.tree-row.is-active')?.scrollIntoView({block:'nearest'});
   }
 
   private async search():Promise<void>{
@@ -671,7 +682,7 @@ export class Workspace {
   }
   private applySettings():void{const theme=this.settings.theme==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):this.settings.theme;document.documentElement.dataset.theme=theme;document.documentElement.style.setProperty('--font-text-size',`${this.settings.fontSize}px`);}
   private saveSettings():void{localStorage.setItem('zorid:settings',JSON.stringify(this.settings));this.applySettings();}
-  private saveSession():void{if(!this.platform||this.restoringLayout)return;this.panes.forEach(pane=>this.capturePaneState(pane));localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),layout:this.splitLayout?.serialize(),activePaneId:this.activePane?.id,panes:this.panes.map(p=>({...p.persisted,id:p.id,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
+  private saveSession():void{if(!this.platform||this.restoringLayout)return;this.panes.forEach(pane=>this.capturePaneState(pane));localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),autoRevealFiles:this.autoRevealFiles,layout:this.splitLayout?.serialize(),activePaneId:this.activePane?.id,panes:this.panes.map(p=>({...p.persisted,id:p.id,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','','Create a note with ⌘N. Link to another note with [[note name]]. Use ⌘O to find a file and ⌘P to find a command.'));
   }
   private onKey(event:KeyboardEvent):void{

@@ -702,3 +702,17 @@ test('inactive caret preserves unchanged middle text across separated sibling ed
   type(first.element.querySelector('textarea')!,'XXprefix MIDDLE suffixYY');await workspace.flush();
   await workspace.openNote('Note.md',false,second);assert.equal(currentEditor().selectionStart,11);
 });
+
+
+test('file toolbar auto-reveal and collapse controls persist real tree state',async t=>{
+  const {workspace,root,click}=await setup(t,new MemoryAdapter({'Folder/Note.md':'note','Other.md':'other'}));
+  await workspace.openNote('Folder/Note.md');
+  click('Collapse all folders');assert.equal(root.querySelector('[role=treeitem][title="Folder"]')?.getAttribute('aria-expanded'),'false');
+  assert.ok(root.querySelector('button[aria-label="Expand all folders"]'));
+  click('Auto-reveal active file');
+  assert.equal(root.querySelector('[role=treeitem][title="Folder"]')?.getAttribute('aria-expanded'),'true');
+  assert.equal(root.querySelector('[data-action="auto-reveal"]')?.getAttribute('aria-pressed'),'true');
+  await workspace.openVault(workspace.platform);
+  assert.equal(root.querySelector('[data-action="auto-reveal"]')?.getAttribute('aria-pressed'),'true');
+  assert.ok(root.querySelector('[role=treeitem][title="Folder/Note.md"]'));
+});
