@@ -2,13 +2,15 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { Compartment, EditorSelection, EditorState, Transaction } from '@codemirror/state';
+import { Annotation, Compartment, EditorSelection, EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
+import { syntaxTree } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { history, undo, redo, isolateHistory } from '@codemirror/commands';
 import { formatMenuForEditor } from '../src/editor/format-menu.ts';
 import type { FormatMenuItem } from '../src/editor/format-menu.ts';
 import { liveTables, activeTableEditor } from '../src/editor/live-tables.ts';
+import { parseTable } from '../src/editor/table-model.ts';
 
 function setup(t: TestContext, doc: string, tables = false) {
   const dom = new JSDOM('<!doctype html><html><body><main></main></body></html>', { pretendToBeVisual: true });
@@ -239,4 +241,123 @@ test('highlight closing delimiters inside inline code stay literal during toggle
   assert.ok(undo(view));
   select(view, 0, source.length); run(view, 'format-clear');
   assert.equal(view.state.doc.toString(), 'a x==y z');
+});
+
+
+test('provided table cell ranges use first-cell state, skip empty cells and annotate one transaction', t => {
+  const source = '| A | B |\n| --- | --- |\n| **one** | two |\n|  | three |';
+  const { view, transactions } = setup(t, source);
+  const preserve = Annotation.define<boolean>();
+  const ranges = () => parseTable(view.state.doc.toString())!.rows.slice(1).flatMap(row => row.cells.map(cell => ({ from: cell.from, to: cell.to })));
+  const options = { ranges, annotations: [preserve.of(true)] };
+  const before = transactions.length, menu = formatMenuForEditor(view, options);
+  assert.equal(transactions.length, before, 'menu construction dispatches no temporary selection');
+  const action = find(menu, 'format-bold'); assert.ok('run' in action);
+  assert.equal(action.checked, true);
+  action.run();
+  assert.equal(transactions.length, before + 1);
+  assert.equal(transactions.at(-1)!.annotation(preserve), true);
+  assert.equal(view.state.doc.toString(), '| A | B |\n| --- | --- |\n| one | two |\n|  | three |');
+  const add = find(formatMenuForEditor(view, options), 'format-bold'); assert.ok('run' in add); add.run();
+  assert.equal(view.state.doc.toString(), '| A | B |\n| --- | --- |\n| **one** | **two** |\n|  | **three** |');
+  assert.equal(view.state.selection.ranges.length, 4);
+});
+
+test('range providers resolve positions at action time and reject vanished or invalid rectangles', t => {
+  const source = '| A | B |\n| --- | --- |\n| a\\|b | word |';
+  const { view } = setup(t, source);
+  let active = true;
+  const ranges = () => {
+    if (!active) return [];
+    const text = view.state.doc.toString(), start = text.indexOf('| A |');
+    return parseTable(text.slice(start), start)!.rows[1].cells.map(cell => ({ from: cell.from, to: cell.to }));
+  };
+  const action = find(formatMenuForEditor(view, { ranges }), 'format-italic'); assert.ok('run' in action);
+  view.dispatch({ changes: { from: 0, insert: 'prefix\n\n' }, annotations: isolateHistory.of('full') });
+  action.run();
+  assert.equal(view.state.doc.toString(), 'prefix\n\n| A | B |\n| --- | --- |\n| *a\\|b* | *word* |');
+  assert.ok(undo(view)); assert.equal(view.state.doc.toString(), 'prefix\n\n' + source);
+  active = false;
+  assert.equal(action.run(), false);
+  assert.equal(find(formatMenuForEditor(view, { ranges }), 'format').enabled, false);
+  const invalid = find(formatMenuForEditor(view, { ranges: () => [{ from: 0, to: 999999 }] }), 'format-bold');
+  assert.ok('run' in invalid); assert.equal(invalid.run(), false);
+});
+
+test('rectangular highlight and clear target only selected encoded cell spans', t => {
+  const source = '| A | B |\n| --- | --- |\n| one | two |\n|  | three |';
+  const { view, transactions } = setup(t, source);
+  const preserve = Annotation.define<boolean>();
+  const ranges = () => parseTable(view.state.doc.toString())!.rows.slice(1).map(row => ({ from: row.cells[0].from, to: row.cells[0].to }));
+  const options = { ranges, annotations: [preserve.of(true)] };
+  const highlight = find(formatMenuForEditor(view, options), 'format-highlight-blue'); assert.ok('run' in highlight); highlight.run();
+  assert.equal(view.state.doc.toString(), '| A | B |\n| --- | --- |\n| ==🔵one== | two |\n|  | three |');
+  assert.equal(transactions.at(-1)!.annotation(preserve), true);
+  const clear = find(formatMenuForEditor(view, options), 'format-clear'); assert.ok('run' in clear); clear.run();
+  assert.equal(view.state.doc.toString(), source);
+  assert.equal(transactions.at(-1)!.annotation(preserve), true);
+});
+
+test('rectangle custom syntax never pairs delimiters across cells, rows or table boundaries', t => {
+  const { view } = setup(t, '');
+  for (const [marker, id] of [['==', 'format-highlight-default'], ['%%', 'format-comment'], ['$', 'format-math']]) {
+    for (const source of [
+      `| A | B |\n| --- | --- |\n| ${marker}one | two${marker} |`,
+      `| ${marker}A | B |\n| --- | --- |\n| one | two${marker} |`,
+      `${marker}outside\n\n| A | B |\n| --- | --- |\n| one | two${marker} |`,
+    ]) {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } });
+      const ranges = () => {
+        const text = view.state.doc.toString(), start = text.indexOf('|');
+        const cell = parseTable(text.slice(start), start)!.rows[1].cells[0];
+        return [{ from: cell.from, to: cell.to }];
+      };
+      const options = { ranges }, action = find(formatMenuForEditor(view, options), id);
+      assert.equal(action.checked, false, source);
+      const clear = find(formatMenuForEditor(view, options), 'format-clear'); assert.ok('run' in clear); clear.run();
+      assert.equal(view.state.doc.toString(), source, 'unmatched custom delimiters are literal');
+      assert.ok('run' in action); action.run();
+      const selected = ranges()[0], text = view.state.doc.toString();
+      assert.equal(text.slice(0, selected.from), source.slice(0, source.indexOf('one') - (source.includes(`${marker}one`) ? marker.length : 0)));
+      assert.ok(text.endsWith(` | two${marker} |`), 'unselected cell source stays intact');
+    }
+  }
+});
+
+test('cell-local custom syntax preserves encoded breaks and escaped pipes when removing wrappers', t => {
+  const { view } = setup(t, '');
+  for (const [marker, id] of [['==', 'format-highlight-default'], ['%%', 'format-comment'], ['$', 'format-math']]) {
+    const source = `| A | B |\n| --- | --- |\n| ${marker}a\\|b<br>c${marker} | ${marker}other${marker} |`;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } });
+    const ranges = () => {
+      const cell = parseTable(view.state.doc.toString())!.rows[1].cells[0];
+      return [{ from: cell.from, to: cell.to }];
+    };
+    const action = find(formatMenuForEditor(view, { ranges }), id); assert.ok('run' in action);
+    assert.equal(action.checked, true); action.run();
+    assert.equal(view.state.doc.toString(), `| A | B |\n| --- | --- |\n| a\\|b<br>c | ${marker}other${marker} |`);
+  }
+});
+
+
+test('late table cells stay independent when the initial Markdown syntax tree is partial', () => {
+  const prefix = 'plain\n\n'.repeat(2000);
+  for (const [body, id, expected] of [
+    ['==one | two==', 'format-highlight-default', '====one== | two=='],
+    ['%%one | two%%', 'format-comment', '%%%%one%% | two%%'],
+    ['$one | two$', 'format-math', '$$one$ | two$'],
+    ['==a `x==y` z== | other', 'format-highlight-default', 'a `x==y` z | other'],
+    ['**one** | other', 'format-bold', 'one | other'],
+  ]) {
+    const table = `| A | B |\n| --- | --- |\n| ${body} |`;
+    let state = EditorState.create({ doc: prefix + table, extensions: [markdown({ base: markdownLanguage }), EditorState.allowMultipleSelections.of(true)] });
+    assert.ok(syntaxTree(state).length < state.doc.length, 'fixture begins with a partial parser tree');
+    const view = { get state() { return state; }, dom: { isConnected: true }, focus() {}, dispatch(spec) { state = state.update(spec).state; } } as unknown as EditorView;
+    const ranges = () => {
+      const cell = parseTable(state.sliceDoc(prefix.length), prefix.length)!.rows[1].cells[0];
+      return [{ from: cell.from, to: cell.to }];
+    };
+    const action = find(formatMenuForEditor(view, { ranges }), id); assert.ok('run' in action); assert.equal(action.run(), true);
+    assert.equal(state.doc.toString(), prefix + `| A | B |\n| --- | --- |\n| ${expected} |`);
+  }
 });
