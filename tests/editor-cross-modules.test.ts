@@ -83,9 +83,12 @@ test('secondary caret entering a folded table section unfolds without changing s
   assert.ok(editor.fold!('fold'));
   view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(0), EditorSelection.cursor(source.indexOf('cell'))], 0) });
   assert.equal(editor.getViewState!().folds!.folds.length, 0);
-  assert.equal(host.querySelectorAll('.cm-live-table').length, 1);
-  assert.equal(view.state.selection.ranges.length, 2);
+  assert.equal(host.querySelectorAll('.cm-live-table').length, 0, 'multiple carets expose table source');
+  assert.ok([...host.querySelectorAll('.cm-line')].some(line => line.textContent === '| cell |'));
+  assert.deepEqual(view.state.selection.ranges.map(range => range.head), [0, source.indexOf('cell')]);
   assert.equal(editor.getValue(), source);
+  view.dispatch({ selection: { anchor: 0 } });
+  assert.equal(host.querySelectorAll('.cm-live-table').length, 1, 'single caret restores the rendered table');
 });
 
 function combined(t: TestContext, source: string, makeEmbed?: (target: string) => HTMLElement) {

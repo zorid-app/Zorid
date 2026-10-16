@@ -9,7 +9,7 @@ import type { EditorOptions } from '../src/ui/editor.ts';
 
 // These exercise the real editor/Reading integration with a controlled asynchronous
 // MathJax runtime. They establish lifecycle ownership, not TeX or native fidelity.
-function setup(t: TestContext, source: string, renderEmbed?: EditorOptions['renderEmbed']) {
+function setup(t: TestContext, source: string, renderEmbed?: EditorOptions['renderEmbed'], mode: 'live' | 'source' = 'live') {
   const dom = new JSDOM('<!doctype html><body><main></main>', { pretendToBeVisual: true, url: 'https://app.local/' });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
@@ -21,7 +21,7 @@ function setup(t: TestContext, source: string, renderEmbed?: EditorOptions['rend
   dom.window.Range.prototype.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, toJSON() {} });
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const host = document.querySelector<HTMLElement>('main')!;
-  const editor = createEditor(host, { value: source, mode: 'live', paths: () => [], open() {}, onChange() {}, renderEmbed });
+  const editor = createEditor(host, { value: source, mode, paths: () => [], open() {}, onChange() {}, renderEmbed });
   const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
   let destroyed = false;
   const destroy = () => { if (!destroyed) { destroyed = true; editor.destroy(); } };
@@ -143,3 +143,23 @@ test('editing math source never mounts wiki embeds lexically contained in the fo
   assert.equal(host.querySelectorAll('.cm-live-embed').length, 0, 'display math syntax owns embed-looking source during editing');
   assert.equal(mounted, 0); assert.equal(editor.getValue(), source);
 });
+
+
+for (const malformed of [false, true]) for (const mode of ['live', 'source'] as const) {
+  test(`${mode} metadata with open code/math delimiters preserves body rendering (${malformed ? 'invalid' : 'valid'} YAML)`, async t => {
+    const prefix = '---\n' + (malformed ? 'title: [unterminated\n' : 'title: Note\n') + 'literal: |\n  $$\n  ```js\n---\n\n';
+    const source = prefix + '# Body\n\n$$\nx^2\n$$\n\n```js\nconst y = 1;\n```\n\nEnd';
+    const { host, editor, focusAt } = setup(t, source, undefined, mode);
+    await focusAt(source.length);
+    assert.equal(editor.getValue(), source);
+    if (mode === 'live') {
+      assert.equal(host.querySelectorAll('.cm-live-math-block').length, 1, 'metadata syntax cannot consume body math');
+      assert.equal(host.querySelectorAll('.cm-fence-flair').length, 1, 'metadata syntax cannot consume body code');
+      assert.ok([...host.querySelectorAll('.cm-line')].some(line => line.textContent === 'Body'));
+    } else {
+      assert.equal(host.querySelectorAll('.cm-live-math,.cm-fence-flair').length, 0);
+      assert.ok(host.textContent!.includes('const y = 1;'));
+      assert.ok(host.textContent!.includes('title:'));
+    }
+  });
+}
