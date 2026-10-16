@@ -7,6 +7,8 @@ import { AttachmentResources, imageAlt, isImage } from './attachments.ts';
 import type { AttachmentLease } from './attachments.ts';
 import { openImageLightbox } from './image-view.ts';
 import type { ImageView } from './image-view.ts';
+import { createPdfView } from './pdf-view.ts';
+import type { PdfView } from './pdf-view.ts';
 
 interface EmbedOptions {
   vault: Vault;
@@ -15,6 +17,8 @@ interface EmbedOptions {
   taskChange?: (path: string, line: number, checked: boolean) => Promise<void>;
   resources?: AttachmentResources;
   contextMenu?: (event: MouseEvent, request: EmbedRequest, source: string) => void;
+  /** Test/host injection; the PDF view owns loading errors and its attachment lease. */
+  pdfFactory?: typeof createPdfView;
 }
 interface EmbedState {
   node: HTMLElement;
@@ -27,6 +31,7 @@ interface EmbedState {
   disposed: boolean;
   children: Set<EmbedState>;
   lease?: AttachmentLease;
+  pdfView?: PdfView;
   imageSource?: () => Promise<AttachmentLease>;
 }
 
@@ -118,6 +123,7 @@ export class MarkdownEmbeds {
 
   private release(state: EmbedState): void {
     state.disposed = true; state.version++;
+    state.pdfView?.destroy();state.pdfView=undefined;
     state.lease?.release();state.lease=undefined;
     this.observer?.unobserve(state.node); this.observed.delete(state.node);
     this.clearChildren(state); this.states.delete(state);
@@ -134,6 +140,7 @@ export class MarkdownEmbeds {
     if (this.disposed || state.disposed) return;
     const version = ++state.version;
     this.clearChildren(state);
+    state.pdfView?.destroy();state.pdfView=undefined;
     state.lease?.release();state.lease=undefined;state.imageSource=undefined;
     const current = () => !this.disposed && !state.disposed && state.version === version;
     const { request, source } = state;
@@ -143,6 +150,7 @@ export class MarkdownEmbeds {
     const open = el('a', 'embed-open', request.label || request.target || source);
     open.href = '#'; open.setAttribute('aria-label', `Open ${request.target || source}`);
     open.onclick = event => { event.preventDefault(); this.options.open(source, request.target, request.kind); };
+    state.node.className='internal-embed markdown-embed';
     state.node.replaceChildren(open);
     const fail = (message: string) => { if (current()) state.node.append(el('span', 'embed-error', message)); };
     if(external || (path&&isImage(path))){
@@ -163,6 +171,19 @@ export class MarkdownEmbeds {
       return;
     }
     if (!path) { fail('File not found'); return; }
+    if (/\.pdf$/i.test(path)) {
+      state.node.className='internal-embed pdf-embed';
+      const hash=request.target.indexOf('#');
+      try {
+        // The view acquires the resource itself. An outer lease would duplicate ownership.
+        const view=(this.options.pdfFactory??createPdfView)(state.node,path,this.resources,{embed:true,subpath:hash<0?'':request.target.slice(hash)});
+        state.pdfView=view;
+        // PDF views render their own loading errors. Consume completion without adding
+        // stale errors to a replacement widget or duplicating the viewer's status UI.
+        void view.ready.catch(()=>{});
+      } catch(error) { fail(error instanceof Error?error.message:String(error)); }
+      return;
+    }
     if (!/\.md$/i.test(path)) { fail('Attachment viewer is not implemented yet'); return; }
     const hash = request.target.indexOf('#');
     const fragment = hash < 0 ? '' : request.target.slice(hash);

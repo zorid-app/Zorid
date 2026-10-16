@@ -97,11 +97,11 @@ test('malformed JSON/data, duplicate IDs, dangling edges and nonfinite numbers r
     { nodes: [data.nodes[0], data.nodes[0]] }, { ...data, edges: [data.edges[0], data.edges[0]] },
     { ...data, edges: [{ id: 'bad', fromNode: 'missing', toNode: 'text' }] },
   ]) invalid.push(JSON.stringify(value));
-  for (const source of invalid) assert.throws(() => CanvasDocument.parse(source), CanvasDocumentError, source);
+  for (const source of invalid) assert.throws(() => CanvasDocument.parse(source, { strictReferences: true }), CanvasDocumentError, source);
 });
 
 test('every failed edit leaves source and published snapshots unchanged', () => {
-  const document = CanvasDocument.parse(fixture), nodes = document.nodes, edges = document.edges;
+  const document = CanvasDocument.parse(fixture, { strictReferences: true }), nodes = document.nodes, edges = document.edges;
   const operations = [
     () => document.updateNode('missing', { text: 'x' }), () => document.updateNode('text', { id: 'changed' }),
     () => document.updateNode('text', { text: undefined }), () => document.updateNode('text', { x: NaN }),
@@ -135,4 +135,28 @@ test('unsafe caller data rejects without executing getters or conversion hooks',
   for (const value of values) assert.throws(() => document.setRoot('bad', value as CanvasValue), CanvasDocumentError);
   assert.throws(() => document.updateNode('text', { get text() { calls++; return 'bad'; } } as CanvasPatch), CanvasDocumentError);
   assert.equal(calls, 0); assert.equal(document.toString(), fixture);
+});
+
+test('default raw model retains duplicate IDs and dangling edges; strict validation remains opt-in', () => {
+  const source = JSON.stringify({ nodes: [data.nodes[0], { ...data.nodes[0], x: 45 }], edges: [{ id: 'missing', fromNode: 'text', toNode: 'absent' }] });
+  const document = CanvasDocument.parse(source);
+  assert.equal(document.toString(), source); assert.equal(document.nodes.length, 2); assert.equal(document.edges.length, 1);
+  document.setRoot('plugin', { keep: true });
+  assert.equal(document.nodes.length, 2); assert.equal(document.edges[0].toNode, 'absent');
+  assert.throws(() => CanvasDocument.parse(source, { strictReferences: true }), CanvasDocumentError);
+});
+
+test('multi-edit transactions publish atomically and source replacement supports exact undo', () => {
+  const document = CanvasDocument.parse(fixture), nodes = document.nodes;
+  assert.throws(() => document.transaction(draft => {
+    draft.updateNode('text', { text: 'first change' });
+    draft.updateNode('file', { file: 42 });
+  }), CanvasDocumentError);
+  assert.equal(document.toString(), fixture); assert.equal(document.nodes, nodes);
+  document.transaction(draft => {
+    draft.updateNode('text', { text: 'first change' }); draft.updateNode('file', { file: 'Other.md' });
+  });
+  assert.equal(document.getNode('text')?.text, 'first change'); assert.equal(document.getNode('file')?.file, 'Other.md');
+  document.replaceSource(fixture); assert.equal(document.toString(), fixture);
+  assert.throws(() => document.replaceSource('{'), CanvasDocumentError); assert.equal(document.toString(), fixture);
 });

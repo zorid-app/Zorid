@@ -91,3 +91,45 @@ test('embeds cap concurrent source loads and skip code and escaped syntax', asyn
   await until(()=>container.querySelectorAll('.markdown-embed-content').length===12,'all embeds complete');
   assert.equal(maximum,4);assert.equal(container.querySelectorAll('.markdown-embed').length,12);
 });
+
+async function pdfSetup(t:TestContext){
+  const {vault,container,dom}=await setup(t,{'Home.md':'','Folder/Note.md':''});await vault.createBinary('Folder/Document.PDF',new Uint8Array([1,2,3]));
+  const {AttachmentResources}=await import('../src/ui/attachments.ts');const resources=new AttachmentResources(vault);
+  let acquisitions=0;const acquire=resources.acquire.bind(resources);resources.acquire=path=>{acquisitions++;return acquire(path);};
+  const calls:{node:HTMLElement;path:string;resources:typeof resources;options:import('../src/ui/pdf-view.ts').PdfViewOptions;destroyed:number;reject:(error:Error)=>void}[]=[];
+  const embeds=new MarkdownEmbeds({vault,resources,open(){},pdfFactory(node,path,shared,options){
+    let reject!:(error:Error)=>void;const ready=new Promise<void>((_,b)=>{reject=b;});const call={node,path,resources:shared,options:options??{},destroyed:0,reject};calls.push(call);
+    const marker=dom.window.document.createElement('div');marker.className='fake-pdf-view';node.append(marker);
+    return {ready,destroy(){call.destroyed++;marker.remove();},goToPage(){},setScale(){},rotate(){},showSearch(){},applySubpath(){},getSelectionSubpath(){return null;}};
+  }});
+  t.after(()=>{embeds.destroy();resources.destroy();});
+  return {vault,container,embeds,calls,resources,get acquisitions(){return acquisitions;}};
+}
+
+test('local PDF embeds use the shared viewer with exact subpath and no duplicate outer lease',async t=>{
+  const f=await pdfSetup(t),node=f.embeds.render({target:'Folder/Document.PDF#page=2&selection=0,1,2,3&height=300',kind:'wiki'},'Home.md');f.container.append(node);
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0].path,'Folder/Document.PDF');assert.equal(f.calls[0].resources,f.resources);
+  assert.deepEqual(f.calls[0].options,{embed:true,subpath:'#page=2&selection=0,1,2,3&height=300'});assert.equal(f.acquisitions,0);
+  assert.ok(node.classList.contains('pdf-embed'));assert.equal(node.querySelectorAll('.fake-pdf-view').length,1);
+  assert.doesNotMatch(node.textContent??'',/not implemented/);
+});
+
+test('PDF modifications dispose the previous view before replacement, and unmount disposes only its owner',async t=>{
+  const f=await pdfSetup(t),first=f.embeds.render({target:'Folder/Document.PDF',kind:'wiki'},'Home.md'),second=f.embeds.render({target:'./Document.PDF#page=3',kind:'markdown'},'Folder/Note.md');f.container.append(first,second);
+  assert.equal(f.calls.length,2);await f.vault.modifyBinary('Folder/Document.PDF',new Uint8Array([4,5,6]));
+  assert.equal(f.calls.length,4);assert.equal(f.calls[0].destroyed,1);assert.equal(f.calls[1].destroyed,1);assert.equal(f.calls[2].destroyed,0);
+  f.embeds.releaseEmbed(first);f.embeds.releaseEmbed(first);assert.equal(f.calls[2].destroyed,1);assert.equal(f.calls[3].destroyed,0);
+  f.embeds.destroy();assert.equal(f.calls[3].destroyed,1);assert.equal(f.calls[2].destroyed,1);
+});
+
+test('late PDF load rejection cannot append an error into a replacement or unmounted embed',async t=>{
+  const f=await pdfSetup(t),node=f.embeds.render({target:'Folder/Document.PDF#page=2',kind:'wiki'},'Home.md');f.container.append(node);
+  f.embeds.invalidate('Folder/Document.PDF');assert.equal(f.calls.length,2);f.calls[0].reject(new Error('old PDF failed'));await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(node.querySelector('.embed-error'),null);assert.equal(node.querySelectorAll('.fake-pdf-view').length,1);
+  f.embeds.releaseEmbed(node);f.calls[1].reject(new Error('closed PDF failed'));await new Promise(resolve=>setImmediate(resolve));assert.equal(node.querySelector('.embed-error'),null);assert.equal(node.querySelector('.fake-pdf-view'),null);
+});
+
+test('deleting an embedded PDF releases its viewer and renders a missing-file result',async t=>{
+  const f=await pdfSetup(t),node=f.embeds.render({target:'Folder/Document.PDF',kind:'wiki'},'Home.md');f.container.append(node);
+  await f.vault.trash('Folder/Document.PDF');assert.equal(f.calls[0].destroyed,1);assert.equal(f.calls.length,1);assert.match(node.textContent??'',/File not found/);assert.equal(node.querySelector('.fake-pdf-view'),null);
+});

@@ -2,7 +2,7 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { EditorState, StateEffect } from '@codemirror/state';
+import { Compartment, EditorState, StateEffect, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { redo, undo } from '@codemirror/commands';
 import { createEditor } from '../src/ui/editor.ts';
@@ -162,4 +162,42 @@ test('a pending cell action follows its owning table through edits before the ta
   assert.equal(actions.find(action => action.id === 'row-before')!.run(), true);
   assert.equal(editor.getValue(), 'Prefix\n' + source.replace('| alpha | beta |', '|  |  |\n| alpha | beta |'));
   assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 2, column 2');
+});
+
+test('new cells inherit read-only state and boundary navigation cannot create rows', t => {
+  const { view, activate, active, dom, editor } = setup(t, source);
+  view.dispatch({ effects: StateEffect.appendConfig.of(EditorState.readOnly.of(true)) });
+  const key = (key: string, shiftKey = false) => active().contentDOM.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, code: key, shiftKey, bubbles: true, cancelable: true }));
+  const last = activate(1, 1);
+  assert.equal(last.state.readOnly, true);
+  key('Tab'); key('Enter'); key('Enter', true); key('Backspace');
+  assert.equal(editor.getValue(), source);
+  activate(0, 0); key('Tab', true);
+  assert.equal(editor.getValue(), source);
+  key('Tab');
+  assert.equal(active().contentDOM.getAttribute('aria-label'), 'Table row 1, column 2', 'navigation among existing cells remains available');
+  assert.equal(active().state.readOnly, true);
+});
+
+test('an open cell follows read-only changes for typing and paste but still receives owner snapshots', t => {
+  const { view, activate, active, dom, editor, changes } = setup(t, source);
+  const mode = new Compartment();
+  view.dispatch({ effects: StateEffect.appendConfig.of(mode.of(EditorState.readOnly.of(false))) });
+  const child = activate(1, 0);
+  view.dispatch({ effects: mode.reconfigure(EditorState.readOnly.of(true)) });
+  assert.equal(active(), child); assert.equal(child.state.readOnly, true);
+  child.dispatch({ ...child.state.replaceSelection('blocked'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(child.state.doc.toString(), 'alpha');
+  const paste = new dom.window.Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, 'clipboardData', { value: { getData: (format: string) => format === 'text/plain' ? 'pasted' : '', types: ['text/plain'], files: [], items: [] } });
+  child.contentDOM.dispatchEvent(paste);
+  assert.equal(editor.getValue(), source); assert.deepEqual(changes, []);
+  editor.setValue(source.replace('alpha', 'external'));
+  assert.equal(child.state.doc.toString(), 'external'); assert.deepEqual(changes, []);
+  view.dispatch({ effects: mode.reconfigure(EditorState.readOnly.of(false)) });
+  assert.equal(child.state.readOnly, false);
+  child.dispatch({ selection: { anchor: child.state.doc.length } });
+  child.dispatch({ ...child.state.replaceSelection('!'), annotations: Transaction.userEvent.of('input.type') });
+  assert.equal(editor.getValue(), source.replace('alpha', 'external!'));
+  assert.deepEqual(changes, [source.replace('alpha', 'external!')]);
 });

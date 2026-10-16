@@ -17,12 +17,18 @@ import { AttachmentImporter, DEFAULT_ATTACHMENT_IMPORT_SETTINGS } from '../core/
 import type { AttachmentImportSettings } from '../core/attachment-import.ts';
 import type { TransferFile } from '../editor/transfers.ts';
 import { showContextMenu, dismissContextMenu } from '../platform/context-menu.ts';
+import { createPdfView } from './pdf-view.ts';
+import type { PdfView } from './pdf-view.ts';
+import { CanvasDocument } from '../canvas/document.ts';
+import { createCanvasView } from '../canvas/view.ts';
+import type { CanvasView } from '../canvas/view.ts';
 
 type Mode = 'live' | 'reading';
-interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; }
-interface Pane { id: string; tabs: Tab[]; active: string; element: HTMLElement; editor?: EditorHandle; imageView?:ImageView; embeds?: MarkdownEmbeds; properties?: PropertiesView; propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void; renderVersion: number; history: string[]; historyIndex: number; persisted?: Record<string, unknown>; }
-interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; }
+interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; subpath?: string; }
+interface Pane { id: string; tabs: Tab[]; active: string; element: HTMLElement; editor?: EditorHandle; imageView?:ImageView; pdfView?:PdfView; canvasView?:CanvasView; canvasSource?:string; embeds?: MarkdownEmbeds; properties?: PropertiesView; propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void; renderVersion: number; history: string[]; historyIndex: number; persisted?: Record<string, unknown>; }
+interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; autoConvertHtml: boolean; }
 interface Command { name: string; shortcut?: string; icon?: string; action: () => void | Promise<void>; }
+export interface WorkspaceViewFactories { pdf?: typeof createPdfView; canvas?: typeof createCanvasView }
 type EditorFactory = (parent: HTMLElement, options: EditorOptions) => EditorHandle;
 const nameOf = (path: string) => path.split('/').at(-1)!.replace(/\.md$/i, '');
 const parentOf = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
@@ -35,8 +41,9 @@ export class Workspace {
   panes: Pane[] = [];
   activePane!: Pane;
   buffers = new Map<string, NoteBuffer>();
-  settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
+  settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
   private editorFactory?: EditorFactory;
+  private viewFactories: WorkspaceViewFactories;
   private sidebar = el('aside', 'sidebar');
   private sidebarContent = el('div', 'sidebar-content');
   private paneContainer = el('main', 'panes');
@@ -53,7 +60,7 @@ export class Workspace {
   private disposers: (() => void)[] = [];
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
-    if ([...this.buffers.values()].some(buffer => buffer.dirty)) { event.preventDefault(); event.returnValue = ''; }
+    if ([...this.buffers.values()].some(buffer => buffer.dirty) || this.panes.some(pane => pane.canvasView?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
   };
   private menuSerial = 0;
   private inputContextListener=(event:MouseEvent)=>{
@@ -72,7 +79,7 @@ export class Workspace {
   private attachmentImporter?: AttachmentImporter;
   private sessionState: Record<string, unknown> = {};
 
-  constructor(root: HTMLElement, editorFactory?: EditorFactory) { this.root = root; this.editorFactory = editorFactory; }
+  constructor(root: HTMLElement, editorFactory?: EditorFactory, viewFactories: WorkspaceViewFactories = {}) { this.root = root; this.editorFactory = editorFactory; this.viewFactories = viewFactories; }
   private run(operation: () => unknown | Promise<unknown>): void { Promise.resolve().then(operation).catch(error => notice(error instanceof Error ? error.message : String(error))); }
   private sessionKey(): string { return `zorid:workspace:${this.platform.id}`; }
 
@@ -129,6 +136,8 @@ export class Workspace {
       const saved = JSON.parse(localStorage.getItem(this.sessionKey()) || 'null');
       if (saved) {
         this.sessionState = saved;
+        this.root.classList.toggle('right-hidden', saved.rightHidden !== false);
+        this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
         for (const item of (saved.panes || []).slice(0, 4)) {
           const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => ({...tab, mode:tab.mode==='reading'?'reading':'live', id:makeId()}));
@@ -143,8 +152,8 @@ export class Workspace {
     this.disposers.push(this.vault.on('create', () => this.renderSidebar()), this.vault.on('delete', change => {
       for (const pane of this.panes) for (const tab of [...pane.tabs]) if (tab.path === change.path || tab.path?.startsWith(change.path + '/')) {
         const buffer = this.buffers.get(tab.path);
-        if (buffer?.dirty) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
-        tab.path = null; void this.renderPane(pane);
+        if (buffer?.dirty || (pane.active === tab.id && pane.canvasView?.hasPendingChanges())) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
+        tab.path = null; this.run(()=>this.renderPane(pane));
       }
       this.renderSidebar(); this.renderRight();
     }), this.vault.on('rename', change => {
@@ -156,8 +165,21 @@ export class Workspace {
       for (const pane of this.panes) for (const tab of pane.tabs) if (tab.path === oldPath || tab.path?.startsWith(oldPath + '/')) {
         const previous = tab.path; tab.path = change.path + previous.slice(oldPath.length);
       }
-      this.renderSidebar(); this.renderRight(); this.panes.forEach(pane => void this.renderPane(pane)); this.saveSession();
+      this.renderSidebar(); this.renderRight(); this.panes.forEach(pane => this.run(()=>this.renderPane(pane))); this.saveSession();
     }), this.vault.on('modify', change => {
+      if(/\.canvas$/i.test(change.path)){
+        const buffer=this.buffers.get(change.path),generation=this.vaultGeneration;
+        const targets=this.panes.filter(pane=>this.current(pane)?.path===change.path&&pane.canvasView).map(pane=>({pane,view:pane.canvasView!}));
+        if(buffer&&!buffer.dirty)this.run(async()=>{
+          for(const {view} of targets)await view.flush();
+          if(generation!==this.vaultGeneration)return;
+          await buffer.reload();
+          if(generation!==this.vaultGeneration||this.buffers.get(change.path)!==buffer)return;
+          for(const {pane,view} of targets)if(pane.canvasView===view&&!view.hasPendingChanges()){
+            pane.canvasSource=buffer.text;view.setDocument(CanvasDocument.parse(buffer.text));
+          }
+        });return;
+      }
       if(!isMarkdown(change.path)){for(const pane of this.panes)if(this.current(pane)?.path===change.path)this.run(()=>this.renderPane(pane));return;}
       const buffer = this.buffers.get(change.path);
       if (buffer && !buffer.dirty) this.run(async () => { await buffer.reload(); for (const pane of this.panes) if (this.current(pane)?.path === change.path) { if (this.current(pane).mode === 'reading') await this.renderPane(pane); else pane.editor?.setValue(buffer.text); } this.renderRight(); });
@@ -182,10 +204,10 @@ export class Workspace {
   }
 
   private buildShell(): void {
-    this.root.replaceChildren(); this.root.className = 'workspace';
+    this.root.replaceChildren(); this.root.className = 'workspace right-hidden';
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
     const top = el('div', 'ribbon-top');
-    top.append(button('search', 'Open quick switcher (⌘O)', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.openGraph()), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), button('terminal', 'Open command palette (⌘P)', () => this.commandPalette()));
+    top.append(button('search', 'Open quick switcher (⌘O)', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.run(() => this.openGraph())), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), button('terminal', 'Open command palette (⌘P)', () => this.commandPalette()));
     const bottom = el('div', 'ribbon-bottom'); bottom.append(button('folder', 'Open another vault', () => this.run(() => this.chooseVault())), button('help', 'Help', () => this.help()), button('settings', 'Settings (⌘,)', () => this.showSettings())); ribbon.append(top, bottom);
     this.sidebar = el('aside', 'sidebar'); this.sidebar.setAttribute('aria-label', 'Left sidebar');
     const title = el('div', 'titlebar'); title.append(button('sidebar', 'Toggle left sidebar', () => this.toggleLeft()));
@@ -225,13 +247,14 @@ export class Workspace {
     this.panes.push(pane); this.paneContainer.append(pane.element); return pane;
   }
   private activate(pane: Pane): void { this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane)); this.renderRight(); this.renderStatus(); }
-  async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true): Promise<void> {
+  async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath=''): Promise<void> {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
-    const current=this.current(pane); if(current?.path) await this.buffers.get(current.path)?.flush();
+    await this.flushPane(pane); const current=this.current(pane);
     const existing=pane.tabs.find(tab=>tab.path===path&&tab.kind==='note');
     if(existing&&!newTab) pane.active=existing.id;
     else if(!newTab&&current){if(current.kind==='graph')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
     else {const tab:Tab={id:makeId(),path,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;}
+    this.current(pane).subpath=subpath;
     if(recordHistory&&pane.history[pane.historyIndex]!==path){pane.history=pane.history.slice(0,pane.historyIndex+1);pane.history.push(path);pane.historyIndex=pane.history.length-1;}
     this.activate(pane); await this.renderPane(pane); this.renderSidebar();this.renderRight();this.saveSession();
     if(matchMedia('(max-width: 700px)').matches)this.root.classList.add('left-hidden');
@@ -245,6 +268,7 @@ export class Workspace {
   }
 
   async renderPane(pane:Pane):Promise<void>{
+    await this.flushPane(pane);
     const version=++pane.renderVersion; this.disposePaneViews(pane);pane.element.replaceChildren();
     const tab=this.current(pane); if(!tab)return;
     const bar=el('div','tab-bar'); bar.setAttribute('role','tablist');
@@ -253,14 +277,22 @@ export class Workspace {
       const node=el('div',`tab${item.id===tab.id?' is-active':''}`);node.role='tab';node.tabIndex=item.id===tab.id?0:-1;node.setAttribute('aria-selected',String(item.id===tab.id));node.draggable=true;
       node.append(icon(item.kind==='graph'?'graph':'file',15),el('span','tab-title',item.kind==='graph'?'Graph view':item.path?nameOf(item.path):'New tab'));
       const close=button('close','Close tab',event=>{event.stopPropagation();this.run(()=>this.closeTab(pane,item));},'tab-close');node.append(close);
-      const select=()=>this.run(async()=>{if(tab.path)await this.buffers.get(tab.path)?.flush();pane.active=item.id;this.activate(pane);await this.renderPane(pane);this.saveSession();});node.onclick=select;
+      const select=()=>this.run(async()=>{await this.flushPane(pane);pane.active=item.id;this.activate(pane);await this.renderPane(pane);this.saveSession();});node.onclick=select;
       node.oncontextmenu=event=>{event.preventDefault();event.stopPropagation();this.tabMenu(pane,item,event.clientX,event.clientY);};
-      node.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')select();if(event.key==='ArrowRight'||event.key==='ArrowLeft'){event.preventDefault();const index=pane.tabs.indexOf(item);pane.active=pane.tabs[(index+(event.key==='ArrowRight'?1:pane.tabs.length-1))%pane.tabs.length].id;this.run(()=>this.renderPane(pane));}};
+      node.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')select();if(event.key==='ArrowRight'||event.key==='ArrowLeft'){event.preventDefault();const index=pane.tabs.indexOf(item);const next=pane.tabs[(index+(event.key==='ArrowRight'?1:pane.tabs.length-1))%pane.tabs.length].id;this.run(async()=>{await this.flushPane(pane);pane.active=next;await this.renderPane(pane);this.saveSession();});}};
       node.ondragstart=event=>event.dataTransfer?.setData('application/x-zorid-tab',JSON.stringify({pane:pane.id,tab:item.id}));
-      node.ondragover=event=>event.preventDefault();node.ondrop=event=>{event.preventDefault();try{const data=JSON.parse(event.dataTransfer?.getData('application/x-zorid-tab')||'null');const from=this.panes.find(p=>p.id===data.pane);const moving=from?.tabs.find(t=>t.id===data.tab);if(!from||!moving||moving===item)return;from.tabs=from.tabs.filter(t=>t!==moving);pane.tabs.splice(pane.tabs.indexOf(item),0,moving);pane.active=moving.id;if(!from.tabs.length)from.tabs.push({id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'});if(!from.tabs.some(t=>t.id===from.active))from.active=from.tabs[0].id;this.run(async()=>{await this.renderPane(from);if(from!==pane)await this.renderPane(pane);this.saveSession();});}catch{/* Not an app tab. */}};
+      node.ondragover=event=>event.preventDefault();node.ondrop=event=>{event.preventDefault();try{
+        const data=JSON.parse(event.dataTransfer?.getData('application/x-zorid-tab')||'null'),from=this.panes.find(p=>p.id===data?.pane),moving=from?.tabs.find(t=>t.id===data?.tab);
+        if(!from||!moving||moving===item)return;
+        this.run(async()=>{await this.flushPane(from);if(from!==pane)await this.flushPane(pane);if(!from.tabs.includes(moving)||!pane.tabs.includes(item))return;
+          from.tabs=from.tabs.filter(t=>t!==moving);pane.tabs.splice(pane.tabs.indexOf(item),0,moving);pane.active=moving.id;
+          if(!from.tabs.length)from.tabs.push({id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'});
+          if(!from.tabs.some(t=>t.id===from.active))from.active=from.tabs[0].id;
+          await this.renderPane(from);if(from!==pane)await this.renderPane(pane);this.saveSession();});
+      }catch{/* Not an app tab. */}};
       bar.append(node);
     }
-    bar.append(button('plus','New tab (⌘T)',()=>this.newTab(pane),'tab-add'),button('down','Tab menu',()=>this.tabMenu(pane)));
+    bar.append(button('plus','New tab (⌘T)',()=>this.run(()=>this.newTab(pane)),'tab-add'),button('down','Tab menu',()=>this.tabMenu(pane)));
     pane.element.append(bar);
     const toolbar=el('div','pane-toolbar');
     const back=button('left','Navigate back',()=>this.run(()=>this.navigate(-1,pane)));back.disabled=pane.historyIndex<=0;
@@ -276,6 +308,26 @@ export class Workspace {
       const host=el('div','attachment-view');pane.element.append(host);
       host.oncontextmenu=event=>{event.preventDefault();const entry=this.vault.entries.get(path);if(entry)this.fileMenu(entry,event.clientX,event.clientY);};
       if(isImage(path))pane.imageView=createImageView(host,path,this.attachments!);
+      else if(/\.pdf$/i.test(path)){
+        host.classList.add('pdf-attachment-view');
+        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches});
+        pane.pdfView=view;void view.ready.catch(error=>{if(pane.pdfView===view&&version===pane.renderVersion)notice(error instanceof Error?error.message:String(error));});
+      }else if(/\.canvas$/i.test(path)){
+        host.classList.add('canvas-attachment-view');
+        try{
+          const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
+          const generation=this.vaultGeneration;pane.canvasSource=buffer.text;
+          pane.canvasView=(this.viewFactories.canvas??createCanvasView)(host,{document:CanvasDocument.parse(buffer.text),onChange:async source=>{
+            if(generation!==this.vaultGeneration||version!==pane.renderVersion)throw new Error('The Canvas is no longer open.');
+            if(buffer.text!==pane.canvasSource)throw new Error('The Canvas changed in another pane. Save or reload before editing it again.');
+            buffer.update(source);pane.canvasSource=source;await buffer.flush();
+            for(const other of this.panes)if(other!==pane&&this.current(other)?.path===path&&other.canvasView&&!other.canvasView.hasPendingChanges()){
+              other.canvasSource=source;other.canvasView.setDocument(CanvasDocument.parse(source));
+            }
+          },openFile:(target,fragment)=>this.vault.entries.has(target)?this.openNote(target,false,pane,true,fragment??''):this.followLink(path,target+(fragment??''),pane,'markdown'),
+          openLink:target=>{if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');},onError:error=>notice(error instanceof Error?error.message:String(error))});
+        }catch(error){host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
+      }
       else host.append(el('p','muted',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
       this.renderStatus();return;
     }
@@ -311,7 +363,7 @@ export class Workspace {
         pane.editor=factory(host,{value:buffer.text,mode:tab.mode,paths:()=>[...this.vault.entries.keys()],
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:request=>{const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
-          transfers:{importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
+          transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
           onChange:value=>{buffer.update(value);this.renderStatus();for(const other of this.panes){other.embeds?.invalidate(path);if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);other.propertyTimer=setTimeout(()=>{other.properties?.refresh();other.refreshPreview?.();},150);}}},open:target=>this.run(()=>this.followLink(path,target,pane))});
       }
       if(buffer.error)notice(buffer.error.message);
@@ -320,7 +372,7 @@ export class Workspace {
   }
 
   private disposePaneViews(pane:Pane):void{
-    clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.editor=undefined;pane.imageView?.destroy();pane.imageView=undefined;pane.embeds?.destroy();pane.embeds=undefined;pane.properties?.destroy();pane.properties=undefined;pane.refreshPreview=undefined;
+    clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.editor=undefined;pane.imageView?.destroy();pane.imageView=undefined;pane.pdfView?.destroy();pane.pdfView=undefined;pane.canvasView?.destroy();pane.canvasView=undefined;pane.canvasSource=undefined;pane.embeds?.destroy();pane.embeds=undefined;pane.properties?.destroy();pane.properties=undefined;pane.refreshPreview=undefined;
   }
 
   private async importAttachment(file:TransferFile,ownerPath:string,generation:number):Promise<string>{
@@ -432,15 +484,15 @@ export class Workspace {
     if(next===path)return;await this.flush();const buffer=this.buffers.get(path);if(buffer)await buffer.rename(next);else await this.vault.rename(path,next);for(const pane of this.panes)await this.renderPane(pane);
   }
   private async deletePath(path:string):Promise<void>{await this.flush();await this.vault.trash(path);this.buffers.delete(path);notice('Moved to vault trash.');}
-  private newTab(pane=this.activePane):void{const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.run(()=>this.renderPane(pane));this.saveSession();}
-  private async closeTab(pane:Pane,tab:Tab):Promise<void>{if(tab.path)await this.buffers.get(tab.path)?.flush();const index=pane.tabs.indexOf(tab);if(index<0)return;pane.tabs.splice(index,1);if(!pane.tabs.length){if(this.panes.length>1){this.disposePaneViews(pane);pane.element.remove();this.panes=this.panes.filter(p=>p!==pane);this.activate(this.panes[0]);this.saveSession();return;}pane.tabs.push({id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'});}if(tab.id===pane.active)pane.active=pane.tabs[Math.min(index,pane.tabs.length-1)].id;await this.renderPane(pane);this.saveSession();this.renderRight();}
+  private async newTab(pane=this.activePane):Promise<void>{await this.flushPane(pane);const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.run(()=>this.renderPane(pane));this.saveSession();}
+  private async closeTab(pane:Pane,tab:Tab):Promise<void>{await this.flushPane(pane);if(tab.path)await this.buffers.get(tab.path)?.flush();const index=pane.tabs.indexOf(tab);if(index<0)return;pane.tabs.splice(index,1);if(!pane.tabs.length){if(this.panes.length>1){this.disposePaneViews(pane);pane.element.remove();this.panes=this.panes.filter(p=>p!==pane);this.activate(this.panes[0]);this.saveSession();return;}pane.tabs.push({id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'});}if(tab.id===pane.active)pane.active=pane.tabs[Math.min(index,pane.tabs.length-1)].id;await this.renderPane(pane);this.saveSession();this.renderRight();}
   private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
   private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.path&&!isMarkdown(tab.path))return;if(tab.path)await this.buffers.get(tab.path)?.flush();tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
-  private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane);return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
+  private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane,true,target.includes('#')?target.slice(target.indexOf('#')):'');return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
   private async dailyNote():Promise<void>{const now=new Date();const name=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.md`;if(!this.vault.entries.has(name))await this.vault.create(name,'');await this.openNote(name);}
-  private split():void{if(this.panes.length>=4)return;const current=this.current();const pane=this.addPane([{...current,id:makeId()}]);this.activate(pane);this.run(()=>this.renderPane(pane));this.saveSession();}
-  private toggleLeft():void{this.root.classList.toggle('left-hidden');}
-  private toggleRight():void{this.root.classList.toggle('right-hidden');}
+  private async split():Promise<void>{if(this.panes.length>=4)return;await this.flushPane(this.activePane);const current=this.current();const pane=this.addPane([{...current,id:makeId()}]);this.activate(pane);this.run(()=>this.renderPane(pane));this.saveSession();}
+  private toggleLeft():void{this.root.classList.toggle('left-hidden');this.saveSession();}
+  private toggleRight():void{this.root.classList.toggle('right-hidden');this.saveSession();}
 
   private commands():Command[]{return[
     {name:'Create new note',shortcut:'⌘ N',action:()=>this.newNote()}, {name:'Open quick switcher',shortcut:'⌘ O',action:()=>this.quickSwitcher()},
@@ -484,11 +536,11 @@ export class Workspace {
       action:async()=>{tab.mode=mode;pane.active=tab.id;await this.renderPane(pane);this.saveSession();},
     })):[];
     const path=tab.path;
-    this.menu([{name:'Split right',action:()=>{pane.active=tab.id;this.split();}},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
+    this.menu([{name:'Split right',action:async()=>{await this.flushPane(pane);pane.active=tab.id;await this.split();}},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
   }
   private modeMenu():void{this.tabMenu(this.activePane);}
 
-  private openGraph():void{const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'graph'};this.activePane.tabs.push(tab);this.activePane.active=tab.id;this.run(()=>this.renderPane(this.activePane));this.saveSession();}
+  private async openGraph():Promise<void>{await this.flushPane(this.activePane);const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'graph'};this.activePane.tabs.push(tab);this.activePane.active=tab.id;this.run(()=>this.renderPane(this.activePane));this.saveSession();}
   private renderGraph(parent:HTMLElement):void{
     const container=el('div','graph-view');const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 800 600');svg.setAttribute('aria-label','Graph of linked notes');
     const files=[...this.vault.entries.values()].filter(e=>e.type==='file'&&e.path.endsWith('.md'));
@@ -512,9 +564,10 @@ export class Workspace {
       if(section==='Appearance'){
         const select=el('select');for(const[label,value]of[['Adapt to system','system'],['Dark','dark'],['Light','light']]){const option=el('option','',label);option.value=value;select.append(option);}select.value=this.settings.theme;select.setAttribute('aria-label','Base color scheme');select.onchange=()=>{this.settings.theme=select.value as Settings['theme'];this.saveSettings();};row('Base color scheme','Choose your default color scheme.',select);
         const size=el('input');size.type='range';size.min='12';size.max='26';size.value=String(this.settings.fontSize);size.setAttribute('aria-label','Font size');size.oninput=()=>{this.settings.fontSize=Number(size.value);this.saveSettings();};row('Font size','Font size in pixels for the editor and reading view.',size);
-        const title=toggle(this.settings.showInlineTitle,value=>{this.settings.showInlineTitle=value;this.panes.forEach(pane=>void this.renderPane(pane));});title.setAttribute('aria-label','Show inline title');row('Show inline title','Display the file name at the top of each note.',title);
+        const title=toggle(this.settings.showInlineTitle,value=>{this.settings.showInlineTitle=value;this.panes.forEach(pane=>this.run(()=>this.renderPane(pane)));});title.setAttribute('aria-label','Show inline title');row('Show inline title','Display the file name at the top of each note.',title);
       }else if(section==='Editor'){
-        const width=toggle(this.settings.readableWidth,value=>{this.settings.readableWidth=value;this.panes.forEach(pane=>void this.renderPane(pane));});width.setAttribute('aria-label','Readable line length');row('Readable line length','Limit the maximum line length for comfortable reading.',width);
+        const width=toggle(this.settings.readableWidth,value=>{this.settings.readableWidth=value;this.panes.forEach(pane=>this.run(()=>this.renderPane(pane)));});width.setAttribute('aria-label','Readable line length');row('Readable line length','Limit the maximum line length for comfortable reading.',width);
+        const html=toggle(this.settings.autoConvertHtml,value=>{this.settings.autoConvertHtml=value;});html.setAttribute('aria-label','Auto convert HTML');row('Auto convert HTML','Convert pasted HTML into Markdown.',html);
         const tabs=toggle(this.settings.useTab,value=>{this.settings.useTab=value;configureLists();});tabs.setAttribute('aria-label','Indent using tabs');row('Indent using tabs','Use tab characters for indentation. Turn off to use spaces.',tabs);
         const tabSize=el('input');tabSize.type='number';tabSize.min='1';tabSize.max='32';tabSize.value=String(this.settings.tabSize);tabSize.setAttribute('aria-label','Tab size');
         tabSize.onchange=()=>{const value=Number(tabSize.value);if(!Number.isInteger(value)||value<1||value>32){tabSize.value=String(this.settings.tabSize);return;}this.settings.tabSize=value;configureLists();this.saveSettings();};row('Tab size','Number of spaces used to display a tab.',tabSize);
@@ -540,15 +593,16 @@ export class Workspace {
   }
   private applySettings():void{const theme=this.settings.theme==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):this.settings.theme;document.documentElement.dataset.theme=theme;document.documentElement.style.setProperty('--font-text-size',`${this.settings.fontSize}px`);}
   private saveSettings():void{localStorage.setItem('zorid:settings',JSON.stringify(this.settings));this.applySettings();}
-  private saveSession():void{if(!this.platform)return;localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,panes:this.panes.map(p=>({...p.persisted,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
+  private saveSession():void{if(!this.platform)return;localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),panes:this.panes.map(p=>({...p.persisted,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','','Create a note with ⌘N. Link to another note with [[note name]]. Use ⌘O to find a file and ⌘P to find a command.'));
   }
   private onKey(event:KeyboardEvent):void{
     if(document.querySelector('.modal-overlay')||!this.vault)return;
     if(!(event.metaKey||event.ctrlKey))return;const key=event.key.toLowerCase();let action:(()=>unknown)|undefined;
-    if(key==='n')action=()=>this.newNote();else if(key==='o')action=()=>this.quickSwitcher();else if(key==='p')action=()=>this.commandPalette();else if(key===',')action=()=>this.showSettings();else if(key==='e')action=()=>this.toggleReading();else if(key==='s')action=()=>this.flush();else if(key==='t')action=()=>this.newTab();else if(key==='w')action=()=>this.closeTab(this.activePane,this.current());else if(key==='f'&&event.shiftKey)action=()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector('input')?.focus();};
+    if(key==='n')action=()=>this.newNote();else if(key==='o')action=()=>this.quickSwitcher();else if(key==='p')action=()=>this.commandPalette();else if(key===',')action=()=>this.showSettings();else if(key==='e')action=()=>this.toggleReading();else if(key==='f'&&!event.shiftKey&&this.activePane.pdfView)action=()=>this.activePane.pdfView?.showSearch();else if(key==='s')action=()=>this.flush();else if(key==='t')action=()=>this.newTab();else if(key==='w')action=()=>this.closeTab(this.activePane,this.current());else if(key==='f'&&event.shiftKey)action=()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector('input')?.focus();};
     if(action){event.preventDefault();this.run(action);}
   }
-  async flush():Promise<void>{for(const buffer of this.buffers.values())await buffer.flush();}
+  private async flushPane(pane:Pane):Promise<void>{await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
+  async flush():Promise<void>{for(const pane of this.panes)await pane.canvasView?.flush();for(const buffer of this.buffers.values())await buffer.flush();}
   async destroy():Promise<void>{this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.panes.forEach(pane=>this.disposePaneViews(pane));this.attachments?.destroy();document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.root.replaceChildren();}
 }
