@@ -65,3 +65,26 @@ imply complete host wiring. Native popouts, tab dragging, window-scoped recovery
 serialized cross-window writes remain pending. Earlier table/list/inline rows above
 are historical checkpoint descriptions; current native and exact parity gaps remain
 tracked in the feature-specific evidence documents and user findings queue.
+
+## Multiwindow and viewer checkpoint revalidation
+
+The frozen implementation at `71f2ee8` passes **874/874 tests** using
+`node --test --test-concurrency=2 tests/*.test.*` (35.5 seconds), followed by a
+successful, separate TypeScript check. These checks were rerun after the session
+boundary with no source changes. The production webpack build passed before that
+boundary with three bundle/performance warnings; it was not rerun during this
+resource-limited revalidation.
+
+This checkpoint includes the actual native new-window bridge and renderer host,
+authenticated window/vault ownership, serialized compare-and-write, scoped recovery
+and sessions, exact numbered/new-window shortcuts, and cancellation-safe shutdown.
+It also includes the PDF sidebar, Canvas style and stale-record repairs, wiki
+completion with live metadata, and browser context-menu selection safeguards.
+The main IPC test fixture now loads the actual window broker while retaining its
+foreign-sender, child-frame and unexpected-document rejection checks.
+
+Native multiwindow and viewer interaction verification remains with root. The
+empty-note focus helper still needs installation in `createEditor`; title and
+navigation safeguards are integrated. Tab docking and handoff contracts exist,
+but state-preserving docking and actual cross-window transfer remain separate
+implementation work. No full parity or mobile runtime certification is implied.

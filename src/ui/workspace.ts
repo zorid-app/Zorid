@@ -1,4 +1,5 @@
-import { Vault } from '../core/index.ts';
+import { bindNoteTitleFocus } from './note-title-focus.ts';
+import { Vault, parseMetadata } from '../core/index.ts';
 import type { VaultEntry } from '../core/index.ts';
 import { pickDesktopVault } from '../platform/index.ts';
 import type { PlatformVault } from '../platform/index.ts';
@@ -25,6 +26,8 @@ import type { CanvasView } from '../canvas/view.ts';
 import { SplitLayout } from './split-layout.ts';
 import { ChangeSet, EditorSelection } from '@codemirror/state';
 import { textChanges } from '../editor/text-changes.ts';
+import { WorkspaceStorageScope, validateWorkspaceWindowInfo, workspaceWindowBridge } from './workspace-window.ts';
+import { resolveWorkspaceShortcut } from './workspace-keymap.ts';
 
 type Mode = 'live' | 'reading';
 interface Tab { id: string; path: string | null; mode: Mode; kind: 'note' | 'graph'; subpath?: string; viewState?: { editor?: EditorViewState; scrollTop: number; scrollLeft: number }; }
@@ -46,6 +49,7 @@ export class Workspace {
   buffers = new Map<string, NoteBuffer>();
   settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
   private editorFactory?: EditorFactory;
+  private noteNavigation = new WeakMap<Pane, number>();
   private viewFactories: WorkspaceViewFactories;
   private sidebar = el('aside', 'sidebar');
   private sidebarContent = el('div', 'sidebar-content');
@@ -88,13 +92,21 @@ export class Workspace {
   private attachments?:AttachmentResources;
   private attachmentImporter?: AttachmentImporter;
   private sessionState: Record<string, unknown> = {};
+  private storageScope = new WorkspaceStorageScope();
+  private navigationIntent = new WeakMap<Pane, number>();
+  private paneActivationRevision = 0;
 
   constructor(root: HTMLElement, editorFactory?: EditorFactory, viewFactories: WorkspaceViewFactories = {}) { this.root = root; this.editorFactory = editorFactory; this.viewFactories = viewFactories; }
   private run(operation: () => unknown | Promise<unknown>): void { Promise.resolve().then(operation).catch(error => notice(error instanceof Error ? error.message : String(error))); }
-  private sessionKey(): string { return `zorid:workspace:${this.platform.id}`; }
+  private sessionKey(): string { return this.storageScope.sessionKey(this.platform.id); }
 
   async start(platform: PlatformVault | null): Promise<void> {
     if (!this.initialized) {
+      const native = workspaceWindowBridge(window.zorid);
+      if (native) {
+        const identity = validateWorkspaceWindowInfo(await native.getWindowInfo());
+        this.storageScope = new WorkspaceStorageScope(identity);
+      }
       document.addEventListener('keydown', this.keyListener);
       document.addEventListener('contextmenu',this.inputContextListener);
       window.addEventListener('beforeunload', this.unloadListener);
@@ -140,6 +152,8 @@ export class Workspace {
   }
 
   private async replaceVault(platform:PlatformVault,next:Vault):Promise<void>{
+    // Migration failures must abort before teardown/save can replace legacy recovery.
+    this.storageScope.migrateLegacy(localStorage, platform.id);
     this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
     await this.flush();
     this.saveSession();
@@ -284,10 +298,14 @@ export class Workspace {
     this.panes.push(pane); this.paneContainer.append(pane.element); return pane;
   }
   private focusPane(pane:Pane):void{if(pane.editor)pane.editor.focus();else pane.element.focus({preventScroll:true});}
-  private activate(pane: Pane): void { const changed=this.activePane!==pane;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
+  private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
   async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath=''): Promise<void> {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
-    await this.flushPane(pane); this.capturePaneState(pane); const current=this.current(pane);
+    const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
+    await this.flushPane(pane);
+    if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||pane.renderVersion!==version||!this.panes.includes(pane))return;
+    this.noteNavigation.set(pane,(this.noteNavigation.get(pane)??0)+1);
+    this.capturePaneState(pane);const current=this.current(pane);
     const existing=pane.tabs.find(tab=>tab.path===path&&tab.kind==='note');
     if(existing&&!newTab) pane.active=existing.id;
     else if(!newTab&&current){if(current.path!==path)current.viewState=undefined;if(current.kind==='graph')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
@@ -300,7 +318,7 @@ export class Workspace {
 
   private async bufferFor(path:string):Promise<NoteBuffer>{
     let buffer=this.buffers.get(path); if(buffer){await buffer.load();return buffer;}
-    buffer=new NoteBuffer(this.vault,path,{storage:localStorage,storageKey:`zorid:draft:${this.platform.id}`,onState:()=>{this.renderStatus();}});
+    buffer=new NoteBuffer(this.vault,path,{storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{this.renderStatus();}});
     this.buffers.set(path,buffer);
     try{await buffer.load();return buffer;}catch(error){this.buffers.delete(path);throw error;}
   }
@@ -372,8 +390,12 @@ export class Workspace {
     }
     const scroll=el('div','note-scroll');scroll.classList.toggle('readable-width',this.settings.readableWidth);
     const title=el('input','note-title');title.value=nameOf(path);title.setAttribute('aria-label','Note title');title.hidden=!this.settings.showInlineTitle;
-    title.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();title.blur();pane.editor?.focus();}};
-    title.onblur=()=>{if(title.value.trim()&&title.value.trim()!==nameOf(path))this.run(()=>this.renamePath(path,title.value.trim()));};
+    const titleGeneration=this.vaultGeneration,titleNavigation=this.noteNavigation.get(pane);let titlePath=path;
+    bindNoteTitleFocus(title,{
+      save:async name=>{if(titleGeneration!==this.vaultGeneration||!this.panes.includes(pane)||this.current(pane)!==tab||tab.path!==titlePath)return;if(name!==nameOf(titlePath))titlePath=await this.renamePath(titlePath,name);},
+      isCurrent:()=>this.initialized&&titleGeneration===this.vaultGeneration&&this.activePane===pane&&this.current(pane)===tab&&tab.path===titlePath&&this.noteNavigation.get(pane)===titleNavigation&&pane.element.isConnected,
+      focusBody:()=>pane.editor?.focus(),onError:error=>notice(error instanceof Error?error.message:String(error)),
+    });
     scroll.append(title);pane.element.append(scroll);
     try{
       const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
@@ -399,7 +421,18 @@ export class Workspace {
         const host=el('div','editor-host');scroll.append(host);
         const factory=this.editorFactory||(await import('./editor.ts')).createEditor;if(version!==pane.renderVersion)return;
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
-        pane.editor=factory(host,{value:buffer.text,mode:tab.mode,paths:()=>[...this.vault.entries.keys()],
+        const ownsEditor=()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path;
+        pane.editor=factory(host,{value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
+          wiki:{sourcePath:()=>ownsEditor()?path:null,
+            metadata:target=>{if(!ownsEditor())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):this.vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:this.vault.entries.get(target)?.mtime};},
+            resolvePath:(target,source)=>ownsEditor()?this.vault.metadata.resolveLink(source,target):null,
+            linkText:(target,source)=>{
+              if(!ownsEditor())return target.replace(/\.md$/i,'');
+              let result=target;const filename=target.split('/').at(-1)!;
+              if(this.settings.newLinkFormat==='shortest'){const matches=this.vault.metadata.resolveLinkCandidates(source,filename);if(matches.length===1&&matches[0]===target)result=filename;}
+              else if(this.settings.newLinkFormat==='relative'){const from=parentOf(source).split('/').filter(Boolean),to=target.split('/');while(from.length&&to.length&&from[0]===to[0]){from.shift();to.shift();}result=from.length?[...from.map(()=>'..'),...to].join('/'):'./'+to.join('/');}
+              return result.replace(/\.md$/i,'');
+            }},
           isUnresolved:(target,kind)=>generation!==this.vaultGeneration||!this.vault.metadata.resolveLink(path,target,kind),
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:request=>{const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
@@ -551,13 +584,18 @@ export class Workspace {
 
   async newNote(folder=''):Promise<void>{
     let index=0,path='';do{path=`${folder?folder+'/':''}Untitled${index?' '+index:''}.md`;index++;}while(this.vault.entries.has(path));
-    await this.vault.create(path,'');await this.openNote(path);const title=this.activePane.element.querySelector<HTMLInputElement>('.note-title');title?.focus();title?.select();
+    const generation=this.vaultGeneration,pane=this.activePane,version=pane.renderVersion,intent=(this.navigationIntent.get(pane)??0)+1,activation=this.paneActivationRevision;
+    this.navigationIntent.set(pane,intent);
+    await this.vault.create(path,'');if(generation!==this.vaultGeneration||!this.panes.includes(pane)||pane.renderVersion!==version||this.navigationIntent.get(pane)!==intent||activation!==this.paneActivationRevision)return;
+    await this.openNote(path,false,pane);if(generation!==this.vaultGeneration||this.activePane!==pane||this.current(pane)?.path!==path||this.navigationIntent.get(pane)!==intent+1)return;
+    const title=pane.element.querySelector<HTMLInputElement>('.note-title');
+    if(title&&!title.hidden){title.focus();title.select();}else pane.editor?.focus();
   }
   async newFolder(parent=''):Promise<void>{const name=await promptName('New folder','Untitled folder');if(name)await this.vault.createFolder(`${parent?parent+'/':''}${name}`);}
   private async renameDialog(path:string):Promise<void>{const name=await promptName('Rename',path.split('/').at(-1),'Rename');if(name)await this.renamePath(path,name);}
-  private async renamePath(path:string,name:string):Promise<void>{
+  private async renamePath(path:string,name:string):Promise<string>{
     if(/[\\/]/.test(name))throw new Error('Use the file menu to move files between folders.');const folder=parentOf(path);const suffix=this.vault.entries.get(path)?.type==='file'&&path.endsWith('.md')&&!name.endsWith('.md')?'.md':'';const next=`${folder?folder+'/':''}${name}${suffix}`;
-    if(next===path)return;await this.flush();const buffer=this.buffers.get(path);if(buffer)await buffer.rename(next);else await this.vault.rename(path,next);for(const pane of this.panes)await this.renderPane(pane);
+    if(next===path)return next;await this.flush();const buffer=this.buffers.get(path);if(buffer)await buffer.rename(next);else await this.vault.rename(path,next);for(const pane of this.panes)await this.renderPane(pane);return next;
   }
   private async deletePath(path:string):Promise<void>{await this.flush();await this.vault.trash(path);this.buffers.delete(path);notice('Moved to vault trash.');}
   private async newTab(pane=this.activePane):Promise<void>{await this.flushPane(pane);const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.run(()=>this.renderPane(pane));this.saveSession();}
@@ -578,7 +616,14 @@ export class Workspace {
   private toggleLeft():void{this.root.classList.toggle('left-hidden');this.saveSession();}
   private toggleRight():void{this.root.classList.toggle('right-hidden');this.saveSession();}
 
+  private async newWindow():Promise<void>{
+    const native=workspaceWindowBridge(window.zorid);
+    if(!native)throw new Error('Additional windows require the desktop app.');
+    await native.newWindow();
+  }
+
   private commands():Command[]{return[
+    ...(workspaceWindowBridge(window.zorid)?[{name:'Open new window',shortcut:'⌘ ⇧ N',action:()=>this.newWindow()}]:[]),
     {name:'Create new note',shortcut:'⌘ N',action:()=>this.newNote()}, {name:'Open quick switcher',shortcut:'⌘ O',action:()=>this.quickSwitcher()},
     {name:'Open command palette',shortcut:'⌘ P',action:()=>this.commandPalette()}, {name:'Open settings',shortcut:'⌘ ,',action:()=>this.showSettings()},
     {name:'Toggle reading view',shortcut:'⌘ E',action:()=>this.toggleReading()},
@@ -688,9 +733,30 @@ export class Workspace {
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','','Create a note with ⌘N. Link to another note with [[note name]]. Use ⌘O to find a file and ⌘P to find a command.'));
   }
   private onKey(event:KeyboardEvent):void{
-    if(document.querySelector('.modal-overlay')||!this.vault)return;
+    if(event.defaultPrevented||event.isComposing||document.querySelector('.modal-overlay'))return;
+    const shortcut=resolveWorkspaceShortcut(event,{platform:/Mac/i.test(window.navigator.platform)?'mac':'other',tabCount:this.activePane?.tabs.length??0,isPhone:matchMedia('(max-width: 700px)').matches,canOpenWindow:!!workspaceWindowBridge(window.zorid)});
+    if(shortcut.handled){
+      event.preventDefault();event.stopPropagation();const action=shortcut.action;
+      if(action?.type==='new-window')this.run(()=>this.newWindow());
+      else if(this.vault&&action?.type==='new-file')this.run(()=>this.newNote());
+      else if(this.vault&&action?.type==='new-tab')this.run(()=>this.newTab());
+      else if(this.vault&&action?.type==='select-tab'){
+        const pane=this.activePane,tab=pane.tabs[action.index],generation=this.vaultGeneration,previousActive=pane.active,previousPath=this.current(pane)?.path,version=pane.renderVersion,activation=this.paneActivationRevision;
+        const request=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,request);
+        if(tab)this.run(async()=>{
+          if(request!==this.navigationIntent.get(pane)||activation!==this.paneActivationRevision)return;
+          if(pane.active===tab.id){this.focusPane(pane);return;}
+          await this.flushPane(pane);
+          if(request!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab)||pane.active!==previousActive||this.current(pane)?.path!==previousPath||pane.renderVersion!==version||activation!==this.paneActivationRevision)return;
+          pane.active=tab.id;this.activate(pane);await this.renderPane(pane);
+          if(request===this.navigationIntent.get(pane)&&pane.active===tab.id&&activation===this.paneActivationRevision)this.focusPane(pane);this.saveSession();
+        });
+      }
+      return;
+    }
+    if(!this.vault)return;
     if(!(event.metaKey||event.ctrlKey))return;const key=event.key.toLowerCase();let action:(()=>unknown)|undefined;
-    if(key==='n')action=()=>this.newNote();else if(key==='o')action=()=>this.quickSwitcher();else if(key==='p')action=()=>this.commandPalette();else if(key===',')action=()=>this.showSettings();else if(key==='e')action=()=>this.toggleReading();else if(key==='f'&&!event.shiftKey&&this.activePane.pdfView)action=()=>this.activePane.pdfView?.showSearch();else if(key==='s')action=()=>this.flush();else if(key==='t')action=()=>this.newTab();else if(key==='w')action=()=>this.closeTab(this.activePane,this.current());else if(key==='f'&&event.shiftKey)action=()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector('input')?.focus();};
+    if(key==='o')action=()=>this.quickSwitcher();else if(key==='p')action=()=>this.commandPalette();else if(key===',')action=()=>this.showSettings();else if(key==='e')action=()=>this.toggleReading();else if(key==='f'&&!event.shiftKey&&this.activePane.pdfView)action=()=>this.activePane.pdfView?.showSearch();else if(key==='s')action=()=>this.flush();else if(key==='w')action=()=>this.closeTab(this.activePane,this.current());else if(key==='f'&&event.shiftKey)action=()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector('input')?.focus();};
     if(action){event.preventDefault();this.run(action);}
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}

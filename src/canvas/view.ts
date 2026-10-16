@@ -2,6 +2,7 @@ import { CANVAS_NODE_TYPES, CanvasDocument } from './document.ts';
 import type { CanvasEdge, CanvasNode, CanvasValue } from './document.ts';
 import { showContextMenu } from '../platform/context-menu.ts';
 import type { ContextMenuItem } from '../platform/context-menu.ts';
+import { icon } from '../ui/dom.ts';
 
 export interface CanvasViewOptions {
   document: CanvasDocument;
@@ -24,17 +25,17 @@ export interface CanvasView {
   hasPendingChanges(): boolean;
   destroy(): void;
 }
-interface ProjectedNode { data: CanvasNode; index: number }
+interface ProjectedNode { data: CanvasNode; original: CanvasNode }
 interface Projection { nodes: Map<string, ProjectedNode>; edges: Map<string, CanvasEdge>; hidden: number }
 
 /** The view's map projection never deletes or normalizes the source records. */
 export function projectCanvas(document: CanvasDocument): Projection {
   const nodes = new Map<string, ProjectedNode>(), edges = new Map<string, CanvasEdge>();
-  document.nodes.forEach((node, index) => {
+  document.nodes.forEach(node => {
     const previous = nodes.get(node.id);
     if (!previous && !(CANVAS_NODE_TYPES as readonly string[]).includes(node.type)) return;
     const data = { ...previous?.data, ...node, type: previous?.data.type ?? node.type } as CanvasNode;
-    nodes.set(node.id, { data: { ...data, x: Math.round(data.x), y: Math.round(data.y), width: Math.round(data.width), height: Math.round(data.height) }, index });
+    nodes.set(node.id, { data: { ...data, x: Math.round(data.x), y: Math.round(data.y), width: Math.round(data.width), height: Math.round(data.height) }, original: node });
   });
   for (const edge of document.edges) {
     if (nodes.has(edge.fromNode) && nodes.has(edge.toNode)) edges.set(edge.id, edge);
@@ -51,23 +52,26 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const dom = parent.ownerDocument, win = dom.defaultView!;
   const element = dom.createElement('section'); element.className = 'zorid-canvas';
   const toolbar = dom.createElement('div'); toolbar.className = 'zorid-canvas-toolbar'; toolbar.setAttribute('aria-label', 'Canvas controls');
+  const cardMenu = dom.createElement('div'); cardMenu.className = 'zorid-canvas-card-menu'; cardMenu.setAttribute('aria-label', 'Canvas creation');
   const viewport = dom.createElement('div'); viewport.className = 'zorid-canvas-viewport'; viewport.tabIndex = 0; viewport.setAttribute('aria-label', 'Canvas');
   const world = dom.createElement('div'); world.className = 'zorid-canvas-world';
   const svg = dom.createElementNS(svgNS, 'svg'); svg.classList.add('zorid-canvas-edges');
-  const defs = dom.createElementNS(svgNS, 'defs'), marker = dom.createElementNS(svgNS, 'marker'), arrow = dom.createElementNS(svgNS, 'path');
-  const markerId = `zorid-canvas-arrow-${++viewSequence}`;
-  marker.id = markerId; marker.setAttribute('viewBox', '0 0 10 10'); marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5'); marker.setAttribute('markerWidth', '7'); marker.setAttribute('markerHeight', '7'); marker.setAttribute('orient', 'auto-start-reverse');
-  arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); arrow.setAttribute('fill', 'context-stroke'); marker.append(arrow); defs.append(marker); svg.append(defs);
-  world.append(svg); viewport.append(world);
+  const background = dom.createElementNS(svgNS, 'svg'); background.classList.add('zorid-canvas-background'); background.setAttribute('aria-hidden', 'true');
+  const pattern = dom.createElementNS(svgNS, 'pattern'), dot = dom.createElementNS(svgNS, 'circle'), fill = dom.createElementNS(svgNS, 'rect');
+  pattern.id = `zorid-canvas-dots-${++viewSequence}`; pattern.setAttribute('patternUnits', 'userSpaceOnUse');
+  dot.setAttribute('cx', '.7'); dot.setAttribute('cy', '.7'); dot.setAttribute('r', '.7'); pattern.append(dot);
+  fill.setAttribute('width', '100%'); fill.setAttribute('height', '100%'); fill.setAttribute('fill', `url(#${pattern.id})`); background.append(pattern, fill);
+  world.append(svg); viewport.append(background, world);
   const status = dom.createElement('div'); status.className = 'zorid-canvas-status'; status.setAttribute('role', 'status');
-  element.append(toolbar, viewport, status); parent.append(element);
+  element.append(viewport, toolbar, cardMenu, status); parent.append(element);
   let document = options.document, projection = projectCanvas(document), closed = false;
   let tx = 40, ty = 40, scale = 1, space = false, saveQueue = Promise.resolve();
   const undoStack: string[] = [], redoStack: string[] = [], selectedNodes = new Set<string>(), selectedEdges = new Set<string>();
-  const nodeEls = new Map<string, HTMLElement>(), edgeEls = new Map<string, { group: SVGGElement; path: SVGPathElement; label: SVGTextElement }>();
+  const nodeEls = new Map<string, HTMLElement>(), edgeEls = new Map<string, { group: SVGGElement; path: SVGPathElement; hit: SVGPathElement; label: HTMLDivElement; arrows: SVGGElement[] }>();
   let drag: { id: number; mode: 'move' | 'pan' | 'select'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let editorOriginal = '';
+  let editorFailure: unknown;
   let finishEditing: ((save: boolean) => void) | undefined;
   let saveVersion = 0, completedSaveVersion = 0;
   let failedSave: { error: unknown; version: number } | undefined;
@@ -78,40 +82,75 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     try { options.onError?.(error); } catch { /* Error observers must not interrupt the persistence queue. */ }
   };
   const invoke = (action: (() => void | Promise<void>) | undefined) => { if (!closed && action) try { Promise.resolve(action()).catch(report); } catch (error) { report(error); } };
-  const button = (name: string, action: () => void) => { const button = dom.createElement('button'); button.type = 'button'; button.textContent = name; button.setAttribute('aria-label', name); button.onclick = () => { if (!closed) action(); }; toolbar.append(button); return button; };
-  const undoButton = button('Undo', () => undo()), redoButton = button('Redo', () => redo());
-  button('Add card', () => {
+  const button = (host: HTMLElement, name: string, glyph: string, action: () => void, size = 16) => {
+    const button = dom.createElement('button'); button.type = 'button'; button.title = name; button.setAttribute('aria-label', name);
+    button.append(icon(glyph, size, dom)); button.onclick = () => { if (!closed && !editor) action(); }; host.append(button); return button;
+  };
+  const controlGroup = () => { const group = dom.createElement('div'); group.className = 'zorid-canvas-control-group'; toolbar.append(group); return group; };
+  const zoomControls = controlGroup();
+  button(zoomControls, 'Zoom in', 'plus', () => zoom(scale * Math.SQRT2));
+  button(zoomControls, 'Reset zoom', 'rotate-cw', () => zoom(1));
+  button(zoomControls, 'Fit canvas', 'maximize', () => fit());
+  button(zoomControls, 'Zoom out', 'minus', () => zoom(scale / Math.SQRT2));
+  const historyControls = controlGroup();
+  const undoButton = button(historyControls, 'Undo', 'undo-2', () => undo()), redoButton = button(historyControls, 'Redo', 'redo-2', () => redo());
+  button(cardMenu, 'Add card', 'sticky-note', () => {
     let id = `node-${Date.now().toString(36)}`; let suffix = 0; while (document.getNode(id)) id = `node-${Date.now().toString(36)}-${++suffix}`;
-    commit(draft => draft.addNode({ id, type: 'text', x: Math.round((100 - tx) / scale), y: Math.round((100 - ty) / scale), width: 250, height: 120, text: '' }));
+    commit(draft => draft.addNode({ id, type: 'text', x: Math.round(((viewport.clientWidth || 800) / 2 - tx) / scale - 125), y: Math.round(((viewport.clientHeight || 600) / 2 - ty) / scale - 30), width: 250, height: 60, text: '' }));
     selectedNodes.clear(); selectedNodes.add(id); paintSelection(); startEditing(id);
-  });
-  button('Zoom in', () => zoom(scale * 1.2)); button('Zoom out', () => zoom(scale / 1.2)); button('Fit canvas', fit);
+  }, 32);
   const position = (node: CanvasNode) => {
     const preview = drag?.positions.get(node.id);
     return preview ? { ...node, x: preview.x + drag!.dx, y: preview.y + drag!.dy } : node;
   };
   function color(value: CanvasValue | undefined): string {
     if (typeof value !== 'string') return '';
-    const palette = ['#c85454', '#d88b3b', '#c6aa34', '#55a36c', '#5689b5', '#9467bd'];
-    return /^[1-6]$/.test(value) ? palette[Number(value) - 1] : /^#[\da-f]{3,8}$/i.test(value) ? value : '';
+    return /^[1-6]$/.test(value) ? `var(--zc-color-${value})` : /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.test(value) ? value : '';
+  }
+  function groupForeground(value: CanvasValue | undefined): string {
+    if (typeof value !== 'string' || !color(value)) return '';
+    if (/^[1-6]$/.test(value)) return `var(--zc-label-${value})`;
+    const hex = value.slice(1), rgb = hex.length <= 4 ? hex.slice(0, 3).split('').map(digit => parseInt(digit + digit, 16)) : [0, 2, 4].map(offset => parseInt(hex.slice(offset, offset + 2), 16));
+    const brightness = rgb[0] * .299 + rgb[1] * .587 + rgb[2] * .114;
+    return brightness >= 150 ? 'var(--text-on-accent-inverted, #000)' : 'var(--text-on-accent, #fff)';
   }
   function drawNode(id: string): void {
     const node = position(projection.nodes.get(id)!.data), item = nodeEls.get(id)!;
     item.style.left = `${node.x}px`; item.style.top = `${node.y}px`; item.style.width = `${Math.max(1, node.width)}px`; item.style.height = `${Math.max(1, node.height)}px`;
+    item.classList.toggle('is-dragging', !!drag?.positions.has(id) && !!(drag.dx || drag.dy));
   }
   function endpoint(node: CanvasNode, side: CanvasValue | undefined, other: CanvasNode) {
-    if (!['left', 'right', 'top', 'bottom'].includes(String(side))) side = other.x >= node.x ? 'right' : 'left';
-    return { x: node.x + (side === 'left' ? 0 : side === 'right' ? node.width : node.width / 2), y: node.y + (side === 'top' ? 0 : side === 'bottom' ? node.height : node.height / 2) };
+    if (!['left', 'right', 'top', 'bottom'].includes(String(side))) {
+      const dx = other.x + other.width / 2 - node.x - node.width / 2, dy = other.y + other.height / 2 - node.y - node.height / 2;
+      side = Math.abs(dy) * node.width > Math.abs(dx) * node.height ? dy >= 0 ? 'bottom' : 'top' : dx >= 0 ? 'right' : 'left';
+    }
+    return { x: node.x + (side === 'left' ? 0 : side === 'right' ? node.width : node.width / 2), y: node.y + (side === 'top' ? 0 : side === 'bottom' ? node.height : node.height / 2), side: side as 'top' | 'right' | 'bottom' | 'left' };
   }
   function drawEdge(id: string): void {
     const edge = projection.edges.get(id)!, item = edgeEls.get(id)!, from = position(projection.nodes.get(edge.fromNode)!.data), to = position(projection.nodes.get(edge.toNode)!.data);
     const a = endpoint(from, edge.fromSide, to), b = endpoint(to, edge.toSide, from);
-    item.path.setAttribute('d', `M ${a.x} ${a.y} L ${b.x} ${b.y}`);
-    item.label.setAttribute('x', String((a.x + b.x) / 2)); item.label.setAttribute('y', String((a.y + b.y) / 2 - 8));
+    const outward = (point: typeof a, distance: number) => ({ ...point, x: point.x + (point.side === 'right' ? distance : point.side === 'left' ? -distance : 0), y: point.y + (point.side === 'bottom' ? distance : point.side === 'top' ? -distance : 0) });
+    const start = outward(a, 7), end = outward(b, 7), reach = Math.min(150, Math.max(70, Math.hypot(end.x - start.x, end.y - start.y) / 2));
+    const first = outward(start, reach), second = outward(end, reach);
+    let path = `M ${start.x} ${start.y} C ${first.x} ${first.y} ${second.x} ${second.y} ${end.x} ${end.y}`;
+    if ((edge.fromEnd ?? 'none') !== 'arrow') path = `M ${a.x} ${a.y} L ${start.x} ${start.y} ${path}`;
+    if ((edge.toEnd ?? 'arrow') !== 'arrow') path += ` M ${end.x} ${end.y} L ${b.x} ${b.y}`;
+    item.path.setAttribute('d', path); item.hit.setAttribute('d', path);
+    for (const arrow of item.arrows) {
+      const point = arrow.dataset.end === 'from' ? a : b, degrees = { top: 180, right: 270, bottom: 0, left: 90 }[point.side];
+      arrow.setAttribute('transform', `translate(${point.x} ${point.y}) rotate(${degrees})`);
+    }
+    item.label.style.left = `${(start.x + 3 * first.x + 3 * second.x + end.x) / 8}px`;
+    item.label.style.top = `${(start.y + 3 * first.y + 3 * second.y + end.y) / 8}px`;
   }
-  function transform(): void { world.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; viewport.dataset.zoom = String(scale); }
+  function transform(): void {
+    world.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; viewport.dataset.zoom = String(scale);
+    const zoomLevel = Math.log2(scale), spacing = (zoomLevel < -3.3 ? 160 : zoomLevel < -2.16 ? 80 : zoomLevel < -.91 ? 40 : 20) * scale;
+    pattern.setAttribute('x', String(tx % spacing)); pattern.setAttribute('y', String(ty % spacing)); pattern.setAttribute('width', String(spacing)); pattern.setAttribute('height', String(spacing));
+    const compensation = Math.sqrt(1 / scale); element.style.setProperty('--zc-zoom-compensation', String(compensation)); element.classList.toggle('is-zoomed-out', zoomLevel <= -1.7);
+  }
   function zoom(next: number, x = viewport.clientWidth / 2, y = viewport.clientHeight / 2): void {
-    next = Math.max(0.1, Math.min(4, next)); const ratio = next / scale;
+    next = Math.max(1 / 16, Math.min(2, next)); const ratio = next / scale;
     tx = x - (x - tx) * ratio; ty = y - (y - ty) * ratio; scale = next; transform();
   }
   function fit(nodes = [...projection.nodes.values()].map(node => node.data)): void {
@@ -119,7 +158,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     const minX = Math.min(...nodes.map(n => n.x)), minY = Math.min(...nodes.map(n => n.y));
     const width = Math.max(...nodes.map(n => n.x + n.width)) - minX, height = Math.max(...nodes.map(n => n.y + n.height)) - minY;
     const vw = viewport.clientWidth || 800, vh = viewport.clientHeight || 600;
-    scale = Math.max(0.1, Math.min(1, (vw - 80) / Math.max(1, width), (vh - 80) / Math.max(1, height))); tx = (vw - width * scale) / 2 - minX * scale; ty = (vh - height * scale) / 2 - minY * scale; transform();
+    scale = Math.max(1 / 16, Math.min(1, (vw - 80) / Math.max(1, width), (vh - 80) / Math.max(1, height))); tx = (vw - width * scale) / 2 - minX * scale; ty = (vh - height * scale) / 2 - minY * scale; transform();
   }
   function paintSelection(): void {
     for (const [id, item] of nodeEls) { item.classList.toggle('is-selected', selectedNodes.has(id)); item.setAttribute('aria-selected', String(selectedNodes.has(id))); }
@@ -128,30 +167,42 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   function render(): void {
     menuVersion++;
     finishEditing?.(false); projection = projectCanvas(document);
-    for (const item of nodeEls.values()) item.remove(); for (const item of edgeEls.values()) item.group.remove(); nodeEls.clear(); edgeEls.clear();
+    for (const item of nodeEls.values()) item.remove(); for (const item of edgeEls.values()) { item.group.remove(); item.label.remove(); } nodeEls.clear(); edgeEls.clear();
     for (const id of selectedNodes) if (!projection.nodes.has(id)) selectedNodes.delete(id);
     for (const id of selectedEdges) if (!projection.edges.has(id)) selectedEdges.delete(id);
     for (const [id, { data: node }] of projection.nodes) {
       const item = dom.createElement('div'); item.className = `zorid-canvas-node is-${node.type}`; item.dataset.nodeId = id; item.setAttribute('role', 'option');
-      item.style.setProperty('--canvas-node-color', color(node.color) || 'var(--background-modifier-border, #777)');
+      item.style.setProperty('--canvas-node-color', color(node.color) || 'var(--zc-border)'); item.classList.toggle('is-themed', !!color(node.color));
+      const frame = dom.createElement('div'); frame.className = 'zorid-canvas-node-frame';
       const content = dom.createElement('div'); content.className = 'zorid-canvas-node-content';
       if (node.type === 'text') { content.textContent = String(node.text ?? ''); item.setAttribute('aria-label', 'Text card'); }
-      else if (node.type === 'group') { content.textContent = String(node.label ?? 'Group'); item.setAttribute('aria-label', `Group: ${content.textContent}`); }
+      else if (node.type === 'group') {
+        const label = dom.createElement('div'); label.className = 'zorid-canvas-group-label'; label.textContent = String(node.label ?? ''); label.hidden = !label.textContent;
+        label.style.setProperty('--zc-label-foreground', groupForeground(node.color));
+        item.append(label); item.setAttribute('aria-label', `Group: ${label.textContent}`);
+      }
       else {
         const open = dom.createElement('button'); open.type = 'button'; open.className = 'zorid-canvas-open';
         open.textContent = String(node.type === 'file' ? node.file ?? '' : node.url ?? ''); open.title = open.textContent;
         open.onclick = () => node.type === 'file' ? invoke(options.openFile ? () => options.openFile!(String(node.file), typeof node.subpath === 'string' ? node.subpath : undefined) : undefined) : invoke(options.openLink ? () => options.openLink!(String(node.url)) : undefined);
         content.append(open); item.setAttribute('aria-label', `${node.type === 'file' ? 'File' : 'Link'}: ${open.textContent}`);
+        const label = dom.createElement('div'); label.className = 'zorid-canvas-node-label';
+        label.textContent = node.type === 'link' ? String(node.url ?? '') : String(node.file ?? '').split('/').at(-1)!.replace(/\.md$/i, '') + (node.subpath ? ` › ${String(node.subpath).replace(/^#/, '')}` : '');
+        item.append(label);
       }
-      item.append(content); world.append(item); nodeEls.set(id, item); drawNode(id);
+      frame.append(content); item.append(frame); world.append(item); nodeEls.set(id, item); drawNode(id);
       item.ondblclick = event => { if (node.type === 'text') { event.preventDefault(); startEditing(id); } };
     }
     for (const [id, edge] of projection.edges) {
-      const group = dom.createElementNS(svgNS, 'g'), path = dom.createElementNS(svgNS, 'path'), label = dom.createElementNS(svgNS, 'text');
-      group.dataset.edgeId = id; group.classList.add('zorid-canvas-edge'); path.setAttribute('fill', 'none'); path.setAttribute('stroke', color(edge.color) || 'currentColor');
-      if ((edge.fromEnd ?? 'none') === 'arrow') path.setAttribute('marker-start', `url(#${markerId})`);
-      if ((edge.toEnd ?? 'arrow') === 'arrow') path.setAttribute('marker-end', `url(#${markerId})`);
-      label.textContent = typeof edge.label === 'string' ? edge.label : ''; group.append(path, label); svg.append(group); edgeEls.set(id, { group, path, label }); drawEdge(id);
+      const group = dom.createElementNS(svgNS, 'g'), path = dom.createElementNS(svgNS, 'path'), hit = dom.createElementNS(svgNS, 'path'), label = dom.createElement('div'), arrows: SVGGElement[] = [];
+      group.dataset.edgeId = id; group.classList.add('zorid-canvas-edge'); group.style.setProperty('--canvas-edge-color', color(edge.color) || 'var(--zc-border)');
+      path.classList.add('zorid-canvas-edge-line'); hit.classList.add('zorid-canvas-edge-hit'); group.append(hit, path);
+      for (const [end, marker] of [['from', edge.fromEnd ?? 'none'], ['to', edge.toEnd ?? 'arrow']]) if (marker === 'arrow') {
+        const wrapper = dom.createElementNS(svgNS, 'g'), triangle = dom.createElementNS(svgNS, 'polygon'); wrapper.dataset.end = String(end);
+        triangle.classList.add('zorid-canvas-arrow'); triangle.setAttribute('points', '0,0 6.5,10.4 -6.5,10.4'); wrapper.append(triangle); arrows.push(wrapper); group.append(wrapper);
+      }
+      label.className = 'zorid-canvas-edge-label'; label.dataset.edgeLabelId = id; label.textContent = typeof edge.label === 'string' ? edge.label : ''; label.hidden = !label.textContent;
+      svg.append(group); world.append(label); edgeEls.set(id, { group, path, hit, label, arrows }); drawEdge(id);
     }
     status.textContent = projection.hidden ? `${projection.hidden} unrendered or duplicate records retained in the file` : '';
     undoButton.disabled = !undoStack.length; redoButton.disabled = !redoStack.length; transform(); paintSelection();
@@ -174,6 +225,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   async function flush(): Promise<void> {
     if (!closed) {
       finishEditing?.(true);
+      if (editorFailure) throw editorFailure;
       // Retry only a failure already known on entry, not a first failure that
       // occurs while this flush waits. Concurrent flushes share that retry.
       if (failedSave && completedSaveVersion === saveVersion) publish();
@@ -197,17 +249,23 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (closed || editor || drag || !redoStack.length) return;
     undoStack.push(document.toString()); document.replaceSource(redoStack.pop()!); render(); publish();
   }
-  function openValueEditor(host: HTMLElement, label: string, value: string, change: (draft: CanvasDocument, value: string) => void, cleanup?: () => void): void {
+  function openValueEditor(host: HTMLElement, label: string, value: string, change: (draft: CanvasDocument, value: string) => void, cleanup?: () => void, afterSave?: () => void): void {
     if (editor || closed) return;
     menuVersion++;
     const input = dom.createElement('textarea'); input.className = 'zorid-canvas-text-editor'; input.setAttribute('aria-label', label); input.value = value;
     input.title = 'Ctrl/⌘ Enter to save; Escape to cancel';
-    host.append(input); editor = input; editorOriginal = input.value; input.focus();
+    host.append(input); editor = input; editorOriginal = input.value; editorFailure = undefined; input.focus();
     let finished = false;
     const finish = (save: boolean) => {
-      if (finished) return; finished = true; editor = undefined; finishEditing = undefined;
+      if (finished) return;
+      let next: CanvasDocument | undefined;
+      if (save && !closed && input.value !== value) {
+        try { next = CanvasDocument.parse(document.toString()); change(next, input.value); }
+        catch (error) { editorFailure = error; report(error); return; }
+      }
+      finished = true; editor = undefined; editorFailure = undefined; finishEditing = undefined;
       input.onblur = null; input.onkeydown = null; input.remove(); cleanup?.();
-      if (save && !closed) commit(draft => change(draft, input.value));
+      if (next) { commit(draft => draft.replaceSource(next!.toString())); afterSave?.(); }
       if (!closed) viewport.focus();
     };
     finishEditing = finish;
@@ -218,23 +276,30 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     const node = projection.nodes.get(id), host = nodeEls.get(id);
     if (!node || !host || field === 'text' && node.data.type !== 'text') return;
     const label = field === 'text' ? 'Edit card text' : field === 'label' ? 'Edit group label' : 'Change URL';
+    const original = node.original;
     openValueEditor(host, label, String(node.data[field] ?? ''), (draft, value) => {
-      draft.setRoot('nodes', draft.nodes.map((raw, index) => index === node.index ? { ...raw, [field]: value } : raw));
+      const index = recordIndex(draft.nodes, original);
+      draft.setRoot('nodes', draft.nodes.map((raw, i) => i === index ? { ...raw, [field]: value } : raw));
     });
   }
-  function popupEditor(label: string, value: string, change: (draft: CanvasDocument, value: string) => void): void {
+  function recordIndex(records: readonly (CanvasNode | CanvasEdge)[], original: CanvasNode | CanvasEdge): number {
+    const matches = records.map((record, index) => ({ record, index })).filter(({ record }) => record.id === original.id && JSON.stringify(record) === JSON.stringify(original));
+    if (matches.length !== 1) throw new Error('Canvas item changed while editing. Keep this draft or cancel and reopen the item.');
+    return matches[0].index;
+  }
+  function popupEditor(label: string, value: string, change: (draft: CanvasDocument, value: string) => void, afterSave?: () => void): void {
     if (closed || editor) return;
     const host = dom.createElement('div'); host.setAttribute('role', 'dialog'); host.setAttribute('aria-label', label);
     Object.assign(host.style, { position: 'absolute', left: '20px', top: '20px', width: 'min(320px, calc(100% - 40px))', height: '100px', zIndex: '6' });
-    viewport.append(host); openValueEditor(host, label, value, change, () => host.remove());
+    viewport.append(host); openValueEditor(host, label, value, change, () => host.remove(), afterSave);
   }
-  function clearDrag(): void { drag = undefined; box.remove(); }
+  function clearDrag(): void { drag = undefined; box.remove(); viewport.classList.remove('is-panning'); }
   const pointerDown = (event: PointerEvent) => {
     if (closed || editor || event.isPrimary === false) return;
     menuVersion++;
     const target = event.target as Element;
     if (target.closest('button,input,textarea,a')) return;
-    const node = target.closest<HTMLElement>('[data-node-id]'), edge = target.closest<SVGElement>('[data-edge-id]');
+    const node = target.closest<HTMLElement>('[data-node-id]'), edge = target.closest<HTMLElement | SVGElement>('[data-edge-id],[data-edge-label-id]');
     const pan = event.button === 1 || (event.button === 0 && space); if (!pan && event.button !== 0) return;
     event.preventDefault(); viewport.focus();
     const prior = new Set(selectedNodes);
@@ -244,7 +309,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         if (event.shiftKey) { if (selectedNodes.has(id)) selectedNodes.delete(id); else selectedNodes.add(id); }
         else if (!selectedNodes.has(id)) { selectedNodes.clear(); selectedEdges.clear(); selectedNodes.add(id); }
       } else if (edge) {
-        const id = edge.dataset.edgeId!; if (!event.shiftKey) { selectedNodes.clear(); selectedEdges.clear(); }
+        const id = (edge.dataset.edgeId ?? edge.dataset.edgeLabelId)!; if (!event.shiftKey) { selectedNodes.clear(); selectedEdges.clear(); }
         if (selectedEdges.has(id)) selectedEdges.delete(id); else selectedEdges.add(id);
       } else if (!event.shiftKey) { selectedNodes.clear(); selectedEdges.clear(); }
       paintSelection();
@@ -253,6 +318,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     const positions = new Map<string, { x: number; y: number }>();
     if (!pan && node && selectedNodes.has(node.dataset.nodeId!)) for (const id of selectedNodes) { const data = projection.nodes.get(id)!.data; positions.set(id, { x: data.x, y: data.y }); }
     drag = { id: event.pointerId, mode: pan ? 'pan' : node ? 'move' : 'select', startX: event.clientX, startY: event.clientY, x: tx, y: ty, dx: 0, dy: 0, positions, prior: event.shiftKey ? prior : new Set() };
+    viewport.classList.toggle('is-panning', pan);
     if (drag.mode === 'select') viewport.append(box);
     viewport.setPointerCapture?.(event.pointerId);
   };
@@ -276,8 +342,12 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (closed || !drag || drag.id !== event.pointerId) return;
     const ended = drag; clearDrag();
     if (ended.mode === 'move' && !cancelled && (ended.dx || ended.dy)) {
-      const indices = new Map([...ended.positions].map(([id, point]) => [projection.nodes.get(id)!.index, point]));
-      commit(draft => draft.setRoot('nodes', draft.nodes.map((node, index) => { const point = indices.get(index); return point ? { ...node, x: point.x + ended.dx, y: point.y + ended.dy } : node; })));
+      commit(draft => {
+        const indices = new Map([...ended.positions].map(([id, point]) => [recordIndex(draft.nodes, projection.nodes.get(id)!.original), point]));
+        draft.setRoot('nodes', draft.nodes.map((node, index) => { const point = indices.get(index); return point ? { ...node, x: point.x + ended.dx, y: point.y + ended.dy } : node; }));
+      });
+      // A rejected transaction must also restore the preview to source geometry.
+      for (const id of ended.positions.keys()) drawNode(id); for (const id of projection.edges.keys()) drawEdge(id);
     } else if (ended.mode === 'move') { for (const id of ended.positions.keys()) drawNode(id); for (const id of projection.edges.keys()) drawEdge(id); }
     if (viewport.hasPointerCapture?.(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
   };
@@ -332,7 +402,8 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (target.closest('textarea,input,select,[contenteditable="true"]')) return;
     event.preventDefault(); event.stopPropagation();
     const nodeId = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId;
-    const edgeId = target.closest<SVGElement>('[data-edge-id]')?.dataset.edgeId;
+    const edgeTarget = target.closest<HTMLElement | SVGElement>('[data-edge-id],[data-edge-label-id]');
+    const edgeId = edgeTarget?.dataset.edgeId ?? edgeTarget?.dataset.edgeLabelId;
     const owner = document;
     finishEditing?.(true);
     const openingVersion = ++menuVersion, openingSource = document.toString();
@@ -384,8 +455,10 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         separator(); add('remove', 'Remove', removeSelection);
       } else if (edge && edgeId) {
         add('edit-label', 'Edit label', () => {
-          const index = document.edges.indexOf(edge);
-          popupEditor('Edit connection label', String(edge.label ?? ''), (draft, label) => draft.setRoot('edges', draft.edges.map((record, i) => i === index ? { ...record, label } : record)));
+          popupEditor('Edit connection label', String(edge.label ?? ''), (draft, label) => {
+            const index = recordIndex(draft.edges, edge);
+            draft.setRoot('edges', draft.edges.map((record, i) => i === index ? { ...record, label } : record));
+          });
         });
         add('follow-connection', 'Follow connection', () => {
           const from = projection.nodes.get(edge.fromNode)!.data, to = projection.nodes.get(edge.toNode)!.data;
@@ -396,9 +469,12 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         separator(); add('remove', 'Remove', removeSelection);
       } else {
         add('add-card', 'Add card', () => create('text'));
-        add('add-web-page', 'Add web page', () => popupEditor('Web page URL', '', (draft, url) => {
-          if (url.trim()) draft.addNode({ id: uniqueNodeId(), type: 'link', ...point, width: 400, height: 400, url });
-        }));
+        add('add-web-page', 'Add web page', () => {
+          let id: string | undefined;
+          popupEditor('Web page URL', '', (draft, url) => {
+            if (url.trim()) { id = uniqueNodeId(); draft.addNode({ id, type: 'link', ...point, width: 400, height: 400, url }); }
+          }, () => { if (id) { selectedNodes.clear(); selectedEdges.clear(); selectedNodes.add(id); paintSelection(); } });
+        });
         add('create-group', 'Create group', () => create('group'));
         if (undoStack.length || redoStack.length) separator();
         if (undoStack.length) add('undo', 'Undo', undo);

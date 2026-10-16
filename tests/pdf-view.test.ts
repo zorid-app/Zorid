@@ -26,7 +26,7 @@ function fixture(t:TestContext,options:PdfViewOptions={}){
   let acquired=0;const resources={async acquire(){acquired++;return {url:'blob:owned-pdf',type:'application/pdf',async arrayBuffer(){return Uint8Array.of(1,2,3).buffer;},release(){disposed.push('lease');}};}};
   const view=createPdfView(root,'Folder/Example.pdf',resources,{loadEngine:async()=>engine,...options});
   t.after(()=>view.destroy());
-  const resolve=()=>loading.resolve({numPages:3,async getPageLabels(){return ['i','ii','iii'];},async destroy(){disposed.push('doc');}});
+  const resolve=()=>loading.resolve({numPages:3,async getPageLabels(){return ['i','ii','iii'];},async getOutline(){return null;},async getPage(){throw new Error('not requested');},async getDestination(){return null;},async getPageIndex(){return 0;},async destroy(){disposed.push('doc');}});
   return {env,root,view,events,hashes,disposed,opens,loading,task,resolve,get bus(){return bus;},get viewer(){return viewer;},get acquired(){return acquired;}};
 }
 async function ticks(){for(let i=0;i<6;i++)await Promise.resolve();}
@@ -181,7 +181,7 @@ test('destroy resolves ready during a pending document request and consumes its 
 });
 
 test('destroy resolves ready while page labels are pending without updating disposed controls',async t=>{
-  const f=fixture(t),labels=deferred<string[]|null>();f.loading.resolve({numPages:3,getPageLabels:()=>labels.promise,async destroy(){}});await ticks();let settled=false;void f.view.ready.then(()=>{settled=true;});f.view.destroy();await ticks();assert.equal(settled,true);const eventCount=f.events.length;labels.resolve(['I','II','III']);await ticks();assert.equal(f.events.length,eventCount);assert.equal(f.root.childElementCount,0);
+  const f=fixture(t),labels=deferred<string[]|null>();f.loading.resolve({numPages:3,getPageLabels:()=>labels.promise,async getOutline(){return null;},async destroy(){}});await ticks();let settled=false;void f.view.ready.then(()=>{settled=true;});f.view.destroy();await ticks();assert.equal(settled,true);const eventCount=f.events.length;labels.resolve(['I','II','III']);await ticks();assert.equal(f.events.length,eventCount);assert.equal(f.root.childElementCount,0);
 });
 
 test('closing during byte materialization releases the lease and prevents a late PDF open',async t=>{
@@ -202,7 +202,7 @@ test('compact PDF toolbar puts fit and spread actions in the checked display men
   const f=fixture(t,{embed:true});f.resolve();await f.view.ready;
   const toolbar=f.root.querySelector('.zorid-pdf-toolbar')!;
   assert.equal(toolbar.querySelector('select'),null);
-  assert.deepEqual(Array.from(toolbar.querySelectorAll('button')).map(button=>button.getAttribute('aria-label')),['Zoom out','Zoom in','Display options']);
+  assert.deepEqual(Array.from(toolbar.querySelectorAll('button')).map(button=>button.getAttribute('aria-label')),['Toggle sidebar','Sidebar options','Zoom out','Zoom in','Display options']);
   const display=toolbar.querySelector<HTMLButtonElement>('[aria-label="Display options"]')!;
   display.click();const doc=f.env.window.document;
   assert.deepEqual(Array.from(doc.querySelectorAll('[role=menuitemcheckbox]')).map(row=>row.textContent),['Fit width','Fit height','Single page','Two-page (odd)','Two-page (even)']);
@@ -227,4 +227,21 @@ test('PDF search settings stay out of the toolbar and retain functional find fla
   assert.equal(preferences.hidden,true);f.root.querySelector<HTMLButtonElement>('[aria-label="Match case"]')!.click();assert.equal(f.events.findLast(item=>item.name==='find')!.data.caseSensitive,true);button.click();assert.equal(preferences.hidden,false);
   const input=preferences.querySelector<HTMLInputElement>('[aria-label="Whole words"]')!;input.checked=true;input.dispatchEvent(new f.env.window.Event('change'));assert.equal(f.events.findLast(item=>item.name==='find')!.data.entireWord,true);
   f.root.querySelector<HTMLButtonElement>('[aria-label="Close search"]')!.click();assert.equal(preferences.hidden,true);assert.equal(button.getAttribute('aria-expanded'),'false');
+});
+
+test('sidebar toolbar wiring shifts standalone pages but overlays embedded PDFs',async t=>{
+  for(const embed of [false,true]){
+    const f=fixture(t,{embed});f.resolve();await f.view.ready;
+    const toggle=f.root.querySelector<HTMLButtonElement>('[aria-label="Toggle sidebar"]')!,scroller=f.root.querySelector<HTMLElement>('.zorid-pdf-scroll')!;
+    toggle.click();assert.equal(toggle.getAttribute('aria-expanded'),'true');assert.equal(scroller.style.insetInlineStart,embed?'0':'140px');assert.equal(f.root.querySelector<HTMLElement>('.zorid-pdf-sidebar')!.hidden,false);
+    toggle.click();assert.equal(toggle.getAttribute('aria-expanded'),'false');assert.equal(scroller.style.insetInlineStart,'0');f.view.destroy();
+  }
+});
+
+test('sidebar options menu reflects missing outline and opens functional thumbnail view',async t=>{
+  const f=fixture(t);f.resolve();await f.view.ready;const button=f.root.querySelector<HTMLButtonElement>('[aria-label="Sidebar options"]')!;
+  button.click();const items=Array.from(f.env.window.document.querySelectorAll<HTMLButtonElement>('.context-menu-item'));
+  assert.deepEqual(items.map(row=>row.textContent),['Thumbnails','Table of contents','Reveal page in table of contents']);assert.equal(items[1].disabled,true);assert.equal(items[2].disabled,true);
+  items[0].click();await ticks();assert.equal(f.root.querySelector<HTMLElement>('.zorid-pdf-sidebar')!.hidden,false);
+  button.click();f.env.window.document.querySelector<HTMLButtonElement>('.context-menu-item')!.click();await ticks();assert.equal(f.root.querySelector<HTMLElement>('.zorid-pdf-sidebar')!.hidden,true);
 });

@@ -243,10 +243,14 @@ export class Vault {
     return this.enqueue(async () => {
       const path = normalizePath(rawPath);
       this.requireFile(path);
-      if (options.expectedContent !== undefined && await this.adapter.read(path) !== options.expectedContent) {
-        throw new Error(`File changed outside this editor: ${path}`);
+      if (options.expectedContent !== undefined && this.adapter.compareAndWrite) {
+        await this.adapter.compareAndWrite(path, options.expectedContent, text);
+      } else {
+        if (options.expectedContent !== undefined && await this.adapter.read(path) !== options.expectedContent) {
+          throw new Error(`File changed outside this editor: ${path}`);
+        }
+        await this.adapter.write(path, text);
       }
-      await this.adapter.write(path, text);
       // Only the written file needs reindexing. Read it back and use adapter metadata
       // rather than guessing timestamps or treating UTF-16 length as a byte count.
       const content = await this.adapter.read(path);
