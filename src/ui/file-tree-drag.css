@@ -2,8 +2,7 @@
   color: var(--text-on-accent, white);
   background-color: var(--interactive-accent, var(--accent, #7c5cff));
 }
-.file-tree .is-file-drop-target,
-.file-tree.is-file-drop-target {
+.file-tree .is-file-drop-target {
   border-radius: var(--radius-s, 4px);
   background: color-mix(in oklch, var(--interactive-accent, var(--accent, #7c5cff)) 10%, transparent);
 }
@@ -29,3 +28,8 @@
 .file-tree-drag-action:empty { display: none; }
 
 .file-tree-drag-native-image { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.file-tree .tree-row.is-selected {
+  color: var(--nav-item-color-selected, var(--text-normal));
+  background: var(--nav-item-background-selected, var(--background-modifier-active));
+}

@@ -29,3 +29,30 @@ The session preserves its draft across reattachment, isolates row navigation whi
 ## Verification and open gaps
 
 Focused original jsdom tests cover unique case/NFC name allocation, numeric gaps, simultaneous creation, stale creation reveal, creation failure, selection, Escape preservation, composition, repeated Enter plus blur, rejected/corrected names, live ownership changes tree reconstruction and rich-paste flattening with caret retention. All 11 focused tests passed, as did a strict TypeScript check scoped to this helper. Independent file-tree review reproduced and verified the simultaneous-creation fix against the original Vault/MemoryAdapter. These establish helper behavior only. Workspace integration, actual sorting/ancestor expansion, native contenteditable focus/paste/selection, tooltip placement, mobile keyboards and visual parity remain unverified. No complete suite or build was run for this helper-only change.
+
+## Host integration verification
+
+Workspace now creates the default folder first, reveals ancestors, and binds the
+inline rename session. Starting another rename/creation blur-commits the existing
+draft. Rebuilding the tree preserves the draft and only restores its focus when it
+owned focus before the rebuild. Explorer Rename and F2 use this same session.
+Enter/Escape focus the rebuilt tree row only when the retiring edit owned focus;
+this preserves keyboard continuation in the original host. Packaged exitRename
+retains logical tree focus but does not explicitly restore DOM focus, so the exact
+native focus comparison is still pending. Blur never steals focus from its target.
+
+Captured vault and path-lifetime checks run again after dirty buffers flush and
+inside the serialized rename operation; stale inline rename cannot target a new
+vault or an observed replacement. Case/NFC destination collisions are checked
+against the fresh queued snapshot. Native drag/selection/inline-edit geometry has
+not been verified by these jsdom integration checks.
+
+Default-folder allocation is also checked inside the vault mutation queue, after
+refresh. A newly discovered case/NFC alias rejects safely rather than creating a
+duplicate or selecting an unrelated existing folder. A subsequent user retry
+allocates the next available name. Parent-folder lifetime is checked while the
+captured vault remains active; a queued observed parent replacement cannot receive
+this creation. An already accepted creation can still finish in its original vault
+following a vault switch, but cannot take focus in the replacement workspace.
+Changing note navigation, active pane, or explorer tab while allocation is pending
+also suppresses its late rename presentation.

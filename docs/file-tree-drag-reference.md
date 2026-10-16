@@ -46,3 +46,29 @@ The helper never reads, rewrites, deletes or guesses file contents. Its single-f
 These are simulated DOM events without native layout, filesystems or OS drag delivery. The host integration is not part of this module. Native verification must cover dirty buffers and unknown/binary files, physical pointer thresholds, multi-selection gestures, repeated hover expansion while rerendering, root/background and child-row destinations, collision files on case-sensitive and insensitive volumes, vault switching during flush/rename, cancellation and focus delivery, long trees and edge scrolling, and actual light/dark screenshots.
 
 Remaining reference gaps: native/touch drag initiation and mobile context-menu behavior, external attachment import, dragging from links/bookmarks or other windows, manager-wide scroll-edge behavior, exact file/folder/multiple icons in the ghost, selected-folder descendant source tint, and native CSS geometry/typography. The ghost suppresses the native drag image in favor of a local DOM preview; platform image/cursor behavior is unverified. Full file-tree drag parity is not established by this isolated implementation.
+
+## Workspace integration checkpoint
+
+The explorer host keeps one drag controller on the persistent sidebar content,
+with row suppliers refreshed after each render. Observed create/delete/rename
+events invalidate path-lifetime symbols; refreshing entry objects alone does not.
+Moves rebase bookmarks, pane navigation history, collapsed paths and selection
+using exact path boundaries. File content is still moved by the vault transaction.
+
+Additional shipped-source audit (same artifact SHA above, app.js offsets
+1491525–1492345, helper at 1480057): Alt-click without Shift toggles membership;
+Shift adds the anchor range to existing selection, including collapsed descendants.
+The platform modifier bypasses selection and opens a tab. This integration preserves
+that distinction and supports middle-click tabs. Modifier+Alt split/window routing
+is still a separate workspace-window gap. These are static findings; native pointer,
+drag-ghost geometry and OS modifier behavior still require verification.
+
+Root accepts drop and displays the ghost's destination label. No root background
+tint is added: packaged CSS only styles the hovered folder/row, not the root
+nav-files-container class (app.js hover handler at 1524850).
+
+Lifecycle protection covers events observed by the vault. An external replacement
+that disappears and reappears at the same path/type between watcher snapshots may
+look like an ordinary modify event; current adapters do not expose durable file
+identity for that case. Desktop/mobile preflight checks are not atomic exclusion
+against arbitrary external filesystem writers.

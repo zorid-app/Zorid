@@ -766,16 +766,22 @@ test('file-list background menu offers root creation and opens a valid new Canva
   await until(()=>workspace.vault.entries.has('Untitled.md')&&!!currentEditor(),'root note created');
 });
 
-test('a background popup and pending folder prompt cannot create into a replacement vault',async t=>{
-  const {workspace,root,dom,adapter,click}=await setup(t,new MemoryAdapter({'Note.md':'note'}));
+test('a background popup and pending folder creation cannot target a replacement vault',async t=>{
+  class SlowFolderAdapter extends MemoryAdapter {
+    waiting=false;release!:()=>void;gate=new Promise<void>(resolve=>this.release=resolve);
+    override async mkdir(path:string):Promise<void>{this.waiting=true;await this.gate;await super.mkdir(path);}
+  }
+  const adapter=new SlowFolderAdapter({'Note.md':'note'});
+  const {workspace,root,dom}=await setup(t,adapter);
   let finish!:(id:string)=>void;
   Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:()=>new Promise<string>(resolve=>finish=resolve),dismissContextMenu:async()=>{}}});
   root.querySelector('.file-tree')!.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));assert.ok(finish);
-  const prompt=workspace.newFolder();const input=document.querySelector<HTMLInputElement>('[aria-label="New folder"]')!;input.value='Old prompt folder';
+  const creating=workspace.newFolder();await until(()=>adapter.waiting,'folder creation started');
   const other=new MemoryAdapter({'Other.md':'other'});await workspace.openVault({adapter:other,id:'other',label:'Other'});
-  finish('file-list.new-note');click('Create');await prompt;await new Promise(resolve=>setImmediate(resolve));
-  assert.equal((await adapter.list()).some(entry=>entry.path==='Untitled.md'||entry.path==='Old prompt folder'),false);
-  assert.equal((await other.list()).some(entry=>entry.path==='Untitled.md'||entry.path==='Old prompt folder'),false);
+  finish('file-list.new-note');adapter.release();await creating;await new Promise(resolve=>setImmediate(resolve));
+  assert.ok((await adapter.list()).some(entry=>entry.path==='Untitled folder'),'accepted creation remains in its original vault');
+  assert.equal((await other.list()).some(entry=>entry.path==='Untitled.md'||entry.path==='Untitled folder'),false);
+  assert.equal(root.querySelector('[contenteditable="true"]'),null,'old creation cannot steal rename focus in the replacement vault');
 });
 
 for(const kind of ['note','canvas'] as const)test(`new ${kind} waiting on a save preserves a later pane activation`,async t=>{
