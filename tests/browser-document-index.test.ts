@@ -167,4 +167,9 @@ test('fresh and explicitly rebuilt caches are uninitialized rather than corrupt'
   await index.rebuild();status=await index.status();assert.equal(status.rebuildRequired,false);assert.equal(status.current,false);await f.build(index);assert.equal((await index.status()).current,true);await index.close();
 });
 
+test('normal consumer close retires only its unpublished cache reservations',async()=>{
+  const f=fixture();f.file('a','text');const a=f.open(),b=f.open('client-b');await f.build(a);const source=f.source(),stage=await a.begin();await a.pump(stage.stageId);await a.close();
+  const status=await b.status();assert.equal(status.current,true);const next=await b.begin();await b.pump(next.stageId);await b.publish(next.stageId);assert.deepEqual(f.source(),source);await b.close();
+});
+
 test.after(()=>{(globalThis as any).IDBKeyRange=range;});
