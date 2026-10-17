@@ -23,6 +23,7 @@ use std::{
 };
 use tokio::sync::OwnedSemaphorePermit;
 use tonic::{Code, Request, Response, Status};
+use tower::Layer;
 use tower_http::cors::CorsLayer;
 use zorid_sync_protocol::{
     rpc::{self, pb},
@@ -218,7 +219,7 @@ fn router_with_state(state: RelayState, origins: &[String]) -> Result<Router> {
             header::HeaderName::from_static("grpc-status-details-bin"),
         ]);
     Ok(Router::new()
-        .fallback_service(tonic_web::enable(service))
+        .fallback_service(tonic_web::GrpcWebLayer::new().layer(service))
         .layer(middleware::from_fn_with_state(state, bounds))
         .layer(cors))
 }

@@ -64,3 +64,16 @@ and permits held before decoding/after canceled database requests.
 These fixtures do not establish actual normal-browser/Electron/standalone CLI
 sync acceptance. Root's integrated clients, retained-outbox/cursor/restart and
 actual browser frame guard gates remain separate. No production readiness claim.
+
+## Integrated compile follow-up
+
+Root aggregate `1c8001e` first serialized gate `24413` exited 101: the installed
+Tonic Web 0.14.6 exports `GrpcWebLayer`, not `enable`. Corrected adapter composition
+to `GrpcWebLayer::new().layer(service)` using `tower::Layer`; promoted the existing
+Tower dependency from dev-only to normal dependencies. Bounds remain outside the
+translation layer and CORS remains outside bounds. No worker build ran; root
+owns the aggregate rerun. Installed 0.14.6 `lib.rs` exports and `layer.rs` trait
+implementation were inspected directly.
+Independent reviewer `/root/default_lifecycle_review_sol/browser_client_slots`
+approved this narrow correction against installed source; no behavior change or
+further scoped source blocker found. Formatting and whitespace checks pass.

@@ -27,6 +27,7 @@ tonic-web = "=0.14.6"
 http-body = "1"
 http-body-util = "0.1"
 
+tower = { version = "0.5", features = ["util"] }
+
 [dev-dependencies]
 zorid-crypto = { path = "../zorid-crypto" }
-tower = { version = "0.5", features = ["util"] }
