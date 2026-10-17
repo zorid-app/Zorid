@@ -101,7 +101,7 @@ pub(crate) fn validate_metadata(
         }
     }
     for task in &metadata.tasks {
-        if task.line > length.bytes || task.status.chars().count() != 1 {
+        if task.line > length.bytes || task.status.encode_utf16().count() != 1 {
             return Err(IndexError::InvalidRecord);
         }
         range(&task.range)?;

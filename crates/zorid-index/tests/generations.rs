@@ -320,3 +320,22 @@ fn cache_restore_validates_metadata_without_reparsing_source() {
         Err(IndexError::InvalidRecord)
     );
 }
+
+#[test]
+fn forged_cache_task_status_cannot_be_an_astral_scalar() {
+    let generation = build("epoch-a", &[("A.md", "- [x] complete", true)]);
+    let record = generation.records().next().unwrap();
+    let mut metadata = record.metadata().unwrap().clone();
+    assert_eq!(metadata.tasks.len(), 1);
+    metadata.tasks[0].status = "😀".into();
+    assert_eq!(
+        IndexRecord::from_persisted(
+            record.witness().clone(),
+            Some(metadata),
+            record.text_digest().copied(),
+            record.text_bytes(),
+            None
+        ),
+        Err(IndexError::InvalidRecord)
+    );
+}
