@@ -289,6 +289,15 @@ confirmed for Zorid app actions, not shell commands; owner notified.
 
 ### 2026-10-17 — Native follow-up ownership and phone7
 
+Native menu review23:53UTC (117/msg_ae023f00fdd1) withholds acceptance of5adb0e4a:
+cross-folder Move discards selected destination folder identity before atomic
+dispatch, permitting replacement-folder targeting; native pending action journal
+is not recovered/gated on startup and every editor/import/new-note transfer.
+371 owns native durable recovery/gate fixes, coordinating reserved loader seams.
+Atomic destination precondition and compact original receipt/status for large
+recursive results need exact Rust ownership proposals. Retain unknown operations
+and same IDs; no path-based success inference. These menus remain outside build9.
+
 Native document tabs source checkpoint23:51UTC: worker2f48a270, isolated
 tingkai-c/mobile-document-tabs, ordered5824bbfe(model)/2d5e934e(overview), only two
 new Swift files. Root reviewed complete drafted files and final bounded-metadata/
