@@ -116,6 +116,18 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Main77bb43f integrates the reviewed resumable native scan batch after actual
+  independent CLI and rebuilt Electron proof. Fresh CLI init/enroll needed no
+  desktop/server;270dirs completed over22 independent32entry scans with one
+  persisted scanID/stable entries, missing note retained on every partial pass
+  and deleted only at completion; quietrepeat unchanged. Unicode Text write/read
+  matched41,800bytes exactly. Fresh default Electron imported270folders+note,
+  cleared warning, opened larger note and saved typedmarker through Rust;
+  independentCLI/physical41,819bytes exact. App21921 normalQuitexit0. See
+  native-progress-verification.md for hashes, retries and automation limitations.
+  Protobuf foundation integrated17907d8+7e29a08, corrected pinnedpnpm12 environment
+  lock07117b1; isolated worker's original pnpm9 install was misidentified and is
+  explicitly corrected in protobuf-adoption-plan.md. No codec/transport activation.
 - User accepts the transport direction (2026-10-17): keep platform-appropriate
   local connections (Electron IPC/pipes, browser WASM/worker, native bindings,
   direct Rust CLI calls), and favor gRPC for remote sync after a small real-browser
