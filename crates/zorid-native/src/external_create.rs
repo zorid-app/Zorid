@@ -18,12 +18,27 @@ pub fn select_external_file_mode(
     bytes: &[u8],
     policy: ExternalFileMode,
 ) -> Result<FamilyCreateMode> {
+    select_external_file_mode_from_facts(
+        path,
+        std::str::from_utf8(bytes).is_ok(),
+        bytes.contains(&0),
+        policy,
+    )
+}
+
+/// Content classification facts may come from an inline body or a completed
+/// strict streaming validator. They grant no physical or import authority.
+pub(super) fn select_external_file_mode_from_facts(
+    path: &VaultPath,
+    valid_utf8: bool,
+    has_nul: bool,
+    policy: ExternalFileMode,
+) -> Result<FamilyCreateMode> {
     if policy == ExternalFileMode::Binary {
         return Ok(FamilyCreateMode::Binary);
     }
-    let valid_text = std::str::from_utf8(bytes).is_ok();
     if policy == ExternalFileMode::Text {
-        return if valid_text {
+        return if valid_utf8 {
             Ok(FamilyCreateMode::Text)
         } else {
             Err(Error::Unsupported(
@@ -85,7 +100,7 @@ pub fn select_external_file_mode(
                 | "pptx"
         )
     });
-    Ok(if binary_extension || !valid_text || bytes.contains(&0) {
+    Ok(if binary_extension || !valid_utf8 || has_nul {
         FamilyCreateMode::Binary
     } else {
         FamilyCreateMode::Text

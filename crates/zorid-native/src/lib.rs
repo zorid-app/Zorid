@@ -196,6 +196,8 @@ pub struct ObservationStatus {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod fs;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod fs_stream;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod native;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use native::{select_external_file_mode, ExternalFileMode, NativeVault};
