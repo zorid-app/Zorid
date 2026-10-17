@@ -301,3 +301,11 @@ result is unauthenticated ordinary data. It has no conversion into text activity
 or authenticated updates. The caller must validate exact stored bytes/digest and
 all independently selected intent metadata; receive paths still require AEAD.
 The provided UpdateId is framing context, not a claim proven by this inspector.
+
+Publication classification uses `TextState::complete_materialized_utf8()`, which
+returns `None` while Yrs retains missing insertion or deletion dependencies and
+`Some(empty)` for an actually complete empty document. It validates and loads the
+snapshot once. Raw `materialized_utf8()` remains available for causal merge and
+inspection; its visible bytes alone are not proof of completeness. Namespace
+ancestry and Yrs dependencies are independent, and namespace visibility still
+requires the file classifier after complete text bytes are available.

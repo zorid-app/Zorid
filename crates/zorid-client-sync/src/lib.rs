@@ -93,6 +93,18 @@ impl TextState {
     pub fn materialized_utf8(&self) -> Result<Vec<u8>> {
         Ok(load(self, 0)?.text().into_bytes())
     }
+    /// Complete visible content for publication. None means Yrs still retains
+    /// missing insertion or deletion dependencies; Some(empty) is a real empty
+    /// document. Namespace ancestry alone cannot prove CRDT completeness.
+    /// This does not decide namespace liveness or authorize a physical baseline.
+    pub fn complete_materialized_utf8(&self) -> Result<Option<Vec<u8>>> {
+        let doc = load(self, 0)?;
+        if doc.has_missing_updates() {
+            Ok(None)
+        } else {
+            Ok(Some(doc.text().into_bytes()))
+        }
+    }
     /// A host must persist this baseline only when it corresponds to the bytes
     /// actually projected/observed on disk, retaining its causal snapshot.
     pub fn projection_baseline(&self) -> Result<TextBaseline> {

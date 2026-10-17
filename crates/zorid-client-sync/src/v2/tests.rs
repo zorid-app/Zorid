@@ -415,3 +415,55 @@ fn plaintext_inspection_is_strict_bounded_and_only_returns_data() {
     }
     assert!(inspect_payload(bytes, &id("namespace-bootstrap")).is_err());
 }
+
+#[test]
+fn complete_content_distinguishes_empty_from_pending_insert_and_delete_after_restart() {
+    let initial = empty();
+    assert_eq!(initial.complete_materialized_utf8().unwrap(), Some(vec![]));
+    let first = plan_authored_text(
+        &initial,
+        &request(&initial, "first", 1, vec![insert(0, "abc")]),
+        &context(&["namespace-bootstrap"]),
+    )
+    .unwrap();
+    for (name, edit, expected) in [
+        ("insert", insert(3, "!"), b"abc!".as_slice()),
+        (
+            "delete",
+            Edit::Delete {
+                index: 0,
+                length: 3,
+            },
+            b"".as_slice(),
+        ),
+    ] {
+        let second = plan_authored_text(
+            &first.plan.next_state,
+            &request(&first.plan.next_state, name, 1, vec![edit]),
+            &context(&["first"]),
+        )
+        .unwrap();
+        // The update contains only the second transaction, not its predecessor.
+        let pending = receive(&initial, &incoming(&second), "pending")
+            .next_state
+            .unwrap();
+        assert_eq!(pending.materialized_utf8().unwrap(), b"");
+        assert_eq!(pending.complete_materialized_utf8().unwrap(), None);
+        let pending = restart(&pending);
+        assert_eq!(pending.complete_materialized_utf8().unwrap(), None);
+        let complete = receive(&pending, &incoming(&first), "complete")
+            .next_state
+            .unwrap();
+        assert_eq!(
+            complete.complete_materialized_utf8().unwrap(),
+            Some(expected.to_vec())
+        );
+        assert_eq!(
+            restart(&complete).complete_materialized_utf8().unwrap(),
+            Some(expected.to_vec())
+        );
+    }
+    let mut corrupt = initial;
+    corrupt.snapshot = vec![255];
+    assert!(corrupt.complete_materialized_utf8().is_err());
+}
