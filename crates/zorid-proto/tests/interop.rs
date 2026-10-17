@@ -84,3 +84,16 @@ fn rpc_fixtures_preserve_u64_presence_and_exact_wire() {
     assert_eq!(page.items[0].exact_wire, [0, 255, 128, 1]);
     assert_eq!(page.encode_to_vec(), bytes);
 }
+
+#[test]
+fn stream_read_open_retains_the_preallocated_lookup_identity() {
+    let bytes = fixture("read-open");
+    let command = stream::BinaryCommand::decode(bytes.as_slice()).unwrap();
+    let Some(binary_command::Command::OpenRead(read)) = &command.command else {
+        panic!("read missing")
+    };
+    assert_eq!(read.read_id, "read-operation");
+    assert_eq!(command.encode_to_vec(), bytes);
+    // Empty is only a raw protobuf default; store/adapter validation must reject it.
+    assert!(stream::OpenRead::default().read_id.is_empty());
+}

@@ -146,3 +146,9 @@ hard runtime allocator/JS-heap cap or proof of every possible message. The576 Mi
 eight-request extrapolation remains unmeasured. Actual admission/one-inflight
 enforcement, browser/CLI/server integration and depth/concurrency checks stay
 activation gates. No production/mobile resource guarantee follows.
+
+The requested small standard-depth boundary was subsequently checked in 60697:
+one Rust and one ES test accept a valid 37-byte shallow unknown-group Hello and
+reject a balanced 517-byte,128-group version under the standard 100-depth policy.
+See rpc-schema-foundation.md. This closes that initial parser check, without
+expanding the resource measurements into a fuzz/security audit or concurrency proof.

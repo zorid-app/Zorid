@@ -28,3 +28,16 @@ test('standard singular message merge accumulates required features in both orde
   assert.deepEqual(fromBinary(HelloRequestSchema,merged).control.requiredFeatures,['future']);
  }
 });
+
+test('standard recursion limit rejects deep unknown groups with nonretention',()=>{
+ const options={readUnknownFields:false,recursionLimit:100};
+ const shallow=fixture('rpc-hello-groups-8');
+ const deep=fixture('rpc-hello-groups-128');
+ assert.ok(shallow.length<=4096 && deep.length<=4096);
+ const value=fromBinary(HelloRequestSchema,shallow,options);
+ assert.deepEqual(value.offeredTransportMajors,[2]);assert.ok(value.control);
+ assert.throws(()=>fromBinary(HelloRequestSchema,deep,options),/recursion/i);
+ // Test-only higher budget proves the matched groups are well formed. The
+ // production browser configuration must retain the explicit limit of 100.
+ assert.deepEqual(fromBinary(HelloRequestSchema,deep,{...options,recursionLimit:256}).offeredTransportMajors,[2]);
+});

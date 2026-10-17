@@ -256,3 +256,21 @@ fn byte_caps_and_current_i64_sequence_domain_apply_to_requests() {
     assert!(pull_request(&vault(), &cursor(u64::MAX), None, 64).is_err());
     assert!(pull_request(&vault(), &cursor(2), Some(LogPosition::new(1)), 64).is_err());
 }
+
+#[test]
+fn standard_recursion_limit_rejects_deep_unknown_groups() {
+    let fixture = |depth| {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../../proto/fixtures/rpc-hello-groups-{depth}.bin")),
+        )
+        .unwrap()
+    };
+    let shallow = fixture(8);
+    let deep = fixture(128);
+    assert!(shallow.len() <= MAX_CONTROL_BYTES && deep.len() <= MAX_CONTROL_BYTES);
+    let hello = pb::HelloRequest::decode(shallow.as_slice()).unwrap();
+    validate_hello_request(&hello).unwrap();
+    let failure = pb::HelloRequest::decode(deep.as_slice()).unwrap_err();
+    assert!(failure.to_string().contains("recursion"), "{failure}");
+}

@@ -102,8 +102,32 @@ format, or retirement of legacy fixtures/defaults. Future document-codec2/files3
 Text3 remains only the separate mapping proposal.
 
 Root subsequently accepts the measured initial development thresholds documented
-in rpc-decode-budget.md and requires the supported browser Connect-Web2.2
+in rpc-decode-budget.md and requires the supported browser Connect-Web 2.2
 `binaryOptions: {readUnknownFields:false}`. Source/generation follows standard
 unknown/singular-merge behavior; no custom protobuf scanner or reflection added.
 Browser/CLI/server runtime guards and actual combined verification remain with
 their named owners. All schema-owner heavy handles are terminal.
+
+## Initial standard depth/group boundary — 2026-10-17
+
+Root requested one small cross-runtime parser boundary gate, not a broader fuzz
+or security audit. The standard protobuf-es BinaryWriter creates a valid bounded
+HelloRequest with mandatory Control followed by balanced unknown tag 100 groups
+at depth 8 (37 bytes total) and 128 (517 bytes). Both fit the 4096-byte method cap.
+Rust's generated Prost decoder and protobuf-es with
+`{readUnknownFields:false,recursionLimit:100}` accept the shallow message and
+reject the deep message with a recursion error. An ES test-only limit 256 accepts
+the same deep bytes, confirming balanced syntax rather than accidental truncation.
+No custom parser, scanner, reflection or production limit override was added.
+
+Pinned protobuf-es 2.16 exposes `BinaryReadOptions.recursionLimit` (default 100).
+Connect-Web 2.2 supports `binaryOptions:Partial<BinaryReadOptions & BinaryWriteOptions>`
+and forwards it to its standard serializer. Browser owner explicitly sets both
+unknown-field nonretention and recursionLimit 100 in `bbc3f03`.
+
+Exclusive jobs1 gate 60697 exit0: Rust depth test 1/1, Rust read-ID fixture 1/1,
+Node targeted checks 2/2, TypeScript and byte-identical regeneration pass. Source
+and generated field/tag changes are independently reviewed. The heavy slot was
+released before further documentation/commit work. This closes the requested
+initial depth check; actual combined browser/server behavior, other adversarial
+shapes and production/mobile guarantees remain outside this microgate.

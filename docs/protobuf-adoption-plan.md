@@ -225,3 +225,22 @@ was notified and the heavy slot released before further doc-only work.
 
 Next codec review is the separate doc-only
 [versioned sync mapping proposal](protobuf-sync-mapping-proposal.md).
+
+## Stable read-open identity before activation — 2026-10-17
+
+Root approves additive `stream.v1.OpenRead.read_id`, string tag 4, jointly before
+this unreleased streaming IDL activates. The caller must allocate and persist
+the valid nonempty OperationId before opening a pinned read, then retry exactly
+the same owner/read ID after an unknown acknowledgement. Consumers reject a
+missing/empty/invalid ID; they must not silently allocate a random replacement.
+The owning Store's with_id operation resolves exact request/source replay before
+checking current state or the finite pin quota. Closed/stale IDs must not silently
+rebind to other content. This field is ordinary untrusted lookup data, not a
+serialized proof. Private capture/cleanup/list policies remain owner/lease-bound
+and cannot evict another live owner's public pin.
+
+Store, desktop and browser owners were notified of Rust `read_id: String` and
+TypeScript `readId: string`. Generation and targeted checks passed in the next
+combined slot (handle 60697, exit 0): Rust read-ID fixture 1/1, Node read-ID
+fixture 1/1, TypeScript and byte-identical regeneration. These are codec/data
+checks; Store/desktop/browser recovery behavior remains with its named owners.
