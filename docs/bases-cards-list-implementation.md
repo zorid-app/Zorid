@@ -1,5 +1,10 @@
 # Cards and List implementation checkpoint
 
+Current status: standalone workspace mounting and guarded shared-buffer property
+writes are now integrated. See [the workspace checkpoint](bases-workspace-integration-checkpoint.md)
+and [current Bases status](bases-status.md). Older module-only verification below
+is historical and does not imply those host features are still missing.
+
 These are original, independently implemented view modules. They consume the immutable
 `BaseQueryResult` contract and do not open vaults, evaluate queries, write `.base` files,
 or load thumbnails without explicit host callbacks. This checkpoint is not native,
@@ -97,9 +102,9 @@ performance or a matching reference latency/memory budget.
 
 ## Remaining gaps
 
-- Workspace toolbar, view settings/property ordering UI, saved configuration,
-  embeds, complete context menus, hover previews, note drag formats and drop actions
-  still need the corresponding host integration.
+- The workspace selector and shared session are integrated. Full view settings/property
+  ordering UI, persisted view state, embeds, complete context menus, hover previews,
+  note drag formats and drop actions remain incomplete.
 - Full property widget/coercion registry, rich links, Markdown values, lists/tags,
   date/datetime controls, plugin renderers, transaction undo, and failed-write UX
   must be supplied or implemented; primitive rendering is not full metadata parity.

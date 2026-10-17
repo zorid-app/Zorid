@@ -1,5 +1,10 @@
 # Bases Table implementation checkpoint
 
+Current status: standalone workspace mounting and guarded shared-buffer property
+writes are now integrated. See [the workspace checkpoint](bases-workspace-integration-checkpoint.md)
+and [current Bases status](bases-status.md). Older module-only verification below
+is historical and does not imply those host features are still missing.
+
 `src/bases/table-view.ts` is an original, imperative Table view over an immutable `BaseQueryResult`. This is a separately testable presentation module, not a completed Bases feature, host integration, or reference parity claim. No recovered source or assets are included.
 
 ## Reference basis
@@ -49,7 +54,7 @@ The tests use JSDOM. They do not measure browser layout, pixel identity, actual 
 
 ## Remaining required parity
 
-- Workspace/Base controller mounting, query-refresh lifecycle, real frontmatter edit/undo transactions and persistence after reopen.
+- Cross-view transaction undo and persistence/recovery after native restart still require work or verification. Workspace mounting, shared-buffer property writes and query refresh are integrated.
 - Complete metadata-type widgets, links/tags/date/list editors, rich values, property labels/types from the host, and error-widget parity.
 - Header menu ordering/actions, sorting, adding/removing properties, resizing/reset/automatic width, column drag reorder and persisted settings.
 - Multi-cell selection, range selection, clipboard formats, copy/paste coercion, row/file context menus, summaries, create-item controls and undo/redo.
