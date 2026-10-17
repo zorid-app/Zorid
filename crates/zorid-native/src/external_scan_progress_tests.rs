@@ -458,3 +458,192 @@ fn external_scan_progress_parent_inode_replacement_invalidates_and_restored_inod
     );
     assert!(seen.contains_key(&path(&added)));
 }
+
+#[test]
+fn external_scan_progress_ready_retries_partial_moved_edit_and_new_child() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut vault, _) = enrolled_with_missing_candidate(root.path());
+    std::fs::create_dir(root.path().join("Original")).unwrap();
+    std::fs::write(root.path().join("Original/note.custom"), b"original").unwrap();
+    let initial = vault
+        .reconcile_external(ScanOptions::default(), ExternalFileMode::Auto)
+        .unwrap();
+    assert!(initial.complete, "{initial:?}");
+    let folder = vault
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.path == path("Original"))
+        .unwrap();
+    let note = vault
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.path == path("Original/note.custom"))
+        .unwrap();
+    let original_inode = vault
+        .store
+        .physical_binding(&note.id)
+        .unwrap()
+        .unwrap()
+        .physical
+        .inode;
+    drop(vault);
+    std::fs::rename(root.path().join("Original"), root.path().join("AMoved")).unwrap();
+    let edited = b"\xef\xbb\xbfedited while moving\r\n";
+    std::fs::write(root.path().join("AMoved/note.custom"), edited).unwrap();
+    std::fs::write(
+        root.path().join("AMoved/new.custom"),
+        b"new child inside relocated folder",
+    )
+    .unwrap();
+    // AMoved is enumerated before these padding subtrees. Their child files
+    // keep global inventory unfinished while relocated paths are attempted.
+    for index in 0..20 {
+        let folder = format!("Padding{index:02}");
+        std::fs::create_dir(root.path().join(&folder)).unwrap();
+        std::fs::write(
+            root.path().join(format!("{folder}/padding.custom")),
+            b"padding",
+        )
+        .unwrap();
+    }
+    let options = ScanOptions {
+        max_entries: 4,
+        ..batch_options()
+    };
+    let mut active = None;
+    let mut partial_move_issue = false;
+    let mut finished = false;
+    for _ in 0..128 {
+        let mut vault = NativeVault::open_existing(root.path()).unwrap();
+        let report = vault
+            .reconcile_external(options.clone(), ExternalFileMode::Auto)
+            .unwrap();
+        if let Some(previous) = &active {
+            assert_eq!(&report.run.scan_id, previous);
+        }
+        active = Some(report.run.scan_id.clone());
+        if !report.run.complete {
+            assert!(!report.complete);
+            assert!(report.namespace.is_empty());
+            partial_move_issue |= report.issues.iter().any(|issue| {
+                issue.path.as_ref().is_some_and(|p| {
+                    p == &path("AMoved/note.custom") || p == &path("AMoved/new.custom")
+                })
+            });
+            continue;
+        }
+        assert!(
+            report.complete,
+            "Ready must revisit positives blocked before namespace authority: {report:?}"
+        );
+        assert_eq!(report.namespace.len(), 1);
+        assert_eq!(
+            vault
+                .list()
+                .unwrap()
+                .into_iter()
+                .find(|e| e.path == path("AMoved"))
+                .unwrap()
+                .id,
+            folder.id
+        );
+        let retained = vault.read(&note.id).unwrap().unwrap();
+        assert_eq!(retained.state.path, path("AMoved/note.custom"));
+        assert_eq!(retained.content.as_deref(), Some(edited.as_slice()));
+        let baseline = vault.store.projection_baseline(&note.id).unwrap().unwrap();
+        assert_eq!(baseline.content, edited);
+        assert_eq!(
+            vault
+                .store
+                .physical_binding(&note.id)
+                .unwrap()
+                .unwrap()
+                .physical
+                .inode,
+            original_inode
+        );
+        let child = vault
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|e| e.path == path("AMoved/new.custom"))
+            .unwrap();
+        assert_ne!(child.id, note.id);
+        assert_eq!(
+            vault.read(&child.id).unwrap().unwrap().content.as_deref(),
+            Some(b"new child inside relocated folder".as_slice())
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("AMoved/note.custom")).unwrap(),
+            edited
+        );
+        assert!(!root.path().join("Original").exists());
+        finished = true;
+        break;
+    }
+    assert!(
+        partial_move_issue,
+        "fixture must attempt a relocated positive while inventory is unfinished"
+    );
+    assert!(
+        finished,
+        "moved edit and new child did not complete within 128 bounded reopen passes"
+    );
+}
+
+#[test]
+fn external_scan_progress_present_proof_without_observation_is_fatal_corruption() {
+    let root = tempfile::tempdir().unwrap();
+    let (vault, _) = enrolled_with_missing_candidate(root.path());
+    drop(vault);
+    create_inventory(root.path(), 80);
+    let mut vault = NativeVault::open_existing(root.path()).unwrap();
+    let report = vault
+        .reconcile_external(batch_options(), ExternalFileMode::Auto)
+        .unwrap();
+    assert!(
+        !report.run.finished,
+        "fixture must leave a persisted partial inventory"
+    );
+    assert!(!report.complete);
+    let before = vault.store.physical_bindings().unwrap();
+    let status = vault.family_status().unwrap();
+    let sql = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+    let captured: String = sql.query_row(
+        "SELECT p.path FROM family_external_scan_proofs p JOIN scan_observations o ON o.scan_id=p.scan_id AND o.path=p.path WHERE p.scan_id=?1 AND json_extract(p.record,'$.kind')='present' ORDER BY p.path LIMIT 1",
+        [report.run.scan_id.as_str()], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(
+        sql.execute(
+            "DELETE FROM scan_observations WHERE scan_id=?1 AND path=?2",
+            rusqlite::params![report.run.scan_id.as_str(), &captured]
+        )
+        .unwrap(),
+        1
+    );
+    let proofs: i64 = sql
+        .query_row(
+            "SELECT count(*) FROM family_external_scan_proofs WHERE scan_id=?1 AND path=?2",
+            rusqlite::params![report.run.scan_id.as_str(), &captured],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        proofs, 1,
+        "retain the immutable proof while corrupting its observation row"
+    );
+    drop(sql);
+    drop(vault);
+    let mut vault = NativeVault::open_existing(root.path()).unwrap();
+    let error = vault
+        .reconcile_external(batch_options(), ExternalFileMode::Auto)
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Store(zorid_store::StoreError::Corrupt(_))),
+        "{error:?}"
+    );
+    assert_eq!(vault.store.physical_bindings().unwrap(), before);
+    assert_eq!(vault.family_status().unwrap(), status);
+}
