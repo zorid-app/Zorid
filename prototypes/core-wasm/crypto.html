@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Zorid native/browser crypto exchange</title>
+<style>body { font: 16px system-ui; margin: 2rem; } pre { white-space: pre-wrap; }</style>
+<h1>Native ↔ browser crypto exchange</h1>
+<p>Disposable fixture keys only. Trusted local harness provisions them; no production key storage or enrollment is exercised.</p>
+<pre id="result">Running…</pre>
+<script type="module">
+  const token = new URL(location.href).searchParams.get('token');
+  const worker = new Worker('./crypto-worker.mjs', { type: 'module' });
+  async function request(path, data) {
+    const response = await fetch(`${path}?token=${encodeURIComponent(token)}`, data === undefined ? {} : {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    });
+    const value = await response.json();
+    if (!response.ok) throw new Error('native fixture validation failed');
+    return value;
+  }
+  function finish(result) {
+    window.__zoridCryptoResult = result;
+    document.querySelector('#result').textContent = JSON.stringify(result, null, 2);
+    worker.terminate();
+  }
+  async function fail() {
+    finish({ ok: false, error: 'Crypto exchange failed; secret-bearing payloads omitted' });
+    await request('/failed', { ok: false }).catch(() => {});
+  }
+  worker.onmessage = async ({ data }) => {
+    try {
+      if (!data.ok) return fail();
+      const result = await request('/verify', data);
+      data.key.fill(0);
+      finish(result);
+    } catch { await fail(); }
+  };
+  worker.onerror = fail;
+  try { const input = await request('/input'); worker.postMessage(input); input.key.fill(0); }
+  catch { await fail(); }
+</script>
+</html>

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Zorid Rust/WASM boundary fixture</title>
+<style>body { font: 16px system-ui; margin: 2rem; } pre { white-space: pre-wrap; }</style>
+<h1>Rust/WASM boundary fixture</h1>
+<p>This fixture runs the Rust core and CRDT in a browser worker. It does not persist data.</p>
+<pre id="result">Running…</pre>
+<script type="module">
+  const worker = new Worker('./worker.mjs', { type: 'module' });
+  const finish = result => {
+    window.__zoridWasmResult = result;
+    document.querySelector('#result').textContent = JSON.stringify(result, null, 2);
+    worker.terminate();
+  };
+  worker.onmessage = event => finish(event.data);
+  worker.onerror = event => finish({ ok: false, error: event.message });
+  worker.postMessage({ run: true });
+</script>
+</html>

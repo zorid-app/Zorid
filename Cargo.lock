@@ -1818,3 +1818,19 @@ dependencies = [
  "zorid-crypto",
  "zorid-sync-protocol",
 ]
+
+[[package]]
+name = "zorid-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "zeroize",
+ "zorid-client-sync",
+ "zorid-core",
+ "zorid-crdt",
+ "zorid-crypto",
+ "zorid-file-sync",
+ "zorid-sync-protocol",
+]

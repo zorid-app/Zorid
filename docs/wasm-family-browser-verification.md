@@ -1,5 +1,24 @@
 # Family sync browser verification
 
+## Updated integration candidate
+
+Candidate `11d2544` includes strict file payload encoding for retries and exact
+namespace metadata validation, with main's recovery crypto dependency reconciled.
+Independent review approved `0bd1437` plus the browser test correction `11d2544`.
+Focused native session49449 passed 30 client-sync tests, 17 WASM tests and one
+compile-fail documentation test. Pinned release build session66465 exited0.
+Actual Chrome again visibly reported all10 groups successful using that rebuilt
+artifact. The new encoder and namespace regressions run within those groups.
+The owned tab and server session82677 were closed after verification.
+
+The exact WASM crate, fixture subtree and native exchange helper were then
+staged into main; its native session22746 passed all17 wrapper tests. Core,
+CRDT, crypto, protocol, file-sync and client-sync source dependencies match the
+validated candidate. Cargo.lock adds only the new workspace crate entry.
+Browser persistence and end-to-end relay convergence remain separate gates.
+
+## Earlier boundary run
+
 On 2026-10-16, Chrome executed the real Rust/WASM worker fixture from
 `core-wasm-integration` fixture commit `6f3ade8`, using the compiled Rust
 artifact from `f79a294`. Independent source review approved both revisions.

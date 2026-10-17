@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Zorid native/browser CRDT exchange</title>
+<style>body { font: 16px system-ui; margin: 2rem; } pre { white-space: pre-wrap; }</style>
+<h1>Native ↔ browser WASM exchange</h1>
+<p>Native Rust and a real browser worker exchange actual CRDT bytes. No storage or sync service is exercised.</p>
+<pre id="result">Running…</pre>
+<script type="module">
+  const token = new URL(location.href).searchParams.get('token');
+  const worker = new Worker('./exchange-worker.mjs', { type: 'module' });
+  async function request(path, data) {
+    const response = await fetch(`${path}?token=${encodeURIComponent(token)}`, data === undefined ? {} : {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    });
+    const value = await response.json();
+    if (!response.ok) throw new Error(JSON.stringify(value));
+    return value;
+  }
+  function finish(result) {
+    window.__zoridCrossTargetResult = result;
+    document.querySelector('#result').textContent = JSON.stringify(result, null, 2);
+    worker.terminate();
+  }
+  async function fail(error) {
+    const failure = { ok: false, error: String(error) };
+    finish(failure);
+    await request('/failed', failure).catch(() => {});
+  }
+  worker.onmessage = async ({ data }) => {
+    try {
+      if (!data.ok) throw new Error(JSON.stringify(data));
+      if (data.phase === 'browser-output') {
+        worker.postMessage({ phase: 'native-return', result: await request('/verify', data) });
+      } else if (data.phase === 'done') {
+        finish(await request('/complete', data));
+      } else throw new Error(`unknown worker phase: ${data.phase}`);
+    } catch (error) { await fail(error); }
+  };
+  worker.onerror = event => fail(event.message);
+  try { worker.postMessage({ phase: 'native-input', input: await request('/input') }); }
+  catch (error) { await fail(error); }
+</script>
+</html>
