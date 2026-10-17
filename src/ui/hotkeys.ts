@@ -1,3 +1,4 @@
+import { INSERTION_COMMANDS } from '../editor/insertion-catalogue.ts';
 /** First-party shortcuts. Each command executes only in its owning scope. */
 export type HotkeyPlatform = 'mac' | 'other';
 export type HotkeyModifier = 'Mod' | 'Ctrl' | 'Meta' | 'Alt' | 'Shift';
@@ -38,7 +39,7 @@ export const EDITOR_HOTKEY_COMMANDS: readonly HotkeyCommand[] = [
   ['toggle-fold','Toggle fold'], ['fold','Fold current'], ['unfold','Unfold current'],
   ['fold-all','Fold all'], ['unfold-all','Unfold all'],
   ['select-parent-syntax','Select parent syntax'],
-].map(([id,name])=>({id:`editor-${id}`,name:`Editor: ${name}`,defaults:id==='bold'?[chord('b','Mod')]:id==='italic'?[chord('i','Mod')]:[],scope:'editor'}));
+].map(([id,name])=>({id:`editor-${id}`,name:`Editor: ${name}`,defaults:id==='bold'?[chord('b','Mod')]:id==='italic'?[chord('i','Mod')]:[],scope:'editor' as const})).concat(INSERTION_COMMANDS.map(command=>({id:command.id,name:`Editor: ${command.name}`,defaults:[],scope:'editor' as const})));
 export const HOTKEY_COMMANDS: readonly HotkeyCommand[] = [...WORKSPACE_HOTKEY_COMMANDS,...EDITOR_HOTKEY_COMMANDS];
 const ids = new Set(HOTKEY_COMMANDS.map(command=>command.id));
 const modifierOrder: HotkeyModifier[] = ['Mod','Ctrl','Meta','Alt','Shift'];

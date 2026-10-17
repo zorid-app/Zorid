@@ -93,3 +93,11 @@ them or interrupting the current work.
 Editor correctness remains the immediate priority: cursor/selection geometry,
 complete live rendering, tables, properties, embeds, clipboard, keybindings,
 recovery and performance. This queue does not certify complete editor parity.
+
+## Scoped insertion-command request — 2026-10-16
+
+The broader editor goal is paused. The user separately requested default editor commands such as Insert table and Insert callout. This scoped task adds table, callout, code block, math block, horizontal rule, Markdown link, image and footnote insertion through the existing command palette and configurable Settings hotkeys, without assigning new default shortcuts. Existing editor formatting/folding commands should also be discoverable in the palette when an editable target is available.
+
+Implementation: isolated `tingkai-c/editor-insertion-commands`; shared insertion actions, command registration and guarded palette routing in progress. Validation and integration are pending. Acceptance covers useful initial caret/selection, selected-text preservation, one-step undo, read-only/composition protection, safe nested-editor handling and rejection of stale palette targets. Do not treat this scoped task as resuming paused Canvas or shared-core consumer work.
+
+Editor insertion scoped validation (2026-10-16): isolated `editor-insertion-commands` from `30c1349` passed 101/101 serial targeted tests and direct TypeScript checking; independent source review cleared. Palette, Settings catalogue and context insertion share guarded actions. No new default shortcuts. Main promotion remains coordinator-owned; native focus/IME and rendered footnotes are not claimed.

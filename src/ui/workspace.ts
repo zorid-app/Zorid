@@ -1,4 +1,4 @@
-import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS } from './hotkeys.ts';
+import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS, EDITOR_HOTKEY_COMMANDS } from './hotkeys.ts';
 import { mountHotkeySettings } from './hotkey-settings.ts';
 import {pdfMarkdownLink} from './pdf-link.ts';
 import {createCanvasAttachmentCard} from '../canvas/attachment-card.ts';
@@ -1242,7 +1242,10 @@ export class Workspace {
     void window.zorid?.setMenuHotkeys?.(['new-window','close-tab'].map(id=>({id:id as 'new-window'|'close-tab',shortcut:this.hotkeys.label(id)}))).catch(error=>notice(error instanceof Error?error.message:String(error)));
   }
   private hotkeyButton(glyph:string,id:string,label:string,action:(event:MouseEvent)=>void,className=''):HTMLButtonElement{
-    const node=button(glyph,label,action,className);node.dataset.hotkeyCommand=id;node.dataset.hotkeyName=label;this.updateHotkeyLabel(node);return node;
+    const node=button(glyph,label,action,className);
+    // Keep the originating note/table selection alive until the palette captures it.
+    if(id==='command-palette')node.addEventListener('pointerdown',event=>{if(event.button===0)event.preventDefault();});
+    node.dataset.hotkeyCommand=id;node.dataset.hotkeyName=label;this.updateHotkeyLabel(node);return node;
   }
   private updateHotkeyLabel(node:HTMLElement):void{
     const hint=this.hotkeys.label(node.dataset.hotkeyCommand!);
@@ -1279,14 +1282,33 @@ export class Workspace {
     if(actions[id])this.run(actions[id]);
   }
 
-  commandPalette():void{this.suggest('Type a command…',()=>this.commands());}
+  commandPalette():void{
+    const pane=this.activePane,tab=pane&&this.current(pane),editor=pane?.editor;
+    const generation=this.vaultGeneration,activation=this.paneActivationRevision,version=pane?.renderVersion;
+    const runtime=pane?.runtime,path=tab?.path,navigation=pane&&this.navigationIntent.get(pane),entry=path?this.treeEntryToken(path):undefined;
+    const ownership=runtime?.captureOwnership();
+    const valid=()=>this.initialized&&generation===this.vaultGeneration&&activation===this.paneActivationRevision
+      &&this.activePane===pane&&this.panes.includes(pane)&&this.current(pane)===tab&&pane.editor===editor
+      &&pane.renderVersion===version&&pane.runtime===runtime&&runtime?.phase==='active'&&!!ownership&&runtime.isCurrent(ownership)&&pane.content?.isConnected===true
+      &&tab?.path===path&&tab?.mode==='live'&&tab?.kind==='note'&&!!path&&isMarkdown(path)
+      &&this.navigationIntent.get(pane)===navigation&&entry!==undefined&&this.treeEntryToken(path)===entry&&this.vault.entries.get(path)?.type==='file';
+    const target=valid()?editor?.captureCommandTarget?.(valid):null;
+    this.suggest('Type a command…',()=>[
+      ...this.commands(),
+      ...(target?EDITOR_HOTKEY_COMMANDS.map(command=>({id:command.id,name:command.name,shortcut:this.hotkeys.label(command.id),action:()=>{target.run(command.id);}})):[]),
+    ],()=>target?.dispose());
+  }
   quickSwitcher():void{this.suggest('Type a file name…',()=>[...this.vault.entries.values()].filter(entry=>entry.type==='file').map(entry=>({name:nameOf(entry.path),shortcut:parentOf(entry.path),action:()=>this.openNote(entry.path)})));}
-  private suggest(placeholder:string,getCommands:()=>Command[]):void{
+  private suggest(placeholder:string,getCommands:()=>Command[],onDismiss?:()=>void):void{
     const{content,close}=modal(placeholder);content.classList.add('command-modal');const input=el('input','command-input');input.placeholder=placeholder;input.setAttribute('aria-label',placeholder);input.setAttribute('role','combobox');input.setAttribute('aria-expanded','true');input.setAttribute('aria-controls','suggestion-list');
     const list=el('div','suggestion-list');list.id='suggestion-list';list.role='listbox';let selected=0,items:Command[]=[];
-    const execute=()=>{const item=items[selected];if(item){close();this.run(item.action);}};
+    let executing=false,finished=false;
+    const finish=()=>{if(finished)return;finished=true;observer.disconnect();onDismiss?.();};
+    const observer=new MutationObserver(()=>{if(!content.isConnected&&!executing)finish();});
+    observer.observe(content.ownerDocument.body,{childList:true,subtree:true});
+    const execute=()=>{const item=items[selected];if(item&&!executing&&!finished){executing=true;close();this.run(async()=>{try{await item.action();}finally{finish();}});}};
     const render=()=>{items=getCommands().filter(item=>item.name.toLocaleLowerCase().includes(input.value.toLocaleLowerCase())).slice(0,80);selected=Math.min(selected,Math.max(0,items.length-1));list.replaceChildren();items.forEach((item,index)=>{const row=el('div',`suggestion${index===selected?' is-selected':''}`);row.role='option';row.id=`suggestion-${index}`;row.setAttribute('aria-selected',String(index===selected));row.append(el('span','',item.name));if(item.shortcut)row.append(el('kbd','suggestion-shortcut',item.shortcut));row.onpointermove=()=>{selected=index;list.querySelectorAll('.suggestion').forEach((node,i)=>node.classList.toggle('is-selected',i===selected));};row.onclick=()=>{selected=index;execute();};list.append(row);});input.setAttribute('aria-activedescendant',`suggestion-${selected}`);if(!items.length)list.append(el('div','suggestion muted','No results found.'));};
-    input.oninput=()=>{selected=0;render();};input.onkeydown=event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();selected=(selected+(event.key==='ArrowDown'?1:Math.max(0,items.length-1)))%Math.max(1,items.length);render();list.children[selected]?.scrollIntoView({block:'nearest'});}if(event.key==='Enter'){event.preventDefault();execute();}};
+    input.oninput=()=>{selected=0;render();};input.onkeydown=event=>{if(event.isComposing||event.keyCode===229)return;if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();selected=(selected+(event.key==='ArrowDown'?1:Math.max(0,items.length-1)))%Math.max(1,items.length);render();list.children[selected]?.scrollIntoView({block:'nearest'});}if(event.key==='Enter'){event.preventDefault();execute();}};
     content.append(input,list,el('div','command-footer','↑↓ to navigate  ↵ to open  esc to dismiss'));render();input.focus();
   }
 

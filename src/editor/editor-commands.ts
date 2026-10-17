@@ -6,6 +6,7 @@ import type { KeyBinding } from '@codemirror/view';
 import { eventHotkey, hotkeyIdentity } from '../ui/hotkeys.ts';
 import type { EditorHotkeySource, Hotkey } from '../ui/hotkeys.ts';
 import { formatMenuForEditor } from './format-menu.ts';
+import { INSERTION_COMMANDS, isInsertionCommand, runInsertion } from './insertion-commands.ts';
 import type { FormatMenuItem } from './format-menu.ts';
 import { activeTableEditor, tableSelectionAt, tableSelectionRanges, tableSelectionAnnotation } from './live-tables.ts';
 import { toggleMarkdownFold, foldMarkdown, unfoldMarkdown, foldAllMarkdown, unfoldAllMarkdown } from './folding.ts';
@@ -22,7 +23,7 @@ const folds: Record<string, (view: EditorView) => boolean> = {
 const selectionCommands: Record<string, (view: EditorView) => boolean> = {
   'editor-select-parent-syntax': selectParentSyntax,
 };
-const ids = [...Object.keys(formats), ...Object.keys(folds), ...Object.keys(selectionCommands)];
+const ids = [...Object.keys(formats), ...Object.keys(folds), ...Object.keys(selectionCommands), ...INSERTION_COMMANDS.map(command => command.id)];
 
 function findAction(items: FormatMenuItem[], id: string): Extract<FormatMenuItem, { run: unknown }> | undefined {
   for (const item of items) {
@@ -41,8 +42,13 @@ function surfaceBlocked(view: EditorView, owner: EditorView): boolean {
 /** Internal commands only. A recognized unavailable action is consumed, so a
  * lower-priority keymap never executes a different command for that binding. */
 export function runEditorCommand(id: string, view: EditorView, owner: EditorView = view): boolean {
-  if (!Object.hasOwn(formats, id) && !Object.hasOwn(folds, id) && !Object.hasOwn(selectionCommands, id)) return false;
+  if (!Object.hasOwn(formats, id) && !Object.hasOwn(folds, id) && !Object.hasOwn(selectionCommands, id) && !isInsertionCommand(id)) return false;
   if (surfaceBlocked(view, owner) || view.composing || owner.composing || activeTableEditor(owner)?.composing) return true;
+  if (isInsertionCommand(id)) {
+    if (view.compositionStarted || owner.compositionStarted || activeTableEditor(owner)?.compositionStarted) return true;
+    runInsertion(view, id, { inTableCell: view !== owner, rectangle: !!tableSelectionAt(owner, view.contentDOM) });
+    return true;
+  }
   if (Object.hasOwn(selectionCommands, id)) {
     // Selection belongs to the focused cell, never the enclosing note. A
     // rectangle's readonly child must retain its table selection ownership.

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { HotkeyPreferences } from '../src/ui/hotkeys.ts';
+import { HotkeyPreferences, EDITOR_HOTKEY_COMMANDS, WORKSPACE_HOTKEY_COMMANDS } from '../src/ui/hotkeys.ts';
 import { mountHotkeySettings } from '../src/ui/hotkey-settings.ts';
 
 test('searchable Settings captures/rebinds/removes/resets commands and keeps focus usable',()=>{
@@ -39,7 +39,7 @@ test('removing the Settings section releases active window capture',async()=>{
 test('editor commands are searchable, configurable and conflict with workspace bindings',()=>{
   const dom=new JSDOM('<main></main>',{url:'https://test.local',pretendToBeVisual:true}),doc=dom.window.document;
   const prefs=new HotkeyPreferences(dom.window.localStorage,'other'),ui=mountHotkeySettings(doc.querySelector('main')!,prefs,()=>{});
-  assert.equal(doc.querySelectorAll('[data-scope="editor"]').length,14);assert.equal(doc.querySelectorAll('[data-scope="workspace"]').length,27);
+  assert.equal(doc.querySelectorAll('[data-scope="editor"]').length,EDITOR_HOTKEY_COMMANDS.length);assert.equal(doc.querySelectorAll('[data-scope="workspace"]').length,WORKSPACE_HOTKEY_COMMANDS.length);
   const search=doc.querySelector('input')!;search.value='Toggle bold';search.dispatchEvent(new dom.window.Event('input'));
   const add=doc.querySelector<HTMLButtonElement>('.hotkey-binding button')!;add.click();
   const key=(key:string)=>add.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key,ctrlKey:true,altKey:key==='b',bubbles:true,cancelable:true}));

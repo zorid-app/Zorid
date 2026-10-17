@@ -5,9 +5,9 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { searchKeymap } from '@codemirror/search';
-import { editorCommandHotkeys } from '../editor/editor-commands.ts';
+import { editorCommandHotkeys, runEditorCommand } from '../editor/editor-commands.ts';
 import type { EditorHotkeySource } from './hotkeys.ts';
-import { activeTableEditor, liveTables } from '../editor/live-tables.ts';
+import { activeTableEditor, liveTables, retainTableEditor } from '../editor/live-tables.ts';
 import { bodyStart, liveProperties, propertyUpdate } from '../editor/live-properties.ts';
 import { frontmatterMarkdown } from '../editor/frontmatter-syntax.ts';
 import { liveCallouts, renderedCalloutRanges } from '../editor/live-callouts.ts';
@@ -42,7 +42,14 @@ export interface EditorViewState {
   folds?: MarkdownFoldSnapshot;
 }
 
+export interface EditorCommandTarget {
+  run(id: string): boolean;
+  dispose(): void;
+}
+
 export interface EditorHandle {
+  /** Capture one note/child selection before a modal takes focus. */
+  captureCommandTarget?(isCurrent: () => boolean): EditorCommandTarget | null;
   getValue(): string;
   getViewState?(): EditorViewState;
   restoreViewState?(state: EditorViewState): void;
@@ -106,7 +113,40 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
   });
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
   const disposeEmptyFocus = installEmptyNoteFocus(view, parent);
+  let destroyed = false;
   return {
+    captureCommandTarget(isCurrent) {
+      const document = view.dom.ownerDocument, focused = document.activeElement;
+      const target = activeTableEditor(view) ?? view;
+      // The palette button may use the last body selection. Other controls,
+      // including a title, property field or CM search input, own their input.
+      const inBody = focused === target.contentDOM;
+      const paletteButton = focused instanceof HTMLElement && focused.closest('[data-hotkey-command="command-palette"]');
+      if (!inBody && focused !== document.body && !paletteButton) return null;
+      if (destroyed || !isCurrent() || !view.dom.isConnected || !target.dom.isConnected
+        || view.state.readOnly || target.state.readOnly || view.compositionStarted || target.compositionStarted
+        || document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]')
+        || view.dom.querySelector('.cm-tooltip-autocomplete,.cm-search')) return null;
+      const ownerDoc = view.state.doc, ownerSelection = view.state.selection;
+      const doc = target.state.doc, selection = target.state.selection;
+      const release = retainTableEditor(view, target.contentDOM);
+      let disposed = false;
+      const valid = () => !disposed && !destroyed && isCurrent() && view.dom.isConnected && target.dom.isConnected
+        && view.dom.contains(target.dom) && view.state.doc === ownerDoc && target.state.doc === doc
+        && view.state.selection.eq(ownerSelection) && target.state.selection.eq(selection)
+        && !view.state.readOnly && !target.state.readOnly && !view.compositionStarted && !target.compositionStarted;
+      return {
+        run(id) {
+          if (!valid()) return false;
+          target.focus();
+          // Focusing can run application handlers, change selection or retire
+          // this pane. Never resolve a replacement target after that happens.
+          if (!valid()) return false;
+          return runEditorCommand(id, target, view);
+        },
+        dispose() { if (!disposed) { disposed = true; release(); } },
+      };
+    },
     getValue: () => view.state.doc.toString(),
     getViewState: () => ({selection: {ranges:view.state.selection.ranges.map(range=>({anchor:range.anchor,head:range.head})),mainIndex:view.state.selection.mainIndex}, scrollTop: view.scrollDOM.scrollTop, scrollLeft: view.scrollDOM.scrollLeft, folds: getMarkdownFoldState(view.state)}),
     restoreViewState(saved) {
@@ -142,7 +182,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       view.dispatch({ changes: textChanges(previous, value),
         annotations: [externalChange.of(true), propertyUpdate.of(true), Transaction.addToHistory.of(false), isolateHistory.of('full')] });
     },
-    focus: () => (activeTableEditor(view) ?? view).focus(), destroy() { disposeEmptyFocus(); view.destroy(); },
+    focus: () => (activeTableEditor(view) ?? view).focus(), destroy() { destroyed = true; disposeEmptyFocus(); view.destroy(); },
     insert(text) { const target = activeTableEditor(view) ?? view; target.dispatch({ ...target.state.replaceSelection(text), annotations: Transaction.userEvent.of('input') }); target.focus(); },
   };
 }

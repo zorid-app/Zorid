@@ -59,7 +59,7 @@ function run(view: EditorView, id: string) {
 }
 function select(view: EditorView, from: number, to = from) { view.dispatch({ selection: EditorSelection.single(from, to) }); }
 
-test('reference labels, highlight order and disabled cell block submenus are exact', t => {
+test('format labels remain stable and cell insertion enables only inline actions', t => {
   const { view } = setup(t, 'text');
   const menu = formatMenuForEditor(view, { inTableCell: true });
   assert.deepEqual(menu.map(item => 'label' in item ? item.label : '|'), ['Add link', 'Add external link', '|', 'Format', 'Paragraph', 'Insert']);
@@ -67,7 +67,9 @@ test('reference labels, highlight order and disabled cell block submenus are exa
   assert.deepEqual(format.submenu.map(item => 'label' in item ? item.label : '|'), ['Bold', 'Italic', 'Strikethrough', 'Highlight', '|', 'Code', 'Math', 'Comment', '|', 'Clear formatting']);
   const highlight = find(menu, 'format-highlight'); assert.ok('submenu' in highlight);
   assert.deepEqual(highlight.submenu.map(item => 'label' in item ? item.label : ''), ['Default', 'Red', 'Orange', 'Yellow', 'Green', 'Blue', 'Purple']);
-  for (const id of ['paragraph', 'insert']) { const item = find(menu, id); assert.equal(item.enabled, false); assert.ok('submenu' in item); }
+  const paragraph = find(menu, 'paragraph'); assert.equal(paragraph.enabled, false);
+  const insertion = find(menu, 'insert'); assert.equal(insertion.enabled, true); assert.ok('submenu' in insertion);
+  for (const item of insertion.submenu) if ('id' in item) assert.equal(item.enabled, ['insert-markdown-link', 'insert-image'].includes(item.id));
   assert.equal(find(menu, 'paragraph-heading-6').label, 'Heading 6');
   const disabled = find(menu, 'insert-table'); assert.ok('run' in disabled); assert.equal(disabled.run(), false);
   assert.equal(view.state.doc.toString(), 'text');

@@ -1,3 +1,4 @@
+import { INSERTION_COMMANDS, canInsert, runInsertion } from './insertion-commands.ts';
 import { ChangeSet, EditorSelection } from '@codemirror/state';
 import type { Annotation, ChangeSpec, EditorState, SelectionRange } from '@codemirror/state';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
@@ -360,10 +361,14 @@ export function formatMenuForEditor(view: EditorView, options: FormatMenuOptions
       disabled('paragraph-bullet', 'Bullet list'), disabled('paragraph-number', 'Numbered list'), disabled('paragraph-task', 'Task list'),
       { type: 'separator' }, ...[1, 2, 3, 4, 5, 6].map(level => disabled(`paragraph-heading-${level}`, `Heading ${level}`, false)),
       disabled('paragraph-body', 'Body', true), { type: 'separator' }, disabled('paragraph-quote', 'Quote'),
-    ] }, { id: 'insert', label: 'Insert', enabled: false, submenu: [
-      disabled('insert-footnote', 'Footnote'), disabled('insert-table', 'Table'), disabled('insert-callout', 'Callout'), disabled('insert-rule', 'Horizontal rule'),
-      { type: 'separator' }, disabled('insert-code-block', 'Code block'), disabled('insert-math-block', 'Math block'),
     ] });
   }
+  const insertionOptions = { inTableCell: options.inTableCell, rectangle: !!options.ranges };
+  const insertions: FormatMenuItem[] = INSERTION_COMMANDS.map(command => ({
+    id: command.id === 'editor-insert-link' ? 'insert-markdown-link' : command.id.replace('editor-', ''), label: command.label,
+    enabled: !view.composing && !view.compositionStarted && canInsert(view.state, command.id, insertionOptions),
+    run: () => runInsertion(view, command.id, insertionOptions),
+  }));
+  items.push({ id: 'insert', label: 'Insert', enabled: insertions.some(item => 'enabled' in item && item.enabled), submenu: insertions });
   return items;
 }
