@@ -121,15 +121,36 @@ Current authoritative update (older bullets below record preceding stages):
   passes6 native transport checks; gate51477 passes16 relay checks (plus one
   ignored helper explicitly invoked by its parent). Gate54282 passes7 protocol,
   one encrypted restore and12 sync checks, but the2MiB binary move/delete case
-  reaches a25-second child deadline. Native owner is identifying the command;
-  this is not yet classified as a product defect or a test-budget issue. Browser
-  production RPC adapter/WASM seam is combined for joint validation, not main.
+  reaches a25-second child deadline. Follow-up profiling identifies the first
+  upload as local legacy whole-graph JSON validation: 1,515/2,160 samples in
+  family_seal, 643 in ACK; the RPC worker is idle in 2,159 samples. A 90-second
+  child allowance still fails gate30268 after102.65s. Do not increase it again
+  or claim the2MiB case passes; validate replacement metadata-only Store first.
+  Browser production RPC adapter/WASM seam is combined, not main: 39 focused
+  Node checks and full typecheck pass; WASM11378, bundle58735 and real relay
+  launcher12000 build successfully. Actual rebuilt browser proof is unverified:
+  computer-use/browser connection timed out; no fallback browser automation ran.
+  Fresh RPC fixture relay67263 and static server20525 were stopped cleanly.
   Schema depth/read-ID gate60697 passes its2 Rust+2 Node checks, typecheck and
   exact regeneration. Store/native/desktop/browser large-file activation remains
   isolated source work. Obsolete agent-owned build caches were removed after
   process inspection to resolve ENOSPC; source, fixture databases and official
   toolchain were retained. Completed browser verification's old HTTP relay70921
   was closed; no current client depends on it. Heavy builds remain serialized.
+- Root reused its clean `core-default-integration` checkout for isolated branch
+  `tingkai-c/streaming-core-integration`, currently940da98: reviewed RPC aggregate
+  eaea42a plus Store foundation277adb0/ada6e8b/d1d0582, locatoraf49f73,
+  activation2921096/abf0bb4, native d42f82d/98842d4/c49819e and desktop capability
+  40b1104/wrapper5bf0ca7/bridged0bd974. This is source composition, not validation.
+  Store owner has the only heavy slot: initial compile30487 failed2 type errors;
+  repeat30383 ran61pass/24fail/1ignored, mainly nullable plan-state decoding and
+  fixture schema issues. Reviewed fixes are being checked in gate74019. Root
+  must import those fixes before combined Native/host checks. Native bdcb40e
+  fixture follow-up is also queued. CLI owner grpc_native_sol now owns only CLI
+  source/helper/tests and approved existing sha2 dependency; sourceb2c10ea awaits
+  review and read-owner crash cleanup. Browser owner retains normalized IDB,
+  streaming engine/WASM and source-import seams; desktop owns platform/index.
+  No schema11 activation or new RPC default has been integrated into main.
 - User explicitly skips P2P in this implementation pass (2026-10-17). Continue
   server-backed E2EE sync and its client integration; P2P stays deferred rather
   than becoming a gate for this pass. Live update behavior is independent of
