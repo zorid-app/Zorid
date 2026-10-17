@@ -111,3 +111,36 @@ test('Kanban exposes Edit columns only with writable configuration host', () => 
   el.querySelector<HTMLButtonElement>('.bases-kanban-edit-columns')!.click(); assert.ok(dom.window.document.querySelector('[role="dialog"]'));
   writable.destroy(); assert.equal(dom.window.document.querySelector('[role="dialog"]'), null);
 });
+
+test('retained controls cannot save after menu close or after another menu opens', async () => {
+  const { dom, doc, row, button, handle, requests } = setup();
+  const oldRow = row('Done'), oldSelect = doc.querySelector<HTMLSelectElement>('select')!;
+  doc.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  oldSelect.value = 'DESC'; oldSelect.dispatchEvent(new dom.window.Event('change')); oldRow.click(); await settle(); assert.equal(requests.length, 0);
+  handle.open(button); oldSelect.dispatchEvent(new dom.window.Event('change')); oldRow.click(); await settle(); assert.equal(requests.length, 0); handle.destroy();
+});
+
+test('failed manual restore retains remembered columns for retry', async () => {
+  const dom = new JSDOM('<main></main><button>Group</button>'), doc = dom.window.document, base = BaseDocument.parse(source);
+  let version = 1, writes = 0; const orders: (readonly unknown[] | undefined)[] = [];
+  const query = () => executeBaseQuery(base, { version, files });
+  const handle = createBaseKanbanColumns(doc.querySelector('main')!, { result: query(), async requestGroupOrder(request) {
+    writes++; orders.push(request.order); if (writes === 2) throw Error('Unavailable');
+    base.updateView(0, { groupOrder: request.order }); version++; handle.update(query());
+  } });
+  handle.open(doc.querySelector('button')!);
+  for (const mode of ['ASC', 'MANUAL', 'MANUAL']) {
+    const select = doc.querySelector<HTMLSelectElement>('select')!; select.value = mode; select.dispatchEvent(new dom.window.Event('change')); await settle();
+  }
+  assert.deepEqual(orders, [undefined, ['Todo', 'Done'], ['Todo', 'Done']]); assert.deepEqual(base.views[0].groupOrder, ['Todo', 'Done']); handle.destroy();
+});
+
+test('old drop target cannot cancel a new menu drag operation', async () => {
+  const { dom, doc, row, button, handle, requests } = setup(); const oldTarget = row('Todo');
+  doc.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); handle.open(button);
+  const start = new dom.window.Event('dragstart', { cancelable: true }); Object.defineProperty(start, 'dataTransfer', { value: { setData() {} } });
+  row('Done').querySelector('.bases-columns-grip')!.dispatchEvent(start);
+  oldTarget.dispatchEvent(new dom.window.Event('drop', { cancelable: true }));
+  row('Todo').dispatchEvent(new dom.window.Event('drop', { cancelable: true })); await settle();
+  assert.deepEqual(requests[0].order, ['Done', 'Todo']); handle.destroy();
+});

@@ -110,8 +110,8 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
     const manual = Array.isArray(result.view.groupOrder), group = result.view.groupBy;
     select.value = manual ? 'MANUAL' : group && typeof group === 'object' && !Array.isArray(group) && 'direction' in group && group.direction === 'DESC' ? 'DESC' : 'ASC';
     select.addEventListener('change', () => {
-      if (disposed || pending || !element.contains(select)) return;
-      if (select.value === 'MANUAL') { const restored = removedOrder ?? []; removedOrder = undefined; void save(restored); }
+      if (disposed || pending || popover !== element || !element.contains(select)) return;
+      if (select.value === 'MANUAL') { const restored = removedOrder ?? []; void save(restored); }
       else { if (Array.isArray(result.view.groupOrder)) removedOrder = result.view.groupOrder as readonly BaseValue[]; void save(undefined, select.value === 'DESC' ? 'DESC' : 'ASC'); }
     });
     by.append(property, select); element.append(by);
@@ -125,9 +125,9 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
         const name = doc.createElement('span'); name.className = 'bases-columns-name'; name.textContent = text(row.key);
         const count = doc.createElement('span'); count.className = 'bases-columns-count'; count.textContent = String(row.count);
         line.append(grip, check, name, count); list.append(line);
-        line.addEventListener('click', event => { if (disposed || pending || !element.contains(line) || (event.target as Element).closest('.bases-columns-grip')) return; selected = index; attempt(() => { row.checked = !row.checked; }); });
+        line.addEventListener('click', event => { if (disposed || pending || popover !== element || !element.contains(line) || (event.target as Element).closest('.bases-columns-grip')) return; selected = index; attempt(() => { row.checked = !row.checked; }); });
         line.addEventListener('keydown', event => {
-          if (disposed || pending || !element.contains(line)) return;
+          if (disposed || pending || popover !== element || !element.contains(line)) return;
           if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); selected = index; attempt(() => { row.checked = !row.checked; }); }
           else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             event.preventDefault(); const next = Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowUp' ? -1 : 1)));
@@ -137,21 +137,22 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
         });
         let ownedDrag: typeof rowDrag;
         grip.addEventListener('dragstart', event => {
-          if (disposed || pending || !element.contains(line) || !event.dataTransfer) { event.preventDefault(); return; }
+          if (disposed || pending || popover !== element || !element.contains(line) || !event.dataTransfer) { event.preventDefault(); return; }
           rowDrag = ownedDrag = { row, token: operation }; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', text(row.key));
         });
         grip.addEventListener('dragend', () => { if (rowDrag === ownedDrag) rowDrag = undefined; });
-        line.addEventListener('dragover', event => { if (rowDrag && !pending && element.contains(line)) event.preventDefault(); });
+        line.addEventListener('dragover', event => { if (rowDrag && !pending && popover === element && element.contains(line)) event.preventDefault(); });
         line.addEventListener('drop', event => {
+          if (disposed || pending || popover !== element || !element.contains(line)) return;
           const source = rowDrag; rowDrag = undefined;
-          if (!source || source.token !== operation || disposed || pending || !element.contains(line)) return;
+          if (!source || source.token !== operation) return;
           event.preventDefault(); attempt(() => { const from = rows.indexOf(source.row); if (from < 0) return; rows.splice(from, 1); rows.splice(index, 0, source.row); selected = index; });
         });
       });
       element.append(list);
       const any = rows.some(row => row.checked), toggle = doc.createElement('button'); toggle.type = 'button'; toggle.className = 'bases-columns-toggle'; toggle.disabled = pending;
       toggle.append(icon(any ? 'eye-off' : 'eye', 16, doc), doc.createTextNode(any ? 'Hide all' : 'Show all'));
-      toggle.addEventListener('click', () => { if (!element.contains(toggle)) return; attempt(() => { rows.forEach(row => { row.checked = !any; }); }); }); element.append(toggle);
+      toggle.addEventListener('click', () => { if (popover !== element || !element.contains(toggle)) return; attempt(() => { rows.forEach(row => { row.checked = !any; }); }); }); element.append(toggle);
     }
     if (errorMessage) { const error = doc.createElement('div'); error.className = 'bases-columns-error'; error.setAttribute('role', 'alert'); error.textContent = errorMessage; element.append(error); }
     position();
