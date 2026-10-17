@@ -793,3 +793,47 @@ Owner supplied ios-build.sh blob405eedc1387224579c9a1e833d90a81cb871f5c4 and
 last-change0b7bbc10; the webpack command is line79, cap copy ios line82 (corrects
 an earlier coordination message's incidental line116). No unpublished Vite
 source was consumed and mobile script remains frozen.
+
+
+## Silent refresh and actual PDF observations — 2026-10-17 22:56 UTC
+
+Direct user screenshot requests removing the Files-page spinner and Updating
+vault text during refresh. Ported only the small silent-refresh hunks from Swift
+worker ce14e9f9 into the owner branch independently of unreviewed search: existing
+listing and empty-state remain visible, initial skeleton requires no listing,
+explicit refresh progress row/text removed. Failure/incomplete warnings and
+refresh/navigation safety guards remain. Owner inspected the ten-line diff;
+Swift frontend parse and diff check pass. Phone6 does not contain this change;
+actual refresh visual/build/install verification remains pending.
+
+Runtime-only Simulator6 slot granted22:48:29, returned22:55:30. Actual encrypted
+PDF prompt and software keyboard became accessible without editorTimeout. Entered
+only disposable fixture-pass; both fixture page texts render. Return to native
+Recents: unlocked PDF appears, invalid PDF does not, exec52792 PASS. Evidence:
+/private/tmp/mobile-v6-password-{settled,unlocked,rendered-confirm}.json and
+mobile-v6-recents-after-pdf.json. Password ready log occurs after user unlock
+(editorReady29921ms includes password waiting); native presentation completion
+intentionally emits no editorReady phase, so absence of that phase alone is not
+a failed prompt signal.
+
+Initial invalid-PDF open showed native editorTimeout8011ms, then actual error
+Invalid PDF structure. Warm reopen displays same visible error without timeout,
+exec48208 PASS; /private/tmp/mobile-v6-warm-error-visible.json and
+mobile-v6-pdf-warm-phase.log. Initial AX hides editor beneath native skeleton,
+so it cannot date first PDF DOM error. Cold engine latency versus early callback
+rejection remains unproven. Earlier callback-failure diagnosis was explicitly
+corrected; no speculative retry patch was made. d809 source review found no
+deterministic normal initial-error drop and preserves its clean investigation
+branch. Further cold-load timing/typed presentation instrumentation is a gap.
+
+Three prepared query/Base/long-focus fixtures were copied into only the existing
+disposable Simulator vault while stopped. App stopped/helper closed; Simulator
+remains booted. No new compiler or iPhone install ran in this pass.
+
+Command mode is confirmed Zorid app actions. Coordinator22:53:27 approves the
+currently supported native New note/Recents/Files/Settings/Choose vault actions
+through existing coordinator, actual availability, no hidden Workspace or
+speculative shared catalog. Swift371 implements a separate follow-up. Search
+5f81f749 and worker silent-refreshce14e9f9 are source-ready; independent117
+Rust DTO/admission review was actually started22:54 after mailbox delivery alone
+left that worker idle. Do not claim search review/typecheck/runtime complete.
