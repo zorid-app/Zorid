@@ -1,3 +1,4 @@
+import { vaultPath } from './path.ts';
 import { bytesToBase64, base64ToBytes } from './binary.ts';
 import { normalizePath, type VaultAdapter, type VaultEntry } from '../core/types.ts';
 import type { PlatformVault } from './index.ts';
@@ -5,9 +6,10 @@ import type { DesktopReconciliation } from './bridge.d.ts';
 import type { DurableWrites, DurableWriteRef, DurableWriteIntent, DurableWriteRead } from '../core/durable-writes.ts';
 import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints } from '../core/durable-checkpoints.ts';
 
-/** Native chooses/opens the vault before loading the editor. No path crosses this API. */
+/** Native chooses/opens the vault before loading the editor. No vault root crosses this API. */
 export interface NativeVaultPlugin {
-  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation }>;
+  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string }>;
+  noteOpened(input: { path: string }): Promise<void>;
   refresh(): Promise<{ reconciliation: DesktopReconciliation }>;
   request(input: { header: string; body: string }): Promise<{ header: string; body: string }>;
   addListener(event: 'lifecycleRequest', handler: (event: { id: string; reason: MobileLifecycleReason }) => void): Promise<{ remove(): Promise<void> }>;
@@ -18,7 +20,7 @@ export interface MobileLifecycle {
   subscribe(handler: (reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>): () => void;
 }
 // Keep this owned surface until the coordinator lands the PlatformVault declaration.
-type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle };
+type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; initialPath?: string; noteOpened(path: string): Promise<void> };
 const FILE_LIMIT = 16 * 1024 * 1024, PLAN_LIMIT = 8 * 1024 * 1024, CHECKPOINT_LIMIT = 32 * 1024 * 1024;
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 // Wire objects are validated at their consumer boundary; never cast them to editor state directly.
@@ -46,6 +48,17 @@ function unbase64(value: string, limit: number): Uint8Array {
 function sameKeys(value: Wire, keys: string[]): boolean { return !!value && typeof value === 'object' && Object.keys(value).sort().join(',') === keys.sort().join(','); }
 const visible = (path: string) => path.split('/').every(part => !part.startsWith('.'));
 const terminal = new Set(['invalid_request','not_found','invalid_path','invalid_identifier','invalid_mutation','invalid_text','invalid_family_command','entry_not_found','entry_deleted','revision_conflict','idempotency_conflict']);
+
+function nativeNotePath(value: unknown): string {
+  if (typeof value !== 'string') throw fail('invalid_path');
+  // Native Rust paths are canonical relative entry paths; never silently rewrite
+  // the selected spelling or allow the private store directory as a note.
+  try {
+    if (vaultPath(value) !== value || /[\u007f-\u009f]/.test(value) || /^\.zorid(?:\/|$)/i.test(value)) throw 0;
+    textBytes(value,1024 * 1024);
+  } catch { throw fail('invalid_path'); }
+  return value;
+}
 
 /** Same bounded native status schema as the desktop host, copied into immutable UI state. */
 function reconciliationStatus(input: unknown): DesktopReconciliation {
@@ -146,6 +159,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { if (lifecycleHandler === handler) lifecycleHandler = undefined; };
     },
   };
+  let initialPath: string | undefined;
   let context: Awaited<ReturnType<NativeVaultPlugin['context']>>;
   let reconciliationState: DesktopReconciliation | null = null;
   const reconciliationListeners = new Set<(status: DesktopReconciliation) => void>();
@@ -187,6 +201,9 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   try {
     context = await bridge.context();
     if (typeof context.clientId !== 'string' || !uuid(context.clientId) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
+    if (context.initialPath !== undefined) {
+      try { initialPath = nativeNotePath(context.initialPath); } catch { throw fail('invalid_native_context'); }
+    }
     if (context.reconciliation !== undefined) reconciliationState = reconciliationStatus(context.reconciliation);
     clientId = context.clientId;
     const claimed = (await call('claim_client', { client_id: clientId })).lease;
@@ -482,7 +499,21 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { listeners.delete(listener); if (!listeners.size && timer) { clearInterval(timer); timer = undefined; } };
     },
   };
-  return { adapter, mobileLifecycle, reconciliation, label: context.name, id: `mobile-core:${scope.vaultId}:${clientId}`,
+  return { adapter, mobileLifecycle, reconciliation, ...(initialPath === undefined ? {} : { initialPath }),
+    async noteOpened(path) {
+      active(); if (releasePromise) throw fail('storage_closed');
+      const captured = nativeNotePath(path);
+      // This optional notification follows actual workspace activation. It only
+      // updates native device-local Recents; errors never change durable saves.
+      const task = tail.then(async () => {
+        active();
+        await bridge.noteOpened({ path: captured });
+        active();
+      });
+      tail = task.catch(() => {});
+      await task;
+    },
+    label: context.name, id: `mobile-core:${scope.vaultId}:${clientId}`,
     recoverCommands: () => serial(async () => {
       let cursor: string | undefined;
       for (let count = 0; count < 100; count++) {

@@ -23,10 +23,12 @@ function fixture() {
   let ackHook: ((input:{id:string;ok:boolean})=>Promise<void>) | undefined;
   let initialReconciliation: any = undefined, refreshValue: any = {reconciliation:scanStatus()}, refreshCalls=0;
   let refreshHook: (()=>Promise<void>) | undefined;
+  let initialPath: any = undefined, openedHook: ((path:string)=>Promise<void>) | undefined; const opened: string[] = [];
   const plugin: NativeVaultPlugin & {close():Promise<void>} = {
     async addListener(event,handler) { assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
     async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
-    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
+    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
+    async noteOpened({path}) { active++;maxActive=Math.max(maxActive,active);opened.push(path);try{if(openedHook)await openedHook(path);await new Promise<void>(r=>setImmediate(r));}finally{active--;} },
     async refresh() { active++;maxActive=Math.max(maxActive,active);refreshCalls++;try {if(refreshHook)await refreshHook();await new Promise<void>(r=>setImmediate(r));return refreshValue;}finally{active--;} },
     async request(input) {
       active++; maxActive = Math.max(maxActive,active);
@@ -97,7 +99,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, opened, selectPath(value:any){initialPath=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -508,4 +510,52 @@ test('explicit terminal namespace rejection is retained and does not execute on 
   await assert.rejects(v.adapter.rename('Note.md','Moved.md'),{code:'revision_conflict',commitUncertain:false});
   await v.recoverCommands!();assert.equal(f.requests.filter(r=>r.command.method==='file_command').length,1);assert.equal(f.receipts.size,0);
   assert.equal((await v.adapter.list())[0].path,'Note.md');await v.release!();
+});
+
+test('optional native selected path preserves Unicode spelling without auto-notifying Recents',async()=>{
+  const f=fixture(),selected='資料/e\u0301/你好 📝.md';f.selectPath(selected);
+  const v=await openNativeMobileVault(f.plugin);assert.equal(v.initialPath,selected);assert.deepEqual(f.opened,[]);
+  await v.adapter.list();await v.adapter.read('Note.md');await v.adapter.write('Note.md','saved');assert.deepEqual(f.opened,[]);
+  await v.noteOpened(selected);assert.deepEqual(f.opened,[selected]);assert.equal(v.initialPath,selected);await v.release!();
+  const other=fixture(),plain=await openNativeMobileVault(other.plugin);assert.equal(Object.hasOwn(plain,'initialPath'),false);await plain.release!();
+});
+
+for(const selected of [null,42,'','/tmp/vault/Note.md','C:/Note.md','a\\b.md','a/../b.md','./Note.md','folder//Note.md','folder/','Note\0.md','.zorid/private','Note\u0085.md','bad\ud800.md']) test(`reject malformed native selected path ${JSON.stringify(selected)}`,async()=>{
+  const f=fixture();f.selectPath(selected);await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});
+  assert.equal(f.requests.length,0);assert.equal(f.removals,1);assert.deepEqual(f.opened,[]);assert.equal(f.closes,0);
+});
+
+test('noteOpened shares native request/refresh queue and release waits for accepted notification',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),entered=deferred(),gate=deferred();
+  f.onOpened(async()=>{entered.resolve();await gate.promise;});
+  const first=v.adapter.read('Note.md'),opened=v.noteOpened('nested/你好.md'),refresh=v.reconciliation!.retry(),last=v.adapter.read('Note.md');
+  await entered.promise;assert.equal(f.requests.filter(r=>r.command.method==='read_path').length,1);assert.equal(f.refreshCalls,0);
+  const release=v.release!();await assert.rejects(v.noteOpened('later.md'),{code:'storage_closed'});assert.equal(f.removals,0);
+  gate.resolve();await Promise.all([first,opened,refresh,last,release]);assert.equal(f.maxActive,1);assert.deepEqual(f.opened,['nested/你好.md']);assert.equal(f.removals,1);
+  await assert.rejects(v.noteOpened('closed.md'),{code:'storage_closed'});assert.equal(f.closes,0);
+});
+
+test('native Recents failure is caller-visible and cannot poison a durable save or future notification',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);f.onOpened(async()=>{throw Object.assign(new Error('Native identity no longer exists'),{code:'not_found'});});
+  await assert.rejects(v.noteOpened('removed.md'),{code:'not_found'});
+  assert.equal((await v.adapter.durableWrites!.readText('Note.md')).content,'before');
+  await v.adapter.write('Note.md','durable despite recents');assert.equal(f.content,'durable despite recents');
+  f.onOpened(async()=>{});await v.noteOpened('Note.md');assert.deepEqual(f.opened,['removed.md','Note.md']);await v.release!();
+});
+
+test('queued noteOpened is never dispatched after successful switch ACK',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),entered=deferred(),done=deferred();
+  const original=f.plugin.request.bind(f.plugin);
+  f.plugin.request=async input=>{if(JSON.parse(input.header).command.method==='read_path'){entered.resolve();await gate.promise;}return original(input);};
+  const read=v.adapter.read('Note.md');await entered.promise;
+  const queued=assert.rejects(v.noteOpened('Note.md'),{code:'storage_closed'});
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('switchVault');await done.promise;
+  await assert.rejects(v.noteOpened('later.md'),{code:'storage_closed'});gate.resolve();await read;await queued;
+  assert.deepEqual(f.opened,[]);await v.release!();assert.equal(f.closes,0);
+});
+
+test('invalid activation notification paths are rejected before native dispatch',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);
+  for(const path of ['../Note.md','/Note.md','folder//Note.md','.ZORID/private','folder\\Note.md','bad\ud800.md'])await assert.rejects(v.noteOpened(path),{code:'invalid_path'});
+  assert.deepEqual(f.opened,[]);await v.noteOpened('folder/My note.canvas');assert.deepEqual(f.opened,['folder/My note.canvas']);await v.release!();
 });
