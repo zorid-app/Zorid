@@ -24,6 +24,15 @@ impl NativeVault {
         self.paths.verify()?;
         Ok(self.store.begin_document_index()?)
     }
+    /// Discard only the addressed unpublished derived stage, including stale
+    /// work. Published snapshots and authoritative source remain intact.
+    pub fn discard_document_index_stage(
+        &mut self,
+        snapshot: &IndexSnapshotId,
+    ) -> NativeDocumentResult<()> {
+        self.paths.verify()?;
+        Ok(self.store.discard_document_index_stage(snapshot)?)
+    }
     pub fn document_index_stages(&self) -> NativeDocumentResult<Vec<DocumentIndexStage>> {
         self.paths.verify()?;
         Ok(self.store.document_index_stages()?)
