@@ -47,9 +47,10 @@ action('configure',async()=>{
   let raw:any;let key:Uint8Array|undefined;
   try{
     raw=JSON.parse(await file.text());
-    if(raw.version!==1||typeof raw.key_base64!=='string')throw new Error('invalid_credentials');
+    const rpc=raw.version===2&&raw.transport==='grpc',legacy=raw.version===1&&raw.transport===undefined;
+    if((!rpc&&!legacy)||typeof raw.key_base64!=='string')throw new Error('invalid_credentials');
     key=Uint8Array.from(atob(raw.key_base64),c=>c.charCodeAt(0));
-    await runtime!.configureSyncFixture({endpoint:raw.endpoint,realmId:raw.realm_id,vaultId:raw.vault_id,serverEpoch:raw.server_epoch,keyEpoch:raw.key_epoch,bearerToken:raw.bearer_token,keyBytes:key,allowLoopbackHttp:true,enrollEmpty:true});
+    await runtime!.configureSyncFixture({...(rpc?{version:2,transport:'grpc'}:{}),endpoint:raw.endpoint,realmId:raw.realm_id,vaultId:raw.vault_id,serverEpoch:raw.server_epoch,keyEpoch:raw.key_epoch,bearerToken:raw.bearer_token,keyBytes:key,allowLoopbackHttp:true,enrollEmpty:true});
     return {status:'configured',files:await rows()};
   }finally{key?.fill(0);if(raw){raw.bearer_token='';raw.key_base64='';}input.value='';}
 });

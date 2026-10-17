@@ -21,6 +21,7 @@ export interface BrowserSyncTransportOptions {
   timeoutMs?: number;
 }
 export interface BrowserSyncTransport {
+  readonly format?: 'http-json-v1' | 'grpc-protobuf-v2';
   hello(signal?: AbortSignal): Promise<Uint8Array>;
   upload(updateId: string, exactWire: Uint8Array, signal?: AbortSignal): Promise<Uint8Array>;
   /** cursorJson is produced by the shared Rust cursor encoder, never renderer input. */
@@ -110,6 +111,7 @@ export function createBrowserSyncTransport(
     }
   }
   return {
+    format: 'http-json-v1',
     hello: signal => request('/v1/hello', SYNC_CONTROL_BYTES, signal),
     upload(updateId, exactWire, signal) {
       if (!id.test(updateId) || !(exactWire instanceof Uint8Array)) return Promise.reject(new BrowserSyncTransportError('sync_invalid_request'));

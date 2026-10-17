@@ -2,6 +2,7 @@
 //! This crate never saves data. A host adapter must commit state, bytes, outbox
 //! and receipts atomically before reporting a durable save.
 mod crypto;
+mod rpc;
 mod sync;
 
 use serde::{Deserialize, Serialize};

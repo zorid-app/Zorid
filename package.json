@@ -27,6 +27,8 @@
     "proto:check": "node scripts/generate-proto.mjs --check"
   },
   "dependencies": {
+    "@connectrpc/connect": "2.2.0",
+    "@connectrpc/connect-web": "2.2.0",
     "@capacitor/core": "^8.0.0",
     "@capacitor/filesystem": "^8.0.0",
     "@codemirror/autocomplete": "^6.18.0",
