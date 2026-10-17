@@ -116,6 +116,25 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- User opened protobuf discussion for streaming/raw-byte messages and asks whether
+  generated schemas/codecs would speed development. No codec adoption or rewrite
+  authorized yet. Root recommends evaluating protobuf for versioned cross-language
+  commands/chunk metadata and bytes fields, retaining JSON for human-facing CLI/
+  settings. Desktop stdio already carries raw bodies; browser/WASM JSON arrays and
+  aggregate graphs are distinct serialization costs. Portable/Store owners told
+  to hold encoding changes while codec-independent semantics/review may continue.
+  Existing authenticated exact-byte commitments and semantic validation remain
+  required with any encoding. No new dependency installed for this discussion.
+- Main7511fb0 integrates reviewed portable foundation7edbb72 after73/73 file-sync
+  checks (owner47442); no large-file client activation is implied. Binary explicit
+  create f62cd3e is integrated after39 Node checks/typecheck/source approval.
+  Isolated native progress six-fixture gate47817 passes6/6. Existing external
+  scope20679 was50/51: pending namespace work omitted a retained external binary
+  observation. Diagnostic73155 confirmed that exact path. Reviewed retention-only
+  fixd44e57f preserves all authority blocks; combined rerun16545 nowpasses51/51
+  (new progress tests excluded to avoid repetition). Actual CLI/host/UI scan proof
+  and two adapted host fixtures9d6cfd2 remain next; progress source not main yet.
+  Store foundation277adb0 is reviewed/frozen but uncompiled; schema10 not active.
 - Main4a48a79 integrates reviewed25f6745: whole-text diff trims shared scalar-
   aligned prefix/suffix, bounds Myers work and falls back to the changed middle
   when the window/edit count exceeds its budget. Existing256KiB Text, snapshot,
