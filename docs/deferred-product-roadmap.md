@@ -118,6 +118,21 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 Current authoritative update — 2026-10-17 20:30 UTC. The bullets below
 this update are historical checkpoints where their status differs:
+- Workspace backlink hook9f259800 is now committed on the isolated candidate;
+  actual Node/JSDOM run2 passed4/4 in0.77s, covering post-save pane/replaced-ID
+  cancellation, valid navigation after save, and blank-tab pin retirement.
+  Log tmp/stage4-workspace-backlinks-run2.log. This is controlled service/DOM
+  evidence, not actual desktop/browser Rust transport or visual app proof.
+- Source review caught Base defaults diverging across hosts (desktop epoch clock
+  and1000 rows versus browser invocation clock and10000 rows). Shared frontend
+ 06cbfb7f and direct browserd62e2b60 align current-clock/1000-row defaults;
+  explicit values remain explicit. Direct desktop clock correction is owned by
+  stage4_markdown_contracts. Shared lost-publication-ACK helper2cdfd9ba and
+  focused probes are composed; owner probes passed2/2, integrated retry pending.
+- Native acknowledged exclusive slot ownershipmsg_fbdde0270743. It granted only
+  the bounded workspace Node passmsg_a3b456455733; root returned that slot after
+  terminal results in msg_238a603ec463. No root heavy job is live. Native owns
+  editor-only recovery/error visibility plus keyboard accessory verification.
 - Subsequent root checks: Base graph corpus44023 passed2/2 after the fixture
   correction (tmp/stage4-base-generation-run4.log); changed Store discard6800
   passed1/1 (tmp/stage4-store-discard-run4.log). Native retry57384 compiled and
