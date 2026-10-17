@@ -81,7 +81,8 @@ export interface DocumentService {
 export interface DocumentSemanticsCapability {readonly documentSemantics?:DocumentService}
 export const DOCUMENT_REQUEST_BYTES=64*1024,DOCUMENT_RESPONSE_BYTES=16*1024*1024,DOCUMENT_PAGE_LIMIT=1000;
 export class DocumentSemanticsError extends Error {
-  constructor(readonly code:string){super('Shared document semantics are unavailable.');this.name='DocumentSemanticsError';}
+  readonly code:string;
+  constructor(code:string){super('Shared document semantics are unavailable.');this.code=code;this.name='DocumentSemanticsError';}
 }
 
 
