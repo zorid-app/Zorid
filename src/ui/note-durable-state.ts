@@ -57,6 +57,14 @@ export class DurableNoteState {
     const op=this.state!.operation!;
     // Resolve an uncertain checkpoint before authorizing its next phase.
     if(this.uncertain)await this.persist();
+    if(op.pendingAck){
+      if(!op.ref||op.pendingAck.operationId!==op.ref.operationId||
+        !(op.pendingAck.status==='committed'&&typeof op.pendingAck.sequence==='string'||op.pendingAck.status==='rejected'&&typeof op.pendingAck.code==='string'))throw failure('invalid pending acknowledgment');
+      // Provider validates the exact terminal outcome and retries ACK idempotently.
+      // No new reconciliation may reinterpret an already reconciled draft/base.
+      await this.writes.acknowledge(op.ref,op.pendingAck);
+      this.state!.operation=undefined;await this.persist();this.changed();return;
+    }
     if(!op.ref){const prepared=await this.writes.prepare(op.plan);this.checkIdentity(prepared.ref);if(prepared.ref.operationId!==op.plan.operationId)throw failure('prepare returned another operation');op.ref=prepared.ref;await this.persist();}
     let outcome=await this.writes.query(op.ref);
     if(!outcome)throw failure('checkpointed intent missing');
