@@ -42,3 +42,13 @@ Raw source remains authoritative even when semantic compilation fails. These
 cases do not authorize Rust YAML reserialization, imported collection storage,
 server plaintext queries, filesystem access or new plugin execution. No MDBASE
 code or upstream oracle fixtures are copied here.
+
+`accepted-expressions.json` is the scalar-safe native/WASM projection. The
+original `expressions.json` intentionally retains JavaScript's broken UTF-16
+surrogate observation; portable parsers must not weaken Unicode validation to
+read that obsolete expected value. `project-accepted.mjs --check` verifies the
+committed projection without running any evaluator. Its explicit approved change
+ID set is the only source of accepted `proposed` values; unknown proposal IDs
+fail until separately approved. Regenerate with `--write` only after reviewing
+the source fixture and approval list. Native/WASM use `expected` directly and
+aggregate all expression mismatches in one pass.

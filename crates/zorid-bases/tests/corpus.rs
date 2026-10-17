@@ -12,8 +12,7 @@ struct Corpus {
 struct Case {
     id: String,
     expression: String,
-    current: Value,
-    proposed: Option<Value>,
+    expected: Value,
     context: Option<Context>,
     repeat: Option<usize>,
 }
@@ -44,7 +43,7 @@ fn compact(value: &BaseValue) -> Value {
 #[test]
 fn accepted_expression_corpus_uses_reused_engine() {
     let corpus: Corpus = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/document-semantics/bases/expressions.json"
+        "../../../tests/fixtures/document-semantics/bases/accepted-expressions.json"
     ))
     .unwrap();
     let mut failures = Vec::new();
@@ -88,7 +87,7 @@ fn accepted_expression_corpus_uses_reused_engine() {
         } else {
             actual.into_iter().next().unwrap()
         };
-        let expected = case.proposed.unwrap_or(case.current);
+        let expected = case.expected;
         if !json_equal(&actual, &expected) {
             failures.push(format!("{}: expected {expected}, actual {actual}", case.id));
         }
