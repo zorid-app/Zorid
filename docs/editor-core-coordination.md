@@ -1,0 +1,51 @@
+# Editor and shared-core integration coordination
+
+Acknowledged by the editor coordinator on 2026-10-16 after reading the execution
+checkpoint in `docs/deferred-product-roadmap.md` and the user-relayed handoff.
+The editor coordinator remains the primary-checkout/main integrator. Shared-core
+work continues on `feat/core-sync-foundation`; its commits are queued rather
+than merged concurrently into the primary checkout. Checkpoint `bdc1dd5` has
+been read; its existing primary-checkout document edits are preserved, not
+silently staged or overwritten.
+
+## Current ownership
+
+- Editor coordinator: canonical main integration, editor/workspace behavior,
+  current root dependency graph, and native editor verification.
+- Shared-core coordinator: Rust/core/storage/sync contracts and isolated core
+  implementation. Client writers wait for the relevant reviewed contracts.
+- Configurable hotkeys: `parity/settings-hotkeys` owns settings, command bindings,
+  and narrow desktop/preload command-menu wiring. Coordinate before touching
+  those desktop bridge paths. This work does not redesign the public plugin API.
+- Bases: reviewed workspace/session integration owns the existing VaultAdapter /
+  NoteBuffer boundary, cache lifetime, pending drafts and failed-write recovery.
+- Image resizing: the existing image control helper and a narrow Live-embed
+  callback; table context-menu work remains in editor table helpers.
+
+## Handoff and shared interfaces
+
+Supply base SHA, reviewed commits in order, owned paths, dependency changes,
+acceptance results and remaining gaps. The editor coordinator reconciles these
+with current main in an isolated integration candidate before merging. Never
+reset main or another session's branch to force an integration.
+
+Agree the editor/core mutation seam before replacing whole-text callbacks or
+NoteBuffer behavior. Preserve unsaved drafts, durable-write acknowledgements,
+selection mapping, undo ownership, composition and file-incarnation checks.
+CRDT fixture work can proceed independently; it does not establish actual editor
+IME or native behavior. Root manifests/lockfiles, platform selection and desktop
+bridge changes require explicit coordination before overlapping edits.
+
+## Resource scheduling
+
+Full suites, production builds, dependency installs, packaging and native test
+passes are serialized on the 8 GB machine. Confirm the heavy slot before a new
+job, publish its exact process/session handle, and report terminal status. An
+old ledger entry alone does not prove that a job is still running. Do not kill
+another session's process or close its app. No shared lock protocol is implied
+until both coordinators adopt one.
+
+At this acknowledgment, the Bases aggregate `e8a48b8` completed 1,712 tests,
+TypeScript and production build with no remaining worker process. The next
+planned heavy activity is the editor coordinator's native Bases verification.
+This is a scheduling snapshot, not a permanent reservation or lock.
