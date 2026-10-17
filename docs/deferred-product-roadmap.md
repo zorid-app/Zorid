@@ -38,6 +38,13 @@ LiveSync against our own requirements. Record pinned provenance and applicable
 licenses for copied code, plus tests for adopted behavior. This is not approval
 to invent encryption primitives or a claim of compatibility with either system.
 
+The user additionally requires systematic review of LiveSync's solved edge cases.
+`mobile_readiness` owns a pinned source/tests/changelog matrix, consulting the
+prior `livesync_audit` findings. Relevant cases must map to Zorid regression tests
+or explicit gaps; source inspection alone is not verified coverage. Target
+artifact: `docs/livesync-edge-case-matrix.md`. Record audit scope and uninspected
+areas rather than claiming that every upstream edge case has been exhausted.
+
 1. Read AGENTS.md, this checkpoint, the accepted decisions/sequence below and
    relevant rows of `docs/user-findings.md`; inspect the active built-in goal.
 2. Inspect current git status, main HEAD, worktrees and live agents. Verify task
