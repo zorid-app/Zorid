@@ -1,6 +1,8 @@
 //! Ciphertext-only relay. Privileged provisioning methods are fixture/operator
 //! APIs, never unauthenticated HTTP endpoints. No vault keys enter this crate.
+mod admission;
 pub mod http;
+pub mod rpc;
 mod snapshot;
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};

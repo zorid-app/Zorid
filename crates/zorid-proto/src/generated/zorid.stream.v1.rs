@@ -245,6 +245,12 @@ pub struct OpenRead {
     pub id: ::prost::alloc::string::String,
     #[prost(string, optional, tag = "3")]
     pub expected_revision: ::core::option::Option<::prost::alloc::string::String>,
+    /// REQUIRED valid nonempty OperationId at consumers. Caller persists before
+    /// open; owner+read_id resolves the original exact request/pinned snapshot
+    /// before current-state/quota checks. Never invent a random fallback or rebind
+    /// a closed/stale handle to another content source.
+    #[prost(string, tag = "4")]
+    pub read_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadChunk {
@@ -285,7 +291,7 @@ pub struct ReadOpened {
 pub struct ReadChunkResult {
     #[prost(uint64, tag = "1")]
     pub offset: u64,
-    /// Consumer must enforce <=131072 bytes; zero bytes valid only at EOF.
+    /// Consumer must enforce \<=131072 bytes; zero bytes valid only at EOF.
     #[prost(bytes = "vec", tag = "2")]
     pub data: ::prost::alloc::vec::Vec<u8>,
     #[prost(bool, tag = "3")]

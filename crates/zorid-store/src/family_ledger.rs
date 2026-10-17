@@ -10,7 +10,7 @@ use zorid_sync_protocol::{Envelope, RealmId, UpdateId, VaultId};
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("sync_envelopes", "CREATE TABLE sync_envelopes (realm_id TEXT NOT NULL, vault_id TEXT NOT NULL, update_id TEXT NOT NULL, metadata TEXT NOT NULL, direction TEXT NOT NULL CHECK(direction IN ('authored','received')), wire BLOB NOT NULL, PRIMARY KEY(realm_id,vault_id,update_id))"),
-    ("authored_envelopes", "CREATE TABLE authored_envelopes (realm_id TEXT NOT NULL, vault_id TEXT NOT NULL, update_id TEXT NOT NULL, metadata TEXT NOT NULL, payload BLOB NOT NULL, sealed BLOB, accepted INTEGER NOT NULL CHECK(accepted IN (0,1)), PRIMARY KEY(realm_id,vault_id,update_id))"),
+    ("authored_envelopes", "CREATE TABLE authored_envelopes (realm_id TEXT NOT NULL, vault_id TEXT NOT NULL, update_id TEXT NOT NULL, metadata TEXT NOT NULL, sealed BLOB, accepted INTEGER NOT NULL CHECK(accepted IN (0,1)), PRIMARY KEY(realm_id,vault_id,update_id), FOREIGN KEY(realm_id,vault_id,update_id) REFERENCES immutable_payloads(realm_id,vault_id,update_id))"),
     ("family_prerequisites", "CREATE TABLE family_prerequisites (realm_id TEXT NOT NULL, vault_id TEXT NOT NULL, update_id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY(realm_id,vault_id,update_id), FOREIGN KEY(realm_id,vault_id,update_id) REFERENCES sync_envelopes(realm_id,vault_id,update_id))"),
 ];
 
@@ -42,6 +42,9 @@ pub(super) struct EnvelopeMetadata {
     pub format_version: u32,
     pub payload_digest: Sha256Digest,
     pub payload_bytes: u32,
+    /// Commitment to the typed descriptor derived from the exact accepted file
+    /// plaintext. Text envelopes have no file descriptor.
+    pub file_summary_digest: Option<Sha256Digest>,
     // File batches/chunks/pages need not name a single entry. A text binding is
     // logical identity only; no entries FK may prevent pre-bootstrap staging.
     pub text_binding: Option<TextBinding>,
@@ -100,6 +103,7 @@ impl EnvelopeMetadata {
             || self.payload_bytes == 0
             || self.payload_bytes as usize > zorid_sync_protocol::MAX_PLAINTEXT_BYTES
             || (self.family == Family::Text) != self.text_binding.is_some()
+            || (self.family == Family::Files) != self.file_summary_digest.is_some()
         {
             return Err(corrupt("invalid envelope family metadata"));
         }
@@ -124,6 +128,20 @@ impl EnvelopeMetadata {
         {
             return Err(corrupt("envelope payload/provenance mismatch"));
         }
+        if self.family == Family::Files {
+            let (scope, id, record) =
+                zorid_file_sync::metadata::GraphRecord::from_authored_exact(payload)
+                    .map_err(|_| corrupt("invalid file descriptor source plaintext"))?;
+            if scope.realm_id != self.key.realm_id
+                || scope.vault_id != self.key.vault_id
+                || id != self.key.update_id
+                || Some(record.summary_digest()?) != self.file_summary_digest
+            {
+                return Err(corrupt(
+                    "file summary differs from exact envelope plaintext",
+                ));
+            }
+        }
         Ok(())
     }
     fn check_key(&self, key: &EnvelopeKey) -> Result<()> {
@@ -147,7 +165,118 @@ impl EnvelopeMetadata {
     }
 }
 
+/// Descriptor/status reads must not select retained payload/wire BLOBs. This
+/// head validates identities, bounded lengths and ownership; a body is checked
+/// again by the separate one-record accessor when it is actually consumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MetadataRecord {
+    pub metadata: EnvelopeMetadata,
+    pub direction: Direction,
+    pub sealed: bool,
+    pub accepted: bool,
+}
+pub(super) fn metadata_only(tx: &Connection, key: &EnvelopeKey) -> Result<Option<MetadataRecord>> {
+    let oversized: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM authored_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3 AND length(CAST(metadata AS BLOB)) NOT BETWEEN 1 AND 1048576 UNION ALL SELECT 1 FROM sync_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3 AND length(CAST(metadata AS BLOB)) NOT BETWEEN 1 AND 1048576)",
+        params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()], |r| r.get(0))?;
+    if oversized {
+        return Err(corrupt("envelope metadata head bound exceeded"));
+    }
+    let authored:Option<(String,i64,i64,i64,Option<i64>)>=tx.query_row(
+        "SELECT a.metadata,a.sealed IS NOT NULL,a.accepted,coalesce(p.payload_bytes,-1),length(a.sealed) FROM authored_envelopes a LEFT JOIN immutable_payloads p USING(realm_id,vault_id,update_id) WHERE a.realm_id=?1 AND a.vault_id=?2 AND a.update_id=?3",
+        params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+    let wire:Option<(String,String,i64)>=tx.query_row(
+        "SELECT metadata,direction,length(wire) FROM sync_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
+        params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    let authored = authored
+        .map(|(raw, sealed, accepted, len, sealed_len)| -> Result<_> {
+            let metadata: EnvelopeMetadata = serde_json::from_str(&raw)?;
+            metadata.check_key(key)?;
+            let source = super::immutable_payloads::head(tx, key)?
+                .ok_or_else(|| corrupt("authored exact source missing"))?;
+            if source.family != metadata.family
+                || source.payload_bytes != metadata.payload_bytes
+                || source.payload_digest != metadata.payload_digest
+                || source.file_summary_digest != metadata.file_summary_digest
+            {
+                return Err(corrupt("authored source differs from envelope metadata"));
+            }
+            if len != i64::from(metadata.payload_bytes)
+                || !matches!(sealed, 0 | 1)
+                || !matches!(accepted, 0 | 1)
+                || accepted == 1 && sealed == 0
+                || sealed_len
+                    .is_some_and(|len| len <= 0 || len > zorid_sync_protocol::MAX_WIRE_BYTES as i64)
+            {
+                return Err(corrupt("invalid authored metadata head"));
+            }
+            Ok((metadata, sealed == 1, accepted == 1))
+        })
+        .transpose()?;
+    let wire = wire
+        .map(|(raw, direction, len)| -> Result<_> {
+            let metadata: EnvelopeMetadata = serde_json::from_str(&raw)?;
+            metadata.check_key(key)?;
+            if len <= 0 || len > zorid_sync_protocol::MAX_WIRE_BYTES as i64 {
+                return Err(corrupt("invalid wire metadata head"));
+            }
+            Ok((metadata, Direction::decode(&direction)?))
+        })
+        .transpose()?;
+    match (authored, wire) {
+        (None, None) => Ok(None),
+        (Some((metadata, false, false)), None) => Ok(Some(MetadataRecord {
+            metadata,
+            direction: Direction::Authored,
+            sealed: false,
+            accepted: false,
+        })),
+        (Some(_), None) => Err(corrupt("sealed authored head lacks wire ledger")),
+        (None, Some((metadata, Direction::Received))) => Ok(Some(MetadataRecord {
+            metadata,
+            direction: Direction::Received,
+            sealed: true,
+            accepted: false,
+        })),
+        (None, Some((_, Direction::Authored))) => {
+            Err(corrupt("authored wire head lacks authored intent"))
+        }
+        (Some((metadata, sealed, accepted)), Some((wire, direction))) => {
+            // SQLite compares one bounded pair; neither body enters a Rust
+            // metadata collection or a whole-history payload allocation.
+            let same:bool=tx.query_row("SELECT coalesce(a.sealed=w.wire,0) FROM authored_envelopes a JOIN sync_envelopes w USING(realm_id,vault_id,update_id) WHERE a.realm_id=?1 AND a.vault_id=?2 AND a.update_id=?3",params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],|r|r.get(0))?;
+            if !sealed || direction != Direction::Authored || metadata != wire || !same {
+                return Err(corrupt("authored head differs from immutable wire ledger"));
+            }
+            Ok(Some(MetadataRecord {
+                metadata,
+                direction,
+                sealed,
+                accepted,
+            }))
+        }
+    }
+}
+
 pub(super) fn wire(tx: &Connection, key: &EnvelopeKey) -> Result<Option<WireRecord>> {
+    // Every caller gets the one-frame allocation bound, including replay and
+    // receive preparation paths that have not loaded the descriptor head yet.
+    let lengths: Option<(i64, i64)> = tx.query_row(
+        "SELECT length(CAST(metadata AS BLOB)),length(wire) FROM sync_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
+        params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).optional()?;
+    let Some((metadata_len, wire_len)) = lengths else {
+        return Ok(None);
+    };
+    if !(1..=1048576).contains(&metadata_len)
+        || wire_len <= 0
+        || wire_len > zorid_sync_protocol::MAX_WIRE_BYTES as i64
+    {
+        return Err(corrupt("wire record allocation bound exceeded"));
+    }
     tx.query_row("SELECT metadata,direction,wire FROM sync_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
         params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],
         |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Vec<u8>>(2)?)))
@@ -160,19 +289,28 @@ pub(super) fn wire(tx: &Connection, key: &EnvelopeKey) -> Result<Option<WireReco
 }
 
 fn authored_raw(tx: &Connection, key: &EnvelopeKey) -> Result<Option<AuthoredRecord>> {
-    tx.query_row("SELECT metadata,payload,sealed,accepted FROM authored_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
-        params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],
-        |r| Ok((r.get::<_,String>(0)?,r.get::<_,Vec<u8>>(1)?,r.get::<_,Option<Vec<u8>>>(2)?,r.get::<_,i64>(3)?)))
-        .optional()?.map(|(metadata,payload,sealed,accepted)| {
-            let metadata:EnvelopeMetadata=serde_json::from_str(&metadata)?;
-            metadata.check_key(key)?;
-            metadata.check_payload(&payload)?;
-            if payload.len() > zorid_sync_protocol::MAX_PLAINTEXT_BYTES || !matches!(accepted,0|1)
-                || accepted == 1 && sealed.is_none()
-            { return Err(corrupt("invalid authored envelope body/outcome")); }
-            if let Some(bytes)=&sealed { metadata.check_wire(bytes)?; }
-            Ok(AuthoredRecord { metadata,payload,sealed,accepted:accepted==1 })
-        }).transpose()
+    metadata_only(tx, key)?;
+    let raw: Option<(String,Option<Vec<u8>>,i64)> = tx.query_row(
+        "SELECT metadata,sealed,accepted FROM authored_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
+        params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    raw.map(|(raw, sealed, accepted)| {
+        let metadata: EnvelopeMetadata = serde_json::from_str(&raw)?;
+        metadata.check_key(key)?;
+        let payload = super::immutable_payloads::read_exact(tx, &metadata)?;
+        if !matches!(accepted, 0 | 1) || accepted == 1 && sealed.is_none() {
+            return Err(corrupt("invalid authored envelope outcome"));
+        }
+        if let Some(wire) = &sealed {
+            metadata.check_wire(wire)?;
+        }
+        Ok(AuthoredRecord {
+            metadata,
+            payload,
+            sealed,
+            accepted: accepted == 1,
+        })
+    })
+    .transpose()
 }
 
 pub(super) fn authored(tx: &Connection, key: &EnvelopeKey) -> Result<Option<AuthoredRecord>> {
@@ -202,8 +340,9 @@ pub(super) fn authored(tx: &Connection, key: &EnvelopeKey) -> Result<Option<Auth
 pub(super) fn unused(tx: &Connection, key: &EnvelopeKey) -> Result<bool> {
     // Validate retained ownership before returning a boolean; a deleted authored
     // head must not make its already sealed operation identity reusable.
-    let a = authored(tx, key)?;
-    Ok(a.is_none() && wire(tx, key)?.is_none())
+    Ok(metadata_only(tx, key)?.is_none()
+        && !super::blob_stage::update_reserved(tx, key)?
+        && !super::binary_commit::update_reserved(tx, key)?)
 }
 
 pub(super) fn insert_authored(
@@ -218,9 +357,68 @@ pub(super) fn insert_authored(
     if !unused(tx, &metadata.key)? {
         return Err(mismatch());
     }
-    tx.execute("INSERT INTO authored_envelopes(realm_id,vault_id,update_id,metadata,payload,accepted) VALUES(?1,?2,?3,?4,?5,0)",
-        params![metadata.key.realm_id.as_str(),metadata.key.vault_id.as_str(),metadata.key.update_id.as_str(),serde_json::to_string(metadata)?,payload])?;
+    super::immutable_payloads::put_exact(tx, metadata, payload, 512 * 1024 * 1024)?;
+    insert_authored_head(tx, metadata)?;
     Ok(())
+}
+
+fn insert_authored_head(tx: &Connection, metadata: &EnvelopeMetadata) -> Result<()> {
+    tx.execute("INSERT INTO authored_envelopes(realm_id,vault_id,update_id,metadata,accepted) VALUES(?1,?2,?3,?4,0)",params![metadata.key.realm_id.as_str(),metadata.key.vault_id.as_str(),metadata.key.update_id.as_str(),serde_json::to_string(metadata)?])?;
+    Ok(())
+}
+/// The durable operation-bound plan names the sole source and independently
+/// commits its exact bytes. Promotion retains all stage/plan reservations.
+pub(super) fn promote_staged(
+    tx: &Connection,
+    owner: &super::blob_stage::BinaryStageRef,
+    metadata: &EnvelopeMetadata,
+    capture_authorization: Option<&super::capture_authorization::CaptureImportAuthorization>,
+) -> Result<()> {
+    let info = super::blob_stage::stage_info(tx, owner)?;
+    match info.purpose {
+        super::blob_stage::StagePurpose::Command(_)
+            if info.phase == super::blob_stage::StagePhase::CommitRequested
+                && capture_authorization.is_none() => {}
+        super::blob_stage::StagePurpose::Capture(_)
+            if info.phase == super::blob_stage::StagePhase::Sealed =>
+        {
+            let authorization = capture_authorization
+                .ok_or_else(|| corrupt("capture does not authorize graph promotion"))?;
+            if authorization.stage() != owner {
+                return Err(mismatch());
+            }
+            authorization.validate(tx)?;
+        }
+        _ => return Err(corrupt("source stage has not authorized this promotion")),
+    }
+    if super::binary_commit::authorized_source_metadata(tx, owner, &metadata.key.update_id)?
+        != *metadata
+        || metadata_only(tx, &metadata.key)?.is_some()
+    {
+        return Err(mismatch());
+    }
+    let source = super::immutable_payloads::head(tx, &metadata.key)?
+        .ok_or_else(|| corrupt("staged immutable source missing"))?;
+    if source.family != metadata.family
+        || source.payload_bytes != metadata.payload_bytes
+        || source.payload_digest != metadata.payload_digest
+        || source.file_summary_digest != metadata.file_summary_digest
+    {
+        return Err(corrupt("planned source differs from immutable row"));
+    }
+    insert_authored_head(tx, metadata)
+}
+/// Authenticated exact plaintext and exact encrypted wire are distinct codecs;
+/// the dispatcher persists both inside its existing final receipt transaction.
+pub(super) fn insert_received_exact(
+    tx: &Connection,
+    metadata: &EnvelopeMetadata,
+    exact_wire: &[u8],
+    exact_plaintext: &[u8],
+) -> Result<bool> {
+    metadata.check_payload(exact_plaintext)?;
+    super::immutable_payloads::put_exact(tx, metadata, exact_plaintext, 512 * 1024 * 1024)?;
+    insert_received(tx, metadata, exact_wire)
 }
 
 /// Returns false for an exact already-durable receipt, including a self echo.
@@ -240,7 +438,10 @@ pub(super) fn insert_received(
         authored(tx, &metadata.key)?;
         return Ok(false);
     }
-    if authored_raw(tx, &metadata.key)?.is_some() {
+    if super::blob_stage::update_reserved(tx, &metadata.key)?
+        || super::binary_commit::update_reserved(tx, &metadata.key)?
+        || authored_raw(tx, &metadata.key)?.is_some()
+    {
         return Err(mismatch());
     }
     insert_wire(tx, metadata, Direction::Received, exact_wire)?;
@@ -395,7 +596,12 @@ mod tests {
     fn db() -> Connection {
         let db = Connection::open_in_memory().unwrap();
         db.pragma_update(None, "foreign_keys", true).unwrap();
-        for (_, sql) in SCHEMA {
+        for (_, sql) in super::super::immutable_payloads::SCHEMA
+            .iter()
+            .chain(SCHEMA)
+            .chain(super::super::blob_stage::SCHEMA)
+            .chain(super::super::binary_commit::SCHEMA)
+        {
             db.execute_batch(sql).unwrap();
         }
         db.execute_batch("CREATE TABLE receive_cursors (realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,record TEXT NOT NULL,PRIMARY KEY(realm_id,vault_id))").unwrap();
@@ -412,6 +618,7 @@ mod tests {
             format_version: 2,
             payload_digest: Sha256Digest::of(b"{}"),
             payload_bytes: 2,
+            file_summary_digest: None,
             text_binding: Some(TextBinding {
                 entry_id: EntryId::new("entry").unwrap(),
                 text_bootstrap_id: UpdateId::new("text_bootstrap").unwrap(),
@@ -502,15 +709,16 @@ mod tests {
         let m = metadata("one");
         let bytes = framed(&m, 1);
         insert_received(&db, &m, &bytes).unwrap();
-        // Deliberate corruption bypassing the private insertion fence.
+        // Deliberate corruption bypassing the private insertion fence. The
+        // normalized source still exists; only envelope ownership is corrupt.
+        super::super::immutable_payloads::put_exact(&db, &m, b"{}", 512 * 1024 * 1024).unwrap();
         db.execute(
-            "INSERT INTO authored_envelopes VALUES(?1,?2,?3,?4,?5,NULL,0)",
+            "INSERT INTO authored_envelopes(realm_id,vault_id,update_id,metadata,sealed,accepted) VALUES(?1,?2,?3,?4,NULL,0)",
             params![
                 m.key.realm_id.as_str(),
                 m.key.vault_id.as_str(),
                 m.key.update_id.as_str(),
-                serde_json::to_string(&m).unwrap(),
-                b"{}".as_slice()
+                serde_json::to_string(&m).unwrap()
             ],
         )
         .unwrap();
@@ -522,6 +730,23 @@ mod tests {
             .unwrap()
             .is_none());
     }
+    #[test]
+    fn wire_accessor_rejects_oversized_retained_frames_before_loading_body() {
+        let db = db();
+        let m = metadata("oversized");
+        db.execute(
+            "INSERT INTO sync_envelopes(realm_id,vault_id,update_id,metadata,direction,wire) VALUES(?1,?2,?3,?4,'received',zeroblob(?5))",
+            params![m.key.realm_id.as_str(),m.key.vault_id.as_str(),m.key.update_id.as_str(),serde_json::to_string(&m).unwrap(),(zorid_sync_protocol::MAX_WIRE_BYTES + 1) as i64],
+        ).unwrap();
+        assert!(matches!(wire(&db, &m.key), Err(StoreError::Corrupt(_))));
+        db.execute(
+            "UPDATE sync_envelopes SET metadata=CAST(zeroblob(1048577) AS TEXT),wire=?1",
+            [framed(&m, 1)],
+        )
+        .unwrap();
+        assert!(matches!(wire(&db, &m.key), Err(StoreError::Corrupt(_))));
+    }
+
     #[test]
     fn cursor_failure_rolls_back_wire_and_prerequisite_atomically() {
         let mut db = db();

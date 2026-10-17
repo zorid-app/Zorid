@@ -16,3 +16,14 @@ accepted authenticated bytes by re-encoding.
 
 These tests do not activate adapters or validate ownership, stages, authenticated
 sync ingress, filesystem publication, native UI, or mobile behavior.
+
+RPC vectors additionally cover positive uint64 accepted sequences above 2^53,
+present-zero empty snapshots, explicit incomplete false, mandatory empty Control
+messages and exact opaque envelope byte carriage. Tiny illustrative wire bodies
+in semantic codec fixtures are not authenticated ZSE1 frames or sync ingress proof.
+
+`rpc-hello-groups-8.bin` and `rpc-hello-groups-128.bin` add balanced unknown tag 100
+groups to a valid HelloRequest with Control. The standard protobuf-es BinaryWriter
+generates them; both stay under 4096 bytes. Shallow groups must decode;128 nested
+groups must fail the standard 100-depth decoder policy in Rust/ES. This is a small
+parser-boundary check, not exhaustive fuzzing or a security audit.

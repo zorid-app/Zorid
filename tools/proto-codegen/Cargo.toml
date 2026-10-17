@@ -11,3 +11,4 @@ license = "AGPL-3.0-only"
 [dependencies]
 prost-build = "=0.14.4"
 protoc-bin-vendored = "=3.3.0"
+tonic-prost-build = "=0.14.6"

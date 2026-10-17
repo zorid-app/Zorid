@@ -18,6 +18,7 @@ function fixture(){
   const find=id=>[...entries.values()].find(row=>row.entry.id===id);
   const put=(id,path,kind,bytes)=>{const row={entry:{id,path,kind,revision:String(++nextRevision),deleted:false},has_content:kind==='file',bytes:Buffer.from(bytes)};entries.set(path,row);return row;};
   const service={host:{
+    async readMetadata(path){const row=entries.get(path);return row?{entry:structuredClone(row.entry),has_content:row.has_content}:null;},
     async readPath(path){const row=entries.get(path);return row?structuredClone(row):null;},
     async fileCommand(client,family,bytes){
       assert.equal(client,'client');
@@ -119,4 +120,12 @@ test('binary create checkpoints an explicit absence-bound create and never overw
   assert.deepEqual(step.family.request.mutation,{type:'create',id:'id-createBinary-race-bin',path:'race.bin',kind:'file'});
   assert.deepEqual([...Buffer.from(step.body_base64,'base64')],[0,255,128]);
   await desktopTextCreates(f.service,f.checkpoints).recover();assert.equal(f.calls.length,1);
+});
+
+test('large-file namespace and destination planning uses metadata without reading payload bodies',async()=>{
+  const f=fixture();f.put('large','large.bin','file',Buffer.from([1]));f.service.host.readPath=async()=>{throw new Error('namespace operation requested full bytes');};
+  const consumer=desktopTextCreates(f.service,f.checkpoints);
+  await consumer.execute(input('move','large.bin',{destination:'moved.bin'}));
+  await consumer.execute(input('trash','moved.bin'));
+  assert.equal(f.entries.has('large.bin'),false);assert.equal(f.entries.has('moved.bin'),false);
 });

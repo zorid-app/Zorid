@@ -10,6 +10,13 @@ pub mod zorid {
             include!("generated/zorid.common.v1.rs");
         }
     }
+    pub mod sync {
+        pub mod rpc {
+            pub mod v1 {
+                include!("generated/zorid.sync.rpc.v1.rs");
+            }
+        }
+    }
     pub mod stream {
         pub mod v1 {
             include!("generated/zorid.stream.v1.rs");

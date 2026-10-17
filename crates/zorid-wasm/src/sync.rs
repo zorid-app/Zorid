@@ -3,6 +3,7 @@
 //! ledger/cursor atomically; a text plan alone never authorizes visibility.
 mod classification;
 mod family;
+mod streaming;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use wasm_bindgen::prelude::*;

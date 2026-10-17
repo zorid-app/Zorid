@@ -520,8 +520,7 @@ fn recovery_and_tombstone_never_expand_content_or_spend_text_budget() {
     );
 }
 
-#[test]
-fn resolved_namespace_keeps_incomplete_crdt_text_pending() {
+fn text_with_missing_predecessor() -> TextState {
     use zorid_client_sync::{AuthenticatedText, ReceiveRequest};
     use zorid_crypto::{CryptoError, EntropySource, VaultKey};
     use zorid_sync_protocol::{ExpectedContext, Header};
@@ -574,7 +573,7 @@ fn resolved_namespace_keeps_incomplete_crdt_text_pending() {
         &key,
     )
     .unwrap();
-    let pending = zorid_client_sync::plan_received_text(
+    zorid_client_sync::plan_received_text(
         &initial,
         &ReceiveRequest {
             expected_version: initial.version.clone(),
@@ -587,7 +586,12 @@ fn resolved_namespace_keeps_incomplete_crdt_text_pending() {
     )
     .unwrap()
     .next_state
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn resolved_namespace_keeps_incomplete_crdt_text_pending() {
+    let pending = text_with_missing_predecessor();
     let (state, mut source) = state(&[text_create("note")]);
     let verified = verify_complete_binary_manifests(&state, &mut source).unwrap();
     let output = classify_metadata(&state, &verified, &[pending], MAX_FILE_BYTES, 0).unwrap();
@@ -596,6 +600,72 @@ fn resolved_namespace_keeps_incomplete_crdt_text_pending() {
         &OutcomeRef::Pending {
             reason: PendingReason::TextDependencies
         }
+    );
+}
+
+#[test]
+fn recovery_hidden_binary_uses_current_causal_head_instead_of_cached_publication() {
+    let (old, mut records) = binary("published", b"previously published");
+    records.push(binary_create("attachment", old));
+    let published = classify(&records, &[]);
+    let OutcomeRef::Normal {
+        content: Some(ContentRef::Binary(cached)),
+        ..
+    } = outcome(&published, "attachment")
+    else {
+        panic!("initial publication must be complete");
+    };
+    let (new, new_parts) = binary("remote", b"unique remote recovery content");
+    records.extend(new_parts);
+    records.push(event(
+        "attachment",
+        "remote-content",
+        &["create-attachment"],
+        v2::Effect::SetContent {
+            content: new.clone(),
+        },
+    ));
+    records.push(event(
+        "attachment",
+        "disk-delete",
+        &["create-attachment"],
+        v2::Effect::Delete,
+    ));
+    let (state, mut source) = state(&records);
+    let verified = verify_complete_binary_manifests(&state, &mut source).unwrap();
+    let classified = classify_metadata(&state, &verified, &[], MAX_FILE_BYTES, 0).unwrap();
+    assert_eq!(
+        outcome(&classified, "attachment"),
+        &OutcomeRef::Recovery {
+            reason: RecoveryReason::DeleteConflict
+        }
+    );
+    let Some(ContentRef::Binary(recovered)) =
+        recovery_content_ref(&state, &verified, &[], &entry("attachment"), MAX_FILE_BYTES).unwrap()
+    else {
+        panic!("hidden current binary must remain recoverable");
+    };
+    assert_eq!(recovered.selected_event(), &id("remote-content"));
+    assert_eq!(recovered.manifest(), &new);
+    assert_ne!(&recovered, cached);
+}
+
+#[test]
+fn recovery_text_with_missing_dependencies_returns_none_instead_of_empty_bytes() {
+    let pending = text_with_missing_predecessor();
+    assert!(pending.materialized_utf8().unwrap().is_empty());
+    let (state, mut source) = state(&[text_create("note")]);
+    let verified = verify_complete_binary_manifests(&state, &mut source).unwrap();
+    assert_eq!(
+        recovery_content_ref(
+            &state,
+            &verified,
+            &[pending],
+            &entry("note"),
+            MAX_FILE_BYTES
+        )
+        .unwrap(),
+        None
     );
 }
 

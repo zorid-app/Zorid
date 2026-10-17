@@ -10,48 +10,89 @@ pub(super) const SCHEMA: &[(&str, &str)] = &[
 fn invalid(reason: &str) -> StoreError {
     StoreError::Corrupt(reason.into())
 }
-fn observation(tx: &Connection, id: &OperationId) -> Result<ExternalObservation> {
+pub(super) fn observation(tx: &Connection, id: &OperationId) -> Result<ExternalObservation> {
     let raw: String = tx.query_row(
         "SELECT record FROM external_observations WHERE observation_id=?1",
         [id.as_str()],
         |r| r.get(0),
     )?;
     let value = projection::decode_observation(id.as_str(), &raw)?;
-    if value.baseline.is_some() || value.content.len() as u64 > FAMILY_MAX_FILE_BYTES {
+    if value.baseline.is_some() || value.content.len() > FAMILY_MAX_FILE_BYTES {
         return Err(invalid(
             "new family observation has a baseline or exceeds limit",
         ));
     }
     Ok(value)
 }
-fn validate_command(command: &FamilyCommand, observation: &ExternalObservation) -> Result<()> {
-    let Mutation::Create {
-        path,
-        kind,
-        content,
-        ..
-    } = &command.request.mutation
-    else {
-        return Err(invalid("external create intent is not Create"));
-    };
-    if command.request.operation_id != observation.observation_id
-        || path != &observation.path
-        || match kind {
-            EntryKind::File => {
-                content.as_ref() != Some(&observation.content) || command.create_mode.is_none()
-            }
-            EntryKind::Folder => {
-                content.is_some()
-                    || !observation.content.is_empty()
-                    || command.create_mode.is_some()
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "intent",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ExternalCreateIntent {
+    Inline(FamilyCommand),
+    BinaryCapture {
+        observation_id: OperationId,
+        entry_id: EntryId,
+        path: VaultPath,
+        capture: CapturedBinaryRef,
+    },
+}
+pub(super) fn validate_intent(
+    intent: &ExternalCreateIntent,
+    observation: &ExternalObservation,
+) -> Result<()> {
+    match intent {
+        ExternalCreateIntent::Inline(command) => {
+            let Mutation::Create {
+                path,
+                kind,
+                content,
+                ..
+            } = &command.request.mutation
+            else {
+                return Err(invalid("external create intent is not Create"));
+            };
+            let bytes = observation
+                .content
+                .inline_bytes()
+                .ok_or_else(|| invalid("inline create has referenced observation"))?;
+            if command.request.operation_id != observation.observation_id
+                || path != &observation.path
+                || match kind {
+                    EntryKind::File => {
+                        content.as_deref() != Some(bytes)
+                            || command.create_mode != Some(FamilyCreateMode::Text)
+                    }
+                    EntryKind::Folder => {
+                        content.is_some() || !bytes.is_empty() || command.create_mode.is_some()
+                    }
+                }
+            {
+                return Err(invalid("external create intent differs from observation"));
             }
         }
-    {
-        return Err(invalid("external create intent differs from observation"));
+        ExternalCreateIntent::BinaryCapture {
+            observation_id,
+            path,
+            capture,
+            ..
+        } => {
+            if observation_id != &observation.observation_id
+                || path != &observation.path
+                || &capture.stage.operation_id != observation_id
+                || observation.content
+                    != StoredContent::BinaryRef(BinarySourceRef::Capture(capture.clone()))
+            {
+                return Err(invalid("binary create intent differs from observation"));
+            }
+        }
     }
     Ok(())
 }
-fn intent(tx: &Connection, id: &OperationId) -> Result<Option<FamilyCommand>> {
+pub(super) fn intent(tx: &Connection, id: &OperationId) -> Result<Option<ExternalCreateIntent>> {
     tx.query_row(
         "SELECT command FROM family_external_creates WHERE observation_id=?1",
         [id.as_str()],
@@ -61,7 +102,7 @@ fn intent(tx: &Connection, id: &OperationId) -> Result<Option<FamilyCommand>> {
     .map(|raw| serde_json::from_str(&raw).map_err(Into::into))
     .transpose()
 }
-fn proof(tx: &Connection, id: &OperationId) -> Result<ObservationPhysical> {
+pub(super) fn proof(tx: &Connection, id: &OperationId) -> Result<ObservationPhysical> {
     let proof = physical_bindings::observation_proof(tx, id)?
         .ok_or_else(|| invalid("new family entry lacks observation proof"))?;
     if proof.expected_binding.is_some() {
@@ -69,7 +110,11 @@ fn proof(tx: &Connection, id: &OperationId) -> Result<ObservationPhysical> {
     }
     Ok(proof)
 }
-fn unowned_path(tx: &Connection, path: &VaultPath, physical: &PhysicalIdentity) -> Result<()> {
+pub(super) fn unowned_path(
+    tx: &Connection,
+    path: &VaultPath,
+    physical: &PhysicalIdentity,
+) -> Result<()> {
     if tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM physical_bindings WHERE path=?1 OR inode=?2)",
         params![path.as_str(), physical.inode],
@@ -104,28 +149,68 @@ fn unowned_path(tx: &Connection, path: &VaultPath, physical: &PhysicalIdentity) 
     Ok(())
 }
 impl Store {
-    /// Prepare once before import. Retries must retain the exact explicit mode;
-    /// changing it is rejected without reallocating the saved entry identity.
+    /// Persist the original identity and explicit mode once, before import.
     pub fn prepare_family_external_create(
         &mut self,
         id: &OperationId,
         kind: EntryKind,
         mode: Option<FamilyCreateMode>,
-    ) -> Result<FamilyCommand> {
+    ) -> Result<ExternalCreateIntent> {
+        self.prepare_family_external_create_inner(None, id, kind, mode)
+    }
+    pub fn prepare_family_external_create_content(
+        &mut self,
+        client: &OperationId,
+        id: &OperationId,
+        kind: EntryKind,
+        mode: Option<FamilyCreateMode>,
+    ) -> Result<ExternalCreateIntent> {
+        self.prepare_family_external_create_inner(Some(client), id, kind, mode)
+    }
+    fn prepare_family_external_create_inner(
+        &mut self,
+        client: Option<&OperationId>,
+        id: &OperationId,
+        kind: EntryKind,
+        mode: Option<FamilyCreateMode>,
+    ) -> Result<ExternalCreateIntent> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let observation = observation(&tx, id)?;
-        proof(&tx, id)?;
-        if let Some(command) = intent(&tx, id)? {
-            validate_command(&command, &observation)?;
-            if command.create_mode != mode
-                || !matches!(&command.request.mutation,Mutation::Create{kind:saved,..} if *saved==kind)
-            {
+        let prior_intent = intent(&tx, id)?;
+        if let Some(intent) = &prior_intent {
+            validate_intent(intent, &observation)?;
+            let same = match intent {
+                ExternalCreateIntent::Inline(command) => {
+                    command.create_mode == mode
+                        && matches!(&command.request.mutation,Mutation::Create{kind:saved,..} if *saved==kind)
+                }
+                ExternalCreateIntent::BinaryCapture { .. } => {
+                    kind == EntryKind::File && mode == Some(FamilyCreateMode::Binary)
+                }
+            };
+            if !same {
                 return Err(invalid("external create retry changed kind or mode"));
             }
+            // Native retries prepare then import. Once resolved, replay the
+            // immutable intent before touching today's source or physical rows.
+            if capture_authorization::replay_resolved(&tx, &observation)?.is_some() {
+                let intent = intent.clone();
+                tx.commit()?;
+                return Ok(intent);
+            }
+        }
+        proof(&tx, id)?;
+        if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = &observation.content {
+            if client != Some(&capture.stage.client_id) {
+                return Err(invalid("binary Create lacks independent client admission"));
+            }
+            entry_content::validate_captured_at(&tx, capture, &observation.path)?;
+        }
+        if let Some(intent) = prior_intent {
             tx.commit()?;
-            return Ok(command);
+            return Ok(intent);
         }
         let count: i64 =
             tx.query_row("SELECT count(*) FROM family_graph_heads", [], |r| r.get(0))?;
@@ -134,91 +219,143 @@ impl Store {
                 "new family create requires unresolved enrolled observation",
             ));
         }
-        let command = FamilyCommand::new(
-            MutationRequest {
-                operation_id: id.clone(),
-                mutation: Mutation::Create {
-                    id: EntryId::new(uuid::Uuid::new_v4().to_string())?,
-                    path: observation.path.clone(),
-                    kind,
-                    content: if kind == EntryKind::File {
-                        Some(observation.content.clone())
-                    } else {
-                        None
+        let entry_id = EntryId::new(uuid::Uuid::new_v4().to_string())?;
+        let intent = if kind == EntryKind::File && mode == Some(FamilyCreateMode::Binary) {
+            let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = &observation.content
+            else {
+                return Err(invalid("binary external create requires a sealed capture"));
+            };
+            ExternalCreateIntent::BinaryCapture {
+                observation_id: id.clone(),
+                entry_id,
+                path: observation.path.clone(),
+                capture: capture.clone(),
+            }
+        } else {
+            let bytes = observation
+                .content
+                .inline_bytes()
+                .ok_or_else(|| invalid("text/folder create requires bounded inline observation"))?;
+            if bytes.len() as u64 > FAMILY_MAX_INLINE_BYTES {
+                return Err(zorid_client_sync::SyncError::TooLarge.into());
+            }
+            ExternalCreateIntent::Inline(
+                FamilyCommand::new(
+                    MutationRequest {
+                        operation_id: id.clone(),
+                        mutation: Mutation::Create {
+                            id: entry_id,
+                            path: observation.path.clone(),
+                            kind,
+                            content: if kind == EntryKind::File {
+                                Some(bytes.to_vec())
+                            } else {
+                                None
+                            },
+                        },
                     },
-                },
-            },
-            mode,
-        )
-        .map_err(family_commands::mapped)?;
-        validate_command(&command, &observation)?;
+                    mode,
+                )
+                .map_err(family_commands::mapped)?,
+            )
+        };
+        validate_intent(&intent, &observation)?;
         tx.execute(
             "INSERT INTO family_external_creates(observation_id,command) VALUES(?1,?2)",
-            params![id.as_str(), serde_json::to_string(&command)?],
+            params![id.as_str(), serde_json::to_string(&intent)?],
         )?;
         tx.commit()?;
-        Ok(command)
+        Ok(intent)
     }
-    /// Commit causal Create, exact physical publication, receipt and observation
-    /// resolution together. Native must recheck the saved inode/parent/content.
     pub fn import_family_external_create(&mut self, id: &OperationId) -> Result<CommitResult> {
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut observation = observation(&tx, id)?;
-        let command =
-            intent(&tx, id)?.ok_or_else(|| invalid("external create was not prepared"))?;
-        validate_command(&command, &observation)?;
+        self.import_family_external_create_inner(None, id)
+    }
+    pub fn import_family_external_create_content(
+        &mut self,
+        client: &OperationId,
+        id: &OperationId,
+    ) -> Result<CommitResult> {
+        self.import_family_external_create_inner(Some(client), id)
+    }
+    fn import_family_external_create_inner(
+        &mut self,
+        client: Option<&OperationId>,
+        id: &OperationId,
+    ) -> Result<CommitResult> {
+        let tx = self.connection.unchecked_transaction()?;
+        let mut observed = observation(&tx, id)?;
+        let intent = intent(&tx, id)?.ok_or_else(|| invalid("external create was not prepared"))?;
+        validate_intent(&intent, &observed)?;
+        if let Some(receipt) = super::capture_authorization::replay_resolved(&tx, &observed)? {
+            tx.commit()?;
+            return Ok(receipt);
+        }
+        if matches!(intent, ExternalCreateIntent::BinaryCapture { .. }) {
+            let authorization =
+                super::capture_authorization::CaptureImportAuthorization::for_create(
+                    &tx,
+                    client.ok_or_else(|| {
+                        invalid("binary Create import lacks independent client admission")
+                    })?,
+                    id,
+                )?;
+            tx.commit()?;
+            return Ok(binary_commit::commit_external_binary(self, authorization)?.receipt);
+        }
+        let ExternalCreateIntent::Inline(command) = &intent else {
+            unreachable!()
+        };
         let Mutation::Create {
             id: entry_id, kind, ..
         } = &command.request.mutation
         else {
             unreachable!()
         };
-        if let Some(resolution) = &observation.resolution {
-            if resolution != id {
-                return Err(invalid("external create resolution differs"));
-            }
-            let recorded: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM operations JOIN family_commands USING(operation_id) WHERE operation_id=?1)",
-                [id.as_str()], |r|r.get(0),
-            )?;
-            if !recorded {
-                return Err(invalid(
-                    "resolved external Create has no exact family receipt",
-                ));
-            }
-            let receipt =
-                family_commands::apply_transaction(&tx, &command.request, command.create_mode)?;
+        let proof = proof(&tx, id)?;
+        unowned_path(&tx, &observed.path, &proof.physical)?;
+        physical_bindings::check_binding(&tx, entry_id, None)?;
+        let prepared =
+            family_commands::prepare_command(&tx, &command.request, command.create_mode)?;
+        tx.commit()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(receipt) =
+            super::capture_authorization::replay_resolved(&tx, &observation(&tx, id)?)?
+        {
             tx.commit()?;
             return Ok(receipt);
         }
-        let proof = proof(&tx, id)?;
-        if tx.query_row("SELECT EXISTS(SELECT 1 FROM entries WHERE id=?1) OR EXISTS(SELECT 1 FROM operations WHERE operation_id=?2)", params![entry_id.as_str(),id.as_str()], |r|r.get::<_,bool>(0))? {
-            return Err(invalid("unresolved external Create already has logical identity"));
+        if observation(&tx, id)? != observed
+            || self::intent(&tx, id)?.as_ref() != Some(&intent)
+            || self::proof(&tx, id)? != proof
+        {
+            return Err(invalid("external Create physical or intent CAS changed"));
         }
         physical_bindings::check_binding(&tx, entry_id, None)?;
-        unowned_path(&tx, &observation.path, &proof.physical)?;
-        let receipt =
-            family_commands::apply_transaction(&tx, &command.request, command.create_mode)?;
+        unowned_path(&tx, &observed.path, &proof.physical)?;
+        let receipt = family_commands::commit_prepared(&tx, &prepared)?;
         let state = receipt
             .changes
             .iter()
             .find(|c| c.after.id == *entry_id)
-            .ok_or_else(|| invalid("external Create receipt lacks entry"))?
+            .ok_or_else(|| invalid("external Create receipt lacks target"))?
             .after
             .clone();
-        if state.path != observation.path || state.kind != *kind || state.deleted {
+        if state.path != observed.path || state.kind != *kind || state.deleted {
             return Err(invalid("external Create receipt target differs"));
         }
-        let content = (*kind == EntryKind::File).then_some(observation.content.as_slice());
-        family_materialization::check_publication(&tx, &state, content)?;
+        family_materialization::check_publication_content(
+            &tx,
+            &state,
+            (*kind == EntryKind::File).then_some(&observed.content),
+        )?;
         match kind {
             EntryKind::File => projection::put_baseline(
                 &tx,
                 &ProjectionBaseline {
                     state: state.clone(),
-                    content: observation.content.clone(),
+                    content: observed.content.clone(),
                 },
             )?,
             EntryKind::Folder => directory::put_baseline(
@@ -232,35 +369,15 @@ impl Store {
         physical_bindings::put_binding(
             &tx,
             &PhysicalBinding {
-                state: state.clone(),
+                state,
                 physical: proof.physical,
             },
         )?;
-        let work = if *kind == EntryKind::File {
-            ProjectionWork::MaterializeFile
-        } else {
-            ProjectionWork::CreateDirectory
-        };
-        let jobs = projection_jobs::pending(&tx, entry_id, work)?;
-        if jobs.len() != 1 {
-            return Err(invalid(
-                "external Create lacks its exact publication obligation",
-            ));
-        }
-        for job in jobs {
-            if !matches!(&job.origin,ProjectionOrigin::LocalCommand{operation_id} if operation_id==id)
-                || job.target != state
-                || job.affected.len() != 1
-                || job.affected[0].after != state
-            {
-                return Err(invalid("external Create publication obligation differs"));
-            }
-            projection_jobs::finish(&tx, &job)?;
-        }
-        observation.resolution = Some(id.clone());
+        projection_jobs::retire_local(&tx, id)?;
+        observed.resolution = Some(id.clone());
         tx.execute(
             "UPDATE external_observations SET record=?1 WHERE observation_id=?2",
-            params![serde_json::to_string(&observation)?, id.as_str()],
+            params![serde_json::to_string(&observed)?, id.as_str()],
         )?;
         tx.commit()?;
         Ok(receipt)

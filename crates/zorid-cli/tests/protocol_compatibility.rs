@@ -1,8 +1,10 @@
 // Real-process compatibility fixtures; no runtime or protocol implementation is replaced.
 #![cfg(unix)]
+#[path = "support/grpc_fixture.rs"]
+mod grpc_fixture;
 use axum::{
     extract::Request,
-    http::{Method, StatusCode},
+    http::StatusCode,
     middleware::{self, Next},
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -42,39 +44,27 @@ impl Server {
                 .build()
                 .unwrap();
             rt.block_on(async move {
-                let app = zorid_sync_server::http::router(store, &[]).unwrap().layer(
-                    middleware::from_fn(move |request: Request, next: Next| {
-                        let fault = middleware_fault.clone();
-                        async move {
-                            let site = if request.uri().path() == "/v1/hello" {
-                                2
-                            } else if request.method() == Method::PUT {
-                                4
-                            } else {
-                                3
-                            };
-                            let response = next.run(request).await;
-                            let mode = fault.load(Ordering::SeqCst);
-                            if response.status() != StatusCode::OK || (mode != 1 && mode != site) {
-                                return response;
+                let app =
+                    zorid_sync_server::rpc::router(store, &[])
+                        .unwrap()
+                        .layer(middleware::from_fn(move |request: Request, next: Next| {
+                            let fault = middleware_fault.clone();
+                            async move {
+                                let site = grpc_fixture::site(request.uri().path());
+                                let response = next.run(request).await;
+                                let mode = fault.load(Ordering::SeqCst);
+                                if mode == 5 && site == 2 {
+                                    return grpc_fixture::oversized_prefix(response).await;
+                                }
+                                if response.status() != StatusCode::OK
+                                    || (mode != 1 && mode != site)
+                                {
+                                    return response;
+                                }
+                                // Patch the real generated RPC response after any durable Append.
+                                grpc_fixture::patch_control(response, site, mode).await
                             }
-                            // Patch the real successful relay response, after any durable PUT.
-                            let (mut parts, body) = response.into_parts();
-                            let bytes = axum::body::to_bytes(body, 3 * 1024 * 1024).await.unwrap();
-                            let mut value: Value = serde_json::from_slice(&bytes).unwrap();
-                            value["extensions"] = if mode == 1 {
-                                json!({"optional_extensions":{"future-hint":{"ignored":true}}})
-                            } else {
-                                json!({"required_features":["future-required-feature"]})
-                            };
-                            parts.headers.remove(axum::http::header::CONTENT_LENGTH);
-                            axum::response::Response::from_parts(
-                                parts,
-                                axum::body::Body::from(serde_json::to_vec(&value).unwrap()),
-                            )
-                        }
-                    }),
-                );
+                        }));
                 axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
                     .with_graceful_shutdown(async move {
                         let _ = receiver.await;
@@ -225,7 +215,7 @@ fn credentials(
     fs::write(
         path,
         serde_json::to_vec(
-            &json!({"version":1,"endpoint":format!("http://{}/",server.address),
+            &json!({"version":2,"transport":"grpc","endpoint":format!("http://{}/",server.address),
         "realm_id":"realm","vault_id":"vault","server_epoch":epoch,"key_epoch":1,
         "key_base64":STANDARD.encode([7u8;32]),"bearer_token":token.expose_secret()}),
         )
@@ -344,6 +334,26 @@ fn optional_hello_page_and_ack_extensions_allow_real_cli_convergence() {
     // A second process consumes the same optional controls without generating echo.
     success(sync(&f.b, &f.cb, &["once"]));
     assert_eq!(f.wires(), wires);
+}
+
+#[test]
+fn declared_oversized_hello_rejects_before_decode_upload_or_cursor_change() {
+    let mut f = Fixture::new();
+    write(&f.a, &f.input, "seed", "retained unsent content");
+    let before = status(&f.a, &f.ca);
+    f.server.fault.store(5, Ordering::SeqCst);
+    for _ in 0..2 {
+        rejected(&f.a, &f.ca, &f.token, "sync_response_limit");
+        let after = status(&f.a, &f.ca);
+        assert_eq!(after["pending_envelopes"], before["pending_envelopes"]);
+        assert_eq!(after["family"]["cursor"], before["family"]["cursor"]);
+        assert!(f.wires().is_empty());
+        assert_eq!(read(&f.a), b"retained unsent content");
+    }
+    f.server.fault.store(0, Ordering::SeqCst);
+    success(sync(&f.a, &f.ca, &["once"]));
+    success(sync(&f.b, &f.cb, &["once"]));
+    assert_eq!(read(&f.b), b"retained unsent content");
 }
 
 #[test]

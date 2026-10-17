@@ -115,14 +115,19 @@ fn binding(vault: &NativeVault, id: &EntryId) -> PhysicalBinding {
     vault.store.physical_binding(id).unwrap().unwrap()
 }
 
-fn assert_file(vault: &NativeVault, id: &EntryId, value: &str, bytes: &[u8]) {
+fn assert_file(vault: &mut NativeVault, id: &EntryId, value: &str, bytes: &[u8]) {
     let entry = vault.read(id).unwrap().unwrap();
     assert_eq!(entry.state.path, path(value));
     assert!(!entry.state.deleted);
     assert_eq!(entry.content.as_deref(), Some(bytes));
     let baseline = vault.store.projection_baseline(id).unwrap().unwrap();
     assert_eq!(baseline.state.path, path(value));
-    assert_eq!(baseline.content, bytes);
+    assert_eq!(
+        vault
+            .test_content_bytes(Some(&baseline.state), &baseline.content)
+            .unwrap(),
+        bytes
+    );
     assert_eq!(binding(vault, id).state, baseline.state);
 }
 
@@ -204,7 +209,7 @@ fn external_namespace_discovers_nested_parents_and_exact_auto_text_and_binary() 
         ("outside/blob.custom", binary.as_slice(), false),
     ] {
         let state = state_at(&vault, name);
-        assert_file(&vault, &state.id, name, bytes);
+        assert_file(&mut vault, &state.id, name, bytes);
         assert_eq!(
             vault.store.family_text_state(&state.id).unwrap().is_some(),
             text
@@ -241,7 +246,7 @@ fn external_namespace_file_rename_and_edit_preserve_identity_inode_and_exact_byt
     assert_eq!(report.namespace[0].authored.len(), 1);
     assert_eq!(report.namespace[0].pending_content.len(), 1);
     assert_eq!(vault.list().unwrap().len(), 1);
-    assert_file(&vault, &old.id, "after.custom", bytes);
+    assert_file(&mut vault, &old.id, "after.custom", bytes);
     assert_eq!(
         binding(&vault, &old.id).physical.inode,
         physical.physical.inode
@@ -249,7 +254,7 @@ fn external_namespace_file_rename_and_edit_preserve_identity_inode_and_exact_byt
     assert!(!root.path().join("before.custom").exists());
     drop(vault);
     let mut vault = NativeVault::open_existing(root.path()).unwrap();
-    assert_file(&vault, &old.id, "after.custom", bytes);
+    assert_file(&mut vault, &old.id, "after.custom", bytes);
     assert!(complete(&mut vault).namespace.is_empty());
 }
 
@@ -297,7 +302,7 @@ fn external_namespace_nested_folder_move_and_edits_preserve_every_descendant() {
     assert!(!before.iter().any(|old| old.state.id == added_folder.id));
     assert!(!before.iter().any(|old| old.state.id == added_file.id));
     assert_file(
-        &vault,
+        &mut vault,
         &added_file.id,
         "new-parent/moved/fresh/added.custom",
         b"created inside moved folder",
@@ -312,8 +317,8 @@ fn external_namespace_nested_folder_move_and_edits_preserve_every_descendant() {
     }
     let note = state_at(&vault, "new-parent/moved/nested/note.custom");
     let blob = state_at(&vault, "new-parent/moved/blob.bin");
-    assert_file(&vault, &note.id, note.path.as_str(), text);
-    assert_file(&vault, &blob.id, blob.path.as_str(), &binary);
+    assert_file(&mut vault, &note.id, note.path.as_str(), text);
+    assert_file(&mut vault, &blob.id, blob.path.as_str(), &binary);
     assert!(!root.path().join("old").exists());
 }
 
@@ -359,7 +364,7 @@ fn external_namespace_delete_removes_only_captured_file_and_folder_members() {
         assert!(!vault.list().unwrap().iter().any(|e| e.id == old.id));
     }
     assert_eq!(binding(&vault, &keep.state.id), keep);
-    assert_file(&vault, &keep.state.id, "keep.md", b"keep.md");
+    assert_file(&mut vault, &keep.state.id, "keep.md", b"keep.md");
     assert!(matches!(
         vault
             .store
@@ -462,7 +467,7 @@ fn external_namespace_prepared_restart_reuses_observation_identity_and_receipt()
         namespace_rows(root.path()),
         vec![(observation.clone(), true)]
     );
-    assert_file(&vault, &before.id, "after.md", b"changed during move");
+    assert_file(&mut vault, &before.id, "after.md", b"changed during move");
     assert_eq!(
         binding(&vault, &before.id).physical.inode,
         physical.physical.inode
@@ -569,7 +574,7 @@ fn external_namespace_store_rejects_forged_move_bytes_against_capture_proof() {
                         parent_inode: captured.parent_identity.clone(),
                     }
                 )),
-                observed_content: Some(b"fake".to_vec()),
+                observed_content: Some(zorid_store::StoredContent::InlineBytes(b"fake".to_vec())),
             }],
         )
         .is_err());
@@ -580,7 +585,7 @@ fn external_namespace_store_rejects_forged_move_bytes_against_capture_proof() {
     );
     assert!(namespace_rows(root.path()).is_empty());
     assert_eq!(complete(&mut vault).namespace.len(), 1);
-    assert_file(&vault, &before.state.id, "new.md", b"real");
+    assert_file(&mut vault, &before.state.id, "new.md", b"real");
 }
 
 #[test]
@@ -841,7 +846,7 @@ fn external_namespace_prepared_content_race_retains_observation_and_retries_exac
         retry.namespace[0].observation_id, prepared[0].0,
         "changed capture bytes require a new immutable observation"
     );
-    assert_file(&vault, &state.id, "after.md", changed);
+    assert_file(&mut vault, &state.id, "after.md", changed);
     assert_eq!(
         binding(&vault, &state.id).physical.inode,
         before.physical.inode
@@ -926,7 +931,7 @@ fn external_namespace_receipt_failure_rolls_back_all_state_and_retries_same_obse
     let receipt = &retry.namespace[0];
     assert_eq!(receipt.observation_id, observation);
     assert_eq!(receipt.authored.len(), 1);
-    assert_file(&vault, &state.id, "after.md", b"preserve these bytes");
+    assert_file(&mut vault, &state.id, "after.md", b"preserve these bytes");
     assert_eq!(
         binding(&vault, &state.id).physical.inode,
         before.physical.inode
@@ -1032,16 +1037,14 @@ fn external_namespace_binary_same_bytes_remote_rewrite_blocks_external_edit() {
         std::fs::read(root.path().join("data.bin")).unwrap(),
         external
     );
-    let observations: Vec<_> = vault
-        .store
-        .external_observations()
-        .unwrap()
+    let observations = vault.store.external_observations().unwrap();
+    let observations: Vec<_> = observations
         .into_iter()
         .filter(|o| {
             o.baseline
                 .as_ref()
                 .is_some_and(|b| b.state.id == before.state.id)
-                && o.content == external
+                && vault.test_content_bytes(None, &o.content).unwrap() == external
                 && o.resolution.is_none()
         })
         .collect();
@@ -1175,16 +1178,14 @@ fn external_namespace_binary_remote_move_away_and_back_blocks_external_edit() {
         std::fs::read(root.path().join("data.bin")).unwrap(),
         external
     );
-    let observations: Vec<_> = vault
-        .store
-        .external_observations()
-        .unwrap()
+    let observations = vault.store.external_observations().unwrap();
+    let observations: Vec<_> = observations
         .into_iter()
         .filter(|o| {
             o.baseline
                 .as_ref()
                 .is_some_and(|b| b.state.id == before.state.id)
-                && o.content == external
+                && vault.test_content_bytes(None, &o.content).unwrap() == external
                 && o.resolution.is_none()
         })
         .collect();
@@ -1241,7 +1242,12 @@ fn external_namespace_folder_move_child_edit_and_delete_commit_as_one_observatio
         binding(&vault, &note.state.id).physical.inode,
         note.physical.inode
     );
-    assert_file(&vault, &note.state.id, "ExternalRenamed/note.custom", bytes);
+    assert_file(
+        &mut vault,
+        &note.state.id,
+        "ExternalRenamed/note.custom",
+        bytes,
+    );
     assert!(vault
         .store
         .physical_binding(&deleted.state.id)
@@ -1381,7 +1387,7 @@ fn external_namespace_prepared_private_permission_change_is_fatal_and_retryable(
     let retry = complete(&mut vault);
     assert_eq!(retry.namespace.len(), 1);
     assert_eq!(retry.namespace[0].observation_id, rows[0].0);
-    assert_file(&vault, &before.state.id, "after.md", b"retained");
+    assert_file(&mut vault, &before.state.id, "after.md", b"retained");
 }
 
 #[test]
@@ -1467,7 +1473,7 @@ fn external_namespace_compound_deleted_subtree_preserves_unseen_remote_text_reco
         note.physical.inode
     );
     assert_file(
-        &vault,
+        &mut vault,
         &note.state.id,
         "ExternalRenamed/note.custom",
         b"surviving note edit",
@@ -1560,7 +1566,7 @@ fn external_namespace_compound_prepared_restart_reuses_one_receipt_and_captured_
     assert_eq!(receipt.authored.len(), 2);
     assert_eq!(state_at(&vault, "ExternalRenamed").id, folder.id);
     assert_file(
-        &vault,
+        &mut vault,
         &note.id,
         "ExternalRenamed/note.custom",
         b"prepared note edit\r\n",
@@ -1680,7 +1686,9 @@ fn assert_compound_ambiguous_member_rejected(case: u8) {
                 .unwrap();
             assert_eq!(baseline.state, member.state);
             assert_eq!(
-                baseline.content,
+                vault
+                    .test_content_bytes(Some(&baseline.state), &baseline.content)
+                    .unwrap(),
                 if member.state.path.file_name() == "child.custom" {
                     b"tracked child".to_vec()
                 } else {

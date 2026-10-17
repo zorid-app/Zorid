@@ -8,5 +8,5 @@ module.exports = {
   resolve:{extensions:['.ts','.js'],extensionAlias:{'.js':['.js','.ts']}},
   module:{rules:[{test:/\.ts$/,exclude:/node_modules/,use:{loader:'ts-loader',options:{transpileOnly:true,compilerOptions:{noEmit:false,allowImportingTsExtensions:true,rewriteRelativeImportExtensions:true}}}}]},
   plugins:[new HtmlWebpackPlugin({template:path.join(__dirname,'index.html')}),
-    new CoreWasmAssetsPlugin({enabled:true,directory:process.env.ZORID_CORE_WASM_DIR,buildId:process.env.ZORID_CORE_BUILD_ID})],
+    new CoreWasmAssetsPlugin({enabled:true,fixture:true,directory:process.env.ZORID_CORE_WASM_DIR,buildId:process.env.ZORID_CORE_BUILD_ID})],
 };

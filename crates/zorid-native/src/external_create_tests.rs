@@ -66,13 +66,11 @@ fn external_create_folder_and_exact_text_binary_publish_and_sync() {
             .unwrap()
             .after
             .clone();
+        let baseline = vault.store.projection_baseline(&entry.id).unwrap().unwrap();
         assert_eq!(
             vault
-                .store
-                .projection_baseline(&entry.id)
-                .unwrap()
-                .unwrap()
-                .content,
+                .test_content_bytes(Some(&baseline.state), &baseline.content)
+                .unwrap(),
             bytes
         );
         assert_eq!(
@@ -126,28 +124,43 @@ fn external_create_prepared_restart_keeps_identity_and_rejects_mode_change() {
         .is_err()
     );
     let observation = vault.store.external_observations().unwrap().pop().unwrap();
-    let command = vault
+    let client = content_stream::core_client().unwrap();
+    let intent = vault
         .store
-        .prepare_family_external_create(
+        .prepare_family_external_create_content(
+            &client,
             &observation.observation_id,
             EntryKind::File,
             Some(FamilyCreateMode::Binary),
         )
         .unwrap();
+    let zorid_store::ExternalCreateIntent::BinaryCapture {
+        observation_id: prepared_operation,
+        entry_id: prepared_entry,
+        path: prepared_path,
+        capture,
+    } = intent
+    else {
+        panic!("explicit Binary create must retain its original capture intent")
+    };
+    assert_eq!(prepared_operation, observation.observation_id);
+    assert_eq!(prepared_path, VaultPath::new("same.custom").unwrap());
+    assert_eq!(capture.stage.operation_id, prepared_operation);
     assert!(vault.store.list().unwrap().is_empty());
     drop(vault);
     let mut vault = NativeVault::open(root.path()).unwrap();
     assert!(vault
         .store
-        .prepare_family_external_create(
+        .prepare_family_external_create_content(
+            &client,
             &observation.observation_id,
             EntryKind::File,
             Some(FamilyCreateMode::Text)
         )
         .is_err());
     let receipt = import_file(&mut vault, "same.custom", FamilyCreateMode::Binary);
-    assert_eq!(receipt.operation_id, command.request.operation_id);
-    assert_eq!(receipt.changes[0].after.id, *command.request.mutation.id());
+    assert_eq!(receipt.operation_id, prepared_operation);
+    assert_eq!(receipt.changes[0].after.id, prepared_entry);
     let pending = vault.family_pending_authored(None, 1000).unwrap().len();
     assert_eq!(
         vault

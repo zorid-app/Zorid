@@ -43,3 +43,12 @@ test('truncated length-delimited messages fail raw decoding', () => {
   const bytes = fixture('append');
   assert.throws(() => fromBinary(BinaryCommandSchema, bytes.subarray(0, bytes.length - 1)));
 });
+
+test('stream read-open carries the preallocated read identity',()=>{
+ const bytes=fixture('read-open');const value=fromBinary(BinaryCommandSchema,bytes);
+ assert.equal(value.command.case,'openRead');assert.equal(value.command.value.readId,'read-operation');
+ assert.deepEqual(toBinary(BinaryCommandSchema,value),bytes);
+ // The raw protobuf default is empty; consumers must reject it rather than
+ // creating a random pin. This test establishes codec presence, not authority.
+ assert.equal(create(BinaryCommandSchema,{command:{case:'openRead',value:{}}}).command.value.readId,'');
+});

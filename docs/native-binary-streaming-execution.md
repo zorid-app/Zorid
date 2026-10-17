@@ -95,3 +95,117 @@ same-byte unseen causal heads, historical folder move plus missing child, and
 bounded scanner content progress. The coordinator selects and runs the coherent
 Store/native/CLI/host gates and actual independent-process/native verification;
 no worker heavy build is authorized by this plan.
+
+## Coupled source checkpoint
+
+The coordinator integrated and tested the independent primitive: aggregate
+`fc886c7` (alias `f9fb565`) gate `77528` passed all ten fixtures, 18.97 seconds
+compile and 0.06 seconds tests, Rust1.95 with one build job. Main `5050db9`
+contains that source and the native SHA256 lock edge. This branch was rebased
+onto that main, then imported reviewed Store foundations `277adb0`/`ada6e8b` and
+typed interface `af49f73` (local aliases `ffa13b7`, `8d0fc82`, `f9d8576`).
+
+Prepared coupled native source now includes typed projection/recovery and
+historical publication handoff, namespace evidence/late-FD alternatives,
+hash-only inventory, existing/new external observers, and metadata/stage/commit/
+read adapters. Existing fixtures resolve actual small content through a bounded
+test-only pin reader, preserving full-byte and durability assertions. Source
+reviews cover the independently owned files; there is no coupled build result.
+
+Current code ownership in this shared worktree:
+
+- Parent: `native.rs`, `content_stream.rs`, `binary_api.rs`, module/type exports,
+  family projection-status visibility and the existing partial-stage fault hook.
+- `external_scan_review`: `publication_handoff.rs` implementation, reviewed by
+  scanner worker; independent parent/public API/source-reader review completed.
+- `external_cli_dispatch`: namespace/family namespace and binary wrapper source,
+  reviewed independently by scanner worker.
+- `scanner_streaming_sol`: `external_scan_progress.rs`, preserving cursor/Ready/
+  immutable proof authority; source review remains part of the coherent freeze.
+- `external_namespace_tests`: new `external_observe_stream.rs` and external
+  create source; `external_namespace_streaming_sol`: external namespace caller.
+- `native_fixture_streaming_sol`: five existing test-file adaptations and
+  independent create/observation/namespace review.
+
+The independently reviewed pre-capture lookup is now wired in native. It uses
+exact historical baseline/physical proof plus verified length/digest before
+staging, reuses namespace pending-content refs after relocation, and preserves
+an accepted Create intent's original mode across Inline/Capture retries. The
+returned observation still requires fresh public inode/parent/content checks;
+lookup grants no import authority.
+Rejected new Text enrollment before any accepted intent may still be explicitly
+imported Binary; an existing Text identity never changes.
+
+Store functional methods and schema11 activation are still being composed by
+`package_sol`. Frozen read pins distinguish caller `read_id` from server-issued
+`pin_id`: Open retry resolves the original view before current metadata; closing
+and reopening the same caller ID creates a new pin, so stale locators do not
+resurrect. Interrupted synchronous core readers explicitly close only their
+reserved actor's pins under the native filesystem lock; frontend pins are never
+evicted. Sealed inert captures are excluded from active-upload counts while
+their immutable sources remain retained.
+
+Root-approved initial shared policy is eight active uploads, 4096 retained
+stages, a single 512 MiB exact-payload quota shared by graph/stages, 4096 chunks
+and 256 pages. These are explicit admission limits, not unlimited vault support.
+The per-file and per-range caps remain 64 MiB and 128 KiB. Next gates are the
+coherent Store/native compile, focused crash/retry/large-file fixtures, then
+independent CLI and host/native app proof. No worker build has run.
+
+### Final native source freeze (source only)
+
+All native production slices have independent source review, including the new
+read-only `binary_stage_projection_status(StageRef)` query. It resolves only the
+original committed jobs and reports completion without recovery or current-state
+reinterpretation. Store failures remain typed errors. Existing small fixtures
+retain full-byte oracles through bounded test-only source reads.
+
+Root approved Store terminal `TooLarge` and a 24 KiB exact CommitResult JSON cap
+with domain/outbox/job rollback before recording rejection; paths are capped at
+4096 bytes for staged commands. These bounds keep immutable terminal results
+within desktop frame/checkpoint budgets. Native reexports the shared constants;
+Store owns the implementation and final independent review.
+
+No native Cargo build or coupled fixture ran in this worktree. Two additional
+17 MiB +17 byte fixtures are assigned source-only in a separate new test module:
+stage/pin/replay behavior and external compound move/edit/delete, each comparing
+all bytes with buffers no larger than128 KiB. They will be a separate follow-up
+commit so initial aggregate compilation is not delayed. Coupled Store activation
+commit and serialized coordinator build remain required before any activation
+claim.
+
+### Focused large-file fixture source
+
+Store activation `2921096` is composed here as `32e80a7` (documentation conflict
+retained the Store owner's newer verification record). Native adapter source is
+frozen at `d42f82d`. Two independently source-reviewed fixtures now cover exactly
+17 MiB +17 byte bodies: stage restart, invisibility, original receipt and lost-Open
+pin replay across a later write; and prepared external folder move/edit/delete
+restart with one original pending-content observation, stable IDs/inode and quiet
+repeat. Expected/public/pinned bytes are compared chunkwise, including EOF. The
+new fixture needs only a test-only serde_json dependency and its existing lock
+package edge to inspect the persisted prepared journal; it does not decode body
+JSON. Formatting and whitespace checks pass. These fixtures have not compiled or
+run; coordinator serialization still applies.
+
+### Exact terminal input retries
+
+CLI retry review identified that terminal status deliberately omits the verified
+sealed handle, so a caller still needs original length/digest metadata to compare
+replayed input without touching a newer graph/source. The agreed additive Store
+and Native `binary_stage_content_manifest(StageRef)` returns an inert original
+Manifest, including terminal diagnostics; it grants no source or commit proof.
+The Native wrapper is independently source-reviewed, and the existing staged
+fixture now checks its original digest after a newer write. Its Store method and
+`BinaryContentManifest` alias are a required follow-up dependency; no compile or
+runtime claim is made for this seam.
+
+### Host pin recovery seam
+
+Combined source review found that host recovery already calls owner-scoped pin
+listing. Native now exposes `list_binary_reads(client)` under the filesystem lock
+with before/after authority checks and the Store's four-pin, current-local-store,
+exact-client bound. It returns only resume/close locators. The same independently
+reviewed follow-up makes `open_binary_read` run its final authority check after
+every retry/metadata validation error, preserving the original-pin-first flow.
+These changes are source-only; no additional build was started.

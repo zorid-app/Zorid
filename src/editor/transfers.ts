@@ -1,3 +1,5 @@
+import { blobBinarySource } from '../core/binary-transfer.ts';
+import type { BinarySource } from '../core/binary-transfer.ts';
 import { EditorSelection, Transaction } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { EditorView, ViewPlugin } from '@codemirror/view';
@@ -9,6 +11,8 @@ export interface TransferFile {
   type: string;
   nativePath?: string;
   read(): Promise<Uint8Array>;
+  /** Fresh bounded reader over the captured immutable File handle. */
+  source?(): BinarySource;
 }
 export interface TransferOptions {
   importFile(file: TransferFile): Promise<string>;
@@ -33,7 +37,7 @@ export function transferFiles(transfer: DataTransfer, nativePath?: (file: File) 
     ? Array.from(transfer.items).filter(item => item.kind === 'file').map(item => item.getAsFile()).filter((file): file is File => !!file)
     : Array.from(transfer.files ?? []);
   return files.map(file => ({ name: file.name, type: file.type,
-    nativePath: nativePath?.(file) || undefined, read: () => readFile(file) }));
+    nativePath: nativePath?.(file) || undefined, read: () => readFile(file), source: () => blobBinarySource(file) }));
 }
 
 function replace(view: EditorView, text: string, event: string) {

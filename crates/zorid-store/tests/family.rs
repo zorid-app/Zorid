@@ -66,6 +66,8 @@ fn actual_family_commands_receive_restart_and_exact_replay_preserve_authority() 
             zorid_core::ContractError::IdempotencyConflict { .. }
         ))
     ));
+    // A mode-bound family receipt does not authorize the generic legacy API.
+    assert!(a.apply(&request).is_err());
     let mut packets = wires(&mut a);
     packets.sort_by_key(|(family, _, _)| {
         if *family == FamilyPayloadKind::Text {
@@ -233,7 +235,7 @@ fn receive_failure_rolls_back_exact_wire_graph_visibility_and_cursor() {
 #[test]
 fn obsolete_fixture_schema_rejection_does_not_change_database_bytes() {
     let dir = tempfile::tempdir().unwrap();
-    for version in [1, 6, 7, 8] {
+    for version in [1, 6, 7, 8, 9] {
         let path = dir.path().join(format!("old{version}"));
         let db = rusqlite::Connection::open(&path).unwrap();
         db.execute_batch(

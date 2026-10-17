@@ -5,13 +5,15 @@ use std::{error::Error, fs::OpenOptions, io::Write, path::Path};
 use zeroize::Zeroizing;
 use zorid_sync_protocol::{DeviceId, RealmId, VaultId};
 use zorid_sync_server::{
-    http::{loopback_address, serve_loopback},
+    http::loopback_address,
+    rpc::{router, serve_loopback},
     RelayStore,
 };
 
 #[derive(Serialize)]
 struct Credentials<'a> {
     version: u8,
+    transport: &'static str,
     endpoint: &'a str,
     realm_id: &'a RealmId,
     vault_id: &'a VaultId,
@@ -93,7 +95,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
             private_json(
                 &directory.join(&filename),
                 &Credentials {
-                    version: 1,
+                    version: 2,
+                    transport: "grpc",
                     endpoint: &endpoint,
                     realm_id: &realm,
                     vault_id: &vault,
@@ -109,13 +112,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
     }
     // Validate the exact CORS allowlist before publishing the ready manifest.
     // The normal server constructor checks this same configuration when serving.
-    // Open a second library handle only for validation; no alternate HTTP server.
+    // Open a second library handle only for validation; no alternate transport.
     let validation = RelayStore::open(directory.join("relay.sqlite"), &realm)?;
-    drop(zorid_sync_server::http::router(validation, &origins)?);
+    drop(router(validation, &origins)?);
     private_json(
         &directory.join("manifest.json"),
         &serde_json::json!({
-            "version":1,"fixture_only":true,"endpoint":endpoint,"realm_id":realm,
+            "version":2,"transport":"grpc","transport_major":2,"fixture_only":true,"endpoint":endpoint,"realm_id":realm,
             "server_epoch":identity.server_epoch,"origin":origins[0],
             "database_file":"relay.sqlite","clients":clients
         }),

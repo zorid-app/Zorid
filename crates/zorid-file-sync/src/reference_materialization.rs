@@ -358,6 +358,30 @@ pub fn classify_metadata(
     Ok(output)
 }
 
+/// Explicit recovery of the current deterministic retained content, independent
+/// of its namespace projection or previous publication. This does not substitute
+/// an older complete binary alternative when the preferred head is pending.
+/// None means a folder or unavailable dependencies; an oversized file is an
+/// error. The result never advances a physical publication/baseline.
+pub fn recovery_content_ref(
+    state: &MetadataState,
+    verified: &VerifiedBinarySet,
+    texts: &[TextState],
+    entry: &EntryId,
+    max_file_bytes: u64,
+) -> Result<Option<ContentRef>> {
+    verified.check_preconditions(state)?;
+    let context = Context::new(state, verified, texts, max_file_bytes)?;
+    if !context.identities.contains_key(entry) {
+        return Err(Error::IdentityMismatch);
+    }
+    match context.content(entry, &mut (MAX_STATE_BYTES as u64))? {
+        Ok(content) => Ok(content),
+        Err(PendingReason::FileLimitExceeded { .. }) => Err(Error::TooLarge),
+        Err(_) => Ok(None),
+    }
+}
+
 #[cfg(test)]
 #[path = "reference_materialization_tests.rs"]
 mod tests;

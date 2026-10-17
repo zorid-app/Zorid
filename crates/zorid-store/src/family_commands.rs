@@ -1,11 +1,16 @@
 //! Local family commands. Core receipts are local idempotency records, never
 //! encrypted wire payloads. All envelopes below come from the shared Rust mapper.
-use super::family_ledger::{self, EnvelopeKey, EnvelopeMetadata, Family, TextBinding};
+use super::family_ledger::EnvelopeKey;
 use super::*;
 use zorid_client_sync::{ActorOwner, ActorRegistration};
 use zorid_core::OperationId;
 use zorid_file_sync::{mutation as command, Scope};
 use zorid_sync_protocol::{DeviceId, UpdateId};
+
+// Shared with proven external operations; preparation precedes the writer.
+pub(super) use super::family_metadata_transactions::{
+    commit_prepared, prepare_command, prepare_parts, replay,
+};
 
 pub(super) const SCHEMA:&[(&str,&str)]=&[
     ("family_commands","CREATE TABLE family_commands (operation_id TEXT PRIMARY KEY REFERENCES operations(operation_id), command TEXT NOT NULL)"),
@@ -64,265 +69,22 @@ impl Store {
         request: &MutationRequest,
         mode: Option<FamilyCreateMode>,
     ) -> Result<CommitResult> {
+        let tx = self.connection.unchecked_transaction()?;
+        if let Some(receipt) = replay(&tx, request, mode)? {
+            tx.commit()?;
+            return Ok(receipt);
+        }
+        if family_metadata_transactions::inline_binary(&tx, request, mode)? {
+            tx.commit()?;
+            return binary_commit::apply_inline_binary(self, request, mode);
+        }
+        let prepared = prepare_command(&tx, request, mode)?;
+        tx.commit()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let receipt = apply_transaction(&tx, request, mode)?;
+        let receipt = commit_prepared(&tx, &prepared)?;
         tx.commit()?;
         Ok(receipt)
     }
-}
-
-pub(super) fn apply_transaction(
-    tx: &Connection,
-    request: &MutationRequest,
-    mode: Option<FamilyCreateMode>,
-) -> Result<CommitResult> {
-    let command = command::FamilyCommand::new(request.clone(), mode).map_err(mapped)?;
-    host_intents::check_execution(tx, request)?;
-    let prior:Option<(String,String,Option<String>)>=tx.query_row("SELECT operations.request,operations.result,family_commands.command FROM operations LEFT JOIN family_commands USING(operation_id) WHERE operations.operation_id=?1",[request.operation_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-    if let Some((raw, receipt, composite)) = prior {
-        let prior_command: command::FamilyCommand =
-            serde_json::from_str(&composite.ok_or_else(|| {
-                StoreError::Corrupt(
-                    "family operation receipt has no exact composite command".into(),
-                )
-            })?)?;
-        command.check_replay(&prior_command).map_err(mapped)?;
-        let recorded = RecordedOperation {
-            request: serde_json::from_str(&raw)?,
-            result: serde_json::from_str(&receipt)?,
-        };
-        if let IdempotencyCheck::Replay(receipt) = check_idempotency(request, Some(&recorded))? {
-            let receipt = receipt.clone();
-            return Ok(receipt);
-        }
-        return Err(StoreError::Corrupt(
-            "retained family receipt did not replay".into(),
-        ));
-    }
-    let authority = text_sync::identity(tx)?;
-    let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) else {
-        return Err(zorid_client_sync::SyncError::IdentityMismatch.into());
-    };
-    let scope = Scope { realm_id, vault_id };
-    let graph = file_state::load(tx, &scope)?.ok_or_else(|| ContractError::InvalidMutation {
-        reason: "vault is not enrolled for family synchronization".into(),
-    })?;
-    family_materialization::validate(tx, &graph)?;
-    // Existing generic prepared intents carry no explicit CreateMode. Never
-    // guess their binary/text identity at commit time.
-    if mode.is_some() {
-        let owned: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM host_intents WHERE operation_id=?1)",
-            [request.operation_id.as_str()],
-            |r| r.get(0),
-        )?;
-        if owned {
-            return Err(ContractError::InvalidMutation {
-                reason: "file creation requires a mode-bound family intent".into(),
-            }
-            .into());
-        }
-    }
-    let bytes = match &request.mutation {
-        Mutation::Create {
-            content: Some(bytes),
-            ..
-        }
-        | Mutation::Write { content: bytes, .. } => Some(bytes),
-        _ => None,
-    };
-    if bytes.is_some_and(|b| b.len() as u64 > FAMILY_MAX_FILE_BYTES) {
-        return Err(zorid_client_sync::SyncError::TooLarge.into());
-    }
-    let entries = read_states(tx, true)?;
-    let text = if matches!(request.mutation, Mutation::Write { .. }) {
-        text_sync::retained(tx, request.mutation.id())?
-    } else {
-        None
-    };
-    let need =
-        command::requirements(request, &entries, &graph, mode, text.as_ref()).map_err(mapped)?;
-    let allocation = command::Allocation {
-        metadata_revision: fresh_revision()?,
-        graph_revision: fresh_revision()?,
-        update_ids: (0..need.update_count)
-            .map(|_| fresh_update())
-            .collect::<Result<_>>()?,
-        text: match need.text {
-            command::TextRequirement::None => None,
-            requirement => Some(command::TextAllocation {
-                actor: actor(tx, text.as_ref())?,
-                new_text: if matches!(requirement, command::TextRequirement::Create) {
-                    Some(command::NewText {
-                        bootstrap_id: fresh_update()?,
-                        empty_revision: fresh_revision()?,
-                    })
-                } else {
-                    None
-                },
-            }),
-        },
-    };
-    let plan = command::plan_mutation(request, &entries, &graph, mode, text.as_ref(), &allocation)
-        .map_err(mapped)?;
-    commit_plan(
-        tx,
-        &command,
-        &scope,
-        &graph,
-        text.as_ref(),
-        &allocation,
-        plan,
-    )
-}
-
-/// Shared only by locally constructed family commands and proven external observations.
-/// The caller owns the enclosing IMMEDIATE transaction and commits physical proof with it.
-pub(super) fn commit_plan(
-    tx: &Connection,
-    command: &command::FamilyCommand,
-    scope: &Scope,
-    graph: &zorid_file_sync::v2::State,
-    text: Option<&zorid_client_sync::TextState>,
-    allocation: &command::Allocation,
-    plan: command::MutationPlan,
-) -> Result<CommitResult> {
-    let request = &command.request;
-    let entries = read_states(tx, true)?;
-    let mut unused = true;
-    for id in &plan.allocated_update_ids {
-        unused &= family_ledger::unused(tx, &key(&scope, id))?;
-    }
-    plan.check_preconditions(&entries, graph, text, unused)
-        .map_err(mapped)?;
-    text_sync::reserve_revision(tx, &allocation.metadata_revision)?;
-    text_sync::reserve_revision(tx, &allocation.graph_revision)?;
-    if let Some(new) = allocation.text.as_ref().and_then(|a| a.new_text.as_ref()) {
-        text_sync::reserve_revision(tx, &new.empty_revision)?;
-    }
-    for authored in &plan.authored_files {
-        let metadata = EnvelopeMetadata {
-            key: key(&scope, &authored.update_id),
-            family: Family::Files,
-            format_version: 2,
-            payload_digest: zorid_file_sync::Sha256Digest::of(&authored.payload_bytes),
-            payload_bytes: u32::try_from(authored.payload_bytes.len())
-                .map_err(|_| zorid_client_sync::SyncError::TooLarge)?,
-            text_binding: None,
-        };
-        family_ledger::insert_authored(tx, &metadata, &authored.payload_bytes)?;
-    }
-    // Text metadata/persistence is handled directly from the validated mapper.
-    if let Some(change) = &plan.text {
-        let text = change.plan();
-        let activity = plan
-            .next_graph
-            .activities()
-            .get(&text.authored.update_id)
-            .ok_or_else(|| StoreError::Corrupt("authored text has no namespace activity".into()))?;
-        let metadata = EnvelopeMetadata {
-            key: key(&scope, &text.authored.update_id),
-            family: Family::Text,
-            format_version: 2,
-            payload_digest: zorid_file_sync::Sha256Digest::of(&text.authored.payload_bytes),
-            payload_bytes: u32::try_from(text.authored.payload_bytes.len())
-                .map_err(|_| zorid_client_sync::SyncError::TooLarge)?,
-            text_binding: Some(TextBinding {
-                entry_id: text.next_state.identity.entry_id.clone(),
-                text_bootstrap_id: text.next_state.identity.bootstrap_id.clone(),
-                namespace: activity.namespace().clone(),
-            }),
-        };
-        family_ledger::insert_authored(tx, &metadata, &text.authored.payload_bytes)?;
-        text_sync::put_current(tx, &text.next_state)?;
-    }
-    // Namespace-only operations keep each text CRDT intact, merely rebinding
-    // the optimistic metadata token. This creates no CRDT envelope.
-    if matches!(
-        request.mutation,
-        Mutation::Move { .. } | Mutation::Delete { .. }
-    ) {
-        for change in &plan.changes {
-            if let Some(mut state) = text_sync::retained(tx, &change.after.id)? {
-                state.version = allocation.metadata_revision.clone();
-                text_sync::put_current(tx, &state)?;
-            }
-        }
-    }
-    let graph_plan = zorid_file_sync::v2::FilePlan {
-        expected_state: graph.clone(),
-        next_state: Some(plan.next_graph.clone()),
-        view: plan.next_graph.view()?,
-    };
-    let files: Vec<_> = plan
-        .authored_files
-        .iter()
-        .map(|f| (&f.update_id, f.payload_bytes.as_slice()))
-        .collect();
-    file_state::persist_many(tx, &graph_plan, &files)?;
-    tx.execute(
-        "INSERT INTO operations(operation_id,request) VALUES(?1,?2)",
-        params![
-            request.operation_id.as_str(),
-            serde_json::to_string(request)?
-        ],
-    )?;
-    let sequence = u64::try_from(tx.last_insert_rowid())
-        .map_err(|_| StoreError::Corrupt("operation sequence overflow".into()))?;
-    let receipt = CommitResult {
-        operation_id: request.operation_id.clone(),
-        sequence,
-        changes: plan.changes,
-    };
-    receipt.validate()?;
-    let changed = family_materialization::apply(
-        tx,
-        &plan.next_graph,
-        ProjectionOrigin::LocalCommand {
-            operation_id: request.operation_id.clone(),
-        },
-        Some(&allocation.metadata_revision),
-    )?;
-    let expected: std::collections::BTreeSet<_> =
-        receipt.changes.iter().map(|c| c.after.id.clone()).collect();
-    if changed
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>()
-        != expected
-    {
-        return Err(StoreError::Corrupt(
-            "command planner and publication classifier changed different identities".into(),
-        ));
-    }
-    for change in &receipt.changes {
-        let raw: String = tx.query_row(
-            "SELECT state FROM entries WHERE id=?1",
-            [change.after.id.as_str()],
-            |r| r.get(0),
-        )?;
-        if serde_json::from_str::<EntryState>(&raw)? != change.after {
-            return Err(StoreError::Corrupt(
-                "command receipt differs from committed materialization".into(),
-            ));
-        }
-    }
-    tx.execute(
-        "UPDATE operations SET result=?1 WHERE operation_id=?2",
-        params![
-            serde_json::to_string(&receipt)?,
-            request.operation_id.as_str()
-        ],
-    )?;
-    tx.execute(
-        "INSERT INTO family_commands VALUES(?1,?2)",
-        params![
-            request.operation_id.as_str(),
-            serde_json::to_string(&command)?
-        ],
-    )?;
-    projection_jobs::enqueue_local(tx, request, &receipt)?;
-    host_intents::record_commit(tx, request)?;
-    Ok(receipt)
 }

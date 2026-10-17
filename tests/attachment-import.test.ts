@@ -176,6 +176,10 @@ test('read/write failure yields no successful import and does not poison followi
       if (this.fail) throw new Error('write failed');
       return super.writeBinary(path, bytes);
     }
+    override async createBinary(path: string, bytes: Uint8Array) {
+      if (this.fail) throw new Error('write failed');
+      return super.createBinary(path, bytes);
+    }
   }
   const adapter = new FailingAdapter(), vault = new Vault(adapter);
   await vault.initialize();

@@ -1,6 +1,9 @@
 import { isMarkdown, normalizePath, parentPath } from './types.ts';
 import type { VaultEntry } from './types.ts';
 import type { Vault } from './vault.ts';
+import { binaryLength } from './binary-transfer.ts';
+import type { BinarySource } from './binary-transfer.ts';
+import { BINARY_CHUNK_BYTES, BINARY_FORMAT_FILE_BYTES } from './binary-streams.ts';
 
 export interface AttachmentImportFile {
   name: string;
@@ -9,6 +12,8 @@ export interface AttachmentImportFile {
   nativePath?: string;
   existingVaultPath?: string;
   read(): Promise<Uint8Array>;
+  /** Optional bounded source; legacy adapters continue using read(). */
+  source?(): BinarySource;
 }
 export interface AttachmentImportSettings {
   attachmentFolderPath: string;
@@ -106,7 +111,7 @@ export class AttachmentImporter {
   constructor(vault: Vault, options: { now?: () => Date } = {}) { this.vault = vault; this.now = options.now ?? (() => new Date()); }
 
   import(file: AttachmentImportFile, ownerPath: string, activePath: AttachmentActivePath, settings: Partial<AttachmentImportSettings> = {}): Promise<ImportedAttachment> {
-    const options = { ...settings }, input = { ...file, read: file.read.bind(file) };
+    const options = { ...settings }, input = { ...file, read: file.read.bind(file), ...(file.source ? { source: file.source.bind(file) } : {}) };
     const result = (queues.get(this.vault) ?? Promise.resolve()).then(() => this.perform(input, ownerPath, activePath, options));
     queues.set(this.vault, result.catch(() => undefined));
     return result;
@@ -124,19 +129,59 @@ export class AttachmentImporter {
     }
     // Validate the configured path before reading, without sampling live focus.
     destinationFolder(null, options.attachmentFolderPath);
-    const bytes = new Uint8Array(await file.read());
+    let source: BinarySource | undefined, bytes: Uint8Array | undefined;
+    const adapter = this.vault.adapter, streaming = adapter.binaryStreams;
+    const assertAdapter = () => { if (this.vault.adapter !== adapter) throw new Error('The destination vault is no longer open.'); };
+    const validate = streaming && file.source ? () => { assertAdapter(); if (typeof activePath === 'function') activePath(); assertAdapter(); } : undefined;
+    if (streaming && file.source) {
+      const original = file.source(), length = binaryLength(original.length), max = streaming.limits.maxChunkBytes;
+      if (!Number.isInteger(max) || max < 1 || max > BINARY_CHUNK_BYTES || binaryLength(streaming.limits.maxFileBytes) > BigInt(BINARY_FORMAT_FILE_BYTES)) throw new Error('Invalid binary stream limits');
+      if (length > binaryLength(streaming.limits.maxFileBytes)) throw Object.assign(new Error('Attachment exceeds the binary file limit'), { code: 'too_large' });
+      // Preserve destination timing without retaining the complete file: only
+      // one bounded first pull precedes the live active-path/generation check.
+      const captured = { length: original.length, read: original.read.bind(original) };
+      const first = await captured.read(max); assertAdapter();
+      if ((first !== null && (!(first instanceof Uint8Array) || !first.length || first.length > max || BigInt(first.length) > length)) || (first === null && length !== 0n)) throw new Error('Attachment source length mismatch');
+      let prefetched = first?.slice() ?? null, offset = 0, initial = true;
+      source = { length: captured.length, async read(maxBytes) {
+        validate?.();
+        if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > max) throw new Error('Invalid attachment chunk limit');
+        if (initial) {
+          if (!prefetched) { initial = false; return null; }
+          const part = prefetched.slice(offset, offset + maxBytes); offset += part.length;
+          if (offset === prefetched.length) { initial = false; prefetched = null; }
+          return part;
+        }
+        const part = await captured.read(maxBytes); validate?.();
+        if (part === null) return null;
+        if (!(part instanceof Uint8Array) || !part.length || part.length > maxBytes) throw new Error('Invalid attachment source chunk');
+        return part.slice();
+      } };
+    } else bytes = new Uint8Array(await file.read());
     const folder = destinationFolder(typeof activePath === 'function' ? activePath() : activePath, options.attachmentFolderPath);
     const name = fileName(file, this.now);
-    const inventory = new Map<string, VaultEntry>((await this.vault.adapter.list()).map(entry => [normalizePath(entry.path).toLowerCase(), entry]));
-    const actualFolder = await this.ensureFolder(folder, inventory);
+    const inventory = new Map<string, VaultEntry>((await (source ? adapter : this.vault.adapter).list()).map(entry => [normalizePath(entry.path).toLowerCase(), entry]));
+    validate?.();
+    const actualFolder = await this.ensureFolder(folder, inventory, validate);
     const prefix = actualFolder ? actualFolder + '/' : '';
     let path = prefix + name.stem + name.extension, suffix = 0;
     while (inventory.has(path.toLowerCase())) path = prefix + name.stem + ` ${++suffix}` + name.extension;
-    await this.vault.createBinary(path, bytes);
+    if (source) {
+      validate?.(); const committed = await this.vault.createBinaryStream(path, source, { validate });
+      try { validate?.(); }
+      catch (error) {
+        // Publication already succeeded. Preserve that fact when a synchronous
+        // create listener or the next microtask retires the receiving workspace.
+        const failure = new Error(error instanceof Error ? error.message : 'Attachment committed before the destination closed.', { cause: error });
+        if (error && typeof error === 'object') for (const key of ['code', 'source', 'commitUncertain'] as const) if (key in error) Object.assign(failure, { [key]: (error as Record<string, unknown>)[key] });
+        throw Object.assign(failure, { committedAttachment: Object.freeze({ path: committed.path, ...(committed.entryId === undefined ? {} : { entryId: committed.entryId }), ...(committed.revision === undefined ? {} : { revision: committed.revision }) }) });
+      }
+    } else await this.vault.createBinary(path, bytes!);
     return { path, embed: attachmentEmbed(this.vault, path, ownerPath, options) };
   }
 
-  private async ensureFolder(folder: string, inventory: Map<string, VaultEntry>): Promise<string> {
+  private async ensureFolder(folder: string, inventory: Map<string, VaultEntry>, validate?: () => void): Promise<string> {
+    validate?.();
     if (!folder) return '';
     const parts = folder.split('/');
     // A conflicting ancestor cannot contain the requested destination either.
@@ -149,7 +194,9 @@ export class AttachmentImporter {
       const existing = inventory.get(candidate.toLowerCase());
       if (existing) actual = existing.path;
       else {
-        const entry = await this.vault.createFolder(candidate);
+        validate?.();
+        const entry = await this.vault.createFolder(candidate, validate);
+        validate?.();
         inventory.set(candidate.toLowerCase(), entry);
         actual = entry.path;
       }

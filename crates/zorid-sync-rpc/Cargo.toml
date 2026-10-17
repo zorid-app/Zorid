@@ -1,0 +1,12 @@
+[package]
+name = "zorid-sync-rpc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+description = "Generated native gRPC relay client/server bindings"
+
+[dependencies]
+zorid-proto = { path = "../zorid-proto" }
+tonic = { version = "=0.14.6", default-features = false, features = ["codegen", "transport"] }
+tonic-prost = "=0.14.6"

@@ -1,11 +1,12 @@
 //! Attach received/authored family namespace obligations to proven local inodes.
 //! The graph decides the desired targets; saved physical bindings alone identify
 //! source occupants. This adapter never discovers members by walking a subtree.
+use super::content_stream::{core_client, file_snapshot, snapshot_matches_content};
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use zorid_store::{
-    NamespaceEvidence, PhysicalBinding, ProjectionJob, MAX_NAMESPACE_EVIDENCE_BYTES,
-    MAX_NAMESPACE_MEMBERS,
+    namespace_content_evidence_bytes, NamespaceEvidence, ObservationPhysical, PhysicalBinding,
+    ProjectionJob, MAX_NAMESPACE_EVIDENCE_BYTES, MAX_NAMESPACE_MEMBERS,
 };
 
 fn root(parents: &mut [usize], mut index: usize) -> usize {
@@ -204,10 +205,12 @@ impl NativeVault {
                 .collect::<Result<BTreeMap<_, _>>>()?;
             let evidence = self.family_namespace_evidence(&group, &targets, &bindings)?;
             self.paths.verify()?;
-            if let Some(attempt) = self
-                .store
-                .family_namespace_prepare(&group, &targets, &evidence)?
-            {
+            if let Some(attempt) = self.store.family_namespace_prepare_content(
+                &core_client()?,
+                &group,
+                &targets,
+                &evidence,
+            )? {
                 self.point("family_namespace_prepared");
                 self.resume_namespace(attempt)?;
             }
@@ -220,7 +223,7 @@ impl NativeVault {
     }
 
     fn family_namespace_evidence(
-        &self,
+        &mut self,
         jobs: &[ProjectionJob],
         targets: &[EntryState],
         bindings: &BTreeMap<EntryId, Option<PhysicalBinding>>,
@@ -292,17 +295,34 @@ impl NativeVault {
                     if baseline.state != *before || directory_baseline.is_some() {
                         return Err(Error::Busy("family source file baseline changed"));
                     }
-                    let disk =
-                        fs::snapshot(&source_parent, &source_name, self.options.max_file_bytes)?
-                            .ok_or(Error::Busy("family namespace source file disappeared"))?;
-                    if disk.identity != binding.physical.inode || disk.bytes != baseline.content {
+                    let disk = file_snapshot(&source_parent, &source_name)?
+                        .ok_or(Error::Busy("family namespace source file disappeared"))?;
+                    if disk.identity != binding.physical.inode
+                        || !snapshot_matches_content(&disk, &baseline.content)
+                    {
                         return Err(Error::Busy(
                             "family namespace source inode or bytes changed; occupant retained",
                         ));
                     }
+                    let physical = ObservationPhysical {
+                        physical: binding.physical.clone(),
+                        expected_binding: Some(binding.clone()),
+                    };
+                    let content = self.capture_observed_file(
+                        &before.path,
+                        &source_parent,
+                        &source_name,
+                        &jobs[0].job_id,
+                        Some(baseline),
+                        Some(&physical),
+                        &disk,
+                        baseline.content.inline_bytes().is_some(),
+                    )?;
+                    let observed_charge = namespace_content_evidence_bytes(&content)?;
+                    let baseline_charge = namespace_content_evidence_bytes(&baseline.content)?;
                     retained_bytes = retained_bytes
-                        .checked_add(disk.bytes.len())
-                        .and_then(|n| n.checked_add(baseline.content.len()))
+                        .checked_add(observed_charge)
+                        .and_then(|n| n.checked_add(baseline_charge))
                         .ok_or(Error::Unsupported(
                             "family namespace evidence bound exceeded",
                         ))?;
@@ -311,7 +331,13 @@ impl NativeVault {
                             "family namespace evidence bound exceeded",
                         ));
                     }
-                    Some(disk.bytes)
+                    self.verify_observed_content(
+                        &before.path,
+                        &source_parent,
+                        &binding.physical,
+                        &content,
+                    )?;
+                    Some(content)
                 }
                 EntryKind::Folder => {
                     let baseline = directory_baseline

@@ -255,6 +255,12 @@ pub(super) fn stage_from_source(
                 "private stream reader exceeded requested chunk",
             ));
         }
+        #[cfg(test)]
+        if std::env::var_os("ZORID_NATIVE_TEST_PARTIAL_STAGE").is_some() {
+            file.write_all(&chunk[..chunk.len() / 2])?;
+            file.sync_all()?;
+            std::process::exit(78);
+        }
         file.write_all(&chunk)?;
         digest.update(&chunk);
         offset += chunk.len() as u64;

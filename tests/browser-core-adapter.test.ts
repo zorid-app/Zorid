@@ -25,7 +25,7 @@ function fixture() {
 test('browser core preserves recovery identity and projects persisted stats without synthesizing time', async () => {
   const {adapter} = fixture();
   assert.equal(BROWSER_CORE_VAULT_ID, 'browser:default');
-  assert.deepEqual(await adapter.stat('Note.md'), {path:'Note.md',type:'file',ctime:123,mtime:456,size:3,revision:'revision-1'});
+  assert.deepEqual(await adapter.stat('Note.md'), {path:'Note.md',type:'file',entryId:'stable-file',ctime:123,mtime:456,size:3,revision:'revision-1'});
   assert.deepEqual(await adapter.list(), [await adapter.stat('Note.md')]);
 });
 test('compare and write binds exact expected bytes to the revision from one coherent read', async () => {
@@ -98,4 +98,10 @@ test('folder moves use stable identity and revision; trash exposes only retained
   assert.equal('remove' in f.adapter,false);
   await f.adapter.close(); assert.equal(f.closed,true);
   await assert.rejects(f.adapter.write('Note.md','late'),{code:'storage_closed'});
+});
+
+test('metadata-only stat and namespace commands do not read a large binary body',async()=>{
+  const row:BrowserVaultRead={entry:{id:'large',path:'Large.bin',kind:'file',revision:'r1',deleted:false},presentation:{id:'large',ctime_ms:1,mtime_ms:2,size_bytes:67108864}};
+  const calls:any[]=[];const backend:BrowserCoreBackend={async inventory(){return [row];},async readMetadata(path){return path==='Large.bin'?row:null;},async readEntry(){throw new Error('whole binary body forbidden');},async execute(_id,json){calls.push(JSON.parse(json));return '{}';},async intents(){return [];},async acknowledge(){},subscribe(){return()=>{};},close(){}};
+  const adapter=new BrowserCoreAdapter(backend);assert.equal((await adapter.list())[0].entryId,'large');assert.equal((await adapter.stat('Large.bin'))!.size,67108864);await adapter.rename('Large.bin','Moved.bin');await adapter.trash('Large.bin');assert.deepEqual(calls.map(value=>value.mutation.type),['move','delete']);
 });

@@ -1,5 +1,6 @@
 //! Private desktop transport only. Storage, recovery and conflict policy belong
 //! to NativeVault. No listener, daemon, filesystem writes or alternate store here.
+mod binary;
 mod family;
 use family::WireFamilyCommand;
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,9 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    Binary {
+        client_id: OperationId,
+    },
     FixtureFamilyEnroll,
     FixtureFamilyStatus,
     FixtureFamilyOnce {
@@ -169,6 +173,7 @@ fn native_fault(error: zorid_native::Error) -> Value {
         Busy(_) => "filesystem_changed",
         Unsupported(_) => "unsupported",
         LockTimeout => "lock_timeout",
+        Store(zorid_store::StoreError::StreamRequired { .. }) => "stream_required",
         Store(zorid_store::StoreError::UnsupportedSchema(_)) => "unsupported_schema",
         Store(zorid_store::StoreError::ReloadRequired(_)) => "reload_required",
         Store(zorid_store::StoreError::Corrupt(_)) | Store(zorid_store::StoreError::Json(_)) => {
@@ -204,7 +209,14 @@ fn read_frame(input: &mut impl Read) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
     input.read_exact(&mut header)?;
     let request: Request = serde_json::from_slice(&header)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "request"))?;
-    if body_len > MAX_BODY && !matches!(request.command, Command::CheckpointCas { .. }) {
+    if body_len
+        > (if matches!(request.command, Command::Binary { .. }) {
+            binary::MAX_FRAME
+        } else {
+            MAX_BODY
+        })
+        && !matches!(request.command, Command::CheckpointCas { .. })
+    {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "body limit"));
     }
     let mut body = vec![0; body_len];
@@ -291,6 +303,7 @@ fn report(report: zorid_native::ReconcileReport) -> Value {
 #[derive(Default)]
 struct ClientLeases {
     active: BTreeMap<String, ClientLease>,
+    binary_reads: BTreeMap<(OperationId, OperationId), zorid_store::BinaryReadSession>,
     released: BTreeMap<String, ClientLeaseRef>,
 }
 fn admission_fault(error: ClientAdmissionError) -> Value {
@@ -308,7 +321,8 @@ impl ClientLeases {
         reference: Option<&ClientLeaseRef>,
     ) -> Result<(), Value> {
         let client = match command {
-            Command::PrepareIntent { client_id, .. }
+            Command::Binary { client_id }
+            | Command::PrepareIntent { client_id, .. }
             | Command::ListIntents { client_id, .. }
             | Command::CreateText { client_id, .. }
             | Command::FileCommand { client_id, .. } => Some(client_id),
@@ -436,6 +450,9 @@ fn execute(
     body: Vec<u8>,
 ) -> Result<(Value, Vec<u8>), Value> {
     let result = match command {
+        Command::Binary { client_id } => {
+            return Ok(binary::execute(vault, leases, &client_id, &body))
+        }
         command @ (Command::FixtureFamilyEnroll
         | Command::FixtureFamilyStatus
         | Command::FixtureFamilyOnce { .. }
@@ -463,6 +480,9 @@ fn execute(
                 .get(reference.token.as_str())
                 .is_some_and(|lease| lease.reference() == &reference)
             {
+                leases
+                    .binary_reads
+                    .retain(|(client, _), _| client != &reference.client_id);
                 leases.active.remove(reference.token.as_str()); // Drop releases kernel ownership; NEVER unlink.
                 leases
                     .released
@@ -869,7 +889,7 @@ fn run() -> io::Result<()> {
     };
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"reconciliation":reconciliation,"capabilities":["reconciliation_status","local_family_status","file_command","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["binary_streams","reconciliation_status","local_family_status","file_command","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
@@ -893,6 +913,7 @@ fn run() -> io::Result<()> {
         let may_commit = matches!(
             &request.command,
             Command::Apply { .. }
+                | Command::Binary { .. }
                 | Command::FixtureFamilyEnroll
                 | Command::FixtureFamilyOnce { .. }
                 | Command::FixtureFamilyApply { .. }

@@ -1,7 +1,9 @@
 #![cfg(unix)]
+#[path = "support/grpc_fixture.rs"]
+mod grpc_fixture;
 use axum::{
     extract::Request,
-    http::{Method, StatusCode},
+    http::StatusCode,
     middleware::{self, Next},
     response::IntoResponse,
 };
@@ -40,24 +42,26 @@ impl Server {
                 .unwrap();
             rt.block_on(async move {
                 let lost = Arc::new(AtomicBool::new(lose_first_ack));
-                let app = zorid_sync_server::http::router(store, &[]).unwrap().layer(
-                    middleware::from_fn(move |request: Request, next: Next| {
-                        let lost = lost.clone();
-                        async move {
-                            let put = request.method() == Method::PUT;
-                            let response = next.run(request).await;
-                            if put
-                                && response.status() == StatusCode::OK
-                                && lost.swap(false, Ordering::SeqCst)
-                            {
-                                // The real relay committed, but the client never receives its ACK.
-                                StatusCode::SERVICE_UNAVAILABLE.into_response()
-                            } else {
-                                response
+                let app =
+                    zorid_sync_server::rpc::router(store, &[])
+                        .unwrap()
+                        .layer(middleware::from_fn(move |request: Request, next: Next| {
+                            let lost = lost.clone();
+                            async move {
+                                let put = grpc_fixture::site(request.uri().path()) == 4;
+                                let response = next.run(request).await;
+                                if put
+                                    && response.status() == StatusCode::OK
+                                    && lost.swap(false, Ordering::SeqCst)
+                                {
+                                    // The real relay committed, but the client never receives its ACK.
+                                    grpc_fixture::discard_response(response).await;
+                                    StatusCode::SERVICE_UNAVAILABLE.into_response()
+                                } else {
+                                    response
+                                }
                             }
-                        }
-                    }),
-                );
+                        }));
                 axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
                     .with_graceful_shutdown(async move {
                         let _ = receiver.await;
@@ -80,6 +84,22 @@ impl Drop for Server {
     }
 }
 fn cli(vault: &Path, args: &[&str]) -> Output {
+    // Diagnostics contain only this finite command vocabulary, never argument
+    // values, vault/config paths, bearer tokens or captured child output.
+    let command_name = match args.first().copied() {
+        Some("init") => "init",
+        Some("create") => "create",
+        Some("read") => "read",
+        Some("write") => "write",
+        Some("move") => "move",
+        Some("delete") => "delete",
+        Some("list") => "list",
+        Some("sync") if args.contains(&"once") => "sync once",
+        Some("sync") if args.contains(&"status") => "sync status",
+        Some("sync") if args.contains(&"fixture-enroll") => "sync fixture-enroll",
+        Some("sync") if args.contains(&"watch") => "sync watch",
+        _ => "other",
+    };
     let mut child = Command::new(env!("CARGO_BIN_EXE_zorid"))
         .arg("--vault")
         .arg(vault)
@@ -106,7 +126,10 @@ fn cli(vault: &Path, args: &[&str]) -> Output {
             .unwrap();
         bytes
     });
-    let deadline = Instant::now() + Duration::from_secs(25);
+    // The 2 MiB binary fixture's debug build repeatedly loads/validates the
+    // legacy whole JSON graph during family_seal/ACK (profiled CPU work, not an
+    // RPC wait). Keep child execution bounded without changing RPC deadlines.
+    let deadline = Instant::now() + Duration::from_secs(90);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -116,7 +139,7 @@ fn cli(vault: &Path, args: &[&str]) -> Output {
             let _ = child.wait();
             let _ = out.join();
             let _ = err.join();
-            panic!("fixture CLI deadline exceeded");
+            panic!("fixture CLI deadline exceeded: {command_name}");
         }
         std::thread::sleep(Duration::from_millis(10));
     };
@@ -207,7 +230,7 @@ fn credentials(
     fs::write(
         path,
         serde_json::to_vec(
-            &json!({"version":1,"endpoint":format!("http://{}/",server.address),
+            &json!({"version":2,"transport":"grpc","endpoint":format!("http://{}/",server.address),
         "realm_id":"realm","vault_id":"vault","server_epoch":epoch,"key_epoch":1,
         "key_base64":STANDARD.encode([7u8;32]),"bearer_token":token.expose_secret()}),
         )
@@ -594,7 +617,12 @@ fn revoked_device_and_wrong_epoch_do_not_advance_receive_cursor() {
     let mut value: Value = serde_json::from_slice(&fs::read(&f.cb).unwrap()).unwrap();
     value["server_epoch"] = json!("wrong-epoch");
     fs::write(&f.cb, serde_json::to_vec(&value).unwrap()).unwrap();
-    assert!(!sync(&f.b, &f.cb, &["once"]).status.success());
+    let failed = sync(&f.b, &f.cb, &["once"]);
+    assert!(!failed.status.success());
+    let failure: Value = serde_json::from_slice(&failed.stderr).unwrap();
+    // Public Hello must reject the pinned epoch before revoked authorization
+    // can mask an incorrect discovery check.
+    assert_eq!(failure["error"]["code"], "sync_epoch_or_realm_mismatch");
     assert_eq!(
         success(sync(&f.b, &f.cb, &["status"]))["family"]["cursor"]["after"],
         "0"
@@ -897,4 +925,34 @@ fn incomplete_binary_dependencies_are_durable_without_partial_publication_or_ech
     assert_eq!(read.stdout, bytes);
     assert_eq!(fs::read(f.b.join("remote.dat")).unwrap(), bytes);
     assert_eq!(f.wires().len(), 3);
+}
+
+#[test]
+fn another_accounts_device_cannot_receive_vault_updates_or_advance_cursor() {
+    let mut f = Fixture::new(false);
+    success(sync(&f.b, &f.cb, &["once"]));
+    let before = success(sync(&f.b, &f.cb, &["status"]));
+    write(&f.a, &f.input, "private-seed", "account-private content");
+    success(sync(&f.a, &f.ca, &["once"]));
+    let wires = f.wires();
+    f.admin.create_account("outsider").unwrap();
+    let outsider = f
+        .admin
+        .issue_device("outsider", &DeviceId::new("outsider-device").unwrap())
+        .unwrap();
+    let mut config: Value = serde_json::from_slice(&fs::read(&f.cb).unwrap()).unwrap();
+    config["bearer_token"] = json!(outsider.expose_secret());
+    fs::write(&f.cb, serde_json::to_vec(&config).unwrap()).unwrap();
+    for _ in 0..2 {
+        let failed = sync(&f.b, &f.cb, &["once"]);
+        assert!(!failed.status.success());
+        let diagnostic = String::from_utf8_lossy(&failed.stderr);
+        assert!(!diagnostic.contains(outsider.expose_secret()));
+        let failure: Value = serde_json::from_slice(&failed.stderr).unwrap();
+        assert_eq!(failure["error"]["code"], "sync_authorization_failed");
+        let after = success(sync(&f.b, &f.cb, &["status"]));
+        assert_eq!(after["family"]["cursor"], before["family"]["cursor"]);
+        assert!(!f.b.join("note.md").exists());
+        assert_eq!(f.wires(), wires);
+    }
 }

@@ -24,6 +24,14 @@ impl Host {
         config: Option<&std::path::Path>,
         initialize: bool,
     ) -> Self {
+        Self::spawn_options_timeout(root, config, initialize, 15)
+    }
+    fn spawn_options_timeout(
+        root: &std::path::Path,
+        config: Option<&std::path::Path>,
+        initialize: bool,
+        timeout_secs: u64,
+    ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_zorid-desktop-host"));
         command.args([std::ffi::OsStr::new("--vault"), root.as_os_str()]);
         if let Some(config) = config {
@@ -46,7 +54,7 @@ impl Host {
         let (stop, timer) = mpsc::channel();
         let watchdog = std::thread::spawn(move || {
             if matches!(
-                timer.recv_timeout(std::time::Duration::from_secs(15)),
+                timer.recv_timeout(std::time::Duration::from_secs(timeout_secs)),
                 Err(mpsc::RecvTimeoutError::Timeout)
             ) {
                 let mut child = watched.lock().unwrap();
@@ -611,4 +619,316 @@ fn incomplete_later_discovery_keeps_previously_imported_notes_readable() {
         .file_type()
         .is_symlink());
     assert_eq!(std::fs::read_link(&blocked_link).unwrap(), outside_file);
+}
+
+#[test]
+fn leased_protobuf_streams_publish_and_pin_more_than_inline_body_limit() {
+    use sha2::{Digest, Sha256};
+    use wire::{binary_command::Command as C, binary_result::Result as R};
+    use zorid_proto::{zorid::stream::v1 as wire, Message};
+    const CHUNK: usize = 128 * 1024;
+    const COUNT: usize = 129;
+    const FRAME: usize = CHUNK + 16 * 1024;
+    fn exchange(host: &mut Host, client: &str, lease: &Value, version: u32, command: C) -> R {
+        let bytes = wire::BinaryCommand {
+            schema_version: version,
+            required_features: vec![],
+            command: Some(command),
+        }
+        .encode_to_vec();
+        assert!(bytes.len() <= FRAME);
+        host.send_header(
+            json!({"version":1,"request_id":"1","lease":lease,
+            "command":{"method":"binary","client_id":client}}),
+            &bytes,
+        );
+        let (header, body) = host.recv();
+        assert_eq!(header["ok"], true, "{header}");
+        assert_eq!(header["result"]["binary"], true);
+        assert!(!body.is_empty() && body.len() <= FRAME);
+        let result = wire::BinaryResult::decode(body.as_slice()).unwrap();
+        assert_eq!(result.schema_version, 1);
+        assert!(result.required_features.is_empty());
+        result.result.unwrap()
+    }
+    fn failure(value: R, code: wire::ErrorCode) {
+        match value {
+            R::Failure(error) => assert_eq!(error.code, code as i32),
+            other => panic!("unexpected result {other:?}"),
+        }
+    }
+    fn fill(bytes: &mut [u8], sequence: usize) {
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = ((sequence * 17 + index * 31) % 251) as u8;
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let mut host = Host::spawn_options_timeout(root.path(), None, true, 60);
+    let startup = host.recv().0;
+    assert_eq!(startup["ok"], true, "{startup}");
+    assert_eq!(startup["result"]["max_binary_frame"], FRAME);
+    let client = "10000000-0000-4000-8000-000000000001";
+    let lease = host
+        .request(json!({"method":"claim_client","client_id":client}), &[])
+        .0["result"]["lease"]
+        .clone();
+    let identity = host.request(json!({"method":"identity"}), &[]).0;
+    let owner = wire::StageOwner {
+        local_store_id: identity["result"]["identity"]["local_store_id"]
+            .as_str()
+            .unwrap()
+            .into(),
+        client_id: client.into(),
+    };
+    let resume = || {
+        C::Resume(wire::ResumeStage {
+            owner: Some(owner.clone()),
+            operation_id: "unknown-stream-operation".into(),
+        })
+    };
+    failure(
+        exchange(&mut host, client, &lease, 2, resume()),
+        wire::ErrorCode::UnsupportedVersion,
+    );
+    failure(
+        exchange(&mut host, client, &lease, 1, resume()),
+        wire::ErrorCode::NotFound,
+    );
+    failure(
+        exchange(
+            &mut host,
+            client,
+            &lease,
+            1,
+            C::Resume(wire::ResumeStage {
+                owner: Some(wire::StageOwner {
+                    client_id: "another-client".into(),
+                    ..owner.clone()
+                }),
+                operation_id: "unknown-stream-operation".into(),
+            }),
+        ),
+        wire::ErrorCode::OwnerMismatch,
+    );
+    let total = (COUNT * CHUNK) as u64;
+    let stage = match exchange(
+        &mut host,
+        client,
+        &lease,
+        1,
+        C::Begin(wire::BeginStage {
+            owner: Some(owner.clone()),
+            operation_id: "large-stream-create".into(),
+            expected_length: Some(total),
+            target: Some(wire::BinaryTarget {
+                target: Some(wire::binary_target::Target::Create(wire::BinaryCreate {
+                    id: "large-stream-file".into(),
+                    path: "large.bin".into(),
+                })),
+            }),
+        }),
+    ) {
+        R::Begun(value) => value.stage.unwrap(),
+        other => panic!("{other:?}"),
+    };
+    let mut bytes = vec![0; CHUNK];
+    let mut expected = Sha256::new();
+    for sequence in 0..COUNT {
+        fill(&mut bytes, sequence);
+        expected.update(&bytes);
+        let receipt = exchange(
+            &mut host,
+            client,
+            &lease,
+            1,
+            C::Append(wire::AppendChunk {
+                stage: Some(stage.clone()),
+                sequence: sequence as u32,
+                offset: (sequence * CHUNK) as u64,
+                data: bytes.clone(),
+            }),
+        );
+        match receipt {
+            R::Appended(value) => {
+                assert_eq!(value.sequence, sequence as u32);
+                assert_eq!(value.accepted_length, ((sequence + 1) * CHUNK) as u64);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    let expected = expected.finalize();
+    assert!(matches!(
+        exchange(
+            &mut host,
+            client,
+            &lease,
+            1,
+            C::Seal(wire::SealStage {
+                stage: Some(stage.clone()),
+                final_length: total,
+                expected_digest: Some(expected.to_vec())
+            })
+        ),
+        R::Sealed(_)
+    ));
+    let committed = match exchange(
+        &mut host,
+        client,
+        &lease,
+        1,
+        C::Commit(wire::CommitStage {
+            stage: Some(stage.clone()),
+        }),
+    ) {
+        R::Committed(value) => value,
+        other => panic!("{other:?}"),
+    };
+    assert!(matches!(
+        committed.projection.unwrap().status,
+        Some(wire::projection_status::Status::Projected(_))
+    ));
+    let receipt = committed.receipt.unwrap();
+    assert_eq!(receipt.operation_id, "large-stream-create");
+    let revision = receipt
+        .changes
+        .iter()
+        .find(|change| {
+            change
+                .after
+                .as_ref()
+                .is_some_and(|entry| entry.id == "large-stream-file")
+        })
+        .unwrap()
+        .after
+        .as_ref()
+        .unwrap()
+        .revision
+        .clone();
+    // Exact retry returns the original operation receipt, without republishing.
+    match exchange(
+        &mut host,
+        client,
+        &lease,
+        1,
+        C::Commit(wire::CommitStage { stage: Some(stage) }),
+    ) {
+        R::Committed(value) => assert_eq!(value.receipt.unwrap(), receipt),
+        other => panic!("{other:?}"),
+    }
+    let (snapshot, body) = host.request(json!({"method":"list_snapshot"}), &[]);
+    assert!(body.is_empty());
+    assert_eq!(snapshot["result"]["entries"].as_array().unwrap().len(), 1);
+    let row = snapshot["result"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["state"]["id"] == "large-stream-file")
+        .unwrap();
+    assert_eq!(row["state"]["revision"], revision);
+    assert_eq!(row["presentation"]["size_bytes"], total);
+    let (inline, body) = host.request(json!({"method":"read_path","path":"large.bin"}), &[]);
+    assert_eq!(inline["error"]["code"], "stream_required");
+    assert!(body.is_empty());
+    let open = || {
+        C::OpenRead(wire::OpenRead {
+            owner: Some(owner.clone()),
+            id: "large-stream-file".into(),
+            expected_revision: Some(revision.clone()),
+            read_id: "stable-open-request".into(),
+        })
+    };
+    let pin = match exchange(&mut host, client, &lease, 1, open()) {
+        R::ReadOpened(value) => {
+            assert_eq!(value.content.unwrap().manifest.unwrap().bytes, total);
+            value.read.unwrap()
+        }
+        other => panic!("{other:?}"),
+    };
+    assert_ne!(pin.read_id, "stable-open-request");
+    match exchange(&mut host, client, &lease, 1, open()) {
+        R::ReadOpened(value) => assert_eq!(value.read.unwrap(), pin),
+        other => panic!("{other:?}"),
+    }
+    let mut actual = Sha256::new();
+    for sequence in 0..COUNT {
+        match exchange(
+            &mut host,
+            client,
+            &lease,
+            1,
+            C::ReadChunk(wire::ReadChunk {
+                read: Some(pin.clone()),
+                offset: (sequence * CHUNK) as u64,
+                max_bytes: CHUNK as u32,
+            }),
+        ) {
+            R::ReadChunk(value) => {
+                fill(&mut bytes, sequence);
+                assert_eq!(value.data, bytes);
+                assert_eq!(value.eof, sequence + 1 == COUNT);
+                actual.update(&value.data);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(actual.finalize(), expected);
+    let mut physical = std::fs::File::open(root.path().join("large.bin")).unwrap();
+    let mut physical_hash = Sha256::new();
+    let mut physical_length = 0u64;
+    loop {
+        let count = physical.read(&mut bytes).unwrap();
+        if count == 0 {
+            break;
+        }
+        physical_hash.update(&bytes[..count]);
+        physical_length += count as u64;
+    }
+    assert_eq!(physical_length, total);
+    assert_eq!(physical_hash.finalize(), expected);
+    for _ in 0..2 {
+        assert!(matches!(
+            exchange(
+                &mut host,
+                client,
+                &lease,
+                1,
+                C::CloseRead(wire::CloseRead {
+                    read: Some(pin.clone())
+                })
+            ),
+            R::ReadClosed(_)
+        ));
+    }
+    let replacement = match exchange(&mut host, client, &lease, 1, open()) {
+        R::ReadOpened(value) => value.read.unwrap(),
+        other => panic!("{other:?}"),
+    };
+    assert_ne!(replacement.read_id, pin.read_id);
+    failure(
+        exchange(
+            &mut host,
+            client,
+            &lease,
+            1,
+            C::ReadChunk(wire::ReadChunk {
+                read: Some(pin),
+                offset: 0,
+                max_bytes: 1,
+            }),
+        ),
+        wire::ErrorCode::NotFound,
+    );
+    assert!(matches!(
+        exchange(
+            &mut host,
+            client,
+            &lease,
+            1,
+            C::CloseRead(wire::CloseRead {
+                read: Some(replacement)
+            })
+        ),
+        R::ReadClosed(_)
+    ));
+    host.close();
 }

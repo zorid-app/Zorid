@@ -196,6 +196,12 @@ importers:
       '@codemirror/view':
         specifier: ^6.36.0
         version: 6.43.14
+      '@connectrpc/connect':
+        specifier: 2.2.0
+        version: 2.2.0(@bufbuild/protobuf@2.16.0)
+      '@connectrpc/connect-web':
+        specifier: 2.2.0
+        version: 2.2.0(@bufbuild/protobuf@2.16.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0))
       '@lezer/highlight':
         specifier: ^1.2.0
         version: 1.2.5
@@ -223,7 +229,7 @@ importers:
     devDependencies:
       '@bufbuild/protoc-gen-es':
         specifier: 2.16.0
-        version: 2.16.0(@bufbuild/protobuf@2.16.0)
+        version: 2.16.0(@bufbuild/protobuf@2.16.0)(supports-color@8.1.1)
       '@capacitor/android':
         specifier: ^8.0.0
         version: 8.5.3(@capacitor/core@8.5.3)
@@ -275,9 +281,11 @@ importers:
 
 packages:
 
+  '@asamuzakjp/css-color@3.2.0':
+    resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
+
   '@bufbuild/protobuf@2.16.0':
     resolution: {integrity: sha512-FWa0sPlqYGJgpTs6OxBRcL/AW4JT0OIO+W1ajerluoTVh8CV0B7XM1qsNCRgnkSCkRCgOICKHRQlY17jrsm0+Q==}
-
 
   '@bufbuild/protoc-gen-es@2.16.0':
     resolution: {integrity: sha512-LbPrEaGd7bOxKbJHllTR5439+PZjqd6fM7xyDZkDVtZ+Efzr7TMdMqShG9Qkf/nYVyiNS/SK5r9JhRaBTFkfZw==}
@@ -289,25 +297,8 @@ packages:
       '@bufbuild/protobuf':
         optional: true
 
-
   '@bufbuild/protoplugin@2.16.0':
     resolution: {integrity: sha512-3FdYJys34VhFnBQsjiV9wurBkX/DBACQAkAk+nCKdO1p8ROVNi7gmaRAcba+4qq8hQq8rYVukuutwvGCvd4kJA==}
-
-
-  '@typescript/vfs@1.6.5':
-    resolution: {integrity: sha512-gobLHQLmvQGJInFk31NvgMd1uYzRXsd8qgnOssyLD055R2QPnw1ubRbBQ4+T+5qC7IQVuYXdvNDE2G7tMDVHgw==}
-    peerDependencies:
-      typescript: '*'
-
-
-  typescript@5.4.5:
-    resolution: {integrity: sha512-vcI4UpRgg81oIRUFwR0WSIHKt11nJ7SAVlYNIu+QpqeyXP+gpQJy/Z4+F0aGxSE4MqwjyXvW/TzgkLAx2AGHwQ==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
-
-  '@asamuzakjp/css-color@3.2.0':
-    resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
 
   '@capacitor/android@8.5.3':
     resolution: {integrity: sha512-ilH4gSSz3DrketMkzDVAvY9JsWJ//rCQnECLTdcFRO7xXDogwAbUvQAnIAbiqefwV/D1xfjEL4Gw1MJXEcaA9g==}
@@ -370,6 +361,17 @@ packages:
 
   '@codemirror/view@6.43.14':
     resolution: {integrity: sha512-hC45YnmJNR1rz42OF57BLoQNFMV12/13drnvibDsR2quNDmldcb4WvYVV81hFQg56i9lcqQMEDqilhX2QDcGQQ==}
+
+  '@connectrpc/connect-web@2.2.0':
+    resolution: {integrity: sha512-uuBUcBTYfb/r1o98LzCCZk1H90yx0vmZ5m21dpw/q4EUwsKwkCDGI8H0aEdjcZld+Q2jJ5A5ADvPqfb6lzQ/sg==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.7.0
+      '@connectrpc/connect': 2.2.0
+
+  '@connectrpc/connect@2.2.0':
+    resolution: {integrity: sha512-M63OQ1ZFcPUm85CuewJ9G9CMV8LjzGR9935xOnXNQGSazAbwMb3x2W7vXBYM1zqrP7XFD8uxp/dUAhirclgwnQ==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.7.0
 
   '@csstools/color-helpers@5.1.0':
     resolution: {integrity: sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==}
@@ -906,6 +908,11 @@ packages:
 
   '@types/ws@8.18.2':
     resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
+
+  '@typescript/vfs@1.6.5':
+    resolution: {integrity: sha512-gobLHQLmvQGJInFk31NvgMd1uYzRXsd8qgnOssyLD055R2QPnw1ubRbBQ4+T+5qC7IQVuYXdvNDE2G7tMDVHgw==}
+    peerDependencies:
+      typescript: '*'
 
   '@webassemblyjs/ast@1.14.1':
     resolution: {integrity: sha512-nuBEDgQfm1ccRp/8bCQrx1frohyufl4JlbMMZ4P1wpeOfDhF6FQkxZJ1b/e+PLwr6X1Nhw6OLme5usuBWYBvuQ==}
@@ -2950,6 +2957,11 @@ packages:
     resolution: {integrity: sha512-TkRKr9sUTxEH8MdfuCSP7VizJyzRNMjj2J2do2Jr3Kym598JVdEksuzPQCnlFPW4ky9Q+iA+ma9BGm06XQBy8g==}
     engines: {node: '>= 0.6'}
 
+  typescript@5.4.5:
+    resolution: {integrity: sha512-vcI4UpRgg81oIRUFwR0WSIHKt11nJ7SAVlYNIu+QpqeyXP+gpQJy/Z4+F0aGxSE4MqwjyXvW/TzgkLAx2AGHwQ==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
@@ -3211,43 +3223,6 @@ packages:
 
 snapshots:
 
-  '@bufbuild/protobuf@2.16.0': {}
-
-
-  '@bufbuild/protoc-gen-es@2.16.0(@bufbuild/protobuf@2.16.0)':
-    dependencies:
-      '@bufbuild/protoplugin': 2.16.0
-    optionalDependencies:
-      '@bufbuild/protobuf': 2.16.0
-    transitivePeerDependencies:
-      - supports-color
-
-
-  '@bufbuild/protoplugin@2.16.0':
-    dependencies:
-      '@bufbuild/protobuf': 2.16.0
-      '@typescript/vfs': 1.6.5(typescript@5.4.5)
-      typescript: 5.4.5
-    transitivePeerDependencies:
-      - supports-color
-
-
-  '@typescript/vfs@1.6.5(typescript@5.4.5)':
-    dependencies:
-      debug: 4.4.3
-      typescript: 5.4.5
-    transitivePeerDependencies:
-      - supports-color
-
-
-  debug@4.4.3:
-    dependencies:
-      ms: 2.1.3
-
-
-  typescript@5.4.5: {}
-
-
   '@asamuzakjp/css-color@3.2.0':
     dependencies:
       '@csstools/css-calc': 2.1.4(@csstools/css-parser-algorithms@3.0.5(@csstools/css-tokenizer@3.0.4))(@csstools/css-tokenizer@3.0.4)
@@ -3255,6 +3230,24 @@ snapshots:
       '@csstools/css-parser-algorithms': 3.0.5(@csstools/css-tokenizer@3.0.4)
       '@csstools/css-tokenizer': 3.0.4
       lru-cache: 10.4.3
+
+  '@bufbuild/protobuf@2.16.0': {}
+
+  '@bufbuild/protoc-gen-es@2.16.0(@bufbuild/protobuf@2.16.0)(supports-color@8.1.1)':
+    dependencies:
+      '@bufbuild/protoplugin': 2.16.0(supports-color@8.1.1)
+    optionalDependencies:
+      '@bufbuild/protobuf': 2.16.0
+    transitivePeerDependencies:
+      - supports-color
+
+  '@bufbuild/protoplugin@2.16.0(supports-color@8.1.1)':
+    dependencies:
+      '@bufbuild/protobuf': 2.16.0
+      '@typescript/vfs': 1.6.5(supports-color@8.1.1)(typescript@5.4.5)
+      typescript: 5.4.5
+    transitivePeerDependencies:
+      - supports-color
 
   '@capacitor/android@8.5.3(@capacitor/core@8.5.3)':
     dependencies:
@@ -3386,6 +3379,15 @@ snapshots:
       crelt: 1.0.7
       style-mod: 4.1.4
       w3c-keyname: 2.2.8
+
+  '@connectrpc/connect-web@2.2.0(@bufbuild/protobuf@2.16.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0))':
+    dependencies:
+      '@bufbuild/protobuf': 2.16.0
+      '@connectrpc/connect': 2.2.0(@bufbuild/protobuf@2.16.0)
+
+  '@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0)':
+    dependencies:
+      '@bufbuild/protobuf': 2.16.0
 
   '@csstools/color-helpers@5.1.0': {}
 
@@ -4070,6 +4072,13 @@ snapshots:
   '@types/ws@8.18.2':
     dependencies:
       '@types/node': 24.19.2
+
+  '@typescript/vfs@1.6.5(supports-color@8.1.1)(typescript@5.4.5)':
+    dependencies:
+      debug: 4.4.3(supports-color@8.1.1)
+      typescript: 5.4.5
+    transitivePeerDependencies:
+      - supports-color
 
   '@webassemblyjs/ast@1.14.1':
     dependencies:
@@ -6220,6 +6229,8 @@ snapshots:
     dependencies:
       media-typer: 0.3.0
       mime-types: 2.1.35
+
+  typescript@5.4.5: {}
 
   typescript@5.9.3: {}
 

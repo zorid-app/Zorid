@@ -4,6 +4,7 @@ use crate::physical_bindings::{
     self, ObservationPhysical, PhysicalIdentity, PublicationKind, PublicationProof,
 };
 use zorid_core::{OperationId, VaultPath};
+use zorid_file_sync::Sha256Digest;
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("projection_baselines", "CREATE TABLE projection_baselines (entry_id TEXT PRIMARY KEY NOT NULL REFERENCES entries(id), record TEXT NOT NULL)"),
@@ -16,7 +17,7 @@ pub(super) const SCHEMA: &[(&str, &str)] = &[
 #[serde(deny_unknown_fields)]
 pub struct ProjectionBaseline {
     pub state: EntryState,
-    pub content: Vec<u8>,
+    pub content: StoredContent,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,11 +58,19 @@ pub struct ExternalObservation {
     pub observation_id: OperationId,
     pub path: VaultPath,
     pub baseline: Option<ProjectionBaseline>,
-    pub content: Vec<u8>,
+    pub content: StoredContent,
     pub resolution: Option<OperationId>,
 }
 fn validate_baseline(value: &ProjectionBaseline, id: &str) -> Result<()> {
-    if value.state.id.as_str() != id || value.state.deleted || value.state.kind != EntryKind::File {
+    if value.state.id.as_str() != id
+        || value.state.deleted
+        || value.state.kind != EntryKind::File
+        || matches!(
+            &value.content,
+            StoredContent::BinaryRef(BinarySourceRef::Capture(_))
+        )
+        || matches!(&value.content, StoredContent::BinaryRef(BinarySourceRef::Graph(reference)) if reference.identity.entry_id != value.state.id)
+    {
         return Err(StoreError::Corrupt(
             "invalid projection file identity/kind/liveness".into(),
         ));
@@ -139,6 +148,8 @@ pub(super) fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<Projectio
 }
 pub(super) fn put_baseline(tx: &Connection, value: &ProjectionBaseline) -> Result<()> {
     validate_baseline(value, value.state.id.as_str())?;
+    entry_content::validate_stored_content(tx, &value.content, false)?;
+    family_materialization::check_publication_content(tx, &value.state, Some(&value.content))?;
     // An unbound baseline replacement must never retain stale inode authority.
     physical_bindings::remove_binding(tx, &value.state.id)?;
     tx.execute("INSERT INTO projection_baselines(entry_id,record) VALUES (?1,?2) ON CONFLICT(entry_id) DO UPDATE SET record=excluded.record",
@@ -174,7 +185,7 @@ fn finish_attempt(
     physical: Option<&PhysicalIdentity>,
 ) -> Result<()> {
     if published {
-        family_materialization::check_publication(
+        family_materialization::check_publication_content(
             tx,
             &value.target.state,
             Some(&value.target.content),
@@ -325,15 +336,16 @@ impl Store {
             }
             return Ok(value);
         }
-        let (path, deleted, s, bytes): (String, i64, String, Option<Vec<u8>>) = tx.query_row(
-            "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND deleted=0",
-            [id.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )?;
-        let state = decode_state(id.as_str(), &path, deleted, &s, bytes.is_some())?;
-        let content = bytes.ok_or_else(|| {
+        let (state, content) = entry_content::read_content_entry(&tx, id)?
+            .ok_or_else(|| StoreError::Corrupt("projection target is missing".into()))?;
+        if state.deleted {
+            return Err(StoreError::Corrupt("projection target is deleted".into()));
+        }
+        let content = content.ok_or_else(|| {
             StoreError::Corrupt("only files can be projected by this adapter".into())
         })?;
+        entry_content::validate_stored_content(&tx, &content, false)?;
+        family_materialization::check_publication_content(&tx, &state, Some(&content))?;
         let seq: i64 = tx.query_row(
             "SELECT coalesce(max(sequence),0) FROM operations",
             [],
@@ -521,7 +533,156 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let value = record_external_transaction(&tx, path, base, content, proof)?;
+        let value = record_external_transaction(
+            &tx,
+            path,
+            base,
+            StoredContent::InlineBytes(content),
+            proof,
+        )?;
+        tx.commit()?;
+        Ok(value)
+    }
+    /// Find an unresolved original observation before allocating another capture.
+    /// This is identity reuse, not byte verification or import authorization.
+    /// Lookup work is finite: 4096 exact-path unresolved candidates, at most
+    /// 64 MiB per encoded row and 128 MiB in aggregate. Overflow is explicit;
+    /// these read limits neither prune retained records nor impose a write quota.
+    pub fn find_matching_external_observation(
+        &self,
+        client: &OperationId,
+        path: &VaultPath,
+        baseline: Option<&ProjectionBaseline>,
+        physical: Option<&ObservationPhysical>,
+        content_length: u64,
+        digest: &Sha256Digest,
+    ) -> Result<Option<ExternalObservation>> {
+        const MAX_CANDIDATES: i64 = 4096;
+        const MAX_ROW_BYTES: i64 = 64 * 1024 * 1024;
+        const MAX_LOOKUP_BYTES: i64 = 128 * 1024 * 1024;
+        let snapshot = self.connection.unchecked_transaction()?;
+        // Filter the original path and unresolved state before applying work
+        // limits. Baselines and proofs are compared as decoded typed values.
+        let (count, largest, total): (i64, i64, i64) = snapshot.query_row(
+            "SELECT count(*),coalesce(max(length(CAST(record AS BLOB))),0),coalesce(sum(length(CAST(record AS BLOB))),0) FROM external_observations WHERE json_extract(record,'$.path')=?1 AND json_extract(record,'$.resolution') IS NULL",
+            [path.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        if count > MAX_CANDIDATES || largest > MAX_ROW_BYTES || total > MAX_LOOKUP_BYTES {
+            return Err(zorid_file_sync::Error::TooLarge.into());
+        }
+        let found = {
+            let mut statement = snapshot.prepare(
+                "SELECT observation_id,record FROM external_observations WHERE json_extract(record,'$.path')=?1 AND json_extract(record,'$.resolution') IS NULL ORDER BY rowid",
+            )?;
+            let mut rows = statement.query([path.as_str()])?;
+            let mut found = None;
+            while let Some(row) = rows.next()? {
+                let id: String = row.get(0)?;
+                let raw: String = row.get(1)?;
+                let observation = decode_observation(&id, &raw)?;
+                if observation.path != *path
+                    || observation.resolution.is_some()
+                    || observation.baseline.as_ref() != baseline
+                    || observation.content.len() != content_length
+                {
+                    continue;
+                }
+                if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) =
+                    &observation.content
+                {
+                    if &capture.stage.client_id != client {
+                        continue;
+                    }
+                }
+                if physical_bindings::observation_proof(&snapshot, &observation.observation_id)?
+                    .as_ref()
+                    != physical
+                    || &observation.content.digest() != digest
+                {
+                    continue;
+                }
+                entry_content::validate_stored_content(&snapshot, &observation.content, true)?;
+                found = Some(observation);
+                break;
+            }
+            found
+        };
+        snapshot.commit()?;
+        Ok(found)
+    }
+    /// Retain an inert source. Physical authority is supplied only for an exact
+    /// safely opened public path; private alternatives pass None.
+    pub fn retain_external_content(
+        &mut self,
+        client: &OperationId,
+        path: &VaultPath,
+        baseline: Option<&ProjectionBaseline>,
+        content: &StoredContent,
+        physical: Option<&ObservationPhysical>,
+    ) -> Result<ExternalObservation> {
+        fn check_capture(
+            tx: &Connection,
+            client: &OperationId,
+            path: &VaultPath,
+            content: &StoredContent,
+        ) -> Result<()> {
+            if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = content {
+                if &capture.stage.client_id != client {
+                    return Err(ContractError::IdempotencyConflict {
+                        operation_id: capture.stage.operation_id.clone(),
+                    }
+                    .into());
+                }
+                entry_content::validate_captured_at(tx, capture, path)?;
+            }
+            Ok(())
+        }
+        // Verify complete bytes under a read snapshot, before taking the writer
+        // lock. The short journal transaction rechecks immutable source identity.
+        let snapshot = self.connection.unchecked_transaction()?;
+        if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = content {
+            if &capture.stage.client_id != client {
+                return Err(ContractError::IdempotencyConflict {
+                    operation_id: capture.stage.operation_id.clone(),
+                }
+                .into());
+            }
+        }
+        if let Some(original) =
+            replay_capture_observation(&snapshot, path, baseline, content, physical)?
+        {
+            snapshot.commit()?;
+            return Ok(original);
+        }
+        check_capture(&snapshot, client, path, content)?;
+        entry_content::verify_stored_content(&snapshot, content)?;
+        snapshot.commit()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(original) = replay_capture_observation(&tx, path, baseline, content, physical)?
+        {
+            tx.commit()?;
+            return Ok(original);
+        }
+        check_capture(&tx, client, path, content)?;
+        entry_content::validate_stored_content(&tx, content, true)?;
+        if let Some(proof) = physical {
+            if let Some(base) = baseline {
+                if self::baseline(&tx, &base.state.id)?.as_ref() != Some(base) {
+                    return Err(StoreError::Corrupt(
+                        "retained observation baseline changed".into(),
+                    ));
+                }
+                physical_bindings::check_binding(
+                    &tx,
+                    &base.state.id,
+                    proof.expected_binding.as_ref(),
+                )?;
+            }
+        }
+        let value =
+            record_external_transaction(&tx, path, baseline.cloned(), content.clone(), physical)?;
         tx.commit()?;
         Ok(value)
     }
@@ -557,7 +718,7 @@ impl Store {
                     ..
                 },
                 None,
-            ) => *path == obs.path && *bytes == obs.content,
+            ) => *path == obs.path && obs.content.inline_bytes() == Some(bytes.as_slice()),
             (
                 Mutation::Write {
                     id,
@@ -568,7 +729,7 @@ impl Store {
             ) => {
                 *id == base.state.id
                     && *expected == base.state.revision
-                    && *content == obs.content
+                    && obs.content.inline_bytes() == Some(content.as_slice())
                     && obs.path == base.state.path
             }
             _ => false,
@@ -650,21 +811,49 @@ impl Store {
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
             .optional()?;
-        let prior: Option<RecordedOperation> = prior
-            .map(|(request, result)| -> Result<_> {
-                Ok(RecordedOperation {
-                    request: serde_json::from_str(&request)?,
-                    result: serde_json::from_str(&result)?,
-                })
+        let result = prior
+            .map(|(raw, result)| {
+                operation_request::replay_inline_with_mode(request, None, &raw, &result)
             })
             .transpose()?;
-        let result = match check_idempotency(request, prior.as_ref())? {
-            IdempotencyCheck::New => None,
-            IdempotencyCheck::Replay(r) => Some(r.clone()),
-        };
         snapshot.commit()?;
         Ok(result)
     }
+}
+
+fn replay_capture_observation(
+    tx: &Connection,
+    path: &VaultPath,
+    baseline: Option<&ProjectionBaseline>,
+    content: &StoredContent,
+    proof: Option<&ObservationPhysical>,
+) -> Result<Option<ExternalObservation>> {
+    let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = content else {
+        return Ok(None);
+    };
+    let id = &capture.stage.operation_id;
+    let raw: Option<String> = tx
+        .query_row(
+            "SELECT record FROM external_observations WHERE observation_id=?1",
+            [id.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let original = decode_observation(id.as_str(), &raw)?;
+    if &original.path != path
+        || original.baseline.as_ref() != baseline
+        || &original.content != content
+        || physical_bindings::observation_proof(tx, id)?.as_ref() != proof
+    {
+        return Err(ContractError::IdempotencyConflict {
+            operation_id: id.clone(),
+        }
+        .into());
+    }
+    Ok(Some(original))
 }
 
 /// Enclosing transaction owns the matching causal/physical commit.
@@ -672,16 +861,30 @@ pub(super) fn record_external_transaction(
     tx: &Connection,
     path: &VaultPath,
     base: Option<ProjectionBaseline>,
-    content: Vec<u8>,
+    content: StoredContent,
     proof: Option<&ObservationPhysical>,
 ) -> Result<ExternalObservation> {
+    if let Some(original) = replay_capture_observation(tx, path, base.as_ref(), &content, proof)? {
+        return Ok(original);
+    }
+    entry_content::validate_stored_content(tx, &content, true)?;
+    if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = &content {
+        entry_content::validate_captured_at(tx, capture, path)?;
+    }
+    if let Some(baseline) = &base {
+        validate_baseline(baseline, baseline.state.id.as_str())?;
+        entry_content::validate_stored_content(tx, &baseline.content, false)?;
+    }
     let records: Vec<(String, String)> = tx
         .prepare("SELECT observation_id,record FROM external_observations")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<std::result::Result<_, _>>()?;
     for (id, record) in records {
         let old = decode_observation(&id, &record)?;
-        if old.path == *path
+        if !matches!(
+            &content,
+            StoredContent::BinaryRef(BinarySourceRef::Capture(_))
+        ) && old.path == *path
             && old.baseline == base
             && old.content == content
             && old.resolution.is_none()
@@ -691,7 +894,12 @@ pub(super) fn record_external_transaction(
         }
     }
     let value = ExternalObservation {
-        observation_id: OperationId::new(uuid::Uuid::new_v4().to_string())?,
+        observation_id: match &content {
+            StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) => {
+                capture.stage.operation_id.clone()
+            }
+            _ => OperationId::new(uuid::Uuid::new_v4().to_string())?,
+        },
         path: path.clone(),
         baseline: base,
         content,
@@ -712,4 +920,260 @@ pub(super) fn record_external_transaction(
         physical_bindings::put_observation_proof(tx, &value.observation_id, proof)?;
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod typed_content_tests {
+    use super::*;
+    use crate::blob_stage::BinaryCaptureRequest;
+    use zorid_file_sync::{EntryIdentity, Manifest, Scope, Sha256Digest};
+    use zorid_sync_protocol::{RealmId, UpdateId, VaultId};
+    fn op(value: &str) -> OperationId {
+        OperationId::new(value).unwrap()
+    }
+    fn scope() -> Scope {
+        Scope {
+            realm_id: RealmId::new("realm").unwrap(),
+            vault_id: VaultId::new("vault").unwrap(),
+        }
+    }
+    fn state() -> EntryState {
+        EntryState {
+            id: EntryId::new("entry").unwrap(),
+            path: VaultPath::new("empty.bin").unwrap(),
+            kind: EntryKind::File,
+            revision: Revision::new("revision").unwrap(),
+            deleted: false,
+        }
+    }
+    #[test]
+    fn empty_binary_baseline_retains_graph_identity() {
+        let state = state();
+        let baseline = ProjectionBaseline {
+            content: StoredContent::BinaryRef(BinarySourceRef::Graph(PublishedBinaryRef {
+                scope: scope(),
+                identity: EntryIdentity {
+                    entry_id: state.id.clone(),
+                    bootstrap_id: UpdateId::new("bootstrap").unwrap(),
+                },
+                selected_event: UpdateId::new("content").unwrap(),
+                manifest: Manifest {
+                    bytes: 0,
+                    digest: Sha256Digest::of(&[]),
+                    pages: vec![],
+                },
+            })),
+            state,
+        };
+        validate_baseline(&baseline, "entry").unwrap();
+        assert_eq!(baseline.content.len(), 0);
+        assert!(baseline.content.inline_bytes().is_none());
+        assert_eq!(
+            serde_json::from_str::<ProjectionBaseline>(&serde_json::to_string(&baseline).unwrap())
+                .unwrap(),
+            baseline
+        );
+    }
+    #[test]
+    fn sealed_capture_retention_stays_unbound_and_cannot_be_desired() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("db")).unwrap();
+        let scope = scope();
+        store
+            .family_enroll(&FamilyScope {
+                realm_id: scope.realm_id,
+                vault_id: scope.vault_id,
+            })
+            .unwrap();
+        let client = op("client");
+        let path = VaultPath::new("empty.bin").unwrap();
+        let stage = store
+            .begin_binary_capture(
+                &client,
+                &op("capture"),
+                &BinaryCaptureRequest {
+                    path: path.clone(),
+                    expected_length: 0,
+                    expected_digest: Sha256Digest::of(&[]),
+                },
+                StreamingLimits {
+                    max_active_stages: 2,
+                    max_stage_records: 4,
+                    max_staged_bytes: 1024 * 1024,
+                    max_chunk_records: 8,
+                    max_page_records: 4,
+                },
+            )
+            .unwrap();
+        store.seal_binary_stage(&stage, 0, None).unwrap();
+        let content = StoredContent::BinaryRef(BinarySourceRef::Capture(
+            store.captured_binary_ref(&stage).unwrap(),
+        ));
+        assert!(store
+            .retain_external_content(&op("other"), &path, None, &content, None)
+            .is_err());
+        let observed = store
+            .retain_external_content(&client, &path, None, &content, None)
+            .unwrap();
+        assert_eq!(observed.content, content);
+        assert_eq!(observed.observation_id, *stage.operation_id());
+        assert_eq!(
+            store
+                .find_matching_external_observation(
+                    &client,
+                    &path,
+                    None,
+                    None,
+                    0,
+                    &Sha256Digest::of(&[])
+                )
+                .unwrap(),
+            Some(observed.clone())
+        );
+        assert!(store
+            .find_matching_external_observation(
+                &op("other"),
+                &path,
+                None,
+                None,
+                0,
+                &Sha256Digest::of(&[])
+            )
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .retain_external_content(&client, &path, None, &content, None)
+                .unwrap(),
+            observed
+        );
+        assert!(matches!(
+            store.retain_external_content(
+                &client,
+                &VaultPath::new("different.bin").unwrap(),
+                None,
+                &content,
+                None
+            ),
+            Err(StoreError::Contract(
+                ContractError::IdempotencyConflict { .. }
+            ))
+        ));
+        let changed_proof = ObservationPhysical {
+            physical: PhysicalIdentity {
+                inode: "public".into(),
+                parent_inode: "parent".into(),
+            },
+            expected_binding: None,
+        };
+        assert!(matches!(
+            store.retain_external_content(&client, &path, None, &content, Some(&changed_proof)),
+            Err(StoreError::Contract(
+                ContractError::IdempotencyConflict { .. }
+            ))
+        ));
+        assert!(
+            physical_bindings::observation_proof(&store.connection, &observed.observation_id)
+                .unwrap()
+                .is_none()
+        );
+        let target = ProjectionBaseline {
+            state: state(),
+            content,
+        };
+        assert!(validate_baseline(&target, "entry").is_err());
+        assert!(put_baseline(&store.connection, &target).is_err());
+        assert_eq!(store.external_observations().unwrap(), vec![observed]);
+    }
+    #[test]
+    fn matching_inline_observation_reuses_original_context_and_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("db")).unwrap();
+        let path = VaultPath::new("new.txt").unwrap();
+        let bytes = b"original";
+        let original = store.record_external(&path, None, bytes.to_vec()).unwrap();
+        let digest = Sha256Digest::of(bytes);
+        assert_eq!(
+            store
+                .find_matching_external_observation(
+                    &op("client"),
+                    &path,
+                    None,
+                    None,
+                    bytes.len() as u64,
+                    &digest
+                )
+                .unwrap(),
+            Some(original.clone())
+        );
+        let changed_proof = ObservationPhysical {
+            physical: PhysicalIdentity {
+                inode: "other".into(),
+                parent_inode: "parent".into(),
+            },
+            expected_binding: None,
+        };
+        assert!(store
+            .find_matching_external_observation(
+                &op("client"),
+                &path,
+                None,
+                Some(&changed_proof),
+                bytes.len() as u64,
+                &digest
+            )
+            .unwrap()
+            .is_none());
+        assert!(store
+            .find_matching_external_observation(
+                &op("client"),
+                &path,
+                None,
+                None,
+                bytes.len() as u64,
+                &Sha256Digest::of(b"changed")
+            )
+            .unwrap()
+            .is_none());
+        let baseline = ProjectionBaseline {
+            state: state(),
+            content: StoredContent::InlineBytes(bytes.to_vec()),
+        };
+        assert!(store
+            .find_matching_external_observation(
+                &op("client"),
+                &path,
+                Some(&baseline),
+                None,
+                bytes.len() as u64,
+                &digest
+            )
+            .unwrap()
+            .is_none());
+        assert_eq!(store.external_observations().unwrap(), vec![original]);
+    }
+    #[test]
+    fn observation_lookup_overflow_is_explicit_instead_of_no_match() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("db")).unwrap();
+        let path = VaultPath::new("overfull.txt").unwrap();
+        let original = store.record_external(&path, None, vec![]).unwrap();
+        // Structurally valid retained records exercise only read-work policy.
+        let raw = serde_json::to_string(&original).unwrap();
+        store.connection.execute(
+            "WITH RECURSIVE n(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM n WHERE value<4096) INSERT INTO external_observations(observation_id,record) SELECT 'retained-'||value,json_set(?1,'$.observation_id','retained-'||value) FROM n",
+            [raw],
+        ).unwrap();
+        assert!(matches!(
+            store.find_matching_external_observation(
+                &op("client"),
+                &path,
+                None,
+                None,
+                0,
+                &Sha256Digest::of(&[])
+            ),
+            Err(StoreError::FileSync(zorid_file_sync::Error::TooLarge))
+        ));
+    }
 }

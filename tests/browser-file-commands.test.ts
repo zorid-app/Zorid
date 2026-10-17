@@ -97,3 +97,15 @@ test('Vault binary create rejects a peer created after its inventory check witho
     assert.equal(f.rows.size, 0, 'the peer must not be adopted into a write command');
     assert.equal(f.heads.size, 0);
 });
+
+test('namespace commands and creation use metadata while text replacement retains coherent body reads',async()=>{
+  const f=fixture(),body=f.backend.readEntry;let metadata=0,reads=0;f.files.set('Large.bin',{...existing('Large.bin'),presentation:{...existing().presentation,size_bytes:67108864}});
+  f.backend.readMetadata=async path=>{metadata++;const row=await body(path);if(!row)return null;const {bytes,...observed}=row;return observed;};
+  f.backend.readEntry=async path=>{reads++;if(path==='Large.bin')throw new Error('whole binary body forbidden');return body(path);};
+  await f.consumer().execute({kind:'move',operationId:'metadata-move',entryId:'unused',path:'Large.bin',destination:'Moved.bin'});
+  await f.consumer().execute({kind:'trash',operationId:'metadata-trash',entryId:'unused',path:'Large.bin'});
+  await f.consumer().execute({kind:'delete',operationId:'metadata-delete',entryId:'unused',path:'Large.bin',force:false});
+  await f.consumer().execute({kind:'writeBinary',operationId:'metadata-write-binary',entryId:'unused',path:'Large.bin',data:Uint8Array.of(1),expectedEntryId:'old-entry',expectedRevision:'old-revision'});
+  await f.consumer().execute({...create,operationId:'metadata-create'});assert.equal(reads,0);assert.ok(metadata>3);
+  await f.consumer().execute({...create,kind:'writeText',operationId:'body-write',expectedContent:'draft'});assert.equal(reads,1);
+});

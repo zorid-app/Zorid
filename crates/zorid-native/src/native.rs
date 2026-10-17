@@ -2,14 +2,22 @@ use crate::{
     fs::{self, Paths},
     *,
 };
+use content_stream::{file_snapshot, metadata_matches_content, snapshot_matches_content};
 use std::{fs::File, path::Path};
 use zorid_core::{EntryKind, Mutation, OperationId};
 use zorid_store::{
     ObservationPhysical, PhysicalIdentity, ProjectionAttempt, ProjectionPhase, PublicationKind,
-    Store,
+    Store, StoredContent,
 };
+#[path = "binary_api.rs"]
+mod binary_api;
+#[cfg(test)]
+#[path = "binary_stream_tests.rs"]
+mod binary_stream_tests;
 #[path = "checkpoints.rs"]
 mod checkpoints;
+#[path = "content_stream.rs"]
+mod content_stream;
 #[path = "external_create.rs"]
 mod external_create;
 pub use external_create::{select_external_file_mode, ExternalFileMode};
@@ -23,6 +31,8 @@ mod external_namespace;
 #[cfg(test)]
 #[path = "external_namespace_tests.rs"]
 mod external_namespace_tests;
+#[path = "external_observe_stream.rs"]
+mod external_observe_stream;
 #[path = "external_scan.rs"]
 mod external_scan;
 #[path = "external_scan_progress.rs"]
@@ -368,11 +378,13 @@ impl NativeVault {
             .filter(|a| a.completed())
         {
             let previous = format!("{}.previous", a.attempt_id.as_str());
-            if let Some(old) =
-                fs::snapshot(&self.paths.private, &previous, self.options.max_file_bytes)?
-            {
-                if a.baseline.as_ref().is_none_or(|b| b.content != old.bytes) {
-                    self.capture(&a, old.bytes)?;
+            if let Some(old) = file_snapshot(&self.paths.private, &previous)? {
+                if a.baseline
+                    .as_ref()
+                    .is_none_or(|b| !snapshot_matches_content(&old, &b.content))
+                {
+                    let private = self.paths.private.try_clone()?;
+                    self.capture_projection_file(&a, &private, &previous)?;
                     report.blocked.push((
                         a.target.state.path.clone(),
                         "retained external divergence needs reconciliation".into(),
@@ -435,6 +447,16 @@ impl NativeVault {
         if fs::node_type(&parent, &name)? == Some(rustix::fs::FileType::Directory) {
             return self.observe_directory(path);
         }
+        if self.store.family_is_enrolled()? {
+            if let Some(snapshot) = file_snapshot(&parent, &name)? {
+                return self.observe_streamed_file(
+                    path,
+                    &parent,
+                    &snapshot,
+                    &OperationId::new("native_external_observe")?,
+                );
+            }
+        }
         let disk = fs::snapshot(&parent, &name, self.options.max_file_bytes)?;
         self.observe_snapshot(path, &parent, disk)
     }
@@ -444,6 +466,24 @@ impl NativeVault {
         parent: &File,
         disk: Option<fs::Snapshot>,
     ) -> Result<Option<CommitResult>> {
+        if self.store.family_is_enrolled()? {
+            if let Some(disk) = &disk {
+                let snapshot = file_snapshot(parent, path.file_name())?
+                    .ok_or(Error::Busy("observed family file disappeared"))?;
+                if snapshot.identity != disk.identity
+                    || snapshot.length != disk.bytes.len() as u64
+                    || snapshot.digest != Sha256Digest::of(&disk.bytes).0
+                {
+                    return Err(Error::Busy("observed family file changed"));
+                }
+                return self.observe_streamed_file(
+                    path,
+                    parent,
+                    &snapshot,
+                    &OperationId::new("native_external_observe")?,
+                );
+            }
+        }
         self.namespace_clear(path)?;
         self.paths.verify_parent(path, &parent)?;
         let state = self.store.list()?.into_iter().find(|s| s.path == *path);
@@ -504,10 +544,9 @@ impl NativeVault {
                 "unproven physical baseline requires explicit enrollment",
             ));
         }
-        if base
-            .as_ref()
-            .is_some_and(|base| base.state.path == *path && base.content == disk.bytes)
-        {
+        if base.as_ref().is_some_and(|base| {
+            base.state.path == *path && base.content.inline_bytes() == Some(disk.bytes.as_slice())
+        }) {
             if expected_binding
                 .as_ref()
                 .is_some_and(|b| b.physical == physical)
@@ -533,6 +572,12 @@ impl NativeVault {
                 expected_binding,
             },
         )?;
+        let observed_bytes = observation
+            .content
+            .inline_bytes()
+            .ok_or(Error::Unsupported(
+                "legacy observation requires bounded inline bytes",
+            ))?;
         let enrolled = self.store.family_is_enrolled()?;
         let managed = match &state {
             Some(state) if enrolled => self.store.family_text_state(&state.id)?.is_some(),
@@ -564,7 +609,7 @@ impl NativeVault {
                     "new external files require explicit family mode enrollment",
                 ));
             }
-            self.verify_observed_file(path, parent, &physical, &observation.content)?;
+            self.verify_observed_file(path, parent, &physical, observed_bytes)?;
             self.paths.verify_parent(path, parent)?;
             return Ok(Some(
                 self.store
@@ -572,7 +617,7 @@ impl NativeVault {
             ));
         }
         if managed {
-            self.verify_observed_file(path, parent, &physical, &observation.content)?;
+            self.verify_observed_file(path, parent, &physical, observed_bytes)?;
             self.paths.verify_parent(path, parent)?;
             return Ok(Some(
                 self.store
@@ -605,7 +650,7 @@ impl NativeVault {
             }
         };
         self.paths.verify_parent(path, &parent)?;
-        self.verify_observed_file(path, parent, &physical, &observation.content)?;
+        self.verify_observed_file(path, parent, &physical, observed_bytes)?;
         // Observation ID is the deterministic import operation key on retry.
         Ok(Some(self.store.import_observation(
             &observation.observation_id,
@@ -619,7 +664,7 @@ impl NativeVault {
         if !self.store.is_visible_entry(id)? {
             return Err(Error::Busy("hidden entry retains its physical publication"));
         }
-        if let Some(entry) = self.store.read(id)? {
+        if let Some(entry) = self.store.read_metadata(id)? {
             self.namespace_clear(&entry.state.path)?;
         }
         self.paths.verify()?;
@@ -631,7 +676,7 @@ impl NativeVault {
         {
             self.resume(&a)?;
         }
-        let Some(current) = self.store.read(id)? else {
+        let Some(current) = self.store.read_metadata(id)? else {
             return Err(Error::Unsupported("physical deletion"));
         };
         if current.state.kind == EntryKind::Folder {
@@ -642,7 +687,11 @@ impl NativeVault {
             .projection_baseline(id)?
             .as_ref()
             .is_some_and(|b| {
-                b.state == current.state && Some(&b.content) == current.content.as_ref()
+                b.state == current.state
+                    && current
+                        .content
+                        .as_ref()
+                        .is_some_and(|metadata| metadata_matches_content(metadata, &b.content))
             })
         {
             // Do not claim success merely from a baseline: an external writer may
@@ -650,16 +699,14 @@ impl NativeVault {
             let (p, n) = self.paths.parent(&current.state.path)?;
             let binding = self.store.physical_binding(id)?;
             let parent_inode = fs::identity(&p)?;
-            if fs::snapshot(&p, &n, self.options.max_file_bytes)?
-                .as_ref()
-                .is_some_and(|d| {
-                    Some(&d.bytes) == current.content.as_ref()
-                        && binding.as_ref().is_some_and(|binding| {
-                            binding.physical.inode == d.identity
-                                && parent_inode == binding.physical.parent_inode
-                        })
+            if file_snapshot(&p, &n)?.as_ref().is_some_and(|d| {
+                current.content.as_ref().is_some_and(|metadata| {
+                    d.length == metadata.len() && d.digest == metadata.digest().0
+                }) && binding.as_ref().is_some_and(|binding| {
+                    binding.physical.inode == d.identity
+                        && parent_inode == binding.physical.parent_inode
                 })
-            {
+            }) {
                 self.paths.verify_parent(&current.state.path, &p)?;
                 return Ok(());
             }
@@ -694,11 +741,6 @@ impl NativeVault {
         }
         Ok(())
     }
-    fn capture(&mut self, a: &ProjectionAttempt, content: Vec<u8>) -> Result<()> {
-        self.store
-            .record_external(&a.target.state.path, a.baseline.clone(), content)?;
-        Ok(())
-    }
     fn resume(&mut self, original: &ProjectionAttempt) -> Result<()> {
         if !self.store.is_visible_entry(&original.target.state.id)? {
             return Err(Error::Busy("hidden entry retains its physical publication"));
@@ -707,7 +749,7 @@ impl NativeVault {
         let mut a = original.clone();
         let stage = format!("{}.stage", a.attempt_id.as_str());
         let previous = format!("{}.previous", a.attempt_id.as_str());
-        let desired = self.store.read(&a.target.state.id)?;
+        let desired = self.store.read_metadata(&a.target.state.id)?;
         if desired
             .as_ref()
             .is_none_or(|d| d.state.path != a.target.state.path || d.state.kind != EntryKind::File)
@@ -732,8 +774,8 @@ impl NativeVault {
                 "publication physical binding or parent changed",
             ));
         }
-        let mut dest = fs::snapshot(&parent, &name, self.options.max_file_bytes)?;
-        let backup = fs::snapshot(&self.paths.private, &previous, self.options.max_file_bytes)?;
+        let dest = file_snapshot(&parent, &name)?;
+        let backup = file_snapshot(&self.paths.private, &previous)?;
         // A retained displaced inode may have received late writes through an
         // already-open external handle. Preserve and expose these changed bytes.
         if let Some(old) = &backup {
@@ -742,35 +784,40 @@ impl NativeVault {
                 .as_ref()
                 .is_none_or(|b| b.physical.inode != old.identity)
             {
-                self.capture(&a, old.bytes.clone())?;
+                let private = self.paths.private.try_clone()?;
+                self.capture_projection_file(&a, &private, &previous)?;
                 return Err(Error::Busy("displaced inode does not match saved binding"));
             }
-            if a.baseline.as_ref().is_none_or(|b| b.content != old.bytes) {
-                self.capture(&a, old.bytes.clone())?;
+            if a.baseline
+                .as_ref()
+                .is_none_or(|b| !snapshot_matches_content(old, &b.content))
+            {
+                let private = self.paths.private.try_clone()?;
+                self.capture_projection_file(&a, &private, &previous)?;
             }
         }
         if dest
             .as_ref()
             .is_some_and(|d| Some(&d.identity) == a.stage_identity.as_ref())
         {
-            let mut changed = dest.as_ref().unwrap().bytes != a.target.content;
+            let mut changed = !snapshot_matches_content(dest.as_ref().unwrap(), &a.target.content);
             if changed {
-                self.capture(&a, dest.take().unwrap().bytes)?;
+                self.capture_projection_file(&a, &parent, &name)?;
             }
             parent.sync_all()?;
             self.point("before_baseline");
             self.paths.verify_parent(&a.target.state.path, &parent)?;
-            let acknowledged = fs::snapshot(&parent, &name, self.options.max_file_bytes)?.ok_or(
-                Error::Busy("published file disappeared before recovery acknowledgement"),
-            )?;
+            let acknowledged = file_snapshot(&parent, &name)?.ok_or(Error::Busy(
+                "published file disappeared before recovery acknowledgement",
+            ))?;
             if Some(&acknowledged.identity) != a.stage_identity.as_ref() {
-                self.capture(&a, acknowledged.bytes)?;
+                self.capture_projection_file(&a, &parent, &name)?;
                 return Err(Error::Busy(
                     "published inode replaced before recovery acknowledgement",
                 ));
             }
-            if acknowledged.bytes != a.target.content {
-                self.capture(&a, acknowledged.bytes)?;
+            if !snapshot_matches_content(&acknowledged, &a.target.content) {
+                self.capture_projection_file(&a, &parent, &name)?;
                 changed = true;
             }
             self.store.finish_projection_bound(
@@ -790,7 +837,10 @@ impl NativeVault {
             };
         }
         let current_target = desired.as_ref().is_some_and(|v| {
-            v.state == a.target.state && v.content.as_ref() == Some(&a.target.content)
+            v.state == a.target.state
+                && v.content
+                    .as_ref()
+                    .is_some_and(|metadata| metadata_matches_content(metadata, &a.target.content))
         });
         if !current_target {
             // Desired advanced while this attempt was offline. Never publish old
@@ -801,15 +851,21 @@ impl NativeVault {
                 self.paths.verify_parent(&a.target.state.path, &parent)?;
             }
             if let Some(dest) = dest {
-                if a.baseline.as_ref().is_none_or(|b| b.content != dest.bytes) {
-                    self.capture(&a, dest.bytes)?;
+                if a.baseline
+                    .as_ref()
+                    .is_none_or(|b| !snapshot_matches_content(&dest, &b.content))
+                {
+                    self.capture_projection_file(&a, &parent, &name)?;
                 }
             }
             self.store.finish_projection(&a.attempt_id, false)?;
             return Ok(());
         }
         if let Some(old) = &backup {
-            if a.baseline.as_ref().is_none_or(|b| b.content != old.bytes) {
+            if a.baseline
+                .as_ref()
+                .is_none_or(|b| !snapshot_matches_content(old, &b.content))
+            {
                 if dest.is_none() {
                     self.paths.verify_parent(&a.target.state.path, &parent)?;
                     fs::rename_new(&self.paths.private, &previous, &parent, &name)?;
@@ -820,7 +876,7 @@ impl NativeVault {
                 ));
             }
             if let Some(disk) = &dest {
-                self.capture(&a, disk.bytes.clone())?;
+                self.capture_projection_file(&a, &parent, &name)?;
                 return Err(Error::Busy(
                     "external file appeared after displacement; all versions retained",
                 ));
@@ -830,13 +886,13 @@ impl NativeVault {
                 (None, None) => {}
                 (Some(base), Some(disk))
                     if base.state.path == a.target.state.path
-                        && base.content == disk.bytes
+                        && snapshot_matches_content(disk, &base.content)
                         && proof
                             .expected_binding
                             .as_ref()
                             .is_some_and(|b| b.physical.inode == disk.identity) => {}
                 (_, Some(disk)) => {
-                    self.capture(&a, disk.bytes.clone())?;
+                    self.capture_projection_file(&a, &parent, &name)?;
                     return Err(Error::Busy(
                         "destination diverged from baseline; not overwritten",
                     ));
@@ -846,9 +902,9 @@ impl NativeVault {
                 }
             }
         }
-        let staged = fs::snapshot(&self.paths.private, &stage, self.options.max_file_bytes)?;
+        let staged = file_snapshot(&self.paths.private, &stage)?;
         let stage_id = if let Some(staged) = staged {
-            if staged.bytes != a.target.content {
+            if !snapshot_matches_content(&staged, &a.target.content) {
                 if a.stage_identity.is_some() {
                     return Err(Error::UnsafePath(
                         "altered previously synced stage retained".into(),
@@ -856,7 +912,7 @@ impl NativeVault {
                 }
                 let partial = format!("{}.partial-{}", a.attempt_id.as_str(), uuid::Uuid::new_v4());
                 fs::rename_new(&self.paths.private, &stage, &self.paths.private, &partial)?;
-                fs::stage(&self.paths.private, &stage, &a.target.content)?
+                self.stage_projection_content(&stage, &a.target.state, &a.target.content)?
             } else {
                 fs::regular(&self.paths.private, &stage)?
                     .ok_or(Error::Busy("stage disappeared"))?
@@ -870,7 +926,7 @@ impl NativeVault {
                     "previous stage disappeared without publication proof",
                 ));
             }
-            let id = fs::stage(&self.paths.private, &stage, &a.target.content)?;
+            let id = self.stage_projection_content(&stage, &a.target.state, &a.target.content)?;
             self.point("stage_written");
             id
         };
@@ -886,15 +942,18 @@ impl NativeVault {
             a = self
                 .store
                 .mark_projection(&a.attempt_id, ProjectionPhase::Displaced, None)?;
-            let moved = fs::snapshot(&self.paths.private, &previous, self.options.max_file_bytes)?
+            let moved = file_snapshot(&self.paths.private, &previous)?
                 .ok_or(Error::Busy("displaced file missing"))?;
-            if a.baseline.as_ref().is_none_or(|b| b.content != moved.bytes)
+            if a.baseline
+                .as_ref()
+                .is_none_or(|b| !snapshot_matches_content(&moved, &b.content))
                 || proof
                     .expected_binding
                     .as_ref()
                     .is_none_or(|b| b.physical.inode != moved.identity)
             {
-                self.capture(&a, moved.bytes)?;
+                let private = self.paths.private.try_clone()?;
+                self.capture_projection_file(&a, &private, &previous)?;
                 self.paths.verify_parent(&a.target.state.path, &parent)?;
                 let _ = fs::rename_new(&self.paths.private, &previous, &parent, &name);
                 self.paths.verify_parent(&a.target.state.path, &parent)?;
@@ -905,8 +964,8 @@ impl NativeVault {
         self.paths.verify_parent(&a.target.state.path, &parent)?;
         // NOREPLACE is atomic. A competing external create is never overwritten.
         if let Err(e) = fs::rename_new(&self.paths.private, &stage, &parent, &name) {
-            if let Some(d) = fs::snapshot(&parent, &name, self.options.max_file_bytes)? {
-                self.capture(&a, d.bytes)?;
+            if file_snapshot(&parent, &name)?.is_some() {
+                self.capture_projection_file(&a, &parent, &name)?;
             }
             return Err(e);
         }
@@ -914,30 +973,30 @@ impl NativeVault {
         self.point("published_before_record");
         self.store
             .mark_projection(&a.attempt_id, ProjectionPhase::Published, None)?;
-        let final_file = fs::snapshot(&parent, &name, self.options.max_file_bytes)?
-            .ok_or(Error::Busy("published file disappeared"))?;
+        let final_file =
+            file_snapshot(&parent, &name)?.ok_or(Error::Busy("published file disappeared"))?;
         if Some(&final_file.identity) != a.stage_identity.as_ref() {
-            self.capture(&a, final_file.bytes)?;
+            self.capture_projection_file(&a, &parent, &name)?;
             return Err(Error::Busy("published path replaced; versions retained"));
         }
-        let mut changed = final_file.bytes != a.target.content;
+        let mut changed = !snapshot_matches_content(&final_file, &a.target.content);
         if changed {
-            self.capture(&a, final_file.bytes)?;
+            self.capture_projection_file(&a, &parent, &name)?;
         }
         self.paths.verify()?;
         self.point("before_baseline");
         self.paths.verify_parent(&a.target.state.path, &parent)?;
-        let acknowledged = fs::snapshot(&parent, &name, self.options.max_file_bytes)?.ok_or(
-            Error::Busy("published file disappeared before acknowledgement"),
-        )?;
+        let acknowledged = file_snapshot(&parent, &name)?.ok_or(Error::Busy(
+            "published file disappeared before acknowledgement",
+        ))?;
         if Some(&acknowledged.identity) != a.stage_identity.as_ref() {
-            self.capture(&a, acknowledged.bytes)?;
+            self.capture_projection_file(&a, &parent, &name)?;
             return Err(Error::Busy(
                 "published inode replaced before acknowledgement",
             ));
         }
-        if acknowledged.bytes != a.target.content {
-            self.capture(&a, acknowledged.bytes)?;
+        if !snapshot_matches_content(&acknowledged, &a.target.content) {
+            self.capture_projection_file(&a, &parent, &name)?;
             changed = true;
         }
         self.store.finish_projection_bound(

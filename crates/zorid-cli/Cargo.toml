@@ -24,6 +24,7 @@ zorid-sync-protocol = { path = "../zorid-sync-protocol" }
 zorid-crypto = { path = "../zorid-crypto" }
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
+sha2 = "=0.11.0"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 libc = "=0.2.191"
@@ -34,3 +35,6 @@ tempfile = "3"
 zorid-sync-server = { path = "../zorid-sync-server" }
 tokio = { version = "1", features = ["rt", "net", "sync"] }
 axum = "=0.8.9"
+
+prost = "=0.14.4"
+http-body-util = "=0.1.5"

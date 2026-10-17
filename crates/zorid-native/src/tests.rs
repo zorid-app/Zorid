@@ -168,12 +168,13 @@ fn divergent_external_and_db_versions_are_both_retained() {
         v.read(&id()).unwrap().unwrap().content.unwrap(),
         b"database"
     );
-    assert!(Store::open(root.join(".zorid/vault.sqlite"))
+    let observations = Store::open(root.join(".zorid/vault.sqlite"))
         .unwrap()
         .external_observations()
-        .unwrap()
-        .iter()
-        .any(|o| o.content == b"external" && o.resolution.is_none()));
+        .unwrap();
+    assert!(observations.iter().any(|o| {
+        v.test_content_bytes(None, &o.content).unwrap() == b"external" && o.resolution.is_none()
+    }));
 }
 #[test]
 fn process_death_at_each_publication_boundary_recovers() {
@@ -255,12 +256,13 @@ fn external_create_in_publication_gap_is_never_clobbered() {
     assert!(!report.blocked.is_empty());
     assert_eq!(disk(root), b"external-gap");
     let status = v.status().unwrap();
-    assert!(Store::open(root.join(".zorid/vault.sqlite"))
+    let observations = Store::open(root.join(".zorid/vault.sqlite"))
         .unwrap()
         .external_observations()
-        .unwrap()
+        .unwrap();
+    assert!(observations
         .iter()
-        .any(|o| o.content == b"external-gap"));
+        .any(|o| v.test_content_bytes(None, &o.content).unwrap() == b"external-gap"));
     let attempt = &status.attempts[0];
     let base = root.join(".zorid");
     assert_eq!(
@@ -409,9 +411,10 @@ fn late_external_write_to_completed_displacement_is_captured() {
         .unwrap()
         .external_observations()
         .unwrap();
-    assert!(observations
-        .iter()
-        .any(|o| o.content == b"late external write" && o.resolution.is_none()));
+    assert!(observations.iter().any(|o| {
+        v.test_content_bytes(None, &o.content).unwrap() == b"late external write"
+            && o.resolution.is_none()
+    }));
     assert!(v
         .status()
         .unwrap()

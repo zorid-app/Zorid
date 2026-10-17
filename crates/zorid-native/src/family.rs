@@ -140,7 +140,7 @@ impl NativeVault {
         }
         Ok(FamilyReceiveOutcome { commit, projection })
     }
-    fn family_project_status(&mut self, id: &EntryId) -> ProjectionStatus {
+    pub(super) fn family_project_status(&mut self, id: &EntryId) -> ProjectionStatus {
         let result = (|| -> Result<()> {
             let materialization = self
                 .store

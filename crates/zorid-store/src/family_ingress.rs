@@ -6,17 +6,8 @@ use super::family_store::AuthenticatedFamily;
 use super::*;
 use zorid_client_sync::{CursorAdvance, ReceiveRequest, ReceivedRecord, TextState};
 use zorid_crypto::OpenedEnvelope;
-use zorid_file_sync::{v2::FilePlan, Scope};
+use zorid_file_sync::Scope;
 
-pub(super) struct PreparedReceive {
-    pub metadata: EnvelopeMetadata,
-    pub graph: FilePlan,
-    pub text: Option<zorid_client_sync::ReceivedPlan>,
-    pub new_text: bool,
-    pub duplicate: bool,
-    pub exact_wire: Vec<u8>,
-    pub file_payload: Option<Vec<u8>>,
-}
 fn fresh() -> Result<Revision> {
     Ok(Revision::new(uuid::Uuid::new_v4().to_string())?)
 }
@@ -43,12 +34,40 @@ pub(super) fn check_delivery(
     }
     Ok(())
 }
-pub(super) fn prepare(
+pub(super) fn retained_texts(tx: &Connection, scope: &Scope) -> Result<Vec<TextState>> {
+    let ids: Vec<String> = tx.prepare("SELECT entry_id FROM text_bindings WHERE realm_id=?1 AND vault_id=?2 ORDER BY entry_id")?
+        .query_map(params![scope.realm_id.as_str(), scope.vault_id.as_str()], |row| row.get(0))?
+        .collect::<std::result::Result<_,_>>()?;
+    ids.into_iter()
+        .map(|id| {
+            text_sync::retained(tx, &EntryId::new(id)?)?
+                .ok_or_else(|| StoreError::Corrupt("listed text head disappeared".into()))
+        })
+        .collect()
+}
+
+/// Prepared in a read snapshot, finalized only with a private all-history binary
+/// proof. The final writer still compares all causal/publication/source inputs.
+pub(super) struct PreparedMetadataReceive {
+    pub metadata: EnvelopeMetadata,
+    pub graph: zorid_file_sync::metadata_plan::MetadataPlan,
+    pub text: Option<zorid_client_sync::ReceivedPlan>,
+    pub new_text: bool,
+    pub duplicate: bool,
+    exact_wire: Vec<u8>,
+    exact_plaintext: Vec<u8>,
+    expected_prior: Option<family_ledger::WireRecord>,
+    expected_head: Option<family_ledger::MetadataRecord>,
+    expected_entries: Vec<EntryState>,
+    expected_texts: Vec<TextState>,
+    file_family: bool,
+}
+pub(super) fn prepare_metadata(
     tx: &Connection,
-    graph: &zorid_file_sync::v2::State,
+    graph: &zorid_file_sync::metadata::MetadataState,
     opened: &OpenedEnvelope,
     delivery: Option<&CursorAdvance>,
-) -> Result<PreparedReceive> {
+) -> Result<PreparedMetadataReceive> {
     let (metadata, incoming) = family_store::decode(opened)?;
     if metadata.key.realm_id != graph.scope().realm_id
         || metadata.key.vault_id != graph.scope().vault_id
@@ -56,39 +75,44 @@ pub(super) fn prepare(
         return Err(zorid_client_sync::SyncError::IdentityMismatch.into());
     }
     check_delivery(tx, graph.scope(), delivery)?;
-    // Validate the authored/received ownership invariant even for exact replay.
-    let authored = family_ledger::authored(tx, &metadata.key)?;
+    let expected_head = family_ledger::metadata_only(tx, &metadata.key)?;
     let prior = family_ledger::wire(tx, &metadata.key)?;
     let exact_wire = opened.envelope().encode();
     if prior
         .as_ref()
         .is_some_and(|p| p.metadata != metadata || p.exact_wire != exact_wire)
-        || (prior.is_none() && authored.is_some())
+        || (prior.is_none() && expected_head.is_some())
     {
         return Err(zorid_client_sync::SyncError::DedupeMismatch.into());
     }
+    let verified_old = blob_index::verify_metadata(tx, graph, &[])?;
+    family_materialization::validate(tx, graph, &verified_old)?;
     let duplicate = prior.is_some();
-    let graph_revision = fresh()?;
-    let (graph, text, new_text, file_payload) = match incoming {
+    let expected_entries = read_states(tx, true)?;
+    let expected_texts = retained_texts(tx, graph.scope())?;
+    let file_family = matches!(&incoming, AuthenticatedFamily::Files(_));
+    let (candidate, text, new_text, overlay) = match incoming {
         AuthenticatedFamily::Files(incoming) => {
-            let prior = prior.as_ref().map(|p| zorid_file_sync::WireRecord {
+            let wire = prior.as_ref().map(|p| zorid_file_sync::WireRecord {
                 scope: graph.scope().clone(),
                 id: metadata.key.update_id.clone(),
                 exact_wire: p.exact_wire.clone(),
             });
-            let plan = zorid_file_sync::v2::plan_received(
+            let candidate = zorid_file_sync::metadata_plan::prepare_received(
                 graph,
                 &incoming,
-                prior.as_ref(),
-                graph_revision,
+                wire.as_ref(),
+                fresh()?,
             )?;
-            plan.check_preconditions(graph, prior.as_ref())?;
-            (
-                plan.graph,
-                None,
-                false,
-                (!duplicate).then(|| incoming.payload_bytes().to_vec()),
-            )
+            let overlay = if duplicate {
+                Vec::new()
+            } else {
+                vec![(
+                    metadata.key.update_id.clone(),
+                    incoming.payload_bytes().to_vec(),
+                )]
+            };
+            (candidate, None, false, overlay)
         }
         AuthenticatedFamily::Text(incoming) => {
             let existing = text_sync::retained(tx, &incoming.identity().entry_id)?;
@@ -105,7 +129,7 @@ pub(super) fn prepare(
             if &current.identity != incoming.identity() {
                 return Err(zorid_client_sync::SyncError::IdentityMismatch.into());
             }
-            let prior = prior.as_ref().map(|p| ReceivedRecord {
+            let wire = prior.as_ref().map(|p| ReceivedRecord {
                 identity: current.identity.clone(),
                 update_id: metadata.key.update_id.clone(),
                 exact_wire: p.exact_wire.clone(),
@@ -120,41 +144,74 @@ pub(super) fn prepare(
                 &current,
                 &request,
                 &incoming,
-                prior.as_ref(),
+                wire.as_ref(),
                 cursor,
             )?;
-            text.check_preconditions(&current, prior.as_ref(), cursor)?;
-            let graph_plan = zorid_file_sync::v2::plan_received_text_activity(
+            text.check_preconditions(&current, wire.as_ref(), cursor)?;
+            let candidate = zorid_file_sync::metadata_plan::prepare_text_activity(
                 graph,
                 incoming.activity(),
-                graph_revision,
+                fresh()?,
             )?;
-            graph_plan.check_preconditions(graph)?;
-            if graph_plan.next_state.is_some() == duplicate {
+            if candidate.next_state().is_some() == duplicate {
                 return Err(StoreError::Corrupt(
                     "text ledger and namespace activity disagree".into(),
                 ));
             }
-            (graph_plan, Some(text), new_text, None)
+            (candidate, Some(text), new_text, Vec::new())
         }
     };
-    Ok(PreparedReceive {
+    let verified = if candidate.verification_state() == graph {
+        verified_old
+    } else {
+        blob_index::verify_metadata(tx, candidate.verification_state(), &overlay)?
+    };
+    let graph = candidate.finalize(verified)?;
+    Ok(PreparedMetadataReceive {
         metadata,
         graph,
         text,
         new_text,
         duplicate,
         exact_wire,
-        file_payload,
+        exact_plaintext: opened.plaintext().to_vec(),
+        expected_prior: prior,
+        expected_head,
+        expected_entries,
+        expected_texts,
+        file_family,
     })
 }
-/// Applies only causal authorities. The enclosing caller must still classify
-/// and persist visibility/projection/prerequisites before COMMIT.
-pub(super) fn persist(tx: &Connection, plan: &PreparedReceive) -> Result<()> {
-    let scope = plan.graph.expected_state.scope();
-    let actual = file_state::load(tx, scope)?
+
+/// Persist causal authorities after exact snapshot CAS. Publication/jobs and
+/// cursor must be committed by the caller before acknowledging receipt.
+pub(super) fn persist_metadata(tx: &Connection, plan: &PreparedMetadataReceive) -> Result<()> {
+    let scope = plan.graph.expected_state().scope();
+    let actual = blob_index::load_metadata(tx, scope)?
         .ok_or_else(|| StoreError::Corrupt("enrolled graph disappeared".into()))?;
-    plan.graph.check_preconditions(&actual)?;
+    let prior = family_ledger::wire(tx, &plan.metadata.key)?;
+    if prior != plan.expected_prior
+        || family_ledger::metadata_only(tx, &plan.metadata.key)? != plan.expected_head
+    {
+        return Err(zorid_client_sync::SyncError::DedupeMismatch.into());
+    }
+    let file_wire = if plan.file_family {
+        prior.as_ref().map(|p| zorid_file_sync::WireRecord {
+            scope: scope.clone(),
+            id: plan.metadata.key.update_id.clone(),
+            exact_wire: p.exact_wire.clone(),
+        })
+    } else {
+        None
+    };
+    plan.graph
+        .check_preconditions(&actual, file_wire.as_ref())?;
+    if read_states(tx, true)? != plan.expected_entries
+        || retained_texts(tx, scope)? != plan.expected_texts
+    {
+        return Err(zorid_client_sync::SyncError::VersionConflict.into());
+    }
+    blob_index::check_sources(tx, &actual)?;
     if let Some(text) = &plan.text {
         let actual_text = text_sync::retained(tx, &text.expected_state.identity.entry_id)?;
         if (plan.new_text && actual_text.is_some())
@@ -163,7 +220,7 @@ pub(super) fn persist(tx: &Connection, plan: &PreparedReceive) -> Result<()> {
             return Err(zorid_client_sync::SyncError::VersionConflict.into());
         }
     }
-    if let Some(next) = &plan.graph.next_state {
+    if let Some(next) = plan.graph.next_state() {
         text_sync::reserve_revision(tx, next.version())?;
     }
     if let Some(text) = &plan.text {
@@ -174,32 +231,126 @@ pub(super) fn persist(tx: &Connection, plan: &PreparedReceive) -> Result<()> {
             text_sync::reserve_revision(tx, &next.version)?;
         }
     }
-    if family_ledger::insert_received(tx, &plan.metadata, &plan.exact_wire)? == plan.duplicate {
+    if family_ledger::insert_received_exact(
+        tx,
+        &plan.metadata,
+        &plan.exact_wire,
+        &plan.exact_plaintext,
+    )? == plan.duplicate
+    {
         return Err(StoreError::Corrupt(
             "received ledger changed during transaction".into(),
         ));
     }
-    file_state::persist(
-        tx,
-        &plan.graph,
-        plan.file_payload
-            .as_ref()
-            .map(|bytes| (&plan.metadata.key.update_id, bytes.as_slice())),
-    )?;
+    blob_index::persist_plan(tx, &plan.graph)?;
+    blob_index::check_sources(tx, plan.graph.verification_state())?;
     if let Some(next) = plan.text.as_ref().and_then(|text| text.next_state.as_ref()) {
         text_sync::put_current(tx, next)?;
     }
     Ok(())
 }
 
-pub(super) fn retained_texts(tx: &Connection, scope: &Scope) -> Result<Vec<TextState>> {
-    let ids: Vec<String> = tx.prepare("SELECT entry_id FROM text_bindings WHERE realm_id=?1 AND vault_id=?2 ORDER BY entry_id")?
-        .query_map(params![scope.realm_id.as_str(), scope.vault_id.as_str()], |row| row.get(0))?
-        .collect::<std::result::Result<_,_>>()?;
-    ids.into_iter()
-        .map(|id| {
-            text_sync::retained(tx, &EntryId::new(id)?)?
-                .ok_or_else(|| StoreError::Corrupt("listed text head disappeared".into()))
-        })
-        .collect()
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    use zorid_crypto::{SystemEntropy, VaultKey};
+    use zorid_file_sync::v2::{Body, ContentSeed, Effect, Payload};
+    use zorid_sync_protocol::{ExpectedContext, LogPosition, RealmId, ServerEpoch, VaultId};
+
+    #[test]
+    fn completed_manifest_hash_failure_never_commits_wire_visibility_or_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let scope = Scope {
+            realm_id: RealmId::new("realm").unwrap(),
+            vault_id: VaultId::new("vault").unwrap(),
+        };
+        let mut author = Store::open(dir.path().join("author")).unwrap();
+        let mut receiver = Store::open(dir.path().join("receiver")).unwrap();
+        author.family_enroll(&scope).unwrap();
+        receiver.family_enroll(&scope).unwrap();
+        let request = MutationRequest {
+            operation_id: zorid_core::OperationId::new("create_binary").unwrap(),
+            mutation: Mutation::Create {
+                id: EntryId::new("binary").unwrap(),
+                path: zorid_core::VaultPath::new("blob.unknown").unwrap(),
+                kind: EntryKind::File,
+                content: Some(vec![7; zorid_file_sync::MAX_CHUNK_BYTES + 3]),
+            },
+        };
+        author
+            .family_apply(&request, Some(FamilyCreateMode::Binary))
+            .unwrap();
+        let key = VaultKey::from_bytes([7; 32]);
+        let mut final_event = None;
+        for pending in author.family_pending_authored(None, 1000).unwrap() {
+            let expected = ExpectedContext {
+                realm_id: scope.realm_id.clone(),
+                vault_id: scope.vault_id.clone(),
+                update_id: pending.update_id,
+                key_epoch: 1,
+            };
+            let wire = author.family_seal(&expected, &key).unwrap();
+            let opened = OpenedEnvelope::open(&wire, &expected, &key).unwrap();
+            let payload = Payload::decode(opened.plaintext()).unwrap();
+            if matches!(payload.body, Body::Events { .. }) {
+                assert!(final_event.replace((expected, wire)).is_none());
+            } else {
+                receiver.family_receive(&opened, None).unwrap();
+            }
+        }
+        assert!(receiver.list().unwrap().is_empty());
+        let (expected, valid_wire) = final_event.unwrap();
+        let valid = OpenedEnvelope::open(&valid_wire, &expected, &key).unwrap();
+        let mut payload = Payload::decode(valid.plaintext()).unwrap();
+        let Body::Events { events } = &mut payload.body else {
+            panic!("expected Create event")
+        };
+        let Effect::Create {
+            content: Some(ContentSeed::Binary { manifest }),
+            ..
+        } = &mut events[0].effect
+        else {
+            panic!("expected binary Create")
+        };
+        // All chunk references remain valid. Only whole-file hashing detects this.
+        manifest.digest = zorid_file_sync::Sha256Digest::of(b"different whole-file hash");
+        let invalid_wire = zorid_crypto::seal(
+            valid.header(),
+            &payload.encode().unwrap(),
+            &key,
+            &mut SystemEntropy,
+        )
+        .unwrap()
+        .encode();
+        let invalid = OpenedEnvelope::open(&invalid_wire, &expected, &key).unwrap();
+        let cursor = zorid_client_sync::ReceiveCursor {
+            realm_id: scope.realm_id.clone(),
+            vault_id: scope.vault_id.clone(),
+            server_epoch: ServerEpoch::new("epoch").unwrap(),
+            after: LogPosition::new(0),
+        };
+        receiver.family_set_receive_cursor(None, &cursor).unwrap();
+        let mut next = cursor.clone();
+        next.after = LogPosition::new(1);
+        let delivery = CursorAdvance {
+            expected: cursor,
+            next: next.clone(),
+        };
+        let before = receiver.family_status().unwrap();
+        assert!(receiver.family_receive(&invalid, Some(&delivery)).is_err());
+        assert_eq!(receiver.family_status().unwrap(), before);
+        assert!(receiver
+            .family_envelope_status(&expected.update_id)
+            .unwrap()
+            .is_none());
+        assert!(receiver.list().unwrap().is_empty());
+        receiver.family_receive(&valid, Some(&delivery)).unwrap();
+        assert_eq!(
+            receiver
+                .family_receive_cursor(&scope.realm_id, &scope.vault_id)
+                .unwrap(),
+            Some(next)
+        );
+        assert_eq!(receiver.list().unwrap().len(), 1);
+    }
 }

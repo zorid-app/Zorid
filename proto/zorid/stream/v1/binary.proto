@@ -117,6 +117,11 @@ message OpenRead {
   StageOwner owner = 1;
   string id = 2;
   optional string expected_revision = 3;
+  // REQUIRED valid nonempty OperationId at consumers. Caller persists before
+  // open; owner+read_id resolves the original exact request/pinned snapshot
+  // before current-state/quota checks. Never invent a random fallback or rebind
+  // a closed/stale handle to another content source.
+  string read_id = 4;
 }
 message ReadChunk { ReadLocator read = 1; uint64 offset = 2; uint32 max_bytes = 3; }
 message CloseRead { ReadLocator read = 1; }

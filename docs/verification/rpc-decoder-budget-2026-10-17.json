@@ -1,0 +1,1003 @@
+{
+  "scope": "single-case sequential standard runtime decoder measurements, not approved production resource budget",
+  "platform": "aarch64-apple-darwin / 8 GB machine",
+  "rust_cargo_on_path": "Homebrew Rust1.99.0 for host measurements; explicit official1.95.0 used separately for WASM checks",
+  "rust": [
+    {
+      "allocation_calls": 21,
+      "case": "pull-items",
+      "conservative_peak_allocated_bytes": 125829120,
+      "counts": [
+        1069093,
+        2097152,
+        0,
+        0
+      ],
+      "decode_ns": 68241208,
+      "decoded": true,
+      "domain_accepted": false,
+      "fixture_elements": 1069093,
+      "frame_cap": 2138208,
+      "live_after_decode": 83886088,
+      "live_after_drop": 0,
+      "runtime": "prost",
+      "scope": "single decode+validation; excludes fixture/input and allocator metadata; no approved resource bound",
+      "sizes": {
+        "extension": 48,
+        "pull_item": 40,
+        "string": 24
+      },
+      "total_allocated_bytes": 167772008,
+      "validation_and_drop_ns": 25454000,
+      "wire_bytes": 2138207
+    },
+    {
+      "allocation_calls": 23,
+      "case": "append-extensions",
+      "conservative_peak_allocated_bytes": 75497472,
+      "counts": [
+        528394,
+        1048576,
+        0,
+        0
+      ],
+      "decode_ns": 35037000,
+      "decoded": true,
+      "domain_accepted": false,
+      "fixture_elements": 528394,
+      "frame_cap": 1056816,
+      "live_after_decode": 50331672,
+      "live_after_drop": 0,
+      "runtime": "prost",
+      "scope": "single decode+validation; excludes fixture/input and allocator metadata; no approved resource bound",
+      "sizes": {
+        "extension": 48,
+        "pull_item": 40,
+        "string": 24
+      },
+      "total_allocated_bytes": 100663129,
+      "validation_and_drop_ns": 15899416,
+      "wire_bytes": 1056816
+    },
+    {
+      "allocation_calls": 21,
+      "case": "pull-extensions",
+      "conservative_peak_allocated_bytes": 150994952,
+      "counts": [
+        0,
+        0,
+        1069092,
+        0
+      ],
+      "decode_ns": 72409750,
+      "decoded": true,
+      "domain_accepted": false,
+      "fixture_elements": 1069092,
+      "frame_cap": 2138208,
+      "live_after_decode": 100663304,
+      "live_after_drop": 0,
+      "runtime": "prost",
+      "scope": "single decode+validation; excludes fixture/input and allocator metadata; no approved resource bound",
+      "sizes": {
+        "extension": 48,
+        "pull_item": 40,
+        "string": 24
+      },
+      "total_allocated_bytes": 201326408,
+      "validation_and_drop_ns": 35114709,
+      "wire_bytes": 2138208
+    },
+    {
+      "allocation_calls": 23,
+      "case": "append-features",
+      "conservative_peak_allocated_bytes": 37748736,
+      "counts": [
+        0,
+        0,
+        528394,
+        1048576
+      ],
+      "decode_ns": 38900459,
+      "decoded": true,
+      "domain_accepted": false,
+      "fixture_elements": 528394,
+      "frame_cap": 1056816,
+      "live_after_decode": 25165848,
+      "live_after_drop": 0,
+      "runtime": "prost",
+      "scope": "single decode+validation; excludes fixture/input and allocator metadata; no approved resource bound",
+      "sizes": {
+        "extension": 48,
+        "pull_item": 40,
+        "string": 24
+      },
+      "total_allocated_bytes": 50331577,
+      "validation_and_drop_ns": 8099667,
+      "wire_bytes": 1056816
+    },
+    {
+      "allocation_calls": 21,
+      "case": "pull-features",
+      "conservative_peak_allocated_bytes": 75497480,
+      "counts": [
+        0,
+        0,
+        0,
+        1069092
+      ],
+      "decode_ns": 79609334,
+      "decoded": true,
+      "domain_accepted": false,
+      "fixture_elements": 1069092,
+      "frame_cap": 2138208,
+      "live_after_decode": 50331656,
+      "live_after_drop": 0,
+      "runtime": "prost",
+      "scope": "single decode+validation; excludes fixture/input and allocator metadata; no approved resource bound",
+      "sizes": {
+        "extension": 48,
+        "pull_item": 40,
+        "string": 24
+      },
+      "total_allocated_bytes": 100663208,
+      "validation_and_drop_ns": 16240375,
+      "wire_bytes": 2138208
+    },
+    {
+      "allocation_calls": 11,
+      "case": "hello-packed",
+      "conservative_peak_allocated_bytes": 24576,
+      "counts": [
+        4091,
+        4096,
+        0,
+        0
+      ],
+      "decode_ns": 85584,
+      "decoded": true,
+      "domain_accepted": false,
+      "fixture_elements": 4091,
+      "frame_cap": 4096,
+      "live_after_decode": 16384,
+      "live_after_drop": 0,
+      "runtime": "prost",
+      "scope": "single decode+validation; excludes fixture/input and allocator metadata; no approved resource bound",
+      "sizes": {
+        "extension": 48,
+        "pull_item": 40,
+        "string": 24
+      },
+      "total_allocated_bytes": 32752,
+      "validation_and_drop_ns": 27417,
+      "wire_bytes": 4096
+    },
+    {
+      "allocation_calls": 16,
+      "case": "reply-packed",
+      "conservative_peak_allocated_bytes": 24592,
+      "counts": [
+        4045,
+        4096,
+        0,
+        0
+      ],
+      "decode_ns": 91000,
+      "decoded": true,
+      "domain_accepted": false,
+      "fixture_elements": 4045,
+      "frame_cap": 4096,
+      "live_after_decode": 16417,
+      "live_after_drop": 0,
+      "runtime": "prost",
+      "scope": "single decode+validation; excludes fixture/input and allocator metadata; no approved resource bound",
+      "sizes": {
+        "extension": 48,
+        "pull_item": 40,
+        "string": 24
+      },
+      "total_allocated_bytes": 32795,
+      "validation_and_drop_ns": 30542,
+      "wire_bytes": 4096
+    },
+    {
+      "allocation_calls": 23,
+      "case": "pull-truncated",
+      "conservative_peak_allocated_bytes": 125829120,
+      "counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "decode_ns": 77538791,
+      "decoded": false,
+      "domain_accepted": false,
+      "fixture_elements": 1069093,
+      "frame_cap": 2138208,
+      "live_after_decode": 200,
+      "live_after_drop": 0,
+      "runtime": "prost",
+      "scope": "single decode+validation; excludes fixture/input and allocator metadata; no approved resource bound",
+      "sizes": {
+        "extension": 48,
+        "pull_item": 40,
+        "string": 24
+      },
+      "total_allocated_bytes": 167772208,
+      "validation_and_drop_ns": 833,
+      "wire_bytes": 2138206
+    },
+    {
+      "allocation_calls": 0,
+      "case": "pull-unknown",
+      "conservative_peak_allocated_bytes": 0,
+      "counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "decode_ns": 37531375,
+      "decoded": true,
+      "domain_accepted": false,
+      "fixture_elements": 1069104,
+      "frame_cap": 2138208,
+      "live_after_decode": 0,
+      "live_after_drop": 0,
+      "runtime": "prost",
+      "scope": "single decode+validation; excludes fixture/input and allocator metadata; no approved resource bound",
+      "sizes": {
+        "extension": 48,
+        "pull_item": 40,
+        "string": 24
+      },
+      "total_allocated_bytes": 0,
+      "validation_and_drop_ns": 958,
+      "wire_bytes": 2138208
+    }
+  ],
+  "protobuf_es": [
+    {
+      "case": "pull-items",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 2138207,
+      "frameCap": 2138208,
+      "fixtureElements": 1069093,
+      "readUnknownFields": true,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 445334032,
+        "heapTotal": 85983232,
+        "heapUsed": 11211152,
+        "external": 18652712,
+        "arrayBuffers": 2275834,
+        "maxRSSKiB": 466336
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": true,
+          "decodeMs": 81.08516600000002,
+          "observed": {
+            "items": 1069093,
+            "extensions": 0,
+            "features": 0,
+            "offered": 0,
+            "envelopeVersions": 0,
+            "unknownFields": 0
+          },
+          "before": {
+            "rss": 445334032,
+            "heapTotal": 79429632,
+            "heapUsed": 11165304,
+            "external": 8126043,
+            "arrayBuffers": 2275834,
+            "maxRSSKiB": 466336
+          },
+          "afterDecode": {
+            "rss": 476611400,
+            "heapTotal": 166821888,
+            "heapUsed": 112164704,
+            "external": 8126043,
+            "arrayBuffers": 2275834,
+            "maxRSSKiB": 466336
+          },
+          "afterDrop": {
+            "rss": 453116648,
+            "heapTotal": 69468160,
+            "heapUsed": 11154288,
+            "external": 8126043,
+            "arrayBuffers": 2275834,
+            "maxRSSKiB": 466336
+          },
+          "decodeDelta": {
+            "rss": 31277368,
+            "heapTotal": 87392256,
+            "heapUsed": 100999400,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 0
+          },
+          "retainedDelta": {
+            "rss": 7782616,
+            "heapTotal": -9961472,
+            "heapUsed": -11016,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 0
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    },
+    {
+      "case": "append-extensions",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 1056816,
+      "frameCap": 1056816,
+      "fixtureElements": 528394,
+      "readUnknownFields": true,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 241003328,
+        "heapTotal": 83099648,
+        "heapUsed": 11194240,
+        "external": 12295632,
+        "arrayBuffers": 1194443,
+        "maxRSSKiB": 269744
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": true,
+          "decodeMs": 50.311541000000005,
+          "observed": {
+            "items": 0,
+            "extensions": 528394,
+            "features": 0,
+            "offered": 0,
+            "envelopeVersions": 0,
+            "unknownFields": 0
+          },
+          "before": {
+            "rss": 240905000,
+            "heapTotal": 79691776,
+            "heapUsed": 11145504,
+            "external": 7044652,
+            "arrayBuffers": 1194443,
+            "maxRSSKiB": 269744
+          },
+          "afterDecode": {
+            "rss": 254979216,
+            "heapTotal": 108003328,
+            "heapUsed": 57532752,
+            "external": 7044652,
+            "arrayBuffers": 1194443,
+            "maxRSSKiB": 270736
+          },
+          "afterDrop": {
+            "rss": 248917088,
+            "heapTotal": 81526784,
+            "heapUsed": 11180936,
+            "external": 7044652,
+            "arrayBuffers": 1194443,
+            "maxRSSKiB": 270736
+          },
+          "decodeDelta": {
+            "rss": 14074216,
+            "heapTotal": 28311552,
+            "heapUsed": 46387248,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 992
+          },
+          "retainedDelta": {
+            "rss": 8012088,
+            "heapTotal": 1835008,
+            "heapUsed": 35432,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 992
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    },
+    {
+      "case": "pull-extensions",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 2138208,
+      "frameCap": 2138208,
+      "fixtureElements": 1069092,
+      "readUnknownFields": true,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 376005480,
+        "heapTotal": 85983232,
+        "heapUsed": 11207456,
+        "external": 18652716,
+        "arrayBuffers": 2275835,
+        "maxRSSKiB": 409168
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": true,
+          "decodeMs": 107.50099999999998,
+          "observed": {
+            "items": 0,
+            "extensions": 1069092,
+            "features": 0,
+            "offered": 0,
+            "envelopeVersions": 0,
+            "unknownFields": 0
+          },
+          "before": {
+            "rss": 376021864,
+            "heapTotal": 79429632,
+            "heapUsed": 11158384,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 409168
+          },
+          "afterDecode": {
+            "rss": 407512416,
+            "heapTotal": 166821888,
+            "heapUsed": 112205800,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 410000
+          },
+          "afterDrop": {
+            "rss": 384001256,
+            "heapTotal": 69730304,
+            "heapUsed": 11154328,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 410000
+          },
+          "decodeDelta": {
+            "rss": 31490552,
+            "heapTotal": 87392256,
+            "heapUsed": 101047416,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 832
+          },
+          "retainedDelta": {
+            "rss": 7979392,
+            "heapTotal": -9699328,
+            "heapUsed": -4056,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 832
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    },
+    {
+      "case": "append-features",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 1056816,
+      "frameCap": 1056816,
+      "fixtureElements": 528394,
+      "readUnknownFields": true,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 49384616,
+        "heapTotal": 16515072,
+        "heapUsed": 11124488,
+        "external": 11238788,
+        "arrayBuffers": 1194443,
+        "maxRSSKiB": 94640
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": true,
+          "decodeMs": 33.331708000000006,
+          "observed": {
+            "items": 0,
+            "extensions": 0,
+            "features": 528394,
+            "offered": 0,
+            "envelopeVersions": 0,
+            "unknownFields": 0
+          },
+          "before": {
+            "rss": 49384616,
+            "heapTotal": 16515072,
+            "heapUsed": 11110800,
+            "external": 7044652,
+            "arrayBuffers": 1194443,
+            "maxRSSKiB": 94640
+          },
+          "afterDecode": {
+            "rss": 82008256,
+            "heapTotal": 45531136,
+            "heapUsed": 35690112,
+            "external": 7044652,
+            "arrayBuffers": 1194443,
+            "maxRSSKiB": 116064
+          },
+          "afterDrop": {
+            "rss": 69392384,
+            "heapTotal": 33030144,
+            "heapUsed": 11145920,
+            "external": 7044652,
+            "arrayBuffers": 1194443,
+            "maxRSSKiB": 116064
+          },
+          "decodeDelta": {
+            "rss": 32623640,
+            "heapTotal": 29016064,
+            "heapUsed": 24579312,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 21424
+          },
+          "retainedDelta": {
+            "rss": 20007768,
+            "heapTotal": 16515072,
+            "heapUsed": 35120,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 21424
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    },
+    {
+      "case": "pull-features",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 2138208,
+      "frameCap": 2138208,
+      "fixtureElements": 1069092,
+      "readUnknownFields": true,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 56872104,
+        "heapTotal": 15466496,
+        "heapUsed": 11154536,
+        "external": 18718316,
+        "arrayBuffers": 2275835,
+        "maxRSSKiB": 102080
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": true,
+          "decodeMs": 79.80233299999999,
+          "observed": {
+            "items": 0,
+            "extensions": 0,
+            "features": 1069092,
+            "offered": 0,
+            "envelopeVersions": 0,
+            "unknownFields": 0
+          },
+          "before": {
+            "rss": 56888488,
+            "heapTotal": 15466496,
+            "heapUsed": 11135952,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 102080
+          },
+          "afterDecode": {
+            "rss": 105374384,
+            "heapTotal": 67928064,
+            "heapUsed": 41448864,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 137168
+          },
+          "afterDrop": {
+            "rss": 83239504,
+            "heapTotal": 45613056,
+            "heapUsed": 11158560,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 137168
+          },
+          "decodeDelta": {
+            "rss": 48485896,
+            "heapTotal": 52461568,
+            "heapUsed": 30312912,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 35088
+          },
+          "retainedDelta": {
+            "rss": 26351016,
+            "heapTotal": 30146560,
+            "heapUsed": 22608,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 35088
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    },
+    {
+      "case": "hello-packed",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 4096,
+      "frameCap": 4096,
+      "fixtureElements": 4091,
+      "readUnknownFields": true,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 44813552,
+        "heapTotal": 16252928,
+        "heapUsed": 11129584,
+        "external": 6028541,
+        "arrayBuffers": 141723,
+        "maxRSSKiB": 81616
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": true,
+          "decodeMs": 0.2484580000000136,
+          "observed": {
+            "items": 0,
+            "extensions": 0,
+            "features": 0,
+            "offered": 4091,
+            "envelopeVersions": 0,
+            "unknownFields": 0
+          },
+          "before": {
+            "rss": 44813552,
+            "heapTotal": 16252928,
+            "heapUsed": 11106400,
+            "external": 5991932,
+            "arrayBuffers": 141723,
+            "maxRSSKiB": 81616
+          },
+          "afterDecode": {
+            "rss": 44829936,
+            "heapTotal": 16252928,
+            "heapUsed": 11245464,
+            "external": 5991932,
+            "arrayBuffers": 141723,
+            "maxRSSKiB": 81616
+          },
+          "afterDrop": {
+            "rss": 44846320,
+            "heapTotal": 16252928,
+            "heapUsed": 11110616,
+            "external": 5991932,
+            "arrayBuffers": 141723,
+            "maxRSSKiB": 81616
+          },
+          "decodeDelta": {
+            "rss": 16384,
+            "heapTotal": 0,
+            "heapUsed": 139064,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 0
+          },
+          "retainedDelta": {
+            "rss": 32768,
+            "heapTotal": 0,
+            "heapUsed": 4216,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 0
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    },
+    {
+      "case": "reply-packed",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 4096,
+      "frameCap": 4096,
+      "fixtureElements": 4045,
+      "readUnknownFields": true,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 43617376,
+        "heapTotal": 15204352,
+        "heapUsed": 11553840,
+        "external": 6096525,
+        "arrayBuffers": 141723,
+        "maxRSSKiB": 80528
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": true,
+          "decodeMs": 0.3150839999999988,
+          "observed": {
+            "items": 0,
+            "extensions": 0,
+            "features": 0,
+            "offered": 0,
+            "envelopeVersions": 4045,
+            "unknownFields": 0
+          },
+          "before": {
+            "rss": 43666528,
+            "heapTotal": 15204352,
+            "heapUsed": 11133656,
+            "external": 5991932,
+            "arrayBuffers": 141723,
+            "maxRSSKiB": 80576
+          },
+          "afterDecode": {
+            "rss": 43666528,
+            "heapTotal": 15204352,
+            "heapUsed": 11308576,
+            "external": 5991932,
+            "arrayBuffers": 141723,
+            "maxRSSKiB": 80576
+          },
+          "afterDrop": {
+            "rss": 43666528,
+            "heapTotal": 15204352,
+            "heapUsed": 11134840,
+            "external": 5991932,
+            "arrayBuffers": 141723,
+            "maxRSSKiB": 80576
+          },
+          "decodeDelta": {
+            "rss": 0,
+            "heapTotal": 0,
+            "heapUsed": 174920,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 0
+          },
+          "retainedDelta": {
+            "rss": 0,
+            "heapTotal": 0,
+            "heapUsed": 1184,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 0
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    },
+    {
+      "case": "pull-truncated",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 2138206,
+      "frameCap": 2138208,
+      "fixtureElements": 1069093,
+      "readUnknownFields": true,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 442860360,
+        "heapTotal": 85458944,
+        "heapUsed": 11211264,
+        "external": 18652712,
+        "arrayBuffers": 2275834,
+        "maxRSSKiB": 463472
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": false,
+          "decodeMs": 75.050209,
+          "before": {
+            "rss": 442811232,
+            "heapTotal": 79953920,
+            "heapUsed": 11165416,
+            "external": 8126043,
+            "arrayBuffers": 2275834,
+            "maxRSSKiB": 463472
+          },
+          "afterDecode": {
+            "rss": 474252560,
+            "heapTotal": 167346176,
+            "heapUsed": 112197864,
+            "external": 8126043,
+            "arrayBuffers": 2275834,
+            "maxRSSKiB": 463472
+          },
+          "afterDrop": {
+            "rss": 450675816,
+            "heapTotal": 69730304,
+            "heapUsed": 11151312,
+            "external": 8126043,
+            "arrayBuffers": 2275834,
+            "maxRSSKiB": 463472
+          },
+          "decodeDelta": {
+            "rss": 31441328,
+            "heapTotal": 87392256,
+            "heapUsed": 101032448,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 0
+          },
+          "retainedDelta": {
+            "rss": 7864584,
+            "heapTotal": -10223616,
+            "heapUsed": -14104,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 0
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    },
+    {
+      "case": "pull-unknown-retain",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 2138208,
+      "frameCap": 2138208,
+      "fixtureElements": 1069104,
+      "readUnknownFields": true,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 44567792,
+        "heapTotal": 15990784,
+        "heapUsed": 11125000,
+        "external": 8126004,
+        "arrayBuffers": 2275835,
+        "maxRSSKiB": 81552
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": true,
+          "decodeMs": 89.62399999999998,
+          "observed": {
+            "items": 0,
+            "extensions": 0,
+            "features": 0,
+            "offered": 0,
+            "envelopeVersions": 0,
+            "unknownFields": 1069104
+          },
+          "before": {
+            "rss": 44584176,
+            "heapTotal": 15990784,
+            "heapUsed": 11116312,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 81552
+          },
+          "afterDecode": {
+            "rss": 316737040,
+            "heapTotal": 243269632,
+            "heapUsed": 197735800,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 326576
+          },
+          "afterDrop": {
+            "rss": 292767152,
+            "heapTotal": 58982400,
+            "heapUsed": 11118304,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 326880
+          },
+          "decodeDelta": {
+            "rss": 272152864,
+            "heapTotal": 227278848,
+            "heapUsed": 186619488,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 245024
+          },
+          "retainedDelta": {
+            "rss": 248182976,
+            "heapTotal": 42991616,
+            "heapUsed": 1992,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 245328
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    },
+    {
+      "case": "pull-unknown-discard",
+      "runtime": "protobuf-es",
+      "node": "v26.10.0",
+      "wireBytes": 2138208,
+      "frameCap": 2138208,
+      "fixtureElements": 1069104,
+      "readUnknownFields": false,
+      "recursionLimit": 100,
+      "domainValidation": "not run; production Rust validation is measured by the Rust companion",
+      "fixtureBaseline": {
+        "rss": 46484672,
+        "heapTotal": 16252928,
+        "heapUsed": 11117392,
+        "external": 8126004,
+        "arrayBuffers": 2275835,
+        "maxRSSKiB": 83408
+      },
+      "measurements": [
+        {
+          "iteration": 0,
+          "decoded": true,
+          "decodeMs": 39.0295,
+          "observed": {
+            "items": 0,
+            "extensions": 0,
+            "features": 0,
+            "offered": 0,
+            "envelopeVersions": 0,
+            "unknownFields": 0
+          },
+          "before": {
+            "rss": 46501056,
+            "heapTotal": 16252928,
+            "heapUsed": 11108928,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 83408
+          },
+          "afterDecode": {
+            "rss": 51925024,
+            "heapTotal": 20971520,
+            "heapUsed": 13939328,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 88064
+          },
+          "afterDrop": {
+            "rss": 51941408,
+            "heapTotal": 20971520,
+            "heapUsed": 11135576,
+            "external": 8126044,
+            "arrayBuffers": 2275835,
+            "maxRSSKiB": 88080
+          },
+          "decodeDelta": {
+            "rss": 5423968,
+            "heapTotal": 4718592,
+            "heapUsed": 2830400,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 4656
+          },
+          "retainedDelta": {
+            "rss": 5440352,
+            "heapTotal": 4718592,
+            "heapUsed": 26648,
+            "external": 0,
+            "arrayBuffers": 0,
+            "maxRSSKiB": 4672
+          }
+        }
+      ],
+      "limitations": "single decode; heap snapshots are sampled, not allocation peaks; maxRSS includes fixture construction and cannot reset; no approved resource bound"
+    }
+  ]
+}

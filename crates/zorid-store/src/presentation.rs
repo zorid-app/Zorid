@@ -127,11 +127,12 @@ pub(crate) fn migrate(tx: &Connection) -> Result<()> {
     }
     // Zero is an explicit unknown legacy time, never a guessed filesystem time.
     for state in read_states(tx, true)? {
-        let size: i64 = tx.query_row(
-            "SELECT coalesce(length(content),0) FROM entries WHERE id=?1",
-            [state.id.as_str()],
-            |r| r.get(0),
-        )?;
+        let size = entry_content::read_metadata_row(tx, &state.id)?
+            .ok_or_else(|| StoreError::Corrupt("presentation entry missing".into()))?
+            .content
+            .map_or(0, |value| value.len());
+        let size = i64::try_from(size)
+            .map_err(|_| StoreError::Corrupt("presentation size overflow".into()))?;
         validate_number(
             u64::try_from(size).map_err(|_| StoreError::Corrupt("negative byte size".into()))?,
         )?;
@@ -144,13 +145,28 @@ pub(crate) fn migrate(tx: &Connection) -> Result<()> {
     Ok(())
 }
 pub(crate) fn presentation(tx: &Connection, state: &EntryState) -> Result<EntryPresentation> {
-    let row = tx.query_row("SELECT p.ctime_ms,p.mtime_ms,p.size_bytes,coalesce(length(e.content),0) FROM entry_presentation p JOIN entries e ON e.id=p.entry_id WHERE p.entry_id=?1", [state.id.as_str()], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?))).optional()?;
-    let (ctime_ms, mtime_ms, size_bytes, actual) =
+    let row = tx
+        .query_row(
+            "SELECT ctime_ms,mtime_ms,size_bytes FROM entry_presentation WHERE entry_id=?1",
+            [state.id.as_str()],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let (ctime_ms, mtime_ms, size_bytes) =
         row.ok_or_else(|| StoreError::Corrupt("missing presentation".into()))?;
     let ctime_ms = stored_number(ctime_ms)?;
     let mtime_ms = stored_number(mtime_ms)?;
     let size_bytes = stored_number(size_bytes)?;
-    let actual = stored_number(actual)?;
+    let actual = entry_content::read_metadata_row(tx, &state.id)?
+        .ok_or_else(|| StoreError::Corrupt("presentation entry missing".into()))?
+        .content
+        .map_or(0, |value| value.len());
     if size_bytes != actual || (state.kind == EntryKind::Folder && size_bytes != 0) {
         return Err(StoreError::Corrupt(
             "presentation size differs from committed bytes".into(),
@@ -185,11 +201,12 @@ pub(crate) fn record_changes(
     let mut entries = Vec::new();
     for change in changes {
         let state = &change.after;
-        let size: i64 = tx.query_row(
-            "SELECT coalesce(length(content),0) FROM entries WHERE id=?1",
-            [state.id.as_str()],
-            |r| r.get(0),
-        )?;
+        let size = entry_content::read_metadata_row(tx, &state.id)?
+            .ok_or_else(|| StoreError::Corrupt("presentation entry missing".into()))?
+            .content
+            .map_or(0, |value| value.len());
+        let size = i64::try_from(size)
+            .map_err(|_| StoreError::Corrupt("presentation size overflow".into()))?;
         stored_number(size)?;
         // Preserve creation time, including legacy unknown=0. Clock rollback does
         // not roll display mtime backwards; revisions remain the only CAS token.
@@ -214,11 +231,13 @@ pub(crate) fn record_family_reload(
     let now =
         i64::try_from(now).map_err(|_| StoreError::Corrupt("display clock overflow".into()))?;
     for change in changes {
-        let size: i64 = tx.query_row(
-            "SELECT coalesce(length(content),0) FROM entries WHERE id=?1",
-            [change.after.id.as_str()],
-            |r| r.get(0),
-        )?;
+        let state = &change.after;
+        let size = entry_content::read_metadata_row(tx, &state.id)?
+            .ok_or_else(|| StoreError::Corrupt("presentation entry missing".into()))?
+            .content
+            .map_or(0, |value| value.len());
+        let size = i64::try_from(size)
+            .map_err(|_| StoreError::Corrupt("presentation size overflow".into()))?;
         stored_number(size)?;
         tx.execute("INSERT INTO entry_presentation VALUES(?1,?2,?2,?3) ON CONFLICT(entry_id) DO UPDATE SET mtime_ms=max(entry_presentation.mtime_ms,excluded.mtime_ms),size_bytes=excluded.size_bytes",params![change.after.id.as_str(),now,size])?;
     }
@@ -283,58 +302,39 @@ impl Store {
     /// Path identity, revision, bytes and presentation share one read snapshot.
     pub fn read_path(&self, path: &VaultPath) -> Result<Option<PresentedEntry>> {
         let tx = self.connection.unchecked_transaction()?;
-        let raw = tx
+        let id: Option<String> = tx
             .query_row(
-                "SELECT id,deleted,state,content FROM entries WHERE path=?1 AND deleted=0 AND visible=1",
+                "SELECT id FROM entries WHERE path=?1 AND deleted=0 AND visible=1",
                 [path.as_str()],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, Option<Vec<u8>>>(3)?,
-                    ))
-                },
+                |r| r.get(0),
             )
             .optional()?;
-        let result = raw
-            .map(|(id, deleted, json, content)| -> Result<PresentedEntry> {
-                let state = decode_state(&id, path.as_str(), deleted, &json, content.is_some())?;
-                let presentation = presentation(&tx, &state)?;
-                Ok(PresentedEntry {
-                    state,
-                    content,
+        let result = id
+            .map(|id| -> Result<Option<PresentedEntry>> {
+                let Some(entry) = entry_content::read_legacy_entry(&tx, &EntryId::new(id)?)? else {
+                    return Ok(None);
+                };
+                let presentation = presentation(&tx, &entry.state)?;
+                Ok(Some(PresentedEntry {
+                    state: entry.state,
+                    content: entry.content,
                     presentation,
-                })
+                }))
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
         tx.commit()?;
         Ok(result)
     }
     /// Entry identity is the recovery key; renamed paths remain display locators.
     pub fn read_presented(&self, id: &EntryId) -> Result<Option<PresentedEntry>> {
         let tx = self.connection.unchecked_transaction()?;
-        let raw = tx
-            .query_row(
-                "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND deleted=0 AND visible=1",
-                [id.as_str()],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, Option<Vec<u8>>>(3)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let result = raw
-            .map(|(path, deleted, json, content)| -> Result<PresentedEntry> {
-                let state = decode_state(id.as_str(), &path, deleted, &json, content.is_some())?;
-                let presentation = presentation(&tx, &state)?;
+        let result = entry_content::read_legacy_entry(&tx, id)?
+            .map(|entry| -> Result<PresentedEntry> {
+                let presentation = presentation(&tx, &entry.state)?;
                 Ok(PresentedEntry {
-                    state,
-                    content,
+                    state: entry.state,
+                    content: entry.content,
                     presentation,
                 })
             })

@@ -4,6 +4,7 @@ import { BrowserVaultError } from '../core/browser-vault.ts';
 import { vaultPath } from './path.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
 import { browserDurableWrites } from './browser-durable-writes.ts';
+import type { BinaryStreams } from '../core/binary-streams.ts';
 import type { DurableCheckpoints } from '../core/durable-checkpoints.ts';
 
 /** Stable identity preserves the existing workspace/session/draft namespace. */
@@ -12,9 +13,12 @@ export interface BrowserCoreBackend {
   /** Authoritative persistence scope, captured by the runtime that opens it. */
   readonly durableScope?: Readonly<{vaultId:string;clientId:string}>;
   readonly checkpoints?: DurableCheckpoints;
+  readonly binaryStreams?: BinaryStreams;
   inventory(): Promise<BrowserVaultRead[]>;
   readEntry(path: string): Promise<BrowserVaultRead | null>;
   readEntryById?(id:string):Promise<BrowserVaultRead|null>;
+  readMetadata?(path:string):Promise<BrowserVaultRead|null>;
+  readMetadataById?(id:string):Promise<BrowserVaultRead|null>;
   /** Persist exact intent before executing; retries must reuse both arguments. */
   execute(intentId: string, requestJson: string): Promise<string>;
   prepare?(intentId: string, requestJson: string): Promise<void>;
@@ -27,7 +31,7 @@ export interface BrowserCoreBackend {
 }
 interface Mutation { type: string; id: string; [key: string]: unknown }
 const metadata = ({entry, presentation}: BrowserVaultRead): VaultEntry & {revision:string} => ({
-  path: entry.path, type: entry.kind, ctime: presentation.ctime_ms,
+  path: entry.path, type: entry.kind, entryId:entry.id, ctime: presentation.ctime_ms,
   mtime: presentation.mtime_ms, size: presentation.size_bytes, revision:entry.revision,
 });
 function failure(code: string, message: string): BrowserVaultError { return new BrowserVaultError(code, message); }
@@ -85,7 +89,7 @@ export class BrowserCoreAdapter implements VaultAdapter {
     return rows.filter(row => !row.entry.path.split('/').some(part => part.startsWith('.'))).map(metadata).sort((a,b) => a.path.localeCompare(b.path));
   }
   async stat(input: string): Promise<VaultEntry | null> {
-    const row = await this.backend.readEntry(vaultPath(input)); return row ? metadata(row) : null;
+    const path=vaultPath(input),row = await (this.backend.readMetadata?.(path)??this.backend.readEntry(path)); return row ? metadata(row) : null;
   }
   async read(input: string): Promise<string> { return new TextDecoder('utf-8', {fatal: true, ignoreBOM:true}).decode((await this.file(vaultPath(input))).bytes); }
   async readBinary(input: string): Promise<Uint8Array> { return (await this.file(vaultPath(input))).bytes!.slice(); }
@@ -114,7 +118,7 @@ export class BrowserCoreAdapter implements VaultAdapter {
   mkdir(input: string): Promise<void> {
     const path = vaultPath(input);
     return this.enqueue(JSON.stringify(['mkdir', path]), async () => {
-      const row = await this.backend.readEntry(path);
+      const row = await (this.backend.readMetadata?.(path)??this.backend.readEntry(path));
       if (row?.entry.kind === 'folder') return;
       await this.commit({type:'create', id:crypto.randomUUID(), path, kind:'folder', content:null});
     });
@@ -122,7 +126,7 @@ export class BrowserCoreAdapter implements VaultAdapter {
   rename(input: string, output: string): Promise<void> {
     const from = vaultPath(input), path = vaultPath(output);
     return this.enqueue(JSON.stringify(['rename', from, path]), async () => {
-      const row = await this.backend.readEntry(from);
+      const row = await (this.backend.readMetadata?.(from)??this.backend.readEntry(from));
       if (!row) throw failure('ENOENT', `Entry not found: ${from}`);
       if (from === path) return;
       await this.commit({type:'move', id:row.entry.id, expected:row.entry.revision, path});
@@ -131,7 +135,7 @@ export class BrowserCoreAdapter implements VaultAdapter {
   trash(input: string): Promise<void> {
     const path = vaultPath(input);
     return this.enqueue(JSON.stringify(['trash', path]), async () => {
-      const row = await this.backend.readEntry(path);
+      const row = await (this.backend.readMetadata?.(path)??this.backend.readEntry(path));
       if (!row) throw failure('ENOENT', `Entry not found: ${path}`);
       // Core logical deletion retains bytes/tombstones; never expose permanent
       // remove capability until a separately approved retention policy exists.

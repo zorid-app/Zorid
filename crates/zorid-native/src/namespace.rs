@@ -1,8 +1,11 @@
 //! Explicit-member namespace projection. A local command binds its observed
 //! source occupants before commit; replay never guesses ownership from bytes.
+use super::content_stream::{file_snapshot, snapshot_matches_content};
 use super::*;
+use crate::fs_stream::StreamSnapshot;
 use zorid_store::{
-    NamespaceAttempt, NamespaceEvidence, NamespaceMember, ProjectionOrigin, ProjectionWork,
+    namespace_content_evidence_bytes, NamespaceAttempt, NamespaceEvidence, NamespaceMember,
+    ProjectionOrigin, ProjectionWork,
 };
 
 fn retained(a: &NamespaceAttempt, index: usize) -> String {
@@ -149,22 +152,37 @@ impl NativeVault {
             let source_parent_identity = fs::identity(&parent)?;
             let (source_identity, content) = match before.kind {
                 EntryKind::File => {
-                    let disk = fs::snapshot(&parent, &name, self.options.max_file_bytes)?
+                    let disk = file_snapshot(&parent, &name)?
                         .ok_or(Error::Busy("namespace source disappeared"))?;
                     let stored = self
                         .store
-                        .read(&before.id)?
+                        .read_metadata(&before.id)?
                         .ok_or(Error::Busy("namespace source deleted"))?;
-                    if stored.state != *before || stored.content.as_ref() != Some(&disk.bytes) {
+                    let baseline = self
+                        .store
+                        .projection_baseline(&before.id)?
+                        .ok_or(Error::Busy("namespace file has no physical baseline"))?;
+                    if stored.state != *before
+                        || baseline.state != *before
+                        || stored.content.as_ref().is_none_or(|content| {
+                            content.len() != baseline.content.len()
+                                || content.digest() != &baseline.content.digest()
+                        })
+                        || !snapshot_matches_content(&disk, &baseline.content)
+                    {
                         return Err(Error::Busy("namespace source changed during preflight"));
                     }
+                    // Payload storage has its own quota. Namespace evidence
+                    // charges inline bytes or exact serialized reference metadata.
+                    let charge = namespace_content_evidence_bytes(&baseline.content)?;
                     bytes = bytes
-                        .checked_add(disk.bytes.len())
-                        .ok_or(Error::Unsupported("namespace byte bound exceeded"))?;
-                    if bytes > 64 * 1024 * 1024 {
-                        return Err(Error::Unsupported("namespace byte bound exceeded"));
+                        .checked_add(charge)
+                        .and_then(|n| n.checked_add(charge))
+                        .ok_or(Error::Unsupported("namespace evidence bound exceeded"))?;
+                    if bytes > zorid_store::MAX_NAMESPACE_EVIDENCE_BYTES {
+                        return Err(Error::Unsupported("namespace evidence bound exceeded"));
                     }
-                    (disk.identity, Some(disk.bytes))
+                    (disk.identity, Some(baseline.content))
                 }
                 EntryKind::Folder => {
                     let disk = fs::optional_directory(&parent, &name)?
@@ -268,12 +286,31 @@ impl NativeVault {
             EntryKind::Folder => fs::optional_directory(parent, name),
         }
     }
-    fn namespace_divergence(&mut self, m: &NamespaceMember, bytes: Vec<u8>) -> Result<()> {
-        self.store.record_external(
+    fn namespace_divergence(
+        &mut self,
+        origin: &OperationId,
+        m: &NamespaceMember,
+        parent: &File,
+        name: &str,
+        snapshot: &StreamSnapshot,
+    ) -> Result<()> {
+        let baseline = m.evidence.file_baseline.as_ref();
+        let content = self.capture_observed_file(
             &m.evidence.before.path,
-            m.evidence.file_baseline.clone(),
-            bytes,
+            parent,
+            name,
+            origin,
+            baseline,
+            None,
+            snapshot,
+            m.evidence
+                .content
+                .as_ref()
+                .is_some_and(|c| c.inline_bytes().is_some()),
         )?;
+        // A retained/private or relocated branch is recoverable content, not a
+        // new public-inode binding. Never transfer authority through this capture.
+        self.retain_observed_content(&m.evidence.before.path, baseline, &content, None)?;
         Ok(())
     }
     /// Restore only into the original absent pathname. If a replacement occupies
@@ -331,11 +368,24 @@ impl NativeVault {
             ));
         }
         if kind == EntryKind::File {
-            let bytes = fs::snapshot(&self.paths.private, &private, self.options.max_file_bytes)?
-                .ok_or(Error::Busy("namespace capture disappeared"))?
-                .bytes;
-            if m.evidence.content.as_ref() != Some(&bytes) {
-                self.namespace_divergence(&m, bytes)?;
+            let recovery_parent = self.paths.private.try_clone()?;
+            let snapshot = file_snapshot(&recovery_parent, &private)?
+                .ok_or(Error::Busy("namespace capture disappeared"))?;
+            if snapshot.identity != m.evidence.source_identity {
+                return Err(Error::Busy("namespace captured file was replaced"));
+            }
+            if m.evidence
+                .content
+                .as_ref()
+                .is_none_or(|content| !snapshot_matches_content(&snapshot, content))
+            {
+                self.namespace_divergence(
+                    &a.job.job_id,
+                    &m,
+                    &recovery_parent,
+                    &private,
+                    &snapshot,
+                )?;
                 return Err(Error::Busy("external edit retained in namespace capture"));
             }
         }
@@ -420,13 +470,18 @@ impl NativeVault {
                 ));
             }
         } else {
-            let source = fs::snapshot(&self.paths.private, &private, self.options.max_file_bytes)?
+            let recovery_parent = self.paths.private.try_clone()?;
+            let source = file_snapshot(&recovery_parent, &private)?
                 .ok_or(Error::Busy("namespace retained source disappeared"))?;
             if source.identity != m.evidence.source_identity {
                 return Err(Error::Busy("namespace retained source replaced"));
             }
-            if m.evidence.content.as_ref() != Some(&source.bytes) {
-                self.namespace_divergence(&m, source.bytes)?;
+            if m.evidence
+                .content
+                .as_ref()
+                .is_none_or(|content| !snapshot_matches_content(&source, content))
+            {
+                self.namespace_divergence(&a.job.job_id, &m, &recovery_parent, &private, &source)?;
                 return Err(Error::Busy(
                     "external edit retained before namespace publication",
                 ));
@@ -435,13 +490,17 @@ impl NativeVault {
             self.point("namespace_published_before_record");
         }
         self.paths.verify_parent(&m.change.after.path, &parent)?;
-        let dest = fs::snapshot(&parent, &name, self.options.max_file_bytes)?
+        let dest = file_snapshot(&parent, &name)?
             .ok_or(Error::Busy("namespace destination disappeared"))?;
         if dest.identity != m.evidence.source_identity {
             return Err(Error::Busy("namespace destination replaced"));
         }
-        if m.evidence.content.as_ref() != Some(&dest.bytes) {
-            self.namespace_divergence(&m, dest.bytes)?;
+        if m.evidence
+            .content
+            .as_ref()
+            .is_none_or(|content| !snapshot_matches_content(&dest, content))
+        {
+            self.namespace_divergence(&a.job.job_id, &m, &parent, &name, &dest)?;
             return Err(Error::Busy(
                 "external edit retained at namespace destination",
             ));
@@ -464,7 +523,7 @@ impl NativeVault {
         // Never publish an earlier move into a path now owned by a later logical
         // operation. Retained objects and both jobs remain available for recovery.
         for m in &a.members {
-            let current = self.store.read(&m.change.after.id)?;
+            let current = self.store.read_metadata(&m.change.after.id)?;
             if m.change.after.deleted {
                 if current.is_some() {
                     return Err(Error::Busy("namespace deletion superseded"));
@@ -539,13 +598,17 @@ impl NativeVault {
             } else {
                 (self.paths.private.try_clone()?, retained(a, index))
             };
-            let disk = fs::snapshot(&parent, &name, self.options.max_file_bytes)?
+            let disk = file_snapshot(&parent, &name)?
                 .ok_or(Error::Busy("namespace file missing before completion"))?;
             if disk.identity != m.evidence.source_identity {
                 return Err(Error::Busy("namespace file replaced before completion"));
             }
-            if m.evidence.content.as_ref() != Some(&disk.bytes) {
-                self.namespace_divergence(m, disk.bytes)?;
+            if m.evidence
+                .content
+                .as_ref()
+                .is_none_or(|content| !snapshot_matches_content(&disk, content))
+            {
+                self.namespace_divergence(&a.job.job_id, m, &parent, &name, &disk)?;
                 return Err(Error::Busy(
                     "namespace external edit retained before completion",
                 ));
@@ -625,18 +688,23 @@ impl NativeVault {
                                 ))),
                             }
                         } else if a.job.work == ProjectionWork::Delete {
-                            match fs::snapshot(
-                                &self.paths.private,
-                                &private,
-                                self.options.max_file_bytes,
-                            )? {
+                            let recovery_parent = self.paths.private.try_clone()?;
+                            match file_snapshot(&recovery_parent, &private)? {
                                 Some(file) => {
                                     let member =
                                         self.store.namespace_member(&a.job.job_id, m.index)?;
                                     if file.identity != m.source_identity
-                                        || member.evidence.content.as_ref() != Some(&file.bytes)
+                                        || member.evidence.content.as_ref().is_none_or(|content| {
+                                            !snapshot_matches_content(&file, content)
+                                        })
                                     {
-                                        self.namespace_divergence(&member, file.bytes)?;
+                                        self.namespace_divergence(
+                                            &a.job.job_id,
+                                            &member,
+                                            &recovery_parent,
+                                            &private,
+                                            &file,
+                                        )?;
                                         Ok(Some(format!(
                                             "retained deleted file changed: .zorid/{private}"
                                         )))

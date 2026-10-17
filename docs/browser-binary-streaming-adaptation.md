@@ -226,3 +226,80 @@ Measure memory as file/history bytes grow; verify ordinary Text/rename operation
 beside a large Binary do not enumerate byte stores. Actual browser import/export,
 offline relay/reopen, two tabs and bounded-preview behavior require later serialized
 production/runtime gates. This preparation claims none of them.
+
+### Common consumer source — 2026-10-17
+
+Owner `/root/default_lifecycle_review_sol`, isolated `browser-binary-streaming`
+branch (base `6bda1b8`, additive capability `40b1104`). New
+`src/core/binary-transfer.ts` defines sequential bounded sources and private sinks;
+Blob input uses slices. Source short pulls coalesce into one negotiated chunk.
+Failed operations preserve the original request and known stage; post-commit
+publication failures preserve the exact returned receipt. No automatic abort or
+commit of an unauthorized stage occurs. Factory consumers remain responsible for
+durable checkpoint phases and native/browser admission.
+
+`VaultAdapter.binaryStreams` and authoritative `VaultEntry.entryId` are optional.
+Vault stream methods resolve metadata identity, pin revision/content event for
+write CAS, and queue only metadata observation/publication; chunk/source/sink
+waits leave unrelated edits available. Stream publication rejects a replacement
+entry at the same path. Existing array APIs select streaming when available and
+reject inputs/reads above its declared small-read limit. Large Markdown binary
+entries remain listed without whole-file text decoding/indexing during
+publication or reload. Explicit stream callers supply a bounded source or private
+sink; no UI upload/export workflow is activated by this source batch.
+
+Focused checks: `node --test --test-concurrency=1
+ tests/binary-transfer.test.ts tests/vault-binary-streams.test.ts
+ tests/core-binary.test.ts` passed 29/29; targeted strict TypeScript and
+`git diff --check` passed. Tests cover lost begin/commit responses, exact retained
+operation/receipt, short source pulls, private-sink abort/EOF, peer edits,
+replacement identity, adapter retirement, small limits, no large Markdown read,
+and unrelated text edits during a stalled source. This is simulated consumer
+verification, not an actual browser/native streaming or production resource gate.
+
+### Normalized browser host composition — 2026-10-17
+
+Owner `/root/default_lifecycle_review_sol`, isolated
+`tingkai-c/browser-binary-streaming` in Orca checkout
+`/Users/ctk/orca/workspaces/Zorid/browser-binary-streaming`. Root remains the sole
+main integrator. The user explicitly approved the isolated default-host source
+wiring after automatic approval initially rejected it; that approval does not
+establish runtime verification, deployment or real-data migration permission.
+
+The new host selects fresh IndexedDB format 7. Earlier databases are rejected
+and retained, with no clearing, implicit conversion or legacy fallback. Only the
+explicit reference fixture selects the old host. The new authority stores causal
+metadata separately from immutable exact payload/wire rows, shares one storage
+budget with stages, and verifies outside writer transactions. The final strict
+transaction rechecks authority, actual metadata/publication, cursor and exact
+source pins before installing Rust changes, source/outbox rows and the parent
+receipt/journal. Binary authorization preserves its original target, final event
+and revision allocations before preparation. Receiving and sealed stages remain
+inert through restart.
+
+The worker forwards bounded typed arrays without numeric JSON and drains admitted
+binary operations before pin cleanup, storage close and lease release. A stable
+caller read operation ID is distinct from the fresh physical pin token. Exact
+active replay retains the same token; close deletes the active row, and retrying
+an old physical close cannot affect a newly allocated pin. Published reads retain
+an actual publication revision. Hidden recovery reads use a separate private
+`current_retained` witness and never invent a published revision. Four active pins
+and 128 KiB ranges apply across both kinds. Restart rebuilds a private proof from
+retained authority rather than trusting a serialized plan.
+
+Composition dependencies include normalized foundation `27fe7b8`/`506fd1b`, stage
+store `13f1d4e`/`23e647a`, consumer/runtime chain
+`b8ea207`/`15ec509`/`eede9f3`, File import
+`2b5819f`/`8f37382`, WASM metadata/read bindings through `883e257`, recovery helper
+`6799499` and bridge `46c734a`, and engine `d53faf8`. The exact final engine quota
+and opaque-handle ownership fixes and default-adapter terminal-rejection closure
+must be included before the coupled batch is accepted.
+
+Observed source checks: a bounded, serial Node run of eight normalized/stage/
+engine/transfer/Vault/runtime/import files passed 100/100 in 2.386 seconds. The
+checks use explicit transaction fixtures and opaque WASM doubles. A full browser
+source TypeScript check reports zero diagnostics when Connect and the generated
+RPC file resolve to the reviewed `grpc-core-integration` dependency; this branch
+has not installed or changed shared dependencies. No real WASM build, browser
+streaming, actual IndexedDB durability, >16 MiB end-to-end transfer, or resource
+claim follows from those results. Those remain serialized combined gates.

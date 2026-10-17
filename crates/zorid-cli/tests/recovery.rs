@@ -133,7 +133,7 @@ fn recovery_relay_process() {
         fs::rename(staging, ready).unwrap();
         axum::serve(
             listener,
-            zorid_sync_server::http::router(store, &[]).unwrap(),
+            zorid_sync_server::rpc::router(store, &[]).unwrap(),
         )
         .await
         .unwrap();
@@ -319,7 +319,7 @@ fn credentials(
     fs::write(
         path,
         serde_json::to_vec(
-            &json!({"version":1,"endpoint":format!("http://{}/",server.address),
+            &json!({"version":2,"transport":"grpc","endpoint":format!("http://{}/",server.address),
         "realm_id":"realm","vault_id":"vault","server_epoch":epoch,"key_epoch":1,
         "key_base64":STANDARD.encode(key.expose_secret()),"bearer_token":token.expose_secret()}),
         )

@@ -66,3 +66,24 @@ test('desktop reconciliation status catches subscription gaps and remains scoped
     stop();assert.equal(stops,1);
   } finally {if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
 });
+
+test('drained binary capability stays retired while exact context release is pending or unknown',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window');
+  let failRelease!:(error:unknown)=>void,entered!:()=>void,releases=0,invocations=0;
+  const releasing=new Promise<void>(resolve=>{entered=resolve;});
+  Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{
+    getVault:async()=>({path:'/fixture',name:'Fixture'}),
+    getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'},binaryLimits:{maxFileBytes:'67108864',maxChunkBytes:131072,smallReadBytes:'16777216'}}),
+    durableInvoke:async(_path:string,_admission:string,method:string)=>{invocations++;assert.equal(method,'checkpoints.list');return{items:[],cursor:null,highWater:'0'};},
+    releaseDurableContext:async(path:string,admission:string)=>{assert.equal(path,'/fixture');assert.equal(admission,'admitted');if(++releases===1){entered();await new Promise<void>((_resolve,reject)=>{failRelease=reject;});}},
+  }}});
+  try {
+    const platform=(await createPlatformAdapter())!,streams=platform.adapter.binaryStreams!;
+    const release=platform.release!();await releasing;
+    const before=invocations;
+    await assert.rejects(streams.openRead({entryId:'entry'}),/context released/);
+    const unknown=assert.rejects(release,/lost release/);failRelease(new Error('lost release'));await unknown;
+    await assert.rejects(streams.openRead({entryId:'entry'}),/context released/);
+    await platform.release!();assert.equal(releases,2);assert.equal(invocations,before);
+  } finally {if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});

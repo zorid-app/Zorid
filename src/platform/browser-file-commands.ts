@@ -37,6 +37,7 @@ export type BrowserFileCommandInput = Base & ({
 export interface BrowserFileCommandBackend {
     readonly checkpoints: DurableCheckpoints;
     readEntry(path: string): Promise<BrowserVaultRead | null>;
+    readMetadata?(path:string):Promise<BrowserVaultRead|null>;
     prepareFamily(intentId: string, commandJson: string): Promise<void>;
     commit(intentId: string): Promise<string>;
     intents(): Promise<BrowserVaultIntent[]>;
@@ -156,7 +157,8 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
     let tail: Promise<unknown> = Promise.resolve();
     function serial<T>(action: () => Promise<T>): Promise<T> { const task = tail.then(() => { assertActive(); return action(); }); tail = task.catch(() => { }); return task; }
     async function plan(request: Request): Promise<Step[]> {
-        const current = await backend.readEntry(request.path), steps: Step[] = [];
+        const observe=(path:string)=>backend.readMetadata?.(path)??backend.readEntry(path);
+        const current = await (request.kind==='writeText'?backend.readEntry(request.path):observe(request.path)), steps: Step[] = [];
         const create = (entryPath: string, kind: 'file' | 'folder', id = request.entryId, operationId = request.operationId): Step => ({ operationId, mutation: { type: 'create', id, path: entryPath, kind }, mode: kind === 'folder' ? null : request.kind.endsWith('Binary') ? 'binary' : 'text' });
         if (request.kind === 'mkdir' || request.kind === 'createText' || request.kind === 'createBinary') {
             if (current)
@@ -169,11 +171,11 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
                     throw failure('revision_conflict');
                 return [create(request.path, 'file')];
             }
-            if (current.entry.kind !== 'file' || !current.bytes)
+            if (current.entry.kind !== 'file' || request.kind==='writeText'&&!current.bytes)
                 throw failure('invalid_request');
             if (request.expectedEntryId !== undefined && (current.entry.id !== request.expectedEntryId || current.entry.revision !== request.expectedRevision))
                 throw failure('revision_conflict');
-            if (request.expectedBody !== undefined && encode(current.bytes) !== request.expectedBody)
+            if (request.expectedBody !== undefined && encode(current.bytes!) !== request.expectedBody)
                 throw failure('revision_conflict');
             return [{ operationId: request.operationId, mutation: { type: 'write', id: current.entry.id, expected: current.entry.revision }, mode: null }];
         }
@@ -189,7 +191,7 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
             if (parts.length >= maxSteps)
                 throw failure('request_limit');
             for (let index = 1; index <= parts.length; index++) {
-                const parentPath = parts.slice(0, index).join('/'), parent = await backend.readEntry(parentPath);
+                const parentPath = parts.slice(0, index).join('/'), parent = await observe(parentPath);
                 if (parent) {
                     if (parent.entry.kind !== 'folder')
                         throw failure('invalid_request');
@@ -199,7 +201,7 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
             }
         }
         if (request.kind === 'move' || request.kind === 'trash') {
-            if (!destination || destination === request.path || destination.startsWith(request.path + '/') || await backend.readEntry(destination))
+            if (!destination || destination === request.path || destination.startsWith(request.path + '/') || await observe(destination))
                 throw failure('revision_conflict');
             steps.push({ operationId: request.operationId, mutation: { type: 'move', id: current.entry.id, expected: current.entry.revision, path: destination }, mode: null });
         }

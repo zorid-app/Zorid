@@ -1,5 +1,6 @@
 //! Bounded local fixture transport. Authentication and authorization live in the
 //! storage transaction, not in a stale HTTP middleware cache.
+use crate::admission::{allowed_origins, run, RelayState as HttpState};
 use crate::{BearerToken, RelayError, RelayStore, Result, MAX_PAGE_BYTES, MAX_PAGE_ITEMS};
 use axum::{
     body::Bytes,
@@ -13,48 +14,15 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::json;
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-};
-use tokio::sync::Semaphore;
+use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 use zorid_sync_protocol::{Cursor, LogPosition, ProtocolError, UpdateId, VaultId, MAX_WIRE_BYTES};
-
-#[derive(Clone)]
-struct HttpState {
-    store: Arc<Mutex<RelayStore>>,
-    inflight: Arc<Semaphore>,
-    work: Arc<Semaphore>,
-}
 
 /// Exact HTTP(S) origin allowlist; no wildcard, null origin or credentials cookie.
 /// Callers embedding this Router are responsible for loopback-only binding.
 pub fn router(store: RelayStore, origins: &[String]) -> Result<Router> {
-    if origins.len() > 16 {
-        return Err(RelayError::InvalidRequest);
-    }
-    let mut allowed = Vec::new();
-    for origin in origins {
-        if origin.len() > 512 {
-            return Err(RelayError::InvalidRequest);
-        }
-        let uri: axum::http::Uri = origin.parse().map_err(|_| RelayError::InvalidRequest)?;
-        if !matches!(uri.scheme_str(), Some("http" | "https"))
-            || uri.authority().is_none()
-            || uri.authority().is_some_and(|a| a.as_str().contains('@'))
-            || uri.path_and_query().is_some_and(|p| p.as_str() != "/")
-            || origin.ends_with('/')
-        {
-            return Err(RelayError::InvalidRequest);
-        }
-        allowed.push(HeaderValue::from_str(origin).map_err(|_| RelayError::InvalidRequest)?);
-    }
-    let state = HttpState {
-        store: Arc::new(Mutex::new(store)),
-        inflight: Arc::new(Semaphore::new(8)),
-        work: Arc::new(Semaphore::new(8)),
-    };
+    let allowed = allowed_origins(origins)?;
+    let state = HttpState::new(store);
     let cors = CorsLayer::new()
         .allow_origin(allowed)
         .allow_methods([Method::GET, Method::PUT])
@@ -116,26 +84,6 @@ async fn no_store(request: Request, next: Next) -> Response {
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
-}
-
-async fn run<T: Send + 'static>(
-    state: HttpState,
-    operation: impl FnOnce(&mut RelayStore) -> Result<T> + Send + 'static,
-) -> Result<T> {
-    // A blocking SQLite operation survives cancellation of its HTTP future.
-    // Its own permit must move into that closure and remain held until it exits.
-    let permit = state
-        .work
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| RelayError::Busy)?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let mut store = state.store.lock().map_err(|_| RelayError::Corrupt)?;
-        operation(&mut store)
-    })
-    .await
-    .map_err(|_| RelayError::Corrupt)?
 }
 
 async fn hello(State(state): State<HttpState>) -> Result<Json<serde_json::Value>> {
@@ -259,7 +207,9 @@ pub fn loopback_address(port: u16) -> SocketAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+    use tokio::sync::Semaphore;
     use zorid_sync_protocol::RealmId;
 
     #[tokio::test(flavor = "current_thread")]

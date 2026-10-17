@@ -1,6 +1,6 @@
 //! Shared blocking native orchestration for explicit loopback sync fixtures.
-//! Extracted from the standalone CLI; neither frontend owns HTTP/CRDT semantics.
-//! No background runtime, production enrollment, daemon or IPC requirement.
+//! Extracted from the standalone CLI; neither frontend owns transport/CRDT semantics.
+//! A bounded per-sweep RPC worker owns its runtime; no daemon or IPC requirement.
 //!
 //! A failed sweep may have committed earlier uploads or receives. Reuse retained
 //! state and exact ciphertext on retry; failure never authorizes a new update ID.

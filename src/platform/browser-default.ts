@@ -9,6 +9,9 @@ import type { BrowserFileCommandInput } from './browser-file-commands.ts';
 import { openBrowserClientSlot } from './browser-client-slots.ts';
 import type { BrowserClientSlot } from './browser-client-slots.ts';
 import { legacyBrowserExport } from './browser-legacy-export.ts';
+import { binaryLength, writeBinarySource } from '../core/binary-transfer.ts';
+import type { BinaryTarget, BinaryStageRef, BinaryReadRef } from '../core/binary-streams.ts';
+import { vaultPath } from './path.ts';
 
 export const DEFAULT_BROWSER_DATABASE='zorid-core-vault:default-v1';
 /** Normal browser commands retain the exact request after uncertain transport.
@@ -31,14 +34,80 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
       throw error;
     });
   };
+  const streams=consumer.binaryStreams;
+  type BinaryPending={kind:'createBinary'|'writeBinary';path:string;bytes:Uint8Array;operationId:string;entryId:string;identity?:{entryId:string;expectedRevision:string};target?:BinaryTarget;pin?:BinaryReadRef;ref?:BinaryStageRef;inFlight?:Promise<void>};
+  const binaryPending=new Map<string,BinaryPending>();
+  const sameBytes=(left:Uint8Array,right:Uint8Array)=>left.length===right.length&&left.every((value,index)=>value===right[index]);
+  function binary(kind:BinaryPending['kind'],inputPath:string,data:Uint8Array):Promise<void>{
+    try{
+      const path=vaultPath(inputPath);
+      if(!(data instanceof Uint8Array)||BigInt(data.byteLength)>binaryLength(streams!.limits.smallReadBytes)||data.byteLength>16*1024*1024)throw new BrowserVaultError('stream_required','Use a binary source for this file size');
+      const prior=binaryPending.get(path);
+      if(prior&&(prior.kind!==kind||!sameBytes(prior.bytes,data)))throw new BrowserVaultError('command_pending','Finish the retained binary operation before changing its request');
+      if(prior?.inFlight)return prior.inFlight;
+      // Snapshot once before metadata, pinning, or any other asynchronous work.
+      const owned:BinaryPending=prior??{kind,path,bytes:data.slice(),operationId:crypto.randomUUID(),entryId:crypto.randomUUID()};
+      binaryPending.set(path,owned);
+      const result=(async()=>{
+        if(owned.pin&&!owned.target){await streams!.closeRead(owned.pin);owned.pin=undefined;}
+        if(!owned.target){
+          if(kind==='createBinary')owned.target={kind:'create',entryId:owned.entryId,path};
+          else{
+            if(!owned.identity){
+              const row=await (runtime.readMetadata?.(path)??runtime.readEntry(path));
+              if(!row)owned.target={kind:'create',entryId:owned.entryId,path};
+              else{if(row.entry.kind!=='file')throw new BrowserVaultError('not_file','Binary destination is not a file');owned.identity={entryId:row.entry.id,expectedRevision:row.entry.revision};}
+            }
+            if(!owned.target){
+              const identity=owned.identity!;
+              owned.pin=await streams!.openRead(identity);
+              if(owned.pin.entryId!==identity.entryId||owned.pin.entryRevision!==identity.expectedRevision||!owned.pin.selectedContentEvent)throw new BrowserVaultError('invalid_binary_read','Binary pin does not match the original destination');
+              owned.target={kind:'write',...identity,expectedContentEvent:owned.pin.selectedContentEvent};
+            }
+          }
+        }
+        if(owned.pin){await streams!.closeRead(owned.pin);owned.pin=undefined;}
+        if(owned.ref){
+          const observed=await streams!.query(owned.ref);
+          if(observed.phase==='sealed'||observed.phase==='commit_requested'||observed.phase==='committed'||observed.phase==='rejected'){
+            if(observed.phase==='sealed')await streams!.seal(owned.ref,{finalLength:String(owned.bytes.length)});
+            await streams!.commit(owned.ref);return;
+          }
+          if(observed.phase!=='receiving')throw new BrowserVaultError('invalid_stage_state','Retained binary operation cannot accept bytes');
+        }
+        let offset=0;
+        const source={length:String(owned.bytes.length),async read(max:number){if(offset===owned.bytes.length)return null;const end=Math.min(owned.bytes.length,offset+max),chunk=owned.bytes.slice(offset,end);offset=end;return chunk;}};
+        try{const completed=await writeBinarySource(streams!,{operationId:owned.operationId,target:owned.target!},source);owned.ref=completed.ref;}
+        catch(error){if(error&&typeof error==='object'&&'binaryStage'in error)owned.ref=structuredClone(error.binaryStage) as BinaryStageRef;throw error;}
+      })();
+      const tracked=result.then(()=>{if(binaryPending.get(path)===owned)binaryPending.delete(path);},async error=>{
+        // Only the owning retained stage's terminal evidence can release a
+        // binary request. Transport errors and semantic-looking error codes
+        // alone never permit a replacement operation.
+        if(owned.ref){
+          let rejected:import('../core/binary-streams.ts').BinaryOperationOutcome|undefined;
+          try{const observed=await streams!.query(owned.ref);if(observed.phase==='rejected'&&observed.outcome?.status==='rejected')rejected=observed.outcome;}catch{/* Preserve the original uncertainty when outcome lookup fails. */}
+          if(rejected?.status==='rejected'){
+            if(binaryPending.get(path)===owned)binaryPending.delete(path);
+            const terminal=rejected.error;throw new BrowserVaultError(terminal.code,terminal.message,terminal.details,terminal.source);
+          }
+        }
+        // Only metadata-only failures may release the captured destination. Any
+        // pin/stage uncertainty retains its original request for an exact retry.
+        if(!owned.target&&!owned.identity&&!owned.pin&&!owned.ref&&binaryPending.get(path)===owned)binaryPending.delete(path);
+        throw error;
+      }).finally(()=>{if(owned.inFlight===tracked)owned.inFlight=undefined;});
+      owned.inFlight=tracked;return tracked;
+    }catch(error){return Promise.reject(error);}
+  }
   return {
-    durableWrites:consumer.durableWrites,durableNamespace:true,
+    durableWrites:consumer.durableWrites,durableNamespace:true,...(streams?{binaryStreams:streams}:{}),
     list:()=>facade.list(),stat:path=>facade.stat(path),read:path=>facade.read(path),readBinary:path=>facade.readBinary(path),subscribe:listener=>facade.subscribe(listener),
     createText:(path,content)=>execute({kind:'createText',path,content}),
     write:(path,content)=>execute({kind:'writeText',path,content}),
     compareAndWrite:(path,expectedContent,content,expectedIdentity)=>execute({kind:'writeText',path,content,expectedContent,...(expectedIdentity?{expectedEntryId:expectedIdentity.entryId,expectedRevision:expectedIdentity.revision}:{})}),
-    createBinary:(path,data)=>execute({kind:'createBinary',path,data}),
-    writeBinary:(path,data)=>execute({kind:'writeBinary',path,data}),
+    createBinary:(path,data)=>streams?binary('createBinary',path,data):execute({kind:'createBinary',path,data}),
+    writeBinary:(path,data)=>streams?binary('writeBinary',path,data):execute({kind:'writeBinary',path,data}),
     mkdir:path=>execute({kind:'mkdir',path}),rename:(path,destination)=>execute({kind:'move',path,destination}),
     trash:path=>execute({kind:'trash',path}),remove:(path,force)=>execute({kind:'delete',path,force}),
   };

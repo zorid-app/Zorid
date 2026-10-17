@@ -1,10 +1,9 @@
 # Native fixture sync runner
 
 `FixtureSync` is the shared blocking runner used by standalone CLI and desktop
-hosts. It embeds no desktop process dependency and starts no daemon. Its HTTP
-transport and protected credentials were extracted from the reviewed CLI family
-runner; the portable protocol codecs and NativeVault retain authority over wire
-validation and atomic persistence.
+hosts. Each `once` sweep owns one bounded worker with a Tokio current-thread
+runtime and a generated Tonic client. It embeds no desktop dependency and starts
+no daemon. NativeVault retains authority over exact ciphertext and durable state.
 
 ```rust,ignore
 let sync = FixtureSync::load(&trusted_config_path, &trusted_vault_root)?;
@@ -13,33 +12,59 @@ let report = sync.once(&mut vault, SyncLimits::default())?;
 ```
 
 Only trusted host startup code selects the config file and vault root. Load
-requires an absolute protected file outside that root, validates its bounded
-contents and accepts literal loopback HTTP endpoints only. The caller must use
-the same root to open NativeVault. The public scope is logical realm/vault
-metadata; it does not prove a filesystem lease. No key, bearer token or endpoint
-is accepted through renderer operations. Credential containers are neither
-serializable nor debug-printable; errors retain only stable static codes.
+requires an absolute protected file outside that root and validates its bounded
+contents. New fixture credentials require `version: 2`, `transport: "grpc"`, a
+literal loopback HTTP endpoint with an explicit port, and independently pinned
+realm/server epoch. Version1 HTTP credentials are rejected; no fallback or silent
+reinterpretation exists. The existing key/token fields and protected-file checks
+remain. The caller must use the same root to open NativeVault. No secret or
+endpoint is accepted through renderer operations. Credential containers are
+neither serializable nor debug-printable; errors retain only static codes.
 
 `enroll` supports fresh disposable family fixtures. `status` is read-only and
-requires the persisted logical binding. `once` checks that binding, validates the
-relay hello, pushes at most `max_push` exact persisted ciphertexts and pulls at
-most `max_pages` pages from one fixed high-water snapshot. Defaults are 64 and 4;
-maximums are 1000 and 100. A zero value disables that part of the sweep. Each
-bounded page is authenticated before its updates are individually committed.
-Server ACK, local receive and physical projection are separate report fields.
-An error can follow earlier durable progress: retain state and retry the same
-work. It never authorizes new update IDs or cursor replacement.
+requires the persisted logical binding. `once` validates the relay Hello against
+transport major2, then pushes at most `max_push` exact persisted ciphertexts and
+pulls at most `max_pages` pages from one fixed snapshot. Defaults are64 and4;
+maximums are1000 and100. Zero disables that part of the sweep. Each bounded page
+is authenticated before its updates are individually committed. Server ACK,
+local receive and physical projection remain separate report fields. Failure
+can follow durable progress: retain state and retry the exact existing ID/wire.
+It never authorizes resealing or cursor replacement.
 
-Transport timeouts, redirect/proxy/retry prohibitions, response bounds before
-JSON/base64 parsing, exact ACK checks and strict raw response codecs are unchanged
-from the CLI implementation. Calls block: desktop hosts run them on their
-existing worker, not the UI thread. Native locking is per core operation, never
-held across HTTP calls. All exposed capabilities remain explicit fixture scope;
-production enrollment, large-file streaming and automatic scheduling are not
-implemented here.
+The generated protobuf codec enforces method-specific encoded message limits
+before decode; portable RPC validators enforce required presence, version,
+features, target, page continuity and exact inner wire/page bounds. This new
+transport uses standard protobuf unknown-field/singular-field semantics. It does
+not reinterpret the exact ZSE1 bytes, header JSON/AAD or encrypted payload format.
 
-The existing CLI process fixtures remain the integration tests for the extracted
-runner (lost ACK, independent offline processes, no received echo, mode identity,
-namespace/binary payloads and protected credentials). Focused library tests cover
-its new public limit validation and body-free error surface. Native schema8 and
-actual CLI/desktop process gates are required before claiming integration.
+Connection timeout is3seconds and each unary deadline is10seconds. Compression,
+automatic RPC retries, redirects and proxy forwarding are disabled. The internal
+command and reply channels have capacity1; the worker and its runtime/channel
+are joined and destroyed before a sweep returns. Hosts may call this blocking
+API from their existing worker, including a worker using Tokio, without nesting
+or dropping runtimes in its async context. Native locking remains per core
+operation and is never held across a network call. Uncertain transport outcomes
+retain `sync_transport` for the existing CLI watch retry allowlist.
+
+Focused tests cover explicit config selection, loopback pinning, sanitized error
+codes and runtime lifecycle. Independent CLI process fixtures retain offline,
+lost-ACK/restart, exact-wire, isolation, revocation and protocol-feature checks
+against the actual relay adapter. Source implementation alone does not establish
+those integrated checks, desktop/browser parity, TLS deployment or enrollment UI.
+
+The 2026-10-17 focused binary fixture investigation used the compiled
+`sync-6744fc778313f4ff` test, exact
+`binary_larger_than_one_envelope_moves_and_deletes_with_exact_bytes`, with one
+test thread. The 25-second child deadline stopped the first upload sweep;
+the direct repro exited101 after37.06seconds. Child29911 used85.7% CPU and
+28,528KiB RSS (about28MiB). The three-second sample at
+`/private/tmp/zorid-native-sync-29911.sample.txt` places1515 of2160 main-thread
+samples in `family_seal` and643 in `family_ack`, predominantly
+`require_scope -> file_state::load -> check_file -> v2::Payload::decode` and JSON
+byte-array validation. The RPC worker was waiting for commands in2159 of2160
+samples. This identifies a legacy local whole-graph CPU bottleneck in this debug
+fixture, not evidence of a stalled RPC. Its test-only per-child deadline is now
+90seconds; the 2MiB payload, exact-byte/move/delete assertions and production
+RPC deadlines are unchanged. A successful bounded rerun remains required; this
+sample makes no throughput or completed-convergence claim. Normalized streaming
+activation must avoid this legacy full-graph seal/ACK path.
