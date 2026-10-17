@@ -714,4 +714,21 @@ mod tests {
             "index_invalid_query"
         );
     }
+    #[test]
+    fn base_read_selector_and_steps_reject_present_null_and_duplicate_fields() {
+        let defaults: BaseReadOptions = serde_json::from_str("{}").unwrap();
+        assert!(defaults.current_entry_id.is_none());
+        assert!(defaults.max_steps.is_none());
+        for raw in [
+            r#"{"currentEntryId":null}"#,
+            r#"{"maxSteps":null}"#,
+            r#"{"currentEntryId":"one","currentEntryId":"two"}"#,
+            r#"{"maxSteps":1,"maxSteps":2}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<BaseReadOptions>(raw).is_err(),
+                "{raw}"
+            );
+        }
+    }
 }
