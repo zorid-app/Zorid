@@ -673,3 +673,71 @@ Existing Apple support case103000040642 remains the escalation. This does not
 block the already installed signed development build5, but TestFlight remains
 unavailable. Root retains its bounded desktop retry/build resources and will
 announce canonical consumer integration before the next native build.
+
+
+## Build 6 installed — 2026-10-17 22:40 UTC
+
+Owner branch/worktree remains tingkai-c/native-mobile-recovery in
+/Users/ctk/orca/workspaces/Zorid/native-mobile-recovery. Canonical308fc9ba
+merged as02bf1fcc, retaining current shared document/Base/query behavior and
+mobile lifecycle/presentation/lease hooks. Adapter witnessed rename fix ee94f6e3
+imported as829cd2c9: capture optional entryId/revision before queue/signature,
+reject stale source before mutation, preserve exact pending retry identity.
+Final independent review msg_2439cdce7595 found no source blockers. Full composed
+tsc5421 exits0; prior composed nine-file focused batch261/261 and locked offline
+mobile metadata pass. Worker rename batch180/180 passes. No duplicate broad
+checks were run after unchanged reviewed source.
+
+Frozen runtime source829cd2c91c6a0bc72e7bac36f9818e325a9112ba built with
+Xcode26.3, official Rust1.95 targets, mobile locked Cargo manifest and jobs1,
+webpack desktop target and cap copy only. Root granted exclusive native slot;
+Simulator54126 terminal0 BUILD SUCCEEDED, then signed Dev52508 terminal0 BUILD
+SUCCEEDED. Simulator app.zorid.notes build6 installed/launched on existing booted
+iPhone17. Actual initial root shows one Notes tab, Files list, settings gear and
+no root history capsule. An initial assertion sampled vault-loading state and
+was retried against settled UI. Detailed menu/navigation/keyboard/PDF checks
+remain separately tracked. Two disposable encrypted/invalid PDF fixtures were
+added only to the disposable Simulator vault; incomplete-scan status is under
+source investigation and is not claimed as clean vault verification.
+
+Physical iPhone: strict/deep signature verification and bundle/environment/build
+assertions pass for app.zorid.notes.dev, development, build6. Exec24342 terminal0
+reports install0 then launch0. This supersedes installed hotfix5; actual phone
+file interaction remains unproven by installer success. Private build/install/
+launch logs are /private/tmp/mobile-v6-phone-build.log and
+/private/tmp/mobile-phone6-{install,launch}.log. Existing development signing
+used with no provisioning updates. No production install, TestFlight upload or
+App Store Connect changes. App artifact remains at
+/private/tmp/zorid-ios-notes-v6-phone-20261017/DerivedData/Build/Products/Debug-Dev-iphoneos/App.app.
+
+User asks whether hiding navigation on downward scroll is common. Recommended
+iOS26 native bottom-tab minimization onScrollDown with restoration upward;
+editor keeps route controls available. This was design advice, not an implemented
+change in frozen build6.
+
+Actual bounded build6 UI continuation passes: native heading Menu exposes Recents
+and Files, selecting both updates heading under the same sole Notes tab; root
+Settings opens a sheet containing Done/Choose vault, Done dismisses; folder row
+drills into Orca-folder, hides settings and shows connected Back/Forward controls
+(Forward disabled at history end). Exec87620 exits0; AX evidence
+/private/tmp/mobile-v6-{recents-settled,files-selected,settings-sheet,folder-ready}.json.
+Immediate AX after menu dismissal showed transient empty context-menu hierarchy;
+the harness now waits for enabled targets and two stable frames. This is not a
+product crash. Choose vault action, restart persistence, build6 note editing,
+keyboard and password/error PDF flows remain pending. Simulator test app stopped
+and helper closed; Simulator remains booted per user instruction.
+
+Source-only scan investigation finds PDF decoding does not feed reconciliation:
+PDFs are binary byte imports. Current native status labels overall reconciliation
+complete=false as incomplete scan; this can also mean pending positive paths or
+reconciliation issues after complete inventory. Actual cause needs bounded
+reconciliation fields/issue codes, so do not hide warning or simply substitute
+scanComplete. No speculative source fix was made.
+
+Coordinator relays new physical-mobile finding22:41: title focused with keyboard
+open, direct body tap collapses/reopens keyboard. Expected continuous title/body
+focus transfer. Assigned existing presentation worker source investigation with
+exact shared-file ownership required before edits; no additional build yet.
+Root now owns Vite migration/root manifests, locks and asset/build pipeline.
+Mobile requires dist/index.html + relative assets + desktop/native adapter
+selection, then cap copy ios only; no unpublished Vite source consumed.
