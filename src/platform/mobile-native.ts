@@ -8,7 +8,7 @@ import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints
 
 /** Native chooses/opens the vault before loading the editor. No vault root crosses this API. */
 export interface NativeVaultPlugin {
-  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string }>;
+  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string; createNoteOnOpen?: boolean }>;
   noteOpened(input: { path: string; entryId: string }): Promise<void>;
   refresh(): Promise<{ reconciliation: DesktopReconciliation }>;
   request(input: { header: string; body: string }): Promise<{ header: string; body: string }>;
@@ -20,7 +20,7 @@ export interface MobileLifecycle {
   subscribe(handler: (reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>): () => void;
 }
 // Keep this owned surface until the coordinator lands the PlatformVault declaration.
-type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; initialPath?: string; initialEntryId?: string; noteOpened(path: string, entryId: string): Promise<void> };
+type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; editorOnly: true; createNoteOnOpen?: boolean; initialPath?: string; initialEntryId?: string; noteOpened(path: string, entryId: string): Promise<void> };
 const FILE_LIMIT = 16 * 1024 * 1024, PLAN_LIMIT = 8 * 1024 * 1024, CHECKPOINT_LIMIT = 32 * 1024 * 1024;
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 // Wire objects are validated at their consumer boundary; never cast them to editor state directly.
@@ -159,7 +159,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { if (lifecycleHandler === handler) lifecycleHandler = undefined; };
     },
   };
-  let initialPath: string | undefined, initialEntryId: string | undefined;
+  let initialPath: string | undefined, initialEntryId: string | undefined, createNoteOnOpen: boolean | undefined;
   let initialSelection: { path: string; entryId: string; phase: 'pending' | 'consumed' } | undefined;
   let context: Awaited<ReturnType<NativeVaultPlugin['context']>>;
   let reconciliationState: DesktopReconciliation | null = null;
@@ -202,6 +202,9 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   try {
     context = await bridge.context();
     if (typeof context.clientId !== 'string' || !uuid(context.clientId) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
+    if (context.createNoteOnOpen !== undefined && typeof context.createNoteOnOpen !== 'boolean') throw fail('invalid_native_context');
+    if (context.createNoteOnOpen === true && (context.initialPath !== undefined || context.initialEntryId !== undefined)) throw fail('invalid_native_context');
+    createNoteOnOpen = context.createNoteOnOpen;
     if ((context.initialPath === undefined) !== (context.initialEntryId === undefined)) throw fail('invalid_native_context');
     if (context.initialPath !== undefined) {
       if (!id(context.initialEntryId)) throw fail('invalid_native_context');
@@ -538,7 +541,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { listeners.delete(listener); if (!listeners.size && timer) { clearInterval(timer); timer = undefined; } };
     },
   };
-  return { adapter, mobileLifecycle, reconciliation, ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
+  return { adapter, mobileLifecycle, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
     async noteOpened(path,entryId) {
       active(); if (releasePromise) throw fail('storage_closed');
       const captured = nativeNotePath(path);

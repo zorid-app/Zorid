@@ -25,11 +25,11 @@ function fixture() {
   let ackHook: ((input:{id:string;ok:boolean})=>Promise<void>) | undefined;
   let initialReconciliation: any = undefined, refreshValue: any = {reconciliation:scanStatus()}, refreshCalls=0;
   let refreshHook: (()=>Promise<void>) | undefined;
-  let initialPath: any = undefined, initialEntryId: any = undefined, openedHook: ((path:string)=>Promise<void>) | undefined; const opened: string[] = [],openedRefs:{path:string;entryId:string}[]=[];
+  let initialPath: any = undefined, initialEntryId: any = undefined, createNoteOnOpen: any = undefined, openedHook: ((path:string)=>Promise<void>) | undefined; const opened: string[] = [],openedRefs:{path:string;entryId:string}[]=[];
   const plugin: NativeVaultPlugin & {close():Promise<void>} = {
     async addListener(event,handler) { assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
     async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
-    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialEntryId===undefined?{}:{initialEntryId}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
+    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialEntryId===undefined?{}:{initialEntryId}),...(createNoteOnOpen===undefined?{}:{createNoteOnOpen}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
     async noteOpened({path,entryId}) { openedRefs.push({path,entryId}); active++;maxActive=Math.max(maxActive,active);opened.push(path);try{if(openedHook)await openedHook(path);await new Promise<void>(r=>setImmediate(r));}finally{active--;} },
     async refresh() { active++;maxActive=Math.max(maxActive,active);refreshCalls++;try {if(refreshHook)await refreshHook();await new Promise<void>(r=>setImmediate(r));return refreshValue;}finally{active--;} },
     async request(input) {
@@ -101,7 +101,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, opened, openedRefs, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, opened, openedRefs, newNote(value:any){createNoteOnOpen=value;}, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -653,4 +653,33 @@ test('concurrent text and binary activation both keep the captured initial ident
   const f=fixture();f.selection('Note.md','selected');const v=await openNativeMobileVault(f.plugin);
   await Promise.all([assert.rejects(v.adapter.durableWrites!.readText('Note.md'),{code:'revision_conflict'}),assert.rejects(v.adapter.readBinary!('Note.md'),{code:'revision_conflict'})]);
   assert.equal((await v.adapter.durableWrites!.readText('Note.md')).entryId,'entry');await v.release!();
+});
+
+test('native editor-only New note capability forwards intent without creating or opening a note',async()=>{
+  const f=fixture();f.newNote(true);const v=await openNativeMobileVault(f.plugin);
+  assert.equal(v.editorOnly,true);assert.equal(v.createNoteOnOpen,true);
+  assert.equal(Object.hasOwn(v,'initialPath'),false);assert.equal(Object.hasOwn(v,'initialEntryId'),false);
+  assert.deepEqual(f.requests.map(r=>r.command.method),['claim_client','identity']);assert.equal(f.heads.size,0);assert.deepEqual(f.openedRefs,[]);
+  assert.ok(v.adapter.durableWrites);assert.equal(v.adapter.durableNamespace,true);assert.ok(v.mobileLifecycle);assert.ok(v.recoverCommands);
+  await v.release!();assert.equal(f.closes,0);
+});
+
+test('existing selected note permits explicit false creation intent and keeps its identity guard',async()=>{
+  const f=fixture();f.selection('Note.md','native-selected');f.newNote(false);const v=await openNativeMobileVault(f.plugin);
+  assert.equal(v.editorOnly,true);assert.equal(v.createNoteOnOpen,false);assert.equal(v.initialEntryId,'native-selected');
+  await assert.rejects(v.adapter.durableWrites!.readText('Note.md'),{code:'revision_conflict'});assert.deepEqual(f.openedRefs,[]);await v.release!();
+});
+
+test('absent New note context flag remains absent while native editor-only capability is present',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);assert.equal(v.editorOnly,true);assert.equal(Object.hasOwn(v,'createNoteOnOpen'),false);await v.release!();
+});
+
+for(const value of [null,0,'true',{},[]]) test(`nonboolean New note context ${JSON.stringify(value)} fails admission`,async()=>{
+  const f=fixture();f.newNote(value);await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});
+  assert.equal(f.requests.length,0);assert.equal(f.removals,1);assert.equal(f.closes,0);
+});
+
+for(const [path,entryId] of [['Note.md','Selected'],['Note.md',undefined],[undefined,'Selected']] as const) test(`New note intent cannot coexist with selection ${JSON.stringify([path,entryId])}`,async()=>{
+  const f=fixture();f.newNote(true);f.selection(path,entryId);await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});
+  assert.equal(f.requests.length,0);assert.equal(f.removals,1);assert.deepEqual(f.openedRefs,[]);
 });
