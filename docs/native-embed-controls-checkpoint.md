@@ -12,12 +12,21 @@ disposable vault using an original SVG and a three-card Canvas fixture.
 - The static Canvas preview exposed its title and three-card/zero-connection
   description. Activating it opened the correct Canvas document.
 
-That final navigation reproduced the unresolved direct-audio defect: the cached
-Canvas had a playable WAV card at startup, but returning through the preview
-showed "Unable to play media." Clicking Play did not change the state. The
-adjacent note used the same WAV successfully. The attachment investigation now
-has this specific workspace/cache transition; isolated resource-lease tests do
-not establish that the native decoder path is correct.
+That final navigation produced the accessibility label "Unable to play media."
+for the direct WAV card; the initial automation Play attempt showed no change.
+A follow-up diagnostic build, instrumenting the actual media element, found no
+media error: metadata loaded, readyState was 4, networkState was 1, and canplay
+fired. The same direct card subsequently emitted play, pause and ended, and the
+native time control reached 0:02 while the misleading accessibility label
+remained. External window activity occurred between activation attempts, so this
+pass does not establish which click triggered playback.
+
+The diagnostic evidence refutes the earlier inference that this accessibility
+label alone proved a decoder failure. The app's own error text is "Unable to play
+this media.", a different string. No speculative retry was added. First-click
+activation consistency still requires controlled native verification; a direct
+file playback failure is not confirmed by this observation. Diagnostic changes
+were isolated and were not merged into production.
 
 The owned desktop process was closed after the pass. These observations verify
 native action outcomes, not exact geometry, screenshot parity, mobile behavior,

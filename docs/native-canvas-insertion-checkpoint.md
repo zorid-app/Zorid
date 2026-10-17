@@ -80,3 +80,9 @@ suffix after the owned app exited normally; existing text and node geometry were
 preserved. Direct WAV-card controls were available throughout this pass, but the
 previous intermittent decoder error is not proven fixed. Screenshots remained
 mostly white/clipped, so no new pixel-parity claim is made.
+
+
+A later instrumented native run corrected the direct-WAV interpretation: the
+Chromium accessibility label "Unable to play media." coexisted with readyState 4,
+no MediaError and a completed play/pause/ended sequence. It is not proof of the
+app's own playback error. See [the native embed checkpoint](native-embed-controls-checkpoint.md).
