@@ -1,0 +1,378 @@
+{
+  "schemaVersion": 1,
+  "status": "proposed-not-executed",
+  "cases": [
+    {
+      "id": "same-instant-explicit-zone",
+      "kind": "expression",
+      "expression": "date(\"2024-01-15T10:00:00+02:00\") == date(\"2024-01-15T08:00:00Z\")",
+      "invocation": {
+        "clock": "2024-01-15T10:20:30Z",
+        "timezone": "America/Toronto"
+      },
+      "expected": {
+        "type": "boolean",
+        "value": true
+      },
+      "decision": "retain-instant-semantics-with-explicit-zone"
+    },
+    {
+      "id": "calendar-day-dst-spring",
+      "kind": "expression",
+      "expression": "date(\"2024-03-10\") + duration(\"1d\")",
+      "invocation": {
+        "clock": "2024-03-10T12:00:00Z",
+        "timezone": "America/Toronto"
+      },
+      "expected": {
+        "type": "date",
+        "timestamp": 1710129600000,
+        "hasTime": false
+      },
+      "note": "March 11 00:00 EDT; one calendar day from March 10 00:00 EST is 23 elapsed hours. This fixture does not infer a fixed-millisecond duration.",
+      "decision": "proposed-explicit-timezone"
+    },
+    {
+      "id": "dst-gap-does-not-roll-forward",
+      "kind": "expression",
+      "expression": "date(\"2024-03-10T02:30:00\")",
+      "invocation": {
+        "clock": "2024-03-10T12:00:00Z",
+        "timezone": "America/Toronto"
+      },
+      "expected": {
+        "type": "error",
+        "code": "invalid-local-time"
+      },
+      "decision": "proposed-reject-nonexistent-local-time"
+    },
+    {
+      "id": "dst-fold-needs-offset",
+      "kind": "expression",
+      "expression": "date(\"2024-11-03T01:30:00\")",
+      "invocation": {
+        "clock": "2024-11-03T12:00:00Z",
+        "timezone": "America/Toronto"
+      },
+      "expected": {
+        "type": "error",
+        "code": "ambiguous-local-time"
+      },
+      "decision": "proposed-reject-ambiguous-local-time"
+    },
+    {
+      "id": "bad-calendar-date-not-epoch-or-rollover",
+      "kind": "expression",
+      "expression": "date(\"2024-02-30\")",
+      "invocation": {
+        "clock": "2024-01-15T10:20:30Z",
+        "timezone": "UTC"
+      },
+      "expected": {
+        "type": "null"
+      },
+      "decision": "proposed-calendar-validation"
+    },
+    {
+      "id": "snapshot-move-preserves-entry-identity",
+      "kind": "query-transition",
+      "before": {
+        "generation": 7,
+        "entries": [
+          {
+            "entryId": "entry-a",
+            "revision": "r1",
+            "path": "Old/a.md",
+            "properties": {
+              "n": 2
+            }
+          }
+        ]
+      },
+      "after": {
+        "generation": 8,
+        "entries": [
+          {
+            "entryId": "entry-a",
+            "revision": "r1",
+            "path": "New/a.md",
+            "properties": {
+              "n": 2
+            }
+          }
+        ]
+      },
+      "expected": {
+        "entryIds": [
+          "entry-a"
+        ],
+        "paths": [
+          "New/a.md"
+        ],
+        "generation": 8
+      },
+      "decision": "required-host-index-provenance"
+    },
+    {
+      "id": "query-budget-never-silent-prefix",
+      "kind": "resource-limit",
+      "input": {
+        "files": 1000,
+        "formula": "[1,2,3].map(value + 1)",
+        "requestSteps": 1
+      },
+      "expected": {
+        "complete": false,
+        "diagnosticCode": "budget"
+      },
+      "note": "Exact request/result names are coordinator-owned. A resource failure must be observable and cannot look like a complete one-row query.",
+      "decision": "required-bounded-query"
+    },
+    {
+      "id": "deep-syntax-bounded-before-evaluation",
+      "kind": "resource-limit",
+      "input": {
+        "sourceRecipe": "129 opening parentheses, 1, 129 closing parentheses",
+        "maxNesting": 128
+      },
+      "expected": {
+        "diagnosticCode": "budget"
+      },
+      "note": "Depth diagnostic name is pending; rejection must happen during compilation without native stack growth or process abort.",
+      "decision": "proposed-initial-depth-limit"
+    },
+    {
+      "id": "natural-multilingual-digits",
+      "kind": "query-order",
+      "view": {
+        "sort": [
+          {
+            "property": "label",
+            "direction": "ASC"
+          }
+        ]
+      },
+      "records": [
+        {
+          "path": "0.md",
+          "properties": {
+            "label": "\u732b10"
+          }
+        },
+        {
+          "path": "1.md",
+          "properties": {
+            "label": "\u042f10"
+          }
+        },
+        {
+          "path": "2.md",
+          "properties": {
+            "label": "\u00e910"
+          }
+        },
+        {
+          "path": "3.md",
+          "properties": {
+            "label": "\u00c410"
+          }
+        },
+        {
+          "path": "4.md",
+          "properties": {
+            "label": "a10"
+          }
+        },
+        {
+          "path": "5.md",
+          "properties": {
+            "label": "\u732b2"
+          }
+        },
+        {
+          "path": "6.md",
+          "properties": {
+            "label": "\u044f2"
+          }
+        },
+        {
+          "path": "7.md",
+          "properties": {
+            "label": "\u00c92"
+          }
+        },
+        {
+          "path": "8.md",
+          "properties": {
+            "label": "\u00e42"
+          }
+        },
+        {
+          "path": "9.md",
+          "properties": {
+            "label": "A2"
+          }
+        }
+      ],
+      "expected": {
+        "paths": [
+          "9.md",
+          "4.md",
+          "8.md",
+          "3.md",
+          "7.md",
+          "2.md",
+          "6.md",
+          "1.md",
+          "5.md",
+          "0.md"
+        ]
+      },
+      "decision": "approved-portable-natural-comparator"
+    },
+    {
+      "id": "natural-zero-and-path-ties",
+      "kind": "query-order",
+      "view": {
+        "sort": [
+          {
+            "property": "label",
+            "direction": "ASC"
+          }
+        ]
+      },
+      "records": [
+        {
+          "path": "z.md",
+          "properties": {
+            "label": "item02"
+          }
+        },
+        {
+          "path": "a.md",
+          "properties": {
+            "label": "ITEM2"
+          }
+        },
+        {
+          "path": "b.md",
+          "properties": {
+            "label": "item10"
+          }
+        },
+        {
+          "path": "c.md",
+          "properties": {
+            "label": "item2a"
+          }
+        }
+      ],
+      "expected": {
+        "paths": [
+          "a.md",
+          "z.md",
+          "c.md",
+          "b.md"
+        ]
+      },
+      "decision": "approved-portable-natural-comparator",
+      "note": "Equal digit runs ignore zero padding; exact path breaks a complete label tie. Text after a numeric run still participates."
+    },
+    {
+      "id": "boolean-null-last-desc",
+      "kind": "query-order",
+      "view": {
+        "sort": [
+          {
+            "property": "key",
+            "direction": "DESC"
+          }
+        ]
+      },
+      "records": [
+        {
+          "path": "a.md",
+          "properties": {
+            "key": null
+          }
+        },
+        {
+          "path": "b.md",
+          "properties": {
+            "key": false
+          }
+        },
+        {
+          "path": "c.md",
+          "properties": {
+            "key": true
+          }
+        }
+      ],
+      "expected": {
+        "paths": [
+          "c.md",
+          "b.md",
+          "a.md"
+        ]
+      },
+      "decision": "approved-null-last-before-boolean"
+    },
+    {
+      "id": "mixed-type-rank-asc",
+      "kind": "query-order",
+      "view": {
+        "sort": [
+          {
+            "property": "key",
+            "direction": "ASC"
+          }
+        ]
+      },
+      "records": [
+        {
+          "path": "list.md",
+          "properties": {
+            "key": [
+              1
+            ]
+          }
+        },
+        {
+          "path": "string.md",
+          "properties": {
+            "key": "1"
+          }
+        },
+        {
+          "path": "number.md",
+          "properties": {
+            "key": 1
+          }
+        },
+        {
+          "path": "boolean.md",
+          "properties": {
+            "key": false
+          }
+        },
+        {
+          "path": "null.md",
+          "properties": {
+            "key": null
+          }
+        }
+      ],
+      "expected": {
+        "paths": [
+          "boolean.md",
+          "number.md",
+          "string.md",
+          "list.md",
+          "null.md"
+        ]
+      },
+      "decision": "approved-type-rank"
+    }
+  ]
+}

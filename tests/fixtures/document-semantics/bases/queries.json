@@ -1,0 +1,699 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "f69dc90de0de697dfb75a5a3d1805b69dba982b3",
+  "baselineTimezone": "UTC",
+  "cases": [
+    {
+      "id": "default-natural-order",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "z/A.md"
+          },
+          {
+            "path": "a/A.md"
+          },
+          {
+            "path": "B10.png"
+          },
+          {
+            "path": "B2.png"
+          }
+        ]
+      },
+      "document": {
+        "views": [
+          {
+            "type": "table",
+            "name": "Table"
+          }
+        ]
+      },
+      "options": {},
+      "current": {
+        "paths": [
+          "a/A.md",
+          "z/A.md",
+          "B2.png",
+          "B10.png"
+        ],
+        "properties": [
+          "file.name"
+        ]
+      },
+      "decision": "proposed-change",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ],
+      "proposal": "Keep natural file.name ordering; replace host locale ties with a specified portable comparator and exact path fallback. This ASCII example remains unchanged."
+    },
+    {
+      "id": "sort-null-desc",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "a.md",
+            "properties": {
+              "n": null
+            }
+          },
+          {
+            "path": "b.md",
+            "properties": {
+              "n": 2
+            }
+          },
+          {
+            "path": "c.md",
+            "properties": {
+              "n": 10
+            }
+          }
+        ]
+      },
+      "document": {
+        "views": [
+          {
+            "type": "table",
+            "name": "Table",
+            "sort": [
+              {
+                "property": "n",
+                "direction": "DESC"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "current": {
+        "paths": [
+          "c.md",
+          "b.md",
+          "a.md"
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "typed-group-keys",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "a.md",
+            "properties": {
+              "key": 2
+            }
+          },
+          {
+            "path": "b.md",
+            "properties": {
+              "key": "2"
+            }
+          },
+          {
+            "path": "c.md",
+            "properties": {
+              "key": [
+                1,
+                2
+              ]
+            }
+          },
+          {
+            "path": "d.md"
+          }
+        ]
+      },
+      "document": {
+        "views": [
+          {
+            "type": "table",
+            "name": "Table",
+            "groupBy": {
+              "property": "key",
+              "direction": "DESC"
+            }
+          }
+        ]
+      },
+      "options": {},
+      "current": {
+        "paths": [
+          "a.md",
+          "b.md",
+          "c.md",
+          "d.md"
+        ],
+        "groups": [
+          {
+            "key": {
+              "type": "number",
+              "value": 2
+            },
+            "paths": [
+              "a.md",
+              "b.md"
+            ]
+          },
+          {
+            "key": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "number",
+                  "value": 1
+                },
+                {
+                  "type": "number",
+                  "value": 2
+                }
+              ]
+            },
+            "paths": [
+              "c.md"
+            ]
+          },
+          {
+            "key": {
+              "type": "null"
+            },
+            "paths": [
+              "d.md"
+            ]
+          }
+        ]
+      },
+      "decision": "proposed-change",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ],
+      "proposal": "Use typed structural grouping: number 2 and string \"2\" occupy different groups; preserve whole-list keys and null-last. Group ordering must use the selected total-order contract.",
+      "proposed": {
+        "paths": [
+          "a.md",
+          "b.md",
+          "c.md",
+          "d.md"
+        ],
+        "groups": [
+          {
+            "key": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "number",
+                  "value": 1
+                },
+                {
+                  "type": "number",
+                  "value": 2
+                }
+              ]
+            },
+            "paths": [
+              "c.md"
+            ]
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "2"
+            },
+            "paths": [
+              "b.md"
+            ]
+          },
+          {
+            "key": {
+              "type": "number",
+              "value": 2
+            },
+            "paths": [
+              "a.md"
+            ]
+          },
+          {
+            "key": {
+              "type": "null"
+            },
+            "paths": [
+              "d.md"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "filter-error-isolated",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "a.md",
+            "properties": {
+              "enabled": true
+            }
+          },
+          {
+            "path": "b.md",
+            "properties": {
+              "enabled": false
+            }
+          }
+        ]
+      },
+      "document": {
+        "filters": "enabled || formula.loop",
+        "formulas": {
+          "loop": "formula.loop"
+        },
+        "views": [
+          {
+            "type": "table",
+            "name": "Table"
+          }
+        ]
+      },
+      "options": {},
+      "current": {
+        "paths": [
+          "a.md"
+        ],
+        "diagnostics": [
+          {
+            "phase": "filter",
+            "path": "b.md",
+            "code": "cycle"
+          }
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "empty-or-composed",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "a.md"
+          }
+        ]
+      },
+      "document": {
+        "filters": {
+          "or": []
+        },
+        "views": [
+          {
+            "type": "table",
+            "name": "Table",
+            "filters": "true"
+          }
+        ]
+      },
+      "options": {},
+      "current": {
+        "paths": [
+          "a.md"
+        ]
+      },
+      "decision": "proposed-change",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ],
+      "proposed": {
+        "paths": []
+      },
+      "proposal": "Compose root and view as Boolean AND without removing semantically false empty OR."
+    },
+    {
+      "id": "property-identifiers",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "a.md",
+            "properties": {
+              "a.b": 4,
+              "Title": "Name"
+            }
+          }
+        ]
+      },
+      "document": {
+        "views": [
+          {
+            "type": "table",
+            "name": "Table",
+            "order": [
+              "a.b",
+              "title",
+              "missing",
+              "formula.absent"
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "current": {
+        "paths": [
+          "a.md"
+        ],
+        "properties": [
+          "note.a.b",
+          "note.title",
+          "note.missing"
+        ],
+        "values": {
+          "a.md": {
+            "note.a.b": {
+              "type": "number",
+              "value": 4
+            },
+            "note.title": {
+              "type": "string",
+              "value": "Name"
+            },
+            "note.missing": {
+              "type": "null"
+            }
+          }
+        }
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "file-host-facts",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "Notes/a.md",
+            "properties": {
+              "Status": "x"
+            },
+            "tags": [
+              "#Work/Today"
+            ]
+          },
+          {
+            "path": "NotesOld/b.md",
+            "properties": {
+              "status": "x"
+            },
+            "tags": [
+              "#workshop"
+            ]
+          }
+        ]
+      },
+      "document": {
+        "filters": "file.inFolder(\"Notes\") && file.hasTag(\"work\") && file.hasProperty(\"Status\") && status == \"x\"",
+        "views": [
+          {
+            "type": "table",
+            "name": "Table"
+          }
+        ]
+      },
+      "options": {},
+      "current": {
+        "paths": [
+          "Notes/a.md"
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "unsupported-link-metadata",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "a.md"
+          }
+        ]
+      },
+      "document": {
+        "filters": "file.links.length > 0",
+        "views": [
+          {
+            "type": "table",
+            "name": "Table"
+          }
+        ]
+      },
+      "options": {},
+      "current": {
+        "paths": [],
+        "diagnostics": [
+          {
+            "phase": "filter",
+            "path": "a.md",
+            "code": "unsupported"
+          }
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ],
+      "proposal": "Retain explicit failure until coherent indexed links are actually supplied; do not substitute an empty graph."
+    },
+    {
+      "id": "current-file-context",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "local.md",
+            "properties": {
+              "score": 3,
+              "name": "Local"
+            }
+          },
+          {
+            "path": "small.md",
+            "properties": {
+              "score": 2
+            }
+          },
+          {
+            "path": "big.md",
+            "properties": {
+              "score": 5
+            }
+          }
+        ]
+      },
+      "document": {
+        "filters": "file == this.file || score > this.score",
+        "formulas": {
+          "owner": "this.name"
+        },
+        "views": [
+          {
+            "type": "table",
+            "name": "Table",
+            "order": [
+              "formula.owner"
+            ]
+          }
+        ]
+      },
+      "options": {
+        "currentFilePath": "local.md"
+      },
+      "current": {
+        "paths": [
+          "big.md",
+          "local.md"
+        ],
+        "values": {
+          "big.md": {
+            "formula.owner": {
+              "type": "string",
+              "value": "Local"
+            }
+          }
+        }
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "group-search-limit-pipeline",
+      "snapshot": {
+        "version": "fixture-v1",
+        "files": [
+          {
+            "path": "a.md",
+            "properties": {
+              "enabled": true,
+              "label": "match",
+              "state": "todo",
+              "rank": 1
+            }
+          },
+          {
+            "path": "b.md",
+            "properties": {
+              "enabled": true,
+              "label": "match",
+              "state": "done",
+              "rank": 9
+            }
+          },
+          {
+            "path": "c.md",
+            "properties": {
+              "enabled": true,
+              "label": "miss",
+              "state": "done",
+              "rank": 12
+            }
+          },
+          {
+            "path": "d.md",
+            "properties": {
+              "enabled": true,
+              "label": "match",
+              "state": "unlisted",
+              "rank": 20
+            }
+          },
+          {
+            "path": "e.md",
+            "properties": {
+              "enabled": false,
+              "label": "match",
+              "state": "todo",
+              "rank": 30
+            }
+          }
+        ]
+      },
+      "document": {
+        "filters": "enabled",
+        "views": [
+          {
+            "type": "table",
+            "name": "Table",
+            "order": [
+              "label"
+            ],
+            "groupBy": {
+              "property": "state",
+              "direction": "ASC"
+            },
+            "groupOrder": [
+              "todo",
+              "done",
+              "empty"
+            ],
+            "sort": [
+              {
+                "property": "rank",
+                "direction": "DESC"
+              }
+            ],
+            "limit": 1
+          }
+        ]
+      },
+      "options": {
+        "searchTerms": [
+          "match"
+        ]
+      },
+      "current": {
+        "paths": [
+          "b.md"
+        ],
+        "counts": {
+          "scanned": 5,
+          "matched": 4,
+          "afterGroupOrder": 3,
+          "afterSearch": 2,
+          "returned": 1
+        },
+        "groupOptions": [
+          {
+            "key": {
+              "type": "string",
+              "value": "todo"
+            },
+            "count": 1,
+            "listed": true
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "done"
+            },
+            "count": 2,
+            "listed": true
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "empty"
+            },
+            "count": 0,
+            "listed": true
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "unlisted"
+            },
+            "count": 1,
+            "listed": false
+          }
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    }
+  ]
+}

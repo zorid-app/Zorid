@@ -1,0 +1,557 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "f69dc90de0de697dfb75a5a3d1805b69dba982b3",
+  "baselineTimezone": "UTC",
+  "cases": [
+    {
+      "id": "precedence",
+      "expression": "2 + 3 * 4",
+      "current": {
+        "type": "number",
+        "value": 14
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "null-false-zero-empty",
+      "expression": "[missing, checked, count, blank, empty]",
+      "current": {
+        "type": "list",
+        "value": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean",
+            "value": false
+          },
+          {
+            "type": "number",
+            "value": 0
+          },
+          {
+            "type": "string",
+            "value": ""
+          },
+          {
+            "type": "list",
+            "value": []
+          }
+        ]
+      },
+      "decision": "retain",
+      "context": {
+        "note": {
+          "checked": false,
+          "count": 0,
+          "blank": "",
+          "empty": []
+        }
+      },
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "null-unary",
+      "expression": "!null",
+      "current": {
+        "type": "null"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "null-comparison",
+      "expression": "null < 1",
+      "current": {
+        "type": "null"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "null-string-concat",
+      "expression": "\"a\" + null",
+      "current": {
+        "type": "string",
+        "value": "a"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "null-to-string",
+      "expression": "null.toString()",
+      "current": {
+        "type": "string",
+        "value": "null"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "empty-list-truth",
+      "expression": "if([], 1, 2)",
+      "current": {
+        "type": "number",
+        "value": 2
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "loose-equality",
+      "expression": "[\"2\" == 2, true == 1, null == 0, [2] == 2]",
+      "current": {
+        "type": "list",
+        "value": [
+          {
+            "type": "boolean",
+            "value": true
+          },
+          {
+            "type": "boolean",
+            "value": true
+          },
+          {
+            "type": "boolean",
+            "value": false
+          },
+          {
+            "type": "boolean",
+            "value": true
+          }
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "strict-multiply",
+      "expression": "\"2\" * 3",
+      "current": {
+        "type": "error",
+        "code": "type"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "number-prefix",
+      "expression": "number(\"12tail\")",
+      "current": {
+        "type": "number",
+        "value": 12
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "nonfinite",
+      "expression": "1 / 0",
+      "current": {
+        "type": "number",
+        "value": "Infinity"
+      },
+      "decision": "proposed-change",
+      "proposed": {
+        "type": "error",
+        "code": "numeric-domain"
+      },
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "property-case",
+      "expression": "[Status, status, STATUS, NOTE[\"odd.name\"]]",
+      "current": {
+        "type": "list",
+        "value": [
+          {
+            "type": "string",
+            "value": "Todo"
+          },
+          {
+            "type": "string",
+            "value": "Done"
+          },
+          {
+            "type": "string",
+            "value": "Todo"
+          },
+          {
+            "type": "number",
+            "value": 3
+          }
+        ]
+      },
+      "decision": "retain",
+      "context": {
+        "note": {
+          "Status": "Todo",
+          "status": "Done",
+          "odd.name": 3
+        }
+      },
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "unicode-length",
+      "expression": "\"A\ud83d\ude00e\u0301\".length",
+      "current": {
+        "type": "number",
+        "value": 5
+      },
+      "decision": "proposed-change",
+      "proposed": {
+        "type": "number",
+        "value": 4
+      },
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "unicode-reverse",
+      "expression": "\"A\ud83d\ude00\".reverse()",
+      "current": {
+        "type": "string",
+        "value": "\ude00\ud83dA"
+      },
+      "decision": "proposed-change",
+      "proposed": {
+        "type": "string",
+        "value": "\ud83d\ude00A"
+      },
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "regex-repeat",
+      "expression": "/a/g.matches(\"a\")",
+      "current": [
+        {
+          "type": "boolean",
+          "value": true
+        },
+        {
+          "type": "boolean",
+          "value": false
+        }
+      ],
+      "decision": "proposed-change",
+      "repeat": 2,
+      "proposed": [
+        {
+          "type": "boolean",
+          "value": true
+        },
+        {
+          "type": "boolean",
+          "value": true
+        }
+      ],
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "lazy-conditional",
+      "expression": "if(true, 42, unknown())",
+      "current": {
+        "type": "number",
+        "value": 42
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "formula-dependency",
+      "expression": "formula.chained",
+      "current": {
+        "type": "number",
+        "value": 7
+      },
+      "decision": "retain",
+      "context": {
+        "note": {
+          "amount": 3
+        },
+        "formulas": {
+          "double": "amount * 2",
+          "chained": "formula.double + 1"
+        }
+      },
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "formula-cycle",
+      "expression": "formula.loop",
+      "current": {
+        "type": "error",
+        "code": "cycle"
+      },
+      "decision": "retain",
+      "context": {
+        "formulas": {
+          "loop": "formula.loop"
+        }
+      },
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "nested-list-scope",
+      "expression": "[[1,2],[3]].map(value.map(value * 2))",
+      "current": {
+        "type": "list",
+        "value": [
+          {
+            "type": "list",
+            "value": [
+              {
+                "type": "number",
+                "value": 2
+              },
+              {
+                "type": "number",
+                "value": 4
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "value": [
+              {
+                "type": "number",
+                "value": 6
+              }
+            ]
+          }
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "invalid-object-literal",
+      "expression": "{a: 1}",
+      "current": {
+        "type": "error",
+        "code": "parse"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "no-ambient-js",
+      "expression": "globalThis.process.exit()",
+      "current": {
+        "type": "null"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "budget",
+      "expression": "[1,2,3].map(value + 1)",
+      "current": {
+        "type": "error",
+        "code": "budget"
+      },
+      "decision": "retain",
+      "context": {
+        "maxSteps": 5
+      },
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "date-invalid",
+      "expression": "date(\"not a date\")",
+      "current": {
+        "type": "null"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "date-only",
+      "expression": "date(\"2024-01-15\")",
+      "current": {
+        "type": "date",
+        "timestamp": 1705276800000,
+        "hasTime": false
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "date-offset",
+      "expression": "date(\"2024-01-15T10:00:00+02:00\")",
+      "current": {
+        "type": "date",
+        "timestamp": 1705305600000,
+        "hasTime": true
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "date-day-equality",
+      "expression": "date(\"2024-01-15\") == date(\"2024-01-15T10:20:30\")",
+      "current": {
+        "type": "boolean",
+        "value": true
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "date-calendar-add",
+      "expression": "(date(\"2024-01-15\") + \"2 days\").toString()",
+      "current": {
+        "type": "string",
+        "value": "2024-01-17"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "clock-pinned",
+      "expression": "today().toString()",
+      "current": {
+        "type": "string",
+        "value": "2024-01-15"
+      },
+      "decision": "retain",
+      "context": {
+        "now": "2024-01-15T10:20:30Z"
+      },
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "unsupported-host-function",
+      "expression": "random()",
+      "current": {
+        "type": "error",
+        "code": "unknown-function"
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts",
+        "tests/bases-expression.test.ts"
+      ]
+    },
+    {
+      "id": "nested-case-source-order",
+      "expression": "[config.TITLE, reversed.TITLE]",
+      "context": {
+        "note": {
+          "config": {
+            "Title": "first",
+            "title": "second"
+          },
+          "reversed": {
+            "title": "second",
+            "Title": "first"
+          }
+        }
+      },
+      "current": {
+        "type": "list",
+        "value": [
+          {
+            "type": "string",
+            "value": "first"
+          },
+          {
+            "type": "string",
+            "value": "second"
+          }
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/expression.ts:75",
+        "src/bases/expression.ts:393"
+      ]
+    }
+  ]
+}
