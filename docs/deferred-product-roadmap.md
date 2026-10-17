@@ -116,6 +116,36 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
+- Candidate39a306e7 actual production browser/IDB full suite PASS18.235s, then
+  page-reload cache PASS, watermark12/rawBytesPreserved:true. Actual WASM
+  Markdown49/49 and Base51/51 remain verified with matching binary provenance.
+- Normal rebuilt Electron UI PASS: shared backlink shown, Source navigation,
+  editor save removes backlink; independent physical Source exact42 bytes.
+  App8635 exited0 and closed. Normal web bundle87821 exit0, server52415(port8767):
+  create/rename/normal save/shared backlink/navigation and reload restored source
+  pass; final backlink removal after edit also passes. Earlier closed-worker under resource
+  pressure did not recur after reload; root cause is not established.
+- Independent review approved staged integration but identified remaining normal
+  sidebar search and Base controller TS evaluation. Assigned isolated workers
+  stage4_native_consumer(search) and stage4_base_reuse(Base controller), with
+  stage4_contract_review owning missing retained current-entry/step-limit options.
+  stage4_native_index strengthens external-import and received-sync index tests.
+  No worker may mutate main; current caches/logs remain preserved.
+- Native build4 opening crash is independently reproduced (UIKit hosting-controller
+  containment). Native owns hotfix51d8b84f/build5, slotmsg_d40cc87b1ea0. Initial
+  simulator build71295 failed linking ENOSPC; native recovered space by cleaning
+  only its own regenerable dependency caches. Retry50983 live; simulator actual
+  file-open verification must precede phone update. Build4 is unaccepted.
+- Reviewed mobile fixture-sync plan dc2a6c1b granted in msg_7efc3aa3b3cf to named
+  term_86199dce-0f1c-45f0-9ca0-8942cba829c5, acknowledgedmsg_58ee54c32890:
+  isolated tingkai-c/mobile-host-fixture-sync based39a306e7, only hostlib minimal
+  field/module/export and new embedded_fixture_sync source/test. Existing-vault
+  binding before initialization, same admitted lease, no renderer sync access,
+  bounded redacted native DTOs; no Rust tests before hotfix terminal checkpoint.
+  Simulator-only fixture; no phone remote-sync or production enrollment claim.
+
+
 Current authoritative update — 2026-10-17 20:42 UTC. The bullets below
 this update are historical checkpoints where their status differs:
 - Browser publication defect is now identified and fixed: order-sensitive JSON

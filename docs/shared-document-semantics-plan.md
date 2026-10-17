@@ -3,9 +3,9 @@
 Accepted by the user on 2026-10-16 after reviewing the proposed split between
 headless data semantics and live editor syntax. This is the next shared-core
 milestone (roadmap wave4), not a change to the current first-milestone completion
-criteria. User explicitly started Stage4 on 2026-10-17. Contract/corpus work is
-active. The first native Rust metadata/Base corpus runs pass in an isolated
-candidate; browser-WASM parity and consumer migration remain in progress.
+criteria. User explicitly started Stage4 on 2026-10-17. The native and actual browser-WASM corpora pass in an isolated candidate.
+Normal desktop and browser backlinks/save integration has executed successfully;
+search/Base view migration and final main integration remain in progress.
 
 ## Timing and dependency gate
 
@@ -103,28 +103,37 @@ Heavy builds and integration remain coordinator-serialized on the8GB machine.
 
 ## Current evidence and remaining acceptance (2026-10-17)
 
-Runtime source is composed in the isolated `stage4-integrated-engine` worktree,
-branch `tingkai-c/stage4-integrated-engine`, currently `d89dbd56`. Stage4 runtime
-source has not been promoted to main. Main documentation is the cross-session
-record; native mobile has the exclusive heavy build slot until explicit release.
+Reviewed candidate: `tingkai-c/stage4-integrated-engine`, `39a306e7`, isolated
+worktree `/Users/ctk/orca/workspaces/Zorid/stage4-integrated-engine`. Runtime
+source is not yet integrated into main. Independent final review found no new
+source blocker; it also identified remaining normal search/Base consumers and
+explicit imported/received-update index evidence. Keep the milestone active.
 
-| Requirement | Observed evidence | Still required |
+| Requirement | Observed evidence | Remaining work |
 | --- | --- | --- |
-| Markdown properties/tags/headings/links/tasks and exact offsets | Native canonical49-case corpus, value/budget/YAML cases pass; raw-source authority retained | Execute same current corpus through generated WASM, malformed transport/Unicode checks, retain actual reports |
-| Revision-aware disposable index/search/backlinks | Native portable contracts7, generations14, metadata-restore2 passed at e8615ecb | Recheck subsequent controlled graph callbacks; actual CLI and browser durable persistence/query execution |
-| Cache publication, concurrency, move/delete and rebuild safety | Store19/19 pass; later changed published-discard preservation case1/1 passes | Execute browser production-worker/IDB acceptance including restart, source races, retained queries and rebuild expiry |
-| Base definitions/formulas/filter/sort/group | Native30 accepted expressions and10 queries passed; corrected generation graph corpus2/2 passes | Current full query/controlled-resource checks, actual WASM same fixtures, equivalent CLI/web/desktop results |
-| Native facade | Current build compiles;4/5 cases pass | Corrected enrolled fixture8619664e passes1/1; remaining four cases passed previous run; original failure never authorized bypassing enrollment |
-| Normal workspace consumer | Shared backlink hook9f259800; real Workspace/NoteBuffer with controlled adapter/service passes4/4 save/navigation/lifecycle regressions | Actual normal desktop/browser app queries through Rust transports and user-visible rendering |
-| Host/default contract consistency | Shared/frontend and direct-browser clock/row defaults aligned; desktop omitted-clock correction04b7d111 composed | Host clock3/3 and real admitted CJS/Rust-child fixture pass; browser parity and normal app execution still required |
-| No source rewriting or editing regression | Parser/index paths remain read-only; Store preservation tests pass | Integrated app verification with raw-file comparisons, durable edits and generation refresh |
+| Markdown properties/tags/headings/links/tasks and offsets | Native canonical49 plus bounds/value/YAML checks; actual Chrome worker49/49 +4 malformed request checks; actual downloaded report independently verified | Preserve provenance through main integration |
+| Revision-aware index/search/backlinks | Portable contracts7, generations15, restore2 pass; actual CLI document3 +metadata4 pass | Explicit imported/received update refresh coverage being strengthened |
+| Publication/concurrency/moves/deletes/rebuild | Store19/19 plus changed discard case1/1 pass; actual production browser worker/IDB suite passes including retained edit/move/delete, CAS/rebuild expiry, concurrent publication, worker restart and page reload | Verify integrated composition; no large-vault performance claim |
+| Base definitions/formulas/filter/sort/group | Actual WASM51/51 +5 malformed requests; native current query3/3 and graph2/2 pass; actual desktop/CLI query evidence | Normal Base controller still uses TS; migration assigned |
+| Native facade/desktop transport | Correctly enrolled facade fixture1/1 passes, previous4 unchanged; host clock3/3; actual CJS→Rust child→independent CLI retained-query fixture1/1 passes | Preserve admission and retained-source guarantees during integration |
+| Normal workspace consumers | Desktop actual save/navigation/backlink refresh passes with independent exact42-byte file check; normal browser creates/renames/saves, displays Rust backlinks, navigates Source and restores source after reload | Normal sidebar search migration assigned |
+| Raw-source/editor authority | Parser/index paths are read-only; browser production suite rawBytesPreserved=true; desktop exact saved bytes and browser reload persistence observed | Imported/received update regression and integrated smoke |
 
-The controlled workspace tests prove navigation/cleanup behavior, not browser,
-native visual, or transport parity. Source-approved browser harnesses and WASM
-wrappers are not executed evidence. Existing TypeScript Base presentation and
-CodeMirror live syntax remain owned by the editor; this milestone migrates
-consumers incrementally and must not silently replace editing transformations.
-No performance improvement is claimed without measurements. Keep the full
-objective active until the remaining acceptance above is actually verified.
-Exact process handles, logs, source corrections and mobile coordination remain
-in `deferred-product-roadmap.md`.
+Evidence files under coordinator `tmp/`: `stage4-browser-document-report.json`,
+`stage4-browser-base-report-run2.json`,
+`stage4-browser-index-actual-pass-summary.json`,
+`stage4-desktop-ui-pass-summary.json`, and matching scoped logs. Browser index
+summary retains selected visible report fields rather than a full exported report.
+Actual WASM SHA256:
+`6c67442d272195269eb2d92e723c3fc8fd92e237c33c9368e046a92134903256`.
+Independent review confirmed no portable/WASM source delta from its build source
+`d89dbd56` through `39a306e7`; subsequent corrections were host comparison and
+fixtures. Desktop audited source likewise remained unchanged after its pass.
+
+A prior parser doctest invocation hit a rustdoc/toolchain mismatch; do not call
+that whole invocation successful. Scoped later checks use matching official1.95
+RUSTC/RUSTDOC. Existing broader desktop failures under resource pressure are not
+represented as a passing full suite. No speed/memory improvement is claimed.
+Native mobile hotfix and simulator-only fixture sync are separate work; none of
+this establishes mobile parity or production security. See the roadmap for live
+ownership, handles and exact commands.

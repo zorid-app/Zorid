@@ -191,3 +191,13 @@ resource leases and shared Stage4 backlinks. Native reports 25 foreground/
 lifecycle checks and type checks passing, but new runtime fixes remain unbuilt.
 Current Simulator save/Back independently preserved exact53 bytes; that does not
 verify these newer keyboard/loading/header changes. See msg_0fd7213f1e90.
+
+### 2026-10-17 — mobile build 4 opening crash
+
+Native owner reproduced the user's opening crash on phone and Simulator:
+UIKit rejects the history-controls hosting controller's containment when its
+view is placed in a navigation bar item. Build 4 is not accepted. Root granted
+the exclusive iOS hotfix slot in msg_d40cc87b1ea0; native owns the minimal
+containment fix and must verify actual file opening in the existing Simulator
+before installing the replacement phone build. No storage repair is indicated;
+implementation, build and runtime verification remain separate pending results.
