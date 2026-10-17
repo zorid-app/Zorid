@@ -1,3 +1,4 @@
+import { mountDocumentBacklinks } from './document-backlinks.ts';
 import { mountImportStatus } from './import-status.ts';
 import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS, EDITOR_HOTKEY_COMMANDS } from './hotkeys.ts';
 import { mountHotkeySettings } from './hotkey-settings.ts';
@@ -100,6 +101,8 @@ export class Workspace {
   private restoringLayout = false;
   private right = el('aside', 'right-sidebar');
   private rightContent = el('div', 'right-content');
+  private documentBacklinks?: ReturnType<typeof mountDocumentBacklinks>;
+  private documentBacklinksGeneration = 0;
   private status = el('footer', 'status-bar');
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
   private rightTab: 'backlinks' | 'outline' | 'tags' = 'backlinks';
@@ -214,6 +217,7 @@ export class Workspace {
   private async releasePlatform():Promise<void>{
     if(this.platformReleased||!this.platform?.release)return;
     if(!this.platformDrained){await this.flush();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
+    this.clearDocumentBacklinks();
     await this.platform.release();this.platformReleased=true;
   }
   async chooseVault(): Promise<void> {
@@ -400,6 +404,7 @@ export class Workspace {
   }
 
   private disposeShell(): void {
+    this.clearDocumentBacklinks();
     this.importStatusCleanup?.();this.importStatusCleanup=undefined;
     this.disposeFileListMenu?.(); this.disposeFileListMenu=undefined;
     this.sidebarControls?.destroy(); this.sidebarControls=undefined;
@@ -485,12 +490,12 @@ export class Workspace {
   }
   private focusPane(pane:Pane):void{if(pane.editor)pane.editor.focus();else pane.element.focus({preventScroll:true});}
   private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
-  async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath='',expectedActivation?:number): Promise<void> {
+  async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath='',expectedActivation?:number,commitGuard?:()=>boolean): Promise<void> {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
     await this.flushPane(pane);
     if(/\.base$/i.test(path))await this.prepareBase(path,generation);
-    if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||pane.renderVersion!==version||!this.panes.includes(pane)||(expectedActivation!==undefined&&expectedActivation!==this.paneActivationRevision))return;
+    if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||pane.renderVersion!==version||!this.panes.includes(pane)||(expectedActivation!==undefined&&expectedActivation!==this.paneActivationRevision)||(commitGuard&&!commitGuard()))return;
     this.noteNavigation.set(pane,(this.noteNavigation.get(pane)??0)+1);
     this.capturePaneState(pane);const current=this.current(pane);
     const existing=pane.tabs.find(tab=>tab.path===path&&tab.kind==='note');
@@ -1124,9 +1129,60 @@ export class Workspace {
     if(!count)results.append(el('p','sidebar-empty','No results found.'));
   }
 
+  private clearDocumentBacklinks():void {
+    this.documentBacklinksGeneration++;
+    this.documentBacklinks?.dispose();this.documentBacklinks=undefined;
+  }
+
+  private async renderSharedBacklinks(path:string|null|undefined):Promise<void> {
+    const vault=this.vault,pane=this.activePane,tab=this.current(pane),generation=this.documentBacklinksGeneration;
+    const service=vault.adapter.documentSemantics;
+    const current=()=>this.vault===vault&&this.activePane===pane&&this.current(pane)===tab
+      &&this.current(pane)?.path===path&&this.rightTab==='backlinks'
+      &&this.documentBacklinksGeneration===generation&&!this.platformReleased&&!this.closing
+      &&!this.root.classList.contains('right-hidden');
+    if(!service||!current())return;
+    try {
+      let entry=path?vault.entries.get(path):undefined;
+      if(path&&!entry?.entryId&&vault.adapter.stat)entry=await vault.adapter.stat(path)??undefined;
+      if(!current())return;
+      if(path&&(!entry?.entryId||entry.type!=='file')) {
+        this.rightContent.append(el('h3','right-heading','Linked mentions'),el('p','sidebar-empty','Linked mentions are waiting for this file’s identity.'));
+        return;
+      }
+      const target=path&&entry?.entryId?{id:entry.entryId,path}:null;
+      this.documentBacklinks=mountDocumentBacklinks(this.rightContent,{
+        service,target,vaultIdentity:vault,
+        isCurrent:(owner,selected)=>current()&&owner===vault&&(!selected||!vault.entries.get(selected.path)?.entryId||vault.entries.get(selected.path)?.entryId===selected.id),
+        onOpenStableEntry:async(id)=>{
+          if(!current())return;
+          const writes=vault.adapter.durableWrites;
+          if(!writes)throw new Error('Stable note navigation is unavailable.');
+          const observed=await writes.readTextById(id);
+          if(!current())return;
+          if(!observed||observed.entryId!==id||vault.entries.get(observed.path)?.entryId!==id)throw new Error('The linked note moved or changed. Refresh linked mentions.');
+          // Saving the current note may rerender backlinks while navigation
+          // waits. Guard the actual pane/tab/identity, not that transient view.
+          const activation=this.paneActivationRevision;
+          const canNavigate=()=>this.vault===vault&&this.activePane===pane&&this.current(pane)===tab
+            &&this.current(pane)?.path===path&&!this.platformReleased&&!this.closing
+            &&vault.entries.get(observed.path)?.entryId===id;
+          await this.openNote(observed.path,false,pane,true,'',activation,canNavigate);
+        },
+      });
+    } catch {
+      if(current())this.rightContent.append(el('h3','right-heading','Linked mentions'),el('p','sidebar-empty','Linked mentions are unavailable.'));
+    }
+  }
+
   private renderRight():void{
+    this.clearDocumentBacklinks();
     if(!this.vault||!this.activePane)return;this.rightContent.replaceChildren();const path=this.current()?.path;
     if(this.rightTab==='backlinks'){
+      if(this.vault.adapter.documentSemantics){
+        if(!this.root.classList.contains('right-hidden'))void this.renderSharedBacklinks(path);
+        return;
+      }
       this.rightContent.append(el('h3','right-heading','Linked mentions'));const links=path?this.vault.metadata.backlinks(path):[];
       const unique=[...new Set(links.map(link=>link.source))];for(const source of unique){const row=textButton(nameOf(source),()=>this.run(()=>this.openNote(source)),'backlink-row');row.prepend(icon('file',14));this.rightContent.append(row);}if(!unique.length)this.rightContent.append(el('p','sidebar-empty','No backlinks found.'));
     }else if(this.rightTab==='outline'){
@@ -1282,7 +1338,7 @@ export class Workspace {
     if(next===path)return next;await this.flush();const buffer=this.buffers.get(path);if(buffer)await buffer.rename(next);else await this.vault.rename(path,next);for(const pane of this.panes)await this.renderPane(pane);return next;
   }
   private async deletePath(path:string):Promise<void>{await this.flush();await this.vault.trash(path);this.buffers.delete(path);notice('Moved to vault trash.');}
-  private async newTab(pane=this.activePane):Promise<void>{await this.flushPane(pane);const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.run(()=>this.renderPane(pane));this.saveSession();}
+  private async newTab(pane=this.activePane):Promise<void>{await this.flushPane(pane);const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.renderRight();this.run(()=>this.renderPane(pane));this.saveSession();}
   private async closeTab(pane:Pane,tab:Tab):Promise<void>{
     if(!pane.tabs.includes(tab))return;
     const owner=pane.viewTabId===tab.id?pane:this.cachedViews.get(tab);
@@ -1311,7 +1367,7 @@ export class Workspace {
     this.activate(pane);await this.renderPane(pane);if(generation!==this.vaultGeneration||!this.panes.includes(pane))return;this.focusPane(pane);this.saveSession();
   }
   private toggleLeft():void{this.root.classList.toggle('left-hidden');this.saveSession();}
-  private toggleRight():void{this.root.classList.toggle('right-hidden');this.saveSession();}
+  private toggleRight():void{this.root.classList.toggle('right-hidden');this.renderRight();this.saveSession();}
 
   private async newWindow():Promise<void>{
     const native=workspaceWindowBridge(window.zorid);
