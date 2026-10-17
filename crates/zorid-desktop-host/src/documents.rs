@@ -582,4 +582,27 @@ mod clock_tests {
             assert!(serde_json::from_str::<BaseOptions>(raw).is_err(), "{raw}");
         }
     }
+    #[test]
+    fn base_context_options_preserve_strong_selector_and_bound_query_steps() {
+        let input: BaseOptions =
+            serde_json::from_str(r#"{"currentEntryId":"current-note","maxSteps":17,"clockMs":0}"#)
+                .unwrap();
+        let options = input
+            .into_options_with_clock(|| panic!("explicit clock must be preserved"))
+            .unwrap();
+        assert_eq!(
+            options.current_entry_id,
+            Some(EntryId::new("current-note").unwrap())
+        );
+        assert_eq!(options.max_steps, 17);
+        for steps in [0, zorid_bases::MAX_QUERY_STEPS + 1] {
+            assert!(BaseOptions {
+                max_steps: steps,
+                ..BaseOptions::default()
+            }
+            .into_options_with_clock(|| Ok(0))
+            .is_err());
+        }
+        assert!(serde_json::from_str::<BaseOptions>(r#"{"currentEntryId":"bad:path"}"#).is_err());
+    }
 }
