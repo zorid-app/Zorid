@@ -134,6 +134,16 @@ model, not integrated). Process observation found no competing actual compiler;
 6.3GiB disk available. Root must not start heavy checks or mutate shared dependency
 trees until native owner returns this slot. Build8 outcomes remain pending.
 
+Native import source checkpoint23:44UTC: independent117 accepted exact
+8c94529d→708012df→c62bc79b→cc3e7721 (terminal text collision recovery fixed).
+Root composed source in isolated tingkai-c/native-import-integration, HEADb21d18d9,
+with existing sha2=0.11.0 promoted to production and standalone mobile lock edge
+added. No new package versions/schema, no main runtime integration, no compiler
+or host10/ABI4 test execution yet; native slot remains owned by mobile session.
+Minimum-one navigation source c1faeda1 reviewed but actual build9 pending.
+Native document tabs source-only new-file scope acknowledged after user answers;
+existing editor/session lifecycle wiring requires a concrete ownership proposal.
+
 Latest Vite completion — main165cf17a +manager-lock60efe609:
 - Vite is the default application renderer build. Actual dev/prod browser, desktop
   file renderer/save/math/code,307exactvendorassets,347fileASAR/nativearm64 and
