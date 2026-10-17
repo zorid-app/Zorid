@@ -32,3 +32,26 @@ remain explicit limits; this is not a hostile same-user filesystem sandbox.
 
 Main integration may fast-forward only this tested candidate and this evidence
 commit while main remains `c3ec15f`. No push or release is part of this acceptance.
+
+## Batch 2 — native folders, scans and coherent reads
+
+Tested candidate: `3df1de834185ee0c3d13aaf2416083aa7991f5d6`, based on main
+`bb7f498`. Session 30255 exited 0 using the same bounded five-package command
+above in a fresh worktree target; build completed in 28.98s. All 109 tests passed:
+core26, CRDT4, native35, store31, CLI13 (including subprocess harness entries).
+
+This batch adds recoverable physical folder creation, bounded recursive rescans
+for files changed while clients were stopped, standalone CLI mkdir/rescan,
+coherent committed path reads, persisted presentation metadata and a local change
+journal. Independent review covered the source and checked SQLite conversions.
+Runtime validation also corrected a test helper that incorrectly used a dotted
+filename as an operation identifier; the filename itself remains unchanged.
+
+Scans retain absence evidence rather than inferring destructive deletions from
+missing or unreadable paths. Physical moves/deletes, remote ingestion, real app
+storage selection and encrypted convergence are still required work. This batch
+does not migrate existing app vaults or establish full sync. Schema5 host-intent
+work remains on the separate core branch pending its own runtime checks.
+
+Main may fast-forward this candidate plus evidence while it remains `bb7f498`.
+No push or release is included.
