@@ -316,3 +316,14 @@ system. No verified media/PDF runtime claim yet.
 Latest user screenshot removes Reload/Open editor action row. Native pages must
 refresh automatically and open a tapped file directly; New note is a native
 compose action, not an entry into a separate web workspace.
+
+## Standing development-device authorization — 2026-10-17
+
+User explicitly states that Zorid Dev data on their connected iPhone may be
+overwritten and should not block development builds. Native owner may rebuild,
+sign, install/update, overwrite or reset the app.zorid.notes.dev development app
+and its disposable test data as needed for verification without asking again.
+This authorization is scoped to Zorid Dev; it grants no deletion or reset of
+production Zorid or unrelated applications/data. Existing signing/account
+authorization remains in effect. Record this explicit authorization in any
+necessary execution approval request; automatic review is still tool-owned.
