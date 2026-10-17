@@ -45,7 +45,7 @@ sequence below; completion of the first goal must not close those requirements.
   source fix `a8cfb75` equals editor `dfbfae7`. Native Base property writes and
   horizontal/vertical Canvas edge resizing persisted on that build; a draft
   committed on blur without loss (focus retention unproven). Audio playback
-  failed for the valid WAV fixture and remains under investigation. Evidence
+  remains unverified: its accessibility label alone does not prove failure. Evidence
   `cc55574` is on main; owned Electron exited0. Tested dist is in
   `editor-base-embed-integration`, not the primary checkout's older dist.
 - Isolated core `b510194` passed the entire Rust workspace in dedicated
