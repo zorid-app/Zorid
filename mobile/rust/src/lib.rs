@@ -21,12 +21,54 @@ pub struct ZoridBuffer {
 fn import_error(code: &'static str, uncertain: bool) -> Value {
     json!({"code":code,"commit_uncertain":uncertain})
 }
+fn normalized_import_error(value: Value) -> Value {
+    // Shared admission faults may contain a generic message. The native import
+    // ABI has exactly TWO error fields; never forward arbitrary error payloads.
+    let code = match value.get("code").and_then(Value::as_str) {
+        Some("import_invalid_selection") => "import_invalid_selection",
+        Some("import_invalid_destination") => "import_invalid_destination",
+        Some("import_invalid_source") => "import_invalid_source",
+        Some("import_invalid_operation") => "import_invalid_operation",
+        Some("import_too_large") => "import_too_large",
+        Some("import_name_limit") => "import_name_limit",
+        Some("import_checkpoint") => "import_checkpoint",
+        Some("import_idempotency_conflict") => "import_idempotency_conflict",
+        Some("import_invalid_text") => "import_invalid_text",
+        Some("import_unsupported") => "import_unsupported",
+        Some("import_source_changed") => "import_source_changed",
+        Some("import_target_rejected") => "import_target_rejected",
+        Some("import_storage") => "import_storage",
+        Some("import_busy") => "import_busy",
+        Some("import_not_found") => "import_not_found",
+        Some("client_not_admitted") => "client_not_admitted",
+        Some("client_scope_mismatch") => "client_scope_mismatch",
+        Some("invalid_client_id") => "invalid_client_id",
+        Some("client_in_use") => "client_in_use",
+        Some("unsafe_path") => "unsafe_path",
+        Some("filesystem_changed") => "filesystem_changed",
+        Some("unsupported") => "unsupported",
+        Some("lock_timeout") => "lock_timeout",
+        Some("unsupported_schema") => "unsupported_schema",
+        Some("reload_required") => "reload_required",
+        Some("corrupt_storage") => "corrupt_storage",
+        Some("storage_io") => "storage_io",
+        Some("filesystem_io") => "filesystem_io",
+        _ => "import_error",
+    };
+    import_error(
+        code,
+        value
+            .get("commit_uncertain")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    )
+}
 fn import_reply(
     result: Result<zorid_desktop_host::ImportProgress, Value>,
 ) -> std::io::Result<Vec<u8>> {
     let value = match result {
         Ok(result) => json!({"version":1,"ok":true,"result":result}),
-        Err(error) => json!({"version":1,"ok":false,"error":error}),
+        Err(error) => json!({"version":1,"ok":false,"error":normalized_import_error(error)}),
     };
     let bytes = serde_json::to_vec(&value).map_err(|_| std::io::Error::other("import encoding"))?;
     if bytes.len() <= MAX_IMPORT_RESULT_BYTES {
@@ -1177,5 +1219,25 @@ mod tests {
                 true
             );
         }
+    }
+    #[test]
+    fn import_error_envelope_strips_shared_message_and_unknown_payloads() {
+        let bytes = import_reply(Err(
+            json!({"code":"filesystem_changed","commit_uncertain":false,
+            "message":"secret-sentinel","path":"private-sentinel"}),
+        ))
+        .unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["error"],
+            json!({"code":"filesystem_changed","commit_uncertain":false})
+        );
+        assert!(!String::from_utf8(bytes).unwrap().contains("sentinel"));
+        let bytes = import_reply(Err(json!({"code":"private-sentinel"}))).unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["error"],
+            json!({"code":"import_error","commit_uncertain":true})
+        );
     }
 }
