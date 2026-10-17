@@ -12,9 +12,11 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window = UIWindow(windowScene: windowScene)
         window?.rootViewController = UINavigationController(rootViewController: NativeVaultPicker())
         window?.makeKeyAndVisible()
+        if let presenter = window?.rootViewController { imports.recover(from: presenter) }
 
         let external = connectionOptions.urlContexts.filter { $0.url.isFileURL }
-        if external.isEmpty {
+        let activityFiles = connectionOptions.userActivities.compactMap { $0.webpageURL }.filter(\.isFileURL)
+        if external.isEmpty && activityFiles.isEmpty {
             SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
         } else {
             // Capacitor's cold proxy captures ALL URLs until its first web view.
@@ -22,15 +24,15 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             // Preserve its connection notification and deferred unrelated links.
             NotificationCenter.default.post(name: .capacitorSceneWillConnect, object: scene)
             let links = Set(connectionOptions.urlContexts.filter { !$0.url.isFileURL })
-            let activities = connectionOptions.userActivities
+            let activities = connectionOptions.userActivities.filter { $0.webpageURL?.isFileURL != true }
             coldLinkObserver = NotificationCenter.default.addObserver(forName: .capacitorViewDidAppear, object: nil, queue: .main) { [weak self] _ in
                 guard let self = self else { return }
                 if let observer = self.coldLinkObserver { NotificationCenter.default.removeObserver(observer); self.coldLinkObserver = nil }
                 if !links.isEmpty { SceneDelegateProxy.shared.scene(scene, openURLContexts: links) }
-                for activity in activities { SceneDelegateProxy.shared.scene(scene, continue: activity) }
+                for activity in activities { self.scene(scene, continue: activity) }
             }
             if let presenter = window?.rootViewController {
-                imports.receiveOpenIn(external.map(\.url), from: presenter)
+                imports.receiveOpenIn(external.map(\.url) + activityFiles, from: presenter)
             }
         }
     }
@@ -57,6 +59,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
-        SceneDelegateProxy.shared.scene(scene, continue: userActivity)
+        if let url = userActivity.webpageURL, url.isFileURL {
+            if let presenter = window?.rootViewController { imports.receiveOpenIn([url], from: presenter) }
+        } else {
+            SceneDelegateProxy.shared.scene(scene, continue: userActivity)
+        }
     }
 }

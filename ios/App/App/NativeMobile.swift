@@ -335,6 +335,18 @@ final class NativeMobileSession {
             DispatchQueue.main.async { completion(result) }
         }
     }
+    func fenceNativeAdmission(_ admission: NativeSessionAdmission, completion: @escaping (Result<Void, Error>) -> Void) {
+        Self.worker.async {
+            let result: Result<Void, Error>
+            if self.nativeAdmission == admission {
+                self.closeOnWorker(); result = .success(())
+            } else {
+                // Never close a new/foreign loan using an old captured tuple.
+                result = .failure(NativeSessionOperationFailure(code: "native_admission_stale", commitUncertain: false, sessionFenced: self.handle == nil))
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
     private static func nativeTrue(_ value: Any?) -> Bool {
         guard let number = value as? NSNumber else { return false }
         return CFGetTypeID(number) == CFBooleanGetTypeID() && number.boolValue
@@ -363,6 +375,108 @@ final class NativeMobileSession {
               object["request_id"] as? String == id, Self.nativeTrue(object["ok"]),
               let result = object["result"] as? [String: Any] else { throw MobileFailure.invalidFrame }
         return result
+    }
+
+    // Owns the native source FD until begin returns on this queue; Rust duplicates
+    // it synchronously. Neither the descriptor nor token is exposed to Capacitor.
+    func beginNativeImport(owningSourceFD: Int32, selection: NativeImportSelection, admission: NativeSessionAdmission,
+                           completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        Self.worker.async {
+            defer { if owningSourceFD >= 0 { Darwin.close(owningSourceFD) } }
+            let result: Result<NativeImportProgress, Error>
+            do {
+                let data = try JSONEncoder().encode(selection)
+                guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      selection.clientId == admission.clientId, selection.localStoreId == admission.localStoreId else { throw NativeImportFailure.invalidJournal }
+                object["leaseToken"] = admission.token // Ephemeral, never written back to the journal.
+                let wire = try JSONSerialization.data(withJSONObject: object)
+                guard wire.count <= 8192 else { throw NativeImportFailure.invalidJournal }
+                result = .success(try self.importOnWorker(admission, operationId: selection.operationId) { handle in
+                    wire.withUnsafeBytes { bytes in
+                        zorid_mobile_import_begin(handle, owningSourceFD, bytes.bindMemory(to: UInt8.self).baseAddress, wire.count)
+                    }
+                })
+            } catch { result = .failure(error) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    func stepNativeImport(_ operationId: String, admission: NativeSessionAdmission, completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        nativeImportAction(operationId, admission: admission, action: zorid_mobile_import_step, completion: completion)
+    }
+    func statusNativeImport(_ operationId: String, admission: NativeSessionAdmission, completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        nativeImportAction(operationId, admission: admission, action: zorid_mobile_import_status, completion: completion)
+    }
+    func cancelNativeImport(_ operationId: String, admission: NativeSessionAdmission, completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        nativeImportAction(operationId, admission: admission, action: zorid_mobile_import_cancel, completion: completion)
+    }
+    private func nativeImportAction(_ operationId: String, admission: NativeSessionAdmission,
+        action: @escaping (OpaquePointer?, UnsafePointer<UInt8>?, Int) -> ZoridBuffer,
+        completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        Self.worker.async {
+            let result = Result {
+                guard UUID(uuidString: operationId)?.uuidString.lowercased() == operationId else { throw NativeImportFailure.invalidJournal }
+                let data = Data(operationId.utf8)
+                return try self.importOnWorker(admission, operationId: operationId) { handle in
+                    data.withUnsafeBytes { bytes in action(handle, bytes.bindMemory(to: UInt8.self).baseAddress, data.count) }
+                }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    private func importOnWorker(_ admission: NativeSessionAdmission, operationId: String,
+                                action: (OpaquePointer) -> ZoridBuffer) throws -> NativeImportProgress {
+        dispatchPrecondition(condition: .onQueue(Self.worker))
+        guard nativeAdmission == admission, let handle = handle else {
+            throw NativeSessionOperationFailure(code: "native_admission_stale", commitUncertain: false, sessionFenced: self.handle == nil)
+        }
+        do { return try Self.consumeImportReply(action(handle), operationId: operationId) }
+        catch let error as NativeSessionOperationFailure { throw error } // Valid bounded business error.
+        catch {
+            // consumeImportReply has already freed the exact returned slice.
+            closeOnWorker()
+            throw NativeSessionOperationFailure(code: "native_import_transport", commitUncertain: true, sessionFenced: true)
+        }
+    }
+    private static func consumeImportReply(_ buffer: ZoridBuffer, operationId: String) throws -> NativeImportProgress {
+        defer { zorid_mobile_buffer_free(buffer) }
+        guard buffer.len > 0, buffer.len <= 65536, let pointer = buffer.data else { throw NativeImportFailure.invalidReply }
+        return try decodeNativeImportReply(Data(bytes: pointer, count: buffer.len), operationId: operationId)
+    }
+    // Pure DTO boundary for focused source tests; no session/lease/FD authority.
+    static func decodeNativeImportReply(_ data: Data, operationId: String) throws -> NativeImportProgress {
+        guard !data.isEmpty, data.count <= 65536, String(data: data, encoding: .utf8) != nil,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = object["version"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(), version == 1,
+              let ok = nativeBoolean(object["ok"]) else { throw NativeImportFailure.invalidReply }
+        if !ok {
+            guard Set(object.keys) == Set(["version", "ok", "error"]), let error = object["error"] as? [String: Any],
+                  Set(error.keys) == Set(["code", "commit_uncertain"]), let code = error["code"] as? String,
+                  code.range(of: "^[a-z_]{1,64}$", options: .regularExpression) != nil,
+                  let uncertain = nativeBoolean(error["commit_uncertain"]) else { throw NativeImportFailure.invalidReply }
+            throw NativeSessionOperationFailure(code: code, commitUncertain: uncertain, sessionFenced: false)
+        }
+        guard Set(object.keys) == Set(["version", "ok", "result"]), let result = object["result"] as? [String: Any],
+              Set(result.keys) == Set(["operationId", "state", "processedBytes", "totalBytes", "selectedPath", "commitState", "projectionState", "canRetryCollision"]),
+              nativeBoolean(result["canRetryCollision"]) != nil else { throw NativeImportFailure.invalidReply }
+        let progress = try JSONDecoder().decode(NativeImportProgress.self, from: JSONSerialization.data(withJSONObject: result))
+        guard progress.operationId == operationId,
+              let processed = UInt64(progress.processedBytes), String(processed) == progress.processedBytes,
+              let total = UInt64(progress.totalBytes), String(total) == progress.totalBytes,
+              processed <= total, total <= NativeImportStaging.fileLimit,
+              progress.canRetryCollision == (progress.state == .collision),
+              progress.state != .collision || progress.commitState == .rejected,
+              progress.state != .committed || (progress.commitState == .committed && progress.projectionState != .not_started),
+              progress.state != .aborted || progress.commitState == .aborted else { throw NativeImportFailure.invalidReply }
+        if let path = progress.selectedPath {
+            guard !path.isEmpty, path.utf8.count <= 4096, !path.hasPrefix("/"), !path.contains("\\"),
+                  !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+                  !path.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { throw NativeImportFailure.invalidReply }
+        }
+        return progress
+    }
+    private static func nativeBoolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
     }
 
     private func closeOnWorker() {

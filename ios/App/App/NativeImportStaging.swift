@@ -88,11 +88,15 @@ final class NativeImportStaging {
         let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard values.isDirectory == true, values.isSymbolicLink != true else { throw NativeImportFailure.invalidSource }
     }
+    private func requireDirectory(_ url: URL) throws {
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else { throw NativeImportFailure.invalidSource }
+    }
     private func location(_ item: NativeImportItem) throws -> URL {
         let batch = try root().appendingPathComponent(item.batchId.uuidString, isDirectory: true)
-        try directory(batch)
+        try requireDirectory(batch)
         let itemURL = batch.appendingPathComponent(item.itemId.uuidString, isDirectory: true)
-        try directory(itemURL)
+        try requireDirectory(itemURL)
         return itemURL
     }
     private func syncDirectory(_ url: URL) throws {
@@ -148,7 +152,7 @@ final class NativeImportStaging {
             // Only a never-published private item is removed here.
             if !completed {
                 try? manager.removeItem(at: itemURL)
-                if (try? manager.contentsOfDirectory(atPath: batch.path).isEmpty) == true {
+                if (try? isEmptyDirectory(batch)) == true {
                     try? manager.removeItem(at: batch); try? syncDirectory(batch.deletingLastPathComponent())
                 }
             }
@@ -204,8 +208,12 @@ final class NativeImportStaging {
             for child in try children(batch, limit: 2000 - visited) {
                 visited += 1
                 guard visited <= 2000 else { throw NativeImportFailure.invalidJournal }
+                if child.lastPathComponent.hasPrefix("retired-"), UUID(uuidString: String(child.lastPathComponent.dropFirst(8))) != nil {
+                    try requireDirectory(child); try syncDirectory(batch)
+                    try manager.removeItem(at: child); try syncDirectory(batch); continue
+                }
                 guard UUID(uuidString: child.lastPathComponent) != nil else { throw NativeImportFailure.invalidJournal }
-                try directory(child)
+                try requireDirectory(child)
                 let ready = child.appendingPathComponent("ready.json")
                 guard manager.fileExists(atPath: ready.path) else {
                     // No ready manifest means begin could never have been admitted.
@@ -221,10 +229,17 @@ final class NativeImportStaging {
                 _ = try Self.leaf(item.fileName); items.append(item)
             }
         }
-        for batch in batches where (try? children(batch, limit: 1).isEmpty) == true {
+        for batch in batches where UUID(uuidString: batch.lastPathComponent) != nil && (try? isEmptyDirectory(batch)) == true {
             try manager.removeItem(at: batch); try syncDirectory(root)
         }
         return items
+    }
+    private func isEmptyDirectory(_ url: URL) throws -> Bool {
+        try requireDirectory(url)
+        var failed = false
+        guard let iterator = manager.enumerator(at: url, includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants], errorHandler: { _, _ in failed = true; return false }) else { throw NativeImportFailure.invalidJournal }
+        let empty = iterator.nextObject() == nil
+        guard !failed else { throw NativeImportFailure.invalidJournal }; return empty
     }
     private func children(_ url: URL, limit: Int) throws -> [URL] {
         var failed = false
@@ -259,10 +274,21 @@ final class NativeImportStaging {
         }
         try durable(JSONEncoder().encode(selection), to: try location(item).appendingPathComponent("selection.json"))
     }
+    // Caller must hold the exact current native response proving a definitive
+    // collision. No timeout/error/projection-pending path may call this method.
+    func replaceAfterCollision(_ previous: NativeImportSelection, next: NativeImportSelection, item: NativeImportItem) throws {
+        try validate(previous, item: item); try validate(next, item: item)
+        guard try selection(for: item) == previous,
+              next.clientId == previous.clientId, next.localStoreId == previous.localStoreId,
+              next.destinationFolder == previous.destinationFolder,
+              next.operationId != previous.operationId, next.entryId != previous.entryId
+        else { throw NativeImportFailure.invalidJournal }
+        try durable(JSONEncoder().encode(next), to: try location(item).appendingPathComponent("selection.json"))
+    }
     private func validate(_ selection: NativeImportSelection, item: NativeImportItem) throws {
         let canonical: (String) -> Bool = { UUID(uuidString: $0)?.uuidString.lowercased() == $0 }
         guard selection.version == 1, canonical(selection.clientId), canonical(selection.operationId), canonical(selection.entryId),
-              selection.localStoreId.range(of: "^[A-Za-z0-9_-]{1,128}$", options: .regularExpression) != nil,
+              canonical(selection.localStoreId),
               selection.fileName == item.fileName, selection.kind == item.kind, selection.sha256 == item.sha256,
               selection.expectedLength == String(item.byteLength), selection.destinationFolder.utf8.count <= 4096
         else { throw NativeImportFailure.invalidJournal }
@@ -277,11 +303,22 @@ final class NativeImportStaging {
         return fd // Caller closes after synchronous native begin has duplicated it.
     }
     func removeConfirmed(_ item: NativeImportItem) throws {
-        let url = try location(item)
-        try manager.removeItem(at: url)
-        let batch = url.deletingLastPathComponent()
+        let batch = try root().appendingPathComponent(item.batchId.uuidString, isDirectory: true)
+        guard manager.fileExists(atPath: batch.path) else { return }
+        try requireDirectory(batch)
+        let url = batch.appendingPathComponent(item.itemId.uuidString, isDirectory: true)
+        let retired = batch.appendingPathComponent("retired-" + item.itemId.uuidString, isDirectory: true)
+        if manager.fileExists(atPath: url.path) {
+            try requireDirectory(url)
+            guard !manager.fileExists(atPath: retired.path), Darwin.rename(url.path, retired.path) == 0 else { throw NativeImportFailure.unavailable }
+        }
+        // Retire the WHOLE identity atomically before removing any journal file.
+        // A failed recursive deletion must never expose ready.json without its
+        // old operation IDs and cause a fresh duplicate import after restart.
         try syncDirectory(batch)
-        if try manager.contentsOfDirectory(atPath: batch.path).isEmpty {
+        if manager.fileExists(atPath: retired.path) { try requireDirectory(retired); try manager.removeItem(at: retired) }
+        try syncDirectory(batch)
+        if try isEmptyDirectory(batch) {
             try manager.removeItem(at: batch); try syncDirectory(batch.deletingLastPathComponent())
         }
     }

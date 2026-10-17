@@ -113,10 +113,81 @@ final class NativeImportStagingTests: XCTestCase {
                 kind: "auto", expectedLength: String(item.byteLength), sha256: item.sha256)
             XCTAssertThrowsError(try store.save(replacement, for: item))
             XCTAssertEqual(try store.selection(for: item), selection)
+            // Only the collision-authorized API can replace both durable IDs;
+            // a repeated stale proof cannot overwrite the replacement again.
+            try store.replaceAfterCollision(selection, next: replacement, item: item)
+            XCTAssertEqual(try store.selection(for: item), replacement)
+            XCTAssertThrowsError(try store.replaceAfterCollision(selection, next: replacement, item: item))
+            XCTAssertEqual(try store.selection(for: item), replacement)
         }
         let journal = inbox.appendingPathComponent(item.batchId.uuidString).appendingPathComponent(item.itemId.uuidString).appendingPathComponent("selection.json")
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: journal)) as? [String: Any])
         XCTAssertNil(object["leaseToken"]); XCTAssertNil(object["sourcePath"])
     }
 
+    func testRetiredPartialCleanupNeverReappearsAsFreshImport() throws {
+        let (url, _) = try fixture(1); let item = try copy(url)
+        let batch = inbox.appendingPathComponent(item.batchId.uuidString)
+        let active = batch.appendingPathComponent(item.itemId.uuidString)
+        let retired = batch.appendingPathComponent("retired-" + item.itemId.uuidString)
+        try FileManager.default.moveItem(at: active, to: retired)
+        // Simulate a crash midway through deleting a confirmed retired item.
+        try FileManager.default.removeItem(at: retired.appendingPathComponent("payload"))
+        XCTAssertTrue(try store.worker.sync { try store.pending().isEmpty })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: batch.path))
+    }
+    func testCleanupOneItemKeepsOtherItemsInSameBatchRecoverable() throws {
+        let (url, _) = try fixture(1); let batch = UUID()
+        let items = try store.worker.sync {
+            try (0..<2).map { _ in try store.copy(url, batchId: batch, fileName: "asset.bin", typeIdentifier: "public.data",
+                remaining: NativeImportStaging.batchLimit, cancellation: NativeImportCancellation()) }
+        }
+        try store.worker.sync {
+            try store.removeConfirmed(items[0])
+            XCTAssertEqual(try store.pending().map(\.itemId), [items[1].itemId])
+            try store.removeConfirmed(items[1])
+            XCTAssertTrue(try store.pending().isEmpty)
+        }
+    }
+
+}
+
+
+final class NativeImportReplyTests: XCTestCase {
+    private let operation = "abcdefab-0000-4000-8000-000000000001"
+    private var result: [String: Any] {
+        ["operationId": operation, "state": "committed", "processedBytes": "1", "totalBytes": "1",
+         "selectedPath": "photo.bin", "commitState": "committed", "projectionState": "pending", "canRetryCollision": false]
+    }
+    private func decode(_ value: [String: Any]) throws -> NativeImportProgress {
+        try NativeMobileSession.decodeNativeImportReply(JSONSerialization.data(withJSONObject: value), operationId: operation)
+    }
+    func testCommittedPendingProjectionAndKnownErrorRemainDistinct() throws {
+        let progress = try decode(["version": 1, "ok": true, "result": result])
+        XCTAssertEqual(progress.state, .committed); XCTAssertEqual(progress.projectionState, .pending)
+        do {
+            _ = try decode(["version": 1, "ok": false, "error": ["code": "import_storage", "commit_uncertain": true]])
+            XCTFail("Expected known error")
+        } catch let error as NativeSessionOperationFailure {
+            XCTAssertEqual(error.code, "import_storage"); XCTAssertTrue(error.commitUncertain); XCTAssertFalse(error.sessionFenced)
+        }
+    }
+    func testMalformedEnvelopeCannotAuthorizeCleanupOrCollisionRetry() throws {
+        for field in ["version", "ok"] {
+            var envelope: [String: Any] = ["version": 1, "ok": true, "result": result]
+            if field == "version" { envelope[field] = true } else { envelope[field] = 1 }
+            XCTAssertThrowsError(try decode(envelope))
+        }
+        let changes: [(String, Any)] = [("operationId", "other"), ("processedBytes", "2"), ("totalBytes", "01"),
+            ("totalBytes", "67108865"), ("canRetryCollision", 1), ("canRetryCollision", true),
+            ("selectedPath", "../outside"), ("selectedPath", "/outside"), ("state", "unknown"), ("projectionState", "not_started")]
+        for (key, value) in changes {
+            var changed = result; changed[key] = value
+            XCTAssertThrowsError(try decode(["version": 1, "ok": true, "result": changed]))
+        }
+        XCTAssertThrowsError(try decode(["version": 1, "ok": false,
+            "error": ["code": "import_storage", "commit_uncertain": true, "message": "/private/provider/path"]]))
+        XCTAssertThrowsError(try NativeMobileSession.decodeNativeImportReply(Data([255]), operationId: operation))
+        XCTAssertThrowsError(try NativeMobileSession.decodeNativeImportReply(Data(repeating: 32, count: 65537), operationId: operation))
+    }
 }
