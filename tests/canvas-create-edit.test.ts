@@ -7,8 +7,7 @@ import { Transaction } from '@codemirror/state';
 import { undo, redo, undoDepth } from '@codemirror/commands';
 import { CanvasDocument } from '../src/canvas/document.ts';
 import { createCanvasView } from '../src/canvas/view.ts';
-import { createCanvasMarkdownCard } from '../src/canvas/markdown-card.ts';
-import type { CanvasMarkdownSession } from '../src/canvas/markdown-card.ts';
+import { createMediaView } from '../src/ui/media-view.ts';
 
 function environment(t: TestContext) {
   const dom = new JSDOM('<!doctype html><main></main>', { url: 'https://zorid.test/', pretendToBeVisual: true });
@@ -87,7 +86,7 @@ test('Add note picker creates selected file node with one save, and stale or des
   let resolve!: (path: string | null) => void; const kinds: unknown[] = [];
   const ui = canvas(t, [], { chooseFile: kind => { kinds.push(kind); return new Promise(done => { resolve = done; }); } });
   const button = ui.parent.querySelector<HTMLButtonElement>('[aria-label="Add note"]')!; button.click(); resolve('Notes/Courses.md'); await tick(); await ui.view.flush();
-  assert.equal(ui.model.nodes.length, 1); const node = ui.model.nodes[0]; assert.equal(node.file, 'Notes/Courses.md'); assert.equal(ui.card(node.id).getAttribute('aria-selected'), 'true'); assert.equal(ui.saves.length, 1);
+  assert.equal(ui.model.nodes.length, 1); const node = ui.model.nodes[0]; assert.equal(node.file, 'Notes/Courses.md'); assert.equal(ui.card(node.id).classList.contains('is-selected'), true); assert.equal(ui.saves.length, 1);
   ui.view.undo(); await ui.view.flush(); assert.equal(ui.model.nodes.length, 0); ui.view.redo(); await ui.view.flush(); assert.equal(ui.model.nodes.length, 1);
   button.click(); ui.view.setDocument(CanvasDocument.parse('{"nodes":[],"edges":[]}')); resolve('Stale.md'); await tick(); assert.equal(ui.view.document.nodes.length, 0);
   ui.parent.querySelector<HTMLButtonElement>('[aria-label="Add media"]')!.click(); ui.view.destroy(); resolve('Closed.md'); await tick(); assert.equal(ui.view.document.nodes.length, 0); assert.deepEqual(kinds, ['note', 'note', 'media']);
@@ -127,4 +126,39 @@ test('a held Canvas write coalesces subsequent Live typing into one latest pendi
   assert.equal(writes.length, 1); assert.equal(ui.view.hasPendingChanges(), true);
   const flushing = ui.view.flush(); release(); await flushing;
   assert.equal(writes.length, 2); assert.equal(JSON.parse(writes[1]).nodes[0].text, 'a' + 'b'.repeat(100)); assert.equal(ui.view.hasPendingChanges(), false);
+});
+
+test('rich Canvas card groups retain real textbox and checkbox semantics and describe selection independently', async t => {
+  const ui = canvas(t, [textNode('# Card\n\n- [ ] Task'), textNode('Second', 'b')]);
+  const first = ui.card(), second = ui.card('b');
+  assert.equal(ui.viewport.getAttribute('role'), 'region'); assert.equal(ui.viewport.getAttribute('aria-label'), 'Canvas');
+  for (const card of [first, second]) { assert.equal(card.getAttribute('role'), 'group'); assert.equal(card.getAttribute('aria-roledescription'), 'Canvas card'); assert.equal(card.hasAttribute('aria-selected'), false); }
+  const description = (card: HTMLElement) => ui.document.getElementById(card.getAttribute('aria-describedby')!)!.textContent;
+  assert.equal(description(first), 'Not selected');
+  const checkbox = first.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  assert.equal(checkbox.disabled, false); assert.equal(checkbox.closest('[role="option"],[role="presentation"],[aria-hidden="true"]'), null);
+  checkbox.click(); await ui.view.flush(); assert.match(String(ui.model.getNode('a')!.text), /\[x\]/);
+  first.dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true })); await tick();
+  const editor = cm(first); assert.equal(editor.contentDOM.getAttribute('role'), 'textbox'); assert.equal(editor.contentDOM.getAttribute('aria-multiline'), 'true'); assert.equal(editor.contentDOM.closest('[role="option"],[role="presentation"],[aria-hidden="true"]'), null);
+  assert.equal(description(first), 'Selected'); assert.equal(description(second), 'Not selected');
+  assert.equal(ui.parent.querySelector('.zorid-canvas-selection-status')?.textContent, '1 card selected');
+  type(editor, '\nWritable'); await ui.view.flush(); assert.match(String(ui.model.getNode('a')!.text), /Writable/);
+  ui.viewport.focus(); ui.viewport.dispatchEvent(new ui.dom.window.KeyboardEvent('keydown', { bubbles: true, key: 'Escape' })); await tick();
+  assert.equal(description(first), 'Not selected'); assert.equal(ui.parent.querySelector('.zorid-canvas-selection-status')?.textContent, 'No items selected');
+});
+
+test('native media controls remain inside a named rich group without presentational ancestors', async t => {
+  const ui = environment(t); let released = 0;
+  ui.dom.window.HTMLMediaElement.prototype.pause = () => {}; ui.dom.window.HTMLMediaElement.prototype.load = () => {};
+  const model = CanvasDocument.parse(JSON.stringify({ nodes: [{ id: 'media', type: 'file', file: 'Clip.mp4', x: 0, y: 0, width: 400, height: 300 }], edges: [] }));
+  const view = createCanvasView(ui.parent, { document: model, onChange() {}, renderFile(path) {
+    const element = ui.document.createElement('div'); const owner = createMediaView(element, path, { acquire: async () => ({ url: 'blob:clip', type: 'video/mp4', release() { released++; } }) });
+    return { element, destroy: () => owner.destroy() };
+  } }); t.after(() => view.destroy()); await tick();
+  const video = ui.parent.querySelector<HTMLVideoElement>('video')!; assert.ok(video);
+  Object.defineProperties(video, { videoWidth: { value: 640 }, videoHeight: { value: 360 } }); video.dispatchEvent(new ui.dom.window.Event('loadedmetadata'));
+  assert.equal(video.style.height, ''); assert.equal(video.controls, true); assert.equal(video.getAttribute('aria-label'), 'Clip.mp4');
+  assert.equal(video.closest('[data-node-id]')!.getAttribute('role'), 'group'); assert.equal(video.closest('[role="option"],[role="presentation"],[aria-hidden="true"]'), null);
+  const pointer = new ui.dom.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }); video.dispatchEvent(pointer); assert.equal(pointer.defaultPrevented, false);
+  view.destroy(); assert.equal(released, 1);
 });

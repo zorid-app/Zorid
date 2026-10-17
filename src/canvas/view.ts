@@ -68,7 +68,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const element = dom.createElement('section'); element.className = 'zorid-canvas';
   const toolbar = dom.createElement('div'); toolbar.className = 'zorid-canvas-toolbar'; toolbar.setAttribute('aria-label', 'Canvas controls');
   const cardMenu = dom.createElement('div'); cardMenu.className = 'zorid-canvas-card-menu'; cardMenu.setAttribute('aria-label', 'Canvas creation');
-  const viewport = dom.createElement('div'); viewport.className = 'zorid-canvas-viewport'; viewport.tabIndex = 0; viewport.setAttribute('aria-label', 'Canvas');
+  const viewport = dom.createElement('div'); viewport.className = 'zorid-canvas-viewport'; viewport.tabIndex = 0; viewport.setAttribute('role', 'region'); viewport.setAttribute('aria-label', 'Canvas');
   const world = dom.createElement('div'); world.className = 'zorid-canvas-world';
   const svg = dom.createElementNS(svgNS, 'svg'); svg.classList.add('zorid-canvas-edges');
   const background = dom.createElementNS(svgNS, 'svg'); background.classList.add('zorid-canvas-background'); background.setAttribute('aria-hidden', 'true');
@@ -78,7 +78,12 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   fill.setAttribute('width', '100%'); fill.setAttribute('height', '100%'); fill.setAttribute('fill', `url(#${pattern.id})`); background.append(pattern, fill);
   world.append(svg); viewport.append(background, world);
   const status = dom.createElement('div'); status.className = 'zorid-canvas-status'; status.setAttribute('role', 'status');
-  element.append(viewport, toolbar, cardMenu, status); parent.append(element);
+  const selectedDescription = dom.createElement('span'), unselectedDescription = dom.createElement('span');
+  selectedDescription.id = `zorid-canvas-selected-${viewSequence}`; selectedDescription.hidden = true; selectedDescription.textContent = 'Selected';
+  unselectedDescription.id = `zorid-canvas-unselected-${viewSequence}`; unselectedDescription.hidden = true; unselectedDescription.textContent = 'Not selected';
+  const selectionStatus = dom.createElement('div'); selectionStatus.className = 'zorid-canvas-selection-status'; selectionStatus.setAttribute('role', 'status'); selectionStatus.setAttribute('aria-live', 'polite'); selectionStatus.setAttribute('aria-atomic', 'true');
+  Object.assign(selectionStatus.style, { position: 'absolute', width: '1px', height: '1px', padding: '0', overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' });
+  element.append(viewport, toolbar, cardMenu, status, selectedDescription, unselectedDescription, selectionStatus); parent.append(element);
   let document = options.document, projection = projectCanvas(document), closed = false;
   let renderedSource = document.toString();
   let tx = 40, ty = 40, scale = 1, space = false, saveQueue = Promise.resolve();
@@ -95,7 +100,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   let saveVersion = 0, completedSaveVersion = 0;
   let failedSave: { error: unknown; version: number } | undefined;
   let pendingTextSave: { source: string; version: number } | undefined;
-  let menuVersion = 0;
+  let menuVersion = 0, announcedSelection = '';
   const box = dom.createElement('div'); box.className = 'zorid-canvas-selection-box';
   const report = (error: unknown) => {
     if (!closed) status.textContent = `Unable to save Canvas: ${error instanceof Error ? error.message : String(error)}`;
@@ -185,8 +190,12 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     scale = Math.max(1 / 16, Math.min(1, (vw - 80) / Math.max(1, width), (vh - 80) / Math.max(1, height))); tx = (vw - width * scale) / 2 - minX * scale; ty = (vh - height * scale) / 2 - minY * scale; transform();
   }
   function paintSelection(): void {
-    for (const [id, item] of nodeEls) { item.classList.toggle('is-selected', selectedNodes.has(id)); item.setAttribute('aria-selected', String(selectedNodes.has(id))); }
+    for (const [id, item] of nodeEls) { item.classList.toggle('is-selected', selectedNodes.has(id)); item.setAttribute('aria-describedby', selectedNodes.has(id) ? selectedDescription.id : unselectedDescription.id); }
     for (const [id, item] of edgeEls) item.group.classList.toggle('is-selected', selectedEdges.has(id));
+    const parts = [selectedNodes.size ? `${selectedNodes.size} ${selectedNodes.size === 1 ? 'card' : 'cards'}` : '', selectedEdges.size ? `${selectedEdges.size} ${selectedEdges.size === 1 ? 'connection' : 'connections'}` : ''].filter(Boolean);
+    const announcement = parts.length ? `${parts.join(' and ')} selected` : 'No items selected';
+    const selection = JSON.stringify([[...selectedNodes].sort(), [...selectedEdges].sort()]);
+    if (selection !== announcedSelection) { announcedSelection = selection; selectionStatus.textContent = announcement; }
     for (const [id, entry] of [...fileCards, ...textCards]) if (!selectedNodes.has(id)) void entry.card.deactivate().catch(report);
   }
   function markdownFile(node: CanvasNode): boolean { return node.type === 'file' && /\.md$/i.test(String(node.file)) && !!options.openMarkdownFile; }
@@ -311,7 +320,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     for (const id of selectedNodes) if (!projection.nodes.has(id)) selectedNodes.delete(id);
     for (const id of selectedEdges) if (!projection.edges.has(id)) selectedEdges.delete(id);
     for (const [id, { data: node }] of projection.nodes) {
-      const item = dom.createElement('div'); item.className = `zorid-canvas-node is-${node.type}`; item.dataset.nodeId = id; item.setAttribute('role', 'option');
+      const item = dom.createElement('div'); item.className = `zorid-canvas-node is-${node.type}`; item.dataset.nodeId = id; item.setAttribute('role', 'group'); item.setAttribute('aria-roledescription', 'Canvas card');
       item.style.setProperty('--canvas-node-color', color(node.color) || 'var(--zc-border)'); item.classList.toggle('is-themed', !!color(node.color));
       const frame = dom.createElement('div'); frame.className = 'zorid-canvas-node-frame';
       const content = dom.createElement('div'); content.className = 'zorid-canvas-node-content';
