@@ -464,3 +464,6 @@ mod sync_tests;
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod namespace_tests;
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod sqlite_lock_tests;

@@ -61,6 +61,27 @@ pub(crate) fn regular(parent: &File, name: &str) -> Result<Option<File>> {
         Err(e) => Err(e.into()),
     }
 }
+/// Inspect SQLite-owned paths without opening them. On Unix, closing ANY
+/// descriptor for a DB/SHM inode drops this process's POSIX locks on that inode,
+/// including locks held by SQLite through another descriptor. Never use regular()
+/// (or File::open/read) for these checks while a connection may be alive.
+pub(crate) fn regular_identity(parent: &File, name: &str) -> Result<Option<String>> {
+    exact(parent, name)?;
+    match fs::statat(parent, name, fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => {
+            if fs::FileType::from_raw_mode(stat.st_mode) != fs::FileType::RegularFile
+                || stat.st_nlink != 1
+            {
+                return Err(Error::UnsafePath(format!(
+                    "not a single-link regular file: {name}"
+                )));
+            }
+            Ok(Some(format!("{}:{}", stat.st_dev, stat.st_ino)))
+        }
+        Err(rustix::io::Errno::NOENT) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
 #[derive(Debug)]
 pub(crate) struct Snapshot {
     pub bytes: Vec<u8>,
@@ -205,12 +226,8 @@ impl Paths {
             "vault.sqlite-journal",
             "vault.lock",
         ] {
-            if let Some(f) = regular(&self.private, name)? {
-                if name == "vault.sqlite"
-                    && self
-                        .db_id
-                        .as_ref()
-                        .is_some_and(|id| identity(&f).ok().as_ref() != Some(id))
+            if let Some(current_id) = regular_identity(&self.private, name)? {
+                if name == "vault.sqlite" && self.db_id.as_ref().is_some_and(|id| &current_id != id)
                 {
                     return Err(Error::UnsafePath("database identity changed".into()));
                 }

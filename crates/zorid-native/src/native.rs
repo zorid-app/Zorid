@@ -54,10 +54,7 @@ impl NativeVault {
     fn open_mode(path: &Path, options: Options, create: bool) -> Result<Self> {
         let mut paths = Paths::open(path, create)?;
         let _guard = paths.lock(options.lock_timeout)?;
-        paths.db_id = fs::regular(&paths.private, "vault.sqlite")?
-            .as_ref()
-            .map(fs::identity)
-            .transpose()?;
+        paths.db_id = fs::regular_identity(&paths.private, "vault.sqlite")?;
         // Standard SQLite opens a pathname. This is private-owned storage, NOT a
         // custom descriptor-anchored VFS. Check aliases/identity before and after.
         let db_path = paths.absolute.join(".zorid/vault.sqlite");
@@ -67,10 +64,10 @@ impl NativeVault {
             Store::open_existing_no_follow(db_path)?
         };
         paths.verify()?;
-        paths.db_id = Some(fs::identity(
-            &fs::regular(&paths.private, "vault.sqlite")?
+        paths.db_id = Some(
+            fs::regular_identity(&paths.private, "vault.sqlite")?
                 .ok_or_else(|| Error::UnsafePath("database missing after open".into()))?,
-        )?);
+        );
         paths.private.sync_all()?;
         Ok(Self {
             paths,
