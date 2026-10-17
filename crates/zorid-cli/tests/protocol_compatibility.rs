@@ -423,6 +423,19 @@ fn required_ack_retains_sealed_pending_and_retries_exact_wire_after_restart() {
     assert_eq!(read(&f.b), b"ack content");
 }
 
+// Reopen the committed database between CLI processes; use the validated public
+// ledger lookup rather than private SQL tables or outward status as a proxy.
+fn ledger_snapshot(
+    vault: &Path,
+    updates: &[zorid_sync_protocol::UpdateId],
+) -> Vec<Option<zorid_store::FamilyEnvelopeStatus>> {
+    let store = zorid_store::Store::open(vault.join(".zorid/vault.sqlite")).unwrap();
+    updates
+        .iter()
+        .map(|id| store.family_envelope_status(id).unwrap())
+        .collect()
+}
+
 fn incompatible_payload_preserves_cursor_and_file(version: u32) {
     let mut f = Fixture::new();
     write(&f.a, &f.input, "seed", "preserve this content");
@@ -491,6 +504,25 @@ fn incompatible_payload_preserves_cursor_and_file(version: u32) {
         .append(&f.token, &VaultId::new("vault").unwrap(), &update, &wire)
         .unwrap();
     let relay_wires = f.wires();
+    let ledger_ids: Vec<_> = relay_wires
+        .iter()
+        .map(|bytes| {
+            zorid_sync_protocol::Envelope::decode(bytes)
+                .unwrap()
+                .header()
+                .update_id()
+                .clone()
+        })
+        .collect();
+    let ledger_before = ledger_snapshot(&f.b, &ledger_ids);
+    assert_eq!(ledger_ids.last(), Some(&update));
+    assert!(ledger_before[..ledger_before.len() - 1]
+        .iter()
+        .all(Option::is_some));
+    assert!(
+        ledger_before.last().unwrap().is_none(),
+        "rejected update starts absent"
+    );
     for _ in 0..2 {
         rejected(&f.b, &f.cb, &f.token, "sync_unsupported_format");
         let after = status(&f.b, &f.cb);
@@ -498,6 +530,11 @@ fn incompatible_payload_preserves_cursor_and_file(version: u32) {
         assert_eq!(after["pending_envelope_sample"], 0);
         assert_eq!(fs::read(f.b.join("note.md")).unwrap(), prior_file);
         assert_eq!(read(&f.b), prior_file);
+        assert_eq!(
+            ledger_snapshot(&f.b, &ledger_ids),
+            ledger_before,
+            "unsupported payload must not enter the shared ledger or alter prior receipts"
+        );
         assert_eq!(
             f.wires(),
             relay_wires,
