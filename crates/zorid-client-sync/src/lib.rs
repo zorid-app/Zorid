@@ -18,7 +18,8 @@ pub const MAX_TEXT_BYTES: usize = 256 * 1024;
 pub const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_ACTORS: usize = 4096;
 pub const MAX_EDITS: usize = 4096;
-/// Conservative CPU bound for whole-text imports; larger imports fail explicitly.
+/// Myers runs only on changed windows within this character budget. Larger
+/// windows use a deterministic middle replacement, retaining the same CRDT.
 pub const MAX_DIFF_CHARS: usize = 8192;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -700,12 +701,55 @@ fn check_cursor(
     }
 }
 fn diff_edits(old: &str, new: &str) -> Result<Vec<TextEdit>> {
-    let old: Vec<char> = old.chars().collect();
-    let new: Vec<char> = new.chars().collect();
-    if old.len() > MAX_DIFF_CHARS || new.len() > MAX_DIFF_CHARS {
-        return Err(SyncError::TooLarge);
+    if old == new {
+        return Ok(Vec::new());
     }
-    let mut offsets = vec![0u32];
+    // Trim at scalar boundaries before allocating diff inputs. Byte-prefix
+    // matching alone can stop inside UTF-8; edit positions count UTF-16 units.
+    let mut prefix = 0;
+    let mut prefix_units = 0u32;
+    for (before, after) in old.chars().zip(new.chars()) {
+        if before != after {
+            break;
+        }
+        prefix += before.len_utf8();
+        prefix_units += before.len_utf16() as u32;
+    }
+    let mut suffix = 0;
+    for (before, after) in old[prefix..].chars().rev().zip(new[prefix..].chars().rev()) {
+        if before != after {
+            break;
+        }
+        suffix += before.len_utf8();
+    }
+    let old_middle = &old[prefix..old.len() - suffix];
+    let new_middle = &new[prefix..new.len() - suffix];
+    // A coarse replacement still deletes only this branch's observed CRDT
+    // content, retaining concurrent inserts. It can merge less precisely than
+    // separate hunks, but never replaces the immutable Text identity.
+    let replace_middle = || {
+        let mut edits = Vec::new();
+        if !old_middle.is_empty() {
+            edits.push(TextEdit::Delete {
+                index: prefix_units,
+                length: old_middle.encode_utf16().count() as u32,
+            });
+        }
+        if !new_middle.is_empty() {
+            edits.push(TextEdit::Insert {
+                index: prefix_units,
+                text: new_middle.into(),
+            });
+        }
+        edits
+    };
+    // Each allocation is bounded even when most of the document changed.
+    let old: Vec<char> = old_middle.chars().take(MAX_DIFF_CHARS + 1).collect();
+    let new: Vec<char> = new_middle.chars().take(MAX_DIFF_CHARS + 1).collect();
+    if old.len() > MAX_DIFF_CHARS || new.len() > MAX_DIFF_CHARS {
+        return Ok(replace_middle());
+    }
+    let mut offsets = vec![prefix_units];
     for character in &old {
         offsets.push(offsets.last().copied().unwrap() + character.len_utf16() as u32);
     }
@@ -733,7 +777,7 @@ fn diff_edits(old: &str, new: &str) -> Result<Vec<TextEdit>> {
         }
     }
     if edits.len() > MAX_EDITS {
-        return Err(SyncError::TooLarge);
+        return Ok(replace_middle());
     }
     Ok(edits)
 }

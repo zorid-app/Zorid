@@ -505,7 +505,7 @@ fn bounds_and_stale_version_are_explicit_errors() {
         plan_external_text(
             &state,
             &state.projection_baseline().unwrap(),
-            "x".repeat(MAX_DIFF_CHARS + 1).as_bytes(),
+            "x".repeat(MAX_TEXT_BYTES + 1).as_bytes(),
             &req
         )
         .unwrap_err(),
@@ -799,7 +799,11 @@ fn replace_current_text_preserves_bom_line_endings_and_supplementary_characters(
 
 #[test]
 fn replace_empty_and_identical_text_have_empty_transaction_updates() {
-    for base in [empty(), seed("😀unchanged\r\n").next_state] {
+    for base in [
+        empty(),
+        seed("😀unchanged\r\n").next_state,
+        seed(&"😀unchanged\r\n".repeat(MAX_DIFF_CHARS / 4)).next_state,
+    ] {
         let current = base.materialized_utf8().unwrap();
         let plan = plan_replace_text(
             &base,
@@ -844,7 +848,7 @@ fn stale_whole_text_command_cannot_overwrite_newer_concurrent_content() {
 }
 
 #[test]
-fn whole_text_replacement_rejects_lossy_double_and_unbounded_work() {
+fn whole_text_replacement_rejects_lossy_double_and_oversized_content() {
     let base = seed("unchanged").next_state;
     let mut req = request(&base, "replace", actor(2, "a"), vec![]);
     assert_eq!(
@@ -853,10 +857,6 @@ fn whole_text_replacement_rejects_lossy_double_and_unbounded_work() {
     );
     assert_eq!(
         plan_replace_text(&base, &vec![b'x'; MAX_TEXT_BYTES + 1], &req).unwrap_err(),
-        SyncError::TooLarge
-    );
-    assert_eq!(
-        plan_replace_text(&base, &vec![b'x'; MAX_DIFF_CHARS + 1], &req).unwrap_err(),
         SyncError::TooLarge
     );
     req.edits.push(insert(0, "sneaky"));
@@ -1010,4 +1010,211 @@ fn external_observed_revision_must_be_separate_and_noop_preserves_exact_bytes() 
         .unwrap_err(),
         SyncError::InvalidEdit
     );
+}
+
+#[test]
+fn diff_large_shared_text_preserves_utf16_character_boundaries() {
+    let prefix = "前😀".repeat(MAX_DIFF_CHARS);
+    let suffix = "終𐐷\r\n".repeat(MAX_DIFF_CHARS);
+    // The differing supplementary characters share UTF-8 leading bytes.
+    let old = format!("{prefix}A😀B{suffix}");
+    let new = format!("{prefix}A𐐷B{suffix}");
+    let index = prefix.encode_utf16().count() as u32 + 1;
+    let edits = diff_edits(&old, &new).unwrap();
+    assert_eq!(
+        edits,
+        vec![
+            TextEdit::Delete { index, length: 2 },
+            TextEdit::Insert {
+                index,
+                text: "𐐷".into()
+            },
+        ]
+    );
+    let replica = TextReplica::new(1);
+    replica.insert(0, &old).unwrap();
+    replica.edit(&edits).unwrap();
+    assert_eq!(replica.text(), new);
+}
+
+#[test]
+fn diff_large_changed_middle_uses_bounded_unicode_replacement() {
+    let prefix = "前😀";
+    let suffix = "é\r\n";
+    let old_middle = "😀".repeat(MAX_DIFF_CHARS + 1);
+    let new_middle = "𐐷".repeat(MAX_DIFF_CHARS + 1);
+    let old = format!("{prefix}{old_middle}{suffix}");
+    let new = format!("{prefix}{new_middle}{suffix}");
+    let edits = diff_edits(&old, &new).unwrap();
+    assert_eq!(
+        edits,
+        vec![
+            TextEdit::Delete {
+                index: 3,
+                length: 2 * (MAX_DIFF_CHARS as u32 + 1),
+            },
+            TextEdit::Insert {
+                index: 3,
+                text: new_middle
+            },
+        ]
+    );
+    let replica = TextReplica::new(1);
+    replica.insert(0, &old).unwrap();
+    replica.edit(&edits).unwrap();
+    assert_eq!(replica.text(), new);
+}
+
+#[test]
+fn replace_large_text_keeps_identity_exact_bytes_and_replication() {
+    let initial = empty();
+    let wanted = format!("\u{feff}{}", "😀x\r\n".repeat(MAX_DIFF_CHARS / 2));
+    let created = plan_replace_text(
+        &initial,
+        wanted.as_bytes(),
+        &request(&initial, "large-created", actor(1, "a"), vec![]),
+    )
+    .unwrap();
+    assert_eq!(created.materialized_utf8, wanted.as_bytes());
+    assert_eq!(created.next_state.identity, initial.identity);
+    let wanted = format!("\u{feff}{}", "𐐷y\r\n".repeat(MAX_DIFF_CHARS / 2));
+    let updated = plan_replace_text(
+        &created.next_state,
+        wanted.as_bytes(),
+        &request(&created.next_state, "large-updated", actor(1, "a"), vec![]),
+    )
+    .unwrap();
+    assert_eq!(updated.materialized_utf8, wanted.as_bytes());
+    assert_eq!(updated.next_state.identity, initial.identity);
+    let peer = receive(&initial, &authored(&created), "large-peer-created")
+        .next_state
+        .unwrap();
+    let peer = receive(&peer, &authored(&updated), "large-peer-updated")
+        .next_state
+        .unwrap();
+    assert_eq!(peer.materialized_utf8().unwrap(), wanted.as_bytes());
+}
+
+#[test]
+fn external_large_shared_text_retains_remote_edit_between_small_hunks() {
+    let prefix = "前😀".repeat(MAX_DIFF_CHARS);
+    let suffix = "終𐐷".repeat(MAX_DIFF_CHARS);
+    let original = format!("{prefix}start 😀 center end{suffix}");
+    let observed = format!("{prefix}START 😀 center END{suffix}");
+    let base = seed(&original).next_state;
+    let baseline = base.projection_baseline().unwrap();
+    let remote = plan_authored_text(
+        &base,
+        &request(
+            &base,
+            "large-remote",
+            actor(2, "remote"),
+            vec![insert(prefix.encode_utf16().count() as u32 + 16, "REMOTE ")],
+        ),
+    )
+    .unwrap();
+    let imported = plan_external_text(
+        &remote.next_state,
+        &baseline,
+        observed.as_bytes(),
+        &request(
+            &remote.next_state,
+            "large-external",
+            actor(3, "scanner"),
+            vec![],
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        string(&imported.next_state),
+        format!("{prefix}START 😀 center REMOTE END{suffix}")
+    );
+    assert_eq!(imported.next_state.identity, base.identity);
+    assert_eq!(imported.expected_baseline, Some(baseline));
+}
+
+#[test]
+fn external_large_coarse_replacement_preserves_remote_and_physical_branch() {
+    let old_middle = "a".repeat(MAX_DIFF_CHARS + 1);
+    let new_middle = "b".repeat(MAX_DIFF_CHARS + 1);
+    let original = format!("😀{old_middle}終\r\n");
+    let observed = format!("😀{new_middle}終\r\n");
+    let base = seed(&original).next_state;
+    let baseline = base.projection_baseline().unwrap();
+    let remote = plan_authored_text(
+        &base,
+        &request(
+            &base,
+            "coarse-remote",
+            actor(2, "remote"),
+            vec![
+                insert(2 + MAX_DIFF_CHARS as u32 / 2, "REMOTE_MIDDLE"),
+                insert(0, "REMOTE_PREFIX"),
+            ],
+        ),
+    )
+    .unwrap();
+    let imported = plan_external_text_with_baseline(
+        &remote.next_state,
+        &baseline,
+        observed.as_bytes(),
+        &request(
+            &remote.next_state,
+            "coarse-external",
+            actor(3, "scanner"),
+            vec![],
+        ),
+        &revision("coarse-observed"),
+    )
+    .unwrap();
+    let merged = string(&imported.authored.next_state);
+    assert!(merged.contains("REMOTE_MIDDLE"));
+    assert!(merged.starts_with("REMOTE_PREFIX"));
+    assert_eq!(
+        merged
+            .replace("REMOTE_MIDDLE", "")
+            .replace("REMOTE_PREFIX", ""),
+        observed
+    );
+    assert_eq!(
+        imported.observed_baseline.materialized_utf8,
+        observed.as_bytes()
+    );
+    assert_eq!(string(&imported.observed_baseline.state), observed);
+    assert_eq!(imported.authored.expected_baseline, Some(baseline));
+    assert_eq!(imported.authored.next_state.identity, base.identity);
+    assert!(!imported.observed_baseline.state.actors.contains_key(&2));
+    let peer = receive(&base, &authored(&imported.authored), "coarse-peer-import")
+        .next_state
+        .unwrap();
+    let peer = receive(&peer, &authored(&remote), "coarse-peer-remote")
+        .next_state
+        .unwrap();
+    assert_eq!(string(&peer), merged);
+}
+
+#[test]
+fn diff_many_small_hunks_fall_back_without_exceeding_edit_budget() {
+    let old = "ab".repeat(MAX_DIFF_CHARS / 2);
+    let new = "ac".repeat(MAX_DIFF_CHARS / 2);
+    // Both changed windows fit Myers, but independent delete/insert hunks
+    // exceed MAX_EDITS. Keep the shared first scalar and replace the middle.
+    let edits = diff_edits(&old, &new).unwrap();
+    assert_eq!(
+        edits,
+        vec![
+            TextEdit::Delete {
+                index: 1,
+                length: MAX_DIFF_CHARS as u32 - 1
+            },
+            TextEdit::Insert {
+                index: 1,
+                text: new[1..].into()
+            },
+        ]
+    );
+    let replica = TextReplica::new(1);
+    replica.insert(0, &old).unwrap();
+    replica.edit(&edits).unwrap();
+    assert_eq!(replica.text(), new);
 }
