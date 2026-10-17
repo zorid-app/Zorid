@@ -8,11 +8,13 @@ worktree `/Users/ctk/orca/workspaces/Zorid/native-mobile-recovery`. Canonical ma
 
 ## Framework and binding decision
 
-UIKit owns native launch, app-local vault creation/selection, navigation, safe-area
-and keyboard viewport layout. Existing Capacitor8 WKWebView hosts the existing web
-editor. A small independent `mobile/rust` staticlib/C ABI embeds the existing Rust
-host dispatcher/vault/SQLite core in-process. No new UI framework, daemon, editor,
-Markdown/Base parser or index implementation is introduced. Stage4 query APIs will
+SwiftUI owns the requested native Recents/Files pages and page controls, hosted
+alongside UIKit launch, app-local vault creation/selection and editor navigation.
+UIKit retains safe-area/keyboard viewport layout around the existing Capacitor8
+WKWebView and shared web editor. A small independent `mobile/rust` staticlib/C ABI
+embeds the existing Rust host dispatcher/vault/SQLite core in-process. No third-party
+UI framework, daemon, new editor or Swift Markdown/Base/index implementation is
+introduced. Stage4 query APIs will
 be consumed incrementally. Existing Capacitor/filesystem code stays in source.
 
 Native selects trusted roots before editor launch; web requests cannot select a
@@ -42,7 +44,8 @@ the workspace before ACK, because a native timeout must retain a usable editor.
 Successful native switch ACK owns queued-call drain, Rust lease/host drop and pop.
 Background uses a bounded UIApplication task, never destroys/closes the workspace,
 and timeout/OS expiry makes no completed-save claim. Missing handlers fail closed.
-The precise workspace hook is coordinator-owned pending scoped approval.
+The precise workspace flush/session/ACK hook was scoped and implemented in913618a;
+its focused harness passes, with native runtime verification still pending.
 
 ## Scoped commits and checks
 
