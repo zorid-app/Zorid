@@ -46,8 +46,8 @@ export type DocumentBaseValue=
 export interface DocumentBaseResult {
   readonly snapshotId:DocumentSnapshotId;readonly view:DocumentValue;
   readonly rows:readonly{readonly entryId:string;readonly revision:string;readonly path:string;readonly values:Readonly<Record<string,DocumentBaseValue>>}[];
-  readonly groups:readonly{readonly key:DocumentBaseValue|null;readonly entryIds:readonly string[]}[];
-  readonly groupOptions:readonly{readonly key:DocumentBaseValue;readonly count:number;readonly listed:boolean}[];
+  readonly groups:readonly{readonly keyId:string|null;readonly key:DocumentBaseValue|null;readonly entryIds:readonly string[]}[];
+  readonly groupOptions:readonly{readonly keyId:string;readonly key:DocumentBaseValue;readonly count:number;readonly listed:boolean}[];
   readonly properties:readonly string[];readonly availableProperties:readonly string[];
   readonly counts:{readonly scanned:number;readonly matched:number;readonly afterGroupOrder:number;readonly afterSearch:number;readonly returned:number};
   readonly diagnostics:readonly{readonly phase:string;readonly entryId:string;readonly path:string;readonly property:string|null;readonly code:string;readonly message:string}[];

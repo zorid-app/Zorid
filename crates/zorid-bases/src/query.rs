@@ -120,11 +120,14 @@ pub struct BaseRow {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseGroup {
+    /// Opaque presentation identity; None is only the ungrouped sentinel.
+    pub key_id: Option<String>,
     pub key: Option<BaseValue>,
     pub entry_ids: Vec<crate::EntryId>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupOption {
+    pub key_id: String,
     pub key: BaseValue,
     pub count: usize,
     pub listed: bool,
@@ -269,6 +272,9 @@ fn canonical(value: &BaseValue) -> String {
         }
     }
     serde_json::to_string(&normalized(value)).expect("finite typed value serializes")
+}
+fn group_key_id(value: &BaseValue) -> String {
+    format!("base-key-v1:{}", canonical(value))
 }
 fn display(value: &BaseValue, timezone: &str) -> String {
     match value {
@@ -606,6 +612,7 @@ pub fn query_base(
         let listed = keys.iter().map(canonical).collect::<HashSet<_>>();
         for key in keys {
             group_options.push(GroupOption {
+                key_id: group_key_id(key),
                 key: key.clone(),
                 count: indexed
                     .get(&canonical(key))
@@ -619,6 +626,7 @@ pub fn query_base(
                 .into_iter()
                 .filter(|(key, _)| !listed.contains(key))
                 .map(|(_, (key, count))| GroupOption {
+                    key_id: group_key_id(&key),
                     key,
                     count,
                     listed: false,
@@ -780,6 +788,7 @@ pub fn query_base(
                 }
                 let index = groups.len();
                 groups.push(BaseGroup {
+                    key_id: Some(format!("base-key-v1:{key_id}")),
                     key: Some(key),
                     entry_ids: Vec::new(),
                 });
@@ -811,6 +820,7 @@ pub fn query_base(
         }
     } else {
         groups.push(BaseGroup {
+            key_id: None,
             key: None,
             entry_ids: rows.iter().map(|row| row.entry_id.clone()).collect(),
         });
