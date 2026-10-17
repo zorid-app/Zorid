@@ -109,10 +109,8 @@ export async function createPlatformAdapter(): Promise<PlatformVault | null> {
   }
   const { Capacitor } = await import('@capacitor/core');
   if (Capacitor.isNativePlatform()) {
-    const { MobileAdapter } = await import('./mobile');
-    const adapter = new MobileAdapter();
-    await adapter.initialize();
-    return { adapter, label: 'Zorid', id: 'mobile:documents:Zorid' };
+    const { openNativeMobileVault } = await import('./mobile-native.ts');
+    return openNativeMobileVault();
   }
   if (typeof __ZORID_CORE_FIXTURES__ !== 'undefined' && __ZORID_CORE_FIXTURES__) {
     const { browserCoreFixtureConfig, openBrowserCoreFixture } = await import('./browser-core-fixture');

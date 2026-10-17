@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        111111111111111111111101 /* NativeMobile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111102 /* NativeMobile.swift */; };
+
 		901B9BEBDB164F35B9CB5690 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 33932BC56CAE4CCF9C9AF936 /* PrivacyInfo.xcprivacy */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
@@ -20,6 +22,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        111111111111111111111102 /* NativeMobile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMobile.swift; sourceTree = "<group>"; };
+
 		33932BC56CAE4CCF9C9AF936 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
@@ -68,6 +72,7 @@
 			children = (
 				33932BC56CAE4CCF9C9AF936 /* PrivacyInfo.xcprivacy */,
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
+                111111111111111111111102 /* NativeMobile.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
@@ -164,6 +169,7 @@
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
+                111111111111111111111101 /* NativeMobile.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -317,6 +323,10 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
+                SWIFT_OBJC_BRIDGING_HEADER = "App/Zorid-Bridging-Header.h";
+                "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios-sim/debug";
+                "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/release";
+                OTHER_LDFLAGS = ("$(inherited)", "-lzorid_mobile_ffi", "-lz", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration");
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -338,6 +348,10 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;
+                SWIFT_OBJC_BRIDGING_HEADER = "App/Zorid-Bridging-Header.h";
+                "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios-sim/debug";
+                "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/release";
+                OTHER_LDFLAGS = ("$(inherited)", "-lzorid_mobile_ffi", "-lz", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration");
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
