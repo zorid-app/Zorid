@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Zorid Rust core verification</title>
+<link rel="stylesheet" href="family-fixture.css">
+<h1>Zorid Rust core verification</h1>
+<p>Explicit fixture mode. Commands use the shared Rust core and native relay client. This is not the document editor or production enrollment.</p>
+<section>
+<button id="enroll">Enroll configured fixture vault</button>
+<button id="status">Status</button>
+<button id="list">Reload files</button>
+<button id="sync">Sync one bounded sweep</button>
+</section>
+<section>
+<label>Operation ID <input id="operation" spellcheck="false"></label>
+<button id="new-operation">New operation ID</button>
+<label>Entry ID <input id="entry" spellcheck="false"></label>
+<label>Relative path for create <input id="path" value="desktop-note.md" spellcheck="false"></label>
+<label>Expected revision for write <input id="revision" spellcheck="false"></label>
+<label>Create mode <select id="mode"><option value="text">Text</option><option value="binary">Binary</option></select></label>
+<label>Content encoding <select id="encoding"><option value="text">UTF-8 text</option><option value="hex">Hex bytes</option></select></label>
+<label>Exact content <textarea id="content" rows="5">Created offline by Electron</textarea></label>
+<button id="create">Create</button>
+<button id="write">Conditional write</button>
+<button id="read">Read entry and revision</button>
+<button id="retry" disabled>Retry exact last mutation</button>
+</section>
+<p>Keep the operation ID and exact command/bytes when a result is uncertain. Retry reuses the captured request; it never substitutes edited fields. The fixture has no automatic save or durable editor recovery.</p>
+<pre id="result" aria-live="polite">Opening fixed main-owned scope…</pre>
+<script src="family-fixture-renderer.js"></script>
+</html>

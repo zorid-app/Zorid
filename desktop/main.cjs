@@ -10,6 +10,7 @@ const { validateMenuHotkeys, workspaceFileMenu } = require('./menu-hotkeys.cjs')
 const menuHotkeys = new WeakMap();
 const contextMenus = createContextMenuController(Menu);
 app.setName('Zorid');
+const familyFixture = process.env.ZORID_DESKTOP_FAMILY_FIXTURE === '1';
 const devUrl = process.env.ZORID_DEV_URL;
 const packagedUrl = pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
 function allowedURL(url) {
@@ -83,6 +84,17 @@ function refreshApplicationMenu() {
   ]));
 }
 app.whenReady().then(async () => {
+  if (familyFixture) {
+    try {
+      await require('./family-fixture.cjs').launchFamilyFixture({app,BrowserWindow,ipcMain}, {
+        root: process.env.ZORID_FIXTURE_VAULT,
+        executable: process.env.ZORID_DESKTOP_HOST_BIN,
+        credentials: process.env.ZORID_FIXTURE_SYNC_CONFIG,
+        source: process.env.ZORID_FIXTURE_SOURCE,
+      });
+    } catch { dialog.showErrorBox('Core fixture unavailable', 'Check the trusted fixture configuration and matching native host build.'); app.quit(); }
+    return;
+  }
   try { lastVaultPath = JSON.parse(await fs.readFile(path.join(app.getPath('userData'), 'vault.json'), 'utf8')).path; }
   catch { /* A missing previous vault returns to the vault picker. */ }
   registerIPC();
@@ -90,6 +102,6 @@ app.whenReady().then(async () => {
   await createWindow({ primary: true, initialState: 'restore' });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow({ primary: true, initialState: 'restore' }).catch(error => dialog.showErrorBox('Could not open window', error.message)); });
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => { if (familyFixture || process.platform !== 'darwin') app.quit(); });
 // before-quit can still be cancelled by a renderer's unsaved-note guard.
 app.on('will-quit', () => broker.dispose());

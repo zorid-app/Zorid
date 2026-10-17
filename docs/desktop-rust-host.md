@@ -391,7 +391,76 @@ node --test --test-concurrency=1 tests/rust-vault-service.test.cjs
 ```
 
 These additions have not run yet and do not establish actual Electron/relay
-convergence. Production `main.cjs`, preload, WindowBroker, platform selection,
-Canvas/Bases and the paused editor durable-write consumer are unchanged. Actual
-Electron fixture selection and the combined desktop/CLI/browser relay proof are
-separate integration gates using this same host and shared runner.
+convergence. The default app path, ordinary preload, WindowBroker, platform selection,
+Canvas/Bases and the paused editor durable-write consumer are unchanged. The
+fixture-only main entry selection is described below; combined desktop/CLI/browser
+relay verification remains a separate gate using this same host and shared runner.
+
+## Actual Electron fixture selection (source pending validation)
+
+The real `desktop/main.cjs` entry now has one explicit trusted-startup opt-in.
+When `ZORID_DESKTOP_FAMILY_FIXTURE=1`, it opens the dedicated core verification
+window instead of loading recent vaults, ordinary IPC, or the editor. Required
+startup values are absolute fixture vault/host/config paths and a source commit:
+
+```sh
+ZORID_DESKTOP_FAMILY_FIXTURE=1 \
+ZORID_FIXTURE_VAULT=/absolute/fresh-initialized-vault \
+ZORID_DESKTOP_HOST_BIN=/absolute/matching/zorid-desktop-host \
+ZORID_FIXTURE_SYNC_CONFIG=/absolute/protected-sync-config.json \
+ZORID_FIXTURE_SOURCE=<integrated-source-commit> \
+node_modules/.bin/electron desktop/main.cjs
+```
+
+Only use a disposable initialized vault and fixture credentials kept outside it.
+The normal app entry, shared host, native sync runner, and relay are the actual
+implementations. This is not a separate Electron project. The dedicated fixture
+page is a verification UI, not the paused NoteBuffer integration or a production
+storage selection. Ordinary preload and WindowBroker source are unchanged.
+
+The main process creates a fixed scope; renderer methods never take a vault root,
+credential path, endpoint, key or bearer token. A dedicated sandboxed preload
+exposes `window.zoridCoreFixture` methods `info`, `enroll`, `status`, `list`,
+`read(entryId)`, `apply(command, bytes)`, and `sync({maxPush,maxPages})`.
+`WindowBroker` authenticates the registered webContents, top frame and exact local
+page URL. The same captured window generation is checked again immediately before
+actual stdio dispatch after queue waits. Navigation/popups/webviews are blocked.
+Replies preserve exact receipts, bounded binary reads and sanitized error codes.
+Closing the window retires IPC first, drains or times out the child host, and
+only then permits the fixture app to quit, including on macOS.
+
+For the combined-client proof, initialize/enroll a separate CLI/browser vault in
+the same fixture scope using its own relay credential. In the actual Electron UI:
+
+1. Capture **info** (shown at startup), including source, local authority and real
+   Electron/Chromium versions. Click **Enroll configured fixture vault**.
+2. Create text while the relay is offline or before requesting any sweep. The
+   operation ID/entry ID are explicit fields. Capture the receipt and **Status**
+   showing pending envelopes. For binary content select binary mode and hex input,
+   use a fresh entry/operation ID and path, and include bytes such as `00 ff 80`.
+3. Start/use the configured relay and click **Sync one bounded sweep**. Preserve
+   accepted/received counters and pending projection/dependency/recovery fields.
+   Sync the other client and verify exact shared IDs and bytes there.
+4. Commit and upload a conditional edit from that independent client. Sweep in
+   Electron, then **Reload files** and **Read entry and revision** to verify exact
+   content and the current coherent revision. This is the actual renderer → IPC →
+   main → Rust host → common native runner → relay path in both directions.
+5. Record results from `window.__zoridDesktopFamilyFixture.results`, screenshots
+   where useful, and independent client/relay evidence. The last exact synthetic
+   mutation is available as `window.__zoridDesktopFamilyLastMutation`. Close the
+   owned verification window/app, verify the child host exits, then stop owned
+   relay resources and delete only recorded disposable fixture directories.
+
+The UI keeps its last captured command/bytes for **Retry exact last mutation**,
+without regenerating IDs or substituting edited fields. That memory is not a
+crash-safe editor checkpoint. If an outcome is uncertain, preserve the exact
+command and bytes outside this fixture UI before closing; production consumer
+recovery remains gated separately. A sweep's `synced:false` is intentional even
+when the bounded snapshot has been pulled. Do not infer full convergence, mobile,
+process-crash durability or editor behavior from these controls.
+
+Source regression `tests/desktop-family-fixture.test.cjs` uses real WindowBroker
+and RustVaultService queue methods with mocked Electron/process boundaries to
+check sender/frame rejection, retired queued writes remaining unsent, argument
+snapshotting, error sanitization and child-drain-before-quit ordering. It has not
+run yet; it cannot replace the actual Electron/relay check above.
