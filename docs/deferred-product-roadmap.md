@@ -125,9 +125,10 @@ Latest Vite completion — main165cf17a +manager-lock60efe609:
   dependency resolutions unchanged, independently reviewed. Main cache activation
   uses existing source/artifact fingerprint validation. Source/evidence:
   docs/vite-migration.md, tmp/vite-main-*.log, native msg67c02132f86d.
-- Root returned exclusive heavy slot to native owner in msgdcd919ecad0d for signed
-  phone7 EXACTce1e0ace build/install. Simulatorapp/helperclosed, root no live apps/
-  servers/compiler. Phone7 install/keyboard/search/newSettings remain separate.
+- Phone7 EXACTce1e0ace build91966 passed; strict signing/development metadata
+  passed and physical iPhone install/launch12016 both exited0. Native owner returned
+  the exclusive heavy slot in msg5e815eb955cf. Keyboard interaction acceptance,
+  search and new Settings remain separate; those new screens are not in build7.
 - Next active milestone is first-party Bases/tasks/calendar, then Stage5. Task
   representations optional question has had a reasonable reply window; working
   default is both inline checkboxes and task notes, pending later user correction.

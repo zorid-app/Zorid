@@ -286,3 +286,27 @@ source-only callbacks were insufficient. Native owner diagnoses bounded shared
 presentation seam; root Vite pdf-view changes only import ignore comments. Neither
 finding is complete until actual behavior passes. Search field leading icon toggle
 confirmed for Zorid app actions, not shell commands; owner notified.
+
+### 2026-10-17 — Native follow-up ownership and phone7
+
+Native owner reports phone7 exact ce1e0ace signed, installed and launched on the
+physical iPhone (build91966 and install/launch12016 exit0). This supersedes phone6;
+full keyboard interaction acceptance remains pending. The heavy slot returned to
+root via msg5e815eb955cf; no native compiler/helper/server remains active.
+
+- Caret should become visible immediately after a tap/selection below the visible
+  editor area, without waiting for typing. Native owner assigned investigation;
+  exact shared-editor file ownership is required before edits. Preserve manual
+  scrolling when the caret does not move. Runtime verification is pending.
+- Full native Settings and configurable navigation bar: source ceef6006 remains
+  isolated under native owner. Extracted production Foundation preference/drop
+  helpers passed34 checks; UIKit drag, gestures, accessibility, empty navigation
+  bar and restart acceptance remain pending. This is not included in phone7.
+- External file/photo/video import: first Rust/native ABI source slice assigned
+  to861, using existing durable stages and text creation, keep-both collisions,
+  bounded streaming and existing64MiB binary limit. Host scope is
+  crates/zorid-desktop-host/src/staged_import.rs plus minimal lib.rs seams;
+  mobile Rust/header ABI belongs to861, native Swift hooks to native coordinator.
+  Root owns manifests. No implementation or runtime acceptance claimed yet.
+  Share extension/AppGroup/project/signing/CI changes require a subsequent scoped
+  coordination decision; the existing wildcard profile does not prove readiness.
