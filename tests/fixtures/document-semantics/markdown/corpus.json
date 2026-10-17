@@ -218,7 +218,8 @@
                 134
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Visible#Section"
           },
           {
             "kind": "wiki",
@@ -245,7 +246,8 @@
                 163
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "image.png"
           },
           {
             "kind": "markdown",
@@ -272,7 +274,8 @@
                 186
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Some note.md#Here"
           }
         ],
         "tasks": [],
@@ -687,7 +690,8 @@
                 103
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "目標#節"
           },
           {
             "kind": "markdown",
@@ -714,7 +718,8 @@
                 126
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Café.md#Here"
           }
         ],
         "tasks": [],
@@ -1275,7 +1280,8 @@
                 47
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -1394,7 +1400,8 @@
                 54
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -1513,7 +1520,8 @@
                 70
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -1632,7 +1640,8 @@
                 50
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -1751,7 +1760,8 @@
                 37
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -1870,7 +1880,8 @@
                 58
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -1989,7 +2000,8 @@
                 48
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -2108,7 +2120,8 @@
                 53
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -2227,7 +2240,8 @@
                 44
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -2330,7 +2344,8 @@
                 36
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -2483,7 +2498,8 @@
                 203
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -2743,7 +2759,8 @@
                 80
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -2868,7 +2885,8 @@
                 63
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target.md"
           }
         ],
         "tasks": [],
@@ -3079,7 +3097,8 @@
                 7
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "A#Head"
           },
           {
             "kind": "markdown",
@@ -3106,7 +3125,8 @@
                 33
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "A.md#Head"
           },
           {
             "kind": "markdown",
@@ -3133,7 +3153,8 @@
                 62
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "B name.md"
           },
           {
             "kind": "markdown",
@@ -3160,7 +3181,8 @@
                 87
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "folder/a(b).md"
           },
           {
             "kind": "wiki",
@@ -3187,7 +3209,8 @@
                 91
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "#Local"
           },
           {
             "kind": "markdown",
@@ -3214,7 +3237,8 @@
                 108
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "#Here"
           }
         ],
         "tasks": [],
@@ -3277,7 +3301,8 @@
                 23
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Visible"
           },
           {
             "kind": "markdown",
@@ -3304,7 +3329,8 @@
                 56
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Shown.md"
           }
         ],
         "tasks": [],
@@ -3860,7 +3886,8 @@
                 50
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [],
@@ -3932,7 +3959,8 @@
                 59,
                 96
               ]
-            }
+            },
+            "destination": "Some note.md#Head"
           },
           {
             "kind": "markdown",
@@ -3968,7 +3996,8 @@
                 59,
                 96
               ]
-            }
+            },
+            "destination": "Some note.md#Head"
           },
           {
             "kind": "markdown",
@@ -4004,7 +4033,8 @@
                 97,
                 114
               ]
-            }
+            },
+            "destination": "Other.md"
           },
           {
             "kind": "markdown",
@@ -4040,7 +4070,8 @@
                 115,
                 135
               ]
-            }
+            },
+            "destination": "Local.md"
           }
         ],
         "tasks": [],
@@ -4253,7 +4284,8 @@
                 19
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "A(B).md#Head"
           },
           {
             "kind": "markdown",
@@ -4280,7 +4312,8 @@
                 45
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "A&B.md"
           }
         ],
         "tasks": [],
@@ -4375,7 +4408,8 @@
                 16
               ]
             },
-            "definitionRange": null
+            "definitionRange": null,
+            "destination": "Target"
           }
         ],
         "tasks": [
@@ -4655,6 +4689,132 @@
             }
           }
         ]
+      }
+    },
+    {
+      "id": "nested-order-forward",
+      "decision": "Preserve recursive source mapping order so a Base fallback lookup of config.TITLE follows the first case-insensitive key after exact-key lookup. Do not globally enable serde_json preserve_order.",
+      "request": {
+        "entryId": "fixture-nested-order-forward",
+        "contentRevision": "fixture-1",
+        "source": "---\nconfig: {Title: first, title: second}\n---\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-nested-order-forward",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 46,
+          "utf16": 46
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              46
+            ],
+            "utf16": [
+              0,
+              46
+            ]
+          },
+          "bodyStart": {
+            "byte": 46,
+            "utf16": 46
+          }
+        },
+        "properties": [
+          {
+            "key": "config",
+            "value": {
+              "Title": "first",
+              "title": "second"
+            },
+            "type": "unknown",
+            "keyRange": {
+              "bytes": [
+                4,
+                10
+              ],
+              "utf16": [
+                4,
+                10
+              ]
+            }
+          }
+        ],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "nested-order-reverse",
+      "decision": "Preserve recursive source mapping order so a Base fallback lookup of config.TITLE follows the first case-insensitive key after exact-key lookup. Do not globally enable serde_json preserve_order.",
+      "request": {
+        "entryId": "fixture-nested-order-reverse",
+        "contentRevision": "fixture-1",
+        "source": "---\nconfig: {title: second, Title: first}\n---\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-nested-order-reverse",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 46,
+          "utf16": 46
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              46
+            ],
+            "utf16": [
+              0,
+              46
+            ]
+          },
+          "bodyStart": {
+            "byte": 46,
+            "utf16": 46
+          }
+        },
+        "properties": [
+          {
+            "key": "config",
+            "value": {
+              "title": "second",
+              "Title": "first"
+            },
+            "type": "unknown",
+            "keyRange": {
+              "bytes": [
+                4,
+                10
+              ],
+              "utf16": [
+                4,
+                10
+              ]
+            }
+          }
+        ],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
       }
     }
   ]

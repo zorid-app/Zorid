@@ -4,7 +4,10 @@ Preparation owner: `stage4_markdown_contracts`, 2026-10-17. Baseline main is
 `f69dc90de0de697dfb75a5a3d1805b69dba982b3`. Worktree
 `/Users/ctk/orca/workspaces/Zorid/stage4-markdown-contracts`, branch
 `tingkai-c/stage4-markdown-contracts`; root is the sole main integrator.
-This document and `tests/fixtures/document-semantics/markdown/*` are the owned
+The original worktree was externally removed after commit `9849ad1`; work
+continues in `/Users/ctk/orca/workspaces/Zorid/stage4-markdown-engine`, branch
+`tingkai-c/stage4-markdown-engine`, restored from that commit without lost edits.
+This document and `tests/fixtures/document-semantics/markdown/*` are the preparation-owned
 paths. Dependencies: root's shared-type review, YAML library selection, then the
 serialized native/WASM build slot. No parser or consumer implementation is
 included. The root coordinator approved reference links, JSON-safe YAML values,
@@ -66,11 +69,11 @@ There are no optional omitted arrays; absent ranges are JSON null.
 ```text
 MetadataRequest { entryId: EntryId, contentRevision: Revision, source: String }
 SourceRange { bytes: [u32; 2], utf16: [u32; 2] }
-Property { key, value: JsonValue, type: PropertyType, keyRange: SourceRange }
+Property { key, value: PropertyValue, type: PropertyType, keyRange: SourceRange }
 TagOccurrence { name, range: SourceRange }  // body occurrences only
 Heading { text, level: 1..6, line: u32, range: SourceRange }
 Link {
-  kind: "wiki" | "markdown", embed: bool, target, fragment,
+  kind: "wiki" | "markdown", embed: bool, target, fragment, destination,
   range: SourceRange, targetRange: SourceRange,
   definitionRange: SourceRange | null
 }
@@ -92,10 +95,13 @@ Metadata {
 }
 ```
 
-`JsonValue` means finite binary64 JSON numbers, strings, booleans, null, arrays
-and string-keyed maps. It is not a tagged date/object/runtime value. Property
-order is a vector, never a JSON object's enumeration order. Nested map ordering
-is semantically irrelevant; prototype-like keys remain data. A string scalar
+`PropertyValue` means finite binary64 JSON numbers, strings, booleans, null, arrays
+and recursively ordered string-keyed maps. Internally maps are entry vectors
+with a custom Serde map visitor, serialized as ordinary JSON objects. Do not use
+`serde_json::Value` maps or enable its global `preserve_order` feature: feature
+unification could affect existing canonical/encrypted JSON. Property order and
+nested mapping entry order retain source order, so Base exact-key lookup followed
+by first case-insensitive match stays deterministic. Prototype-like keys remain data. A string scalar
 mapping key is retained verbatim after YAML decoding; ordinary nonstring scalar
 keys are converted to their YAML string spelling as the current `stringKeys`
 policy does. Detect duplicates again after scalar-key conversion, so boolean `true` and string
@@ -145,8 +151,12 @@ Lines are zero-based; CRLF is one newline, LF or bare CR is one newline each.
   `targetRange` covers only raw destination path spelling, excluding angle
   wrappers, `#fragment`, alias, label and title. A local fragment has a zero-width
   target. `target` and `fragment` preserve raw spelling; fragment includes `#`.
-  File lookup, percent/entity/escape normalization and path policy belong to
-  link resolution. Do not substitute the parser's unescaped URL for raw source.
+  `destination` is the established Markdown parser's semantic URL, with Markdown
+  escapes/entities decoded and percent escapes retained; wiki destinations keep
+  raw target+fragment. File lookup and percent/path policy belong to link
+  resolution, which splits the semantic fragment before percent decoding. Do not
+  substitute semantic URLs for raw provenance or add a second Markdown decoder
+  in the resolver.
 - Reference Markdown links have a use-site `range` and shared definition
   `targetRange`/`definitionRange`; the latter covers the whole definition excluding
   its final newline. Full, collapsed and shortcut references follow CommonMark
@@ -292,11 +302,20 @@ accepted BOM/comments/dot closer/unclosed policy is explicit above.
 This is a source-based pin proposal, not an authenticated upstream package audit
 or a build result. The fixed-version docs.rs pages could not be fetched by the
 web tool in this session; local source was the primary evidence. Dependency
-adoption/license lock review belongs to root. YAML dependency selection is still
-open; evaluate a maintained portable YAML parser against these fixtures rather
-than write custom YAML. MDBASE and index/query work have separate owners.
+adoption/license lock review belongs to root. YAML parser selection is now `saphyr-parser = "=0.2.2"`, defaults off, after
+root approval and an exact source-archive audit: SHA256
+`6c6220586c3dacac54bfddec87af86ddb31862d29666e7e35cf4baf70a25d387`,
+VCS `b8205d5f60ea44f757f7d075fe4f3704bbe5dccc`, edition 2024/Rust 1.85.
+It exposes decoded scalar/style/anchor/tag events and byte spans through a pull
+iterator, permitting bounded typed-value reconstruction without new YAML grammar.
+Runtime dependencies are `arraydeque 0.5.1` and `thiserror 2.0.20`, defaults off.
+The inherited Chen Yuheng and Ethiraric license sets both require redistribution
+notices. [Parser docs](https://docs.rs/saphyr-parser/latest/saphyr_parser/) and
+[upstream](https://github.com/saphyr-rs/saphyr) informed selection; the downloaded
+exact crate, including `Cargo.toml`, `parser.rs`, `scanner.rs` and `LICENSE`, was
+the primary version-specific evidence. No dependency/runtime build is claimed. MDBASE and index/query work have separate owners.
 
-The 42-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
+The 44-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
 invalid/duplicate/tagged YAML, mixed projections, nonfinite/unsafe numbers,
 BOM/CRLF/bare-CR/astral/decomposed Unicode, empty/partial Markdown, exclusions,
 ATX/Setext/container headings, raw/inline/reference links and task dialect.
@@ -319,10 +338,12 @@ They must not copy `expected` into their result. The checker itself validates
 IDs/provenance, byte/UTF-16 boundaries/source slices, ordering, line positions and
 task invariants; it does not implement parsing. Fixtures with quoted/escaped keys
 include separate `propertyKeySpellings` source assertions; decoded keys must not
+be mistaken for raw YAML spelling. Fixtures with quoted/escaped keys
+include separate `propertyKeySpellings` source assertions; decoded keys must not
 be mistaken for raw YAML spelling. The TypeScript option checks all
 recorded baseline observations, including intentional mismatches with the target.
 
-Verification at preparation completion: the checker and all 42 current TypeScript
+Verification at preparation completion: the checker and all 44 current TypeScript
 observations pass; 22 existing property/metadata tests pass. The first checker
 run caught an accidentally empty status in the final empty task and was corrected;
 fixture IDs were corrected to the existing strong-ID grammar before completion.

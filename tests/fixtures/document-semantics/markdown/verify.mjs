@@ -94,8 +94,16 @@ if (options.has('--typescript')) {
   assert.deepEqual(observed, baseline.cases);
   console.log(`PASS ${observed.length} current TypeScript observations match recorded baseline ${baseline.sourceCommit}`);
 }
+function checkValueOrder(expected, actual) {
+  if (Array.isArray(expected)) expected.forEach((value, i) => checkValueOrder(value, actual?.[i]));
+  else if (expected && typeof expected === 'object') {
+    assert.deepEqual(Object.keys(actual ?? {}), Object.keys(expected), 'recursive property mapping order');
+    for (const key of Object.keys(expected)) checkValueOrder(expected[key], actual[key]);
+  }
+}
 if (options.has('--results')) {
   const observed = JSON.parse(await readFile(path.resolve(options.get('--results')), 'utf8'));
   assert.deepEqual(observed, corpus.cases.map(c => ({ id: c.id, result: c.expected })));
+  corpus.cases.forEach((c, i) => c.expected.properties.forEach((p, j) => checkValueOrder(p.value, observed[i].result.properties[j].value)));
   console.log(`PASS ${observed.length} candidate results match exact shared contract`);
 }

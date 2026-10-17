@@ -1319,6 +1319,60 @@
       },
       "properties": null,
       "propertiesError": true
+    },
+    {
+      "id": "nested-order-forward",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "config": {
+            "Title": "first",
+            "title": "second"
+          }
+        },
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "config",
+          "value": {
+            "Title": "first",
+            "title": "second"
+          },
+          "type": "unknown"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "nested-order-reverse",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "config": {
+            "title": "second",
+            "Title": "first"
+          }
+        },
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "config",
+          "value": {
+            "title": "second",
+            "Title": "first"
+          },
+          "type": "unknown"
+        }
+      ],
+      "propertiesError": false
     }
   ]
 }
