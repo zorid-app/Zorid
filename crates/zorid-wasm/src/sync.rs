@@ -1,6 +1,8 @@
 //! Synchronous trusted-host v2 planning. No persistence and no authenticated
 //! plaintext constructor. The host must commit BOTH plans and its common wire
 //! ledger/cursor atomically; a text plan alone never authorizes visibility.
+mod classification;
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use zorid_client_sync::{self as text, v2, AuthorRequest, ReceiveRequest, TextIdentity, TextState};

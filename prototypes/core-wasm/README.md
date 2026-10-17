@@ -342,3 +342,41 @@ The returned JSON is bytes or null: null means unavailable dependencies, while
 publication. State/control input caps apply, and the shared bounded helper rejects
 oversized expanded output before allocating it. This source addition requires a
 new native/build/browser verification gate; previous fixture evidence excludes it.
+
+
+## Authoritative JSON fixture limits
+
+These limits belong to this in-memory WASM JSON fixture, not the application's
+file-size contract. They do not establish arbitrary-size vault/file support.
+Streaming/binary transfer remains required; native/browser host limits elsewhere
+must not be silently treated as verified by these fixtures.
+
+| Boundary | Limit / behavior |
+| --- | --- |
+| General planner JSON input | 32 MiB before parsing |
+| Reusable persisted text or namespace state | 8 MiB serialized per state |
+| Classifier namespace input | 8 MiB raw JSON |
+| Classifier text-state input | 8 MiB aggregate raw JSON; at most 4096 states; aliases rejected in Rust |
+| Classifier/recovery file content | 8 MiB per file |
+| Classifier aggregate returned content | 8 MiB raw bytes, reserved before binary allocation; exceeding total fails the whole classification |
+| Serialized JSON result | 64 MiB, enforced while writing |
+| Retained/materialize JSON byte-array result | At most floor((64 MiB - 2) / 4) raw bytes, rejected before expansion |
+| Replacement text | Shared client-sync 256 KiB bound |
+| Control JSON / encrypted wire | Shared protocol constants; no higher wrapper allowance |
+
+`classifyFileMaterializations(stateJson,textStatesJson)` returns the shared
+classifier's per-entry map, including normal/pending/recovery/tombstone outcomes
+and typed content witnesses. The text argument is an array, preserving aliases
+until Rust validates them. Only normal outcomes carry publication bytes; other
+outcomes are not replacements. Per-file overflow remains the shared explicit
+`file_limit_exceeded` pending reason, while aggregate overflow is an error with no
+partial map. No JavaScript visibility or content-selection rules are duplicated. The aggregate
+cap measures retained output bytes, not all runtime memory: shared text decoding
+may use a separately bounded 256 KiB temporary before reserving output budget.
+
+`recoveryFileContent(stateJson,textStatesJson,entryId)` returns shared verified
+content or null. This is an explicit current-content recovery read, not a
+historical-witness read or publication authorization; oversize recovery is an
+error. Entry ID is a validated plain string. Both bindings use the shared Rust
+classifier with the limits above. New wrapper source requires independent review
+and native/build/browser validation beyond earlier source evidence.

@@ -596,3 +596,53 @@ fn retained_wrapper_rejects_noncanonical_identity_and_bounded_inputs() {
     .is_err());
     assert!(retained_file(&" ".repeat(MAX_INPUT_BYTES + 1), identity, "create").is_err());
 }
+
+#[test]
+fn classifier_bindings_delegate_visibility_and_recovery_without_alias_collapse() {
+    let (text, graph, input) = fixture();
+    let state_json = serde_json::to_string(&graph).unwrap();
+    let missing: serde_json::Value =
+        serde_json::from_str(&classification::classify_json(&state_json, "[]").unwrap()).unwrap();
+    assert_eq!(missing["note"]["outcome"]["status"], "pending");
+    assert_eq!(
+        classification::recovery_json(&state_json, "[]", "note").unwrap(),
+        "null"
+    );
+    let plan = replace(&input.to_string(), b"visible").unwrap();
+    let graph = plan.graph.next_state.as_ref().unwrap();
+    let state_json = serde_json::to_string(&graph).unwrap();
+    let texts = serde_json::to_string(&vec![&plan.text.next_state]).unwrap();
+    let classified: serde_json::Value =
+        serde_json::from_str(&classification::classify_json(&state_json, &texts).unwrap()).unwrap();
+    assert_eq!(classified["note"]["outcome"]["status"], "normal");
+    assert_eq!(
+        classified["note"]["outcome"]["content"]["bytes"],
+        json!(b"visible".to_vec())
+    );
+    let recovered: serde_json::Value =
+        serde_json::from_str(&classification::recovery_json(&state_json, &texts, "note").unwrap())
+            .unwrap();
+    assert_eq!(recovered["witness"]["kind"], "text");
+    assert_eq!(recovered["bytes"], json!(b"visible".to_vec()));
+    let duplicate = serde_json::to_string(&vec![&text, &text]).unwrap();
+    assert!(classification::classify_json(&state_json, &duplicate).is_err());
+    assert!(classification::recovery_json(&state_json, &texts, "unknown").is_err());
+    let binary = serde_json::to_string(&retained_fixture()).unwrap();
+    let binary_result: serde_json::Value =
+        serde_json::from_str(&classification::recovery_json(&binary, "[]", "note").unwrap())
+            .unwrap();
+    assert_eq!(binary_result["witness"]["kind"], "binary");
+    assert_eq!(binary_result["bytes"], json!([]));
+}
+#[test]
+fn classifier_bindings_enforce_aggregate_text_input_and_identity_bounds() {
+    let (text, graph, _) = fixture();
+    let graph_json = serde_json::to_string(&graph).unwrap();
+    assert!(
+        classification::classify_json(&graph_json, &" ".repeat(MAX_STATE_JSON_BYTES + 1)).is_err()
+    );
+    assert!(classification::classify_json(&" ".repeat(MAX_STATE_JSON_BYTES + 1), "[]").is_err());
+    let too_many = serde_json::to_string(&vec![&text; zorid_file_sync::MAX_RECORDS + 1]).unwrap();
+    assert!(classification::classify_json(&graph_json, &too_many).is_err());
+    assert!(classification::recovery_json(&graph_json, "[]", "../escape").is_err());
+}

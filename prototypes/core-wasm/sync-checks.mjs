@@ -4,6 +4,7 @@ import {
   createEmptyTextState, materializeTextState, planTextReplace,
   encodeSyncCursor, decodeSyncAccepted, decodeSyncPage,
   validateAuthoredSyncPayload, validateSyncWire, encodeFilePayload, materializeRetainedFile,
+  classifyFileMaterializations, recoveryFileContent,
 } from './pkg/zorid_wasm.js';
 import { headerFor, contextFor } from './crypto-cases.mjs';
 
@@ -119,6 +120,17 @@ export function runSyncChecks(checks) {
     rejects(() => materializeRetainedFile(j(retainedGraph), j({ ...binaryIdentity, bootstrap_id: 'other' }), 'binary-create'), 'retained binary wrong bootstrap');
     rejects(() => materializeRetainedFile(j(retainedGraph), j(binaryIdentity), 'namespace-create'), 'retained binary wrong entry');
     checks.push('WASM historical binary witness distinguishes retained empty bytes from missing current dependencies and checks identity');
+
+    const classifiedText = JSON.parse(classifyFileMaterializations(j(textReceived.namespace.next_state), j([textReceived.text.next_state])));
+    assert(classifiedText.note.outcome.status === 'normal', 'shared classifier selects live text');
+    assert(decode.decode(Uint8Array.from(classifiedText.note.outcome.content.bytes)) === 'Hello browser 🦀', 'shared classifier returns verified text bytes');
+    const recoveredText = JSON.parse(recoveryFileContent(j(textReceived.namespace.next_state), j([textReceived.text.next_state]), 'note'));
+    assert(recoveredText.witness.kind === 'text', 'shared recovery returns typed text witness');
+    const classifiedMissing = JSON.parse(classifyFileMaterializations(j(retainedGraph), j([text])));
+    assert(classifiedMissing.binary.outcome.status === 'pending', 'missing current binary remains hidden');
+    assert(recoveryFileContent(j(retainedGraph), j([text]), 'binary') === 'null', 'recovery does not fall back to historical empty binary');
+    rejects(() => classifyFileMaterializations(j(graph), j([text, text])), 'duplicate text identity remains visible to Rust');
+    checks.push('WASM shared classifier and recovery return verified content while keeping missing dependencies hidden');
 
     const maximum = '18446744073709551615';
     const cursor = JSON.parse(encodeSyncCursor(j({ server_epoch: 'epoch', after: maximum })));
