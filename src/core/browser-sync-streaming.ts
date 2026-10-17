@@ -115,6 +115,7 @@ export interface PreparedStreamingRecoveryRead {
 export interface BrowserStreamingSyncEngine {
   api:BrowserSync & {readonly concurrentPreparation:true};
   prepareLocal(input:StreamingLocalInput):Promise<PreparedStreamingMutation>;
+  /** Owns batch and built immediately on call, including every failure path. */
   prepareBinary(input:StreamingBinaryInput):Promise<PreparedStreamingMutation>;
   commitLocal(tx:IDBTransaction,prepared:PreparedStreamingMutation,current:StreamingPublication,
     done:(result:{sequence:string})=>void,abort:Abort):void;
@@ -462,12 +463,18 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
     }finally{graph.free();}
   }
   async function prepareBinary(input:StreamingBinaryInput):Promise<PreparedStreamingMutation> {
-    active();input={...input,target:copy(input.target),sourceKeys:copy(input.sourceKeys)};const s=await snapshot(),graph=state(s),config=enrolled(s);
+    const batch=input.batch,built=input.built;let graph:StreamingMetadataState|undefined,consumed=false;
     try{
+      active();input={...input,target:copy(input.target),sourceKeys:copy(input.sourceKeys)};const s=await snapshot(),config=enrolled(s);graph=state(s);
       if(input.sourceKeys.some(identity=>identity.realmId!==config.realm_id||identity.vaultId!==config.vault_id)||new Set(input.sourceKeys.map(keyString)).size!==input.sourceKeys.length)throw failure('binary_stage_source_mismatch');
-      const candidate=rust(()=>graph.prepareBinaryMutation(stringify({entries:s.publication.entries,target:input.target,final_event_id:input.finalEventId,metadata_revision:input.metadataRevision,next_graph_revision:input.graphRevision}),input.batch,input.built));
+      const raw=stringify({entries:s.publication.entries,target:input.target,final_event_id:input.finalEventId,metadata_revision:input.metadataRevision,next_graph_revision:input.graphRevision});
+      // wasm-bindgen consumes these by value even if the Rust call rejects.
+      consumed=true;const candidate=rust(()=>graph!.prepareBinaryMutation(raw,batch,built));
       return await finish(s,candidate,candidateEmissions(candidate),{updateId:input.finalEventId,sourceKeys:input.sourceKeys});
-    }finally{graph.free();}
+    }finally{
+      try{graph?.free();}catch{/* Cleanup must not mask a committed/prepared outcome. */}
+      if(!consumed){try{batch.free();}catch{/* Preserve the original preparation failure. */}try{built.free();}catch{/* Both owned handles get a cleanup attempt. */}}
+    }
   }
 
   function commitLocal(tx:IDBTransaction,token:PreparedStreamingMutation,current:StreamingPublication,done:(result:{sequence:string})=>void,abort:Abort):void {
@@ -532,16 +539,37 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
     },reject);
     }catch(error){reject(error);}
     function writeSources():void {
-      let index=0;
-      const next=()=>{
-        if(index===value!.sources.length){writeDeltas();return;}
-        const source=value!.sources[index++];
-        addImmutableSource(tx,source,candidate=>{
-          const meta=descriptor(candidate.header).metadata;
-          if(candidate.payload)rust(()=>host.wasm.validateAuthoredSyncPayload(stringify(meta),candidate.payload!));
-          if(candidate.wire)rust(()=>host.wasm.validateSyncWire(stringify(meta),candidate.wire!));
-        },()=>next(),reject);
-      };next();
+      // The stage store and engine share one immutable-source quota. Promotion
+      // of previously staged rows only changes graph/outbox membership.
+      read(tx,tx.objectStore('control').get('binary-stream-usage:v1'),row=>{
+        const usage=row?.value;
+        if(!usage||usage.version!==1||!Number.isInteger(usage.stages)||usage.stages<0||usage.stages>4096||
+          !Number.isInteger(usage.activeStages)||usage.activeStages<0||usage.activeStages>8||usage.activeStages>usage.stages||
+          !Number.isInteger(usage.chunkRecords)||usage.chunkRecords<0||usage.chunkRecords>4096||
+          !Number.isInteger(usage.pageRecords)||usage.pageRecords<0||usage.pageRecords>256||
+          BigInt(decimalU64(usage.sourcePayloadBytes))>536870912n)throw failure('binary_usage_unavailable');
+        const counters=copy(usage);let index=0;
+        const next=()=>{
+          if(index===value!.sources.length){tx.objectStore('control').put({key:'binary-stream-usage:v1',value:counters});writeDeltas();return;}
+          const source=value!.sources[index++];
+          read(tx,tx.objectStore('sync_source_headers').get(key(source.header)),header=>{
+            read(tx,tx.objectStore('sync_source_payloads').getKey(key(source.header)),body=>{
+              if((header===undefined)!==(body===undefined))throw failure(header===undefined?'storage_corrupt':'source_body_missing');
+              const newPayload=body===undefined&&source.payload!==undefined,record=descriptor(source.header).record;
+              const bytes=newPayload?BigInt(source.payload!.byteLength):0n,chunks=newPayload&&record?.body?.kind==='chunk'?1:0,pages=newPayload&&record?.body?.kind==='page'?1:0;
+              if(BigInt(counters.sourcePayloadBytes)+bytes>536870912n||counters.chunkRecords+chunks>4096||counters.pageRecords+pages>256)throw failure('binary_quota_exceeded');
+              addImmutableSource(tx,source,candidate=>{
+                const meta=descriptor(candidate.header).metadata;
+                if(candidate.payload)rust(()=>host.wasm.validateAuthoredSyncPayload(stringify(meta),candidate.payload!));
+                if(candidate.wire)rust(()=>host.wasm.validateSyncWire(stringify(meta),candidate.wire!));
+              },inserted=>{
+                if(newPayload&&!inserted){reject(failure('storage_corrupt'));return;}
+                counters.sourcePayloadBytes=String(BigInt(counters.sourcePayloadBytes)+bytes);counters.chunkRecords+=chunks;counters.pageRecords+=pages;next();
+              },reject);
+            },reject,active);
+          },reject,active);
+        };next();
+      },reject,active);
     }
     function writeDeltas():void {
       const config=enrolled(value!.snapshot),records:Json[]=[],activities:Json[]=[];

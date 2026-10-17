@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createBrowserBinaryStageStore } from '../src/core/browser-binary-stage-store.ts';
 import { browserStreamingSync, browserStreamingSyncKeyPaths, browserStreamingSyncStores } from '../src/core/browser-sync-streaming.ts';
 import { createBrowserNormalizedSchema, browserNormalizedStores, normalizedTransact } from '../src/core/browser-normalized-idb.ts';
 const authority='11111111-1111-4111-8111-111111111111';
@@ -65,7 +66,7 @@ function fixture(){
           };
           return {get(key:any){return request('get',key,()=>local.get(name)!.get(JSON.stringify(key)));},
             getKey(key:any){return request('getKey',key,()=>local.get(name)!.has(JSON.stringify(key))?key:undefined);},
-            index(indexName:string){const definition=indexes.get(name)?.find(index=>index.name===indexName);assert.ok(definition,'missing index');return {openCursor(range?:any,direction='next'){return cursor(range,direction,definition.path);}};},
+            index(indexName:string){const definition=indexes.get(name)?.find(index=>index.name===indexName);assert.ok(definition,'missing index');return {get(key:any){return request('index-get',key,()=>[...local.get(name)!.values()].find(row=>compare(keyOf(row,definition.path),key)===0));},openCursor(range?:any,direction='next'){return cursor(range,direction,definition.path);}};},
             add(row:any){return write(row,true);},put(row:any){return write(row,false);},
             getAll(){assert.fail('byte-bearing aggregate scan is forbidden');},
             openCursor(range?:any,direction='next'){return cursor(range,direction);},
@@ -76,6 +77,7 @@ function fixture(){
       transactions.push(tx);schedule();return tx;
     },
   };
+  records.get('control')!.set(JSON.stringify('binary-stream-usage:v1'),{key:'binary-stream-usage:v1',value:{version:1,stages:0,activeStages:0,sourcePayloadBytes:'0',chunkRecords:0,pageRecords:0}});
   createBrowserNormalizedSchema(db);
   for(const [name,keyPath] of Object.entries({...browserStreamingSyncKeyPaths,metadata:'id',presentation:'id',content:'id',receipts:'key',journal:'sequence',intents:'key'}))if(!records.has(name))db.createObjectStore(name,{keyPath});
   indexes.set('sync_authored',[{name:'by_pending_order',path:['pending','order'],unique:false}]);
@@ -122,6 +124,7 @@ function harness(){
     return {version,records,activities,free(){},metadataHeadJson(){return JSON.stringify({scope,version,record_count:records.size,activity_count:activities.size});},namespaceViewJson(){return JSON.stringify({namespace:{pending:[]}});},verificationSession:session,classify(){return classification(classificationRows.get(version)??[]);},
       prepareBinaryMutation(raw:string,batch:any,built:any){
         assert.ok(binaryScript,'binary output must be scripted');assert.equal(batch,binaryScript.batch);assert.equal(built,binaryScript.built);
+        batch.consume();built.consume();if(binaryScript.invokeError)throw new Error('opaque binary invocation rejected');
         const input=JSON.parse(raw);assert.deepEqual(input.target,binaryScript.target);
         return candidate(this,input.next_graph_revision,[binaryScript.final],{allocated_update_ids:binaryScript.allocated,changes:binaryScript.changes},binaryScript.rows,[...binaryScript.staged,binaryScript.final]);
       },
@@ -144,7 +147,7 @@ function harness(){
       },
     };
   }
-  function candidate(base:any,version:string,emissions:any[],output:any={},rows:any[]=[],descriptors=emissions):any {
+  function candidate(base:any,version:string,emissions:any[],output:any={},rows:any[]=[],descriptors=emissions,nextPresent=true):any {
     const records=new Map(base.records),activities=new Map(base.activities);
     for(const e of descriptors)(e.record?records:activities).set(e.metadata.key.update_id,e.record??e.activity);
     classificationRows.set(version,clone(rows));
@@ -152,7 +155,7 @@ function harness(){
     const recordDeltas=descriptors.filter(e=>e.record).map(e=>({update_id:e.metadata.key.update_id,record:e.record,summary_digest:summary}));
     const activityDeltas=descriptors.filter(e=>e.activity).map(e=>({update_id:e.metadata.key.update_id,activity:e.activity,summary_digest:summary}));
     const result={record_delta_count:recordDeltas.length,activity_delta_count:activityDeltas.length,payload_count:emissions.length,allocated_update_ids:[],changes:[],...output};
-    const plan:any={free(){},resultJson(){return JSON.stringify(result);},nextState:next,
+    const plan:any={free(){},resultJson(){return JSON.stringify(result);},nextState:()=>nextPresent?next():undefined,
       recordDeltaJson(i:number){return JSON.stringify(recordDeltas[i]);},activityDeltaJson(i:number){return JSON.stringify(activityDeltas[i]);},
       payloadMetadataJson(i:number){return JSON.stringify(emissions[i].metadata);},payloadBytes(i:number){return emissions[i].payload.slice();},textBytes(){return new Uint8Array([116,101,120,116]);},receivedWireBytes(){return output.wire?.slice()??new Uint8Array();},
       checkPreconditions(actual:any){assert.equal(actual.version,base.version,'opaque plan receives current graph for CAS');},
@@ -188,18 +191,25 @@ function harness(){
   const key:any={seal(raw:string,payload:Uint8Array){const id=JSON.parse(raw).update_id,e=updates.get(id);same(payload,e.payload);const result=wire(e,new Uint8Array([91,92,wires.size]));sealHook?.();return result;},
     openSyncUpdate(raw:string,bytes:Uint8Array){const context=JSON.parse(raw),e=wires.get(wireKey(bytes));assert.ok(e,'opaque authentication rejected wire');assert.equal(context.update_id,e.metadata.key.update_id);
       return {free(){},metadataJson(){return JSON.stringify(e.metadata);},exactWire(){return bytes.slice();},matchesPayload(payload:Uint8Array){return Buffer.from(payload).equals(Buffer.from(e.payload));},exactPlaintext(){return e.payload.slice();},authenticatedDescriptorJson(){return JSON.stringify({record:e.record,activity:e.activity,summary_digest:summary});},
-        prepareMetadataFile(base:any,next:string){return candidate(base,next,[e],{wire:bytes},receiveRows);},
+        prepareMetadataFile(base:any,next:string,prior:Uint8Array){return prior.length?candidate(base,base.version,[],{wire:bytes},receiveRows,[],false):candidate(base,next,[e],{wire:bytes},receiveRows);},
       };
     },
   };
   const commit=(token:any)=>f.run<any>([...browserStreamingSyncStores,'metadata','presentation','content','control','receipts','journal','intents'],(tx,done,abort)=>host.readPublication(tx,(current:any)=>engine.commitLocal(tx,token,current,done,abort),abort));
+  const charge=(e:any)=>{
+    if(f.row('sync_source_payloads',keyOfId(e.metadata.key.update_id)))return;
+    const usage=clone(f.row('control','binary-stream-usage:v1').value);usage.sourcePayloadBytes=String(BigInt(usage.sourcePayloadBytes)+BigInt(e.payload.length));
+    if(e.record?.body?.kind==='chunk')usage.chunkRecords++;if(e.record?.body?.kind==='page')usage.pageRecords++;
+    f.seed('control','binary-stream-usage:v1',{key:'binary-stream-usage:v1',value:usage});
+  };
   const seedStage=(e:any)=>{
+    charge(e);
     register(e);const identity={realmId:'realm',vaultId:'vault',updateId:e.metadata.key.update_id};
     f.seed('sync_source_headers',keyOfId(identity.updateId),{...identity,descriptor:{version:1,metadata:e.metadata,record:e.record,activity:e.activity,summary_digest:summary}});
     f.seed('sync_source_payloads',keyOfId(identity.updateId),{...identity,bytes:e.payload});
   };
   const seed=(e:any)=>{
-    register(e);const identity={realmId:'realm',vaultId:'vault',updateId:e.metadata.key.update_id};
+    charge(e);register(e);const identity={realmId:'realm',vaultId:'vault',updateId:e.metadata.key.update_id};
     f.seed('sync_source_headers',keyOfId(identity.updateId),{...identity,descriptor:{version:1,metadata:e.metadata,record:e.record,activity:e.activity,summary_digest:summary}});
     f.seed('sync_source_payloads',keyOfId(identity.updateId),{...identity,bytes:e.payload});
     f.seed(e.record?'sync_graph_records':'sync_graph_activities',keyOfId(identity.updateId),{...identity,...(e.record?{record:e.record}:{activity:e.activity}),summary_digest:summary});
@@ -216,6 +226,7 @@ function harness(){
   },abort),abort));
   return {f,engine,key,updates,wire,provided,commit,seed,seedStage,commitRead,commitRecoveryRead,
     scriptBinary(script:any){binaryScript=script;register(script.final);},
+    failBinaryInvoke(){binaryScript.invokeError=true;},
     scriptClassifications(version:string,rows:any[]){classificationRows.set(version,clone(rows));},
     scriptRecovery(id:string,metadata:any,bytes=new Uint8Array([9])){recoveries.set(id,{metadata:clone(metadata),bytes:bytes.slice()});},
     recoveryCounts(){return {materializationReads,recoveryByteReads,recoveryFrees};},
@@ -335,7 +346,8 @@ async function binaryStage(){
     {before:parent,after:{...parent,revision:'binary-revision'}}];
   const rows=[{identity:{entry_id:'binary'},outcome:{status:'normal',path:'assets/data.bin',kind:'file',content:{kind:'binary',content:reference}}},
     {identity:{entry_id:'parent'},outcome:{status:'normal',path:'assets',kind:'folder',content:null}}];
-  const batch={free(){},pushPayload(){throw new Error('scripted opaque stage already built');}},built={free(){},manifestJson(){return JSON.stringify(reference.manifest);}},target={kind:'create',id:'binary',path:'assets/data.bin'};
+  const owned=()=>({counts:{consumed:0,freed:0},freeThrows:false,consume(){this.counts.consumed++;},free(){this.counts.freed++;if(this.freeThrows)throw new Error('cleanup must not mask original failure');}});
+  const batch={...owned(),pushPayload(){throw new Error('scripted opaque stage already built');}},built={...owned(),manifestJson(){return JSON.stringify(reference.manifest);}},target={kind:'create',id:'binary',path:'assets/data.bin'};
   h.scriptBinary({batch,built,target,final,staged:[chunk,page],changes,rows,allocated:['staged-chunk','staged-page','binary-final']});
   h.requestVerification(['staged-chunk']);
   const input={target,batch,built,finalEventId:'binary-final',metadataRevision:'binary-revision',graphRevision:'binary-graph',sourceKeys:[chunk,page].map(e=>({realmId:'realm',vaultId:'vault',updateId:e.metadata.key.update_id}))};
@@ -508,4 +520,80 @@ test('unpublished hidden Binary recovery uses a distinct current-retained read w
   const stale=await h.engine.prepareRecoveryRead(input),head=clone(h.f.row('sync_state','metadata-head'));head.value.version='newer-recovery-graph';h.f.seed('sync_state','metadata-head',head);
   await assert.rejects(h.commitRecoveryRead(stale,'stale-recovery'),{code:'sync_snapshot_conflict'});
   assert.equal(h.f.row('binary_reads',['client','stale-recovery']),undefined);assert.throws(()=>stale.length(),{code:'binary_read_closed'});
+});
+const usageKey='binary-stream-usage:v1';
+const usageOf=(h:any)=>clone(h.f.row('control',usageKey).value);
+const setUsage=(h:any,patch:any)=>h.f.seed('control',usageKey,{key:usageKey,value:{...usageOf(h),...patch}});
+test('received exact payloads charge shared bytes and chunk page counts once across exact replay',async()=>{
+  const h=await receiving(),chunk=emission('quota-chunk'),wire=h.wire(chunk);
+  await h.engine.api.receive('quota-chunk',wire,h.key,delivery);
+  assert.deepEqual(usageOf(h),{version:1,stages:0,activeStages:0,sourcePayloadBytes:'3',chunkRecords:1,pageRecords:0});
+  const replay=await h.engine.api.receive('quota-chunk',wire,h.key);assert.equal(replay.duplicate,true);
+  assert.equal(usageOf(h).sourcePayloadBytes,'3');assert.equal(usageOf(h).chunkRecords,1);
+  const page=emission('quota-page',new Uint8Array([4,5,6,7]));page.record!.body={kind:'page',page:{chunks:[{id:'quota-chunk',bytes:3,digest}]}} as any;
+  await h.engine.api.receive('quota-page',h.wire(page),h.key);
+  assert.equal(usageOf(h).sourcePayloadBytes,'7');assert.equal(usageOf(h).pageRecords,1);
+  const stage=await binaryStage(),before=usageOf(stage);assert.equal(before.sourcePayloadBytes,'5');
+  await stage.commit(await stage.engine.prepareBinary(stage.input));
+  const promoted=usageOf(stage);assert.equal(promoted.sourcePayloadBytes,'7');assert.equal(promoted.chunkRecords,before.chunkRecords);assert.equal(promoted.pageRecords,before.pageRecords);
+});
+test('receive quota and missing usage fail closed while aborted commits roll back accounting and insertion',async()=>{
+  for(const mode of ['bytes','chunks','pages','missing','abort']){
+    const h=await receiving(),e=emission('quota-rejected');
+    if(mode==='bytes')setUsage(h,{sourcePayloadBytes:'536870910'});
+    if(mode==='chunks')setUsage(h,{chunkRecords:4096});
+    if(mode==='pages'){setUsage(h,{pageRecords:256});e.record!.body={kind:'page',page:{chunks:[]}} as any;}
+    const before=usageOf(h);if(mode==='missing')h.f.records.get('control')!.delete(JSON.stringify(usageKey));
+    if(mode==='abort')h.f.failNextCommit();
+    await assert.rejects(h.engine.api.receive('quota-rejected',h.wire(e),h.key,delivery),{code:mode==='missing'?'binary_usage_unavailable':mode==='abort'?'storage_failure':'binary_quota_exceeded'});
+    assert.equal(h.f.row('sync_source_headers',keyOfId('quota-rejected')),undefined);assert.equal(h.f.row('sync_source_payloads',keyOfId('quota-rejected')),undefined);
+    assert.equal(h.f.row('control','test-publication'),undefined);assert.deepEqual(h.f.row('sync_cursors',['realm','vault']).value,startCursor);
+    if(mode==='missing')assert.equal(h.f.row('control',usageKey),undefined);else assert.deepEqual(usageOf(h),before);
+  }
+  // First local emission fits, the second exceeds capacity: the first immutable
+  // insert and the quota row must still roll back in the same transaction.
+  const h=await enrolled();setUsage(h,{sourcePayloadBytes:'536870910'});const before=usageOf(h);
+  await assert.rejects(h.commit(await local(h)),{code:'binary_quota_exceeded'});
+  assert.ok(h.f.requests.some(r=>r.store==='sync_source_payloads'&&r.operation==='add'));
+  assert.equal(h.f.records.get('sync_source_payloads')!.size,0);assert.equal(h.f.records.get('sync_authored')!.size,0);assert.deepEqual(usageOf(h),before);
+});
+test('actual stage admission sees received shared usage and cannot exceed its injected source-byte budget',async()=>{
+  const h=await receiving();await h.engine.api.receive('received-before-stage',h.wire(emission('received-before-stage')),h.key,delivery);
+  class Builder {
+    length=0;
+    statusJson(){return JSON.stringify({accepted_length:String(this.length),pending_chunks:this.length?1:0});}
+    pushChunk(id:string,bytes:Uint8Array){this.length+=bytes.length;const e=emission(id,bytes);return {descriptorJson(){return JSON.stringify({scope,update_id:id,record:e.record,summary_digest:summary});},payloadBytes(){return bytes.slice();},chunkBytes(){return bytes.slice();},free(){}};}
+    restoreChunkPayload(){throw new Error('unused empty-stage restore');}restorePagePayload(){throw new Error('unused empty-stage restore');}
+    flushPage(){throw new Error('no page needed');}finish(){throw new Error('quota failure precedes seal');}free(){}
+  }
+  class Batch {pushRecord(){return '{}';}pushPayload(){throw new Error('quota rejection must precede source insertion validation');}free(){}}
+  let allocation=0;
+  const receivedCost=3,stagePayloadCost=4,sharedBudget=receivedCost+stagePayloadCost-1;
+  assert.ok(stagePayloadCost<=sharedBudget,'this same stage payload fits before receive consumes the shared budget');
+  const stages=createBrowserBinaryStageStore({db:h.f.db,authorityId:authority,scope:{realmId:'realm',vaultId:'vault'},clientId:'client',assertActive(){},allocateId:()=>`quota-stage-${++allocation}`,
+    limits:{maxFileBytes:'67108864',maxChunkBytes:131072,maxPayloadBytes:1048576,maxStages:4096,maxActiveStages:8,maxSourceBytes:String(sharedBudget),maxChunkRecords:4096,maxPageRecords:256},wasm:{WasmBinaryBuilder:Builder,WasmAuthoredMetadataBatch:Batch} as any});
+  try{
+    const ref=await stages.begin({operationId:'received-then-stage',target:{kind:'create',entryId:'staged',path:'staged.bin'},expectedLength:'4'}),before=usageOf(h);
+    await assert.rejects(stages.append(ref,{sequence:0,offset:'0',bytes:new Uint8Array([4,5,6,7])}),{code:'binary_quota_exceeded'});
+    assert.deepEqual(usageOf(h),before);assert.equal(before.sourcePayloadBytes,'3');
+    assert.equal(h.f.records.get('sync_source_payloads')!.size,1);assert.equal(h.f.records.get('binary_stage_chunks')!.size,0);assert.equal((await stages.query(ref)).acceptedLength,'0');
+  }finally{stages.dispose();}
+});
+test('Binary preparation transfers owned handles to Rust exactly once on success invocation failure and later proof failure',async()=>{
+  for(const mode of ['success','invoke','proof']){
+    const h=await binaryStage();if(mode==='invoke')h.failBinaryInvoke();if(mode==='proof')h.rejectProof();
+    if(mode==='success')(await h.engine.prepareBinary(h.input)).dispose();
+    else await assert.rejects(h.engine.prepareBinary(h.input),{code:'sync_plan_rejected'});
+    for(const handle of [h.input.batch,h.input.built])assert.deepEqual(handle.counts,{consumed:1,freed:0},'engine must not free moved-by-value handles');
+  }
+});
+test('Binary preparation early guard copy snapshot and scope errors attempt both frees once without masking',async()=>{
+  for(const mode of ['guard','copy','snapshot','scope']){
+    const h=await binaryStage();h.input.batch.freeThrows=true;
+    if(mode==='guard')h.retire();if(mode==='copy')(h.input.target as any).uncloneable=()=>{};
+    if(mode==='snapshot')h.f.records.get('sync_state')!.delete(JSON.stringify('config'));
+    if(mode==='scope')h.input.sourceKeys[0].realmId='different';
+    await assert.rejects(h.engine.prepareBinary(h.input),mode==='copy'?{name:'DataCloneError'}:{code:mode==='guard'?'owner_retired':mode==='snapshot'?'storage_corrupt':'binary_stage_source_mismatch'});
+    for(const handle of [h.input.batch,h.input.built])assert.deepEqual(handle.counts,{consumed:0,freed:1},'both cleanup attempts preserve the original failure');
+  }
 });
