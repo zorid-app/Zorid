@@ -1,0 +1,171 @@
+[
+  {
+    "name": "root exact before local suffix",
+    "source": "A/Source.md",
+    "files": [
+      "Note.md",
+      "A/Note.md"
+    ],
+    "target": "Note",
+    "expected": [
+      "Note.md"
+    ]
+  },
+  {
+    "name": "explicit relative priority",
+    "source": "A/Child/Source.md",
+    "files": [
+      "A/Note.md",
+      "Note.md"
+    ],
+    "target": "../Note",
+    "expected": [
+      "A/Note.md"
+    ]
+  },
+  {
+    "name": "directory is segment not prefix",
+    "source": "A/Source.md",
+    "files": [
+      "A/Deep/Note.md",
+      "AB/Note.md"
+    ],
+    "target": "Note",
+    "expected": [
+      "A/Deep/Note.md",
+      "AB/Note.md"
+    ]
+  },
+  {
+    "name": "suffix is segment not suffix text",
+    "source": "Source.md",
+    "files": [
+      "OtherDir/Note.md",
+      "X/Dir/Note.md"
+    ],
+    "target": "Dir/Note",
+    "expected": [
+      "X/Dir/Note.md"
+    ]
+  },
+  {
+    "name": "UTF16 length tie then UTF8 path",
+    "source": "A/Source.md",
+    "files": [
+      "A/😀/Note.md",
+      "A/xx/Note.md"
+    ],
+    "target": "Note",
+    "expected": [
+      "A/xx/Note.md",
+      "A/😀/Note.md"
+    ]
+  },
+  {
+    "name": "NFC and lowercase",
+    "source": "Source.md",
+    "files": [
+      "Café.md"
+    ],
+    "target": "CAFÉ",
+    "expected": [
+      "Café.md"
+    ]
+  },
+  {
+    "name": "strict percent target",
+    "source": "Source.md",
+    "files": [
+      "A B.md"
+    ],
+    "target": "A%20B",
+    "expected": [
+      "A B.md"
+    ]
+  },
+  {
+    "name": "malformed percent preserves whole literal",
+    "source": "Source.md",
+    "files": [
+      "bad%20%ZZ.md",
+      "bad %ZZ.md"
+    ],
+    "target": "bad%20%ZZ",
+    "expected": [
+      "bad%20%ZZ.md"
+    ]
+  },
+  {
+    "name": "invalid UTF8 percent preserves literal",
+    "source": "Source.md",
+    "files": [
+      "%E9.md"
+    ],
+    "target": "%E9",
+    "expected": [
+      "%E9.md"
+    ]
+  },
+  {
+    "name": "encoded scheme classified external",
+    "source": "Source.md",
+    "files": [
+      "https%3Aexample.md"
+    ],
+    "target": "https%3Aexample",
+    "expected": []
+  },
+  {
+    "name": "encoded hash is path character",
+    "source": "Source.md",
+    "files": [
+      "Hash#Name.md"
+    ],
+    "target": "Hash%23Name",
+    "expected": [
+      "Hash#Name.md"
+    ]
+  },
+  {
+    "name": "rooted miss does not use suffix",
+    "source": "A/Source.md",
+    "files": [
+      "A/Note.md"
+    ],
+    "target": "/Note",
+    "expected": []
+  },
+  {
+    "name": "empty fragment target is source",
+    "source": "A/Source.md",
+    "files": [],
+    "target": "#heading",
+    "expected": [
+      "A/Source.md"
+    ]
+  },
+  {
+    "name": "extension fallback preserves existing policy",
+    "source": "Source.md",
+    "files": [
+      "Note.custom.md"
+    ],
+    "target": "Note.custom",
+    "expected": [
+      "Note.custom.md"
+    ]
+  },
+  {
+    "name": "normalized exact ties deterministic",
+    "source": "Source.md",
+    "files": [
+      "NOTE.md",
+      "note.md"
+    ],
+    "target": "Note",
+    "expected": [
+      "NOTE.md",
+      "note.md"
+    ]
+  }
+]
