@@ -226,12 +226,25 @@ impl Store {
             // Binary edits have no causal text merge. A newer remote revision is
             // retained as a conflict, never replaced by the stale disk branch.
             if entry != physical.state {
-                return Err(ContractError::RevisionConflict {
-                    id: entry.id.clone(),
-                    expected: physical.state.revision.clone(),
-                    actual: entry.revision.clone(),
+                // A proven external Move records its own immutable physical
+                // revision. Rebind that opaque token only when every causal
+                // namespace/content witness is exactly the current publication.
+                // Equal bytes alone never authorize unseen binary activity.
+                let mut same_state = physical.state.clone();
+                same_state.revision = entry.revision.clone();
+                let current = family_materialization::get(&tx, &entry.id)?;
+                let historical =
+                    family_materialization::history(&tx, &entry.id, &physical.state.revision)?;
+                if entry != same_state
+                    || !matches!((&current,&historical),(Some(current),Some(historical)) if current==historical)
+                {
+                    return Err(ContractError::RevisionConflict {
+                        id: entry.id.clone(),
+                        expected: physical.state.revision.clone(),
+                        actual: entry.revision.clone(),
+                    }
+                    .into());
                 }
-                .into());
             }
             let request = MutationRequest {
                 operation_id: id.clone(),
