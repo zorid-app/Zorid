@@ -1,0 +1,290 @@
+//! Portable, host-fed Bases expressions adapted from MDBASE's existing evaluator.
+//! This crate owns neither files nor a running vault. See UPSTREAM.md for scope.
+mod expression;
+mod files;
+mod order;
+
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+pub use zorid_document::PropertyValue;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum BaseValue {
+    Null,
+    Boolean {
+        value: bool,
+    },
+    Number {
+        value: f64,
+    },
+    String {
+        value: String,
+    },
+    List {
+        value: Vec<BaseValue>,
+    },
+    Object {
+        value: Vec<(String, BaseValue)>,
+    },
+    Date {
+        timestamp: i64,
+        #[serde(rename = "hasTime")]
+        has_time: bool,
+    },
+    Duration {
+        years: f64,
+        months: f64,
+        weeks: f64,
+        days: f64,
+        hours: f64,
+        minutes: f64,
+        seconds: f64,
+        milliseconds: f64,
+    },
+    File {
+        path: String,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExpressionDiagnostic {
+    pub code: String,
+    pub message: String,
+}
+impl ExpressionDiagnostic {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+impl std::fmt::Display for ExpressionDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+impl std::error::Error for ExpressionDiagnostic {}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationResult {
+    pub value: BaseValue,
+    pub steps_used: usize,
+}
+
+/// Host-owned facts from one coherent document-index generation. Property order
+/// is recursive through the shared document value, including nested collisions.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachedRecord {
+    pub entry_id: String,
+    pub revision: String,
+    pub path: String,
+    #[serde(default)]
+    pub properties: Vec<(String, PropertyValue)>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub size: Option<u64>,
+    pub ctime_ms: Option<i64>,
+    pub mtime_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct OperationCancellation(Arc<AtomicBool>);
+impl OperationCancellation {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+    pub(crate) fn stop_reason(&self) -> Option<()> {
+        self.0.load(Ordering::Relaxed).then_some(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EvaluationOptions {
+    /// One captured operation clock; no ambient clock is read by the engine.
+    pub clock_ms: i64,
+    /// UTC is the default. Local aliases are deliberately rejected.
+    pub timezone: String,
+    pub max_steps: usize,
+    pub formulas: Vec<(String, String)>,
+    pub current_record: Option<DetachedRecord>,
+    pub cancellation: Option<OperationCancellation>,
+}
+impl Default for EvaluationOptions {
+    fn default() -> Self {
+        Self {
+            clock_ms: 0,
+            timezone: "UTC".into(),
+            max_steps: 100_000,
+            formulas: Vec::new(),
+            current_record: None,
+            cancellation: None,
+        }
+    }
+}
+
+fn instant(millis: i64) -> Result<String, ExpressionDiagnostic> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis)
+        .map(|date| date.to_rfc3339())
+        .ok_or_else(|| ExpressionDiagnostic::new("input", "Clock or timestamp is out of range"))
+}
+
+fn runtime_value(
+    value: &PropertyValue,
+    depth: usize,
+    bytes: &mut usize,
+) -> Result<expression::RuntimeValue, ExpressionDiagnostic> {
+    use expression::RuntimeValue as R;
+    if depth > 128 || *bytes > 8 * 1024 * 1024 {
+        return Err(ExpressionDiagnostic::new(
+            "budget",
+            "Property input exceeds depth/byte budget",
+        ));
+    }
+    *bytes = bytes.saturating_add(16);
+    Ok(match value {
+        PropertyValue::Null => R::Null,
+        PropertyValue::Bool(value) => R::Bool(*value),
+        PropertyValue::Number(value) => R::Number(
+            value
+                .as_f64()
+                .ok_or_else(|| ExpressionDiagnostic::new("input", "Invalid numeric property"))?,
+        ),
+        PropertyValue::String(value) => {
+            *bytes = bytes.saturating_add(value.len());
+            R::String(value.clone())
+        }
+        PropertyValue::Array(values) => R::List(
+            values
+                .iter()
+                .map(|value| runtime_value(value, depth + 1, bytes))
+                .collect::<Result<_, _>>()?,
+        ),
+        PropertyValue::Object(values) => {
+            let mut result = IndexMap::new();
+            for (key, value) in values {
+                *bytes = bytes.saturating_add(key.len());
+                if result.contains_key(key) {
+                    return Err(ExpressionDiagnostic::new(
+                        "input",
+                        "Duplicate exact property key",
+                    ));
+                }
+                result.insert(key.clone(), runtime_value(value, depth + 1, bytes)?);
+            }
+            R::Object(result)
+        }
+    })
+}
+fn runtime_file(record: &DetachedRecord) -> Result<expression::BasesFile, ExpressionDiagnostic> {
+    if record.path.is_empty()
+        || record.path.starts_with('/')
+        || record.path.contains('\\')
+        || record
+            .path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(ExpressionDiagnostic::new(
+            "input",
+            "Expected a normalized vault-relative path",
+        ));
+    }
+    let fullname = record.path.rsplit('/').next().unwrap_or_default();
+    let (basename, extension) = fullname.rsplit_once('.').unwrap_or((fullname, ""));
+    let mut bytes = 0;
+    let mut properties = IndexMap::new();
+    for (key, value) in &record.properties {
+        bytes += key.len();
+        if properties.contains_key(key) {
+            return Err(ExpressionDiagnostic::new(
+                "input",
+                "Duplicate exact property key",
+            ));
+        }
+        properties.insert(key.clone(), runtime_value(value, 0, &mut bytes)?);
+    }
+    if bytes > 8 * 1024 * 1024 {
+        return Err(ExpressionDiagnostic::new(
+            "budget",
+            "Property input exceeds byte budget",
+        ));
+    }
+    Ok(expression::BasesFile {
+        path: record.path.clone(),
+        name: if extension == "md" {
+            basename.into()
+        } else {
+            fullname.into()
+        },
+        basename: basename.into(),
+        folder: record
+            .path
+            .rsplit_once('/')
+            .map(|(parent, _)| parent)
+            .unwrap_or("/")
+            .into(),
+        extension: extension.into(),
+        size: record.size,
+        properties,
+        tags: record.tags.clone(),
+        ctime: record.ctime_ms.map(instant).transpose()?,
+        mtime: record.mtime_ms.map(instant).transpose()?,
+        ..Default::default()
+    })
+}
+
+pub fn evaluate_expression(
+    source: &str,
+    record: &DetachedRecord,
+    options: &EvaluationOptions,
+) -> Result<EvaluationResult, ExpressionDiagnostic> {
+    if options.formulas.len() > 1024 {
+        return Err(ExpressionDiagnostic::new("budget", "Too many formulas"));
+    }
+    let mut formulas = IndexMap::new();
+    let mut bytes = source.len();
+    for (name, source) in &options.formulas {
+        bytes = bytes.saturating_add(name.len() + source.len());
+        if bytes > 262_144 {
+            return Err(ExpressionDiagnostic::new(
+                "budget",
+                "Formula program exceeds byte budget",
+            ));
+        }
+        if formulas.insert(name.clone(), source.clone()).is_some() {
+            return Err(ExpressionDiagnostic::new("input", "Duplicate formula name"));
+        }
+    }
+    let file = runtime_file(record)?;
+    let this_file = options
+        .current_record
+        .as_ref()
+        .map(runtime_file)
+        .transpose()?;
+    let context = expression::BasesEvaluationContext {
+        note: file.properties.clone(),
+        file: file.clone(),
+        this_file,
+        files: Arc::new(files::BasesFiles::new(vec![file])),
+        formulas: Arc::new(formulas),
+        now: Some(instant(options.clock_ms)?),
+        timezone: expression::BasesTimezone::from_setting(Some(&options.timezone))
+            .map_err(|message| ExpressionDiagnostic::new("input", message))?,
+        work_limit: Some(options.max_steps),
+        cancellation: options.cancellation.clone(),
+        ..Default::default()
+    };
+    expression::evaluate(source, &context)
+}

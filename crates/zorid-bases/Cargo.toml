@@ -1,0 +1,15 @@
+[package]
+name = "zorid-bases"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Portable host-fed Base semantics adapted from MDBASE"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+indexmap = "=2.14.2"
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+chrono-tz = { version = "=0.10.4", default-features = false, features = ["std"] }
+regex = "=1.13.1"
+zorid-document = { path = "../zorid-document" }
