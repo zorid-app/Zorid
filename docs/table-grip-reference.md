@@ -33,3 +33,10 @@ strict TypeScript check of the affected modules. No CSS-mirroring tests were
 added. Native screenshot comparison and actual hover/drag hit testing remain the
 root verification owner's work; this static evidence and DOM test pass do not
 establish complete visual or gesture parity.
+
+Integrated on main as `f0898d8`. Root's table/icon test entrypoints, project
+TypeScript check and production build passed. An unsigned arm64 package of that
+commit launched successfully with Electron 44.8.0 and a synthetic vault. Native
+accessibility confirmed the table handles and cell editor, but screenshot
+capture returned a mostly white/clipped image: the six-dot appearance was not
+visually verified. The agent-owned packaged app was closed after the pass.
