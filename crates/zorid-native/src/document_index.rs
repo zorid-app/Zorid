@@ -56,6 +56,14 @@ impl NativeVault {
         self.paths.verify()?;
         Ok(self.store.open_document_snapshot()?)
     }
+    /// Validate and describe this exact retained pin, including open retries.
+    /// No current-head substitution or additional pin allocation takes place.
+    pub fn document_snapshot_identity(
+        &self,
+        pin: &DocumentQueryPin,
+    ) -> NativeDocumentResult<DocumentQueryResult<()>> {
+        self.document_result(pin, ())
+    }
     pub fn close_document_snapshot(&self, pin: DocumentQueryPin) {
         // Dropping a pin is always safe, including after the root becomes unsafe.
         self.store.close_document_snapshot(pin)

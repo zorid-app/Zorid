@@ -75,6 +75,10 @@ fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
     vault.initialize_document_index().unwrap();
     let snapshot = build(&mut vault);
     let old = vault.open_document_snapshot().unwrap();
+    let identity = vault.document_snapshot_identity(&old).unwrap();
+    assert_eq!(identity.snapshot, snapshot);
+    assert_eq!(identity.source, *old.generation().manifest().source());
+    assert!(identity.coverage_complete);
     let old_base = vault
         .query_base_document_view(&old, &id("base"), "All", &QueryOptions::default())
         .unwrap();
@@ -191,6 +195,7 @@ fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
     assert!(graph.value.edges()[0].target().is_none());
 
     writer.rebuild_document_index().unwrap();
+    expect_code(vault.document_snapshot_identity(&old), "snapshot_expired");
     expect_code(
         vault.document_metadata(&old, &id("target")),
         "snapshot_expired",
@@ -258,6 +263,7 @@ fn queries_never_implicitly_reconcile_external_files_and_reject_foreign_pins() {
     assert_eq!(page.value.hits.len(), 1);
     let other_dir = tempfile::tempdir().unwrap();
     let other = NativeVault::open(other_dir.path()).unwrap();
+    expect_code(other.document_snapshot_identity(&pin), "snapshot_expired");
     expect_code(
         other.document_metadata(&pin, &id("note")),
         "snapshot_expired",
@@ -286,6 +292,7 @@ fn facade_verifies_native_root_before_serving_cached_metadata() {
     let pin = vault.open_document_snapshot().unwrap();
     std::fs::rename(&root, outer.path().join("moved")).unwrap();
     std::fs::create_dir(&root).unwrap();
+    expect_code(vault.document_snapshot_identity(&pin), "unsafe_path");
     expect_code(vault.document_metadata(&pin, &id("note")), "unsafe_path");
     vault.close_document_snapshot(pin);
 }
