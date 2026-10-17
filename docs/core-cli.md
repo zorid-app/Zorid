@@ -55,6 +55,10 @@ override each bound; native validation still applies. The duration is checked
 between operations and is not a hard wall-clock deadline; vault lock waiting has
 its own bound. Incomplete coverage returns `complete: false`, rather than claiming
 all files were inspected. A later scan may continue discovering current state.
+`--max-entries` accepts 1 through 100,000. Zero byte budget allows only empty
+files/directories; zero duration ends scanning incomplete immediately. Depth zero
+examines root entries but records unvisited subdirectories as incomplete. None of
+these limits authorize deletion. Projection recovery precedes bounded scanning.
 Inspect `issues` and `missing`: missing paths are preserved absence observations,
 **not deletions**, and committed bytes remain accessible. No scan result can be
 used as an instruction to remove all unseen entries. The response reports the
