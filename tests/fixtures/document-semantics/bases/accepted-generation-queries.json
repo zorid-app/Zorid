@@ -969,7 +969,7 @@
             "request": {
               "entryId": "context-base",
               "contentRevision": "base-r1",
-              "source": "views:\n  - type: table\n"
+              "source": "views:\n  - type: table\n    name: Context\n"
             },
             "markdown": false
           },
@@ -989,7 +989,7 @@
               "entryId": "context-base",
               "revision": "base-r1"
             },
-            "size": 23,
+            "size": 41,
             "ctimeMs": 1000,
             "mtimeMs": 2000
           }
@@ -1009,7 +1009,8 @@
                 "formula.contextPath",
                 "formula.contextTitle",
                 "formula.contextSize"
-              ]
+              ],
+              "name": "Context"
             }
           ]
         },
@@ -1040,7 +1041,7 @@
             },
             "formula.contextSize": {
               "type": "number",
-              "value": 23
+              "value": 41
             }
           }
         }
@@ -1086,7 +1087,7 @@
             "request": {
               "entryId": "context-base",
               "contentRevision": "base-r1",
-              "source": "views:\n  - type: table\n"
+              "source": "views:\n  - type: table\n    name: Context\n"
             },
             "markdown": false
           },
@@ -1106,7 +1107,7 @@
               "entryId": "context-base",
               "revision": "base-r1"
             },
-            "size": 23,
+            "size": 41,
             "ctimeMs": 1000,
             "mtimeMs": 2000
           }
@@ -1126,7 +1127,8 @@
                 "formula.contextPath",
                 "formula.contextTitle",
                 "formula.contextSize"
-              ]
+              ],
+              "name": "Context"
             }
           ]
         },
@@ -1197,7 +1199,7 @@
             "request": {
               "entryId": "context-base",
               "contentRevision": "base-r1",
-              "source": "views:\n  - type: table\n"
+              "source": "views:\n  - type: table\n    name: Context\n"
             },
             "markdown": false
           },
@@ -1217,7 +1219,7 @@
               "entryId": "context-base",
               "revision": "base-r1"
             },
-            "size": 23,
+            "size": 41,
             "ctimeMs": 1000,
             "mtimeMs": 2000
           }
@@ -1233,7 +1235,8 @@
               "order": [
                 "file.path",
                 "formula.context"
-              ]
+              ],
+              "name": "Context"
             }
           ]
         },

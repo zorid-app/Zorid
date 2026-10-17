@@ -81,7 +81,16 @@ fn generation_factory_canonical_graph_corpus() {
         let r = case.request;
         let generation =
             Generation::from_sources(r.source, r.snapshot_id, r.entries, r.sources).unwrap();
-        let program = compile_base(r.configuration).unwrap();
+        let program = match compile_base(r.configuration) {
+            Ok(program) => program,
+            Err(error) => {
+                failures.push(format!(
+                    "{}: configuration failed to compile: {error}",
+                    case.id
+                ));
+                continue;
+            }
+        };
         let result = match query_generation(&program, &generation, &r.facts, &r.options) {
             Ok(r) => r,
             Err(e) => {
@@ -193,7 +202,8 @@ fn current_entry_selection_rejects_missing_conflicting_and_unbounded_contexts() 
         request.sources,
     )
     .unwrap();
-    let program = compile_base(request.configuration).unwrap();
+    let program = compile_base(request.configuration)
+        .expect("current-entry base context fixture must compile");
     let mut options = request.options;
     options.current_entry_id = Some(zorid_core::EntryId::new("missing-context").unwrap());
     assert_eq!(

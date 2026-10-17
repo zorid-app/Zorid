@@ -744,7 +744,7 @@ fn current_entry_context_uses_retained_properties_and_base_file_facts() {
         "Current.md",
         "---\ntitle: Before\n---\n",
     );
-    let source = "filters: file.path == this.file.path\nformulas:\n  context: this.file.path\n  title: this.title\nviews:\n  - type: table\n    order: [file.path, formula.context, formula.title]\n";
+    let source = "filters: file.path == this.file.path\nformulas:\n  context: this.file.path\n  title: this.title\nviews:\n  - type: table\n    name: Context\n    order: [file.path, formula.context, formula.title]\n";
     create(&mut vault, "context-base", "Context.base", source);
     vault.initialize_document_index().unwrap();
     build(&mut vault);
