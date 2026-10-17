@@ -12,11 +12,31 @@ struct NativeFileEntry: Decodable {
     var name: String { path.split(separator: "/", omittingEmptySubsequences: false).last.map(String.init) ?? path }
     var parent: String { path.split(separator: "/", omittingEmptySubsequences: false).dropLast().joined(separator: "/") }
 
-    static func isValidPath(_ path: String) -> Bool {
-        guard !path.isEmpty, path.utf8.count <= 4096, !path.contains("\0") else { return false }
-        return path.split(separator: "/", omittingEmptySubsequences: false)
-            .allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    static func isValidEntryId(_ value: String) -> Bool {
+        // Rust EntryId is an opaque, case-sensitive token, not a UUID.
+        let bytes = value.utf8
+        return (1...128).contains(bytes.count) && bytes.allSatisfy {
+            (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
+        }
     }
+
+    static func isValidPath(_ path: String) -> Bool {
+        guard !path.isEmpty, path.utf8.count <= 1_048_576, !path.contains("\\"),
+              !path.unicodeScalars.contains(where: { $0.value < 0x20 || (0x7f...0x9f).contains($0.value) }) else { return false }
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return false }
+        let first = Array(segments[0].utf8.prefix(2))
+        if first.count == 2, first[1] == 58,
+           (65...90).contains(first[0]) || (97...122).contains(first[0]) { return false }
+        return true
+    }
+
+    static func isVisiblePath(_ path: String) -> Bool {
+        // Match the adapter's visible/nativeNotePath boundary: never expose root
+        // .zorid (Rust-reserved), .trash, or any other dot namespace/component.
+        isValidPath(path) && path.split(separator: "/").allSatisfy { !$0.hasPrefix(".") }
+    }
+
 }
 
 private enum NativePageError: Error { case invalidResponse, unavailable }
@@ -72,12 +92,12 @@ extension NativeMobileSession {
                             let bytes = try JSONSerialization.data(withJSONObject: snapshot)
                             let decoded = try JSONDecoder().decode(Snapshot.self, from: bytes)
                             let entries = decoded.entries.map(\.state)
-                            guard !decoded.cursor.isEmpty, entries.allSatisfy({ !$0.deleted && !$0.id.isEmpty && NativeFileEntry.isValidPath($0.path) }),
+                            guard !decoded.cursor.isEmpty, entries.allSatisfy({ !$0.deleted && NativeFileEntry.isValidEntryId($0.id) && NativeFileEntry.isValidPath($0.path) }),
                                   Set(entries.map(\.id)).count == entries.count,
                                   Set(entries.map(\.path)).count == entries.count else { throw NativePageError.invalidResponse }
                             self.context { context in
                                 let reconciliation = context["reconciliation"] as? [String: Any]
-                                completion(.success(NativeVaultListing(localStoreId: storeId, entries: entries,
+                                completion(.success(NativeVaultListing(localStoreId: storeId, entries: entries.filter { NativeFileEntry.isVisiblePath($0.path) },
                                                                       scanComplete: reconciliation?["complete"] as? Bool == true)))
                             }
                         } catch { completion(.failure(NativePageError.invalidResponse)) }
@@ -87,12 +107,14 @@ extension NativeMobileSession {
         }
     }
 
-    func recordNoteOpened(path: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        guard NativeFileEntry.isValidPath(path) else { completion(.failure(NativePageError.invalidResponse)); return }
+    func recordNoteOpened(path: String, entryId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard NativeFileEntry.isVisiblePath(path), NativeFileEntry.isValidEntryId(entryId) else {
+            completion(.failure(NativePageError.invalidResponse)); return
+        }
         pageListing { result in
             completion(result.flatMap { listing in
                 Result {
-                    guard let entry = listing.entries.first(where: { $0.path == path && $0.kind == .file }) else {
+                    guard let entry = listing.entries.first(where: { $0.id == entryId && $0.path == path && $0.kind == .file }) else {
                         throw NativePageError.unavailable
                     }
                     try NativeRecentStore.record(entryId: entry.id, vaultId: self.vault.id, storeId: listing.localStoreId)
@@ -130,7 +152,7 @@ private enum NativeRecentStore {
         let byId = Dictionary(uniqueKeysWithValues: listing.entries.map { ($0.id, $0) })
         return try read().filter { $0.vaultId == vaultId && $0.storeId == listing.localStoreId }
             .sorted { $0.openedAt > $1.openedAt }
-            .compactMap { byId[$0.entryId] }.filter { $0.kind == .file }
+            .compactMap { byId[$0.entryId] }.filter { $0.kind == .file && NativeFileEntry.isVisiblePath($0.path) }
     }
 }
 
@@ -179,13 +201,17 @@ private final class NativePagesCoordinator {
         self.session = session
     }
 
-    func load(completion: @escaping () -> Void = {}) {
+    func load(refresh: Bool = false, completion: @escaping () -> Void = {}) {
         guard !busy, !editorActive else { completion(); return }
         busy = true
         generation += 1
         let ticket = generation
         owner?.setLoading()
-        if let session = session { read(session, ticket: ticket, completion: completion); return }
+        if let session = session {
+            if refresh { refreshThenRead(session, ticket: ticket, completion: completion) }
+            else { read(session, ticket: ticket, completion: completion) }
+            return
+        }
         NativeMobileSession.open(vault: vault, root: root) { [weak self] result in
             guard let self = self, self.generation == ticket, !self.editorActive else {
                 if case .success(let session) = result { session.close {} }
@@ -199,37 +225,75 @@ private final class NativePagesCoordinator {
         }
     }
 
-    private func read(_ session: NativeMobileSession, ticket: Int, completion: @escaping () -> Void) {
-        session.pageListing { [weak self] result in
+    private func refreshThenRead(_ session: NativeMobileSession, ticket: Int, completion: @escaping () -> Void) {
+        session.refresh { [weak self] result in
             guard let self = self, self.generation == ticket, !self.editorActive else { completion(); return }
-            self.busy = false
             switch result {
-            case .success(let listing): self.owner?.showListing(listing); completion()
-            case .failure:
-                // A failed/fenced host must not be reused by every retry.
-                self.session = nil
-                self.busy = true
-                session.close {
-                    guard self.generation == ticket else { completion(); return }
-                    self.busy = false
-                    self.owner?.showLoadFailure()
-                    completion()
-                }
+            case .success: self.read(session, ticket: ticket, completion: completion)
+            case .failure: self.fail(session, ticket: ticket, completion: completion)
             }
         }
     }
 
-    func reload() async {
-        await withCheckedContinuation { continuation in load { continuation.resume() } }
+    private func read(_ session: NativeMobileSession, ticket: Int, completion: @escaping () -> Void) {
+        session.pageListing { [weak self] result in
+            guard let self = self, self.generation == ticket, !self.editorActive else { completion(); return }
+            switch result {
+            case .success(let listing):
+                self.busy = false
+                self.owner?.showListing(listing)
+                completion()
+            case .failure: self.fail(session, ticket: ticket, completion: completion)
+            }
+        }
     }
 
-    func openEditor(path: String?, origin: String) {
-        guard !busy, !editorActive, let session = session, let owner = owner,
-              let navigation = owner.navigationController else { return }
+    private func fail(_ session: NativeMobileSession, ticket: Int, missingSelection: Bool = false, completion: @escaping () -> Void = {}) {
+        // A failed/fenced host must not be reused by every retry. Complete close
+        // before making Reload usable so a new host cannot overlap this one.
+        self.session = nil
+        busy = true
+        session.close { [weak self] in
+            guard let self = self, self.generation == ticket else { completion(); return }
+            self.busy = false
+            self.owner?.showLoadFailure(missingSelection: missingSelection)
+            completion()
+        }
+    }
+
+    func reload() async {
+        await withCheckedContinuation { continuation in load(refresh: true) { continuation.resume() } }
+    }
+
+    func openEditor(entry: NativeFileEntry?, origin: String) {
+        guard !busy, !editorActive, let session = session, owner?.navigationController != nil else { return }
         generation += 1
+        let ticket = generation
+        guard let entry = entry else { transfer(session, initialEntry: nil, origin: origin); return }
+        busy = true
+        owner?.setLoading()
+        // The row's path is only a display locator. Resolve its stable identity
+        // again; never open a replacement entry that has reused the old path.
+        session.pageListing { [weak self] result in
+            guard let self = self, self.generation == ticket, !self.editorActive else { return }
+            switch result {
+            case .success(let listing):
+                guard let current = listing.entries.first(where: { $0.id == entry.id && $0.kind == .file }) else {
+                    self.fail(session, ticket: ticket, missingSelection: true)
+                    return
+                }
+                self.transfer(session, initialEntry: current, origin: origin)
+            case .failure: self.fail(session, ticket: ticket)
+            }
+        }
+    }
+
+    private func transfer(_ session: NativeMobileSession, initialEntry: NativeFileEntry?, origin: String) {
+        guard let navigation = owner?.navigationController else { busy = false; return }
+        busy = false
         self.session = nil
         editorActive = true
-        let editor = NativeEditorContainer(session: session, initialPath: path, originTitle: origin) { [weak self] in
+        let editor = NativeEditorContainer(session: session, initialEntry: initialEntry, originTitle: origin) { [weak self] in
             self?.editorActive = false
         }
         navigation.pushViewController(editor, animated: !UIAccessibility.isReduceMotionEnabled)
@@ -276,10 +340,12 @@ private final class NativePagesModel: ObservableObject {
         status = "Loading vault…"
         render()
     }
-    func showLoadFailure() {
+    func showLoadFailure(missingSelection: Bool = false) {
         loading = false
         listing = nil
-        status = "Could not load this vault safely. Reload to try again. Your files have not been changed."
+        status = missingSelection
+            ? "The selected note is no longer available. Reload to see the current files."
+            : "Could not load this vault safely. Reload to try again. Your files have not been changed."
         render()
         focusedEntryId = nil
         restoringFocus = false
@@ -367,7 +433,7 @@ final class NativePagesController: UIViewController {
         let pages = NativePagesView(model: model, open: { [weak self] entry in
             guard let self = self else { return }
             self.model.willOpen(entry)
-            self.coordinator.openEditor(path: entry?.path, origin: self.model.preferences.selected.title)
+            self.coordinator.openEditor(entry: entry, origin: self.model.preferences.selected.title)
         }, chooseVault: { [weak self] in self?.coordinator.chooseVault() }, refresh: { [weak self] in
             if let self = self { await self.coordinator.reload() }
         })
@@ -398,7 +464,7 @@ final class NativePagesController: UIViewController {
     }
     fileprivate func setLoading() { model.setLoading() }
     fileprivate func showListing(_ listing: NativeVaultListing) { model.showListing(listing) }
-    fileprivate func showLoadFailure() { model.showLoadFailure() }
+    fileprivate func showLoadFailure(missingSelection: Bool = false) { model.showLoadFailure(missingSelection: missingSelection) }
 }
 
 @MainActor
@@ -487,6 +553,7 @@ private struct NativePagesView: View {
                 .modifier(PageControlSurface(id: "plus", namespace: glassNamespace))
                 .accessibilityLabel("Manage pages")
                 .accessibilityIdentifier("native.pages.add")
+                .disabled(model.loading)
                 .accessibilityFocused($focus, equals: .plus)
         }
         .font(.body)
@@ -513,6 +580,7 @@ private struct NativePagesView: View {
         .accessibilityLabel(page.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("native.pages.tab.\(page.rawValue)")
+        .disabled(model.loading)
         .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
     }
 

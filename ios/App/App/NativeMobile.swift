@@ -276,14 +276,14 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "lifecycleAck", returnType: CAPPluginReturnPromise)
     ]
     private let session: NativeMobileSession
-    private let initialPath: String?
+    private let initialEntry: NativeFileEntry?
     private var pending: (id: String, reason: String, completion: (Bool) -> Void)?
     private var timeout: DispatchWorkItem?
     private var closeAuthorized = false
 
-    fileprivate init(session: NativeMobileSession, initialPath: String?) {
+    fileprivate init(session: NativeMobileSession, initialEntry: NativeFileEntry?) {
         self.session = session
-        self.initialPath = initialPath
+        self.initialEntry = initialEntry
         super.init()
     }
 
@@ -307,18 +307,22 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func context(_ call: CAPPluginCall) {
         session.context { context in
             var context = context
-            if let initialPath = self.initialPath { context["initialPath"] = initialPath }
+            if let entry = self.initialEntry {
+                context["initialPath"] = entry.path
+                context["initialEntryId"] = entry.id
+            }
             call.resolve(context)
         }
     }
 
     @objc func noteOpened(_ call: CAPPluginCall) {
-        guard let path = call.getString("path"), NativeFileEntry.isValidPath(path) else {
-            call.reject("Invalid note path.", "invalid_request")
+        guard let path = call.getString("path"), NativeFileEntry.isVisiblePath(path),
+              let entryId = call.getString("entryId"), NativeFileEntry.isValidEntryId(entryId) else {
+            call.reject("Invalid note identity.", "invalid_request")
             return
         }
         // Called after real web activation, never just after tapping a native row.
-        session.recordNoteOpened(path: path) { result in
+        session.recordNoteOpened(path: path, entryId: entryId) { result in
             switch result {
             case .success: call.resolve()
             case .failure: call.reject("The opened note could not be recorded.", "native_history_failed")
@@ -407,8 +411,8 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
 private final class NativeEditorBridge: CAPBridgeViewController {
     let vaultPlugin: NativeVaultPlugin
 
-    init(session: NativeMobileSession, initialPath: String?) {
-        vaultPlugin = NativeVaultPlugin(session: session, initialPath: initialPath)
+    init(session: NativeMobileSession, initialEntry: NativeFileEntry?) {
+        vaultPlugin = NativeVaultPlugin(session: session, initialEntry: initialEntry)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -442,11 +446,11 @@ final class NativeEditorContainer: UIViewController {
     private let originTitle: String
     private let onClosed: () -> Void
 
-    init(session: NativeMobileSession, initialPath: String? = nil, originTitle: String = "Pages", onClosed: @escaping () -> Void = {}) {
+    init(session: NativeMobileSession, initialEntry: NativeFileEntry? = nil, originTitle: String = "Pages", onClosed: @escaping () -> Void = {}) {
         self.session = session
         self.originTitle = originTitle
         self.onClosed = onClosed
-        editor = NativeEditorBridge(session: session, initialPath: initialPath)
+        editor = NativeEditorBridge(session: session, initialEntry: initialEntry)
         super.init(nibName: nil, bundle: nil)
         title = session.vault.name
     }
