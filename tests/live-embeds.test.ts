@@ -14,7 +14,7 @@ import type { EmbedRequest } from '../src/ui/markdown.ts';
 
 // These tests exercise real CM fields/widgets/lifecycle. jsdom geometry cannot
 // certify native pointer coordinates, image sizing, IME, or visual parity.
-function setup(t: TestContext, source: string, integrated = false) {
+function setup(t: TestContext, source: string, integrated = false, nativeMobile = false) {
   const dom = new JSDOM('<!doctype html><body><div id="host"></div>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   const observers: { target?: Element; disconnected: boolean; callback: () => void }[] = [];
@@ -64,6 +64,7 @@ function setup(t: TestContext, source: string, integrated = false) {
   };
   const extension = liveEmbeds(renderer);
   const host = document.querySelector<HTMLElement>('#host')!;
+  if (nativeMobile) host.classList.add('native-editor-only');
   const editor = integrated ? createEditor(host, { value: source, mode: 'live', paths: () => [], open() {}, onChange() {}, renderEmbed: renderer }) : undefined;
   const view = editor ? EditorView.findFromDOM(host.querySelector('.cm-editor')!)! : new EditorView({ parent: host, state: EditorState.create({ doc: source,
     extensions: [markdown({ base: markdownLanguage }), history(), compartment.of(extension)] }) });
@@ -739,4 +740,19 @@ test('renderer occurrence survives DOM remount for the same state but is new aft
   view.dispatch({ effects: compartment.reconfigure(extension) });
   assert.notEqual(renders[2].context!.occurrence, occurrence, 'context is view-state local, not durable session identity');
   destroy(); assert.ok(renders.every(record => record.destroys === 1));
+});
+
+test('native image tap opens the same renderer immediately without requesting body focus or replacing source/resources', async t => {
+  const source='before\n![[Orca-image.png]]\nafter';
+  const f=setup(t,source,true,true),root=f.renders[0].node,{image,zooms}=await resolveTestImage(root);
+  const initialState=f.view.state.doc,wrapper=root.parentElement;let focusCalls=0;
+  const originalFocus=f.view.focus.bind(f.view);f.view.focus=()=>{focusCalls++;originalFocus();};
+  assert.ok(root.querySelector('.zorid-image-embed-actions.is-mobile'));assert.equal(root.querySelector('[aria-label="Zoom in"]'),null);
+  assert.equal(root.querySelector('.zorid-image-resize-corner'),null);
+  image.dispatchEvent(new f.dom.window.MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true}));f.click(image);
+  await settleControls();assert.equal(zooms(),1);assert.equal(focusCalls,0);assert.equal(f.view.hasFocus,false);
+  assert.equal(f.view.state.doc,initialState);assert.equal(f.view.state.selection.main.from,source.indexOf('![['));
+  assert.equal(root.classList.contains('zorid-image-selected'),true);assert.equal(root.parentElement,wrapper);assert.equal(f.renders.length,1);assert.equal(f.renders[0].destroys,0);
+  f.click(root.querySelector('[aria-label="Edit image source"]')!);assert.equal(focusCalls,1);
+  assert.equal(f.view.state.sliceDoc(f.view.state.selection.main.from,f.view.state.selection.main.to),'Orca-image.png');
 });

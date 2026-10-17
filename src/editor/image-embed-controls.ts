@@ -74,7 +74,13 @@ export function createImageEmbedControls(container: HTMLElement, options: ImageE
     if (closed || event.defaultPrevented || !ownImageEvent(event)) return;
     event.preventDefault(); event.stopImmediatePropagation();
     if (!alive()) return;
-    if (selected) options.onZoom(image!, event); else options.onSelect();
+    if (options.isMobile) {
+      // A native viewing tap must complete before text focus/keyboard layout can
+      // move this target. Keep source selection, but open in the same event.
+      const target = image!;
+      if (!selected) options.onSelect();
+      if (alive() && image === target && target.parentElement === container) options.onZoom(target, event);
+    } else if (selected) options.onZoom(image!, event); else options.onSelect();
   };
   const edit = (event: MouseEvent) => {
     event.preventDefault(); event.stopPropagation();
