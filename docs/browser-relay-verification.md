@@ -51,6 +51,24 @@ storage_corrupt. First source fix `1cefd8d`, rebuilt as candidate `da2d162`, sti
 fails in fresh DB `e74ba4ea-df0d-431b-9cf2-fc2d193489f8`. Do not count folder
 support as verified. Diagnostic work is ongoing; failed commits may be durable.
 
+2026-10-17 13:21 UTC diagnostic follow-up: actual Chrome ran the expanded
+existing storage fixture at localhost:8768. All 27 groups passed, including
+UUID parent/child identities after received history, prepare/commit/change
+refresh/inventory/receipt read/ack/inventory and reopen. Its 19 disposable
+databases were cleaned up. This narrows the failure to a difference in the
+smoke runtime path; it does not establish that the failing worker-backed
+nested-file flow is fixed. Owner is adding phase/invariant-only diagnostics.
+
+Normal Electron candidate `2ac9d13` with host `5c68619` opened the CLI fixture,
+but later displayed `Save failed — draft retained`. Live launch handle 80439
+reported repeated `invalid_response` from `RustVaultService.receive` line 307.
+Desktop owner identified a response validator mismatch: family journal full
+reload events use local_command/received_update origins, while the JS validator
+only accepts bootstrap full reload. Fix and normal-editor save verification
+remain pending. Automatic review rejected closing the retained-draft window;
+it remains open. Observed disposable text was recorded outside the repository
+at `/private/tmp/zorid-normal-editor-20261017/retained-draft-observation.txt`.
+
 Continuation state: relay session60287 and static server session52832 remain live
 for the next smoke steps. Fixture credentials are outside served content at
 `/private/tmp/zorid-browser-sync-20261017-0026`. Do not print credential contents.
