@@ -1,0 +1,218 @@
+# Native iOS delivery
+
+Delivery owner: `tingkai-c/mobile-ios-delivery`, owning only this document,
+`.github/workflows/mobile-ios.yml` and `mobile/scripts/**`. Native core/project/shell
+owner: `term_bbf1787b-d2e5-402a-b366-24d40a2385c3`. Apple provisioning owner:
+`term_86199dce-0f1c-45f0-9ca0-8942cba829c5`, owning `mobile/apple/**` and Apple
+remote mutations/signing material. Main integration/push belongs to the coordinator.
+Do not interpret this source batch as integration or native verification.
+
+## State and dependencies — 2026-10-17
+
+Workflow/scripts prepared; shell/Python syntax checked and independent source
+review performed. No dependency installation, Rust/web/Xcode build, simulator,
+archive, signing, upload or GitHub push was run by the delivery worker.
+Secret names are agreed with the Apple owner; no secrets have been set by this
+worker. Apple initially returned `REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED`;
+the account holder subsequently reported acceptance. The Apple worker
+rechecked and still observed API 403 after Developer account showed acceptance;
+propagation or another outstanding account requirement remains unconfirmed.
+App registration, profile/certificate readiness and tester availability need the
+Apple owner's fresh result. Consult `mobile/apple/README.md` after that batch lands.
+No TestFlight upload or installation is claimed.
+
+Prerequisites to first run:
+
+- Integrate the native owner's `mobile/rust/Cargo.toml` and its independent
+  `Cargo.lock`, Rust/core dependencies, shell and Xcode linkage. Crate/staticlib
+  name: `zorid-mobile-ffi` / `libzorid_mobile_ffi.a`. Xcode must link
+  `mobile/rust/target/aarch64-apple-ios-sim/debug` for simulator Debug and
+  `mobile/rust/target/aarch64-apple-ios/release` for device Release. Scripts do
+  not alter native linker settings or generate a missing lockfile.
+- Commit the current pnpm lockfile and `ios/App/CapApp-SPM/Package.swift` together
+  when dependency changes require it. The package currently pins upstream
+  Capacitor 8.5.3 and has a Filesystem dependency into the local pnpm layout.
+  This exact installed layout is required; the scripts do not rewrite Package.swift.
+- macOS with full Xcode 26+, accepted local Xcode license/first-launch setup,
+  Node 26, pnpm 12.14.0, Rust/rustup, Python 3 and available Apple SDKs. CI uses
+  the hosted `macos-15` image and explicitly selects Xcode 26.3; its default
+  Xcode may be older. A missing pinned Xcode fails rather than silently falling back.
+- Before upload: Apple owner confirms the exact `app.zorid.notes` app/bundle,
+  team, valid App Store distribution profile, matching Apple Distribution
+  certificate **with private key** in P12, and an upload-authorized ASC API key.
+  A macOS Developer ID certificate is insufficient. Team/profile values are not
+  hardcoded in source.
+
+## Local builds
+
+Run from any directory, using an absolute script path if outside the repo.
+Install dependencies from the repo root once; no speculative tool installs or
+Electron runtime install is needed:
+
+```sh
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile
+rustup target add aarch64-apple-ios-sim
+DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer \
+  IOS_BUILD_NUMBER=1 IOS_OUTPUT_DIR="$HOME/Library/Caches/zorid-ios-sim-1" \
+  bash mobile/scripts/ios-build.sh simulator
+```
+
+This compiles, but does not boot/install a simulator. The unsigned app is at
+`$IOS_OUTPUT_DIR/DerivedData/Build/Products/Debug-iphonesimulator/App.app`.
+It is an arm64 simulator app, not an IPA or physical-device app.
+
+The script runs `pnpm exec webpack --mode production --env target=desktop`,
+which uses the existing web bundle path without the unnecessary WASM build and
+has no Electron runtime dependency. `pnpm exec cap copy ios` copies `dist` into
+`ios/App/App/public` and refreshes runtime config/assets. It deliberately does
+not run `cap sync`, `update` or `add`, which can rewrite native project/package
+source. Run on a clean disposable build checkout; runtime copies can dirty
+tracked generated files. Preserve native source changes and review any unexpected
+diff; do not use a blanket reset/clean to hide them.
+
+Rust builds use `--locked --manifest-path mobile/rust/Cargo.toml -j1` with official
+`aarch64-apple-ios-sim` Debug or `aarch64-apple-ios --release` targets.
+`CARGO_TARGET_DIR` is fixed to `mobile/rust/target` to match the project.
+`IOS_CC`, `IOS_CXX`, and `IOS_AR` optionally specify compiler/tool **paths**, not
+shell command strings; defaults come from the selected Xcode SDK. `DEVELOPER_DIR`
+selects Xcode without changing global xcode-select state. No nightly/build-std,
+WASM target, cross compiler package, CocoaPods or fastlane install is performed.
+
+## Signed device export and explicit upload
+
+Use a fresh external output directory for every archive. All environment values
+below are local inputs populated by the Apple owner, never pasted into a logged
+command, source, issue or chat. Load the P12 password from its protected file
+without shell tracing. A password file must contain exactly the password bytes
+(no trailing newline). Do not export signed artifacts or credentials into Git.
+
+```sh
+rustup target add aarch64-apple-ios
+export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+export IOS_BUILD_NUMBER=2
+export IOS_OUTPUT_DIR="$HOME/Library/Caches/zorid-ios-device-2"
+# Set IOS_TEAM_ID and the three path inputs using the Apple owner's secure local files.
+# IOS_DISTRIBUTION_P12_PATH=/absolute/path/to/distribution.p12
+# IOS_PROVISION_PROFILE_PATH=/absolute/path/to/app-store.mobileprovision
+# IOS_DISTRIBUTION_P12_PASSWORD_PATH=/absolute/path/to/password-file
+export IOS_DISTRIBUTION_P12_PATH IOS_PROVISION_PROFILE_PATH IOS_TEAM_ID
+export IOS_DISTRIBUTION_P12_PASSWORD="$(cat "$IOS_DISTRIBUTION_P12_PASSWORD_PATH")"
+bash mobile/scripts/ios-release.sh export
+unset IOS_DISTRIBUTION_P12_PASSWORD
+```
+
+`export` stops after archive/export and creates exactly one IPA in
+`$IOS_OUTPUT_DIR/ipa`. It requires no ASC key. To upload instead, use a fresh output
+directory/build number, set `ASC_API_KEY_ID`, `ASC_API_ISSUER_ID`, and
+`ASC_API_PRIVATE_KEY_PATH` (the Apple owner's `AuthKey_<id>.p8`), then run:
+
+```sh
+bash mobile/scripts/ios-release.sh upload
+```
+
+The release wrapper validates a nonexpired exact-bundle App Store profile,
+selects the imported valid identity whose certificate appears in that profile,
+creates a random-password temporary keychain, preserves the user keychain search
+list, and installs profiles in both supported Xcode profile directories. Identical
+preexisting profiles stay untouched. New profiles, temporary keys and keychain
+are removed on ordinary exit/error/INT/TERM, and the search list is restored.
+Do not run concurrent local signing sessions: the search list is user-global.
+A forced kill/power loss can bypass traps; inspect leftover `zorid-ios-signing.*`
+temporary directories and remove only their recorded profiles/keychain before
+another signing run. Do not change the user's default keychain. CI uses disposable
+GitHub-hosted VMs, not persistent self-hosted runners.
+
+Archive uses `ios/App/App.xcodeproj`, scheme `App`, Release, generic iOS destination,
+arm64, explicit team/profile/identity, version **0.1.0**, and supplied build number.
+Export uses manual `app-store-connect` signing with build-number management off.
+Upload uses Xcode's documented `altool --upload-app --apiKey --apiIssuer`, with
+`API_PRIVATE_KEYS_DIR` scoped to a disposable key directory; no Apple ID password
+or generated JWT is printed. Apple now documents `--upload-app` as deprecated in
+favor of `--upload-package`; this established interface is retained for the
+requested API-key contract and requires verification on the selected Xcode.
+A future switch needs numeric ASC app ID metadata and a verified upload.
+
+## GitHub manual workflow and secret contract
+
+Only `workflow_dispatch` on `main` runs. There are no PR, tag, push or automatic
+deploy triggers. One serialized macOS job uses bounded Rust/Xcode parallelism.
+`build-only` is the default and uses no signing/ASC secrets; it preserves a
+seven-day `ios-simulator.tar.gz` artifact. Extract with `tar -xzf` to retain app
+permissions and symlinks before a separate native verification pass.
+`upload` explicitly archives, exports and uploads; it does not save signed IPA or
+archive as GitHub artifacts, release the App Store app, invite testers or assign
+TestFlight groups.
+
+Create/configure environment `ios-testflight` with deployment branches restricted
+to `main` before first upload; use repository environment protections as desired.
+`ios-build` is the credential-free build environment. Configure signing secrets
+only in `ios-testflight`, never in a PR-accessible environment or root YAML.
+No credential is passed as a workflow_dispatch input. Dependency installation
+happens before the signing step receives secrets, and raw secrets are removed
+from the environment before invoking build children.
+
+Exact names agreed with the Apple worker:
+
+| Environment secret | Content |
+| --- | --- |
+| `IOS_DISTRIBUTION_P12_BASE64` | Single-line base64 of iOS distribution P12, including private key |
+| `IOS_DISTRIBUTION_P12_PASSWORD` | Exact P12 password (may be empty only for an unprotected P12) |
+| `IOS_PROVISION_PROFILE_BASE64` | Single-line base64 of matching App Store distribution profile |
+| `IOS_TEAM_ID` | Team identifier confirmed by Apple owner |
+| `ASC_API_KEY_ID` | ASC upload API key identifier |
+| `ASC_API_ISSUER_ID` | ASC API issuer UUID |
+| `ASC_API_PRIVATE_KEY_BASE64` | Single-line base64 of the corresponding P8 private key |
+
+After Apple owner confirms readiness, delivery owner can run
+`python3 mobile/scripts/ios-set-secrets.py` with `gh` authenticated to
+`zorid-app/Zorid`, required local path variables from the example above, and
+`IOS_TEAM_ID`. The helper reads ASC metadata from
+`~/certificates/apple/team/app-store-connect-api/metadata.txt` (override
+`ASC_METADATA_PATH`) and its sibling `AuthKey_<id>.p8`. It sends all seven values
+directly to `gh secret set --repo zorid-app/Zorid --env ios-testflight` through
+stdin and suppresses subprocess output. It does not create the environment or
+Apple resources, modify existing macOS `APPLE_API_*` secrets, or print keys,
+passwords, JWTs or base64. A partial remote write failure requires rerunning the
+complete contract; do not inspect secret values to diagnose it.
+
+After coordinator integration/push, dispatch from Actions or:
+
+```sh
+gh workflow run mobile-ios.yml --repo zorid-app/Zorid --ref main -f operation=build-only -f build_number=3
+# Explicit upload, only once app/signing readiness and build evidence are established:
+gh workflow run mobile-ios.yml --repo zorid-app/Zorid --ref main -f operation=upload -f build_number=4
+```
+
+Build numbers must be unused and increasing for version 0.1.0 across local and CI
+uploads. Contract accepts integers `1..9999`, within Apple's first-component limit.
+An omitted dispatch number uses `github.run_number`; check ASC first if local
+uploads or another workflow may have advanced the sequence. Rerunning a successful
+upload with the same build number is invalid; dispatch a fresh number. Beyond
+9999, deliberately revise version/build-number strategy before uploading.
+
+## Verification boundary and official references
+
+Delivery source/syntax review does not prove the current native crate compiles,
+Swift linkage works, device signing succeeds, privacy/icons/export compliance
+are accepted, or the mobile app functions. Record first simulator compile,
+archive/export, successful upload response, processed ASC build, group assignment
+and actual TestFlight installation as separate evidence. altool success alone is
+not proof a build is processed or available to testers. API upload can succeed
+while Apple still requires export-compliance or other account/app actions.
+Heavy verification remains with the native owner and must be serialized.
+
+Current official guidance checked 2026-10-17:
+
+- [GitHub: Apple certificates on hosted macOS runners](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications)
+  supports importing secrets into an ephemeral keychain and cleaning profiles;
+  hosted VMs are destroyed after jobs.
+- [Apple: upload builds](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/)
+  lists current iOS Xcode requirements and distinguishes delivery from processing.
+- [Apple: altool options](https://help.apple.com/asc/appsaltool/en.lproj/static.html)
+  documents API-key authentication, private-key search directory and upload interfaces.
+- [GitHub runner image inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)
+  lists Xcode 26.3 alongside the older default; images can change.
+- [Capacitor 8: copy command](https://capacitorjs.com/docs/cli/commands/copy)
+  documents copying web assets and runtime configuration.
+- [GitHub artifact permission behavior](https://github.com/actions/upload-artifact#permission-loss)
+  explains why the simulator bundle is tarred before artifact storage.
