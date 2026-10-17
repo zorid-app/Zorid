@@ -45,9 +45,11 @@ jobs:
         include:
           - arch: arm64
             runner: macos-15
+            rust-target: aarch64-apple-darwin
             app: release/mac-arm64/Zorid.app
           - arch: x64
             runner: macos-15-intel
+            rust-target: x86_64-apple-darwin
             app: release/mac/Zorid.app
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -74,6 +76,16 @@ jobs:
         run: |
           node --test --test-concurrency=2 tests/*.test.*
           pnpm run build
+      - name: Build matching native Rust desktop host
+        env:
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          case "$(uname -m):$RELEASE_ARCH" in
+            arm64:arm64|x86_64:x64) ;;
+            *) echo "Runner architecture does not match the requested release" >&2; exit 1 ;;
+          esac
+          rustup target add "$RUST_TARGET"
+          cargo build --locked --release --target "$RUST_TARGET" -p zorid-desktop-host -j1
       - name: Import release signing credentials
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}

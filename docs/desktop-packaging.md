@@ -6,15 +6,67 @@ The supported release artifacts are `Zorid-${version}-arm64.dmg` and `Zorid-${ve
 
 ## Build inputs and licenses
 
-Run `pnpm install --frozen-lockfile`, then `pnpm run desktop:install --arm64` (or `--x64`) and `pnpm run build` before packaging. The explicit installer verifies the pinned macOS executable architecture and runtime notices; packaging and staging do not download a missing runtime. Use a separate dependency installation per architecture. `pnpm run package:stage` creates a fresh `.release/app` from six explicitly named desktop modules, all compiled `dist` runtime files except source maps, the current project `LICENSE`, and a minimal generated application `package.json`. It does not copy root `node_modules`, source trees, tests, vaults, recovered reference artifacts, credentials or repository metadata. Dependencies used by the renderer are already bundled or emitted by webpack. The staging script rejects symlinks and hidden/cache directories in compiled input. Future additional desktop modules must be added deliberately to its allowlist.
+Run `pnpm install --frozen-lockfile`, then `pnpm run desktop:install --arm64` (or `--x64`) and `pnpm run build` before packaging. The explicit installer verifies the pinned macOS executable architecture and runtime notices; packaging and staging do not download a missing runtime. Use a separate dependency installation per architecture. `pnpm run package:stage` creates a fresh `.release/app` from the explicit desktop runtime allowlist (including Rust bridge, admission, durable-write and host-discovery modules), all compiled `dist` runtime files except source maps, the current project `LICENSE`, and a minimal generated application `package.json`. It does not copy root `node_modules`, source trees, tests, vaults, recovered reference artifacts, credentials or repository metadata. Dependencies used by the renderer are already bundled or emitted by webpack. The staging script rejects symlinks and hidden/cache directories in compiled input. Future additional desktop modules must be added deliberately to its allowlist.
 
 The license field is AGPL-3.0-only. Staging copies the current license text rather than embedding an old copy in a script. Third-party packages retain their own terms. Existing webpack-extracted `*.LICENSE.txt` and all emitted MathJax, PDF.js, Prism, font and wasm notices remain intact. A conservative aggregate of regular production dependencies and installed peers is included as `THIRD_PARTY_NOTICES.txt`; optional native modules are not shipped. MathJax font packages that omit a standalone license use the installed MathJax Apache-2.0 license text, with each package's name, version and upstream repository retained. Electron's license and Chromium notices are separately included under `licenses/electron/`, since the packager removes the downloaded distribution's top-level copies. This is an inventory of distributed notices, not a legal opinion on license compatibility.
 
 The corresponding source for the same version tag must accompany release binaries. The release workflow owns publication and source archives; packaging never publishes by itself.
 
-`.release/inputs.json` records every staged application path and SHA-256 hash. The after-pack hook checks the ASAR's exact file inventory and byte contents, including renderer assets and notices. Package metadata is checked semantically because electron-builder rewrites its formatting. `pnpm run package:verify <path/to/Zorid.app>` repeats this check against a mounted DMG app or an unpacked bundle. This checks included application resources, not Apple signing/notarization or native rendering behavior.
+`.release/inputs.json` records every staged application path and SHA-256 hash. The after-pack hook checks the ASAR's exact file inventory and byte contents, including renderer assets and notices. Package metadata is checked semantically because electron-builder rewrites its formatting. `pnpm run package:verify <path/to/Zorid.app>` repeats this check against a mounted DMG app or an unpacked bundle. This checks included application resources and, when a signed native record exists, that host’s code signature; full app signing/notarization and native rendering remain separate checks.
 
 Electron Builder's separate dependency collector can fall back from the minimal staged app to the repository's production dependencies. The packaging configuration explicitly excludes all `node_modules` paths from that collector. A regression test exercises the pinned collector against an original fixture containing a native dependency; the unfiltered control collects it and the release configuration collects no dependency files. The exact ASAR verifier remains mandatory and rejects any unexpected files.
+
+## Rust desktop host
+
+Build the native host before staging, using the architecture matching the Electron
+package. On arm64 use `rustup target add aarch64-apple-darwin` and
+`cargo build --locked --release --target aarch64-apple-darwin -p zorid-desktop-host -j1`;
+on Intel use `x86_64-apple-darwin`. CI uses a matching runner and refuses an
+architecture mismatch before building; this does not claim cross-compilation works.
+The staging default is `target/<target>/release/zorid-desktop-host`. An absolute
+`ZORID_DESKTOP_HOST_BIN` can select an already-built host for a local package.
+Staging never builds or downloads it, and rejects missing, symlinked,
+non-executable, non-Mach-O or wrong-architecture inputs.
+
+The executable is staged separately under `.release/native`, then copied to
+`Zorid.app/Contents/Resources/native/zorid-desktop-host` outside ASAR. Runtime
+lookup uses that installed resource path and requires no fixture configuration.
+The input manifest records its architecture, source byte length and SHA-256.
+After-pack verification checks exact native inventory, executable permission,
+architecture and source bytes along with ASAR contents. Unsigned package
+verification continues to require those exact source bytes.
+
+For signed packages, the native host is explicitly included in code signing.
+The after-sign hook verifies its strict code signature, expected Developer ID
+identity, timestamp and hardened runtime before recording a separate signed
+length/hash in the external input manifest. It preserves and rechecks the source
+hash against the staged executable. Final package verification checks those
+signed bytes and the same identity again. This accounts for codesign changing
+Mach-O signature data while retaining separately verified build and signed
+artifacts. The build/signing process and its local files are trusted: the exact
+source-byte gate runs immediately before builder signing, and the after-sign
+gate authenticates the resulting executable. This does not defend against a
+compromised signing host replacing the program with different code signed by
+the same expected Developer ID between those hooks.
+
+The updated staging and archive fixtures pass locally, including missing host,
+wrong architecture, non-executable input, native tampering and complete runtime
+module coverage. Node 26 focused packaging/release checks pass 23/23, including
+a mocked codesign check of source-hash retention, separate signed hashes,
+identity/timestamp/hardened-runtime rejection and final-byte tampering. These
+mocked checks do not establish actual Developer ID signing. A real package,
+Developer ID signing/notarization and launch of this Rust-default app remain
+separate verification gates; the earlier packaging
+results below predate these changes.
+
+Native Cargo dependency license and copyright notices are not yet generated or
+included. The current notice collector covers npm and Electron only; the Rust
+host statically includes a separate dependency graph. Before any distribution,
+generate a pinned inventory and applicable license/copyright texts from the
+host's Cargo dependency graph, preserve them in staging, and verify them through
+the exact ASAR input manifest. Local development packaging or launch proof does
+not establish a redistributable release. No release or tag is created by this
+implementation work.
 
 ## Signing and notarization
 

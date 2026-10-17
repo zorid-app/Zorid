@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { createRequire } from 'node:module';
-import { stageDesktop, desktopFiles, requiredRendererFiles, requiredRendererDirectories } from '../scripts/stage-desktop.mjs';
+import childProcess, { spawnSync } from 'node:child_process';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { stageDesktop, desktopFiles, requiredRendererFiles, requiredRendererDirectories, nativeTarget } from '../scripts/stage-desktop.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'zorid-package-test-'));
@@ -27,13 +27,25 @@ async function fixture(t) {
   await write('node_modules/electron/dist/Electron.app/Contents/MacOS/Electron', executable);
   await write('node_modules/electron/dist/LICENSE', 'Electron fixture license');
   await write('node_modules/electron/dist/LICENSES.chromium.html', 'Chromium fixture notices');
-  return { root, write, metadata };
+  const hostRelative = `target/${nativeTarget(process.arch)}/release/zorid-desktop-host`;
+  const host = Buffer.alloc(64); host.writeUInt32LE(0xfeedfacf, 0);
+  host.writeUInt32LE(process.arch === 'arm64' ? 0x0100000c : 0x01000007, 4);
+  host.writeUInt32LE(2, 12); // MH_EXECUTE, never a script or shared library.
+  await write(hostRelative, host); await fs.chmod(path.join(root, hostRelative), 0o755);
+  return { root, write, metadata, hostRelative, host };
 }
 
 test('desktop staging includes runtime assets/notices and excludes source, maps, vaults and dependencies', async t => {
   const f = await fixture(t), result = await stageDesktop(f.root);
   const inputs = JSON.parse(await fs.readFile(result.inputManifest));
   assert.ok(inputs.files['desktop/menu-hotkeys.cjs']);
+  for (const module of ['editor-core', 'host-location', 'client-slots', 'rust-vault-service', 'durable-checkpoints', 'durable-writes']) assert.ok(inputs.files[`desktop/${module}.cjs`]);
+  assert.equal(inputs.native.architecture, process.arch);
+  assert.equal(inputs.native.resource, 'native/zorid-desktop-host');
+  assert.equal(inputs.native.signed, undefined);
+  assert.deepEqual(await fs.readFile(path.join(f.root, '.release/native/zorid-desktop-host')), f.host);
+  assert.ok((await fs.stat(path.join(f.root, '.release/native/zorid-desktop-host'))).mode & 0o111);
+  assert.ok(!inputs.files['native/zorid-desktop-host'], 'native executable lives outside ASAR');
   assert.ok(inputs.files['dist/main.123abc.js.LICENSE.txt']);
   assert.ok(inputs.files['dist/lib/pdfjs/build/pdf.worker.mjs']);
   assert.ok(inputs.files['licenses/electron/LICENSES.chromium.html']);
@@ -99,6 +111,7 @@ test('ASAR verifier checks exact inventory and content, not just file existence'
   const { createPackage, uncacheAll } = await import('@electron/asar');
   const { verifyDesktopArchive } = await import('../scripts/verify-desktop-package.mjs');
   const f = await fixture(t), staged = await stageDesktop(f.root), archive = path.join(f.root, 'app.asar');
+  await fs.cp(path.join(f.root, '.release/native'), path.join(f.root, 'native'), { recursive: true });
   await createPackage(staged.appDirectory, archive);
   assert.equal((await verifyDesktopArchive(archive, staged.inputManifest)).fileCount, staged.fileCount);
   const packagePath = path.join(staged.appDirectory, 'package.json'), originalPackage = await fs.readFile(packagePath, 'utf8');
@@ -145,6 +158,8 @@ test('builder dependency collector excludes project dependencies after staged ap
   });
   assert.equal(configResult.status, 0, configResult.stderr);
   const config = JSON.parse(configResult.stdout);
+  assert.deepEqual(config.extraResources, [{ from: '.release/native', to: 'native', filter: ['zorid-desktop-host'] }]);
+  assert.deepEqual(config.mac.binaries, ['Contents/Resources/native/zorid-desktop-host']);
   const staged = await stageDesktop(f.root);
   const destination = path.join(f.root, 'output');
   const packager = { config, appInfo: { type: 'commonjs' }, getWorkspaceRoot: async () => f.root };
@@ -161,4 +176,111 @@ test('builder dependency collector excludes project dependencies after staged ap
   const runtimeFilter = new FileMatcher(staged.appDirectory, destination, value => value, config.files).createFilter();
   const runtimeFile = path.join(staged.appDirectory, 'desktop/main.cjs');
   assert.equal(runtimeFilter(runtimeFile, await fs.stat(runtimeFile)), true);
+});
+
+
+test('native host input fails closed on missing, wrong-architecture, script, symlink or non-executable files', async t => {
+  const f = await fixture(t), filename = path.join(f.root, f.hostRelative);
+  await fs.rm(filename);
+  await assert.rejects(stageDesktop(f.root), { code: 'ENOENT' });
+  const wrong = Buffer.from(f.host); wrong.writeUInt32LE(process.arch === 'arm64' ? 0x01000007 : 0x0100000c, 4);
+  await f.write(f.hostRelative, wrong); await fs.chmod(filename, 0o755);
+  await assert.rejects(stageDesktop(f.root), /architecture does not match/);
+  await f.write(f.hostRelative, Buffer.alloc(64));
+  await assert.rejects(stageDesktop(f.root), /Mach-O executable/);
+  await f.write(f.hostRelative, f.host); await fs.chmod(filename, 0o644);
+  await assert.rejects(stageDesktop(f.root), /regular executable/);
+  await fs.rm(filename); await fs.symlink(path.join(f.root, 'vault/private.md'), filename);
+  await assert.rejects(stageDesktop(f.root), /regular executable/);
+  await assert.rejects(stageDesktop(f.root, { architecture: 'universal' }), /Only arm64 and x64/);
+});
+
+test('native target selection supports explicit cross-architecture input and rejects a mismatched target', async t => {
+  const f = await fixture(t), alternate = process.arch === 'arm64' ? 'x64' : 'arm64';
+  const host = Buffer.from(f.host); host.writeUInt32LE(alternate === 'arm64' ? 0x0100000c : 0x01000007, 4);
+  const relative = `target/${nativeTarget(alternate)}/release/zorid-desktop-host`;
+  await f.write(relative, host); await fs.chmod(path.join(f.root, relative), 0o755);
+  const staged = await stageDesktop(f.root, { architecture: alternate });
+  assert.equal(JSON.parse(await fs.readFile(staged.inputManifest)).native.architecture, alternate);
+  await assert.rejects(stageDesktop(f.root, { architecture: alternate, nativeHost: path.join(f.root, f.hostRelative) }), /architecture does not match/);
+});
+
+test('packaged external host is required and verified independently of ASAR', async t => {
+  const { createPackage } = await import('@electron/asar');
+  const { verifyDesktopArchive } = await import('../scripts/verify-desktop-package.mjs');
+  const f = await fixture(t), staged = await stageDesktop(f.root), archive = path.join(f.root, 'app.asar');
+  await createPackage(staged.appDirectory, archive);
+  await assert.rejects(verifyDesktopArchive(archive, staged.inputManifest), { code: 'ENOENT' });
+  const directory = path.join(f.root, 'native'), host = path.join(directory, 'zorid-desktop-host');
+  await fs.cp(path.join(f.root, '.release/native'), directory, { recursive: true });
+  assert.equal((await verifyDesktopArchive(archive, staged.inputManifest)).nativeArchitecture, process.arch);
+  await assert.rejects(verifyDesktopArchive(archive, staged.inputManifest, { architecture: process.arch === 'arm64' ? 'x64' : 'arm64' }), /target architecture mismatch/);
+  const changed = Buffer.from(f.host); changed[63] ^= 1; await fs.writeFile(host, changed);
+  await assert.rejects(verifyDesktopArchive(archive, staged.inputManifest), /native host content mismatch/);
+  await fs.writeFile(host, f.host); await fs.chmod(host, 0o644);
+  await assert.rejects(verifyDesktopArchive(archive, staged.inputManifest), /regular executable/);
+  await fs.chmod(host, 0o755); await fs.writeFile(path.join(directory, 'unexpected'), 'not allowed');
+  await assert.rejects(verifyDesktopArchive(archive, staged.inputManifest), /resource inventory/);
+});
+
+test('runtime allowlist covers each desktop CommonJS module and its local dependencies', async () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  for (const name of await fs.readdir(path.join(root, 'desktop'))) {
+    if (!name.endsWith('.cjs')) continue;
+    assert.ok(desktopFiles.includes(`desktop/${name}`), `unstaged runtime module ${name}`);
+    const source = await fs.readFile(path.join(root, 'desktop', name), 'utf8');
+    for (const [, dependency] of source.matchAll(/require\(['"](\.\/[^'"]+)['"]\)/g)) {
+      assert.ok(desktopFiles.includes(path.posix.join('desktop', dependency)), `unstaged dependency ${dependency} from ${name}`);
+    }
+  }
+});
+
+
+test('signed native host preserves source provenance and requires verified final bytes', async t => {
+  const { createPackage } = await import('@electron/asar');
+  const { recordSignedNativeHost, verifyDesktopArchive } = await import('../scripts/verify-desktop-package.mjs');
+  const f = await fixture(t), staged = await stageDesktop(f.root), archive = path.join(f.root, 'app.asar');
+  await createPackage(staged.appDirectory, archive);
+  await fs.cp(path.join(f.root, '.release/native'), path.join(f.root, 'native'), { recursive: true });
+  const filename = path.join(f.root, 'native/zorid-desktop-host');
+  const source = JSON.parse(await fs.readFile(staged.inputManifest)).native;
+  const identity = 'Developer ID Application: Zorid Fixture (ABCDEFGHIJ)';
+  const signature = `Authority=${identity}\nTimestamp=Oct 17, 2026\nCodeDirectory flags=0x10000(runtime)\n`;
+  let details = signature, verifyStatus = 0, calls = 0;
+  t.mock.method(childProcess, 'spawnSync', (command, args) => {
+    assert.equal(command, '/usr/bin/codesign'); assert.equal(args.at(-1), filename); calls++;
+    return { status: args[0] === '--verify' ? verifyStatus : 0, stderr: details };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  await verifyDesktopArchive(archive, staged.inputManifest, { sourceOnly: true });
+  assert.equal(calls, 0, 'afterPack checks exact unsigned source bytes');
+  const signedBytes = Buffer.concat([f.host, Buffer.from('fixture-signature')]);
+  await fs.writeFile(filename, signedBytes);
+  await assert.rejects(verifyDesktopArchive(archive, staged.inputManifest, { sourceOnly: true }), /content mismatch/);
+  for (const invalid of [signature.replace(identity, 'other'), signature.replace('Timestamp=', 'Date='), signature.replace('runtime', 'none'), `${signature}Signature=adhoc\n`]) {
+    details = invalid;
+    await assert.rejects(recordSignedNativeHost(archive, staged.inputManifest, identity, process.arch));
+    assert.deepEqual(JSON.parse(await fs.readFile(staged.inputManifest)).native, source, 'failed validation leaves provenance unchanged');
+  }
+  details = signature; verifyStatus = 1;
+  await assert.rejects(recordSignedNativeHost(archive, staged.inputManifest, identity, process.arch), /signature verification failed/);
+  verifyStatus = 0;
+  const stagedHost = path.join(f.root, '.release/native/zorid-desktop-host');
+  await fs.writeFile(stagedHost, signedBytes);
+  await assert.rejects(recordSignedNativeHost(archive, staged.inputManifest, identity, process.arch), /staging input changed/);
+  await fs.writeFile(stagedHost, f.host);
+  await recordSignedNativeHost(archive, staged.inputManifest, identity, process.arch);
+  const recorded = JSON.parse(await fs.readFile(staged.inputManifest)).native;
+  assert.deepEqual({ ...recorded, signed: undefined }, { ...source, signed: undefined });
+  assert.equal(recorded.signed.identity, identity);
+  assert.equal(recorded.signed.byteLength, signedBytes.length);
+  assert.notEqual(recorded.signed.sha256, source.sourceSha256);
+  await verifyDesktopArchive(archive, staged.inputManifest);
+  details = signature.replace(identity, 'other');
+  await assert.rejects(verifyDesktopArchive(archive, staged.inputManifest), /identity does not match/);
+  details = signature;
+  const tampered = Buffer.from(signedBytes); tampered[tampered.length - 1] ^= 1;
+  await fs.writeFile(filename, tampered);
+  await assert.rejects(verifyDesktopArchive(archive, staged.inputManifest), /content mismatch/);
 });

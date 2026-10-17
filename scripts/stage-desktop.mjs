@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,11 @@ import { desktopNotices } from './desktop-notices.mjs';
 export const desktopFiles = [
   'desktop/main.cjs', 'desktop/preload.cjs', 'desktop/vault-service.cjs',
   'desktop/vault-dispatch.cjs', 'desktop/window-broker.cjs', 'desktop/context-menu.cjs', 'desktop/menu-hotkeys.cjs',
+  'desktop/editor-core.cjs', 'desktop/host-location.cjs', 'desktop/client-slots.cjs', 'desktop/client-admission.cjs',
+  'desktop/core-vault-fixture-service.cjs', 'desktop/rust-vault-service.cjs',
+  'desktop/durable-writes.cjs', 'desktop/durable-checkpoints.cjs', 'desktop/text-create.cjs',
+  'desktop/family-sync-protocol.cjs', 'desktop/family-fixture.cjs', 'desktop/family-fixture-preload.cjs',
+  'desktop/family-fixture-renderer.js', 'desktop/family-fixture.html', 'desktop/family-fixture.css',
 ];
 export const requiredRendererFiles = [
   'dist/index.html', 'dist/lib/mathjax/LICENSE', 'dist/lib/mathjax/tex-chtml-nofont.js',
@@ -25,6 +31,33 @@ export const requiredRendererDirectories = [
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const sha256 = data => createHash('sha256').update(data).digest('hex');
 const vendorAssetExtensions = new Set(['.js', '.mjs', '.mts', '.json', '.css', '.woff', '.woff2', '.ttf', '.pfb', '.bcmap', '.wasm', '.icc', '.svg', '.gif', '.png']);
+
+export const nativeResource = 'native/zorid-desktop-host';
+export function nativeTarget(architecture) {
+  const target = { arm64: 'aarch64-apple-darwin', x64: 'x86_64-apple-darwin' }[architecture];
+  if (!target) throw new Error('Only arm64 and x64 macOS native hosts are supported');
+  return target;
+}
+
+/** Inspect without running a build input; a script or dylib is not a host. */
+export async function readNativeHost(filename, architecture) {
+  nativeTarget(architecture);
+  const stat = await fs.lstat(filename);
+  if (!stat.isFile() || stat.isSymbolicLink() || !(stat.mode & 0o111)) throw new Error('Native host must be a regular executable file');
+  const file = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const actual = await file.stat();
+    if (!actual.isFile() || !(actual.mode & 0o111) || actual.dev !== stat.dev || actual.ino !== stat.ino || actual.size < 32 || actual.size > 512 * 1024 * 1024) throw new Error('Invalid native host file size');
+    const header = Buffer.alloc(32);
+    if ((await file.read(header, 0, header.length, 0)).bytesRead !== 32 || header.readUInt32LE(0) !== 0xfeedfacf || header.readUInt32LE(12) !== 2) throw new Error('Expected a thin macOS native host Mach-O executable');
+    const cpu = header.readUInt32LE(4);
+    const actualArchitecture = cpu === 0x0100000c ? 'arm64' : cpu === 0x01000007 ? 'x64' : null;
+    if (actualArchitecture !== architecture) throw new Error(`Native host architecture does not match ${architecture}`);
+    const data = await file.readFile();
+    if (data.length !== actual.size) throw new Error('Native host changed while reading');
+    return data;
+  } finally { await file.close(); }
+}
 
 function allowedRendererFile(relative) {
   if (relative === 'dist/index.html' || /^dist\/(?:main|\d+)\.[\da-f]+\.js(?:\.LICENSE\.txt)?$/.test(relative)) return true;
@@ -46,7 +79,12 @@ async function collectFiles(root, relative) {
   return result;
 }
 
-export async function stageDesktop(root = projectRoot) {
+export async function stageDesktop(root = projectRoot, options = {}) {
+  const architecture = options.architecture ?? process.arch;
+  const target = nativeTarget(architecture);
+  const hostPath = options.nativeHost ?? process.env.ZORID_DESKTOP_HOST_BIN ?? path.join(root, 'target', target, 'release/zorid-desktop-host');
+  if (!path.isAbsolute(hostPath)) throw new Error('Native host input path must be absolute');
+  const nativeBytes = await readNativeHost(hostPath, architecture);
   const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
   const desktopDirectory = await fs.lstat(path.join(root, 'desktop'));
   if (!desktopDirectory.isDirectory() || desktopDirectory.isSymbolicLink()) throw new Error('Desktop source directory must be a real directory');
@@ -75,7 +113,17 @@ export async function stageDesktop(root = projectRoot) {
   const appDirectory = path.join(staging, 'app');
   await fs.rm(appDirectory, { recursive: true, force: true });
   await fs.mkdir(appDirectory);
-  const inputs = { version: pkg.version, files: {} };
+  // Keep the executable outside ASAR so the installed app can spawn it directly.
+  const nativeDirectory = path.join(staging, 'native');
+  try { if ((await fs.lstat(nativeDirectory)).isSymbolicLink()) throw new Error('Native staging directory must not be a symlink'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await fs.rm(nativeDirectory, { recursive: true, force: true });
+  await fs.mkdir(nativeDirectory);
+  await fs.writeFile(path.join(nativeDirectory, 'zorid-desktop-host'), nativeBytes, { mode: 0o755, flag: 'wx' });
+  const inputs = { version: pkg.version, files: {}, native: {
+    platform: 'darwin', architecture, resource: nativeResource,
+    sourceSha256: sha256(nativeBytes), sourceByteLength: nativeBytes.length,
+  } };
   for (const relative of files) {
     const data = await fs.readFile(path.join(root, relative));
     await fs.mkdir(path.dirname(path.join(appDirectory, relative)), { recursive: true });

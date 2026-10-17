@@ -23,7 +23,7 @@ try {
   const architecture = args.find(argument => ['--arm64', '--x64'].includes(argument)) ?? `--${process.arch}`;
   if (!['--arm64', '--x64'].includes(architecture)) throw new Error('Only arm64 and x64 macOS releases are supported');
   await verifyElectronRuntime(root, architecture.slice(2));
-  await stageDesktop(root);
+  await stageDesktop(root, { architecture: architecture.slice(2) });
   const result = spawnSync(process.execPath, [require.resolve('electron-builder/cli.js'), '--config', 'electron-builder.cjs', '--mac', '--publish', 'never', architecture, ...(args.includes('--dir') ? ['--dir'] : [])], { cwd: root, env: environment, stdio: 'inherit' });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;

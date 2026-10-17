@@ -17,12 +17,14 @@ module.exports = {
   // Renderer dependencies are already bundled; exclude that separate collector.
   files: ['**/*', '!**/node_modules/**'],
   asar: true,
+  extraResources: [{ from: '.release/native', to: 'native', filter: ['zorid-desktop-host'] }],
   npmRebuild: false,
   forceCodeSigning: !unsigned,
   artifactName: 'Zorid-${version}-${arch}.${ext}',
   publish: null,
   mac: {
     target: ['dmg'],
+    binaries: ['Contents/Resources/native/zorid-desktop-host'],
     category: 'public.app-category.productivity',
     minimumSystemVersion: '13.0',
     darkModeSupport: true,
@@ -41,11 +43,21 @@ module.exports = {
     window: { width: 540, height: 380 },
     contents: [{ x: 130, y: 190, type: 'file' }, { x: 410, y: 190, type: 'link', path: '/Applications' }],
   },
+  afterSign: async context => {
+    if (unsigned) return;
+    const { recordSignedNativeHost } = await import('./scripts/verify-desktop-package.mjs');
+    await recordSignedNativeHost(
+      path.join(context.appOutDir, 'Zorid.app/Contents/Resources/app.asar'),
+      path.join(__dirname, '.release/inputs.json'), identity,
+      ({ 1: 'x64', 3: 'arm64' }[context.arch] ?? 'unsupported'),
+    );
+  },
   afterPack: async context => {
     const { verifyDesktopArchive } = await import('./scripts/verify-desktop-package.mjs');
     await verifyDesktopArchive(
       path.join(context.appOutDir, 'Zorid.app/Contents/Resources/app.asar'),
       path.join(__dirname, '.release/inputs.json'),
+      { architecture: ({ 1: 'x64', 3: 'arm64' }[context.arch] ?? 'unsupported'), sourceOnly: true },
     );
   },
 };
