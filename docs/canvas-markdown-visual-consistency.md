@@ -42,21 +42,29 @@ markers at the active caret may legitimately change that line's width.
 ## Verification status and acceptance
 
 Independent source review identified the heading cascade, display-math class
-and multiline-inline edge cases; the candidate addresses them. Eight focused
-regressions are authored but have not run: the root coordinator must grant the
-serialized validation slot. No build, native app or browser pass was launched.
+and multiline-inline edge cases; source candidate `b1b4778` addresses them.
+With the root coordinator's exclusive scoped slot, the following checks passed
+on 2026-10-17 in this worktree using the existing root dependencies:
 
-Acceptance after the slot is available:
+- `node --test --test-concurrency=1 tests/canvas-markdown-layout.test.ts tests/canvas-markdown.test.ts tests/canvas-markdown-focus.test.ts tests/canvas-file-editor.test.ts`
+  passed all 46 tests, including eight new layout regressions (session 9150,
+  exit 0). The original estimate of 42 tests was low; no extra suite was run.
+- `node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json` passed
+  (session 7142, exit 0); `git diff --check` passed.
+- Source-only comparison with main `90e7b91` found no changes since the base in
+  the six owned paths or relevant renderer/editor/CSS dependencies.
 
-1. Run `tests/canvas-markdown-layout.test.ts` serially with existing
-   `canvas-markdown` and `canvas-markdown-focus` suites. Verify gaps, CRLF,
-   leading/trailing blank lines, soft/hard breaks, rich-content opt-out and
-   retained inline links. Run scoped TypeScript validation.
-2. In an actual rendered card use an H1 plus three paragraphs, including a long
+The tests verify DOM/source mapping, retained controls and editor lifecycle;
+they do not measure rendered geometry. No build, native app or browser pass was
+launched. The runtime slot was released after these checks.
+
+Pending rendered acceptance:
+
+1. In an actual rendered card use an H1 plus three paragraphs, including a long
    wrapping paragraph. At widths 240px and 480px and Canvas zoom .5, 1 and 2,
    toggle preview/Live while keeping the caret in the final paragraph. Compare
    the heading's font/weight/line-height and the preceding paragraph bounds.
-3. Repeat at text sizes 16px and 20px; verify the last line remains reachable,
+2. Repeat at text sizes 16px and 20px; verify the last line remains reachable,
    the caret maps to the clicked line, editing/undo preserve source, and a rich
    table/task/embed card retains its existing controls and scrolling.
 
