@@ -157,3 +157,14 @@ test('stored string labels resolve composite and typed-null groups without losin
     assert.equal(await handle.hide(result.groups[0].key!), true); assert.deepEqual(request?.order, []); handle.destroy();
   }
 });
+
+test('save acknowledgement preserves counts for configured string labels of typed groups', async () => {
+  const dom = new JSDOM('<main></main><button>Group</button>'), doc = dom.window.document;
+  const base = BaseDocument.parse('views:\n - type: kanban\n   name: Board\n   groupBy: {property: status, direction: ASC}\n   groupOrder: ["A, B", Other]\n');
+  let version = 1; const query = () => executeBaseQuery(base, { version, files: [{ path: 'Typed.md', properties: { status: ['A', 'B'] } }] });
+  const handle = createBaseKanbanColumns(doc.querySelector('main')!, { result: query(), async requestGroupOrder(request) { base.updateView(0, { groupOrder: request.order }); version++; handle.update(query()); } });
+  handle.open(doc.querySelector('button')!);
+  [...doc.querySelectorAll<HTMLElement>('.bases-columns-row')].find(row => row.querySelector('.bases-columns-name')!.textContent === 'Other')!.click(); await settle();
+  const list = [...doc.querySelectorAll('.bases-columns-row')].find(row => row.querySelector('.bases-columns-name')!.textContent === 'A, B')!;
+  assert.equal(list.querySelector('.bases-columns-count')!.textContent, '1'); handle.destroy();
+});

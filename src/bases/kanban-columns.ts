@@ -179,7 +179,7 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
       if (previousProperty !== propertyOf(next)) { close(); }
       else if (popover) {
         rowDrag = undefined;
-        if (keepRows) rows.forEach(row => { row.count = next.groupOptions.find(group => same(group.key, row.key))?.count ?? 0; });
+        if (keepRows) rows.forEach(row => { row.count = next.groupOptions.find(group => matchesBaseGroupKey(group.key, row.key))?.count ?? 0; });
         else readRows();
         draw();
       }
