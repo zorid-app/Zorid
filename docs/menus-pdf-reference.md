@@ -93,4 +93,12 @@ The original implementation connects `PdfSidebarOptions.onOutlineContextMenu` to
 
 Implementation validation deliberately rejects out-of-document pages and non-finite offset components. The source's named-destination path additionally tests for a reference object's numeric `num` field; the original resolver accepts the public engine's explicit integer page index as well. This is a bounded permissive difference for unusual named-destination outputs, not established malformed-input parity. URL-only outline entries produce no fabricated PDF section-link action. Absence of clipboard or the host's real link formatter omits the context handler capability.
 
-Focused tests cover real viewer/sidebar wiring to the transport seam, named/explicit destinations, offset truncation at null, title normalization, untitled/mobile entries, exact pointer coordinates, unchanged page/selection, stale/destroyed/retargeted targets, unavailable capabilities and competing menu resolution. Existing official PDF.js engine/outline/thumbnail tests remain green. These results establish original integration behavior; native menu appearance, touch long-press, keyboard context invocation and reference visual parity still require runtime verification. Worktree: `parity/pdf-outline-menu`, based on `9a2fd49`; the parent integration owner records the final reviewed commit and main integration separately.
+Focused tests cover real viewer/sidebar wiring to the transport seam, named/explicit destinations, offset truncation at null, title normalization, untitled/mobile entries, exact pointer coordinates, unchanged page/selection, stale/destroyed/retargeted targets, unavailable capabilities and competing menu resolution. Existing official PDF.js engine/outline/thumbnail tests remain green. These results establish original integration behavior; native menu appearance, touch long-press, keyboard context invocation and reference visual parity still require runtime verification. Worktree: `parity/pdf-outline-menu`, based on `9a2fd49`.
+
+Reviewed commit `f7b4850` was integrated on main as `c47952d`. All affected PDF
+paths were unchanged between its base and the preceding main checkpoint. Root
+then ran the PDF context-review, Workspace PDF-link, sidebar and viewer test files
+serially on main: 61/61 passed in 8.615 seconds. The exact feature delta passed
+the publication privacy scan. No production rebuild or native verification was
+performed during the cross-session heavy-job hold; the next built checkpoint
+must include this source before testing its native menu.
