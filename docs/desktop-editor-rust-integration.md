@@ -78,3 +78,19 @@ Combined source candidate: `tingkai-c/desktop-editor-combined`, based on main
 branches are retained. Async close handshake and Workspace callback complete the
 source integration; native compilation and actual Electron save/close/restart
 remain required before reporting this path usable.
+
+
+### Combined build evidence — 2026-10-17
+
+Candidate `67eb63b` in `desktop-editor-combined` passed:
+
+- `node node_modules/typescript/bin/tsc --noEmit`: session46590, exit0.
+- `node node_modules/webpack/bin/webpack.js --mode development`: session15318,
+  exit0, compiled successfully in 2061ms. Normal editor `dist/` generated;
+  no browser-WASM fixture selection needed for the desktop core bridge.
+
+Four changed desktop entry/bridge modules also passed `node --check`, and
+`git diff --check` passed. Dependencies used a temporary symlink to existing main node_modules; no install
+ran. The symlink was removed after building. Heavy slot released after webpack.
+No Electron window was launched and no native save/sync/restart was exercised by
+these checks. Root coordinates the matching host build and actual smoke next.
