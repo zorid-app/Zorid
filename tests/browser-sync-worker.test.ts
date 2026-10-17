@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {BrowserVaultError} from '../src/core/browser-vault.ts';
 import {BrowserSyncWorker} from '../src/platform/browser-sync-worker.ts';
 import type {BrowserSyncFixtureCredentials} from '../src/platform/browser-sync-worker.ts';
 const credentials=():BrowserSyncFixtureCredentials=>({endpoint:'http://127.0.0.1:1234',realmId:'realm',vaultId:'vault',serverEpoch:'epoch',keyEpoch:1,bearerToken:'secret',keyBytes:new Uint8Array(32).fill(1),allowLoopbackHttp:true,enrollEmpty:true});
@@ -34,9 +35,9 @@ function fixture(){
     async pull(cursorJson:string){assert.deepEqual(JSON.parse(cursorJson),{server_epoch:'epoch',after:'0'});events.push('http-pull');return new Uint8Array();},
     close(){events.push('http-close');},
   };
-  const host:any={storage,wasm,assertOwner(){if(!owner)throw new Error('owner lost');},async local(op:()=>Promise<unknown>){return op();},async changed(check:()=>void){check();changed++;}};
+  const host:any={storage,wasm,fatal(code:string){events.push('fatal:'+code);owner=false;},assertOwner(){if(!owner)throw new Error('owner lost');},async local(op:()=>Promise<unknown>){return op();},async changed(check:()=>void){check();changed++;}};
   const worker=new BrowserSyncWorker(host,()=>transport);
-  return{worker,events,received,wasm,host,pending,get freed(){return freed;},get changed(){return changed;},get cursor(){return cursor;},setHello(fn:typeof hello){hello=fn;},retire(){owner=false;}};
+  return{worker,events,received,wasm,host,storage,pending,get freed(){return freed;},get changed(){return changed;},get cursor(){return cursor;},setHello(fn:typeof hello){hello=fn;},retire(){owner=false;}};
 }
 test('sweep persists exact wire before upload, decodes raw ACK before acceptance, atomically receives cursor',async()=>{
   const f=fixture(),input=credentials();await f.worker.configure(input);
@@ -73,4 +74,25 @@ test('raw codec rejection never acknowledges an upload and does not expose secre
   const f=fixture();f.wasm.decodeSyncAccepted=()=>{throw new Error('secret-token and private payload');};
   await f.worker.configure(credentials());await assert.rejects(f.worker.once(),{code:'sync_protocol_rejected',message:'Browser sync session could not complete'});
   assert.ok(!f.events.includes('durable-ack'));assert.equal(f.pending.length,1);
+});
+
+test('fatal sync storage failures revoke keys and fence owner even without a local editor RPC',async()=>{
+  for(const operation of ['inspect','receive']) {
+    const f=fixture();await f.worker.configure(credentials());
+    f.storage[operation]=async()=>{throw new BrowserVaultError('storage_corrupt','private stored detail');};
+    await assert.rejects(f.worker.once(),{code:'storage_corrupt'});
+    assert.equal(f.freed,1);assert.equal(f.events.filter(e=>e==='http-close').length,1);
+    assert.ok(f.events.includes('fatal:storage_corrupt'));
+    await assert.rejects(f.worker.once(),{code:'sync_not_configured'});
+    assert.throws(()=>f.host.assertOwner());
+  }
+});
+
+test('raw discovery/page rejection cannot progress dependent upload or receive work',async()=>{
+  for(const method of ['decodeSyncHello','decodeSyncPage']) {
+    const f=fixture();f.wasm[method]=()=>{throw new Error('invalid raw response');};
+    await f.worker.configure(credentials());await assert.rejects(f.worker.once(),{code:'sync_protocol_rejected'});
+    assert.equal(f.cursor.after,'0');assert.equal(f.received.length,0);
+    if(method==='decodeSyncHello'){assert.ok(!f.events.includes('durable-seal'));assert.ok(!f.events.includes('http-upload'));}
+  }
 });

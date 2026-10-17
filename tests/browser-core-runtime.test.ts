@@ -181,3 +181,13 @@ test('sync RPCs obey admission and credential snapshots are bounded before dispa
     assert.equal(calls.length,2);
   });
 });
+
+test('fatal storage event from sync lane terminates runtime and rejects pending sync RPC',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    worker.block='sync-once';const entered=enteredRequest(worker,'sync-once');
+    const pending=assert.rejects(runtime.syncOnce(),{code:'storage_corrupt'});await entered;
+    worker.onmessage({data:{event:'storage-error',code:'storage_corrupt'}});await pending;
+    assert.equal(worker.terminated,true);assert.throws(()=>runtime.assertActive(),{code:'client_ownership_lost'});
+    await assert.rejects(runtime.prepare('later','{}'),{code:'storage_closed'});
+  });
+});

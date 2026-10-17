@@ -17,10 +17,16 @@ export interface BrowserSyncCodec {
   decodeSyncPage(expected:string,raw:Uint8Array):string;
   syncEnvelopeUpdateId(wire:Uint8Array):string;
 }
-export interface BrowserSyncSweep { uploaded:number; received:number; complete:boolean }
+export interface BrowserSyncSweep {
+  uploaded:number;received:number;
+  /** Fixed relay snapshot consumed and sampled outbox empty, NOT causal/materialization
+   * completeness, absence of missing chunks, or convergence with every peer. */
+  complete:boolean;
+}
 interface Host {
   storage:BrowserSync; wasm:BrowserSyncCodec;
   assertOwner():void;
+  fatal(code:string):void;
   /** Queues only local transactions, never the HTTP part of a sweep. */
   local<T>(operation:()=>Promise<T>):Promise<T>;
   changed(assertActive:()=>void):Promise<void>;
@@ -91,7 +97,10 @@ export class BrowserSyncWorker {
   }
   private sanitize(error:unknown):BrowserVaultError {
     if(error instanceof BrowserSyncTransportError)return failure(error.code);
-    if(error instanceof BrowserVaultError)return failure(error.code);
+    if(error instanceof BrowserVaultError){
+      if(['storage_closed','storage_corrupt','client_ownership_lost'].includes(error.code)){this.revoke();this.host.fatal(error.code);}
+      return failure(error.code);
+    }
     return failure('sync_protocol_rejected');
   }
   private async sweep(session:NonNullable<BrowserSyncWorker['session']>):Promise<BrowserSyncSweep> {

@@ -13,12 +13,18 @@ let sequence = '0', queue: Promise<unknown> = Promise.resolve();
 let recovery = new Set<string>();
 let lease: BrowserClientLease | undefined, released = false;
 let sync:BrowserSyncWorker|undefined;
+let storageFailed=false;
+function failStorage(code:string):void {
+  if(storageFailed||!['storage_closed','storage_corrupt','client_ownership_lost'].includes(code))return;
+  storageFailed=true;sync?.revoke();channel?.close();vault?.close();
+  try{port.postMessage({event:'storage-error',code});}catch{/* Worker transport already failed. */}
+}
 function local<T>(operation:()=>Promise<T>):Promise<T> {
   const result=queue.catch(()=>undefined).then(()=>{assertOwner();return operation();});
   queue=result.catch(()=>undefined);return result;
 }
 function assertOwner(): void {
-  if (released || !lease) throw new BrowserVaultError('client_ownership_lost', 'Worker no longer owns this consumer');
+  if (released || storageFailed || !lease) throw new BrowserVaultError('client_ownership_lost', 'Worker no longer owns this consumer');
   lease.assertActive();
 }
 async function refresh(assertSession?:()=>void): Promise<void> {
@@ -48,11 +54,10 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       // Open only reads the persisted authority. No intent replay/checkpoint access
       // occurs before this lifetime lease; no IDB transaction spans the wait.
       lease = await claimBrowserClient(self.navigator.locks, {vaultId:vault.authorityId,clientId}, error => {
-        sync?.revoke(); channel?.close(); vault?.close();
-        try { port.postMessage({event:'storage-error',code:error.code}); } catch { /* Worker transport already failed. */ }
+        failStorage(error.code);
       });
       assertOwner();
-      sync = new BrowserSyncWorker({storage:vault.sync,wasm:wasm as unknown as BrowserSyncCodec,assertOwner,local,
+      sync = new BrowserSyncWorker({storage:vault.sync,wasm:wasm as unknown as BrowserSyncCodec,assertOwner,local,fatal:failStorage,
         changed:async assertSession=>{assertSession();await refresh(assertSession);assertSession();channel?.postMessage({changed:true});}});
       channel = new BroadcastChannel(`zorid-core:${payload.database}`);
       let recoveredCommit = false;
@@ -125,6 +130,7 @@ port.onmessage = ({data}) => {
         port.postMessage({id,ok:true,result});
       } catch(error) {
         const code=error instanceof BrowserVaultError?error.code:'sync_failed';
+        failStorage(code);
         try {port.postMessage({id,ok:false,error:{code,message:'Browser sync operation failed'}});}catch{}
       } finally {
         if(operation==='sync-configure'&&payload){payload.bearerToken='';if(payload.keyBytes instanceof Uint8Array)payload.keyBytes.fill(0);}
@@ -138,12 +144,7 @@ port.onmessage = ({data}) => {
       const failure = error instanceof BrowserVaultError ? error : new BrowserVaultError('storage_failure', error instanceof Error ? error.message : String(error));
       try { port.postMessage({id, ok:false, error:{code:failure.code, message:failure.message, details:failure.details, source:failure.source}}); }
       catch { /* Lost response remains outcome_unknown; do not poison later dispatch. */ }
-      if (['storage_closed','storage_corrupt','client_ownership_lost'].includes(failure.code)) {
-        // For example, IDB versionchange can close the database while the worker
-        // is still alive. Revoke the runtime rather than retain an admitted scope.
-        sync?.revoke(); channel?.close(); vault?.close();
-        try { port.postMessage({event:'storage-error',code:failure.code}); } catch { /* Transport is already lost. */ }
-      }
+      failStorage(failure.code);
     }
   });
 };
