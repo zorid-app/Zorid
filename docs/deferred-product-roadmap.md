@@ -116,6 +116,29 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Current Vite checkpoint — candidate103428be (not main default yet):
+- Root isolated vite-renderer-migration composes independently reviewed native
+ 9c35d6d7/source829cd2c9 with Vite8.3.4. Final source/config and native-preservation
+  reviews pass; fulltsc0 and272 focused consumers pass,34 build/worker/CSP/assets/
+  packaging checks +2 dev MIME/Rust invalidation checks pass. Frozen install0.
+- Actual Electron file renderer startup/edit/math/code/save passes, raw146 bytes
+  confirmed, app37382 closed0. Actual production browser create/rename/save/reload
+  and dev create/save/reload pass; math and actual Prism tokens observed, no
+  observed errors/warnings. Both test tabs closed; servers stopped130. Unchanged
+  Stage4WASM accepted only after existing source/artifact fingerprint validation.
+- Real Vite native build91739 succeeded; staging then hit missing license texts
+  in new protobuf/Connect distributions, assigned scoped pinned-notice source fix
+  to vite-desktop-staging worker. Guard remains strict. Official pinned Electron
+  runtime installed/verified in isolated dependency tree. No release claim.
+- Native owner may merge103428be into reviewedcc13 focus/silent-refresh candidate
+  for ONE simulator7 +phone7 build after composed review/typecheck, under grant
+  msg177a2c088479. This supersedes baseline-only build instruction. Native owns
+  exclusive heavy slot; root source/notices work only, no compiler/app/server.
+  Search remains isolated until independent117 review fixes pass.
+- Root source902bd190 adds only acceptance docs and generic mobile:sync native
+  renderer command beyond frozen103; no renderer/native runtime change.
+
+
 Latest user sequence correction — 2026-10-17:
 - Complete the active Vite migration first, then build the Bases/tasks/calendar
   product milestone BEFORE Stage5. This supersedes the immediately preceding
