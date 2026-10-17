@@ -315,3 +315,33 @@ for(const state of ['password','error'] as const)test(`PDF ${state} shown while 
   assert.deepEqual(f.presentations.at(-1),{path:'Document.pdf',entryId:'id_Document_pdf',state});
   assert.equal(f.opened.filter(([path])=>path==='Document.pdf').length,0);
 });
+
+
+function countPresentationQueries(content:HTMLElement){
+  let count=0;
+  const query=content.querySelector,all=content.querySelectorAll;
+  content.querySelector=((...args:Parameters<typeof query>)=>{count++;return query.apply(content,args);}) as typeof query;
+  content.querySelectorAll=((...args:Parameters<typeof all>)=>{count++;return all.apply(content,args);}) as typeof all;
+  return()=>count;
+}
+
+test('final ready stops presentation subtree scans during subsequent editor mutations',async t=>{
+  const f=await setup(t,{initialPath:'A.md',initialEntryId:'id_A_md'});
+  await presentationTick();const content=f.workspace.activePane.content!,queries=countPresentationQueries(content);
+  const text=document.createTextNode('typing');content.append(text);text.data='typing more';
+  await presentationTick();text.data='typing again';await presentationTick();
+  assert.equal(queries(),0,'settled Markdown edits must not scan the view subtree');
+  assert.deepEqual(f.presentations.map(value=>value.state),['ready']);
+});
+
+test('password keeps initial error observation, final error stops scans, explicit PDF ready still delivers',async t=>{
+  const view=presentationPdf('password'),f=await setup(t,{initialPath:'Document.pdf',initialEntryId:'id_Document_pdf'},false,{pdf:view.pdf});
+  const content=f.workspace.activePane.content!,queries=countPresentationQueries(content);
+  const error=document.createElement('div');error.className='error-message';error.textContent='Cannot display';content.append(error);
+  await presentationTick();assert.ok(queries()>0,'password must retain observation until a final presentation');
+  assert.deepEqual(f.presentations.map(value=>value.state),['password','error']);assert.deepEqual(f.opened,[]);
+  const settled=queries();error.textContent='Updated error';content.append(document.createTextNode('later mutation'));
+  await presentationTick();assert.equal(queries(),settled,'final error must stop subtree scans');
+  error.remove();view.succeed();await presentationTick();
+  assert.equal(f.presentations.at(-1)?.state,'ready');assert.equal(f.opened.length,1);
+});

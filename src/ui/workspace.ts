@@ -354,8 +354,13 @@ export class Workspace {
       if(visible)receive('error');return visible;
     };
     const Observer=content.ownerDocument.defaultView?.MutationObserver;
-    const observer=Observer?new Observer(checkError):undefined;
+    let observing=true;
+    const stopObserving=()=>{observing=false;observer?.disconnect();};
+    const observer=Observer?new Observer(()=>{if(observing)checkError();}):undefined;
     const record={current,send:(state:'ready'|'password'|'error')=>{
+      // Settlement ends subtree watching; explicit PDF callbacks and retained
+      // activation checks still report subsequent current presentation states.
+      if(state!=='password')stopObserving();
       try{void Promise.resolve(platform.presentationSettled!({path,entryId,state})).catch(()=>{});}catch{/* UI-only host failures cannot fail editing. */}
     },receive,checkError,rearm:(owner:Pane)=>{
       // Only an explicit render/activation can rebind the same retained runtime.
@@ -365,7 +370,7 @@ export class Workspace {
       if(next!==navigation||request!==this.vaultRequest||epoch!==this.nativePresentationEpoch||previous!==pane){
         navigation=next;request=this.vaultRequest;epoch=this.nativePresentationEpoch;record.pending=record.last;record.sent=undefined;
       }
-    },dispose:()=>observer?.disconnect(),last:undefined as 'ready'|'password'|'error'|undefined,pending:undefined as 'ready'|'password'|'error'|undefined,sent:undefined as 'ready'|'password'|'error'|undefined};
+    },dispose:stopObserving,last:undefined as 'ready'|'password'|'error'|undefined,pending:undefined as 'ready'|'password'|'error'|undefined,sent:undefined as 'ready'|'password'|'error'|undefined};
     this.nativePresentations.set(runtime,record);
     observer?.observe(content,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','hidden']});
     return receive;
