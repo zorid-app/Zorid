@@ -65,8 +65,19 @@ outcomes retain recovery state and original operation identity.
 | streaming_acceptance_sol | tingkai-c/bases-workflow | src/bases workflows/helpers and focused tests; root wires workspace commands |
 | stage4_base_reuse | tingkai-c/task-read-model | Rust index task projection/query and fixtures; DTO proposal first |
 | stage4_markdown_contracts | read-only | Independent task contract/lifecycle review |
+| stage4_native_consumer | tingkai-c/task-workspace-integration | Workspace commands/lifecycle and additive queued Vault.create validator |
+| stage4_native_index | tingkai-c/task-actions-ui | Task session/actions and lossless mutations |
+| stage4_browser_index_host | tingkai-c/task-query-bindings | Cross-client query bindings; exact native Rust host ownership coordinated separately |
+| stage4_index_review | tingkai-c/calendar-workflow | FullCalendar presentation, sharing task actions |
+| stage4_contract_review | read-only | Independent Bases/workspace review |
 | root | main integration | Manifests, consumer assignments, workspace ownership and actual client acceptance |
 
 Native owner retains Swift navigation/editor viewport and import ownership.
 Serialize heavy checks on the 8GB machine. Source implementation and isolated
 tests do not establish integrated web/desktop/mobile workflow acceptance.
+
+FullCalendar package metadata verified via npm and official v7 documentation:
+`fullcalendar`7.1.3 and `temporal-polyfill`1.0.6 are MIT; pin both in the isolated
+calendar candidate. v7 uses `fullcalendar/*` plugin entrypoints and explicit
+skeleton/theme CSS. Do not use retired v6 package imports or premium plugins.
+Reference: https://fullcalendar.io/docs/vanilla-js .
