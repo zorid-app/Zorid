@@ -75,9 +75,9 @@ export function createBrowserSyncTransport(
         redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
         signal: controller.signal,
       }), interrupted]);
+      reader = response.body?.getReader();
       // Native fetch enforces redirect:error; this also rejects a misbehaving injected transport.
       if (response.redirected || (response.url && response.url !== url)) return fail('sync_invalid_response');
-      reader = response.body?.getReader();
       if (response.status !== 200) return fail(response.status === 401 || response.status === 403 ? 'sync_authorization_failed' :
         response.status === 409 ? 'sync_relay_conflict' : response.status === 413 ? 'sync_limit' : 'sync_transport');
       if (response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return fail('sync_invalid_response');
@@ -118,7 +118,7 @@ export function createBrowserSyncTransport(
       return request(`/v1/vaults/${vault}/updates/${updateId}`, SYNC_CONTROL_BYTES, signal, exactWire.slice());
     },
     pull(cursorJson, through, signal) {
-      if (typeof cursorJson !== 'string' || new TextEncoder().encode(cursorJson).byteLength > SYNC_CONTROL_BYTES || !cursorJson.length ||
+      if (typeof cursorJson !== 'string' || cursorJson.length > SYNC_CONTROL_BYTES || new TextEncoder().encode(cursorJson).byteLength > SYNC_CONTROL_BYTES || !cursorJson.length ||
           (through !== undefined && (!decimal.test(through) || BigInt(through) > 18446744073709551615n))) {
         return Promise.reject(new BrowserSyncTransportError('sync_invalid_request'));
       }

@@ -122,12 +122,10 @@ test('caller abort and close cancel a hanging response stream', async () => {
     let cancelled = false;
     const t = transport(async () => new Response(new ReadableStream<Uint8Array>({
       pull() { observed(); }, cancel() { cancelled=true; },
-    }),{headers:{'Content-Type':'application/json'}}));
+    },{highWaterMark:0}),{headers:{'Content-Type':'application/json'}}));
     const controller = new AbortController();
     const pending = t.hello(controller.signal);
     await reading;
-    // Let fetch resolution reach the response reader before cancellation.
-    await Promise.resolve(); await Promise.resolve();
     if (mode === 'abort') controller.abort(); else t.close();
     await assert.rejects(pending,code(mode==='abort'?'sync_aborted':'sync_closed'));
     assert.equal(cancelled,true);
