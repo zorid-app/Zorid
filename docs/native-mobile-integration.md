@@ -547,3 +547,31 @@ root granted subsequent named source scope in msg_9bf740e528d3, after reviewed
 reconciliation and inclusion of published hostfixture d94c3ae3. No shared core
 crate changes, no renderer-accessible fixture sync/credentials, and no duplicated
 Markdown/Base/index semantics are authorized by this next source scope.
+
+
+### Reviewed reconciliation and next source ownership — 22:05 UTC
+
+Independent source review msg_e1ee38f1a87b cleared7d04f2f3 with no blockers,
+including all canonical/native guards and the standalone lock graph. Published
+hostfixture d94c3ae3 was then merged without conflicts as ecf6f1a0; three host
+files only, no dependency changes. This is not a merged-mobile build result.
+
+Root grants msg_9bf740e528d3 / msg_ebe90f90ef9d name these isolated owners:
+- mobile-ffi-fixture-sync: mobile/rust/src/lib.rs, include/zorid_mobile.h and
+  focused FFI tests. Trusted fixture open/status/once only; raw bounded owned
+  result buffers, pointer+length inputs, same host/client lease, no fallback.
+- mobile-ios-shell fresh branch: ios/App/App/NativeMobile.swift only; validate
+  actual startup documentSemantics?:true, forward same capability in context,
+  keep raw framed response body bytes/base64 unchanged and fence terminal failure.
+- mobile-editor-adapter fresh branch: mobile-native.ts/tests; reuse existing
+  shared DocumentService and admitted Documents transport. Root separately grants
+  minimal TextEncoder UTF8 portability in desktop/document-semantics.cjs plus
+  declaration/focused tests, so mobile reuses existing wire validators/pin owner.
+  Portability is a separate small commit for root's newer codec reconciliation.
+
+Read-only native audit found recoverCommands returns true even with no recovered
+operations, making Workspace initialize/index a second time. First watcher poll
+may also emit a redundant refresh. Adapter owner investigates truthful change
+reporting and consistent snapshot baselines in a separate mobile-only fix; no
+measured latency improvement is claimed. Shared Vault/metadata semantics remain
+unchanged. Root owns current WASM/browser build slot; no native compile started.

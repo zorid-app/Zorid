@@ -1,8 +1,22 @@
 # Proposed embedded mobile fixture-sync slice
 
-Status: **plan only; no hostlib, FFI or Swift implementation grant**.
-Root permission message `msg_42aa6f2f1874` was read; it retains hostlib integration
-ownership with root and keeps the Stage 4 candidate frozen during its WASM slot.
+Status update — 2026-10-17 22:05 UTC: the trusted host seam is integrated on
+canonical main at `d94c3ae3` after nine focused host checks passed. The native
+owner included it in isolated `ecf6f1a0`, following clean independent review of
+shared-core reconciliation `7d04f2f3`. Root grants `msg_9bf740e528d3` and
+`msg_ebe90f90ef9d` now authorize named mobile FFI/Swift/adapter source work.
+Compilation and iOS verification remain pending their separate build slot; no
+successful mobile relay exchange, device sync or production enrollment is claimed.
+
+The following is the original design/evidence record. Earlier grant restrictions
+refer to its original preparation checkpoint. The accepted new fixture-open ABI
+retains explicit pointer+length inputs below; normal local-open ABI stays unchanged.
+Fixture credentials/status/once stay native-only, outside Capacitor registration.
+A separate additive startup `documentSemantics:true` flag advertises same-build
+shared document transport; old binaries omit it and must never be probed.
+
+Original permission message `msg_42aa6f2f1874` retained hostlib integration
+ownership with root and froze the then-current Stage 4 candidate during WASM.
 Prepared 2026-10-17 in `tingkai-c/mobile-testflight-setup` for native owner
 `term_bbf1787b-d2e5-402a-b366-24d40a2385c3` and the shared-core coordinator.
 Inspected recovery checkout: `tingkai-c/native-mobile-recovery`, HEAD
