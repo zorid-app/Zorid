@@ -592,6 +592,10 @@ fn check_baselines(tx: &Connection, e: &NamespaceEvidence) -> Result<()> {
     }
     Ok(())
 }
+pub(super) fn check_projection_handoff(tx: &Connection, id: &EntryId) -> Result<()> {
+    family::check_projection_handoff(tx, id)
+}
+
 impl Store {
     /// Recheck semantic targets before filesystem replay. A hidden Recovery row
     /// is never interchangeable with a semantic tombstone.

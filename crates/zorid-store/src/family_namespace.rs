@@ -103,6 +103,32 @@ fn target_entries(tx: &Connection, ids: &BTreeSet<EntryId>) -> Result<Vec<EntryS
     }
     Ok(result)
 }
+/// Authorization for settling an older active file publication before attaching
+/// its pending original namespace member. Claimed members cannot borrow another
+/// member's still-pending job as authority for this handoff.
+pub(super) fn check_projection_handoff(tx: &Connection, id: &EntryId) -> Result<()> {
+    enrolled(tx)?;
+    target_entries(tx, &BTreeSet::from([id.clone()]))?;
+    for job in jobs(tx, true)? {
+        if !job.affected.iter().any(|change| change.after.id == *id) {
+            continue;
+        }
+        if tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM namespace_attempts WHERE job_id=?1)",
+            [job.job_id.as_str()],
+            |r| r.get::<_, bool>(0),
+        )? || claim(tx, &job.job_id, id)?.is_some()
+        {
+            continue;
+        }
+        check_job(tx, &job)?;
+        return Ok(());
+    }
+    Err(invalid(
+        "file publication has no unclaimed family namespace responsibility",
+    ))
+}
+
 fn targets(tx: &Connection, covered: &[ProjectionJob]) -> Result<Vec<EntryState>> {
     enrolled(tx)?;
     if covered.is_empty() || covered.len() > MAX_NAMESPACE_MEMBERS {

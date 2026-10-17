@@ -165,6 +165,93 @@ fn attempt(tx: &Connection, id: &OperationId) -> Result<ProjectionAttempt> {
     )?;
     decode_attempt(id.as_str(), &entry, complete, &s)
 }
+/// The authorization boundary lives in each caller. This common transaction
+/// records only the immutable historical target and exact covered file jobs.
+fn finish_attempt(
+    tx: &Connection,
+    mut value: ProjectionAttempt,
+    published: bool,
+    physical: Option<&PhysicalIdentity>,
+) -> Result<()> {
+    if published {
+        family_materialization::check_publication(
+            tx,
+            &value.target.state,
+            Some(&value.target.content),
+        )?;
+        if value.stage_identity.is_none() || baseline(tx, &value.target.state.id)? != value.baseline
+        {
+            return Err(StoreError::Corrupt("publication provenance changed".into()));
+        }
+        let proof = physical_bindings::publication_proof(tx, &value.attempt_id)?;
+        match (&proof, physical) {
+            (Some(proof), Some(physical))
+                if proof.kind == PublicationKind::File
+                    && proof.entry_id == value.target.state.id
+                    && proof.parent_inode == physical.parent_inode
+                    && value.stage_identity.as_ref() == Some(&physical.inode) =>
+            {
+                physical_bindings::check_binding(
+                    tx,
+                    &value.target.state.id,
+                    proof.expected_binding.as_ref(),
+                )?;
+            }
+            (None, None) => {}
+            _ => {
+                return Err(StoreError::Corrupt(
+                    "file publication binding mismatch".into(),
+                ))
+            }
+        }
+        put_baseline(tx, &value.target)?;
+        if let Some(physical) = physical {
+            physical_bindings::put_binding(
+                tx,
+                &physical_bindings::PhysicalBinding {
+                    state: value.target.state.clone(),
+                    physical: physical.clone(),
+                },
+            )?;
+        }
+        projection_jobs::retire_file(tx, &value.target.state.id, &value.covered_jobs)?;
+    }
+    value.phase = if published {
+        ProjectionPhase::Complete
+    } else {
+        ProjectionPhase::Cancelled
+    };
+    put_attempt(tx, &value)?;
+    Ok(())
+}
+
+/// A hidden or relocated family entry may settle its earlier publication only
+/// when an unclaimed namespace obligation still owns responsibility for it.
+fn check_namespace_handoff(
+    tx: &Connection,
+    expected: &ProjectionAttempt,
+) -> Result<ProjectionAttempt> {
+    let value = attempt(tx, &expected.attempt_id)?;
+    if value.completed() || value != *expected {
+        return Err(StoreError::Corrupt(
+            "namespace publication attempt changed".into(),
+        ));
+    }
+    namespace::check_projection_handoff(tx, &value.target.state.id)?;
+    let proof = physical_bindings::publication_proof(tx, &value.attempt_id)?
+        .ok_or_else(|| StoreError::Corrupt("namespace publication has no physical proof".into()))?;
+    if proof.kind != PublicationKind::File
+        || proof.entry_id != value.target.state.id
+        || baseline(tx, &value.target.state.id)? != value.baseline
+    {
+        return Err(StoreError::Corrupt(
+            "namespace publication provenance changed".into(),
+        ));
+    }
+    physical_bindings::check_binding(tx, &value.target.state.id, proof.expected_binding.as_ref())?;
+    Ok(value)
+}
+
 /// Retire only file create/write requests actually represented by this baseline.
 /// Ancestor revisions are metadata, so require no physical write; a folder create,
 /// move or deletion remains queued, even if a descendant file was published.
@@ -355,7 +442,7 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut value = attempt(&tx, id)?;
+        let value = attempt(&tx, id)?;
         if value.completed() {
             return Ok(());
         }
@@ -365,56 +452,32 @@ impl Store {
             }
             .into());
         }
-        if published {
-            family_materialization::check_publication(
-                &tx,
-                &value.target.state,
-                Some(&value.target.content),
-            )?;
-            if value.stage_identity.is_none()
-                || baseline(&tx, &value.target.state.id)? != value.baseline
-            {
-                return Err(StoreError::Corrupt("publication provenance changed".into()));
-            }
-            let proof = physical_bindings::publication_proof(&tx, id)?;
-            match (&proof, physical) {
-                (Some(proof), Some(physical))
-                    if proof.kind == PublicationKind::File
-                        && proof.entry_id == value.target.state.id
-                        && proof.parent_inode == physical.parent_inode
-                        && value.stage_identity.as_ref() == Some(&physical.inode) =>
-                {
-                    physical_bindings::check_binding(
-                        &tx,
-                        &value.target.state.id,
-                        proof.expected_binding.as_ref(),
-                    )?;
-                }
-                (None, None) => {}
-                _ => {
-                    return Err(StoreError::Corrupt(
-                        "file publication binding mismatch".into(),
-                    ))
-                }
-            }
-            put_baseline(&tx, &value.target)?;
-            if let Some(physical) = physical {
-                physical_bindings::put_binding(
-                    &tx,
-                    &physical_bindings::PhysicalBinding {
-                        state: value.target.state.clone(),
-                        physical: physical.clone(),
-                    },
-                )?;
-            }
-            projection_jobs::retire_file(&tx, &value.target.state.id, &value.covered_jobs)?;
-        }
-        value.phase = if published {
-            ProjectionPhase::Complete
-        } else {
-            ProjectionPhase::Cancelled
-        };
-        put_attempt(&tx, &value)?;
+        finish_attempt(&tx, value, published, physical)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Read-only preflight before the native adapter restores an unpublished
+    /// baseline or acknowledges a stage already published at the old path.
+    pub fn check_projection_for_namespace(&self, expected: &ProjectionAttempt) -> Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        check_namespace_handoff(&tx, expected)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Settle an exact active file attempt so pending family namespace work can
+    /// take over its source. Native proves the old-path occupant before calling:
+    /// Some is the published stage; None means unpublished/restored baseline.
+    /// Cancellation preserves every baseline, binding, and covered file job.
+    pub fn finish_projection_for_namespace(
+        &mut self,
+        expected: &ProjectionAttempt,
+        published: Option<&PhysicalIdentity>,
+    ) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value = check_namespace_handoff(&tx, expected)?;
+        finish_attempt(&tx, value, published.is_some(), published)?;
         tx.commit()?;
         Ok(())
     }
