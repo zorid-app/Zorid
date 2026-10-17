@@ -22,7 +22,7 @@ const requiredMethods = {
   WasmSyncUpdate:['metadataJson','exactWire','matchesPayload','planText','planFile','free'],
 };
 function moduleBindings(source) {
-  const parser = require(require.resolve('acorn',{paths:[path.dirname(require.resolve('webpack/package.json'))]}));
+  const parser = require('acorn');
   const ast = parser.parse(source,{ecmaVersion:'latest',sourceType:'module'});
   const names = new Set(), classes = new Map();
   for (const node of ast.body) {
