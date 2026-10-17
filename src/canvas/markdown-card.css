@@ -1,0 +1,69 @@
+/* Canvas prose has one text measure in Reading and Live Edit. Source line
+   spacing is local to cards; the main note renderer keeps its own rhythm. */
+.zorid-canvas-markdown-card {
+  --canvas-prose-line-height: calc(var(--font-text-size, 16px) * var(--line-height-normal, 1.6));
+}
+.zorid-canvas-markdown-card > .zorid-canvas-note-preview,
+.zorid-canvas-markdown-card > .zorid-canvas-note-editor {
+  min-width: 0;
+  font-family: var(--font-text);
+  font-size: var(--font-text-size);
+  line-height: var(--line-height-normal);
+}
+/* Paired selectors outrank live-inline.css without changing note-pane styles.
+   Sizes follow the existing reference-defaults theme for both card surfaces. */
+.zorid-canvas-markdown-card > .zorid-canvas-note-preview > h1,
+.zorid-canvas-note-editor > .cm-editor > .cm-scroller > .cm-content > .cm-heading-1 {
+  font-size: 1.618em; font-weight: 700; line-height: 1.2; letter-spacing: -.015em;
+}
+.zorid-canvas-markdown-card > .zorid-canvas-note-preview > h2,
+.zorid-canvas-note-editor > .cm-editor > .cm-scroller > .cm-content > .cm-heading-2 {
+  font-size: 1.462em; font-weight: var(--h2-weight, 600); line-height: 1.2; letter-spacing: -.011em;
+}
+.zorid-canvas-markdown-card > .zorid-canvas-note-preview > h3,
+.zorid-canvas-note-editor > .cm-editor > .cm-scroller > .cm-content > .cm-heading-3 {
+  font-size: 1.318em; font-weight: var(--h3-weight, 600); line-height: 1.3; letter-spacing: -.008em;
+}
+.zorid-canvas-markdown-card > .zorid-canvas-note-preview > h4,
+.zorid-canvas-note-editor > .cm-editor > .cm-scroller > .cm-content > .cm-heading-4 {
+  font-size: 1.188em; font-weight: var(--h4-weight, 600); line-height: 1.4; letter-spacing: -.005em;
+}
+.zorid-canvas-markdown-card > .zorid-canvas-note-preview > h5,
+.zorid-canvas-note-editor > .cm-editor > .cm-scroller > .cm-content > .cm-heading-5 {
+  font-size: 1.076em; font-weight: var(--h5-weight, 600); line-height: var(--line-height-normal); letter-spacing: -.002em;
+}
+.zorid-canvas-markdown-card > .zorid-canvas-note-preview > h6,
+.zorid-canvas-note-editor > .cm-editor > .cm-scroller > .cm-content > .cm-heading-6 {
+  font-size: 1em; font-weight: 600; line-height: var(--line-height-normal); letter-spacing: 0; color: inherit;
+}
+/* Syntax highlighting supplies its own bold heading spans. Inherit the paired
+   weight while preserving explicit strong text and embedded widget ownership. */
+.zorid-canvas-note-editor > .cm-editor > .cm-scroller > .cm-content > .cm-heading span:not(.cm-strong, .cm-live-embed, .cm-live-embed *, .cm-live-math, .cm-live-math *) {
+  font-weight: inherit;
+}
+/* Restrict editor selectors to the card's outer editor, leaving table cells and
+   embedded notes alone. Padding (not margins) keeps CodeMirror measurements valid. */
+.zorid-canvas-note-editor > .cm-editor > .cm-scroller > .cm-content > .cm-heading:first-child {
+  padding-top: 0;
+}
+.zorid-canvas-markdown-card > .has-source-prose-layout > :is(p, h1, h2, h3, h4, h5, h6) {
+  margin: calc(var(--canvas-blank-lines, 0) * var(--canvas-prose-line-height)) 0 0;
+  white-space: break-spaces;
+  overflow-wrap: anywhere;
+}
+.zorid-canvas-markdown-card > .has-source-prose-layout > :is(h1, h2, h3, h4, h5, h6) {
+  padding-block: .65em .25em;
+}
+.zorid-canvas-markdown-card > .has-source-prose-layout > .is-first-source-line {
+  padding-top: 0;
+}
+.zorid-canvas-markdown-card > .has-source-prose-layout::after {
+  content: '';
+  display: block;
+  height: calc(var(--canvas-trailing-lines, 0) * var(--canvas-prose-line-height));
+}
+.zorid-canvas-markdown-card > .has-source-prose-layout code {
+  font-size: inherit;
+  padding: 0;
+  border-radius: .2em;
+}

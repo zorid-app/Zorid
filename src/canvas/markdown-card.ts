@@ -5,6 +5,7 @@ import { renderMarkdown } from '../ui/markdown.ts';
 import { destroyMarkdown } from '../ui/markdown-lifecycle.ts';
 import { selectMarkdownSubpath } from '../core/subpath.ts';
 import { icon } from '../ui/dom.ts';
+import { applyCanvasProseLayout } from './markdown-card-layout.ts';
 
 /** Internal workspace lease. update is synchronous compare-and-set against the
  * shared note buffer; flush retains the buffer's optimistic disk-write checks.
@@ -163,6 +164,7 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
         properties: false,
         embed: configuration?.renderEmbed ? request => { const owner = configuration.renderEmbed!(request); previewOwners.push(owner); return owner.dom; } : undefined,
       });
+      applyCanvasProseLayout(preview, selected.content);
       // Guard each retained subtree, not only its current parent: external
       // embed controls can remain callable after removal from the preview.
       for (const root of preview.children) root.addEventListener('click', event => {

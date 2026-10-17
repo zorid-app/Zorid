@@ -20,6 +20,7 @@ import './editor/live-callouts.css';
 import './ui/pdf-view.css';
 import './ui/media-view.css';
 import './canvas/view.css';
+import './canvas/markdown-card.css';
 import './canvas/attachment-card.css';
 import './canvas/embed-preview.css';
 import './bases/session.css';
