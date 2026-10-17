@@ -220,6 +220,8 @@ impl DocumentIndexStage {
 pub struct DocumentIndexProgress {
     pub snapshot: IndexSnapshotId,
     pub prepared_documents: usize,
+    /// Unchanged parser records reused during this pump (bodies remain bounded).
+    pub reused_documents: usize,
     pub total_documents: usize,
     pub ready: bool,
 }
@@ -414,6 +416,30 @@ fn builder(tx: &Connection, h: &Header) -> IndexResult<GenerationBuilder> {
     b.begin_pump();
     Ok(b)
 }
+fn reusable_record(
+    tx: &Connection,
+    previous: Option<&(Header, Manifest)>,
+    current: &Manifest,
+    original: &StoredEntryMetadata,
+) -> IndexResult<Option<IndexRecord>> {
+    let Some((header, manifest)) = previous else {
+        return Ok(None);
+    };
+    if header
+        .manifest
+        .entries
+        .iter()
+        .find(|e| e.state.id == original.state.id)
+        != Some(original)
+    {
+        return Ok(None);
+    }
+    let raw:Option<String>=tx.query_row("SELECT record FROM document_index_rows WHERE snapshot_key=?1 AND entry_id=?2 AND length(CAST(record AS BLOB))<=?3",params![header.snapshot.key(),original.state.id.as_str(),MAX_GENERATION_METADATA_BYTES as i64],|r|r.get(0)).optional()?;
+    let record = decode::<Record>(&raw.ok_or(DocumentIndexError::RebuildRequired)?)?
+        .restore(manifest.witness(&original.state.id)?)?;
+    Ok(Some(record.rebind_unchanged(current)?))
+}
+
 fn check_stage(tx: &Connection, h: &Header) -> IndexResult<()> {
     let c = control(tx)?;
     if c.epoch != h.snapshot.epoch {
@@ -650,7 +676,7 @@ impl Store {
         &mut self,
         stage: &DocumentIndexStage,
     ) -> IndexResult<DocumentIndexProgress> {
-        let (h, mut b) = {
+        let (h, mut b, previous) = {
             let tx = self.connection.unchecked_transaction()?;
             let h = header(&tx, &stage.snapshot)?;
             if h.published {
@@ -658,11 +684,27 @@ impl Store {
             }
             check_stage(&tx, &h)?;
             let b = builder(&tx, &h)?;
+            let previous = if let Some(expected) = &h.expected {
+                let id = expected.id()?;
+                if id.versions() == stage.snapshot.versions() {
+                    let previous = header(&tx, &id)?;
+                    if !previous.published {
+                        return Err(DocumentIndexError::RebuildRequired);
+                    }
+                    let manifest = previous.manifest.manifest()?;
+                    Some((previous, manifest))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             tx.commit()?;
-            (h, b)
+            (h, b, previous)
         };
         let mut prepared = Vec::new();
         let mut source_bytes = 0usize;
+        let mut reused_documents = 0;
         for witness in b.pending_entries() {
             let original = h
                 .manifest
@@ -675,6 +717,7 @@ impl Store {
             {
                 break;
             }
+            let mut reused_this_record = false;
             let (record, text) = {
                 // Exact committed authority read; the filesystem is never consulted.
                 let tx = self.connection.unchecked_transaction()?;
@@ -685,6 +728,7 @@ impl Store {
                 if actual.as_ref() != Some(original) || !is_visible(&tx, &witness.entry().id)? {
                     return Err(IndexError::StaleSource.into());
                 }
+                let reused = reusable_record(&tx, previous.as_ref(), b.manifest(), original)?;
                 let text = match &original.content {
                     Some(ContentMetadata::BinaryRef { .. }) => None,
                     Some(ContentMetadata::InlineBytes { bytes, .. })
@@ -701,37 +745,51 @@ impl Store {
                 };
                 tx.commit()?;
                 // All parsing is after the source read transaction has ended.
-                match &original.content {
-                    Some(ContentMetadata::BinaryRef { .. }) => {
-                        (IndexRecord::excluded(witness, Exclusion::Binary), None)
-                    }
-                    Some(ContentMetadata::InlineBytes { bytes, .. })
-                        if *bytes > FAMILY_MAX_INLINE_BYTES =>
-                    {
-                        (IndexRecord::excluded(witness, Exclusion::SourceLimit), None)
-                    }
-                    _ => match text.and_then(|b| String::from_utf8(b).ok()) {
-                        Some(text) if !text.contains('\0') => {
-                            let request = MetadataRequest {
-                                entry_id: witness.entry().id.clone(),
-                                content_revision: witness.entry().revision.clone(),
-                                source: text,
-                            };
-                            let markdown = witness
-                                .entry()
-                                .path
-                                .as_str()
-                                .to_ascii_lowercase()
-                                .ends_with(".md");
-                            let row = IndexRecord::text(witness, &request, markdown)?;
-                            let text = row
-                                .text_digest()
-                                .is_some()
-                                .then(|| request.source.into_bytes());
-                            (row, text)
+                if let Some(record) = reused {
+                    let text = if record.text_digest().is_some() {
+                        let bytes = text.ok_or(DocumentIndexError::RebuildRequired)?;
+                        record
+                            .check_text(&bytes)
+                            .map_err(|_| DocumentIndexError::RebuildRequired)?;
+                        Some(bytes)
+                    } else {
+                        None
+                    };
+                    reused_this_record = true;
+                    (record, text)
+                } else {
+                    match &original.content {
+                        Some(ContentMetadata::BinaryRef { .. }) => {
+                            (IndexRecord::excluded(witness, Exclusion::Binary), None)
                         }
-                        _ => (IndexRecord::excluded(witness, Exclusion::Unreadable), None),
-                    },
+                        Some(ContentMetadata::InlineBytes { bytes, .. })
+                            if *bytes > FAMILY_MAX_INLINE_BYTES =>
+                        {
+                            (IndexRecord::excluded(witness, Exclusion::SourceLimit), None)
+                        }
+                        _ => match text.and_then(|b| String::from_utf8(b).ok()) {
+                            Some(text) if !text.contains('\0') => {
+                                let request = MetadataRequest {
+                                    entry_id: witness.entry().id.clone(),
+                                    content_revision: witness.entry().revision.clone(),
+                                    source: text,
+                                };
+                                let markdown = witness
+                                    .entry()
+                                    .path
+                                    .as_str()
+                                    .to_ascii_lowercase()
+                                    .ends_with(".md");
+                                let row = IndexRecord::text(witness, &request, markdown)?;
+                                let text = row
+                                    .text_digest()
+                                    .is_some()
+                                    .then(|| request.source.into_bytes());
+                                (row, text)
+                            }
+                            _ => (IndexRecord::excluded(witness, Exclusion::Unreadable), None),
+                        },
+                    }
                 }
             };
             match b.add(record.clone()) {
@@ -739,12 +797,16 @@ impl Store {
                 Err(IndexError::PumpLimit) if !prepared.is_empty() => break,
                 Err(e) => return Err(e.into()),
             }
+            if reused_this_record {
+                reused_documents += 1;
+            }
             source_bytes += record.text_bytes();
             prepared.push((record, text));
         }
         let progress = DocumentIndexProgress {
             snapshot: stage.snapshot.clone(),
             prepared_documents: b.prepared_records(),
+            reused_documents,
             total_documents: h
                 .manifest
                 .entries

@@ -471,3 +471,70 @@ fn exact_committed_id_revision_read_rejects_stale_manifest() {
         Some(b"new".to_vec())
     );
 }
+#[test]
+fn unchanged_records_are_reused_but_changed_or_moved_witnesses_are_reparsed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store.apply(&create("a", "a.md", b"needle a")).unwrap();
+    store.apply(&create("b", "b.md", b"needle b")).unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let unchanged = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&unchanged).unwrap();
+    assert_eq!(progress.reused_documents, 2);
+    assert!(progress.ready);
+    store.publish_document_index(&unchanged).unwrap();
+    write(&mut store, "edit", "a", b"needle updated");
+    let changed = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&changed).unwrap();
+    assert_eq!(progress.reused_documents, 1);
+    assert!(progress.ready);
+    store.publish_document_index(&changed).unwrap();
+    let b = store.read_metadata(&id("b")).unwrap().unwrap().state;
+    store
+        .apply(&request(
+            "move",
+            Mutation::Move {
+                id: b.id,
+                expected: b.revision,
+                path: VaultPath::new("moved.md").unwrap(),
+            },
+        ))
+        .unwrap();
+    let moved = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&moved).unwrap();
+    assert_eq!(progress.reused_documents, 1);
+    assert!(progress.ready);
+    store.publish_document_index(&moved).unwrap();
+    let incremental = hits(&store, "needle");
+    store.rebuild_document_index().unwrap();
+    build(&mut store);
+    assert_eq!(hits(&store, "needle"), incremental);
+}
+#[test]
+fn one_sixteen_mib_text_row_can_advance_a_soft_one_mib_pump() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let mut bytes = vec![b'x'; zorid_store::FAMILY_MAX_INLINE_BYTES as usize];
+    bytes[..6].copy_from_slice(b"needle");
+    store.apply(&create("large", "large.txt", &bytes)).unwrap();
+    drop(bytes);
+    store.initialize_document_index().unwrap();
+    let stage = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&stage).unwrap();
+    assert!(progress.ready);
+    assert_eq!(progress.prepared_documents, 1);
+    store.publish_document_index(&stage).unwrap();
+    let pin = store.open_document_snapshot().unwrap();
+    let page = store
+        .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), None, 1)
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(
+        page.source_bytes,
+        zorid_store::FAMILY_MAX_INLINE_BYTES as usize
+    );
+    assert!(page.complete);
+}
