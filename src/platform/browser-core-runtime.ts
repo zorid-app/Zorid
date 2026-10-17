@@ -1,3 +1,4 @@
+import type {BrowserDocumentIndex} from '../core/browser-document-index.ts';
 import type { BrowserSyncFixtureCredentials, BrowserSyncSweep } from './browser-sync-worker.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '../core/browser-vault.ts';
@@ -33,6 +34,8 @@ interface Pending { resolve(value: unknown): void; reject(error: unknown): void;
 export class BrowserCoreRuntime implements BrowserCoreBackend {
   private authorityScope?: Readonly<{vaultId:string;clientId:string}>;
   get durableScope(): Readonly<{vaultId:string;clientId:string}> | undefined { return this.authorityScope; }
+  private indexProvider?:Omit<BrowserDocumentIndex,'close'>;
+  get documentIndex():Omit<BrowserDocumentIndex,'close'>|undefined{return this.indexProvider;}
   private checkpointProvider?: DurableCheckpoints;
   get checkpoints():DurableCheckpoints|undefined{return this.checkpointProvider;}
   private binaryCapability?:BinaryStreams;
@@ -92,7 +95,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       // this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
       const clientId = options.clientId;
-      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits;documentIndexAvailable?:boolean}>('open', {...options, wasmModuleUrl:moduleUrl.href});
       if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
       runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
       const pageOptions=(input:CheckpointListOptions)=>{
@@ -110,6 +113,14 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
           return runtime.call<CheckpointPage>('checkpoint-changes',{...page,after});
         },
       } satisfies DurableCheckpoints);
+      if(opened.documentIndexAvailable)runtime.indexProvider=Object.freeze<Omit<BrowserDocumentIndex,'close'>>({
+        status:()=>runtime.call('document-index-status'),begin:()=>runtime.call('document-index-begin'),
+        pump:id=>runtime.call('document-index-pump',id),publish:id=>runtime.call('document-index-publish',id),
+        open:()=>runtime.call('document-index-open'),closePin:id=>runtime.call('document-index-close-pin',id),
+        search:input=>runtime.call('document-index-search',structuredClone(input)),
+        resolve:input=>runtime.call('document-index-resolve',structuredClone(input)),
+        backlinks:input=>runtime.call('document-index-backlinks',structuredClone(input)),rebuild:()=>runtime.call('document-index-rebuild'),
+      });
       runtime.recovery = new Set(opened.recovery);
       if(opened.binaryLimits){runtime.installBinaryStreams(opened.binaryLimits);await runtime.recoverReadRequests();}
       document.addEventListener('visibilitychange', runtime.visibility);

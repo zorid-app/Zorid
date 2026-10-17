@@ -86,7 +86,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       };
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
       assertOwner();
-      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{})};
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!streaming()?.documentIndex};
     } catch (error) {
       sync?.revoke(); channel?.close(); channel = undefined; vault.close(); vault = undefined;
       if (lease) { try { await lease.release(); } catch { /* Original open failure remains uncertain. */ } }
@@ -98,12 +98,28 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     if (released) return; // Exact retry after a lost release acknowledgement.
     assertOwner();
     await Promise.allSettled([...detached]);
-    if(streaming())await streaming()!.cleanupReadPins();
+    if(streaming()){await streaming()!.documentIndex?.close();await streaming()!.cleanupReadPins();}
     // Serialized behind all earlier dispatches, including timed-out RPCs/hints.
     sync?.revoke(); channel?.close(); channel = undefined; vault.close();
     await lease!.release(); released = true; return;
   }
   assertOwner();
+  if(operation.startsWith('document-index-')){
+    const index=streaming()?.documentIndex;if(!index)throw new BrowserVaultError('index_unavailable','Shared document index WASM is unavailable');
+    switch(operation){
+      case 'document-index-status':return index.status();
+      case 'document-index-begin':return index.begin();
+      case 'document-index-pump':return index.pump(payload);
+      case 'document-index-publish':return index.publish(payload);
+      case 'document-index-open':return index.open();
+      case 'document-index-close-pin':return index.closePin(payload);
+      case 'document-index-search':return index.search(payload);
+      case 'document-index-resolve':return index.resolve(payload);
+      case 'document-index-backlinks':return index.backlinks(payload);
+      case 'document-index-rebuild':return index.rebuild();
+      default:throw new BrowserVaultError('invalid_operation','Unknown document index operation');
+    }
+  }
   switch (operation) {
     case 'inventory': return vault.inventory();
     case 'read': return vault.readEntry(payload);

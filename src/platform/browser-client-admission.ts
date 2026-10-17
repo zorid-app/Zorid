@@ -54,6 +54,15 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
   });
   const backend: BrowserCoreBackend = {
     durableScope: scope, checkpoints,
+    ...(runtime.documentIndex?{documentIndex:Object.freeze({
+      status:()=>dispatch(()=>runtime.documentIndex!.status()),begin:()=>dispatch(()=>runtime.documentIndex!.begin()),
+      pump:(id:string)=>dispatch(()=>runtime.documentIndex!.pump(id)),publish:(id:string)=>dispatch(()=>runtime.documentIndex!.publish(id)),
+      open:()=>dispatch(()=>runtime.documentIndex!.open()),closePin:(id:string)=>dispatch(()=>runtime.documentIndex!.closePin(id)),
+      search:(input:Parameters<NonNullable<typeof runtime.documentIndex>['search']>[0])=>dispatch(()=>runtime.documentIndex!.search(input)),
+      resolve:(input:Parameters<NonNullable<typeof runtime.documentIndex>['resolve']>[0])=>dispatch(()=>runtime.documentIndex!.resolve(input)),
+      backlinks:(input:Parameters<NonNullable<typeof runtime.documentIndex>['backlinks']>[0])=>dispatch(()=>runtime.documentIndex!.backlinks(input)),
+      rebuild:()=>dispatch(()=>runtime.documentIndex!.rebuild()),
+    })}:{}),
     inventory: () => dispatch(() => runtime.inventory()),
     readEntry: path => dispatch(() => runtime.readEntry(path)),
     readEntryById: id => dispatch(() => runtime.readEntryById(id)),

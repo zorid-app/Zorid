@@ -1,3 +1,5 @@
+import {browserDocumentIndex} from './browser-document-index.ts';
+import type {BrowserDocumentIndex,BrowserDocumentIndexWasm} from './browser-document-index.ts';
 import {createBrowserBinaryStageStore} from './browser-binary-stage-store.ts';
 import type {BrowserBinaryStageWasm,BrowserBinaryStageStore,BrowserBinaryUsage} from './browser-binary-stage-store.ts';
 import type {BinaryStreams,BinaryStageRef,BinaryReadRef} from './binary-streams.ts';
@@ -23,6 +25,7 @@ function core<T>(action:()=>string):T{
 }
 export interface BrowserRecoveryReadRef {pinId:string;entryId:string;reference:any;witness:PreparedStreamingRecoveryRead['witness'];length:string}
 export interface BrowserStreamingVault extends BrowserVault {
+  readonly documentIndex?:BrowserDocumentIndex;
   openRecoveryBinaryRead(requestedReadId:string,input:StreamingRecoveryReadInput):Promise<BrowserRecoveryReadRef>;
   readRecoveryBinaryRange(ref:BrowserRecoveryReadRef,input:{offset:string;maxBytes:number}):ReturnType<BinaryStreams['read']>;
   closeRecoveryBinaryRead(ref:BrowserRecoveryReadRef):Promise<void>;
@@ -386,7 +389,8 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
       openRead:input=>openBinaryRead(crypto.randomUUID(),input),read:rangeRead,closeRead:closeBinaryRead};
     return binaryCapability;
   }
-  const vault:BrowserStreamingVault={authorityId,sync:engine.api,openRecoveryBinaryRead,readRecoveryBinaryRange,closeRecoveryBinaryRead,binaryStreams,openBinaryRead,cleanupReadPins,closeBinaryReadRequest,
+  const documentIndex=typeof (wasm as unknown as Partial<BrowserDocumentIndexWasm>).WasmDocumentIndexBuilder==='function'?browserDocumentIndex({db,authorityId,clientId:options.clientId,wasm:wasm as unknown as BrowserDocumentIndexWasm,assertActive:active,readPublication}):undefined;
+  const vault:BrowserStreamingVault={authorityId,documentIndex,sync:engine.api,openRecoveryBinaryRead,readRecoveryBinaryRange,closeRecoveryBinaryRead,binaryStreams,openBinaryRead,cleanupReadPins,closeBinaryReadRequest,
     validateStorage:()=>engine.validate(),
     checkpoints:clientId=>browserCheckpoints(db,authorityId,clientId),
     inventory,readMetadata,readMetadataById,
@@ -414,7 +418,7 @@ export async function openBrowserStreamingVault(options:BrowserStreamingVaultOpt
         if(expected!==BigInt(sequence))throw fail('storage_corrupt');done({sequence,...(structural?{}:{paths:[...paths]})});
       };
       rows<any>(tx,'journal',value=>{events=value;finish();},abort);on(tx.objectStore('control').get('sequence'),row=>{sequence=decimalU64(row?.value);finish();},abort);
-    });},close:()=>{stageStore?.dispose();for(const item of readCache.values())item.plan.dispose();readCache.clear();for(const item of recoveryCache.values())item.plan.dispose();recoveryCache.clear();close();},
+    });},close:()=>{void documentIndex?.close().catch(()=>{});stageStore?.dispose();for(const item of readCache.values())item.plan.dispose();readCache.clear();for(const item of recoveryCache.values())item.plan.dispose();recoveryCache.clear();close();},
   };
   return vault;
 }

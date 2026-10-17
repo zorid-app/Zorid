@@ -1,0 +1,127 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {browserDocumentIndex} from '../src/core/browser-document-index.ts';
+import type {BrowserDocumentIndexWasm,BrowserIndexHeader} from '../src/core/browser-document-index.ts';
+import type {EntryState} from '../src/core/browser-vault.ts';
+
+const authority='11111111-1111-4111-8111-111111111111';
+const clone=<T>(v:T):T=>structuredClone(v);
+const sha=(bytes:Uint8Array)=>[...createHash('sha256').update(bytes).digest()];
+const range=(globalThis as any).IDBKeyRange;
+(globalThis as any).IDBKeyRange={bound:(lower:string,upper:string)=>({lower,upper})};
+/** Transaction/opaque-WASM doubles test host storage and transport only. No JS
+ * parser, resolver or query evaluator stands in for Rust corpus parity. */
+function fixture(){
+  const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs'].map(n=>[n,new Map()]));
+  const seed=(store:string,key:string,value:any)=>records.get(store)!.set(key,clone(value));
+  seed('control','local-store-id',{key:'local-store-id',value:authority});seed('control','sequence',{key:'sequence',value:'0'});
+  const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false;
+  const db:any={transaction(names:string[],mode:string,options:any){
+    if(mode==='readwrite')assert.deepEqual(options,{durability:'strict'});transactions.push(names);
+    const local=new Map(names.map(n=>[n,clone(records.get(n)!)])),writes=new Set<string>();let pending=0,aborted=false,completed=false,scheduled=false;
+    const tx:any={durability:'strict',abort(){if(aborted||completed)return;aborted=true;queueMicrotask(()=>tx.onabort?.());},
+      objectStore(name:string){assert.ok(local.has(name));
+        const request=(op:string,key:any,action:()=>any)=>{const result:any={};calls.push({store:name,op,key});pending++;
+          queueMicrotask(()=>{if(aborted)return;try{result.result=clone(action());result.onsuccess?.();}catch{tx.abort();}finally{pending--;schedule();}});return result;};
+        const put=(row:any,add:boolean)=>request(add?'add':'put',row.key??row.id,()=>{assert.equal(mode,'readwrite');const key=row.key??row.id;if(add&&local.get(name)!.has(key))throw new Error('duplicate');local.get(name)!.set(key,clone(row));writes.add(name);return key;});
+        return {get:(key:string)=>request('get',key,()=>local.get(name)!.get(key)),put:(row:any)=>put(row,false),add:(row:any)=>put(row,true),
+          getAll(){assert.fail('aggregate source/control scan is forbidden');},
+          delete:(key:string)=>request('delete',key,()=>{local.get(name)!.delete(key);writes.add(name);}),
+          openKeyCursor(bounds?:any){return this.openCursor(bounds);},
+          openCursor(bounds?:any){if(name==='control')assert.ok(bounds?.lower?.startsWith('document-index:v1/g/'),'control cursor must have an exact derived prefix');
+            calls.push({store:name,op:'cursor',key:bounds});const result:any={};pending++;const rows=[...local.get(name)!].filter(([key])=>!bounds||key>=bounds.lower&&key<=bounds.upper).sort(([a],[b])=>a<b?-1:1);let pos=0;
+            const step=()=>{if(aborted)return;let continued=false;const row=rows[pos];result.result=row?{primaryKey:row[0],value:clone(row[1]),continue(){continued=true;pos++;queueMicrotask(step);},delete(){return request('delete',row[0],()=>{local.get(name)!.delete(row[0]);writes.add(name);});}}:null;
+              try{result.onsuccess?.();}catch{tx.abort();}finally{if(!continued){pending--;schedule();}}};queueMicrotask(step);return result;
+          },
+        };
+      },
+    };
+    function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;if(aborted||completed||pending)return;if(failCommit&&mode==='readwrite'){failCommit=false;tx.abort();return;}completed=true;for(const n of writes)records.set(n,local.get(n)!);tx.oncomplete?.();});}schedule();return tx;
+  }};
+  let textExtractions=0,reuses=0;
+  class MockBuilder {
+    header:BrowserIndexHeader;rows=new Map<string,any>();constructor(input:string){this.header=JSON.parse(input);}
+    free(){}headerJson(){return JSON.stringify(this.header);}beginPump(){}
+    pendingJson(){return JSON.stringify(this.header.entries.filter(e=>e.kind==='file'&&!this.rows.has(e.id)).slice(0,32));}
+    addText(id:string,bytes:Uint8Array){textExtractions++;this.rows.set(id,{metadata:null,digest:sha(bytes),textBytes:bytes.length,exclusion:null});}
+    addBinary(id:string){this.rows.set(id,{metadata:null,digest:null,textBytes:0,exclusion:'binary'});}
+    addUnreadable(id:string){this.rows.set(id,{metadata:null,digest:null,textBytes:0,exclusion:'unreadable'});}
+    addPersisted(id:string,row:string){reuses++;this.rows.set(id,JSON.parse(row));}
+    rowJson(id:string){return JSON.stringify(this.rows.get(id));}ready(){return this.header.entries.filter(e=>e.kind==='file').length===this.rows.size;}
+    finish(){const header=this.header,rows=this.rows;assert.ok(this.ready());return {
+      free(){},headerJson:()=>JSON.stringify(header),snapshotJson:()=>JSON.stringify(header.nextIndex),coverageComplete:()=>true,rowJson:(id:string)=>JSON.stringify(rows.get(id)),
+      resolveJson:()=>'{"fixture":"opaque-rust-transport"}',backlinksJson:()=>'{"fixture":"opaque-rust-transport"}',
+      openLiteral(){let position=0;const observed:string[]=[];const files=header.entries.filter(e=>e.kind==='file'&&rows.get(e.id)?.digest);return {
+        free(){},nextReadJson:()=>JSON.stringify(files[position]??null),accept(bytes:Uint8Array){assert.deepEqual(sha(bytes),rows.get(files[position]!.id).digest);observed.push(new TextDecoder().decode(bytes));position++;},finishJson:()=>JSON.stringify({fixture:'projection-transport',observed,snapshot:header.nextIndex}),
+      };},
+    };}
+  }
+  const wasm={documentIndexVersionsJson:()=>'{"schema":1,"extraction":"fixture","resolver":"fixture","query":"fixture"}',WasmDocumentIndexBuilder:MockBuilder} as unknown as BrowserDocumentIndexWasm;
+  const open=(clientId='client-a')=>browserDocumentIndex({db,authorityId:authority,clientId,wasm,assertActive(){if(denied)throw Object.assign(new Error('retired'),{code:'owner_retired'});},
+    readPublication(tx,done,abort){let entries:any[]|undefined,presentation:any[]|undefined,sequence:string|undefined;
+      const finish=()=>{if(entries&&presentation&&sequence!==undefined)done({entries,presentation,sequence});};
+      for(const store of ['metadata','presentation']){const list:any[]=[];const request=tx.objectStore(store).openCursor();request.onsuccess=()=>{try{const cursor=request.result;if(cursor){list.push(cursor.value);cursor.continue();}else{if(store==='metadata')entries=list;else presentation=list;finish();}}catch(error){abort(error);}};}
+      const request=tx.objectStore('control').get('sequence');request.onsuccess=()=>{sequence=request.result.value;finish();};
+    },
+  });
+  function file(id:string,text:string,opts:{path?:string;revision?:string;binary?:boolean;mtime?:number}={}){
+    const bytes=new TextEncoder().encode(text),entry:EntryState={id,path:opts.path??id+'.md',kind:'file',revision:opts.revision??'r1',deleted:false},presentation={id,ctime_ms:1,mtime_ms:opts.mtime??1,size_bytes:bytes.length};
+    seed('metadata',id,entry);seed('presentation',id,presentation);
+    const content=opts.binary?{kind:'binary',reference:{selected_event:'binary1',manifest:{bytes:String(bytes.length)}}}:{kind:'text',metadata:{byte_length:String(bytes.length),digest:sha(bytes),witness:{identity:{entry_id:id},revision:entry.revision}}};
+    seed('sync_materialization_refs',id,{id,status:'normal',entry,presentation,content});if(opts.binary)records.get('content')!.delete(id);else seed('content',id,{id,bytes});
+  }
+  const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
+  const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
+  return {records,calls,transactions,file,open,build,source,seed,stats:()=>({textExtractions,reuses}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},deny(){denied=true;}};
+}
+
+test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
+  const f=fixture();f.file('a','hello');const source=f.source(),index=f.open();await f.build(index);
+  const status=await index.status();assert.equal(status.current,true);assert.equal(status.coveredWatermark,'0');assert.equal(status.rebuildRequired,false);assert.deepEqual(f.source(),source);
+  const pin=await index.open();assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'})) as any,{fixture:'projection-transport',observed:['hello'],snapshot:pin.snapshot});
+  assert.ok(f.transactions.every(names=>names.includes('control')));await index.close();
+});
+test('old pinned generation reads retained projection across edit, move and delete',async()=>{
+  const f=fixture();f.file('a','old');const index=f.open();await f.build(index);const old=await index.open();
+  f.file('a','new',{path:'moved.md',revision:'r2'});f.sequence('1');await f.build(index);const fresh=await index.open();
+  f.delete('a');f.sequence('2');await f.build(index);
+  assert.deepEqual((await index.search({pinId:old.pinId,query:'opaque'}) as any).observed,['old']);assert.deepEqual((await index.search({pinId:fresh.pinId,query:'opaque'}) as any).observed,['new']);
+  assert.equal((await index.status()).current,true);await index.close();
+});
+test('presentation-only change with unchanged local watermark rejects publication',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();const stage=await index.begin();await index.pump(stage.stageId);
+  f.file('a','text',{mtime:7});await assert.rejects(index.publish(stage.stageId),{code:'index_source_changed'});assert.equal((await index.status()).snapshot,null);await index.close();
+});
+test('two independently prepared publishers CAS the same index head',async()=>{
+  const f=fixture();f.file('a','text');const a=f.open(),b=f.open('client-b'),sa=await a.begin(),sb=await b.begin();await a.pump(sa.stageId);await b.pump(sb.stageId);await a.publish(sa.stageId);
+  await assert.rejects(b.publish(sb.stageId),{code:'index_head_changed'});await a.close();await b.close();
+});
+test('authored binary mode stays excluded even for valid UTF8 bytes',async()=>{
+  const f=fixture();f.file('a','ordinary UTF8',{binary:true});const index=f.open();await f.build(index);const pin=await index.open();
+  assert.equal(f.stats().textExtractions,0);assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).observed,[]);await index.close();
+});
+test('unchanged exact source witnesses reuse Rust records while moves re-extract',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);await f.build(index);assert.equal(f.stats().textExtractions,1);assert.equal(f.stats().reuses,1);
+  f.file('a','text',{path:'move.md'});await f.build(index);assert.equal(f.stats().textExtractions,2);await index.close();
+});
+test('cache corruption requires explicit rebuild and rebuild expires pins without changing source',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const pin=await index.open(),source=f.source();
+  const cache=[...f.records.get('control')!].find(([key])=>key.includes('/row/'))!;cache[1].value.record='{"metadata":null}';
+  await assert.rejects(index.open(),{code:'index_rebuild_required'});await index.rebuild();await assert.rejects(index.search({pinId:pin.pinId,query:'opaque'}),{code:'index_snapshot_expired'});
+  assert.deepEqual(f.source(),source);await f.build(index);assert.equal((await index.status()).current,true);await index.close();
+});
+test('source content digest mismatch fails before Rust extraction',async()=>{
+  const f=fixture();f.file('a','text');f.seed('content','a',{id:'a',bytes:new TextEncoder().encode('evil')});const index=f.open(),stage=await index.begin();
+  await assert.rejects(index.pump(stage.stageId),{code:'storage_corrupt'});assert.equal(f.stats().textExtractions,0);await index.close();
+});
+test('bounded pin limit and cross-client nonce ownership reject fabricated pins',async()=>{
+  const f=fixture();f.file('a','text');const a=f.open(),b=f.open('client-b');await f.build(a);const pins=[];for(let i=0;i<4;i++)pins.push(await a.open());
+  await assert.rejects(a.open(),{code:'index_pin_limit'});await assert.rejects(b.search({pinId:pins[0]!.pinId,query:'opaque'}),{code:'index_snapshot_expired'});await a.closePin(pins[0]!.pinId);await a.open();await a.close();await b.close();
+});
+test('corrupt catalog rebuild sweeps only exact derived prefixes',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);f.seed('control','unrelated',{key:'unrelated',value:'preserved'});f.seed('control','document-index:v1/catalog',{key:'document-index:v1/catalog',value:{bad:true}});
+  assert.equal((await index.status()).rebuildRequired,true);await index.rebuild();assert.equal(f.records.get('control')!.get('unrelated').value,'preserved');await f.build(index);await index.close();
+});
+
+test.after(()=>{(globalThis as any).IDBKeyRange=range;});
