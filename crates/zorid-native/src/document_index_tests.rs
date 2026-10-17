@@ -237,27 +237,28 @@ fn staged_work_fences_concurrent_source_changes_and_can_resume_after_restart() {
     assert_eq!(page.value.hits.len(), 1);
 }
 
-#[test]
-fn queries_never_implicitly_reconcile_external_files_and_reject_foreign_pins() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut vault = NativeVault::open(dir.path()).unwrap();
-    // External family reconciliation requires explicit enrollment while empty
-    // and an authored text-mode binding; derived queries do neither implicitly.
+// Same explicit enrollment and authenticated family delivery as the native
+// family_observation_tests fixtures. No Store internals or synthetic receipts.
+fn enrolled(root: &std::path::Path) -> NativeVault {
+    let mut vault = NativeVault::open(root).unwrap();
     vault
         .family_enroll(&crate::FamilyScope {
             realm_id: zorid_sync_protocol::RealmId::new("document-fixture-realm").unwrap(),
             vault_id: zorid_sync_protocol::VaultId::new("document-fixture-vault").unwrap(),
         })
         .unwrap();
+    vault
+}
+fn family_create(vault: &mut NativeVault, name: &str, path: &str, source: &str) {
     let created = vault
         .family_apply(
             &MutationRequest {
-                operation_id: OperationId::new("create-note").unwrap(),
+                operation_id: OperationId::new(format!("create-{name}")).unwrap(),
                 mutation: Mutation::Create {
-                    id: id("note"),
-                    path: VaultPath::new("Note.md").unwrap(),
+                    id: id(name),
+                    path: VaultPath::new(path).unwrap(),
                     kind: EntryKind::File,
-                    content: Some(b"committed\n".to_vec()),
+                    content: Some(source.as_bytes().to_vec()),
                 },
             },
             Some(crate::FamilyCreateMode::Text),
@@ -267,25 +268,155 @@ fn queries_never_implicitly_reconcile_external_files_and_reject_foreign_pins() {
         created.projection,
         crate::ProjectionStatus::Projected
     ));
+}
+fn send_family(source: &mut NativeVault, target: &mut NativeVault) -> usize {
+    let key = zorid_crypto::VaultKey::from_bytes([37; 32]);
+    let updates = source.family_pending_authored(None, 100).unwrap();
+    let count = updates.len();
+    assert!(count < 100, "fixture must not truncate pending updates");
+    for update in updates {
+        let context = zorid_sync_protocol::ExpectedContext {
+            realm_id: update.scope.realm_id,
+            vault_id: update.scope.vault_id,
+            update_id: update.update_id,
+            key_epoch: 1,
+        };
+        let wire = source.family_seal(&context, &key).unwrap();
+        let opened = zorid_crypto::OpenedEnvelope::open(&wire, &context, &key).unwrap();
+        let received = target.family_receive(&opened, None).unwrap();
+        assert!(!received.commit.duplicate);
+        source
+            .family_ack(
+                &context.realm_id,
+                &context.vault_id,
+                &context.update_id,
+                &wire,
+            )
+            .unwrap();
+    }
+    let status = target.family_status().unwrap();
+    assert_eq!(status.pending_dependencies, "0");
+    assert_eq!(status.pending_projection, "0");
+    count
+}
+/// Compare semantic payloads independently of the generation token. Each result
+/// still has to carry the same pinned source and exact committed entry revision.
+fn document_view(
+    vault: &NativeVault,
+    pin: &DocumentQueryPin,
+    expected: &Revision,
+    literal: &str,
+    tag: &str,
+    target: &str,
+) -> serde_json::Value {
+    let metadata = vault.document_metadata(pin, &id("note")).unwrap();
+    assert_eq!(&metadata.value.entry.revision, expected);
+    assert_eq!(metadata.value.metadata.as_ref().unwrap().tags, [tag]);
+    let search = vault
+        .search_documents(pin, LiteralQuery::new(literal).unwrap(), None, 10)
+        .unwrap();
+    assert!(search.value.complete);
+    assert_eq!(search.value.hits.len(), 1);
+    assert_eq!(search.value.hits[0].entry.id, id("note"));
+    assert_eq!(&search.value.hits[0].entry.revision, expected);
+    let backlinks = vault
+        .document_backlinks(pin, &id(target), None, 10)
+        .unwrap();
+    assert!(backlinks.value.complete);
+    assert_eq!(backlinks.value.edges.len(), 1);
+    assert_eq!(backlinks.value.edges[0].source().id, id("note"));
+    assert_eq!(&backlinks.value.edges[0].source().revision, expected);
+    assert_eq!(metadata.snapshot, search.snapshot);
+    assert_eq!(metadata.snapshot, backlinks.snapshot);
+    assert_eq!(metadata.source, search.source);
+    assert_eq!(metadata.source, backlinks.source);
+    serde_json::json!({
+        "metadata": metadata.value,
+        "hits": search.value.hits,
+        "backlinks": backlinks.value.edges,
+    })
+}
+fn old_semantics_absent(vault: &NativeVault, pin: &DocumentQueryPin) {
+    assert!(vault
+        .search_documents(pin, LiteralQuery::new("committed").unwrap(), None, 10)
+        .unwrap()
+        .value
+        .hits
+        .is_empty());
+    assert!(vault
+        .document_backlinks(pin, &id("before"), None, 10)
+        .unwrap()
+        .value
+        .edges
+        .is_empty());
+}
+const BEFORE_IMPORT: &str = "#before\r\ncommitted [[Before]]\r\n";
+const AFTER_IMPORT: &str = "#after\r\nexternal [[After]] café\r\n";
+
+#[test]
+fn queries_never_implicitly_reconcile_external_files_and_reject_foreign_pins() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(dir.path());
+    family_create(&mut vault, "before", "Before.md", "# Before\n");
+    family_create(&mut vault, "after", "After.md", "# After\n");
+    family_create(&mut vault, "note", "Note.md", BEFORE_IMPORT);
+    let original_revision = revision(&vault, "note");
     vault.initialize_document_index().unwrap();
     build(&mut vault);
     let pin = vault.open_document_snapshot().unwrap();
-    std::fs::write(dir.path().join("Note.md"), "external\n").unwrap();
-    let page = vault
-        .search_documents(&pin, LiteralQuery::new("committed").unwrap(), None, 10)
-        .unwrap();
-    assert_eq!(page.value.hits.len(), 1);
-    let page = vault
+    let original_view = document_view(
+        &vault,
+        &pin,
+        &original_revision,
+        "committed",
+        "before",
+        "before",
+    );
+    let original_source = vault.document_index_status_with_source().unwrap().0;
+    std::fs::write(dir.path().join("Note.md"), AFTER_IMPORT).unwrap();
+    // Neither queries nor an explicit derived build import physical bytes.
+    assert_eq!(
+        document_view(
+            &vault,
+            &pin,
+            &original_revision,
+            "committed",
+            "before",
+            "before"
+        ),
+        original_view
+    );
+    assert!(vault
         .search_documents(&pin, LiteralQuery::new("external").unwrap(), None, 10)
-        .unwrap();
-    assert!(page.value.hits.is_empty());
-    // An explicit derived build still reads authority rather than disk.
+        .unwrap()
+        .value
+        .hits
+        .is_empty());
     build(&mut vault);
     let fresh = vault.open_document_snapshot().unwrap();
-    let page = vault
-        .search_documents(&fresh, LiteralQuery::new("committed").unwrap(), None, 10)
-        .unwrap();
-    assert_eq!(page.value.hits.len(), 1);
+    assert_eq!(
+        document_view(
+            &vault,
+            &fresh,
+            &original_revision,
+            "committed",
+            "before",
+            "before"
+        ),
+        original_view
+    );
+    assert_eq!(
+        vault.document_index_status_with_source().unwrap().0,
+        original_source
+    );
+    assert_eq!(
+        vault.read(&id("note")).unwrap().unwrap().content.unwrap(),
+        BEFORE_IMPORT.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("Note.md")).unwrap(),
+        AFTER_IMPORT.as_bytes()
+    );
     let other_dir = tempfile::tempdir().unwrap();
     let other = NativeVault::open(other_dir.path()).unwrap();
     expect_code(other.document_snapshot_identity(&pin), "snapshot_expired");
@@ -293,18 +424,224 @@ fn queries_never_implicitly_reconcile_external_files_and_reject_foreign_pins() {
         other.document_metadata(&pin, &id("note")),
         "snapshot_expired",
     );
+
     // Explicit source reconciliation is the only import gate.
     let imported_source = vault
         .reconcile_external(crate::ScanOptions::default(), crate::ExternalFileMode::Auto)
         .unwrap();
     assert!(imported_source.complete, "{imported_source:?}");
     assert_eq!(imported_source.imported.len(), 1, "{imported_source:?}");
+    let imported_revision = revision(&vault, "note");
+    assert_ne!(imported_revision, original_revision);
+    let source_after = vault.document_index_status_with_source().unwrap().0;
+    assert_ne!(source_after, original_source);
+    assert_eq!(
+        vault.read(&id("note")).unwrap().unwrap().content.unwrap(),
+        AFTER_IMPORT.as_bytes()
+    );
+    // The old generation remains coherent even after the authority import.
+    assert_eq!(
+        document_view(
+            &vault,
+            &pin,
+            &original_revision,
+            "committed",
+            "before",
+            "before"
+        ),
+        original_view
+    );
     build(&mut vault);
     let imported = vault.open_document_snapshot().unwrap();
-    let page = vault
-        .search_documents(&imported, LiteralQuery::new("external").unwrap(), None, 10)
+    assert_eq!(
+        vault.document_snapshot_identity(&imported).unwrap().source,
+        source_after
+    );
+    let refreshed = document_view(
+        &vault,
+        &imported,
+        &imported_revision,
+        "external",
+        "after",
+        "after",
+    );
+    old_semantics_absent(&vault, &imported);
+    let family_before_rebuild = vault.family_status().unwrap();
+    vault.rebuild_document_index().unwrap();
+    build(&mut vault);
+    let rebuilt = vault.open_document_snapshot().unwrap();
+    assert_eq!(
+        document_view(
+            &vault,
+            &rebuilt,
+            &imported_revision,
+            "external",
+            "after",
+            "after"
+        ),
+        refreshed
+    );
+    old_semantics_absent(&vault, &rebuilt);
+    assert_eq!(
+        vault.document_index_status_with_source().unwrap().0,
+        source_after
+    );
+    assert_eq!(vault.family_status().unwrap(), family_before_rebuild);
+    assert_eq!(revision(&vault, "note"), imported_revision);
+    assert_eq!(
+        vault.read(&id("note")).unwrap().unwrap().content.unwrap(),
+        AFTER_IMPORT.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("Note.md")).unwrap(),
+        AFTER_IMPORT.as_bytes()
+    );
+}
+
+#[test]
+fn authenticated_received_update_refreshes_metadata_search_and_backlinks_and_rebuilds_equally() {
+    let sender_dir = tempfile::tempdir().unwrap();
+    let receiver_dir = tempfile::tempdir().unwrap();
+    let mut sender = enrolled(sender_dir.path());
+    let mut receiver = enrolled(receiver_dir.path());
+    family_create(&mut sender, "before", "Before.md", "# Before\n");
+    family_create(&mut sender, "after", "After.md", "# After\n");
+    family_create(&mut sender, "note", "Note.md", BEFORE_IMPORT);
+    assert!(send_family(&mut sender, &mut receiver) >= 3);
+    assert!(receiver
+        .family_pending_authored(None, 100)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        receiver
+            .read(&id("note"))
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        BEFORE_IMPORT.as_bytes()
+    );
+    receiver.initialize_document_index().unwrap();
+    build(&mut receiver);
+    let old = receiver.open_document_snapshot().unwrap();
+    let original_revision = revision(&receiver, "note");
+    let original_source = receiver.document_index_status_with_source().unwrap().0;
+    let original_view = document_view(
+        &receiver,
+        &old,
+        &original_revision,
+        "committed",
+        "before",
+        "before",
+    );
+
+    // Real authored family update, encrypted and authenticated before ingress.
+    let written = sender
+        .family_apply(
+            &MutationRequest {
+                operation_id: OperationId::new("remote-write").unwrap(),
+                mutation: Mutation::Write {
+                    id: id("note"),
+                    expected: revision(&sender, "note"),
+                    content: AFTER_IMPORT.as_bytes().to_vec(),
+                },
+            },
+            None,
+        )
         .unwrap();
-    assert_eq!(page.value.hits.len(), 1);
+    assert!(matches!(
+        written.projection,
+        crate::ProjectionStatus::Projected
+    ));
+    assert_eq!(send_family(&mut sender, &mut receiver), 1);
+    assert!(
+        receiver
+            .family_pending_authored(None, 100)
+            .unwrap()
+            .is_empty(),
+        "receive must not echo an authored update"
+    );
+    let received_revision = revision(&receiver, "note");
+    assert_ne!(received_revision, original_revision);
+    let received_source = receiver.document_index_status_with_source().unwrap().0;
+    assert_ne!(received_source, original_source);
+    assert_eq!(
+        receiver
+            .read(&id("note"))
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        AFTER_IMPORT.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(receiver_dir.path().join("Note.md")).unwrap(),
+        AFTER_IMPORT.as_bytes()
+    );
+    assert_eq!(
+        document_view(
+            &receiver,
+            &old,
+            &original_revision,
+            "committed",
+            "before",
+            "before"
+        ),
+        original_view
+    );
+    build(&mut receiver);
+    let current = receiver.open_document_snapshot().unwrap();
+    assert_eq!(
+        receiver
+            .document_snapshot_identity(&current)
+            .unwrap()
+            .source,
+        received_source
+    );
+    let refreshed = document_view(
+        &receiver,
+        &current,
+        &received_revision,
+        "external",
+        "after",
+        "after",
+    );
+    old_semantics_absent(&receiver, &current);
+    let family_before_rebuild = receiver.family_status().unwrap();
+    receiver.rebuild_document_index().unwrap();
+    build(&mut receiver);
+    let rebuilt = receiver.open_document_snapshot().unwrap();
+    assert_eq!(
+        document_view(
+            &receiver,
+            &rebuilt,
+            &received_revision,
+            "external",
+            "after",
+            "after"
+        ),
+        refreshed
+    );
+    old_semantics_absent(&receiver, &rebuilt);
+    assert_eq!(
+        receiver.document_index_status_with_source().unwrap().0,
+        received_source
+    );
+    assert_eq!(receiver.family_status().unwrap(), family_before_rebuild);
+    assert_eq!(revision(&receiver, "note"), received_revision);
+    assert_eq!(
+        receiver
+            .read(&id("note"))
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        AFTER_IMPORT.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(receiver_dir.path().join("Note.md")).unwrap(),
+        AFTER_IMPORT.as_bytes()
+    );
 }
 
 #[test]
