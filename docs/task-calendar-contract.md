@@ -1,5 +1,14 @@
 # Task and calendar implementation contract
 
+SUPERSEDED — latest user design on2026-10-17 defines Markdown records with
+configurable types and optional task capabilities. Markdown checkboxes remain
+separate; conversion is explicit. The tag-defined task-note plus inline aggregate
+model below is historical, not the implementation contract. User explicitly
+requested discussion before more implementation. All task/query/UI/calendar
+candidates are held isolated; none has been integrated into main. Reusable Bases
+workflow changes are source-reviewed but also await the discussion checkpoint.
+Resolve storage/type identity, recurrence and calendar ownership first.
+
 Accepted implementation defaults, 2026-10-17. User may refine the workflows;
 these defaults permit useful parallel implementation without migrating notes.
 Execution remains Vite (complete), Bases/tasks/calendar, then Stage5.

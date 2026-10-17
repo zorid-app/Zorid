@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Latest user design supersedes the initial task contract: ordinary Markdown records
+reference configurable vault type definitions; task behavior is an optional type
+capability mapping status categories/planned day/deadline/recurrence/reminders.
+Checkboxes stay separate with explicit conversion. Bases select records and hold
+multiple views/creation defaults; built-in Tasks/Calendar reuse the same system.
+User says "let's discuss": stop new task/calendar implementation and hold all
+isolated candidates. No task or calendar source has reached main. Resolve storage
+and stable type/property/option identity, then recurrence/calendar connection
+ownership before resuming. Native UX/import work remains separately owned.
+
 Latest Vite completion — main165cf17a +manager-lock60efe609:
 - Vite is the default application renderer build. Actual dev/prod browser, desktop
   file renderer/save/math/code,307exactvendorassets,347fileASAR/nativearm64 and
