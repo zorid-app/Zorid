@@ -3,6 +3,7 @@ const config = {
   moduleUrl: new URL(parameters.get('module') ?? '/target/browser-wasm/generated/zorid_wasm.js', location.href).href,
   expressionsUrl: new URL(parameters.get('expressions') ?? '../document-semantics/bases/accepted-expressions.json', location.href).href,
   queriesUrl: new URL(parameters.get('queries') ?? '../document-semantics/bases/accepted-queries.json', location.href).href,
+  generationQueriesUrl: new URL(parameters.get('generationQueries') ?? '../document-semantics/bases/accepted-generation-queries.json', location.href).href,
   documentsUrl: new URL(parameters.get('documents') ?? '../document-semantics/bases/documents.json', location.href).href,
 };
 config.wasmUrl = new URL(parameters.get('wasm') ?? 'zorid_wasm_bg.wasm', config.moduleUrl).href;

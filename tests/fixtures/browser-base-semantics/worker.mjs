@@ -60,7 +60,7 @@ function expressionValue(outcome) {
 function compareQuery(outcome, item) {
   if (!outcome.ok) return { path: '$', error: outcome.error, expected: 'successful shared query' };
   const result = outcome.value;
-  const snapshotFailure = difference(result.snapshotId, item.request.snapshot.snapshotId, '$.snapshotId');
+  const snapshotFailure = difference(result.snapshotId, item.request.snapshot?.snapshotId ?? item.request.snapshotId, '$.snapshotId');
   if (snapshotFailure) return snapshotFailure;
   const paths = new Map(result.rows.map(row => [row.entryId, row.path]));
   const projected = {
@@ -91,7 +91,7 @@ function compareQuery(outcome, item) {
   }
   return null;
 }
-function requestChecks(bindings, queryRequest) {
+function requestChecks(bindings, queryRequest, generationRequest) {
   const checks = [
     { id: 'compile-unpaired-high-surrogate', input: String.fromCharCode(0xd800) },
     { id: 'compile-unpaired-low-surrogate', input: String.fromCharCode(0xdc00) },
@@ -103,6 +103,12 @@ function requestChecks(bindings, queryRequest) {
   const forged = { ...queryRequest, snapshot: { ...queryRequest.snapshot, relationships: {} } };
   const actual = invoke(bindings.queryBase, forged);
   checks.push({ id: 'reject-caller-authored-relationship-graph', passed: !actual.ok && actual.error.code === 'invalid_request', actual });
+  const stale = structuredClone(generationRequest);
+  const text = stale.sources.find(source => source.kind === 'text');
+  if (!text) throw new Error('Canonical generation corpus needs one exact text witness for the stale-revision proof');
+  text.request.contentRevision = 'stale-browser-revision';
+  const staleResult = invoke(bindings.queryBaseFromSources, stale);
+  checks.push({ id: 'reject-stale-generation-source-witness', passed: !staleResult.ok && staleResult.error.code === 'index_error' && staleResult.error.error === 'stale_source', actual: staleResult });
   return checks;
 }
 
@@ -113,13 +119,14 @@ self.onmessage = async ({ data: config }) => {
     const expressions = await fetchCorpus(config.expressionsUrl);
     const queries = await fetchCorpus(config.queriesUrl);
     const documents = await fetchCorpus(config.documentsUrl);
+    const generationQueries = await fetchCorpus(config.generationQueriesUrl);
     const wasmBytes = await fetchBytes(config.wasmUrl);
     const bindings = await import(config.moduleUrl);
-    for (const name of ['default', 'evaluateBaseExpression', 'queryBase', 'compileBaseSource']) {
+    for (const name of ['default', 'evaluateBaseExpression', 'queryBase', 'queryBaseFromSources', 'compileBaseSource']) {
       if (typeof bindings[name] !== 'function') throw new Error(`Generated WASM module lacks ${name}`);
     }
     await bindings.default({ module_or_path: wasmBytes });
-    const total = expressions.value.cases.length + queries.value.cases.length + documents.value.cases.length;
+    const total = expressions.value.cases.length + queries.value.cases.length + documents.value.cases.length + generationQueries.value.cases.length;
     let completed = 0;
     for (const item of expressions.value.cases) {
       if (!item.request || !Object.hasOwn(item, 'expected')) throw new Error(`Accepted expression ${item.id} lacks canonical transport-ready request/expected; run the Base owner's shared projector`);
@@ -138,6 +145,14 @@ self.onmessage = async ({ data: config }) => {
       if (failure) failures.push({ id: item.id, operation: 'query', ...failure });
       self.postMessage({ type: 'progress', completed: ++completed, total });
     }
+    for (const item of generationQueries.value.cases) {
+      if (!item.request?.snapshotId || !Array.isArray(item.request.sources) || !Object.hasOwn(item, 'expected')) throw new Error(`Accepted generation query ${item.id} lacks canonical source factory request/expected`);
+      const outcome = invoke(bindings.queryBaseFromSources, item.request);
+      results.push({ id: item.id, operation: 'generationQuery', result: outcome });
+      const failure = compareQuery(outcome, item);
+      if (failure) failures.push({ id: item.id, operation: 'generationQuery', ...failure });
+      self.postMessage({ type: 'progress', completed: ++completed, total });
+    }
     for (const item of documents.value.cases) {
       if (typeof item.source !== 'string' || typeof item.current?.valid !== 'boolean') throw new Error(`Invalid source fixture ${item.id}`);
       const outcome = invoke(bindings.compileBaseSource, item.source);
@@ -146,14 +161,14 @@ self.onmessage = async ({ data: config }) => {
       if (outcome.ok !== item.current.valid || (!outcome.ok && !sharedCompileError)) failures.push({ id: item.id, operation: 'compile', expectedValid: item.current.valid, actual: outcome });
       self.postMessage({ type: 'progress', completed: ++completed, total });
     }
-    const checks = requestChecks(bindings, queries.value.cases[0].request);
+    const checks = requestChecks(bindings, queries.value.cases[0].request, generationQueries.value.cases[0].request);
     for (const check of checks) if (!check.passed) failures.push({ id: check.id, operation: 'request-rejection', ...check });
     self.postMessage({ type: 'complete', report: {
       status: failures.length ? 'failed' : 'passed', runtime: 'actual-browser-worker-generated-rust-wasm',
-      relationshipCoverage: 'not-exercised-graphless-detached-snapshots', ...config,
-      corpusHashes: { expressions: expressions.sha256, queries: queries.sha256, documents: documents.sha256 },
+      relationshipCoverage: { detachedQueries: 'graphless', generationQueryCases: generationQueries.value.cases.length, passedGenerationQueries: generationQueries.value.cases.length - failures.filter(failure => failure.operation === 'generationQuery').length, scope: 'canonical Rust-owned source-generation queries; production host persistence not exercised' }, ...config,
+      corpusHashes: { expressions: expressions.sha256, queries: queries.sha256, generationQueries: generationQueries.sha256, documents: documents.sha256 },
       wasmSha256: await hash(wasmBytes), actualResultsSha256: await hash(encoder.encode(JSON.stringify(results))),
-      totals: { expressions: expressions.value.cases.length, queries: queries.value.cases.length, compile: documents.value.cases.length },
+      totals: { expressions: expressions.value.cases.length, queries: queries.value.cases.length, generationQueries: generationQueries.value.cases.length, compile: documents.value.cases.length },
       total, passed: total - failures.filter(failure => failure.operation !== 'request-rejection').length,
       requestChecks: checks, elapsedMs: performance.now() - started, results, failures,
     } });
