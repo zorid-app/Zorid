@@ -113,3 +113,40 @@ Real Electron/editor save-handoff, restart recovery, full-vault binary/namespace
 sync, production enrollment/recovery and deployed service behavior remain
 separate gates. The CLI HTTP transport remains explicit loopback fixture text
 sync, and no production credentials or ordinary vault migration are introduced.
+
+## Coordinator verification — 2026-10-16
+
+Candidate source `3660c77820511ac1c7fe323a88b4b79b9a988cfe` was tested on
+macOS arm64. Root imported the resolved dependency lock from source `1a918a1`;
+Cargo pruned unused workspace packages. No existing main package identity
+(name/version/source) was removed or upgraded. Final tested lock SHA-256:
+`e12a4485aefcd7643f236e315b00c7364a6e0c232fb96186e8f320e192812210`.
+
+Serialized checks completed:
+
+```sh
+cargo test --offline -p zorid-core -p zorid-crdt -p zorid-store -p zorid-native -p zorid-client-sync -p zorid-cli -p zorid-desktop-host -j1 -- --test-threads=1
+cargo test --offline -p zorid-sync-protocol -j1 -- --test-threads=1
+cargo build --offline -p zorid-cli -p zorid-desktop-host -j1
+ZORID_CLI_BIN="$PWD/target/debug/zorid" ZORID_DESKTOP_HOST_BIN="$PWD/target/debug/zorid-desktop-host" node --test --test-concurrency=1 tests/rust-vault-service.test.cjs tests/core-vault-fixture-service.test.cjs tests/desktop-durable-writes.test.cjs tests/desktop-durable-checkpoints.test.cjs tests/rust-vault-cli.integration.cjs
+```
+
+- Session14067 exited0: **202 Rust tests passed**, including independent CLI
+  process offline convergence through the loopback relay and the corrected
+  desktop response decoder test.
+- Session72147 exited0: **6 protocol tests passed**, actual CLI/host binaries
+  built, then **46 CJS tests passed**, none skipped. Actual process fixtures
+  exercised desktop-host/CLI concurrency, restart, checkpoint recovery and
+  byte copying. Synthetic transport fixtures remain labeled by their tests.
+- Logs: `/private/tmp/zorid-native-integration-3660c77.log`,
+  `/private/tmp/zorid-native-protocol-3660c77.log`,
+  `/private/tmp/zorid-native-binaries-3660c77.log`,
+  `/private/tmp/zorid-native-cjs-3660c77.log`.
+
+These checks supersede the pending combined-runtime statement above for this
+exact batch. They do not establish Electron UI integration, browser/server
+convergence, full namespace/binary sync, the later client-admission lease batch,
+production enrollment or clean-client encrypted restore. Fixture processes
+finished with the test commands; no Electron window or deployed service was
+opened. Main changes since this candidate base were editor commands and docs,
+not these Rust/desktop service paths.
