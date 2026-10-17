@@ -68,6 +68,26 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-16 23:50 local
 
+- Subsequent promotion: `f9e6fc9` integrates the reviewed WASM crate and runtime
+  fixtures. Rebuilt candidate `11d2544` passed all10 actual Chrome groups; main
+  wrapper tests passed17. `906dab6` includes strict plaintext inspection with
+  no authenticated authority. See `wasm-family-browser-verification.md`.
+- `5f6555e` integrates physical move frontier joining and retained historical
+  binary witness validation. Candidate session44641 and current-main session4653
+  each passed all38 file-sync tests. These pure helpers do not prove filesystem
+  projection; native/browser adapters still must commit their own durable proof.
+- HTTP isolation candidate `ccad485` passed2 actual TCP tests, but review requires
+  request deadlines and narrower overlap-race claims before integration. Timing
+  alone does not establish deterministic revocation transaction ordering.
+- Browser storage review found cursor skipping, incomplete hidden-content witness
+  validation, stranded unsupported prepared intents, bounds-after-copy and a
+  competing sealed-result authentication gap. Owner is fixing these; no storage
+  integration approval yet. Focused TypeScript passed, not runtime evidence.
+- `core_cli` owns portable mutation planning; `data_readiness/family_ledger_review`
+  owns shared materialization classification in `core-materialization-2`, reviewed
+  independently by another worker. `wasm_integration_prep` exposes the validated
+  retained-binary helper. No duplicated JavaScript/native causal algorithms.
+
 - Main `90aa624` through `ec5b2ee` now contains purpose-separated recovery,
   portable raw-response codecs and text/file-v2 planners. Combined current-native
   candidate `a72e13c` passed 108 tests (session60597 exit0), including known-note
