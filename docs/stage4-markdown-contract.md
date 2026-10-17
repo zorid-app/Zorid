@@ -98,7 +98,9 @@ order is a vector, never a JSON object's enumeration order. Nested map ordering
 is semantically irrelevant; prototype-like keys remain data. A string scalar
 mapping key is retained verbatim after YAML decoding; ordinary nonstring scalar
 keys are converted to their YAML string spelling as the current `stringKeys`
-policy does. Collection keys, empty/whitespace-only keys and control characters
+policy does. Detect duplicates again after scalar-key conversion, so boolean `true` and string
+`"true"` cannot silently collide in the resulting JSON mapping. Collection keys,
+empty/whitespace-only keys and control characters
 U+0000–001F/U+007F in keys invalidate the whole frontmatter.
 
 `schemaVersion` describes result shape; `dialectVersion` describes extraction
@@ -294,7 +296,7 @@ adoption/license lock review belongs to root. YAML dependency selection is still
 open; evaluate a maintained portable YAML parser against these fixtures rather
 than write custom YAML. MDBASE and index/query work have separate owners.
 
-The 40-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
+The 42-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
 invalid/duplicate/tagged YAML, mixed projections, nonfinite/unsafe numbers,
 BOM/CRLF/bare-CR/astral/decomposed Unicode, empty/partial Markdown, exclusions,
 ATX/Setext/container headings, raw/inline/reference links and task dialect.
@@ -315,10 +317,12 @@ corpus order and deep-compares every field to `expected`. Both native and browse
 WASM harnesses must read `request`, execute the actual engine and emit that shape.
 They must not copy `expected` into their result. The checker itself validates
 IDs/provenance, byte/UTF-16 boundaries/source slices, ordering, line positions and
-task invariants; it does not implement parsing. The TypeScript option checks all
+task invariants; it does not implement parsing. Fixtures with quoted/escaped keys
+include separate `propertyKeySpellings` source assertions; decoded keys must not
+be mistaken for raw YAML spelling. The TypeScript option checks all
 recorded baseline observations, including intentional mismatches with the target.
 
-Verification at preparation completion: the checker and all 40 current TypeScript
+Verification at preparation completion: the checker and all 42 current TypeScript
 observations pass; 22 existing property/metadata tests pass. The first checker
 run caught an accidentally empty status in the final empty task and was corrected;
 fixture IDs were corrected to the existing strong-ID grammar before completion.

@@ -4470,6 +4470,192 @@
         "tasks": [],
         "diagnostics": []
       }
+    },
+    {
+      "id": "yaml-key-spellings",
+      "decision": "Quoted and escaped source key spelling differs from decoded key. Ordinary scalar keys convert to string spelling; source ranges cover original syntax.",
+      "request": {
+        "entryId": "fixture-yaml-key-spellings",
+        "contentRevision": "fixture-1",
+        "source": "---\n\"quoted key\": value\n\"a\\u0062\": escaped\ntrue: boolean key\n12: numeric key\n---\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-yaml-key-spellings",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 81,
+          "utf16": 81
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              81
+            ],
+            "utf16": [
+              0,
+              81
+            ]
+          },
+          "bodyStart": {
+            "byte": 81,
+            "utf16": 81
+          }
+        },
+        "properties": [
+          {
+            "key": "quoted key",
+            "value": "value",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                4,
+                16
+              ],
+              "utf16": [
+                4,
+                16
+              ]
+            }
+          },
+          {
+            "key": "ab",
+            "value": "escaped",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                24,
+                33
+              ],
+              "utf16": [
+                24,
+                33
+              ]
+            }
+          },
+          {
+            "key": "true",
+            "value": "boolean key",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                43,
+                47
+              ],
+              "utf16": [
+                43,
+                47
+              ]
+            }
+          },
+          {
+            "key": "12",
+            "value": "numeric key",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                61,
+                63
+              ],
+              "utf16": [
+                61,
+                63
+              ]
+            }
+          }
+        ],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      },
+      "propertyKeySpellings": [
+        "\"quoted key\"",
+        "\"a\\u0062\"",
+        "true",
+        "12"
+      ]
+    },
+    {
+      "id": "converted-key-duplicate",
+      "decision": "Reject collisions after scalar-key conversion to strings, including YAML boolean true versus quoted string true. Never silently overwrite one JSON mapping entry.",
+      "request": {
+        "entryId": "fixture-converted-key-duplicate",
+        "contentRevision": "fixture-1",
+        "source": "---\ntrue: first\n\"true\": second\n---\nBody #visible"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-converted-key-duplicate",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 48,
+          "utf16": 48
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              35
+            ],
+            "utf16": [
+              0,
+              35
+            ]
+          },
+          "bodyStart": {
+            "byte": 35,
+            "utf16": 35
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                40,
+                48
+              ],
+              "utf16": [
+                40,
+                48
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_duplicate_key",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                35
+              ],
+              "utf16": [
+                0,
+                35
+              ]
+            }
+          }
+        ]
+      }
     }
   ]
 }

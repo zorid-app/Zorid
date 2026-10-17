@@ -35,7 +35,7 @@ function walkRanges(source, object) {
   else for (const value of Object.values(object)) walkRanges(source, value);
 }
 const ids = new Set();
-for (const { id, request, expected } of corpus.cases) {
+for (const { id, request, expected, propertyKeySpellings } of corpus.cases) {
   assert(!ids.has(id), `duplicate fixture ${id}`); ids.add(id);
   const s = request.source;
   assert.equal(expected.entryId, request.entryId);
@@ -47,7 +47,8 @@ for (const { id, request, expected } of corpus.cases) {
   assert.deepEqual(expected.sourceLength, { bytes: utf8(s), utf16: s.length });
   walkRanges(s, expected);
   const slice = range => s.slice(...range.utf16);
-  for (const p of expected.properties) assert.equal(slice(p.keyRange), p.key, `${id} property key`);
+  if (propertyKeySpellings) assert.equal(propertyKeySpellings.length, expected.properties.length);
+  expected.properties.forEach((p, i) => assert.equal(slice(p.keyRange), propertyKeySpellings?.[i] ?? p.key, `${id} property source key spelling`));
   for (const tag of expected.tagOccurrences) assert.equal(slice(tag.range), '#' + tag.name, `${id} tag`);
   assert.deepEqual(expected.tags, [...new Set(expected.tags)], `${id} tag deduplication`);
   for (const link of expected.links) {

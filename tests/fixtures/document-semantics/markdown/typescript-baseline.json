@@ -1265,6 +1265,60 @@
       },
       "properties": [],
       "propertiesError": false
+    },
+    {
+      "id": "yaml-key-spellings",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "12": "numeric key",
+          "quoted key": "value",
+          "ab": "escaped",
+          "true": "boolean key"
+        },
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "quoted key",
+          "value": "value",
+          "type": "text"
+        },
+        {
+          "key": "ab",
+          "value": "escaped",
+          "type": "text"
+        },
+        {
+          "key": "true",
+          "value": "boolean key",
+          "type": "text"
+        },
+        {
+          "key": "12",
+          "value": "numeric key",
+          "type": "text"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "converted-key-duplicate",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": null,
+      "propertiesError": true
     }
   ]
 }
