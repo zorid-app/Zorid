@@ -32,7 +32,7 @@ sequence below; completion of the first goal must not close those requirements.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
 
-### Integration checkpoint — 2026-10-16 22:40 local
+### Integration checkpoint — 2026-10-16 22:58 local
 
 - Main `227f084` contains both native/CLI batches and editor E1/E2. Native batch2
   candidate `3df1de8` passed 109 tests in a fresh target (session30255 exit0),
@@ -42,9 +42,12 @@ sequence below; completion of the first goal must not close those requirements.
 - Editor candidate `6b96d1f` passed 29 focused and 1963 aggregate tests,
   TypeScript and production webpack (three performance warnings), session64815
   exit0. The stale parser-tree bug has eight verified fail-before regressions;
-  source fix `a8cfb75` equals editor `dfbfae7`. Native verification is separate:
-  the editor session was granted that slot after root34798 completed. Tested dist
-  is in `editor-base-embed-integration`, not the primary checkout's older dist.
+  source fix `a8cfb75` equals editor `dfbfae7`. Native Base property writes and
+  horizontal/vertical Canvas edge resizing persisted on that build; a draft
+  committed on blur without loss (focus retention unproven). Audio playback
+  failed for the valid WAV fixture and remains under investigation. Evidence
+  `cc55574` is on main; owned Electron exited0. Tested dist is in
+  `editor-base-embed-integration`, not the primary checkout's older dist.
 - Isolated core `b510194` passed the entire Rust workspace in dedicated
   target-verification: session34798 exit0, 201 passes, one ignored crash helper
   explicitly invoked by its parent. Includes schema5 host intents, text plans,
@@ -52,17 +55,23 @@ sequence below; completion of the first goal must not close those requirements.
   backup/restore. SQLite unsigned conversions and two invalid test setups were
   corrected before this pass. These are component/process tests, not real app
   convergence. WASM crate native tests do not substitute for browser execution.
-- Backend candidate `core-backend-integration` contains exact reviewed server,
-  protocol and crypto source from `b510194`, reconciled with current main.
-  Candidate-specific lock resolution and affected tests remain before integration.
-  The server is a loopback fixture service; hosted account enrollment, admin UI
-  and deployment are not implemented by this batch.
+- Backend foundation is integrated on main at `04bf12b`. Candidate `91694d3`
+  passed 28 protocol/crypto/server checks including managed backup/restore
+  (session65524 exit0); no-default-features crypto passed 8 including its doc
+  test (session5557 exit0). Offline lock resolution preserved existing pins.
+  See `docs/backend-integration-acceptance.md`. The server remains a loopback
+  fixture: hosted enrollment, admin UI and deployment are unfinished.
 - Native owner implements schema6 atomic authored/received text persistence and
   origin-aware projection jobs, plus durable local authority identity. Browser
   owner handles shared durable-write types, wrapper and persistent authority
   binding; desktop owner has reviewed source `5380d15` pending runtime checks.
-  Editor owns the forthcoming NoteBuffer checkpoint consumer. Portable helper
-  `2db0bf8` and whole-text planner `7a07bfb` are queued for source integration/tests.
+  Editor owns the NoteBuffer checkpoint consumer; the contract is frozen in
+  `docs/durable-write-contract.md`. Native owner now holds the heavy slot for
+  schema6/checkpoint focused checks. Checkpoint module `c1ed04f`, materialization
+  helper `2db0bf8` and external observed-baseline helper `dc3a697` are source
+  reviewed, runtime pending. Browser checkpoint pagination review found an
+  unbounded live-key scan despite fixed high-water; owner is fixing it. Vault
+  publication and desktop checkpoint transport are source-only pending checks.
 - Actual web/Electron selection, durable editor handshake, complete moves/deletes,
   binary transfer and cross-client encrypted convergence/restore remain required.
   P2P, complete recovery/admin and native mobile remain later milestones.
