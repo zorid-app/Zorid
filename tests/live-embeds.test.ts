@@ -454,7 +454,7 @@ test('note Open link reuses navigation capability and invalidates retained links
   click(first); assert.equal(opened, 1, 'detached link cannot navigate before observer delivery');
   await settleControls(); click(second); assert.equal(opened, 2);
   click(root); assert.equal(view.state.selection.main.from, 7); assert.equal(renders[0].destroys, 0);
-  destroy(); click(second); assert.equal(opened, 2); assert.equal(renders[0].destroys, 1);
+  destroy(); assert.equal(click(second), false, 'retained anchor default navigation is suppressed'); assert.equal(opened, 2); assert.equal(renders[0].destroys, 1);
   assert.equal(host.querySelector('.cm-live-embed'), null);
 });
 
@@ -517,4 +517,38 @@ test('async control observer is shallow, does not observe its own actions, and d
   const selection = view.state.selection.main.from; click(action); assert.equal(view.state.selection.main.from, selection);
   root.className = 'audio-embed'; root.replaceChildren(document.createElement('audio'));
   await settleControls(); assert.equal(observer.calls, count); assert.equal(wrapper.dataset.embedType, 'pdf');
+});
+
+
+test('same note anchor recovers after loading and preserves fallback navigation after asynchronous failure', async t => {
+  const { renders, click, destroy } = setup(t, 'before\n![[Note]]\nafter', true);
+  const root = renders[0].node;
+  const link = document.createElement('a'); link.className = 'embed-open'; link.href = '#Note'; link.textContent = 'Note';
+  link.title = 'Original title'; link.setAttribute('aria-label', 'Open Note');
+  let opened = 0; link.onclick = event => { event.preventDefault(); opened++; };
+  root.className = 'markdown-embed'; root.replaceChildren(link); await settleControls();
+  click(link); assert.equal(opened, 1);
+  const loading = document.createElement('span'); loading.className = 'embed-loading'; root.append(loading); await settleControls();
+  assert.equal(click(link), false); assert.equal(opened, 1);
+  loading.remove(); await settleControls(); click(link); assert.equal(opened, 2);
+  const error = document.createElement('span'); error.className = 'embed-error'; root.append(error); await settleControls();
+  assert.equal(root.parentElement!.dataset.embedType, 'unavailable');
+  assert.equal(link.textContent, 'Note'); assert.equal(link.title, 'Original title'); assert.equal(link.getAttribute('aria-label'), 'Open Note');
+  assert.equal(link.classList.contains('cm-live-embed-open'), false);
+  click(link); assert.equal(opened, 3);
+  error.remove(); await settleControls(); assert.equal(link.getAttribute('aria-label'), 'Open link'); click(link); assert.equal(opened, 4);
+  destroy(); assert.equal(click(link), false); assert.equal(opened, 4);
+});
+
+
+test('typed renderer failure exposes fallback source action but nested viewer errors keep viewer policy', async t => {
+  const { renders, click, view } = setup(t, 'before\n![[sound.wav]]\nafter', true);
+  const root = renders[0].node, wrapper = root.parentElement!;
+  const error = document.createElement('span'); error.className = 'embed-error';
+  root.querySelector('div')!.append(error); await settleControls();
+  assert.equal(wrapper.dataset.embedType, 'audio'); assert.equal(wrapper.querySelector('.cm-live-embed-edit'), null);
+  root.append(error); await settleControls();
+  assert.equal(wrapper.dataset.embedType, 'unavailable');
+  click(wrapper.querySelector('.cm-live-embed-edit')!); assert.equal(view.state.selection.main.from, 7);
+  assert.equal(renders[0].destroys, 0);
 });

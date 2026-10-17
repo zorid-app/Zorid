@@ -29,11 +29,11 @@ type EmbedControlKind = 'loading' | 'unavailable' | 'unknown' | 'image' | 'audio
  * that is unavailable (notably .base/.canvas until their renderer is mounted). */
 function embedControlKind(root: HTMLElement): EmbedControlKind {
   if (root.querySelector(':scope > .embed-loading')) return 'loading';
+  if (root.querySelector(':scope > .embed-error')) return 'unavailable';
   for (const [name, selector] of [
     ['image', '.image-embed'], ['audio', '.audio-embed'], ['video', '.video-embed'],
     ['pdf', '.pdf-embed'], ['base', '.bases-embed'], ['canvas', '.canvas-embed'],
   ] as const) if (root.matches(selector)) return name;
-  if (root.querySelector(':scope > .embed-error')) return 'unavailable';
   if (root.matches('.markdown-embed')) return 'note';
   return 'unknown';
 }
@@ -124,7 +124,10 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
       wrapper.append(instance.dom);
       let disposed = false, action: HTMLButtonElement | undefined, noteLink: HTMLAnchorElement | undefined;
       const edit = (event: MouseEvent) => { event.preventDefault(); event.stopPropagation(); if (!disposed) editSource(view, this.span.identity); };
-      const releaseNoteLink = () => { if (noteLink) noteLink.onclick = null; noteLink = undefined; };
+      const links = new WeakMap<HTMLAnchorElement, { navigate: HTMLAnchorElement['onclick']; children: ChildNode[]; title: string; label: string | null; styled: boolean }>();
+      // Retired anchors keep a guarded handler: nulling onclick would reenable
+      // the browser's default href navigation on a retained detached element.
+      const releaseNoteLink = () => { noteLink = undefined; };
       const updateControls = () => {
         if (disposed) return;
         const kind = embedControlKind(instance.dom);
@@ -139,20 +142,35 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
         } else if (!needsSource && action) {
           action.removeEventListener('click', edit); action.remove(); action = undefined;
         }
-        const link = kind === 'note' ? instance.dom.querySelector<HTMLAnchorElement>(':scope > a.embed-open') : null;
+        const link = kind === 'note' || kind === 'unavailable'
+          ? instance.dom.querySelector<HTMLAnchorElement>(':scope > a.embed-open') : null;
         if (link !== noteLink) {
           releaseNoteLink();
           if (link) {
             noteLink = link;
-            const navigate = link.onclick;
+            let saved = links.get(link);
+            if (!saved) {
+              saved = { navigate: link.onclick, children: [...link.childNodes], title: link.title, label: link.getAttribute('aria-label'), styled: false };
+              links.set(link, saved);
+              const capability = saved;
+              link.onclick = event => {
+                event.stopPropagation();
+                if (disposed || noteLink !== link || !instance.dom.contains(link)) { event.preventDefault(); return; }
+                return capability.navigate?.call(link, event);
+              };
+            }
+          }
+        }
+        if (link) {
+          const saved = links.get(link)!;
+          if (kind === 'note' && !saved.styled) {
             link.classList.add('cm-live-embed-open');
             link.title = 'Open link'; link.setAttribute('aria-label', 'Open link');
-            link.replaceChildren(icon('maximize', 16, view.dom.ownerDocument));
-            link.onclick = event => {
-              event.stopPropagation();
-              if (disposed || !instance.dom.contains(link)) { event.preventDefault(); return; }
-              navigate?.call(link, event);
-            };
+            link.replaceChildren(icon('maximize', 16, view.dom.ownerDocument)); saved.styled = true;
+          } else if (kind !== 'note' && saved.styled) {
+            link.classList.remove('cm-live-embed-open'); link.title = saved.title;
+            if (saved.label === null) link.removeAttribute('aria-label'); else link.setAttribute('aria-label', saved.label);
+            link.replaceChildren(...saved.children); saved.styled = false;
           }
         }
       };

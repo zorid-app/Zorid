@@ -17,10 +17,10 @@ viewers. Image-specific interaction is a separate integration.
 Each widget observes only root class and immediate child changes, so lazy resolution
 updates controls without replacing the renderer or watching nested render churn.
 Cleanup disconnects that observer and resize measurement, removes owned handlers,
-invalidates retained note anchors, then releases the renderer. Source reveal keeps
+guards retired note anchors against navigation, then releases the renderer. Source reveal keeps
 the existing rendered owner and editable syntax together.
 
-Validation: 38 focused CodeMirror/editor tests pass, including async type changes,
+Validation: 40 focused CodeMirror/editor tests pass, including async type changes,
 unsupported-extension fallbacks, note navigation identity and stale anchors, PDF
 source/viewer control separation, native video default behavior, observer bounds,
 source reveal ownership, and existing media deletion/undo cases. Scoped TypeScript
