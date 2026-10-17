@@ -11,7 +11,24 @@ case "$MODE" in
   *) fail 'Usage: ios-build.sh [simulator|device]' ;;
 esac
 [[ "$(uname -s)" == Darwin ]] || fail 'iOS builds require macOS and full Xcode.'
-for cmd in pnpm cargo rustup xcrun python3; do command -v "$cmd" >/dev/null || fail "Missing command: $cmd"; done
+for cmd in pnpm xcrun python3; do command -v "$cmd" >/dev/null || fail "Missing command: $cmd"; done
+# Executable overrides are scalar paths/names, never command strings or shell code.
+CARGO_BIN="${CARGO:-cargo}"
+RUSTC_BIN="${RUSTC:-rustc}"
+CARGO_BIN="$(command -v -- "$CARGO_BIN")" || fail 'CARGO must name an executable file (no arguments).'
+RUSTC_BIN="$(command -v -- "$RUSTC_BIN")" || fail 'RUSTC must name an executable file (no arguments).'
+[[ -f "$CARGO_BIN" && -x "$CARGO_BIN" ]] || fail 'CARGO must name an executable file.'
+[[ -f "$RUSTC_BIN" && -x "$RUSTC_BIN" ]] || fail 'RUSTC must name an executable file.'
+# Keep rustup proxy basenames intact; resolve relative paths before Cargo changes directory.
+case "$CARGO_BIN" in /*) ;; *) CARGO_BIN="$ROOT/$CARGO_BIN" ;; esac
+case "$RUSTC_BIN" in /*) ;; *) RUSTC_BIN="$ROOT/$RUSTC_BIN" ;; esac
+export RUSTC="$RUSTC_BIN"
+# The selected compiler's sysroot is authoritative, including non-rustup installations.
+TARGET_LIBDIR="$("$RUSTC" --print target-libdir --target "$TARGET")" || fail "Selected RUSTC cannot locate target libraries for $TARGET."
+[[ -d "$TARGET_LIBDIR" ]] || fail "Selected RUSTC lacks installed target libraries for $TARGET."
+shopt -s nullglob
+TARGET_LIBCORE=("$TARGET_LIBDIR"/libcore-*.rlib)
+[[ ${#TARGET_LIBCORE[@]} -gt 0 && -f "${TARGET_LIBCORE[0]}" ]] || fail "Selected RUSTC has no libcore for $TARGET; install the official target into this compiler's toolchain."
 [[ -f mobile/rust/Cargo.lock ]] || fail 'Missing mobile/rust/Cargo.lock; integrate the native-core batch first.'
 [[ -f ios/App/App.xcodeproj/project.pbxproj ]] || fail 'Missing iOS Xcode project.'
 [[ -d node_modules ]] || fail 'Run pnpm install --frozen-lockfile first.'
@@ -20,7 +37,6 @@ xcrun --find xcodebuild >/dev/null
 XCODE_MAJOR="$(xcrun xcodebuild -version | python3 -c 'import sys; print(sys.stdin.readline().split()[1].split(".")[0])')"
 [[ "$XCODE_MAJOR" =~ ^[0-9]+$ && "$XCODE_MAJOR" -ge 26 ]] || fail 'Select Xcode 26 or later with DEVELOPER_DIR (Capacitor 8 and current upload requirement).'
 
-rustup target list --installed | python3 -c 'import sys; target=sys.argv[1]; sys.exit(0 if target in sys.stdin.read().splitlines() else 1)' "$TARGET" || fail "Install the official Rust target: rustup target add $TARGET"
 : "${IOS_BUILD_NUMBER:?Set an unused, increasing IOS_BUILD_NUMBER (1..9999).}"
 [[ "$IOS_BUILD_NUMBER" =~ ^[1-9][0-9]{0,3}$ ]] || fail 'IOS_BUILD_NUMBER must be an integer from 1 through 9999.'
 OUTPUT="${IOS_OUTPUT_DIR:-${TMPDIR:-/tmp}/zorid-ios-output}"
@@ -47,7 +63,7 @@ export AR="${IOS_AR:-$(xcrun --sdk "$SDK" --find ar)}"
 export SDKROOT="$(xcrun --sdk "$SDK" --show-sdk-path)"
 CARGO_ARGS=(build --locked --manifest-path mobile/rust/Cargo.toml --target "$TARGET" -j1)
 [[ "$PROFILE" != release ]] || CARGO_ARGS+=(--release)
-cargo "${CARGO_ARGS[@]}"
+"$CARGO_BIN" "${CARGO_ARGS[@]}"
 [[ -f "$CARGO_TARGET_DIR/$TARGET/$PROFILE/libzorid_mobile_ffi.a" ]] || fail 'Missing zorid_mobile_ffi static library.'
 XCODE_ARGS=(-project ios/App/App.xcodeproj -scheme App -configuration "$CONFIG" -sdk "$SDK" -destination "$DEST" -derivedDataPath "$OUTPUT/DerivedData" -jobs 1 "ARCHS=arm64" "CURRENT_PROJECT_VERSION=$IOS_BUILD_NUMBER" 'MARKETING_VERSION=0.1.0' 'PRODUCT_BUNDLE_IDENTIFIER=app.zorid.notes')
 if [[ "$MODE" == simulator ]]; then

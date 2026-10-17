@@ -34,7 +34,7 @@ Prerequisites to first run:
   Capacitor 8.5.3 and has a Filesystem dependency into the local pnpm layout.
   This exact installed layout is required; the scripts do not rewrite Package.swift.
 - macOS with full Xcode 26+, accepted local Xcode license/first-launch setup,
-  Node 26, pnpm 12.14.0, Rust/rustup, Python 3 and available Apple SDKs. CI uses
+  Node 26, pnpm 12.14.0, Rust with installed iOS target libraries, Python 3 and available Apple SDKs. CI uses
   the hosted `macos-15` image and explicitly selects Xcode 26.3; its default
   Xcode may be older. A missing pinned Xcode fails rather than silently falling back.
 - Before upload: Apple owner confirms the exact `app.zorid.notes` app/bundle,
@@ -72,6 +72,38 @@ diff; do not use a blanket reset/clean to hide them.
 
 Rust builds use `--locked --manifest-path mobile/rust/Cargo.toml -j1` with official
 `aarch64-apple-ios-sim` Debug or `aarch64-apple-ios --release` targets.
+`CARGO` and `RUSTC` accept one executable path or PATH-resolved executable name
+(each defaults to `cargo` / `rustc`). Both are validated as executable files and
+invoked as quoted scalars, with no word splitting or `eval`; arguments such as
+`CARGO="cargo +stable"` are rejected. Select a toolchain with executable paths or
+the normal rustup environment instead. `RUSTC` is exported to Cargo so preflight
+and compilation use the same selected compiler. The preflight asks that compiler
+for `--print target-libdir --target <target>`, requires its directory to exist,
+and checks for `libcore-*.rlib`. A shared `rustup target list` from a different
+installation is not used and rustup itself is not required by the build script.
+This proves target-library presence, not successful linking or a compatible build.
+Do not set Cargo configuration or Rust compiler wrappers that substitute a different
+compiler after preflight; toolchain compatibility remains the build owner's gate.
+
+The owner recovered official Rust 1.95 at the shared canonical toolchain path.
+For that installation, set both executable overrides explicitly (the same variables
+also flow through `ios-release.sh`):
+
+```sh
+export CARGO=/Users/ctk/Projects/Zorid/tmp/shared-rust-toolchain/toolchains/stable-aarch64-apple-darwin/bin/cargo
+export RUSTC=/Users/ctk/Projects/Zorid/tmp/shared-rust-toolchain/toolchains/stable-aarch64-apple-darwin/bin/rustc
+```
+
+Follow-up checks passed: shell syntax, independent source review, selected-compiler
+target-libdir/libcore preflight for both iOS triples using the recovered toolchain,
+and rejection of `CARGO="cargo --version"`. These were read-only preflight queries;
+no Cargo compilation, staticlib build or Xcode build ran.
+
+This is a local recovery path, not a hardcoded CI dependency. Installing targets
+with rustup, when needed, must address this selected toolchain's sysroot; changing
+`RUSTUP_HOME` does not redirect a Homebrew compiler. Source follow-up validation
+must not take the owner's exclusive staticlib build slot.
+
 `CARGO_TARGET_DIR` is fixed to `mobile/rust/target` to match the project.
 `IOS_CC`, `IOS_CXX`, and `IOS_AR` optionally specify compiler/tool **paths**, not
 shell command strings; defaults come from the selected Xcode SDK. `DEVELOPER_DIR`
