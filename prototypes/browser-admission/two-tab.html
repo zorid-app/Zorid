@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'">
+<title>Zorid two-tab admission verification</title>
+<style>body{max-width:960px;margin:32px auto;padding:0 20px;font:16px/1.5 system-ui}button{padding:10px;font:inherit}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:20px}a{overflow-wrap:anywhere}</style>
+<h1>Two-tab admission verification</h1>
+<p>Open the owner first, then its generated URL in a second actual Chrome tab. Coordination uses BroadcastChannel; storage uses real application workers and Rust/WASM. Only fresh synthetic data is used.</p>
+<button id="run">Initialize</button>
+<p><a id="peer" hidden target="_blank" rel="noopener"></a></p>
+<button id="closed" hidden>Verify owner tab closed</button>
+<pre id="result" aria-live="polite">Ready. No editor is mounted.</pre>
+</html>

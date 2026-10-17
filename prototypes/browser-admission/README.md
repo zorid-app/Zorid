@@ -64,3 +64,59 @@ identities and does not reuse earlier results.
 No actual two-tab lifecycle, worker power-loss durability, production tab-slot
 allocation, paused NoteBuffer consumer, native mobile or network sync is proved
 by this page. The Web Lock checks use real separate worker contexts on one origin.
+
+## Two actual tabs
+
+The same fixture build now also emits `two-tab.html`. This is a separate runnable
+fixture; the original one-page checks are unchanged. Build using the commands
+above, then use two actual Chrome tabs at the same origin:
+
+1. Open `http://127.0.0.1:8768/two-tab.html` in the **owner tab**, click
+   **Initialize owner tab**, and wait for `phase: "owner-ready"`.
+2. Open its displayed generated peer URL in a **second tab**. Do not duplicate
+   the owner URL: the peer URL contains the run ID and `role=peer`. Click
+   **Run second-tab checks**. Keep the owner tab open.
+3. The second tab verifies duplicate ownership rejection before replay, then
+   performs edits through distinct clients. Both tabs prepare against the same
+   persisted revision before either commits. Exactly one must commit and the
+   other must persist `revision_conflict`; both reload the winning observation.
+   The peer releases/reopens its worker and makes a new explicit edit from the
+   winning base, which the owner must also read from storage.
+4. Wait for `phase: "close-owner-tab"` in the second tab. Close the **first owner
+   Chrome tab using the browser's tab close control**. Do not navigate or reload
+   it, call `runtime.close`, or merely close its worker. In the surviving second
+   tab, click **Verify owner tab closed** within 120 seconds. It verifies the
+   owner lock disappeared, reacquires that exact client, retains its checkpoint,
+   replays the authorized recovery write, leaves prepared content inert, and
+   verifies that the prior shared edit remains unchanged.
+5. Capture the second tab's visible final JSON or
+   `window.__zoridTwoTabAdmissionResult`. Acceptance requires `ok:true`,
+   `passed:4`, the four named checks, `ownerTabCloseConfirmed:true`, and both
+   cleanup flags true. Record actual tab closure alongside the result: the
+   fixture cannot itself distinguish a manually killed owner worker from closure
+   of the tab. Close the remaining fixture tab and owned static server afterward.
+
+Each run generates a new database with prefix
+`zorid-core-vault:two-tab-admission-` and random client IDs. The pages coordinate
+only using a run-scoped BroadcastChannel; they do not share an opener, window
+object, or runtime. All edits and reloads use each tab's real application worker.
+The sole raw IndexedDB injection changes an exact synthetic prepared intent to
+`commit_requested` before the duplicate test, modeling the persisted authorization
+boundary. Plans, refs, and settled outcomes are checkpointed around fixture
+writes. Test coordination does not provide document storage or perform merging.
+
+Requests have 15-second bounds, tab-close confirmation has a 120-second bound,
+and each active page has a 240-second inactivity watchdog. Failure broadcasts
+an abort to the other fixture tab, closes local workers, waits up to 10 seconds
+for fixture authority locks to disappear, then attempts bounded deletion of only
+that generated database. Cleanup failure makes the run fail and records the
+exact database name; do not delete unrelated origin data. Successful owner closure
+intentionally has no pagehide/beforeunload handler: Chrome must terminate the
+worker and release its lifetime lock. Closing the surviving tab early prevents
+its result/cleanup sequence; wait for final JSON, or retain the recorded fixture
+name for explicit cleanup after all fixture tabs are closed.
+
+These checks establish same-origin tab/client locking and optimistic revision
+serialization only. They do not establish automatic CRDT merge, editor recovery,
+production tab-slot allocation, browser/OS process-crash durability, or network
+sync. Browser execution remains pending until the coordinator records results.

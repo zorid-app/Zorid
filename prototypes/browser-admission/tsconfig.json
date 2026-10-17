@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.json",
-  "include": ["./fixture.ts", "../../src/platform/browser-core-worker.ts"],
+  "include": ["./fixture.ts", "./two-tab.ts", "../../src/platform/browser-core-worker.ts"],
   "compilerOptions": { "types": [] }
 }
