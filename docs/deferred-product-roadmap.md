@@ -935,6 +935,27 @@ Implementation waves and parallel ownership (latest requested plan):
    E2EE boundaries before production rollout. Preserve existing vaults/recovery
    drafts until their migration is verified.
 
+### After all six stages: seamless stale-editor draft merging
+
+Direct user instruction (2026-10-17): defer this until all six stages above are
+complete. Preserve the existing retained-draft/recovery-copy UX meanwhile.
+This deferral concerns stale local editor buffers, not existing normal CRDT
+replication or the first milestone's no-loss concurrency/restart requirements.
+
+Use the existing Yrs merge machinery. The missing bridge must retain the original
+causal document witness for the editor baseline, derive the user's edit delta
+against that state, and apply it to the latest core state without treating unseen
+remote text as a deletion. Reconcile the resulting buffer while preserving active
+typing, selections, composition and local undo behavior. Draft checkpoint,
+authored mutation and recovery acknowledgment must stay consistent across
+interruptions. Never implement this by replacing an expected revision with the
+latest revision while submitting the same stale full buffer.
+
+Acceptance should include independent CLI/sync edits while typing, insert/delete
+overlap, undo/IME/selection, repeated concurrent changes, interruption/restart and
+missing baseline history. If safe merge cannot be established, retain the current
+recoverable draft and both document versions.
+
 Proposed ownership boundaries (new paths are proposals, not existing crates):
 
 | Owner | Primary scope | Dependencies and boundaries |
