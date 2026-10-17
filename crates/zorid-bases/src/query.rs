@@ -14,11 +14,47 @@ pub const MAX_QUERY_SCANNED: usize = 50_000;
 pub const MAX_QUERY_ROWS: usize = 10_000;
 pub const MAX_QUERY_GROUPS: usize = 5_000;
 pub const MAX_QUERY_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Records and graph are sealed together; deserialization supplies detached rows only.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BaseSnapshot {
-    pub snapshot_id: crate::IndexSnapshotId,
-    pub records: Vec<DetachedRecord>,
+    pub(crate) snapshot_id: crate::IndexSnapshotId,
+    pub(crate) records: Vec<DetachedRecord>,
+    pub(crate) relationships: Option<zorid_index::ResolutionSnapshot>,
+}
+impl BaseSnapshot {
+    pub fn detached(snapshot_id: crate::IndexSnapshotId, records: Vec<DetachedRecord>) -> Self {
+        Self {
+            snapshot_id,
+            records,
+            relationships: None,
+        }
+    }
+    pub fn snapshot_id(&self) -> &crate::IndexSnapshotId {
+        &self.snapshot_id
+    }
+    pub fn records(&self) -> &[DetachedRecord] {
+        &self.records
+    }
+}
+impl<'de> Deserialize<'de> for BaseSnapshot {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Detached {
+            snapshot_id: crate::IndexSnapshotId,
+            records: Vec<DetachedRecord>,
+            #[serde(default)]
+            relationships: Option<serde_json::Value>,
+        }
+        let value = Detached::deserialize(deserializer)?;
+        if value.relationships.is_some() {
+            return Err(serde::de::Error::custom(
+                "Relationships require a Rust-owned Generation factory",
+            ));
+        }
+        Ok(Self::detached(value.snapshot_id, value.records))
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -100,6 +136,7 @@ pub struct BaseQueryResult {
     pub counts: QueryCounts,
     pub diagnostics: Vec<QueryDiagnostic>,
     pub steps_used: usize,
+    pub relationships_available: bool,
 }
 
 const FILE_PROPERTIES: &[&str] = &[
@@ -222,7 +259,7 @@ fn display(value: &BaseValue, timezone: &str) -> String {
         BaseValue::Boolean { value } => value.to_string(),
         BaseValue::Number { value } => value.to_string(),
         BaseValue::String { value } => value.clone(),
-        BaseValue::File { path } => path.clone(),
+        BaseValue::File { path } | BaseValue::Link { path, .. } => path.clone(),
         BaseValue::List { value } => value
             .iter()
             .map(|value| display(value, timezone))
@@ -267,7 +304,8 @@ pub fn query_base(
     options: &QueryOptions,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
     let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
-    if options.max_steps > MAX_QUERY_STEPS
+    if options.max_steps == 0
+        || options.max_steps > MAX_QUERY_STEPS
         || options.max_scanned > MAX_QUERY_SCANNED
         || options.max_rows > MAX_QUERY_ROWS
         || options.max_groups > MAX_QUERY_GROUPS
@@ -299,6 +337,36 @@ pub fn query_base(
             ));
         }
     }
+    if let Some(current) = &options.evaluation.current_record {
+        let witness = current.witness.as_ref().ok_or_else(|| {
+            ExpressionDiagnostic::new("input", "Current query record requires a witness")
+        })?;
+        if !snapshot
+            .records
+            .iter()
+            .any(|row| row.witness.as_ref() == Some(witness) && row == current)
+        {
+            return Err(ExpressionDiagnostic::new(
+                "stale-source",
+                "Current record does not match this snapshot",
+            ));
+        }
+    }
+    let graph_work = snapshot
+        .relationships
+        .as_ref()
+        .map_or(0, |graph| graph.edges().len());
+    if graph_work > options.max_steps {
+        return Err(budget("Relationships exceed query work budget"));
+    }
+    let relationships = snapshot
+        .relationships
+        .as_ref()
+        .map(crate::graph::PreparedRelationships::new)
+        .transpose()?;
+    let relationship_available = relationships.as_ref().is_some_and(|graph| graph.complete());
+    let mut discovery = 0usize;
+    let mut preparation_work = graph_work;
     let mut counts = QueryCounts {
         scanned: snapshot.records.len(),
         ..Default::default()
@@ -307,10 +375,32 @@ pub fn query_base(
         .iter()
         .map(|value| value.to_string())
         .collect::<Vec<_>>();
+    if relationship_available {
+        available.extend(["file.links", "file.embeds", "file.backlinks"].map(String::from));
+    }
+    let mut available_set = available.iter().cloned().collect::<HashSet<_>>();
     for record in &snapshot.records {
+        if options
+            .evaluation
+            .cancellation
+            .as_ref()
+            .is_some_and(|v| v.stop_reason().is_some())
+        {
+            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+        }
+        preparation_work = preparation_work.saturating_add(
+            record.properties.len() + record.property_types.len() + record.tags.len() + 1,
+        );
+        if preparation_work > options.max_steps {
+            return Err(budget("Property discovery exceeds query work budget"));
+        }
         for (key, _) in &record.properties {
+            discovery = discovery.saturating_add(key.len() + 16);
+            if discovery > crate::MAX_BASE_REQUEST_BYTES {
+                return Err(budget("Property discovery exceeds byte budget"));
+            }
             let property = format!("note.{key}");
-            if !available.contains(&property) {
+            if available_set.insert(property.clone()) {
                 available.push(property);
             }
         }
@@ -340,7 +430,7 @@ pub fn query_base(
     }
     let mut diagnostics = Vec::new();
     let mut rows = Vec::new();
-    let mut steps_used = 0usize;
+    let mut steps_used = preparation_work;
     let mut retained_bytes = 0usize;
     let ignored = options.ignore_paths.iter().collect::<HashSet<_>>();
     for record in &snapshot.records {
@@ -352,7 +442,7 @@ pub fn query_base(
         invocation.max_steps = invocation
             .max_steps
             .min(options.max_steps.saturating_sub(steps_used));
-        let row = with_session("", record, &invocation, |session| {
+        let row = with_session("", record, &invocation, relationships.as_ref(), |session| {
             let filtered = (|| {
                 for filter in [program.filter.as_ref(), view.filter.as_ref()]
                     .into_iter()
@@ -519,11 +609,15 @@ pub fn query_base(
             )
         })
         .collect::<HashMap<_, _>>();
+    if relationship_available {
+        matched_available.extend(["file.links", "file.embeds", "file.backlinks"].map(String::from));
+    }
+    let mut matched_set = matched_available.iter().cloned().collect::<HashSet<_>>();
     for row in &rows {
         if let Some(record) = by_id.get(&row.entry_id) {
             for (key, _) in &record.properties {
                 let property = format!("note.{key}");
-                if !matched_available.contains(&property) {
+                if matched_set.insert(property.clone()) {
                     matched_available.push(property);
                 }
             }
@@ -668,6 +762,7 @@ pub fn query_base(
         counts,
         diagnostics,
         steps_used,
+        relationships_available: relationship_available,
     };
     if serde_json::to_vec(&result)
         .map_err(|error| ExpressionDiagnostic::new("output", error.to_string()))?

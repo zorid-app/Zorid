@@ -11,6 +11,24 @@ pub struct BaseProgram {
     /// lossless source writer and must never be serialized over the raw file.
     pub configuration: PropertyValue,
 }
+impl BaseProgram {
+    pub fn view_names(&self) -> Vec<Option<&str>> {
+        self.views
+            .iter()
+            .map(|view| get(&view.configuration, "name").and_then(text))
+            .collect()
+    }
+    /// Exact names only. Duplicate names are ambiguous and return None.
+    pub fn view_index_by_name(&self, name: &str) -> Option<usize> {
+        let mut matches = self
+            .views
+            .iter()
+            .enumerate()
+            .filter(|(_, view)| get(&view.configuration, "name").and_then(text) == Some(name));
+        let index = matches.next()?.0;
+        matches.next().is_none().then_some(index)
+    }
+}
 #[derive(Clone, Debug)]
 pub(crate) enum Filter {
     Expression(String),

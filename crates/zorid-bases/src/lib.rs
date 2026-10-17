@@ -2,6 +2,8 @@
 //! This crate owns neither files nor a running vault. See UPSTREAM.md for scope.
 mod expression;
 mod files;
+mod graph;
+pub use graph::{query_generation, FilePresentationFacts, MAX_RELATIONSHIP_EDGES};
 mod order;
 mod program;
 mod query;
@@ -60,6 +62,12 @@ pub enum BaseValue {
     },
     File {
         path: String,
+    },
+    Link {
+        path: String,
+        target: Option<RecordWitness>,
+        display: Option<String>,
+        external: bool,
     },
     Error {
         code: String,
@@ -231,7 +239,23 @@ fn runtime_file(
     }
     let fullname = record.path.rsplit('/').next().unwrap_or_default();
     let (basename, extension) = fullname.rsplit_once('.').unwrap_or((fullname, ""));
-    let mut bytes = 0;
+    let mut bytes = 0usize;
+    let mut hints = std::collections::HashMap::new();
+    for (name, hint) in &record.property_types {
+        bytes = bytes.saturating_add(name.len() + 16);
+        if bytes > 8 * 1024 * 1024 {
+            return Err(ExpressionDiagnostic::new(
+                "budget",
+                "Property hints exceed byte budget",
+            ));
+        }
+        if hints.insert(name.as_str(), hint).is_some() {
+            return Err(ExpressionDiagnostic::new(
+                "input",
+                "Duplicate property type hint",
+            ));
+        }
+    }
     let mut properties = IndexMap::new();
     for (key, value) in &record.properties {
         bytes += key.len();
@@ -242,22 +266,18 @@ fn runtime_file(
             ));
         }
         let value = runtime_value(value, 0, &mut bytes)?;
-        let value =
-            if let Some((_, hint)) = record.property_types.iter().find(|(name, _)| name == key) {
-                expression::apply_property_type(value, hint, timezone)
-            } else {
-                value
-            };
+        let value = if let Some(hint) = hints.get(key.as_str()) {
+            expression::apply_property_type(value, hint, timezone)
+        } else {
+            value
+        };
         properties.insert(key.clone(), value);
     }
-    let mut hinted = std::collections::HashSet::new();
-    for (name, _) in &record.property_types {
-        if !hinted.insert(name) || !properties.contains_key(name) {
-            return Err(ExpressionDiagnostic::new(
-                "input",
-                "Property type hints require unique existing exact keys",
-            ));
-        }
+    if hints.keys().any(|name| !properties.contains_key(*name)) {
+        return Err(ExpressionDiagnostic::new(
+            "input",
+            "Property type hints require existing exact keys",
+        ));
     }
     if bytes > 8 * 1024 * 1024 {
         return Err(ExpressionDiagnostic::new(
@@ -266,6 +286,7 @@ fn runtime_file(
         ));
     }
     Ok(expression::BasesFile {
+        witness: record.witness.clone(),
         path: record.path.clone(),
         name: if extension == "md" {
             basename.into()
@@ -293,9 +314,10 @@ pub(crate) fn with_session<T>(
     source: &str,
     record: &DetachedRecord,
     options: &EvaluationOptions,
+    relationships: Option<&graph::PreparedRelationships<'_>>,
     run: impl FnOnce(&mut expression::Session<'_>) -> Result<T, ExpressionDiagnostic>,
 ) -> Result<T, ExpressionDiagnostic> {
-    if options.max_steps > MAX_EXPRESSION_STEPS {
+    if options.max_steps == 0 || options.max_steps > MAX_EXPRESSION_STEPS {
         return Err(ExpressionDiagnostic::new(
             "budget",
             "Expression step ceiling exceeds supported maximum",
@@ -320,13 +342,20 @@ pub(crate) fn with_session<T>(
     }
     let timezone = expression::BasesTimezone::from_setting(Some(&options.timezone))
         .map_err(|message| ExpressionDiagnostic::new("input", message))?;
-    let file = runtime_file(record, &timezone)?;
-    let this_file = options
+    let mut file = runtime_file(record, &timezone)?;
+    if let Some(graph) = relationships {
+        graph.attach(&mut file);
+    }
+    let mut this_file = options
         .current_record
         .as_ref()
         .map(|record| runtime_file(record, &timezone))
         .transpose()?;
+    if let (Some(graph), Some(file)) = (relationships, this_file.as_mut()) {
+        graph.attach(file);
+    }
     let context = expression::BasesEvaluationContext {
+        relationships,
         note: file.properties.clone(),
         file: file.clone(),
         this_file,
@@ -347,7 +376,7 @@ pub fn evaluate_expression(
     record: &DetachedRecord,
     options: &EvaluationOptions,
 ) -> Result<EvaluationResult, ExpressionDiagnostic> {
-    with_session(source, record, options, |session| {
+    with_session(source, record, options, None, |session| {
         let value = session.evaluate(source)?;
         Ok(EvaluationResult {
             value,

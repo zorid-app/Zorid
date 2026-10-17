@@ -57,7 +57,7 @@ fn rank(value: &BaseValue) -> u8 {
         BaseValue::String { .. } => 4,
         BaseValue::List { .. } => 5,
         BaseValue::Object { .. } => 6,
-        BaseValue::File { .. } => 7,
+        BaseValue::File { .. } | BaseValue::Link { .. } => 7,
         BaseValue::Error { .. } => 8,
         BaseValue::Null => 9,
     }
@@ -89,7 +89,8 @@ fn ascending(left: &BaseValue, right: &BaseValue) -> Ordering {
         }
         (BaseValue::Date { timestamp: a, .. }, BaseValue::Date { timestamp: b, .. }) => a.cmp(b),
         (BaseValue::String { value: a }, BaseValue::String { value: b }) => natural_text(a, b),
-        (BaseValue::File { path: a }, BaseValue::File { path: b }) => natural_text(a, b),
+        (BaseValue::File { path: a }, BaseValue::File { path: b })
+        | (BaseValue::Link { path: a, .. }, BaseValue::Link { path: b, .. }) => natural_text(a, b),
         (BaseValue::List { value: a }, BaseValue::List { value: b }) => sequence(a, b),
         (BaseValue::Object { value: a }, BaseValue::Object { value: b }) => {
             let mut a = a.iter().collect::<Vec<_>>();

@@ -127,7 +127,9 @@ fn query_limit_does_not_hide_resource_failure_or_missing_witness() {
         .code,
         "budget"
     );
-    snapshot.records[0].witness = None;
+    let mut records = snapshot.records().to_vec();
+    records[0].witness = None;
+    snapshot = BaseSnapshot::detached(snapshot.snapshot_id().clone(), records);
     assert_eq!(
         query_base(&program, &snapshot, &QueryOptions::default())
             .unwrap_err()

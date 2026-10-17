@@ -426,8 +426,9 @@ impl Parser {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct BasesEvaluationContext {
+#[derive(Clone, Default)]
+pub(crate) struct BasesEvaluationContext<'a> {
+    pub relationships: Option<&'a super::graph::PreparedRelationships<'a>>,
     pub note: IndexMap<String, RuntimeValue>,
     pub file: BasesFile,
     pub this_file: Option<BasesFile>,
@@ -447,6 +448,7 @@ pub(crate) struct BasesEvaluationContext {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BasesFile {
+    pub witness: Option<super::RecordWitness>,
     pub path: String,
     pub name: String,
     pub basename: String,
@@ -464,6 +466,7 @@ pub(crate) struct BasesFile {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BasesLink {
+    pub target: Option<super::RecordWitness>,
     pub path: String,
     pub display: Option<String>,
     pub resolved_path: Option<Option<String>>,
@@ -584,7 +587,7 @@ pub(crate) struct Session<'a> {
     initial_steps: usize,
 }
 impl<'a> Session<'a> {
-    pub(crate) fn new(context: &'a BasesEvaluationContext) -> Self {
+    pub(crate) fn new(context: &'a BasesEvaluationContext<'a>) -> Self {
         Self {
             evaluator: Evaluator::new(context),
             initial_steps: context.work_limit.unwrap_or(100_000),
@@ -788,7 +791,7 @@ fn expression_uses_backlinks(expression: &Expr) -> bool {
 }
 
 struct Evaluator<'a> {
-    context: &'a BasesEvaluationContext,
+    context: &'a BasesEvaluationContext<'a>,
     now: DateValue,
     timezone: BasesTimezone,
     formula_cache: HashMap<String, RuntimeValue>,
@@ -802,7 +805,7 @@ pub(crate) const BASES_OPERATION_CANCELLED: &str = "Obsidian Base expression eva
 type Scope = BTreeMap<String, RuntimeValue>;
 
 impl<'a> Evaluator<'a> {
-    fn new(context: &'a BasesEvaluationContext) -> Self {
+    fn new(context: &'a BasesEvaluationContext<'a>) -> Self {
         let timezone = context.timezone.clone();
         Self {
             context,
@@ -1235,6 +1238,7 @@ impl<'a> Evaluator<'a> {
         let work = match &receiver {
             RuntimeValue::List(values) => values.len(),
             RuntimeValue::Object(values) => values.len(),
+            RuntimeValue::File(file) if name == "hasLink" => file.links.len(),
             RuntimeValue::String(value) => value.len() / 256,
             _ => 0,
         };
@@ -1641,20 +1645,27 @@ impl<'a> Evaluator<'a> {
         arguments: &[RuntimeValue],
     ) -> RuntimeValue {
         match name {
-            "hasLink" | "asLink" => {
-                RuntimeValue::Error("unsupported\0Relationship metadata not supplied".into())
+            "hasLink" => {
+                let Some(graph) = self.context.relationships else {
+                    return RuntimeValue::Error(
+                        "unavailable\0Relationship metadata not supplied".into(),
+                    );
+                };
+                match graph.has_link(
+                    file,
+                    &arguments.first().map(plain_string).unwrap_or_default(),
+                ) {
+                    Ok(value) => RuntimeValue::Bool(value),
+                    Err(error) => RuntimeValue::Error(format!("{}\0{}", error.code, error.message)),
+                }
             }
             "asLink" => RuntimeValue::Link(BasesLink {
                 path: file.path.clone(),
                 display: arguments.first().map(plain_string),
                 resolved_path: Some(Some(file.path.clone())),
                 external: false,
+                target: file.witness.clone(),
             }),
-            "hasLink" => RuntimeValue::Bool(file.links.iter().any(|link| {
-                arguments
-                    .first()
-                    .is_some_and(|target| self.link_matches(link, target))
-            })),
             "hasProperty" => RuntimeValue::Bool(
                 arguments
                     .first()
@@ -1694,7 +1705,9 @@ impl<'a> Evaluator<'a> {
         arguments: &[RuntimeValue],
     ) -> RuntimeValue {
         match name {
-            "asFile" => self.file_from_link(link),
+            "asFile" => {
+                RuntimeValue::Error("unsupported\0Link file coercion is not exposed".into())
+            }
             "linksTo" => match self.file_from_link(link) {
                 RuntimeValue::File(file) => self.file_method(&file, "hasLink", arguments),
                 _ => RuntimeValue::Error("Could not coerce link to file".to_string()),
@@ -1724,8 +1737,15 @@ impl<'a> Evaluator<'a> {
                 .unwrap_or(RuntimeValue::Null),
             RuntimeValue::Date(value) => date_property(&value, property),
             RuntimeValue::File(value) => {
-                if ["links", "embeds", "backlinks"].contains(&property.to_lowercase().as_str()) {
-                    RuntimeValue::Error("unsupported\0Relationship metadata not supplied".into())
+                if ["links", "embeds", "backlinks"].contains(&property.to_lowercase().as_str())
+                    && !self
+                        .context
+                        .relationships
+                        .is_some_and(|graph| graph.complete())
+                {
+                    RuntimeValue::Error(
+                        "unavailable\0Relationship metadata is unavailable or incomplete".into(),
+                    )
                 } else {
                     file_property(&value, &property.to_lowercase(), &self.timezone)
                 }
@@ -1843,6 +1863,7 @@ impl<'a> Evaluator<'a> {
     fn make_link(&self, target: &str, display: Option<String>) -> BasesLink {
         let (target, parsed_display) = parse_link_text(target);
         BasesLink {
+            target: None,
             resolved_path: Some(self.resolve_link(&target)),
             external: is_external(&target),
             path: target,
@@ -2005,6 +2026,7 @@ fn runtime_link_from_json(value: &Value) -> Option<BasesLink> {
     }
     let link = object.get("value")?.as_object()?;
     Some(BasesLink {
+        target: None,
         path: link.get("path")?.as_str()?.to_string(),
         display: link.get("display").map(runtime_display_string),
         resolved_path: link
@@ -2962,6 +2984,16 @@ fn typed_value(
             milliseconds: value.milliseconds,
         },
         RuntimeValue::File(value) => BaseValue::File { path: value.path },
+        RuntimeValue::Link(value) => {
+            *bytes = bytes
+                .saturating_add(value.path.len() + value.display.as_ref().map_or(0, String::len));
+            BaseValue::Link {
+                path: value.path,
+                target: value.target,
+                display: value.display,
+                external: value.external,
+            }
+        }
         RuntimeValue::Error(message) => {
             let (code, message) = message
                 .split_once('\0')
