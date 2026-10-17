@@ -69,6 +69,17 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Main `5d29c53` now integrates native candidate292cd27 and normal desktop
+  create/save candidatea29605b plus idle-child cleanupc06d110. Main tsc31928
+  exited0 and four focused creation checks passed; crates/Cargo sources exactly
+  match the built native candidate. Actual fresh CLI14-record receive, nested
+  text/binary hashes, deleted-path absence, rebuilt Electron New note/save,
+  simultaneous-open CLI upload and browser exact receive passed. Electron92846
+  quit normally exit0. See browser-relay-verification.md for scope and hashes.
+- `core_cli` owns the next serialized recovery check: binary extension3aab341
+  in an isolated candidate, then existing metadata/permission snapshot checks.
+  Mixed namespace obligations and external-edit imports remain isolated follow-ups;
+  these are not included in the successful runtime claims above.
 - Main `517f87b` includes reviewed browser ancestor-publication fix and hashed
   smoke assets. Actual worker nested create/reload/read and encrypted upload
   passed; see `docs/browser-relay-verification.md`. Old failed database is

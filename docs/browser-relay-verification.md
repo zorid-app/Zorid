@@ -119,4 +119,6 @@ Browser received3 and read exact40 bytes, SHA256
 Normal Cmd-Q then exited test launch92846 with code0. This proves desktop
 create/save plus CLI upload/browser receive; simultaneous conflicting writes,
 crash injection, external edits and complete milestone acceptance remain open.
-Native/desktop candidate integration to main is still pending.
+Native/desktop batch integrated to main `5d29c53`. Main TypeScript check31928
+exited0 and four focused create checks passed. Rust crates/Cargo sources match
+built candidate292cd27 exactly; this is not a new main-bundle UI verification.
