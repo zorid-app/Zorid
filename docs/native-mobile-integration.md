@@ -575,3 +575,34 @@ may also emit a redundant refresh. Adapter owner investigates truthful change
 reporting and consistent snapshot baselines in a separate mobile-only fix; no
 measured latency improvement is claimed. Shared Vault/metadata semantics remain
 unchanged. Root owns current WASM/browser build slot; no native compile started.
+
+
+## Actual keyboard pass and phone hotfix install — 22:11 UTC
+
+Coordinator msg_2b4122caf634 granted a short UI-only pass on the same booted
+iPhone17 Simulator, existing hotfix5 artifact/source51d8b84f. No new build.
+Using Simulator's public I/O > Toggle Software Keyboard (CUA only for the menu),
+actual Orca AX and native screenshot show the software keyboard with the native
+Insert, Formatting, Undo, Redo and Dismiss controls, and no extra WK Previous/Next/
+Done bar. Evidence /private/tmp/mobile-v5-software-keyboard.{json,png}.
+Home and reactivation kept the same PID13562; iOS dismissed keyboard and toolbar.
+The first harness assertion requiring toolbar without refocus was too strict.
+Tapping the body again restored BOTH actual software keys and native formatting
+toolbar, without the extra accessory. AX: mobile-v5-foreground-refocus.json.
+This verifies refocus recovery for that actual artifact, not every lifecycle/IME
+case. The focus-transition video exists, but a subsequent Orca AX transport failure
+prevented a complete transient-jump assertion; that visual gate remains open.
+Video recording and automation ended; test app terminated. Simulator stays booted.
+UI slot returned in msg_ec625d0f9fd5 before coordinator desktop verification.
+
+During the pass the physical iPhone reconnected (tunnel connected and developer
+services true). Owner immediately verified artifact bundle app.zorid.notes.dev,
+environment development, version5 and strict deep signature, then ran existing
+ios-run.sh install and launch with private signing-contract device selection.
+Owned process80513: install EXIT0 and launch EXIT0. Private logs:
+/private/tmp/mobile-phone5-install.log and mobile-phone5-launch.log (0600).
+Thus signed hotfix5/source51d8b84f IS NOW installed and launched on the iPhone,
+superseding prior unavailable/uninstalled observations above. No new Xcode build,
+production app mutation, fixture sync, TestFlight or shared-core merged runtime
+claim follows. Actual phone file interaction after installation remains distinct
+from the already observed Simulator open/navigation/save proof.
