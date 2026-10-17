@@ -116,6 +116,24 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Main04ca6f3 is clean. Isolated aggregate e42d7fe now composes native fatal-error
+  propagation61236b2 (source0fcf8fe), atomic moved-folder/child-deletion37c77b4
+  (source5404a50), status seam9a200fb and live incomplete diagnostics e42d7fe.
+  Documentation-only cherry-pick conflict retained both records. Native runtime
+  validation remains pending; external_reconcile_sol separately owns persistent
+  scan progress beyond256 directories. No heavy native job started.
+- Actual normal browser startup at8791 contradicted the successful build: the
+  minified worker contains invalid dynamic-import JavaScript before WASM loads.
+  Browser owner fixed loader rewriting in d1ac52c; independent review, tiny real
+  production-worker parse regression and TypeScript pass. Rebuild9631 currently
+  holds the serialized heavy slot; actual editor proof remains pending. Do not
+  cite the earlier successful build as functional normal-browser evidence.
+- Milestone acceptance audit identifies further accepted CLI gaps: Search is
+  explicitly unsupported, continuous watch/sync absent, and whole-file paths
+  remain capped at16MiB. package_sol owns isolated CLI search/watch follow-up;
+  external owner will assess bounded streaming separately. Indexed Markdown
+  search remains stage4. Add one short actual undo/selection/composition pass
+  during the next successful client session, not a repeated broad test matrix.
 - Mainf5f97b2 now integrates the reviewed/tested desktop default batch; crates,
   desktop, src, scripts and build configs are source-equivalent to aggregate
   1a02f01 (zero diff). Copied tested CLI/host and renderer into ignored main
