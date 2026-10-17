@@ -116,6 +116,31 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Aggregate1a02f01 compiled; native external42/42, portable8/8, oldschema byte-
+  preserving rejection1/1, credential-free localhost startup1/1 passed. CLI/host
+  built serial gate96668; TypeScript/renderer webpack30017 passed. Actual no-env
+  app82388 discovered aggregate target/debug host (SHA256
+  3bd287c11baf7a7321725e8d06d38296f975cc0e032daa7b4f5b3801be680ee6).
+  Default create/save/title rename/folder creation proven through UI+CLI.
+- Fresh fixture /private/tmp/zorid-native-default-8o5uj29z/vault, profile sibling,
+  launcher sibling; no opt-in/hostoverride/credentials. Primary clientabcd76be-
+  24b6-437e-9cbc-3ad20d47803a. Forced app98078+host98137 crash after CLI won race
+  preserves draft. Restart72273 opens normal workspace with exact draft and
+  recovery banner. Save recovery copy succeeds:44 bytes digest
+  1f2732c872e0eab1235c1911725609c3526c4007352f6459eecd45bb1f9ce075,
+  original36 CLI bytes unchanged, checkpoint adopts latestoriginal. Report
+  /private/tmp/zorid-default-recovery-result-1017.json. Normal close pending.
+- Actual external auto-import of custom text+binary+folder passed. Compound move
+  folder+edit text+delete binary leaves completefalse/old logical paths; exact
+  new physical paths retained. external_reconcile_sol owns required atomic
+  MoveWithDeletions followup, no activefixture writes. Do not claim complete
+  external compound support. Native contextmenu trash action was attempted but
+  produced no observed change; verification remains open (tool/menu issue unknown).
+- Browser normal default needs real admission/durable editor integration beyond
+  smoke; default_lifecycle_review_sol owns browser-rust-default, Sol subworkers
+  slots/commands/assets. Desktop incomplete-import diagnostics followup owned
+  desktop_default_sol, UI module744083c recovery_ui_sol, workspacewire browser
+  owner, backendreview package_sol. >256dir import progress remains gap.
 - Combined candidate core-default-integration9aec09b holds reviewed Rust-default desktop, packaging, external reconciliation and recovery UI. Main not yet default; actual no-env native gate remains. Combined cargo check84218 failed unresolved crate alias in external_scan.rs410; owner preparing fix, no heavy job now.
 - Actual stopped-relay browser/CLI offline edits, browser reload and relay restart converge exact55 bytes/digest; see browser-relay-verification.md. Current relay43620/static69072; old60287/52832 handles gone. Old test app3337 handle missing and process inspection confirms no test app alive.
 - Agent tree reset on resume; replacements explicitly Sol/high now own existing worktrees. Prior work preserved. New-device QR/code join plan recorded below, implementation after current default/recovery gate.
@@ -209,9 +234,9 @@ First-milestone acceptance snapshot (2026-10-17; not a completion claim):
 | Portable Rust + independent web/Electron/CLI | Built WASM/native and actual three-client transfer; desktop remains explicit opt-in. Main integration recorded below |
 | Text, binary and folders | Actual nested browser create/reopen to CLI; binary digest preserved. Desktop remaining folder/binary/move/delete consumer is in isolated implementation |
 | Offline convergence | Actual stopped-relay browser/CLI independent edits, browser reload and relay restart converge exact55 bytes; see verification document |
-| Desktop/CLI simultaneous safety | Blocked by observed split-WAL defect; metadata-only native identity fix and fresh cross-process check required |
+| Desktop/CLI simultaneous safety | POSIX lock fix integrated; actual CLI wins while desktop draft retained, forced restart and recovery copy preserve both exact versions. Automatic stale-editor merge remains future UX |
 | Browser-tab safety | Earlier spike and store-connection checks exist; current complete worker/tab lifecycle still needs bounded integrated proof |
-| Durable-save crash/restart | Normal desktop restart preserves saved note; actual dirty-draft/unknown-commit process interruption remains unverified |
+| Durable-save crash/restart | Actual abrupt app+host termination retains draft, normal workspace opens after restart, recovery copy verified. In-flight commit lost-reply UI case remains separate |
 | Move/delete/external edits | Fresh native receive physically retires deleted paths. Mixed obligations/publication handoff/existing external imports are reviewed follow-ups awaiting storage fix and combined runtime gate |
 | E2EE/account/vault isolation | Actual server, standalone CLI and browser worker isolation checks passed; production enrollment remains fixture-only |
 | Protocol compatibility | Current-v2 CLI checks6/6 passed, including exact retry after rejected required-feature ACK |
