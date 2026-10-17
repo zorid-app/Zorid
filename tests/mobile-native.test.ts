@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { openNativeMobileVault, type NativeVaultPlugin, type MobileLifecycleReason } from '../src/platform/mobile-native.ts';
 
-const clientId = '11111111-1111-4111-8111-111111111111';
-const token = '22222222-2222-4222-8222-222222222222';
+const clientId = 'a1b2c3d4-abcd-4abc-8abc-abcdef012345';
+const token = 'b2c3d4e5-bcde-4bcd-9bcd-bcdef0123456';
 const encoder = new TextEncoder(), decoder = new TextDecoder();
 const body = (text: string) => btoa(String.fromCharCode(...encoder.encode(text)));
+function scanStatus(overrides:Record<string,unknown>={}) { return {scanId:'scan_fixture',complete:true,scanComplete:true,finished:true,observed:1,imported:1,namespaceApplied:0,issueCount:0,issuesTruncated:false,issues:[],...overrides}; }
 function fixture() {
   const requests: any[] = [], heads = new Map<string, any>(), intents = new Map<string, any>(), receipts = new Map<string, any>();
   let content = 'before', revision = 'rev1', path = 'Note.md', exists = true, closes = 0, sequence = 0, active = 0, maxActive = 0;
@@ -17,10 +18,13 @@ function fixture() {
   let lifecycleListener: ((event:{id:string;reason:MobileLifecycleReason})=>void) | undefined, removals = 0;
   let contextEvent: MobileLifecycleReason | undefined, wrongAuthority = false;
   let ackHook: ((input:{id:string;ok:boolean})=>Promise<void>) | undefined;
+  let initialReconciliation: any = undefined, refreshValue: any = {reconciliation:scanStatus()}, refreshCalls=0;
+  let refreshHook: (()=>Promise<void>) | undefined;
   const plugin: NativeVaultPlugin & {close():Promise<void>} = {
     async addListener(event,handler) { assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleListener=handler; return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleListener=undefined;}}; },
     async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
-    context: async () => { lifecycleOrder.push('context'); if(contextEvent)lifecycleListener!({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId}; }, close: async () => { closes++; },
+    context: async () => { lifecycleOrder.push('context'); if(contextEvent)lifecycleListener!({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
+    async refresh() { active++;maxActive=Math.max(maxActive,active);refreshCalls++;try {if(refreshHook)await refreshHook();await new Promise<void>(r=>setImmediate(r));return refreshValue;}finally{active--;} },
     async request(input) {
       active++; maxActive = Math.max(maxActive,active);
       await new Promise(resolve => setImmediate(resolve));
@@ -75,7 +79,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, acks, lifecycleOrder, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id=crypto.randomUUID()){lifecycleListener!({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(){wrongAuthority=true;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id=crypto.randomUUID()){lifecycleListener!({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(){wrongAuthority=true;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -308,4 +312,86 @@ test('successful switch ACK stops polling and rejects further adapter work',asyn
   const before=f.requests.length;poll();await new Promise<void>(r=>setImmediate(r));
   assert.equal(stops,1);assert.equal(f.requests.length,before);
   await assert.rejects(v.adapter.list(),{code:'storage_closed'});await v.release!();assert.equal(f.closes,0);
+});
+
+test('incomplete context remains visible even when snapshot has no files',async()=>{
+  const f=fixture(),pending=scanStatus({complete:false,scanComplete:false,finished:false,imported:0,issueCount:1,issues:[{path:null,code:'scan_limit'}]});
+  f.initialStatus(pending);f.absent();const v=await openNativeMobileVault(f.plugin);
+  assert.deepEqual(await v.adapter.list(),[]);assert.deepEqual(v.reconciliation!.getStatus(),pending);
+  pending.complete=true;pending.issues.push({path:null,code:'recovery_retained'} as never);
+  assert.equal(v.reconciliation!.getStatus()!.complete,false);assert.equal(v.reconciliation!.getStatus()!.issues.length,1);
+  assert.ok(Object.isFrozen(v.reconciliation!.getStatus()!.issues[0]));await v.release!();
+});
+
+test('optional missing status stays unknown until explicit native refresh publishes a valid status',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),statuses:any[]=[],changes:any[]=[];
+  assert.equal(v.reconciliation!.getStatus(),null);
+  const stop=v.reconciliation!.subscribe(status=>statuses.push(status));const unwatch=v.adapter.subscribe!(()=>changes.push('changed'));
+  const status=scanStatus({scanId:'refreshed'});f.refreshed({reconciliation:status});
+  await v.reconciliation!.retry();assert.deepEqual(v.reconciliation!.getStatus(),status);assert.equal(statuses.length,1);assert.equal(changes.length,1);
+  stop();await v.reconciliation!.retry();assert.equal(statuses.length,1);unwatch();
+  assert.equal(f.requests.some(r=>['rescan','recover','apply','fixture_family_apply'].includes(r.command.method)),false);
+  await v.release!();
+});
+
+test('refresh is serialized with host requests and other refreshes; release drains it',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),entered=deferred();
+  f.onRefresh(async()=>{entered.resolve();await gate.promise;});
+  const firstRead=v.adapter.read('Note.md'),refresh=v.reconciliation!.retry(),secondRefresh=v.reconciliation!.retry(),lastRead=v.adapter.read('Note.md');
+  await entered.promise;assert.equal(f.refreshCalls,1);assert.equal(f.requests.filter(r=>r.command.method==='read_path').length,1);
+  const release=v.release!();await new Promise<void>(r=>setImmediate(r));assert.equal(f.removals,0);
+  gate.resolve();await Promise.all([firstRead,refresh,secondRefresh,lastRead,release]);
+  assert.equal(f.maxActive,1);assert.equal(f.refreshCalls,2);assert.equal(f.removals,1);assert.equal(f.closes,0);
+  await assert.rejects(v.reconciliation!.retry(),{code:'storage_closed'});
+});
+
+for(const [label,changes] of [
+  ['contradictory complete',{complete:true,scanComplete:false}],
+  ['unsafe count',{observed:Number.MAX_SAFE_INTEGER+1}],
+  ['negative count',{imported:-1}],
+  ['truncated mismatch',{issuesTruncated:true}],
+  ['unknown status field',{ready:true}],
+  ['invalid failure',{complete:false,failure:'ignored'}],
+  ['complete with failure',{failure:'scan_failed'}],
+  ['unknown issue',{complete:false,issueCount:1,issues:[{path:'Note.md',code:'unknown'}]}],
+  ['escaping issue path',{complete:false,issueCount:1,issues:[{path:'../Note.md',code:'scan_limit'}]}],
+  ['private issue path',{complete:false,issueCount:1,issues:[{path:'.zorid/private',code:'scan_limit'}]}],
+] as const) test(`context rejects ${label} reconciliation before client admission`,async()=>{
+  const f=fixture();f.initialStatus(scanStatus(changes));
+  await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_reconciliation'});
+  assert.equal(f.requests.length,0);assert.equal(f.removals,1);assert.equal(f.closes,0);
+});
+
+test('bad or failed refresh preserves last valid incomplete status and retry remains available',async()=>{
+  const f=fixture(),pending=scanStatus({complete:false,finished:false,scanComplete:false});f.initialStatus(pending);
+  const v=await openNativeMobileVault(f.plugin),statuses:any[]=[];v.reconciliation!.subscribe(status=>statuses.push(status));
+  f.refreshed({reconciliation:scanStatus({complete:true,issueCount:1,issues:[]})});
+  await assert.rejects(v.reconciliation!.retry(),{code:'invalid_reconciliation'});assert.deepEqual(v.reconciliation!.getStatus(),pending);assert.equal(statuses.length,0);
+  f.onRefresh(async()=>{throw new Error('native scan unavailable');});
+  await assert.rejects(v.reconciliation!.retry(),/native scan unavailable/);assert.deepEqual(v.reconciliation!.getStatus(),pending);
+  f.onRefresh(async()=>{});const failed=scanStatus({complete:false,failure:'scan_failed'});f.refreshed({reconciliation:failed});
+  await v.reconciliation!.retry();assert.deepEqual(v.reconciliation!.getStatus(),failed);
+  f.refreshed({reconciliation:scanStatus()});await v.reconciliation!.retry();assert.equal(v.reconciliation!.getStatus()!.complete,true);assert.equal(statuses.length,2);
+  await v.release!();
+});
+
+test('queued refresh cannot reach native after successful switch ACK',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),entered=deferred(),done=deferred();
+  const original=f.plugin.request.bind(f.plugin);
+  f.plugin.request=async input=>{if(JSON.parse(input.header).command.method==='read_path'){entered.resolve();await gate.promise;}return original(input);};
+  const read=v.adapter.read('Note.md');await entered.promise;
+  const refresh=assert.rejects(v.reconciliation!.retry(),{code:'storage_closed'});
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('switchVault');await done.promise;
+  gate.resolve();await read;await refresh;assert.equal(f.refreshCalls,0);await v.release!();
+});
+
+test('client UUID must be canonical lowercase, including alphabetic digits',async()=>{
+  const f=fixture();f.plugin.context=async()=>({name:'fixture',clientId:clientId.toUpperCase()});
+  await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});assert.equal(f.requests.length,0);assert.equal(f.removals,1);
+});
+
+test('noncanonical lifecycle UUID cannot invoke workspace or approve a native switch',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);let calls=0;
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{calls++;await ack();});f.emit('switchVault',clientId.toUpperCase());
+  await new Promise<void>(r=>setImmediate(r));assert.equal(calls,0);assert.equal(f.acks.length,0);assert.equal(await v.adapter.read('Note.md'),'before');await v.release!();
 });

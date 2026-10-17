@@ -1,12 +1,14 @@
 import { bytesToBase64, base64ToBytes } from './binary.ts';
 import { normalizePath, type VaultAdapter, type VaultEntry } from '../core/types.ts';
 import type { PlatformVault } from './index.ts';
+import type { DesktopReconciliation } from './bridge.d.ts';
 import type { DurableWrites, DurableWriteRef, DurableWriteIntent, DurableWriteRead } from '../core/durable-writes.ts';
 import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints } from '../core/durable-checkpoints.ts';
 
 /** Native chooses/opens the vault before loading the editor. No path crosses this API. */
 export interface NativeVaultPlugin {
-  context(): Promise<{ name: string; clientId: string }>;
+  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation }>;
+  refresh(): Promise<{ reconciliation: DesktopReconciliation }>;
   request(input: { header: string; body: string }): Promise<{ header: string; body: string }>;
   addListener(event: 'lifecycleRequest', handler: (event: { id: string; reason: MobileLifecycleReason }) => void): Promise<{ remove(): Promise<void> }>;
   lifecycleAck(input: { id: string; ok: boolean }): Promise<void>;
@@ -45,6 +47,30 @@ function sameKeys(value: Wire, keys: string[]): boolean { return !!value && type
 const visible = (path: string) => path.split('/').every(part => !part.startsWith('.'));
 const terminal = new Set(['invalid_request','not_found','invalid_path','invalid_identifier','invalid_mutation','invalid_text','invalid_family_command','entry_not_found','entry_deleted','revision_conflict','idempotency_conflict']);
 
+/** Same bounded native status schema as the desktop host, copied into immutable UI state. */
+function reconciliationStatus(input: unknown): DesktopReconciliation {
+  const object = (v: unknown): v is Wire => !!v && typeof v === 'object' && !Array.isArray(v);
+  const count = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
+  const relative = (v: unknown) => v === null || typeof v === 'string' && encoder.encode(v).length <= 2048 && !!v
+    && !v.startsWith('/') && !v.includes('\\') && !/[\u0000-\u001f\u007f]/.test(v) && !/^[A-Za-z]:/.test(v)
+    && !/^\.zorid(?:\/|$)/i.test(v) && !v.split('/').some(part => !part || part === '.' || part === '..');
+  const fields = ['scanId','complete','scanComplete','finished','observed','imported','namespaceApplied','issueCount','issuesTruncated','issues','failure'];
+  if (!object(input) || !Object.keys(input).every(key => fields.includes(key)) || !id(input.scanId)
+    || ![input.complete,input.scanComplete,input.finished,input.issuesTruncated].every(v => typeof v === 'boolean')
+    || ![input.observed,input.imported,input.namespaceApplied,input.issueCount].every(count)
+    || !Array.isArray(input.issues) || input.issues.length > 32 || input.issueCount < input.issues.length
+    || input.issuesTruncated !== (input.issueCount > input.issues.length)
+    || !input.issues.every((issue: unknown) => object(issue) && sameKeys(issue,['path','code']) && relative(issue.path)
+      && ['scan_limit','recovery_retained','changed_during_scan','reconciliation_blocked'].includes(issue.code))
+    || input.complete && (!input.scanComplete || !input.finished || input.issueCount !== 0)
+    || input.failure !== undefined && (input.failure !== 'scan_failed' || input.complete)) throw fail('invalid_reconciliation');
+  return Object.freeze({ scanId: input.scanId, complete: input.complete, scanComplete: input.scanComplete, finished: input.finished,
+    observed: input.observed, imported: input.imported, namespaceApplied: input.namespaceApplied, issueCount: input.issueCount,
+    issuesTruncated: input.issuesTruncated, issues: Object.freeze(input.issues.map((issue: Wire) => Object.freeze({path: issue.path, code: issue.code}))),
+    ...(input.failure === undefined ? {} : { failure: input.failure }),
+  });
+}
+
 /** Native Rust authority only. Whole-file binary I/O is bounded to 16 MiB;
  * binaryStreams/media resource URLs are deliberately unavailable until admitted.
  * Optional bridge injection supports focused tests without a native shell. */
@@ -64,10 +90,10 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   let requestId = 0n, closed = false, closing = false, lease: Wire | undefined;
   const listeners = new Set<(paths?: readonly string[]) => void>();
   let timer: ReturnType<typeof setInterval> | undefined;
-  function stopPolling() { if (timer) { clearInterval(timer); timer = undefined; } listeners.clear(); }
+  function stopPolling() { if (timer) { clearInterval(timer); timer = undefined; } listeners.clear(); reconciliationListeners.clear(); }
   const rejectLifecycle = async (id: string) => { try { await bridge.lifecycleAck({ id, ok: false }); } catch { /* Native may already have expired this request. */ } };
   function onLifecycle(event: { id: string; reason: MobileLifecycleReason }) {
-    if (typeof event?.id !== 'string' || !uuid(event.id.toLowerCase())) return;
+    if (typeof event?.id !== 'string' || !uuid(event.id)) return;
     if (lifecycleBusyId === event.id) return; // Duplicate delivery shares the original outcome.
     if (lifecycleTask || lifecycleStopped || closed || closing || releasePromise || !['background','switchVault'].includes(event.reason)) { void rejectLifecycle(event.id); return; }
     lifecycleBusyId = event.id;
@@ -120,7 +146,9 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { if (lifecycleHandler === handler) lifecycleHandler = undefined; };
     },
   };
-  let context: { name: string; clientId: string };
+  let context: Awaited<ReturnType<NativeVaultPlugin['context']>>;
+  let reconciliationState: DesktopReconciliation | null = null;
+  const reconciliationListeners = new Set<(status: DesktopReconciliation) => void>();
   function notify() { for (const listener of listeners) { try { listener(); } catch { /* Consumer errors do not change durable storage outcomes. */ } } }
   function active() { if (closed || closing) throw fail('storage_closed'); }
   function serial<T>(action: () => Promise<T>): Promise<T> { active(); if (releasePromise) throw fail('storage_closed'); const task = serialTail.then(action); serialTail = task.catch(() => {}); return task; }
@@ -152,7 +180,8 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   const call = async (method: string, fields: Wire = {}, bytes?: Uint8Array) => (await request({ method, ...fields }, bytes)).result;
   try {
     context = await bridge.context();
-    if (typeof context.clientId !== 'string' || !uuid(context.clientId.toLowerCase()) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
+    if (typeof context.clientId !== 'string' || !uuid(context.clientId) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
+    if (context.reconciliation !== undefined) reconciliationState = reconciliationStatus(context.reconciliation);
     clientId = context.clientId;
     const claimed = (await call('claim_client', { client_id: clientId })).lease;
     if (!claimed || !id(claimed.local_store_id) || claimed.client_id !== clientId || !uuid(claimed.token)) throw fail('invalid_client_lease');
@@ -165,6 +194,31 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     await lifecycleTask; await stopLifecycle().catch(() => {}); closed = true;
     throw error;
   }
+  const reconciliation: NonNullable<PlatformVault['reconciliation']> = {
+    getStatus: () => reconciliationState,
+    subscribe(listener) {
+      active(); if (releasePromise) throw fail('storage_closed');
+      reconciliationListeners.add(listener);
+      return () => { reconciliationListeners.delete(listener); };
+    },
+    async retry() {
+      active(); if (releasePromise) throw fail('storage_closed');
+      // Only native may initiate a trusted scan. Share the exact request queue,
+      // so refresh never overlaps a leased request or another refresh.
+      const task = tail.then(async () => {
+        active();
+        const response = await bridge.refresh();
+        active();
+        if (!response || !sameKeys(response,['reconciliation'])) throw fail('invalid_reconciliation');
+        const status = reconciliationStatus(response.reconciliation);
+        reconciliationState = status;
+        for (const listener of reconciliationListeners) { try { listener(status); } catch { /* UI listener errors do not undo native reconciliation. */ } }
+        notify();
+      });
+      tail = task.catch(() => {});
+      await task;
+    },
+  };
   const scope = Object.freeze({ vaultId: lease!.local_store_id as string, clientId });
   function checkScope(value: Wire) { if (value?.vaultId !== scope.vaultId || value.clientId !== clientId) throw fail('checkpoint_scope_mismatch'); }
   function key(value: string) { textBytes(value, 1024); if (!value || value.includes('\0')) throw fail('checkpoint_invalid'); return value; }
@@ -422,7 +476,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { listeners.delete(listener); if (!listeners.size && timer) { clearInterval(timer); timer = undefined; } };
     },
   };
-  return { adapter, mobileLifecycle, label: context.name, id: `mobile-core:${scope.vaultId}:${clientId}`,
+  return { adapter, mobileLifecycle, reconciliation, label: context.name, id: `mobile-core:${scope.vaultId}:${clientId}`,
     recoverCommands: () => serial(async () => {
       let cursor: string | undefined;
       for (let count = 0; count < 100; count++) {
