@@ -102,6 +102,17 @@ areas rather than claiming that every upstream edge case has been exhausted.
   in `core-browser-sync-worker`. Network waits remain outside IDB transactions.
   Native store/schema8 and actual CLI/recovery/protocol fixtures form the other
   integration batch. No full network-convergence claim yet.
+- Remaining browser dependency owner explicitly reactivated: `wasm_integration_prep`
+  implements FamilyCommand/planning, bounded envelope-ID routing and historical
+  binary witness bindings. Worker source `e79ad2f` is reviewed by `crdt_interop`;
+  no runtime claim before combined storage/worker/WASM build.
+- `core_cli` owns extraction of existing native CLI relay orchestration into
+  `zorid-native-sync`; desktop host and CLI call that same library directly.
+  `desktop_integration` owns host/bridge consumption, preserving paused editor
+  consumer work. `browser_sync_plan` prepared source-reviewed disposable relay
+  launcher `8df30f7`, pending the combined launch/build gate.
+- Editor's next combined build/native slot is granted via `msg_1b2ab3e90af6`
+  after its current tests finish. No overlapping core heavy checks are authorized.
 
 - Main `1362e6f` adds the reviewed shared mutation planner; `01bf40a` bounds
   retained binary expansion before allocation. Combined current-main session96859
