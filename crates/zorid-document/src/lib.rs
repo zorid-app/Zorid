@@ -6,6 +6,7 @@ mod positions;
 mod types;
 mod value;
 
+pub use frontmatter::parse_yaml_mapping;
 pub use types::*;
 pub use value::PropertyValue;
 

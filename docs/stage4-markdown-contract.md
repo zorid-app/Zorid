@@ -361,3 +361,20 @@ then a minimal WASM JSON seam reading the same requests. Root owns shared/root
 manifests and locks; no worker edits those until assigned. Preserve this corpus
 as an independent oracle and add focused resource/request-error boundary tests.
 Consumer switches and index publication occur in later coherent reviewed changes.
+
+
+## Shared YAML-only consumer seam
+
+Root approved `parse_yaml_mapping(&str) -> Result<PropertyValue, YamlDiagnostic>`
+for Base definition consumers. It uses the same Saphyr event decoder and ordered
+value reconstruction as frontmatter, with no Markdown framing, property inference
+or tags/aliases projection. Input is exactly one YAML mapping; whitespace/comments
+produce an ordered empty object. BOM and CR/LF spellings remain intact.
+
+`YamlDiagnostic { code, range: SourceRange }` has typed snake-case codes `syntax`,
+`duplicate_key`, `mapping`, `tag`, `alias`, `value` and `resource`. A source over
+1 MiB reports Resource at zero-width start without scanning the oversized input;
+other errors cover the whole YAML input in original byte/UTF-16 coordinates.
+Depth/node/alias/8 MiB expanded decoded scalar/key byte limits are shared with
+frontmatter. Base may apply its stricter 256 KiB input limit before calling it.
+There is one parser/decoder, rather than a separate Base YAML implementation.

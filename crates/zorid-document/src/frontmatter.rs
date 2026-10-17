@@ -310,14 +310,10 @@ fn priority(code: &DiagnosticCode) -> u8 {
         _ => 6,
     }
 }
-fn decode(
-    source: &str,
-    offset: usize,
-    positions: &Positions<'_>,
-) -> Result<Vec<Property>, DiagnosticCode> {
+fn decode_mapping(source: &str) -> Result<(Tree, Vec<(String, PropertyValue)>), DiagnosticCode> {
     let tree = event_tree(source)?;
     let Some(root) = tree.root else {
-        return Ok(Vec::new());
+        return Ok((tree, Vec::new()));
     };
     let mut decoder = Decoder {
         tree: &tree,
@@ -344,6 +340,18 @@ fn decode(
     if let Some(code) = decoder.issues.into_iter().min_by_key(priority) {
         return Err(code);
     }
+    Ok((tree, entries))
+}
+
+fn decode(
+    source: &str,
+    offset: usize,
+    positions: &Positions<'_>,
+) -> Result<Vec<Property>, DiagnosticCode> {
+    let (tree, entries) = decode_mapping(source)?;
+    let Some(root) = tree.root else {
+        return Ok(Vec::new());
+    };
     let keys = match &tree.nodes[root].kind {
         Kind::Mapping(entries, _) => entries.iter().map(|entry| entry.0).collect::<Vec<_>>(),
         _ => Vec::new(),
@@ -363,6 +371,38 @@ fn decode(
         })
         .collect())
 }
+/// Decode exactly one YAML property mapping using the same bounded parser as
+/// Markdown frontmatter. This API performs no framing, inference or projection.
+pub fn parse_yaml_mapping(source: &str) -> Result<PropertyValue, YamlDiagnostic> {
+    if source.len() > MAX_FRONTMATTER_BYTES {
+        return Err(YamlDiagnostic {
+            code: YamlDiagnosticCode::Resource,
+            range: SourceRange {
+                bytes: [0, 0],
+                utf16: [0, 0],
+            },
+        });
+    }
+    decode_mapping(source)
+        .map(|(_, entries)| PropertyValue::Object(entries))
+        .map_err(|code| {
+            let code = match code {
+                DiagnosticCode::FrontmatterSyntax => YamlDiagnosticCode::Syntax,
+                DiagnosticCode::FrontmatterDuplicateKey => YamlDiagnosticCode::DuplicateKey,
+                DiagnosticCode::FrontmatterMapping => YamlDiagnosticCode::Mapping,
+                DiagnosticCode::FrontmatterTag => YamlDiagnosticCode::Tag,
+                DiagnosticCode::FrontmatterAlias => YamlDiagnosticCode::Alias,
+                DiagnosticCode::FrontmatterValue => YamlDiagnosticCode::Value,
+                DiagnosticCode::FrontmatterResource => YamlDiagnosticCode::Resource,
+                _ => unreachable!("only YAML decoder diagnostics enter this adapter"),
+            };
+            YamlDiagnostic {
+                code,
+                range: Positions::new(source).range(0..source.len()),
+            }
+        })
+}
+
 fn core_tag(tag: &Tag, name: &str) -> bool {
     tag.is_yaml_core_schema() && tag.suffix == name
 }

@@ -181,3 +181,28 @@ impl std::fmt::Display for ExtractionError {
     }
 }
 impl std::error::Error for ExtractionError {}
+
+/// Diagnostics for YAML-only consumers, without Markdown frontmatter framing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum YamlDiagnosticCode {
+    Syntax,
+    DuplicateKey,
+    Mapping,
+    Tag,
+    Alias,
+    Value,
+    Resource,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct YamlDiagnostic {
+    pub code: YamlDiagnosticCode,
+    pub range: SourceRange,
+}
+impl std::fmt::Display for YamlDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "YAML mapping error: {:?}", self.code)
+    }
+}
+impl std::error::Error for YamlDiagnostic {}
