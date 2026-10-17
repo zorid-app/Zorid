@@ -19,7 +19,8 @@ node /absolute/main/node_modules/webpack/bin/webpack.js --config prototypes/brow
 Serve that output over localhost. Open the page with a real supported browser,
 click **Run fresh suite**, and retain the complete visible JSON report, served
 bundle hashes and exact source/build revisions. The build config copies only the
-allowlisted generated WASM JS/binary assets through the maintained root plugin.
+allowlisted generated WASM JS/binary assets through the maintained root plugin
+with its normal production export checks and content-addressed asset path.
 It does not build Rust or write the source database format.
 
 The suite checks exact raw UTF-8/BOM/CRLF and binary bytes, shared Rust metadata

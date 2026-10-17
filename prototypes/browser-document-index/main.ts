@@ -5,6 +5,7 @@ import {defaultBrowserAdapter} from '../../src/platform/browser-default.ts';
 import type {BrowserDocumentIndex,BrowserIndexPin,BrowserIndexSnapshot} from '../../src/core/browser-document-index.ts';
 import type {VaultAdapter} from '../../src/core/types.ts';
 declare const __DOCUMENT_INDEX_SOURCE__:string;
+declare const __DOCUMENT_INDEX_MODULE_PATH__:string;
 type Index=Omit<BrowserDocumentIndex,'close'>;
 interface Session {runtime:BrowserCoreRuntime;consumer:BrowserClientContext;adapter:VaultAdapter;index:Index}
 const output=document.getElementById('result')!,identity=document.getElementById('identity')!;
@@ -19,7 +20,7 @@ const show=(value:unknown)=>{output.textContent=JSON.stringify(value,null,2);};
 function parameters(){const url=new URL(location.href);return {url,database:url.searchParams.get('database'),client:url.searchParams.get('client')};}
 function stage(name:string){phase=name;show({status:'running',phase,source:__DOCUMENT_INDEX_SOURCE__});}
 async function open(database:string,clientId:string):Promise<Session>{
-  const runtime=await BrowserCoreRuntime.open({database,clientId,wasmModuleUrl:new URL('lib/core/zorid_wasm.js',document.baseURI).href,allowNewVault:true,initializeLocal:true,timeoutMs:60000});
+  const runtime=await BrowserCoreRuntime.open({database,clientId,wasmModuleUrl:new URL(__DOCUMENT_INDEX_MODULE_PATH__,document.baseURI).href,allowNewVault:true,initializeLocal:true,timeoutMs:60000});
   try{const consumer=admitBrowserClient(runtime,{assertOwner:()=>runtime.assertActive()});assert(consumer.documentIndex,'Production worker did not expose shared document index');
     await consumer.documentIndex.initialize();const value={runtime,consumer,adapter:defaultBrowserAdapter(runtime,consumer),index:consumer.documentIndex};sessions.add(value);return value;
   }catch(error){runtime.close();throw error;}
@@ -77,7 +78,7 @@ async function run(){
     stage('invalid Base source remains durable');await a.adapter.write('Links.base','views: [');await build(a.index);const malformed=await a.index.open();await expectedError(()=>a.index.base({pinId:malformed.pinId,id:base.entry.id}),'index_base_compile');await exact(a,'Links.base','views: [');await a.index.closePin(malformed.pinId);
     currentSnapshot=(await a.index.status()).snapshot!;checks.invalidBasePreserved=true;
   }finally{await releaseAll();}
-  stage('fresh worker cache restore');checks.restart=await persisted();const manifest=await fetch(new URL('lib/core/manifest.json',document.baseURI)).then(r=>r.json());
+  stage('fresh worker cache restore');checks.restart=await persisted();const manifest=await fetch(new URL('manifest.json',new URL(__DOCUMENT_INDEX_MODULE_PATH__,document.baseURI))).then(r=>r.json());
   return {status:'passed',fixtureSource:__DOCUMENT_INDEX_SOURCE__,wasm:manifest,browser:navigator.userAgent,database,elapsedMs:Math.round(performance.now()-started),snapshot:currentSnapshot,checks};
 }
 function action(id:string,task:()=>Promise<unknown>){document.getElementById(id)!.addEventListener('click',async()=>{if(active)return;active=true;document.querySelectorAll('button').forEach(button=>button.disabled=true);
