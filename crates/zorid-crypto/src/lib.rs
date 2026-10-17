@@ -1,4 +1,6 @@
-//! AEAD for immutable vault-update envelopes. No key enrollment, storage or server.
+//! AEAD for vault-update envelopes and purpose-separated vault-key recovery.
+//! No enrollment UI, secret storage or server.
+pub mod recovery;
 use chacha20poly1305::{
     aead::{Aead, Payload},
     KeyInit, XChaCha20Poly1305, XNonce,
