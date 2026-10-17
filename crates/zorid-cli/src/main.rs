@@ -1,4 +1,8 @@
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod search;
 mod sync;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod watch;
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
@@ -126,8 +130,30 @@ enum Command {
         #[arg(long)]
         recursive: bool,
     },
-    /// Not implemented in this slice.
-    Search,
+    /// Search committed UTF-8 file contents literally, without scanning disk.
+    Search {
+        #[arg(value_parser=search_query)]
+        query: String,
+        #[arg(long, default_value_t=100, value_parser=clap::value_parser!(u32).range(1..=1000))]
+        limit: u32,
+        #[arg(long, default_value_t=67_108_864, value_parser=clap::value_parser!(u64).range(0..=268_435_456))]
+        max_total_bytes: u64,
+    },
+    /// Foreground rescan and optional existing-scope sync; restart uses durable core queues.
+    Watch {
+        /// Existing protected fixture credentials, never an enrollment request.
+        #[arg(long, value_name = "FILE")]
+        credentials: Option<PathBuf>,
+        #[arg(long, default_value_t=1000, value_parser=clap::value_parser!(u64).range(100..=60_000))]
+        interval_ms: u64,
+        /// Stop after this many attempts; omitted means continue until SIGINT/SIGTERM.
+        #[arg(long, value_parser=clap::value_parser!(u64).range(1..))]
+        max_cycles: Option<u64>,
+        #[arg(long, default_value_t=64, value_parser=clap::value_parser!(u32).range(0..=1000))]
+        max_push: u32,
+        #[arg(long, default_value_t=4, value_parser=clap::value_parser!(u32).range(0..=100))]
+        max_pages: u32,
+    },
     /// Explicit current-v2 loopback fixture sync; file limits remain bounded.
     Sync {
         /// Owner-only credential JSON outside the vault; never pass secrets as flags.
@@ -136,6 +162,15 @@ enum Command {
         #[command(subcommand)]
         command: sync::Command,
     },
+}
+
+fn search_query(value: &str) -> std::result::Result<String, String> {
+    if value.is_empty() || value.len() > 4096 || value.contains(['\r', '\n']) {
+        return Err(
+            "Search requires a nonempty single-line literal of at most 4096 UTF-8 bytes".into(),
+        );
+    }
+    Ok(value.to_owned())
 }
 
 struct Failure {
@@ -161,6 +196,8 @@ type Result<T> = std::result::Result<T, Failure>;
 enum Output {
     Json(Value),
     Raw(Vec<u8>),
+    /// A foreground command already emitted bounded JSONL frames.
+    Streamed,
 }
 
 fn projection_json(status: zorid_native::ProjectionStatus) -> Value {
@@ -215,6 +252,7 @@ fn main() -> ExitCode {
     match run(args) {
         Ok(output) => {
             let result = match output {
+                Output::Streamed => Ok(()),
                 Output::Json(value) => write_json(
                     &mut io::stdout().lock(),
                     &json!({"version":1,"ok":true,"result":value}),
@@ -363,13 +401,6 @@ fn run(args: Args) -> Result<Output> {
     };
     use zorid_native::NativeVault;
 
-    if matches!(args.command, Command::Search) {
-        return Err(Failure::new(
-            "unsupported",
-            "This command is not implemented in the initial CLI slice",
-            5,
-        ));
-    }
     if !matches!(args.command, Command::Init) {
         match std::fs::symlink_metadata(args.vault.join(".zorid/vault.sqlite")) {
             Ok(metadata) if metadata.file_type().is_file() => {}
@@ -395,6 +426,27 @@ fn run(args: Args) -> Result<Output> {
                 ))
             }
         }
+    }
+
+    if let Command::Watch {
+        credentials,
+        interval_ms,
+        max_cycles,
+        max_push,
+        max_pages,
+    } = &args.command
+    {
+        watch::run(
+            &args.vault,
+            credentials.as_deref(),
+            *interval_ms,
+            *max_cycles,
+            zorid_native_sync::SyncLimits {
+                max_push: *max_push,
+                max_pages: *max_pages,
+            },
+        )?;
+        return Ok(Output::Streamed);
     }
 
     // Prepare and bound mutation input before opening the vault or taking locks.
@@ -567,7 +619,12 @@ fn run(args: Args) -> Result<Output> {
                 json!({"complete":report.run.complete,"run":{"scan_id":report.run.scan_id,"max_entries":report.run.max_entries,"finished":report.run.finished,"complete":report.run.complete,"observed":report.run.observed,"imported":report.run.imported,"issue":report.run.issue.map(|_| "scan_incomplete")},"issues":issues,"missing":report.missing,"missing_are_deletions":false,"limits":limits,"synced":false})
             }
         }
-        Command::Search => unreachable!(),
+        Command::Search {
+            query,
+            limit,
+            max_total_bytes,
+        } => search::run(&vault, &query, limit as usize, max_total_bytes)?,
+        Command::Watch { .. } => unreachable!(),
     };
     Ok(Output::Json(value))
 }

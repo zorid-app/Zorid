@@ -6,8 +6,9 @@ vault's SQLite authority and uses the native adapter's cross-process filesystem
 coordination. This initial slice supports macOS and Linux; other platforms return
 `unsupported_platform` until their native adapter exists.
 
-This is not the completed full-vault CLI milestone. Search, continuous watching,
-large-file streaming and production enrollment remain required. Current-v2 family
+This is not the completed full-vault CLI milestone. Basic committed-content
+search and foreground watch/rescan/sync are implemented; large-file streaming
+and production enrollment remain required. Current-v2 family
 sync source uses the native core's shared ledger and causal text/file state; its
 source and fixture presence do not establish runtime acceptance.
 
@@ -75,12 +76,79 @@ a 16 MiB whole-file bound. Input over the bound is rejected, never truncated. Th
 native adapter retains its own matching size check. Larger files/streaming remain
 required work. No credentials are accepted as flags or emitted as diagnostics.
 
+## Committed-content search
+
+`zorid --vault /path/to/vault search "literal text" --limit 100 --max-total-bytes 67108864`
+searches authoritative committed UTF-8 content, including unknown extensions and
+hidden vault files. It never imports a physical edit, scans disk or connects to a
+server. The literal is case-sensitive, nonempty, single-line and at most 4096
+UTF-8 bytes; regular expressions and semantic/indexed Markdown search are outside
+this command. Invalid UTF-8 and NUL-containing files count as skipped binary.
+
+Results identify each matching line by stable entry ID, current path, revision,
+1-based line number and byte offset, with a snippet capped at 512 Unicode scalar
+values. At most 1000 matching lines may be requested. Content reads are bounded
+by the byte budget (default 64 MiB, maximum 256 MiB); zero requests no nonempty
+content reads. `searched_files`, `skipped_binary`, `skipped_changed`,
+`scanned_bytes`, `truncated` and `complete` make omitted work explicit. Reaching a
+budget never means that the remaining files contain no matches. Metadata is
+currently enumerated through the shared core snapshot API; these limits bound
+content reads/output, not that metadata allocation or the core's whole-file read.
+
+The identity set comes from one inventory, and each subsequent file read returns
+its own coherent committed state. Results use that read's path/revision; search
+does not promise one atomic cross-file snapshot while other writers run. Deleted
+entries are skipped; files created after enumeration need another invocation.
+
+## Foreground watch and optional sync
+
+```sh
+zorid --vault /path/to/existing-vault watch --interval-ms 1000
+zorid --vault /path/to/enrolled-vault watch --credentials /private/fixture.json --interval-ms 1000 --max-cycles 10
+```
+
+Watch runs in its own process and embeds the native core; no desktop, IPC or
+daemon is required. It never initializes storage or enrolls/rebinds a sync scope.
+The optional credential file uses the existing protected loopback fixture loader.
+Without credentials, only local changes are reconciled. With credentials, the
+existing scope is checked before any local scan, followed by a bounded existing
+sync sweep. The current credential/enrollment restrictions remain unchanged.
+
+Each cycle reopens the same authority and drops it before waiting, so independent
+writers continue to use the shared storage protocol. An authority or enrollment
+change stops the process rather than adopting another vault. Enrolled discovery
+runs before projection recovery. Both recovery and network sync are deferred
+when inventory/reconciliation is incomplete: receiving even an existing update
+can recover publications internally. Such cycles report `sync_deferred:
+"scan_incomplete"`; they do not present enrollment or partial imports as ready.
+The scanner's existing bounds still apply. Repetition alone does not prove full
+coverage if the configured/native limits prevent progress.
+
+Watch emits JSON Lines: successful cycle frames include `event: "watch_cycle"`,
+local scan/import counts, sanitized bounded scan issues, separate optional sync
+results and pending local counts. `complete` describes the local scan only;
+`synced` remains false. Retry frames use `ok: false`, `retrying: true` and a stable
+error code. Only `lock_timeout`, `filesystem_changed` and `sync_transport` retry,
+with increasing delay capped at the greater of 30 seconds and the configured
+interval. Corruption/schema/unsafe paths, credentials, authentication/revocation,
+protocol and authority failures stop with the ordinary sanitized error frame on
+stderr. A failed output write stops further cycles.
+
+SIGINT/SIGTERM handlers only set an atomic stop flag. Shutdown waits for the
+current bounded native operation or complete sync sweep, checks between phases,
+and uses short sleep slices; it is not a hard network-cancellation deadline.
+`--max-cycles` bounds attempted cycles, including retries. The final
+`watch_stopped` frame distinguishes signal from cycle limit and reports whether
+the last attempt completed locally. Clean shutdown does not claim all network
+work finished. Restart reuses the native persisted observations, exact sealed
+requests and receive cursors; it never mints replacement retry identities.
+
 ## Agent protocol and retry rules
 
 Success is one JSON object on stdout, with `version: 1`, `ok: true`, and `result`.
 Failure is one JSON object on stderr, with `version: 1`, `ok: false`, and
 `error: {code, message, detail}`; stdout is empty. Help/version are conventional
-text. `read --raw` is the only data-output exception: successful stdout contains
+text. `watch` is the explicit streaming exception described above; `read --raw` is the raw data-output exception: successful stdout contains
 exact bytes, no framing or newline; errors remain JSON on stderr. Default `read`
 returns `entry` metadata, `encoding: "base64"`, and `bytes` containing standard
 padded base64. Status exposes counts, never the recovery records' plaintext bytes.
@@ -120,7 +188,7 @@ typed native recovery diagnostics remain future work.
 | 5 | Unsupported capability, platform, or schema |
 
 Stable codes are provided for automation; human messages may change. Content is
-printed only by explicit reads. Parser errors intentionally do not echo arbitrary
+printed only by explicit read/search commands. Parser errors intentionally do not echo arbitrary
 argument values, and low-level database/I/O error strings are not logged.
 
 ## Verification scope

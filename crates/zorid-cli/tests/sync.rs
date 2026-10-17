@@ -348,6 +348,199 @@ fn lost_remote_ack_retries_persisted_ciphertext_after_cli_restart() {
 }
 
 #[test]
+fn watch_retries_persisted_ciphertext_after_lost_ack_and_process_restart() {
+    let mut f = Fixture::new(true);
+    write(&f.a, &f.input, "watch-seed", "private watch seed\r\n");
+    let before = success(sync(&f.a, &f.ca, &["status"]));
+    let failed_cycle = cli(
+        &f.a,
+        &[
+            "watch",
+            "--credentials",
+            f.ca.to_str().unwrap(),
+            "--interval-ms",
+            "100",
+            "--max-cycles",
+            "1",
+        ],
+    );
+    assert!(failed_cycle.status.success());
+    assert!(failed_cycle.stderr.is_empty());
+    let frames: Vec<Value> = std::str::from_utf8(&failed_cycle.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["version"], 1);
+    assert_eq!(frames[0]["ok"], false);
+    assert_eq!(frames[0]["event"], "watch_cycle");
+    assert_eq!(frames[0]["cycle"], 1);
+    assert_eq!(frames[0]["retrying"], true);
+    assert_eq!(frames[0]["error"]["code"], "sync_transport");
+    assert_eq!(frames[1]["ok"], true);
+    assert_eq!(frames[1]["result"]["event"], "watch_stopped");
+    assert_eq!(frames[1]["result"]["cycles"], 1);
+    assert_eq!(frames[1]["result"]["reason"], "max_cycles");
+    assert_eq!(frames[1]["result"]["last_cycle_complete"], false);
+
+    let first_wire = f.wires();
+    assert_eq!(first_wire.len(), 1, "relay committed before losing its ACK");
+    let pending = success(sync(&f.a, &f.ca, &["status"]));
+    let pending_count = pending["pending_envelope_sample"].as_u64().unwrap();
+    assert!(pending_count >= 2);
+    assert_eq!(pending["pending_envelopes"][0]["sealed"], true);
+    assert_eq!(pending["family"]["cursor"], before["family"]["cursor"]);
+
+    // This is a fresh foreground process over the same durable local state.
+    let restarted = cli(
+        &f.a,
+        &[
+            "watch",
+            "--credentials",
+            f.ca.to_str().unwrap(),
+            "--interval-ms",
+            "100",
+            "--max-cycles",
+            "2",
+        ],
+    );
+    assert!(restarted.status.success());
+    assert!(restarted.stderr.is_empty());
+    let frames: Vec<Value> = std::str::from_utf8(&restarted.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 3);
+    for (index, frame) in frames[..2].iter().enumerate() {
+        assert_eq!(frame["version"], 1);
+        assert_eq!(frame["ok"], true, "{frame}");
+        assert_eq!(frame["result"]["event"], "watch_cycle");
+        assert_eq!(frame["result"]["cycle"], index + 1);
+        assert_eq!(frame["result"]["scan"]["complete"], true);
+        assert_eq!(frame["result"]["sync"]["pending_envelope_sample"], 0);
+    }
+    assert_eq!(
+        frames[0]["result"]["sync"]["server_accepted"],
+        pending_count
+    );
+    assert_eq!(frames[1]["result"]["sync"]["server_accepted"], 0);
+    assert_eq!(frames[2]["ok"], true);
+    assert_eq!(frames[2]["result"]["event"], "watch_stopped");
+    assert_eq!(frames[2]["result"]["cycles"], 2);
+    assert_eq!(frames[2]["result"]["reason"], "max_cycles");
+    let after = success(sync(&f.a, &f.ca, &["status"]));
+    assert_eq!(after["pending_envelope_sample"], 0);
+    assert_ne!(after["family"]["cursor"], before["family"]["cursor"]);
+    let wires = f.wires();
+    assert_eq!(wires.len(), pending_count as usize);
+    assert_eq!(
+        &wires[..1],
+        first_wire.as_slice(),
+        "watch restart retries identical ciphertext at its original log position"
+    );
+    success(sync(&f.b, &f.cb, &["once"]));
+    assert_eq!(read(&f.b), b"private watch seed\r\n");
+    for output in [&failed_cycle.stdout, &restarted.stdout] {
+        let output = std::str::from_utf8(output).unwrap();
+        assert!(!output.contains(f.token.expose_secret()));
+        assert!(!output.contains("private watch seed"));
+        assert!(!output.contains(&STANDARD.encode([7u8; 32])));
+    }
+}
+
+#[test]
+fn watch_revoked_credentials_fail_without_retry_or_secret_output() {
+    let mut f = Fixture::new(false);
+    write(&f.a, &f.input, "watch-seed", "private remote watch seed");
+    success(sync(&f.a, &f.ca, &["once"]));
+    let before = success(sync(&f.b, &f.cb, &["status"]));
+    let credentials: Value = serde_json::from_slice(&fs::read(&f.cb).unwrap()).unwrap();
+    f.admin
+        .revoke_device(&DeviceId::new("device-b").unwrap())
+        .unwrap();
+    let denied = cli(
+        &f.b,
+        &[
+            "watch",
+            "--credentials",
+            f.cb.to_str().unwrap(),
+            "--interval-ms",
+            "100",
+            "--max-cycles",
+            "2",
+        ],
+    );
+    assert!(!denied.status.success());
+    assert!(denied.stdout.is_empty(), "fatal rejection must not retry");
+    let failure: Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(failure["ok"], false);
+    assert_eq!(failure["error"]["code"], "sync_authorization_failed");
+    assert_ne!(failure["retrying"], true);
+    let diagnostics = std::str::from_utf8(&denied.stderr).unwrap();
+    for secret in [
+        credentials["bearer_token"].as_str().unwrap(),
+        credentials["key_base64"].as_str().unwrap(),
+        "private remote watch seed",
+    ] {
+        assert!(!diagnostics.contains(secret));
+    }
+    let after = success(sync(&f.b, &f.cb, &["status"]));
+    assert_eq!(after["family"]["cursor"], before["family"]["cursor"]);
+    assert_eq!(after["pending_envelope_sample"], 0);
+    assert!(!cli(&f.b, &["read", "--id", "note"]).status.success());
+}
+
+#[test]
+fn watch_defers_sync_and_recovery_when_enrolled_directory_scan_is_incomplete() {
+    let mut f = Fixture::new(false);
+    for index in 0..257 {
+        fs::create_dir(f.a.join(format!("directory-{index:03}"))).unwrap();
+    }
+    assert!(f.wires().is_empty());
+    let watched = cli(
+        &f.a,
+        &[
+            "watch",
+            "--credentials",
+            f.ca.to_str().unwrap(),
+            "--interval-ms",
+            "100",
+            "--max-cycles",
+            "1",
+        ],
+    );
+    assert!(
+        watched.status.success(),
+        "{}",
+        String::from_utf8_lossy(&watched.stderr)
+    );
+    assert!(watched.stderr.is_empty());
+    let frames: Vec<Value> = std::str::from_utf8(&watched.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["ok"], true);
+    let cycle = &frames[0]["result"];
+    assert_eq!(cycle["event"], "watch_cycle");
+    assert_eq!(cycle["cycle"], 1);
+    assert_eq!(cycle["complete"], false);
+    assert_eq!(cycle["scan"]["complete"], false);
+    assert_eq!(cycle["scan"]["recovery_run"], false);
+    assert!(cycle["sync"].is_null());
+    assert_eq!(cycle["sync_deferred"], "scan_incomplete");
+    assert_eq!(frames[1]["ok"], true);
+    assert_eq!(frames[1]["result"]["event"], "watch_stopped");
+    assert_eq!(frames[1]["result"]["cycles"], 1);
+    assert_eq!(frames[1]["result"]["reason"], "max_cycles");
+    assert_eq!(frames[1]["result"]["last_cycle_complete"], false);
+    assert!(f.wires().is_empty(), "incomplete scan must defer transport");
+}
+
+#[test]
 fn credentials_are_private_outside_vault_and_errors_do_not_echo_secrets() {
     let f = Fixture::new(false);
     fs::set_permissions(&f.ca, fs::Permissions::from_mode(0o644)).unwrap();

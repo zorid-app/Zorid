@@ -177,7 +177,7 @@ fn read_commands_never_initialize_and_usage_does_not_echo_values() {
     failure(output, "usage", 2);
     failure(invoke(dir.path(), &["sync"], None), "usage", 2);
     for cmd in ["search"] {
-        failure(invoke(dir.path(), &[cmd], None), "unsupported", 5);
+        failure(invoke(dir.path(), &[cmd], None), "usage", 2);
         assert!(!dir.path().join(".zorid").exists());
     }
 }
