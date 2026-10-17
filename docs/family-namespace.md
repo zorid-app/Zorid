@@ -61,7 +61,7 @@ claims, applies semantic deletes first, and resumes remaining moves after restar
 Null-plan claims require no binding, baseline, or active publication; no filesystem
 occupant is inferred to belong to an unbound entry. The new mixed folder fixture
 checks that child deletion cannot retire the parent Move before remaining members
-finish. This follow-up is source-only pending its coordinated runtime gate.
+finish. This follow-up passed the coordinated native/store gate recorded below.
 
 The file-publication handoff follow-up settles an exact interrupted file attempt
 before namespace attachment. It cancels only an unpublished attempt with proven
@@ -75,5 +75,35 @@ a live Move it publishes the immutable original create target before relocation,
 so the old-path create job cannot be stranded. For an unpublished semantic Delete
 it cancels the attempt and retains its private stage; the namespace transaction
 then retires the exact obsolete create job. A prepared/published interruption
-fixture covers this path. These handoffs are independently source-reviewed and
-runtime-unverified until the combined gate completes.
+fixture covers this path. These handoffs are independently source-reviewed and passed the combined
+component gate below. Actual app and cross-client checks remain separate.
+
+
+## Combined verification — 2026-10-17
+
+Owner: `client_sync_review`. Isolated branch `tingkai-c/core-namespace-external-gate`
+at `9c61837`, based on main `e71f59a`, combines the mixed claims, managed external
+edits, exact file/directory publication handoffs, SQLite lock preservation and
+native desktop file-command seam. It uses a fresh disposable schema8 in tests;
+no user vault migration or live fixture mutation was performed.
+
+With this worktree's own `target` directory, `CARGO_PROFILE_DEV_DEBUG=0`,
+`CARGO_PROFILE_TEST_DEBUG=0`, and `CARGO_INCREMENTAL=0`:
+
+- `cargo test --offline -p zorid-native -j1 --lib -- --test-threads=1`:
+  session `3979`, exit 0, 84/84 passed.
+- `cargo test --offline -p zorid-store --test namespace -j1 -- --test-threads=1`:
+  session `76539`, exit 0, 18/18 passed.
+- `cargo build --offline -p zorid-cli -p zorid-desktop-host -j1`:
+  session `3348`, exit 0. Binaries are in this worktree's `target/debug`.
+
+The earlier run `26631` passed 76/79. Its two legacy text-authority failures were
+fixed by checking actual family enrollment before family namespace recovery;
+the retry fixture now restores its original inode after temporary absence rather
+than inventing authority from an equal-byte replacement. The final run includes
+both corrections and the independently tested SQLite POSIX-lock fix. No weakened
+occupant/provenance guard was used to make the checks pass.
+
+This verifies component behavior and compilation, not normal desktop UI or full
+browser/CLI convergence. Managed existing external text/binary edits are covered;
+new external file enrollment and external rename/delete remain separate work.
