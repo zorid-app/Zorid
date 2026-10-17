@@ -89,7 +89,7 @@ fn setup() -> tempfile::TempDir {
 }
 fn build(root: &Path) -> Value {
     let result = success(invoke(root, &["document-index", "build"]));
-    assert_eq!(result["complete"], true);
+    assert_eq!(result["buildComplete"], true);
     assert_eq!(result["published"], true);
     result
 }

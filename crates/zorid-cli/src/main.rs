@@ -1,6 +1,8 @@
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod binary;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod documents;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod metadata;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod search;
@@ -151,6 +153,36 @@ enum Command {
         limit: u32,
         #[arg(long, default_value_t=67_108_864, value_parser=clap::value_parser!(u64).range(0..=268_435_456))]
         max_total_bytes: u64,
+    },
+    /// Inspect or explicitly build the disposable committed document index.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    DocumentIndex {
+        #[command(subcommand)]
+        command: documents::IndexCommand,
+    },
+    /// Search a published Rust index; never implicitly build or scan files.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    IndexedSearch {
+        #[arg(value_parser = search_query)]
+        query: String,
+        #[command(flatten)]
+        options: documents::PageOptions,
+    },
+    /// Query incoming resolved links in one published document snapshot.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    Backlinks {
+        #[arg(long)]
+        id: String,
+        #[command(flatten)]
+        options: documents::PageOptions,
+    },
+    /// Evaluate a committed Base definition against one published Rust snapshot.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    BaseQuery {
+        #[arg(long)]
+        id: String,
+        #[command(flatten)]
+        options: documents::BaseOptions,
     },
     /// Foreground rescan and optional existing-scope sync; restart uses durable core queues.
     Watch {
@@ -689,6 +721,26 @@ fn run(args: Args) -> Result<Output> {
             limit,
             max_total_bytes,
         } => search::run(&vault, &query, limit as usize, max_total_bytes)?,
+        Command::DocumentIndex { command } => {
+            return Ok(Output::Raw(documents::index(&mut vault, command)?));
+        }
+        Command::IndexedSearch { query, options } => {
+            return Ok(Output::Raw(documents::search(&vault, query, options)?));
+        }
+        Command::Backlinks { id, options } => {
+            return Ok(Output::Raw(documents::backlinks(
+                &vault,
+                EntryId::new(id)?,
+                options,
+            )?));
+        }
+        Command::BaseQuery { id, options } => {
+            return Ok(Output::Raw(documents::base(
+                &vault,
+                EntryId::new(id)?,
+                options,
+            )?));
+        }
         Command::Watch { .. } => unreachable!(),
     };
     Ok(Output::Json(value))
