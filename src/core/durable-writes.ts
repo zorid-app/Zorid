@@ -32,8 +32,16 @@ export type DurableWriteIntent = { readonly ref: DurableWriteRef } & (
 export interface DurableWriteInput {
   readonly operationId: string;
   readonly path: string;
+  readonly expectedEntryId: string;
+  readonly expectedRevision: string;
   readonly expectedContent: string;
   readonly content: string;
+}
+/** One coherent persisted observation, never assembled from read + stat. */
+export interface DurableWriteRead {
+  readonly content: string;
+  readonly entryId: string;
+  readonly revision: string;
 }
 /** Optional editor capability; it does not replace legacy adapter methods.
  * Persist plan BEFORE prepare; persist returned ref BEFORE commit; reconcile and
@@ -41,6 +49,7 @@ export interface DurableWriteInput {
  * next step. Prepared records are inert. Unknown outcomes reuse the same plan/ref.
  */
 export interface DurableWrites {
+  readText(path: string): Promise<DurableWriteRead>;
   planWrite(input: DurableWriteInput): Promise<DurableWritePlan>;
   prepare(plan: DurableWritePlan): Promise<DurableWriteIntent>;
   commit(ref: DurableWriteRef): Promise<DurableWriteIntent>;

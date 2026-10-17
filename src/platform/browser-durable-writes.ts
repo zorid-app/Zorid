@@ -1,4 +1,4 @@
-import type { DurableWrites, DurableWritePlan, DurableWriteRef, DurableWriteIntent, DurableWriteInput, DurableWriteOutcome } from '../core/durable-writes.ts';
+import type { DurableWrites, DurableWritePlan, DurableWriteRef, DurableWriteIntent, DurableWriteInput, DurableWriteOutcome, DurableWriteRead } from '../core/durable-writes.ts';
 import type { BrowserVaultIntent } from '../core/browser-vault.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
@@ -84,14 +84,24 @@ export function browserDurableWrites(backend: BrowserCoreBackend, scope: {vaultI
     return row;
   }
   return Object.freeze({
+    async readText(input: string): Promise<DurableWriteRead> {
+      active();
+      const path = vaultPath(input), row = await backend.readEntry(path);
+      if (!row) throw error('ENOENT',`File not found: ${path}`);
+      if (row.entry.kind !== 'file' || !row.bytes) throw error('not_file',`Path is not a file: ${path}`);
+      return Object.freeze({content:new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.bytes),entryId:row.entry.id,revision:row.entry.revision});
+    },
     async planWrite(input: DurableWriteInput): Promise<DurableWritePlan> {
       active();
       if (!input || !identity(input.operationId)) throw error('invalid_write_plan','Caller must supply the operation identity');
       const operationId = input.operationId, path = vaultPath(input.path), content = input.content, expected = input.expectedContent;
+      const expectedEntryId = input.expectedEntryId, expectedRevision = input.expectedRevision;
+      if (!identity(expectedEntryId) || !identity(expectedRevision)) throw error('invalid_write_plan','Write planning requires the coherent observed entry identity and revision');
       textSize(content); textSize(expected);
       const row = await backend.readEntry(path);
       if (!row) throw error('ENOENT',`File not found: ${path}`);
       if (row.entry.kind !== 'file' || !row.bytes) throw error('not_file',`Path is not a file: ${path}`);
+      if (row.entry.id !== expectedEntryId || row.entry.revision !== expectedRevision) throw error('revision_conflict','File identity or revision changed since the persisted observation');
       if (new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.bytes) !== expected) throw error('content_conflict',`File changed outside this editor: ${path}`);
       const bytes = new TextEncoder().encode(content);
       const base = JSON.stringify({operation_id:operationId,mutation:{type:'write',id:row.entry.id,expected:row.entry.revision,content:[]}});

@@ -46,7 +46,7 @@ function fixture() {
   };
   const adapter=new BrowserCoreAdapter(backend,scope), durable=adapter.durableWrites!;
   return {scope,entry,rows,calls,backend,adapter,durable,
-    plan:()=>durable.planWrite({operationId:'operation-a',path:'Note.md',expectedContent:'old',content:'new'}),
+    plan:()=>durable.planWrite({operationId:'operation-a',path:'Note.md',expectedEntryId:'entry-a',expectedRevision:'revision-a',expectedContent:'old',content:'new'}),
     get reads(){return reads;}, losePrepare(){losePrepare=true;}, loseCommit(){loseCommit=true;}, rejectCommit(){rejectCommit=true;},
     listing(fn?:()=>Promise<void>){listing=fn;}, listingFailure(error?:Error){listingFailure=error;}};
 }
@@ -55,9 +55,25 @@ test('durable capability requires authoritative runtime scope and remains option
   assert.equal(new BrowserCoreAdapter(f.backend).durableWrites,undefined);
   assert.throws(()=>new BrowserCoreAdapter(f.backend,{...f.scope,vaultId:'wrong-vault'}),{code:'intent_identity_mismatch'});
 });
+test('readText returns bytes and identity from one backend observation',async()=>{
+  const f=fixture();
+  const reading=f.durable.readText('Note.md');
+  f.entry.entry.id='replacement'; f.entry.entry.revision='revision-b'; f.entry.bytes=new TextEncoder().encode('peer');
+  assert.deepEqual(await reading,{content:'old',entryId:'entry-a',revision:'revision-a'});
+  assert.equal(f.reads,1); assert.equal(f.calls.length,0);
+});
+test('same-byte recreation or revision change rejects planning before any intent is prepared',async()=>{
+  const f=fixture(), observed=await f.durable.readText('Note.md');
+  const input={operationId:'operation-a',path:'Note.md',expectedEntryId:observed.entryId,expectedRevision:observed.revision,expectedContent:observed.content,content:'new'};
+  f.entry.entry.id='replacement';
+  await assert.rejects(f.durable.planWrite(input),{code:'revision_conflict'});
+  f.entry.entry.id=observed.entryId; f.entry.entry.revision='revision-b';
+  await assert.rejects(f.durable.planWrite(input),{code:'revision_conflict'});
+  assert.equal(f.calls.length,0,'same text never overrides identity/revision guards');
+});
 test('plan binds one coherent revision, preserves BOM/supplementary Unicode and prepares without commit',async()=>{
   const f=fixture(); f.entry.bytes=new TextEncoder().encode('\uFEFFold');
-  const plan=await f.durable.planWrite({operationId:'operation-a',path:'Note.md',expectedContent:'\uFEFFold',content:'\uFEFF😀new'});
+  const plan=await f.durable.planWrite({operationId:'operation-a',path:'Note.md',expectedEntryId:'entry-a',expectedRevision:'revision-a',expectedContent:'\uFEFFold',content:'\uFEFF😀new'});
   assert.equal(f.reads,1); assert.equal(f.calls.length,0); assert.equal(Object.isFrozen(plan),true);
   assert.deepEqual(JSON.parse(plan.encodedPlan).mutation,{type:'write',id:'entry-a',expected:'revision-a',content:Array.from(new TextEncoder().encode('\uFEFF😀new'))});
   const view=await f.durable.prepare(plan);
@@ -145,7 +161,7 @@ test('plan/ref mismatches, malformed UTF16 and oversized encoded plans fail befo
   const f=fixture(), plan=await f.plan();
   await assert.rejects(f.durable.prepare({...plan,entryId:'other-entry'}),{code:'intent_identity_mismatch'});
   await assert.rejects(f.durable.prepare({...plan,encodedPlan:' '.repeat(8*1024*1024+1)}),{code:'encoded_plan_too_large'});
-  for(const [expectedContent,content] of [['old','\ud800'],['\udfff','new']]) await assert.rejects(f.durable.planWrite({operationId:'bad',path:'Note.md',expectedContent,content}),{code:'invalid_text'});
+  for(const [expectedContent,content] of [['old','\ud800'],['\udfff','new']]) await assert.rejects(f.durable.planWrite({operationId:'bad',path:'Note.md',expectedEntryId:'entry-a',expectedRevision:'revision-a',expectedContent,content}),{code:'invalid_text'});
   assert.equal(f.calls.length,0);
   await f.adapter.close(); await assert.rejects(f.durable.prepare(plan),{code:'storage_closed'});
 });
