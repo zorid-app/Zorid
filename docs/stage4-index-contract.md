@@ -5,7 +5,10 @@ Owner: this document only. Branch `tingkai-c/stage4-index-contract`, Orca worktr
 `/Users/ctk/orca/workspaces/Zorid/stage4-index-contract`. Root owns the shared
 semantic API and contract freeze. Metadata/parser and Base workers own their
 respective result semantics; the new mobile session owns native shell/bindings.
-No implementation, dependency adoption, build, runtime or performance claim.
+Root froze the initial rules below on2026-10-17. A portable resolver/identity
+slice is now assigned in `crates/zorid-index/**`; metadata-dependent generation
+planning waits for the shared document public types. No builds, runtime or
+performance claim; native/store/host/CLI remain unassigned to this worker.
 
 Depends on [the accepted milestone](shared-document-semantics-plan.md) and
 [source reuse assessment](document-semantics-reuse-assessment.md). Wave3 passed;
@@ -120,10 +123,20 @@ journal as local writes; projections/scanner callbacks are wake hints only.
 
 Keep raw outbound links attached to their source witness. Resolve against the
 query generation's complete inventory, so target create/move/delete and source
-folder moves invalidate resolution without reparsing unrelated bodies. Root
-must freeze candidate ordering/ambiguity policy with metadata fixtures; current
-NFC/lowercase, local-directory/shortest suffix and insertion-order ties are
-behavior evidence, not an accepted cross-runtime ordering contract. Do not
+folder moves invalidate resolution without reparsing unrelated bodies. Frozen resolver rules preserve explicit-relative lookup priority, root-exact
+lookup, `.md` fallback and NFC followed by Unicode lowercase. Percent decoding
+is strict whole-value UTF-8 or retains the whole literal, matching current
+`decodeURIComponent` behavior. Normalization is versioned as shared Rust behavior
+on native/WASM (`unicode-normalization =0.1.25`), not host locale behavior.
+Local directory membership and suffix matching require slash-segment boundaries:
+`AB` is not inside `A`, and `OtherDir/Note.md` is not a suffix match for
+`Dir/Note.md`. These are intentional corrections to accidental TS prefix/suffix
+matches. Relative lookup checks source-directory targets first; a rooted miss
+never falls back globally. Remaining candidates are ordered local-before-other,
+then shortest original logical path length in UTF-16 code units (preserving the
+existing JavaScript length metric), original UTF-8 path bytes, stable entry ID.
+Equal normalized root paths use that same deterministic tie ordering. Insertion
+order no longer determines winners; this correction is explicit in fixtures. Do not
 implement rename source rewriting here; existing CAS-protected TS rewrites stay
 with their owner until a separate lossless-edit migration.
 
@@ -172,9 +185,8 @@ pins are unnecessary if tokens expire explicitly after process restart.
 
 First operation: literal UTF-8 search matching the current CLI contract, exact
 case, bounded query/line snippets, explicit byte ranges plus the metadata-owned
-UTF-8/UTF-16 conversion. Sort by logical UTF-8 path bytes then entry ID and hit
-position, independent of host locale. Root must approve this ordering before
-changing the CLI. Avoid using FTS rank as a cross-platform default. UI's current
+UTF-8/UTF-16 conversion. Frozen result ordering is logical UTF-8 path bytes then entry ID and hit
+position, independent of host locale. Avoid using FTS rank as a cross-platform default. UI's current
 locale-dependent case-insensitive behavior and rich regex/scope grammar need separate fixtures
 before that consumer migrates; existing TS paths keep their behavior meanwhile.
 Base gets `open_snapshot` rows/version/diagnostics; its worker owns values,
@@ -214,10 +226,12 @@ repeat supported candidate cases with FTS enabled only when implemented:
 | Two indexers/tabs publish same expected head; query spans rebuild/write | One winner, bounded retry, stable snapshot page or explicit expiry; no mixed-generation result. |
 | Tiny work/result budget, unreadable/oversize text, optional FTS absent/corrupt | Explicit progress/lag/truncation/exclusions with resumable cursor; exact fallback or explicit failure, never false completed/no matches. |
 
-Proposed initial pump budget: at most32 documents and1MiB source/output per call,
+Frozen initial pump budget: at most32 documents and1MiB source/output per call,
 with cooperative elapsed/step limits and existing per-file authority limits.
-Root freezes actual numbers; an exhausted budget reports resumable progress,
-never discards source or raises the core's file cap. Record latency/memory when
+A document exceeding a call budget requires explicit bounded per-file
+continuation or a terminal per-file limit diagnostic; it must not remain at the
+queue head returning no progress forever. An exhausted budget reports resumable
+progress, never discards source or raises the core's file cap. Record latency/memory when
 implementation exists; this source proposal makes no speed claim.
 
 Migration sequence: (1) portable contracts/corpus + native/IDB adapter parity;
@@ -233,5 +247,6 @@ facts/spans/version; Base worker snapshot projection requirements; future native
 store owner derived tables/journal/read fence; future browser-storage owner IDB
 stores/bounded feed/transactions; CLI owner commands/JSON compatibility; editor
 owner Vault/workspace, backlink navigation and draft overlays; mobile owner
-bindings/shell. Only this document is assigned now. Root must name those future
-implementers and freeze the shared contract before consumer/schema changes.
+bindings/shell. This worker now also owns `crates/zorid-index/**` for the initial portable
+slice; other implementation seams remain future assignments. Root owns final
+metadata type freeze and must name implementers before consumer/schema changes.
