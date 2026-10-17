@@ -6,10 +6,15 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 mod blob_index;
 mod blob_stage;
 mod checkpoints;
+mod content;
 pub use blob_stage::{
     BinaryStageRef, BinaryStageRequest, BinaryStageStatus, BinaryTarget, StageChunkReceipt,
     StagePhase, StagedBinaryRef, StreamingLimits, BINARY_STAGE_MAX_CHUNK_BYTES,
     BINARY_STAGE_MAX_FILE_BYTES, BINARY_STAGE_MAX_PAYLOAD_BYTES,
+};
+pub use content::{
+    BinarySourceRef, BinaryStageLocator, CapturedBinaryRef, ContentMetadata, PublishedBinaryRef,
+    StoredContent, StoredEntryMetadata,
 };
 mod external_scan_progress;
 mod family_commands;
@@ -220,6 +225,7 @@ pub enum ReloadReason {
 
 #[derive(Debug)]
 pub enum StoreError {
+    StreamRequired { bytes: u64, limit: u64 },
     ReloadRequired(ReloadReason),
     Sql(rusqlite::Error),
     Sync(zorid_client_sync::SyncError),
@@ -234,6 +240,10 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::StreamRequired { bytes, limit } => write!(
+                f,
+                "content requires streaming ({bytes} bytes exceeds inline limit {limit})"
+            ),
             Self::ReloadRequired(reason) => {
                 write!(f, "Coherent snapshot reload required: {reason:?}")
             }
