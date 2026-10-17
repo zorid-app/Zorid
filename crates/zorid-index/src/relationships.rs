@@ -65,6 +65,14 @@ impl ResolutionSnapshot {
     pub fn resolver(&self) -> Resolver<'_> {
         Resolver::new(&self.manifest)
     }
+    /// Preserve consumer work/cancellation accounting while preparing the same
+    /// private immutable namespace for arbitrary hasLink/asFile destinations.
+    pub fn resolver_checked<E>(
+        &self,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Resolver<'_>, E> {
+        Resolver::new_checked(&self.manifest, check)
+    }
     pub fn resolve(
         &self,
         source: &EntryId,
