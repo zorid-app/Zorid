@@ -7,6 +7,7 @@ import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import type { EmbedRequest } from '../ui/markdown.ts';
 import { bodyStart } from './live-properties.ts';
+import { icon } from '../ui/icons.ts';
 
 interface EmbedSpan {
   from: number;
@@ -22,6 +23,20 @@ type Renderer = (request: EmbedRequest) => { dom: HTMLElement; destroy: () => vo
 
 const excludedNodes = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock', 'LiveInlineComment', 'Table', 'LinkReference', 'URL', 'LinkTitle', 'ZoridFrontmatter', 'ZoridMathInline', 'ZoridMathDisplay', 'ZoridMathBlock']);
 const interactive = 'a, button, input, select, textarea, audio, video, iframe, object, embed, summary, .cm-editor, .interactive-child, [contenteditable]:not([contenteditable="false"]), [role="button"]';
+
+type EmbedControlKind = 'loading' | 'unavailable' | 'unknown' | 'image' | 'audio' | 'video' | 'note' | 'pdf' | 'base' | 'canvas';
+/** The renderer owns resolution. A filename alone must not advertise a viewer
+ * that is unavailable (notably .base/.canvas until their renderer is mounted). */
+function embedControlKind(root: HTMLElement): EmbedControlKind {
+  if (root.querySelector(':scope > .embed-loading')) return 'loading';
+  for (const [name, selector] of [
+    ['image', '.image-embed'], ['audio', '.audio-embed'], ['video', '.video-embed'],
+    ['pdf', '.pdf-embed'], ['base', '.bases-embed'], ['canvas', '.canvas-embed'],
+  ] as const) if (root.matches(selector)) return name;
+  if (root.querySelector(':scope > .embed-error')) return 'unavailable';
+  if (root.matches('.markdown-embed')) return 'note';
+  return 'unknown';
+}
 
 function unescape(value: string): string {
   return value.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~ ])/g, '$1');
@@ -107,10 +122,46 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
       wrapper.contentEditable = 'false';
       const instance = render(this.span.request);
       wrapper.append(instance.dom);
-      const action = view.dom.ownerDocument.createElement('button');
-      action.type = 'button'; action.className = 'edit-block-button cm-live-embed-edit';
-      action.textContent = '</>'; action.title = 'Edit embed'; action.setAttribute('aria-label', 'Edit embed source');
-      wrapper.append(action);
+      let disposed = false, action: HTMLButtonElement | undefined, noteLink: HTMLAnchorElement | undefined;
+      const edit = (event: MouseEvent) => { event.preventDefault(); event.stopPropagation(); if (!disposed) editSource(view, this.span.identity); };
+      const releaseNoteLink = () => { if (noteLink) noteLink.onclick = null; noteLink = undefined; };
+      const updateControls = () => {
+        if (disposed) return;
+        const kind = embedControlKind(instance.dom);
+        wrapper.dataset.embedType = kind;
+        const needsSource = ['image', 'pdf', 'base', 'unknown', 'unavailable'].includes(kind);
+        if (needsSource && !action) {
+          action = view.dom.ownerDocument.createElement('button');
+          action.type = 'button'; action.className = 'edit-block-button cm-live-embed-edit';
+          action.append(icon('code', 16, view.dom.ownerDocument));
+          action.title = 'Edit embed'; action.setAttribute('aria-label', 'Edit embed source');
+          action.addEventListener('click', edit); wrapper.append(action);
+        } else if (!needsSource && action) {
+          action.removeEventListener('click', edit); action.remove(); action = undefined;
+        }
+        const link = kind === 'note' ? instance.dom.querySelector<HTMLAnchorElement>(':scope > a.embed-open') : null;
+        if (link !== noteLink) {
+          releaseNoteLink();
+          if (link) {
+            noteLink = link;
+            const navigate = link.onclick;
+            link.classList.add('cm-live-embed-open');
+            link.title = 'Open link'; link.setAttribute('aria-label', 'Open link');
+            link.replaceChildren(icon('maximize', 16, view.dom.ownerDocument));
+            link.onclick = event => {
+              event.stopPropagation();
+              if (disposed || !instance.dom.contains(link)) { event.preventDefault(); return; }
+              navigate?.call(link, event);
+            };
+          }
+        }
+      };
+      updateControls();
+      // Resolution may happen after a lazy renderer is attached. Observe only
+      // its root, not nested content or the controls we own outside that root.
+      const Mutation = view.dom.ownerDocument.defaultView?.MutationObserver;
+      const controlsObserver = Mutation ? new Mutation(updateControls) : undefined;
+      controlsObserver?.observe(instance.dom, { attributes: true, attributeFilter: ['class'], childList: true });
       const isInteractive = (event: Event) => {
         const target = event.target;
         if (!(target instanceof view.dom.ownerDocument.defaultView!.Element)) return false;
@@ -123,16 +174,14 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
         if (event.defaultPrevented || event.button !== 0 || isInteractive(event)) return;
         event.preventDefault(); editSource(view, this.span.identity);
       };
-      const edit = (event: MouseEvent) => { event.preventDefault(); event.stopPropagation(); editSource(view, this.span.identity); };
-      wrapper.addEventListener('mousedown', down); wrapper.addEventListener('click', click); action.addEventListener('click', edit);
-      let disposed = false;
+      wrapper.addEventListener('mousedown', down); wrapper.addEventListener('click', click);
       const Observer = view.dom.ownerDocument.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
       const observer = typeof Observer === 'function' ? new Observer(() => { if (!disposed) view.requestMeasure(); }) : undefined;
       observer?.observe(wrapper);
       mounted.set(wrapper, () => {
         if (disposed) return;
-        disposed = true; observer?.disconnect();
-        wrapper.removeEventListener('mousedown', down); wrapper.removeEventListener('click', click); action.removeEventListener('click', edit);
+        disposed = true; observer?.disconnect(); controlsObserver?.disconnect(); releaseNoteLink();
+        wrapper.removeEventListener('mousedown', down); wrapper.removeEventListener('click', click); action?.removeEventListener('click', edit);
         instance.destroy();
       });
       return wrapper;
