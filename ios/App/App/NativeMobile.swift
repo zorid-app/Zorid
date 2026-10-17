@@ -112,7 +112,7 @@ private final class NativeMobileSession {
     private static let worker = DispatchQueue(label: "app.zorid.mobile.core", qos: .userInitiated)
     private var handle: OpaquePointer?
     let vault: LocalVault
-    let reconciliation: [String: Any]
+    private var reconciliation: [String: Any] // Access only on worker.
     private static let headerLimit = 1_048_576
     private static let bodyLimit = 33_554_432
 
@@ -130,18 +130,9 @@ private final class NativeMobileSession {
             let result: Result<NativeMobileSession, Error>
             if let pointer = pointer {
                 do {
-                    let startup = zorid_mobile_startup(pointer)
-                    defer { zorid_mobile_buffer_free(startup) }
-                    guard startup.len > 0, startup.len <= headerLimit, let data = startup.data else {
-                        throw MobileFailure.unavailable
-                    }
-                    let bytes = Data(bytes: data, count: startup.len)
-                    guard String(data: bytes, encoding: .utf8) != nil,
-                          let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-                          let reconciliation = object["reconciliation"] as? [String: Any],
-                          reconciliation["complete"] is Bool else { throw MobileFailure.unavailable }
+                    let startup = try consumeReconciliation(zorid_mobile_startup(pointer))
                     // Incomplete startup is usable recovery state, never an empty-ready fallback.
-                    result = .success(NativeMobileSession(vault: vault, handle: pointer, reconciliation: reconciliation))
+                    result = .success(NativeMobileSession(vault: vault, handle: pointer, reconciliation: startup.reconciliation))
                 } catch {
                     zorid_mobile_close(pointer)
                     result = .failure(MobileFailure.unavailable)
@@ -151,6 +142,47 @@ private final class NativeMobileSession {
             }
             DispatchQueue.main.async { completion(result) }
         }
+    }
+
+    // Reads and updates of cached reconciliation share the C-ABI worker queue.
+    func context(completion: @escaping ([String: Any]) -> Void) {
+        Self.worker.async {
+            let context: [String: Any] = ["name": self.vault.name, "clientId": self.vault.clientId,
+                                          "reconciliation": self.reconciliation]
+            DispatchQueue.main.async { completion(context) }
+        }
+    }
+
+    func refresh(completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        Self.worker.async {
+            let result: Result<[String: Any], Error>
+            do {
+                guard let handle = self.handle else { throw MobileFailure.unavailable }
+                // Native selects the already-open root; web supplies no paths.
+                let refreshed = try Self.consumeReconciliation(zorid_mobile_refresh(handle))
+                self.reconciliation = refreshed.reconciliation
+                result = .success(refreshed.wrapper)
+            } catch {
+                // Retain the last validated state on failure; never fabricate ready.
+                result = .failure(MobileFailure.unavailable)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    // Both startup and refresh return owned raw JSON, unlike framed requests.
+    private static func consumeReconciliation(_ buffer: ZoridBuffer) throws
+        -> (wrapper: [String: Any], reconciliation: [String: Any]) {
+        defer { zorid_mobile_buffer_free(buffer) }
+        guard buffer.len > 0, buffer.len <= headerLimit, let data = buffer.data else {
+            throw MobileFailure.unavailable
+        }
+        let bytes = Data(bytes: data, count: buffer.len)
+        guard String(data: bytes, encoding: .utf8) != nil,
+              let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let reconciliation = object["reconciliation"] as? [String: Any],
+              reconciliation["complete"] is Bool else { throw MobileFailure.unavailable }
+        return (object, reconciliation)
     }
 
     func request(header: String, body: String, completion: @escaping (Result<(String, String), Error>) -> Void) {
@@ -225,6 +257,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     let jsName = "NativeVault"
     let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "context", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "refresh", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "close", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "lifecycleAck", returnType: CAPPluginReturnPromise)
@@ -257,8 +290,16 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func context(_ call: CAPPluginCall) {
-        call.resolve(["name": session.vault.name, "clientId": session.vault.clientId,
-                      "reconciliation": session.reconciliation])
+        session.context { call.resolve($0) }
+    }
+
+    @objc func refresh(_ call: CAPPluginCall) {
+        session.refresh { result in
+            switch result {
+            case .success(let wrapper): call.resolve(wrapper)
+            case .failure: call.reject("The vault refresh could not be completed.", "native_refresh_failed")
+            }
+        }
     }
 
     @objc func request(_ call: CAPPluginCall) {
