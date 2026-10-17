@@ -3,6 +3,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { checkpointBytes } = require('./durable-checkpoints.cjs');
+const { familyStatus, syncStatus, syncReport, familyCommand } = require('./family-sync-protocol.cjs');
 
 const MAX_HEADER = 1024 * 1024;
 const MAX_BODY = 16 * 1024 * 1024;
@@ -112,6 +113,11 @@ function successful(command, result, bytes, expectedBytes) {
   if (!command) return bytes.length === 0; // Full startup validation follows.
   if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas'].includes(command.method) && bytes.length) return false;
   switch (command.method) {
+    case 'fixture_family_enroll': return familyStatus(result.family);
+    case 'fixture_family_status': return syncStatus(result.sync);
+    case 'fixture_family_once': return syncReport(result.sync, command);
+    case 'fixture_family_apply': return familyCommand(command.family)
+      && successful({ method: 'apply', ...command.family.request }, result, bytes, expectedBytes);
     case 'claim_client': return object(result.lease) && identity(result.lease.local_store_id) && result.lease.client_id === command.client_id && uuid(result.lease.token);
     case 'release_client': return result.released === true && object(result.reference) && ['local_store_id', 'client_id', 'token'].every(key => result.reference[key] === command.reference[key]);
     case 'checkpoint_load': return result.checkpoint === null ? bytes.length === 0 : checkpointMetadata(result.checkpoint, command.scope) && result.checkpoint.key === command.key && checkpointBody(result.checkpoint, bytes);
@@ -182,12 +188,14 @@ function successful(command, result, bytes, expectedBytes) {
 
 /** Private main-process transport, NOT yet the path-based VaultService adapter.
  * Every mutation comes from an explicit caller-owned durable operation intent.
- * No automatic new operation IDs, storage policy, raw filesystem writes or sync.
+ * No automatic new operation IDs, storage policy or raw filesystem writes.
+ * Explicit family fixture sync delegates entirely to the shared native runner.
  */
 class RustVaultService {
-  static async open(root, { executable, timeoutMs = 30000 } = {}) {
+  static async open(root, { executable, timeoutMs = 30000, fixtureSyncConfig } = {}) {
     if (typeof root !== 'string' || !path.isAbsolute(root)
       || typeof executable !== 'string' || !path.isAbsolute(executable)
+      || (fixtureSyncConfig !== undefined && (typeof fixtureSyncConfig !== 'string' || !path.isAbsolute(fixtureSyncConfig)))
       || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300000) {
       throw failure('invalid_host_options');
     }
@@ -195,13 +203,13 @@ class RustVaultService {
     if (!(await fs.stat(canonical)).isDirectory()) throw failure('invalid_vault');
     // executable is an explicitly selected trusted app resource, never an env var
     // or renderer-supplied command. shell:false preserves arguments literally.
-    const service = new RustVaultService(canonical, executable, timeoutMs);
+    const service = new RustVaultService(canonical, executable, timeoutMs, fixtureSyncConfig);
     try { await service.ready; }
     catch (error) { service.abort(error); await service.exit; throw error; }
     return service;
   }
 
-  constructor(root, executable, timeoutMs) {
+  constructor(root, executable, timeoutMs, fixtureSyncConfig) {
     this.root = root;
     this.timeoutMs = timeoutMs;
     this.sequence = 0n;
@@ -215,7 +223,9 @@ class RustVaultService {
     this.frame = null;
     this.frameUsed = 0;
     this.exited = false;
-    this.child = spawn(executable, ['--vault', root], { stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true });
+    // Only trusted main selects this protected fixture config. No framed RPC can change it.
+    const args = ['--vault', root, ...(fixtureSyncConfig === undefined ? [] : ['--fixture-sync-config', fixtureSyncConfig])];
+    this.child = spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true });
     this.exit = new Promise(resolve => { this.resolveExit = resolve; });
     this.ready = this.expect('0').then(({ result, bytes }) => {
       if (bytes.length || result?.transport !== 'zorid-native-stdio' || result.max_header !== MAX_HEADER || result.max_body !== MAX_BODY
@@ -329,6 +339,18 @@ class RustVaultService {
     } catch (error) { return Promise.reject(error?.code ? error : failure('invalid_request')); }
   }
 
+  fixtureFamilyEnroll() { return this.request({ method: 'fixture_family_enroll' }).then(reply => reply.result.family); }
+  fixtureFamilyStatus() { return this.request({ method: 'fixture_family_status' }).then(reply => reply.result.sync); }
+  fixtureFamilyOnce({ maxPush = 64, maxPages = 4 } = {}) {
+    if (!Number.isInteger(maxPush) || maxPush < 0 || maxPush > 1000 || !Number.isInteger(maxPages) || maxPages < 0 || maxPages > 100) return Promise.reject(failure('request_limit'));
+    return this.request({ method: 'fixture_family_once', max_push: maxPush, max_pages: maxPages }).then(reply => reply.result.sync);
+  }
+  fixtureFamilyApply(command, bytes = new Uint8Array()) {
+    if (!familyCommand(command)) return Promise.reject(failure('invalid_family_command'));
+    // Copy/serialization happens synchronously in request, including explicit
+    // create_mode. Retry the exact command+bytes after an uncertain acknowledgement.
+    return this.request({ method: 'fixture_family_apply', family: command }, bytes).then(reply => reply.result);
+  }
   claimClient(clientId) { return this.request({ method: 'claim_client', client_id: clientId }).then(reply => Object.freeze({ ...reply.result.lease })); }
   releaseClient(reference) { return this.request({ method: 'release_client', reference }).then(reply => reply.result); }
   withClientLease(reference, beforeRequest = () => {}) {

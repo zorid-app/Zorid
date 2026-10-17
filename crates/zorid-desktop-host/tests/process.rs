@@ -14,8 +14,15 @@ struct Host {
 }
 impl Host {
     fn spawn(root: &std::path::Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_zorid-desktop-host"))
-            .args([std::ffi::OsStr::new("--vault"), root.as_os_str()])
+        Self::spawn_config(root, None)
+    }
+    fn spawn_config(root: &std::path::Path, config: Option<&std::path::Path>) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_zorid-desktop-host"));
+        command.args([std::ffi::OsStr::new("--vault"), root.as_os_str()]);
+        if let Some(config) = config {
+            command.arg("--fixture-sync-config").arg(config);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -314,5 +321,109 @@ fn coherent_path_metadata_and_journal_are_exposed_without_binary_json() {
     let (hidden, body) = host.request(json!({"method":"read_path","path":".hidden"}), &[]);
     assert_eq!(hidden["ok"], true);
     assert_eq!(body, [9, 0, 255]);
+    host.close();
+}
+
+#[cfg(unix)]
+#[test]
+fn family_commands_embed_native_core_and_retry_exact_mode_without_http() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = fixture();
+    let private = tempfile::tempdir().unwrap();
+    let config = private.path().join("sync.json");
+    std::fs::write(&config, serde_json::to_vec(&json!({
+        "version":1,"endpoint":"http://127.0.0.1:9/","realm_id":"realm","vault_id":"vault",
+        "server_epoch":"epoch","key_epoch":1,"key_base64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "bearer_token":"a".repeat(64)
+    })).unwrap()).unwrap();
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut host = Host::spawn_config(root.path(), Some(&config));
+    assert_eq!(host.recv().0["ok"], true);
+    let enrolled = host
+        .request(json!({"method":"fixture_family_enroll"}), &[])
+        .0;
+    assert_eq!(enrolled["ok"], true, "{enrolled}");
+    assert_eq!(enrolled["result"]["family"]["scope"]["realm_id"], "realm");
+    let command = json!({"method":"fixture_family_apply","family":{
+        "version":1,"create_mode":"text","request":{"operation_id":"family-create",
+        "mutation":{"type":"create","id":"file","path":"note.md","kind":"file"}}}});
+    let first = host.request(command.clone(), b"family text").0;
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(first["result"]["commit"]["operation_id"], "family-create");
+    assert_eq!(
+        host.request(command.clone(), b"family text").0["result"]["commit"],
+        first["result"]["commit"]
+    );
+    let mut different = command.clone();
+    different["family"]["create_mode"] = json!("binary");
+    assert_eq!(
+        host.request(different, b"family text").0["error"]["code"],
+        "idempotency_conflict"
+    );
+    assert_eq!(
+        host.request(command, b"different").0["error"]["code"],
+        "idempotency_conflict"
+    );
+    let status = host
+        .request(json!({"method":"fixture_family_status"}), &[])
+        .0;
+    assert_eq!(status["ok"], true, "{status}");
+    assert_eq!(status["result"]["sync"]["synced"], false);
+    assert!(
+        status["result"]["sync"]["pending_envelope_sample"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        host.request(json!({"method":"read","id":"file"}), &[]).1,
+        b"family text"
+    );
+    host.close();
+}
+
+#[test]
+fn family_commands_require_explicit_startup_configuration() {
+    let root = fixture();
+    let mut host = Host::start(root.path());
+    for method in ["fixture_family_enroll", "fixture_family_status"] {
+        let reply = host.request(json!({"method":method}), &[]).0;
+        assert_eq!(reply["error"]["code"], "fixture_sync_not_configured");
+        assert_eq!(reply["error"]["commit_uncertain"], false);
+    }
+    assert_eq!(
+        host.request(json!({"method":"identity"}), &[]).0["ok"],
+        true
+    );
+    host.close();
+}
+
+#[test]
+fn leased_editor_scope_cannot_invoke_generic_family_mutations() {
+    let root = fixture();
+    let mut host = Host::start(root.path());
+    let lease = host
+        .request(
+            json!({"method":"claim_client","client_id":"10000000-0000-4000-8000-000000000001"}),
+            &[],
+        )
+        .0["result"]["lease"]
+        .clone();
+    assert!(lease.is_object());
+    for command in [
+        json!({"method":"fixture_family_enroll"}),
+        json!({"method":"fixture_family_once","max_push":0,"max_pages":0}),
+        json!({"method":"fixture_family_apply","family":{"version":1,"create_mode":"binary","request":{
+            "operation_id":"bypass","mutation":{"type":"create","id":"file","path":"file","kind":"file"}}}}),
+    ] {
+        host.send_header(
+            json!({"version":1,"request_id":"1","command":command,"lease":lease}),
+            &[],
+        );
+        assert_eq!(
+            host.recv().0["error"]["code"],
+            "client_operation_unsupported"
+        );
+    }
     host.close();
 }

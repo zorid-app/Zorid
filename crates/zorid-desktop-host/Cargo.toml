@@ -7,6 +7,8 @@ license = "AGPL-3.0-only"
 description = "Private framed stdio host for the shared native vault core"
 
 [dependencies]
+zorid-file-sync = { path = "../zorid-file-sync" }
+zorid-native-sync = { path = "../zorid-native-sync" }
 zorid-core = { path = "../zorid-core" }
 zorid-native = { path = "../zorid-native" }
 zorid-store = { path = "../zorid-store" }

@@ -1,5 +1,7 @@
 //! Private desktop transport only. Storage, recovery and conflict policy belong
 //! to NativeVault. No listener, daemon, filesystem writes or alternate store here.
+mod family;
+use family::WireFamilyCommand;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -9,6 +11,7 @@ use zorid_native::{
     ClientAdmissionError, ClientLease, ClientLeaseRef, HostIntentAcknowledgment, HostIntentRef,
     NativeVault, ProjectionStatus,
 };
+use zorid_native_sync::FixtureSync;
 use zorid_store::{Checkpoint, CheckpointError, CheckpointScope, CheckpointWrite};
 
 const MAX_HEADER: usize = 1024 * 1024;
@@ -26,6 +29,15 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    FixtureFamilyEnroll,
+    FixtureFamilyStatus,
+    FixtureFamilyOnce {
+        max_push: u32,
+        max_pages: u32,
+    },
+    FixtureFamilyApply {
+        family: WireFamilyCommand,
+    },
     Identity,
     ClaimClient {
         client_id: OperationId,
@@ -325,6 +337,9 @@ impl ClientLeases {
             Command::ClaimClient { .. }
             | Command::ReleaseClient { .. }
             | Command::Apply { .. }
+            | Command::FixtureFamilyEnroll
+            | Command::FixtureFamilyOnce { .. }
+            | Command::FixtureFamilyApply { .. }
             | Command::Reconcile { .. }
             | Command::Recover
             | Command::Rescan => Err(fault("client_operation_unsupported")),
@@ -394,13 +409,27 @@ fn wire_mutation(mutation: WireMutation, body: Vec<u8>) -> Result<Mutation, Valu
         }
     })
 }
+fn apply_reply(outcome: zorid_native::ApplyOutcome) -> Value {
+    let projection = match outcome.projection {
+        ProjectionStatus::Projected => json!({"state":"projected"}),
+        ProjectionStatus::Pending(_) => json!({"state":"pending","code":"projection_pending"}),
+    };
+    json!({"commit":outcome.commit,"projection":projection})
+}
 fn execute(
     vault: &mut NativeVault,
     leases: &mut ClientLeases,
+    sync: Option<&FixtureSync>,
     command: Command,
     body: Vec<u8>,
 ) -> Result<(Value, Vec<u8>), Value> {
     let result = match command {
+        command @ (Command::FixtureFamilyEnroll
+        | Command::FixtureFamilyStatus
+        | Command::FixtureFamilyOnce { .. }
+        | Command::FixtureFamilyApply { .. }) => {
+            return family::execute(vault, sync, command, body);
+        }
         Command::ClaimClient { client_id } => {
             empty(&body)?;
             if leases.active.len() >= 32 || leases.active.len() + leases.released.len() >= 1024 {
@@ -544,13 +573,7 @@ fn execute(
                     mutation,
                 })
                 .map_err(native_fault)?;
-            let projection = match outcome.projection {
-                ProjectionStatus::Projected => json!({"state":"projected"}),
-                ProjectionStatus::Pending(_) => {
-                    json!({"state":"pending","code":"projection_pending"})
-                }
-            };
-            json!({"commit":outcome.commit,"projection":projection})
+            apply_reply(outcome)
         }
         Command::Read { id } => {
             empty(&body)?;
@@ -654,7 +677,12 @@ fn run() -> io::Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     // Only the trusted main process supplies this startup root. Requests cannot
     // initialize storage or change it. Fixture initialization uses the CLI/core.
-    if args.len() != 2 || args[0] != "--vault" {
+    if !(args.len() == 2 || args.len() == 4 && args[2] == "--fixture-sync-config")
+        || args[0] != "--vault"
+    {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "usage"));
+    }
+    if args.len() == 4 && !std::path::Path::new(&args[3]).is_absolute() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "usage"));
     }
     let mut output = io::stdout().lock();
@@ -669,9 +697,30 @@ fn run() -> io::Result<()> {
             return Ok(());
         }
     };
+    // The trusted main process selects a protected config path once. No framed
+    // command accepts credential bytes, paths, endpoints or key material.
+    let sync = if args.len() == 4 {
+        match FixtureSync::load(
+            std::path::Path::new(&args[3]),
+            std::path::Path::new(&args[1]),
+        ) {
+            Ok(sync) => Some(sync),
+            Err(error) => {
+                write_frame(
+                    &mut output,
+                    &json!({"version":1,"request_id":"0","ok":false,
+                    "error":family::sync_fault(error, false)}),
+                    &[],
+                )?;
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"capabilities":["claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"capabilities":["claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
@@ -695,6 +744,9 @@ fn run() -> io::Result<()> {
         let may_commit = matches!(
             &request.command,
             Command::Apply { .. }
+                | Command::FixtureFamilyEnroll
+                | Command::FixtureFamilyOnce { .. }
+                | Command::FixtureFamilyApply { .. }
                 | Command::ClaimClient { .. }
                 | Command::ReleaseClient { .. }
                 | Command::CheckpointCas { .. }
@@ -708,7 +760,15 @@ fn run() -> io::Result<()> {
         let answer = if request.version == 1 {
             leases
                 .authorize(&vault, &request.command, request.lease.as_ref())
-                .and_then(|()| execute(&mut vault, &mut leases, request.command, body))
+                .and_then(|()| {
+                    execute(
+                        &mut vault,
+                        &mut leases,
+                        sync.as_ref(),
+                        request.command,
+                        body,
+                    )
+                })
         } else {
             Err(fault("unsupported_protocol"))
         };

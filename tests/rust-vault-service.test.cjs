@@ -8,7 +8,7 @@ const { RustVaultService } = require('../desktop/rust-vault-service.cjs');
 
 // Actual subprocess tests of the JS transport. This intentionally tiny fake host
 // tests framing/lifecycle only; Rust process.rs separately executes NativeVault.
-async function fixture(t, mode = 'normal') {
+async function fixture(t, mode = 'normal', options = {}) {
   const root = await fs.mkdtemp(path.join(tmpdir(), 'zorid-host-transport-'));
   const executable = path.join(root, 'host');
   const source = `#!${process.execPath}
@@ -53,6 +53,24 @@ process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(b
   if(mode==='intent_nonterminal') {result.intent.state='commit_requested';result.intent.receipt=null;result.intent.projection=null;}
   if(mode==='intent_bad_ack')result.intent.acknowledged=true;
  }
+ if(mode.startsWith('family_')) {
+  const scope={realm_id:'realm',vault_id:'vault'};
+  const family={scope,cursor:null,limits:{max_file_bytes:16777216,max_graph_encoded_bytes:134217728,max_records:4096},graph_records:0,graph_encoded_bytes:2,pending_authored:'0',pending_dependencies:'0',pending_projection:'0',recovery_entries:'0'};
+  const status={scope:'fixture_families_v2',family_sync_supported:true,all_file_sync_supported:false,synced:false,family,pending_envelope_sample:0,pending_envelope_sample_complete:true,pending_envelopes:[],unsupported_capabilities:['larger_file_streaming','production_enrollment']};
+  if(req.command.method==='fixture_family_enroll')result={family};
+  else if(req.command.method==='fixture_family_apply') {
+   const command=req.command.family.request;
+   result={commit:{operation_id:command.operation_id,sequence:'1',changes:[{before:null,after:{id:command.mutation.id,path:command.mutation.path,kind:'file',revision:'new',deleted:false}}]},projection:{state:'pending'},captured:[...body],mode:req.command.family.create_mode};
+  } else if(req.command.method==='fixture_family_once')result={sync:{...status,server_accepted:0,locally_received:0,locally_applied_updates:0,duplicate_receipts:0,dependency_pending_receipts:0,receive_projection_pending:0,pull_snapshot_complete:req.command.max_pages>0,pull_through:req.command.max_pages>0?'0':null}};
+  else result={sync:status,args:process.argv.slice(2)};
+  if(mode==='family_wrong_receipt')result.commit.operation_id='other';
+  if(mode==='family_missing_recovery')delete result.sync.family.recovery_entries;
+  if(mode==='family_bad_recovery')result.sync.family.recovery_entries='01';
+  if(mode==='family_false_synced')result.sync.synced=true;
+  if(mode==='family_bad_cursor')result.sync.family.cursor={...scope,vault_id:'other',server_epoch:'epoch',after:'1'};
+  if(mode==='family_bad_counts')result.sync.server_accepted=req.command.max_push+1;
+  if(mode==='family_bad_pending'){result.sync.pending_envelopes=[{scope,update_id:'update',family:'text',sealed:true,accepted:true}];result.sync.pending_envelope_sample=1;}
+ }
  if(mode==='missing')result=undefined;
  if(mode==='wrong_receipt')result.commit.operation_id='wrong';
  setTimeout(()=>send({version:1,request_id:req.request_id,ok:true,result},responseBody),15);
@@ -62,7 +80,7 @@ process.stdin.on('end',()=>process.exit(0));
   await fs.writeFile(executable, source, { mode: 0o700 });
   let host;
   t.after(async () => { if (host) await host.close(); await fs.rm(root, { recursive: true, force: true }); });
-  host = await RustVaultService.open(root, { executable, timeoutMs: 1000 });
+  host = await RustVaultService.open(root, { executable, timeoutMs: 1000, ...options });
   return host;
 }
 
@@ -167,5 +185,48 @@ for (const mode of ['checkpoint_page_duplicate', 'checkpoint_page_unordered', 'c
     const result = mode === 'checkpoint_page_after'
       ? host.checkpointChanges(scope, { after: '2', limit: 100 }) : host.checkpointList(scope, { limit: 100 });
     await assert.rejects(result, { code: 'invalid_response', commitUncertain: true });
+  });
+}
+
+
+test('family command captures explicit mode and exact bytes; pending projection remains durable success', async t => {
+  const host=await fixture(t,'family_valid');
+  const command={version:1,request:{operation_id:'family-create',mutation:{type:'create',id:'file',path:'drawing.data',kind:'file'}},create_mode:'binary'};
+  const bytes=Buffer.from([0,255,128]);
+  const pending=host.fixtureFamilyApply(command,bytes);
+  command.create_mode='text';command.request.operation_id='different';bytes.fill(42);
+  const result=await pending;
+  assert.equal(result.commit.operation_id,'family-create');assert.equal(result.mode,'binary');
+  assert.deepEqual(result.captured,[0,255,128]);assert.equal(result.projection.state,'pending');
+});
+
+test('family create mode is required and non-create commands require explicit null', async t => {
+  const host=await fixture(t,'family_valid');
+  const create={version:1,request:{operation_id:'op',mutation:{type:'create',id:'file',path:'a',kind:'file'}}};
+  await assert.rejects(host.fixtureFamilyApply(create),{code:'invalid_family_command'});
+  await assert.rejects(host.fixtureFamilyApply({...create,create_mode:null}),{code:'invalid_family_command'});
+  await assert.rejects(host.fixtureFamilyApply({version:1,request:{operation_id:'op',mutation:{type:'write',id:'file',expected:'rev'}},create_mode:'text'}),{code:'invalid_family_command'});
+  assert.equal(host.queuedCount,0,'invalid commands never enter transport queue');
+  assert.equal((await host.fixtureFamilyStatus()).scope,'fixture_families_v2');
+});
+
+test('family fixture config is a startup-only path, and sweep limits fail before dispatch', async t => {
+  const config=path.join(tmpdir(),'trusted fixture config.json');
+  const host=await fixture(t,'family_valid',{fixtureSyncConfig:config});
+  const reply=await host.request({method:'fixture_family_status'});
+  assert.deepEqual(reply.result.args,['--vault',host.root,'--fixture-sync-config',config]);
+  await assert.rejects(host.fixtureFamilyOnce({maxPush:1001}),{code:'request_limit'});
+  await assert.rejects(host.fixtureFamilyOnce({maxPages:-1}),{code:'request_limit'});
+  const result=await host.fixtureFamilyOnce({maxPush:0,maxPages:0});
+  assert.equal(result.pull_through,null);assert.equal(result.synced,false);
+});
+
+for(const mode of ['family_missing_recovery','family_bad_recovery','family_wrong_receipt','family_false_synced','family_bad_cursor','family_bad_counts','family_bad_pending']) {
+  test('malformed family response '+mode+' preserves uncertain caller intent',async t=>{
+    const host=await fixture(t,mode);
+    const promise=mode==='family_wrong_receipt'
+      ?host.fixtureFamilyApply({version:1,request:{operation_id:'op',mutation:{type:'create',id:'file',path:'a',kind:'file'}},create_mode:'text'},Buffer.from('text'))
+      :mode==='family_bad_counts'?host.fixtureFamilyOnce({maxPush:0,maxPages:0}):host.fixtureFamilyStatus();
+    await assert.rejects(promise,{code:'invalid_response',commitUncertain:true});
   });
 }

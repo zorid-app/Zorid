@@ -342,3 +342,56 @@ fake commit reply lacked file-kind metadata; correcting that fixture to the
 existing receipt contract produced the final pass. No production receipt or
 transport behavior was weakened. No additional Rust/build/UI checks were needed
 for this JavaScript-only lifecycle follow-up.
+
+## Current-family fixture commands (source pending validation)
+
+The private host accepts an optional startup-only
+`--fixture-sync-config /absolute/protected-file.json`, selected by trusted main
+through `RustVaultService.open(root, {executable, fixtureSyncConfig})`. It delegates
+protected credential loading, enrollment, status and bounded E2EE push/pull to
+`zorid-native-sync`, the same library used by the standalone CLI. The host does
+not spawn the CLI or implement HTTP, encryption, cursor or storage semantics.
+Config contents, endpoint, key and token never enter renderer requests; framing
+has no command to select a root or replace sync configuration. The shared runner
+keeps the existing literal-loopback and protected-file restrictions. These are
+fixture credentials, not production enrollment or secret-storage integration.
+
+The explicit main-only methods are `fixtureFamilyEnroll()`,
+`fixtureFamilyStatus()`, `fixtureFamilyOnce({maxPush,maxPages})`, and
+`fixtureFamilyApply(command, bytes)`. The apply header uses the common durable
+identity `{version:1, request:{operation_id,mutation}, create_mode}`; exact file
+bytes occupy the existing raw frame body. `create_mode` must be present: `text`
+or `binary` for creating a file, and `null` for other operations. Rust validates
+the reconstructed `FamilyCommand` and delegates to `NativeVault.family_apply`.
+Retries retain the entire original command, including mode and bytes; changing
+mode under the same operation ID is an idempotency conflict. This direct fixture
+command does not replace paused NoteBuffer intents or their checkpoint protocol.
+A leased editor consumer cannot use these generic enrollment/apply/sweep commands.
+
+`ApplyOutcome.commit` proves a durable local receipt; `projection.state` separately
+reports `projected` or `pending`, with physical error details sanitized. A bounded
+sync sweep reports accepted/received counts and pending work, always retaining
+`synced:false`; it does not certify whole-vault convergence. Any sweep error is
+marked `commit_uncertain:true` because earlier upload/receive progress may already
+be durable. Child timeout terminates the host and preserves that uncertainty;
+reopening with the same protected config retries durable progress. Requests are
+bounded by existing framing/backpressure and shared sweep limits; the sum of
+network waits can exceed the transport deadline, so a small fixture sweep is
+appropriate. No network operation holds the vault's filesystem lock.
+
+Source regressions extend the existing `zorid-desktop-host` process suite and
+`tests/rust-vault-service.test.cjs`: explicit mode admission, exact retry versus
+changed mode/body, family config opt-in, rejection of leased generic mutations,
+request copying, and malformed receipt/status/cursor/counter rejection. Run them
+with the matching native-family/store and shared-runner dependencies, serialized:
+
+```sh
+cargo test -p zorid-desktop-host -j1 -- --test-threads=1
+node --test --test-concurrency=1 tests/rust-vault-service.test.cjs
+```
+
+These additions have not run yet and do not establish actual Electron/relay
+convergence. Production `main.cjs`, preload, WindowBroker, platform selection,
+Canvas/Bases and the paused editor durable-write consumer are unchanged. Actual
+Electron fixture selection and the combined desktop/CLI/browser relay proof are
+separate integration gates using this same host and shared runner.
