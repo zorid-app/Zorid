@@ -242,3 +242,11 @@ reject missing/replaced/revised source before move planning, retain persisted re
 identity and preserve no-witness rename. Source review and focused race checks
 must pass before build6. Exclusive native slot remains with owner; root main has
 no mobile source change. Finding remains pending exact fix/review/runtime evidence.
+
+Follow-up22:32 UTC: frozen native829cd2c9 independently source-reviewed clean
+(msg480b7b558291). Witnessed rename captures immutable primitive identity/revision,
+rejects missing/replaced/revised source before planning and preserves exact pending
+operation retries;14 added race/input cases inspected. Owner reports180 mobile
+checks +scopedTS passing. Canonical contract/codec and workspace lifecycle/search
+unions preserved. Source blocker closed; composed build/link and actual simulator/
+phone behavior remain pending. Existing exclusive native validation grant continues.
