@@ -45,3 +45,12 @@ The bounded test slot was explicitly released to the core coordinator via Orca
 `msg_28c7b931b2aa`. Combined production build and synthetic native verification
 are requested as the next separate resource handoff. No native completion or
 main integration is claimed. The old broad goal remains paused.
+
+
+Resume checkpoint: user explicitly resumed this scoped UI task and authorized
+Electron built-in screenshot capture for the isolated test app. Candidate
+`e888d9f` includes reviewed Base width repair `8d464a7`; production rebuild
+passed. Native sorting previously persisted Score ascending. Full visual pass
+was interrupted and remains incomplete. Source comparison to main `72208afe`
+found no overlapping source/test paths. Preserve both sessions' findings rows;
+core owns its separately resumed Rust durable-save seams and main integration.
