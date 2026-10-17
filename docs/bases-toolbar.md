@@ -88,12 +88,33 @@ original responsive panel implementation prioritizes usable Zorid controls.
 
 ## Verification checkpoint
 
-The pure configuration helper has 11 focused passing tests, including detached
-patch validation, recursive limits, unknown-field preservation, safe literal
-construction and execution through the real query engine. The existing session
-suite passes 10 tests. Independent UI review supplied seven regression tests; its last pre-fix run
-passed five and exposed group-alias and unavailable-sort-default issues. Both
-are now corrected in source, awaiting the shared test slot. Actual-session
-action fixtures are in progress. TypeScript passed before the last reviewed
-source fixes and standard Lucide icon additions; rerun it for the final candidate. No production build or native pass has run for this
-branch.
+On 2026-10-17, isolated candidate `cb35bf8` passed **39/39 tests**, exit 0
+(session 44303, 1.84 seconds):
+
+```sh
+node --test --test-concurrency=1 tests/bases-session.test.ts tests/bases-toolbar-config.test.ts tests/bases-toolbar-review.test.ts tests/bases-toolbar-session.test.ts
+```
+
+Coverage comprises 10 existing session regressions, 11 pure configuration/filter
+checks, seven independent toolbar review regressions, and 11 real
+Vault/MemoryAdapter/NoteBuffer session fixtures. The latter verify actual query
+results, note-byte and YAML comment/extension preservation, staged configuration,
+property-draft guards, read-only and named-view behavior, accepted-save failure,
+exact retry without a second buffer publication, and external CAS conflicts.
+
+Independent review originally exposed two failing regressions: changing a grouped
+property retained a conflicting legacy column alias, and Add sort chose an
+unavailable ordered formula. Both fixes are independently source-reviewed and
+both regressions pass in the final 39-test run. Review also strengthened the
+session fixtures to await deferred DOM mounting and preserve teardown diagnostics.
+
+`./node_modules/.bin/tsc --noEmit --pretty false` passed, exit 0
+(session 11149). `git diff --check` passed. Source comparison against main
+`90e7b918` found no changes since the candidate base in the owned paths or the
+checked Bases/query/buffer/workspace/build seams. This is a source comparison,
+not an integrated-main test claim.
+
+No production build, native Electron, mobile, wide/narrow geometry, or actual
+embedded-panel placement verification ran for this branch. Those gates remain
+open; passing jsdom/session fixtures does not establish them. No test processes
+remain running.
