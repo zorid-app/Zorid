@@ -4,7 +4,10 @@ Preparation owner: `stage4_markdown_contracts`, 2026-10-17. Baseline main is
 `f69dc90de0de697dfb75a5a3d1805b69dba982b3`. Worktree
 `/Users/ctk/orca/workspaces/Zorid/stage4-markdown-contracts`, branch
 `tingkai-c/stage4-markdown-contracts`; root is the sole main integrator.
-This document and `tests/fixtures/document-semantics/markdown/*` are the owned
+The original worktree was externally removed after commit `9849ad1`; work
+continues in `/Users/ctk/orca/workspaces/Zorid/stage4-markdown-engine`, branch
+`tingkai-c/stage4-markdown-engine`, restored from that commit without lost edits.
+This document and `tests/fixtures/document-semantics/markdown/*` are the preparation-owned
 paths. Dependencies: root's shared-type review, YAML library selection, then the
 serialized native/WASM build slot. No parser or consumer implementation is
 included. The root coordinator approved reference links, JSON-safe YAML values,
@@ -66,11 +69,11 @@ There are no optional omitted arrays; absent ranges are JSON null.
 ```text
 MetadataRequest { entryId: EntryId, contentRevision: Revision, source: String }
 SourceRange { bytes: [u32; 2], utf16: [u32; 2] }
-Property { key, value: JsonValue, type: PropertyType, keyRange: SourceRange }
+Property { key, value: PropertyValue, type: PropertyType, keyRange: SourceRange }
 TagOccurrence { name, range: SourceRange }  // body occurrences only
 Heading { text, level: 1..6, line: u32, range: SourceRange }
 Link {
-  kind: "wiki" | "markdown", embed: bool, target, fragment,
+  kind: "wiki" | "markdown", embed: bool, target, fragment, destination,
   range: SourceRange, targetRange: SourceRange,
   definitionRange: SourceRange | null
 }
@@ -92,10 +95,13 @@ Metadata {
 }
 ```
 
-`JsonValue` means finite binary64 JSON numbers, strings, booleans, null, arrays
-and string-keyed maps. It is not a tagged date/object/runtime value. Property
-order is a vector, never a JSON object's enumeration order. Nested map ordering
-is semantically irrelevant; prototype-like keys remain data. A string scalar
+`PropertyValue` means finite binary64 JSON numbers, strings, booleans, null, arrays
+and recursively ordered string-keyed maps. Internally maps are entry vectors
+with a custom Serde map visitor, serialized as ordinary JSON objects. Do not use
+`serde_json::Value` maps or enable its global `preserve_order` feature: feature
+unification could affect existing canonical/encrypted JSON. Property order and
+nested mapping entry order retain source order, so Base exact-key lookup followed
+by first case-insensitive match stays deterministic. Prototype-like keys remain data. A string scalar
 mapping key is retained verbatim after YAML decoding; ordinary nonstring scalar
 keys are converted to their YAML string spelling as the current `stringKeys`
 policy does. Detect duplicates again after scalar-key conversion, so boolean `true` and string
@@ -145,8 +151,12 @@ Lines are zero-based; CRLF is one newline, LF or bare CR is one newline each.
   `targetRange` covers only raw destination path spelling, excluding angle
   wrappers, `#fragment`, alias, label and title. A local fragment has a zero-width
   target. `target` and `fragment` preserve raw spelling; fragment includes `#`.
-  File lookup, percent/entity/escape normalization and path policy belong to
-  link resolution. Do not substitute the parser's unescaped URL for raw source.
+  `destination` is the established Markdown parser's semantic URL, with Markdown
+  escapes/entities decoded and percent escapes retained; wiki destinations keep
+  raw target+fragment. File lookup and percent/path policy belong to link
+  resolution, which splits the semantic fragment before percent decoding. Do not
+  substitute semantic URLs for raw provenance or add a second Markdown decoder
+  in the resolver.
 - Reference Markdown links have a use-site `range` and shared definition
   `targetRange`/`definitionRange`; the latter covers the whole definition excluding
   its final newline. Full, collapsed and shortcut references follow CommonMark
@@ -262,7 +272,12 @@ Fixed initial defaults, identical on native/WASM: input ≤16 MiB UTF-8; framed
 frontmatter ≤1 MiB; YAML value depth ≤64 with scalar root depth zero; ≤100,000
 expanded JSON value nodes, counting container and scalar values; ≤1,000 values
 created by alias substitution, counting every copied container/scalar including
-nested copies. Exceeding the input cap is an extraction request error; exceeding
+nested copies; and ≤8 MiB aggregate decoded scalar/key UTF-8 bytes across ordinary
+and alias materializations, reserved before any materialization clone. Count all
+decoded scalar spelling bytes, including numeric/bool/null spellings, plus map
+keys. This byte ceiling prevents a large scalar reused by many aliases from
+amplifying into gigabytes while remaining under node caps. Exceeding the input cap is an
+extraction request error; exceeding
 YAML caps yields `frontmatter_resource`, preserving body extraction. Bound
 iteration/recursion before materializing an oversized expansion. Never truncate
 metadata silently or publish a partial YAML map. Fixed defaults are part of this
@@ -292,11 +307,20 @@ accepted BOM/comments/dot closer/unclosed policy is explicit above.
 This is a source-based pin proposal, not an authenticated upstream package audit
 or a build result. The fixed-version docs.rs pages could not be fetched by the
 web tool in this session; local source was the primary evidence. Dependency
-adoption/license lock review belongs to root. YAML dependency selection is still
-open; evaluate a maintained portable YAML parser against these fixtures rather
-than write custom YAML. MDBASE and index/query work have separate owners.
+adoption/license lock review belongs to root. YAML parser selection is now `saphyr-parser = "=0.2.2"`, defaults off, after
+root approval and an exact source-archive audit: SHA256
+`6c6220586c3dacac54bfddec87af86ddb31862d29666e7e35cf4baf70a25d387`,
+VCS `b8205d5f60ea44f757f7d075fe4f3704bbe5dccc`, edition 2024/Rust 1.85.
+It exposes decoded scalar/style/anchor/tag events and byte spans through a pull
+iterator, permitting bounded typed-value reconstruction without new YAML grammar.
+Runtime dependencies are `arraydeque 0.5.1` and `thiserror 2.0.20`, defaults off.
+The inherited Chen Yuheng and Ethiraric license sets both require redistribution
+notices. [Parser docs](https://docs.rs/saphyr-parser/latest/saphyr_parser/) and
+[upstream](https://github.com/saphyr-rs/saphyr) informed selection; the downloaded
+exact crate, including `Cargo.toml`, `parser.rs`, `scanner.rs` and `LICENSE`, was
+the primary version-specific evidence. No dependency/runtime build is claimed. MDBASE and index/query work have separate owners.
 
-The 42-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
+The 49-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
 invalid/duplicate/tagged YAML, mixed projections, nonfinite/unsafe numbers,
 BOM/CRLF/bare-CR/astral/decomposed Unicode, empty/partial Markdown, exclusions,
 ATX/Setext/container headings, raw/inline/reference links and task dialect.
@@ -322,7 +346,7 @@ include separate `propertyKeySpellings` source assertions; decoded keys must not
 be mistaken for raw YAML spelling. The TypeScript option checks all
 recorded baseline observations, including intentional mismatches with the target.
 
-Verification at preparation completion: the checker and all 42 current TypeScript
+Verification at preparation completion: the checker and all 49 current TypeScript
 observations pass; 22 existing property/metadata tests pass. The first checker
 run caught an accidentally empty status in the final empty task and was corrected;
 fixture IDs were corrected to the existing strong-ID grammar before completion.
@@ -335,3 +359,65 @@ then a minimal WASM JSON seam reading the same requests. Root owns shared/root
 manifests and locks; no worker edits those until assigned. Preserve this corpus
 as an independent oracle and add focused resource/request-error boundary tests.
 Consumer switches and index publication occur in later coherent reviewed changes.
+
+
+## Shared YAML-only consumer seam
+
+Root approved `parse_yaml_mapping(&str) -> Result<PropertyValue, YamlDiagnostic>`
+for Base definition consumers. It uses the same Saphyr event decoder and ordered
+value reconstruction as frontmatter, with no Markdown framing, property inference
+or tags/aliases projection. Input is exactly one YAML mapping; whitespace/comments
+produce an ordered empty object. BOM and CR/LF spellings remain intact.
+
+`YamlDiagnostic { code, range: SourceRange }` has typed snake-case codes `syntax`,
+`duplicate_key`, `mapping`, `tag`, `alias`, `value` and `resource`. A source over
+1 MiB reports Resource at zero-width start without scanning the oversized input;
+other errors cover the whole YAML input in original byte/UTF-16 coordinates.
+Depth/node/alias/8 MiB expanded decoded scalar/key byte limits are shared with
+frontmatter. Base may apply its stricter 256 KiB input limit before calling it.
+There is one parser/decoder, rather than a separate Base YAML implementation.
+
+
+## Parser fixture gaps observed during native candidate validation
+
+Root's actual native 1.95 candidate run compiled successfully. The ordered value
+checks passed 5/5 and resource checks passed 7/7 after classifying Saphyr's pinned
+`recursion limit exceeded` scanner error as Resource. The 46-case shared corpus
+then passed 44/46 before the following adapter fixes; see root's recorded
+`tmp/stage4-parser-run2.log`. These observations do not establish the fixed
+candidate's runtime success or native/WASM/consumer equivalence yet.
+
+- Pulldown 0.13.4 interpreted the first `![[A#Head|Label]]` in the `inline-links`
+  case as an ordinary image spanning the rest of the line, closed by a later
+  escaped-bracket sequence and targeting `Hidden.md`. The narrow OFM adapter
+  considers only parser-confirmed ordinary inline images starting `![[`; a short
+  single-line atom is accepted only if the same established parser independently
+  validates that exact slice as one Wiki Image. An escaped opener protects the
+  confirmed atom from the ordinary-image grammar without changing byte positions
+  or indentation. Its isolated parser supplies link/label data; surrounding text,
+  links and exclusions remain parser-owned. Two adjacent corpus cases cover an
+  escaped literal tail, plain heading text and three-space indentation.
+- Pulldown's collapsed-reference event range excludes the trailing `[]`. The
+  source-range adapter extends only a parser-confirmed Collapsed link whose
+  immediately following source is exactly `[]`, preserving the shared complete
+  occurrence range. The reference definition/destination span is unchanged.
+
+These are concrete capability gaps supporting small compatibility adapters,
+not a new Markdown parser or permission to weaken the independent expectations.
+
+
+Native Base-source integration additionally exposed a Saphyr 0.2.2 scanner BOM
+TODO: an initial BOM before a comment made otherwise valid YAML fail Syntax.
+The common event adapter now strips only the initial BOM for syntax and rebases
+all AST byte spans by three, keeping original BOM/CRLF coordinates and source
+untouched. Focused YAML-only cases cover nonempty BOM content and BOM+comment
+before both a valid map and an invalid null root. This is a framing/offset
+compatibility adapter around the same established YAML parser.
+
+
+Initial Markdown BOM masking also required a source-input correction: three
+synthetic spaces could turn an original 1–3-space ATX heading into indented code.
+The read-only parser input now replaces the three BOM bytes with blank newlines,
+a semantic empty document prefix. Original source positions/line numbers still
+come from the untouched input. The shared corpus covers BOM+three-space heading;
+a focused parameterized test covers zero through three original spaces.

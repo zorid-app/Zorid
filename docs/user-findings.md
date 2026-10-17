@@ -136,6 +136,26 @@ User confirms ownership of zorid.app and proposes it as the main-site entry, wit
 
 User questions whether excessive testing is delaying completion and asks for honest status. Coordinator acknowledged overly fragmented validation. Prioritize completing native/CLI and browser/relay flows, then batch meaningful integration checks. Keep regression tests for concrete data-loss, isolation, ordering and recovery bugs; avoid repeated unchanged component checks or new standalone audit projects. This does not reduce the original end-to-end acceptance requirements.
 
+## Native mobile shell steering — 2026-10-17
+
+Native mobile owner relayed direct user choices in durable messages
+msg_febbf11dd950 and msg_74bd1ce89ebb: top-left Settings, a configurable
+horizontal pill tab row, and native Recents and Files pages now. Home, Tasks and
+Calendar remain later page inventory, not implementation scope. Selecting a note
+pushes the shared web editor; Back returns to the originating native page. Use
+SwiftUI, appropriate Liquid Glass and animations with system preference support.
+The native session owns implementation and isolated evidence; source work does
+not establish actual device/simulator UX. Shared-core coordinator granted only
+the bounded initialPath/noteOpened workspace/platform seams in msg_77abcb590bc5.
+
+User now physically connected an iPhone and explicitly wants to try the app.
+Prioritize the native session's signed development build/install at the next
+terminal boundary; root granted the exclusive slot in msg_6b654f918bbd after
+all root checks stopped. Existing development signing/profile covers the device
+per native owner, using separate app.zorid.notes.dev. Installation and actual
+phone behavior remain to verify; source/TypeScript/library passes do not prove
+them. Stage4 core source work continues independently without overlapping builds.
+
 ## Canvas and Bases UX scope — 2026-10-17
 
 User replaced the active task with Canvas edit-button hit ownership, consistent
@@ -147,3 +167,37 @@ combined production build and short native practical pass now passed (see
 resize/zoom/rich-block polish remains unverified. This scoped UI task does not resume the older fenced-Base work. The separate
 core coordinator now owns the explicitly resumed Rust durable-save integration,
 including its NoteBuffer/workspace seams.
+
+### 2026-10-17 — mobile development verification permissions
+
+Native relays msg_df11e44a6746/msg_03ea8ab884f1 carry explicit user directions:
+physical iPhone Zorid Dev (`app.zorid.notes.dev`) data is disposable, including
+reset/overwrite for builds without repeat confirmation; unrelated/production
+apps are excluded. Keep the owned simulator booted between passes; test app or
+automation streams may be terminated to reduce load. Recorded in AGENTS.md.
+This is verification policy, not a product feature or completed mobile gate.
+
+### 2026-10-17 — native mobile keyboard, loading and header follow-ups
+
+Native owner relays actual phone findings: hide the extra WebKit previous/next/
+Done bar; restore the native formatting toolbar after defocus/foreground; prevent
+content jumps on keyboard focus; use loading skeletons throughout native and
+embedded attachment loading; investigate slow vault opening. Latest screenshot
+clarification is **shadow clipping at the hard header boundary**, not a request
+to change spacing or shadow intensity. Do not close this by tuning the wrong
+visual property. Owner: native mobile session, isolated branches; root granted
+scoped foreground callbacks and attachment loading attributes, preserving source,
+resource leases and shared Stage4 backlinks. Native reports 25 foreground/
+lifecycle checks and type checks passing, but new runtime fixes remain unbuilt.
+Current Simulator save/Back independently preserved exact53 bytes; that does not
+verify these newer keyboard/loading/header changes. See msg_0fd7213f1e90.
+
+### 2026-10-17 — mobile build 4 opening crash
+
+Native owner reproduced the user's opening crash on phone and Simulator:
+UIKit rejects the history-controls hosting controller's containment when its
+view is placed in a navigation bar item. Build 4 is not accepted. Root granted
+the exclusive iOS hotfix slot in msg_d40cc87b1ea0; native owns the minimal
+containment fix and must verify actual file opening in the existing Simulator
+before installing the replacement phone build. No storage repair is indicated;
+implementation, build and runtime verification remain separate pending results.

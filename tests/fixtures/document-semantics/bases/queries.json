@@ -484,13 +484,26 @@
           }
         ]
       },
-      "decision": "retain",
+      "decision": "proposed-change",
       "evidence": [
         "src/bases/query.ts",
         "tests/bases-query.test.ts",
-        "tests/bases-query-review.test.ts"
+        "tests/bases-query-review.test.ts",
+        "docs/stage4-base-contract.md:261",
+        "crates/zorid-bases/src/expression.rs (relationship availability guard)",
+        "crates/zorid-bases/src/graph.rs (complete coverage guard)"
       ],
-      "proposal": "Retain explicit failure until coherent indexed links are actually supplied; do not substitute an empty graph."
+      "proposal": "Keep the original TypeScript unsupported observation. The accepted generation-backed dialect distinguishes implemented relationships with absent/incomplete input (unavailable) from unsupported operations; an absent graph must not become an empty graph.",
+      "proposed": {
+        "paths": [],
+        "diagnostics": [
+          {
+            "phase": "filter",
+            "path": "a.md",
+            "code": "unavailable"
+          }
+        ]
+      }
     },
     {
       "id": "current-file-context",

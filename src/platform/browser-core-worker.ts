@@ -20,10 +20,19 @@ let storageFailed=false,closing=false;
 let binary:BinaryStreams|undefined;
 const detached=new Set<Promise<unknown>>();
 const streaming=()=>vault&&'validateStorage'in vault?vault as BrowserStreamingVault:undefined;
-function failStorage(code:string):void {
+function storageDiagnostic(details:unknown):Record<string,string|boolean>|undefined {
+  if(!details||typeof details!=='object'||Array.isArray(details))return;
+  const row=details as Record<string,unknown>,names=new Set(['index_capture_inventory','index_capture_descriptor','index_source_presentation','index_source_inline','index_source_mode','index_source_text_commitment']);
+  if(typeof row.invariant!=='string'||!names.has(row.invariant))return;
+  const result:Record<string,string|boolean>={invariant:row.invariant};
+  if(typeof row.entryId==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(row.entryId))result.entryId=row.entryId;
+  for(const key of ['normal','sameEntry','samePresentation','textMode','binaryMode','hasInline','lengthMatches','identityMatches','revisionMatches','digestArray'])if(typeof row[key]==='boolean')result[key]=row[key];
+  return result;
+}
+function failStorage(code:string,details?:unknown):void {
   if(closing||storageFailed||!['storage_closed','storage_corrupt','client_ownership_lost'].includes(code))return;
   storageFailed=true;sync?.revoke();channel?.close();vault?.close();
-  try{port.postMessage({event:'storage-error',code});}catch{/* Worker transport already failed. */}
+  try{const diagnostic=storageDiagnostic(details);port.postMessage({event:'storage-error',code,...(diagnostic?{details:diagnostic}:{})});}catch{/* Worker transport already failed. */}
 }
 function local<T>(operation:()=>Promise<T>):Promise<T> {
   const result=queue.catch(()=>undefined).then(()=>{assertOwner();return operation();});
@@ -86,7 +95,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       };
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
       assertOwner();
-      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{})};
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!streaming()?.documentIndex};
     } catch (error) {
       sync?.revoke(); channel?.close(); channel = undefined; vault.close(); vault = undefined;
       if (lease) { try { await lease.release(); } catch { /* Original open failure remains uncertain. */ } }
@@ -98,12 +107,32 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     if (released) return; // Exact retry after a lost release acknowledgement.
     assertOwner();
     await Promise.allSettled([...detached]);
-    if(streaming())await streaming()!.cleanupReadPins();
+    if(streaming()){await streaming()!.documentIndex?.close();await streaming()!.cleanupReadPins();}
     // Serialized behind all earlier dispatches, including timed-out RPCs/hints.
     sync?.revoke(); channel?.close(); channel = undefined; vault.close();
     await lease!.release(); released = true; return;
   }
   assertOwner();
+  if(operation.startsWith('document-index-')){
+    const index=streaming()?.documentIndex;if(!index)throw new BrowserVaultError('index_unavailable','Shared document index WASM is unavailable');
+    switch(operation){
+      case 'document-index-initialize':return index.initialize();
+      case 'document-index-discard':return index.discard(payload);
+      case 'document-index-status':return index.status();
+      case 'document-index-begin':return index.begin();
+      case 'document-index-pump':return index.pump(payload);
+      case 'document-index-publish':return index.publish(payload);
+      case 'document-index-open':return index.open();
+      case 'document-index-close-pin':return index.closePin(payload);
+      case 'document-index-search':return index.search(payload);
+      case 'document-index-metadata':return index.metadata(payload);
+      case 'document-index-base':return index.base(payload);
+      case 'document-index-resolve':return index.resolve(payload);
+      case 'document-index-backlinks':return index.backlinks(payload);
+      case 'document-index-rebuild':return index.rebuild();
+      default:throw new BrowserVaultError('invalid_operation','Unknown document index operation');
+    }
+  }
   switch (operation) {
     case 'inventory': return vault.inventory();
     case 'read': return vault.readEntry(payload);
@@ -150,7 +179,7 @@ port.onmessage = ({data}) => {
     const task=(async()=>{try{if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');assertOwner();const result=await dispatch(operation,payload);
       const transfer=operation==='binary-read'&&result&&typeof result==='object'&&'bytes'in result&&result.bytes instanceof Uint8Array&&result.bytes.buffer instanceof ArrayBuffer?[result.bytes.buffer]:undefined;
       (port.postMessage as (value:unknown,transfer?:Transferable[])=>void)({id,ok:true,result},transfer);
-    }catch(error){const failure=error instanceof BrowserVaultError?error:new BrowserVaultError('storage_failure','Binary worker operation failed');port.postMessage({id,ok:false,error:{code:failure.code,message:failure.message,details:failure.details,source:failure.source}});failStorage(failure.code);}})();
+    }catch(error){const failure=error instanceof BrowserVaultError?error:new BrowserVaultError('storage_failure','Binary worker operation failed');port.postMessage({id,ok:false,error:{code:failure.code,message:failure.message,details:failure.details,source:failure.source}});failStorage(failure.code,failure.details);}})();
     detached.add(task);void task.finally(()=>detached.delete(task));return;
   }
   if (['sync-configure','sync-once','sync-revoke'].includes(operation)) {
@@ -180,7 +209,7 @@ port.onmessage = ({data}) => {
       const failure = error instanceof BrowserVaultError ? error : new BrowserVaultError('storage_failure', error instanceof Error ? error.message : String(error));
       try { port.postMessage({id, ok:false, error:{code:failure.code, message:failure.message, details:failure.details, source:failure.source}}); }
       catch { /* Lost response remains outcome_unknown; do not poison later dispatch. */ }
-      failStorage(failure.code);
+      failStorage(failure.code,failure.details);
     }
   });
 };

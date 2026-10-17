@@ -1,0 +1,50 @@
+[
+  {
+    "name": "exact current heads",
+    "store": "store-a",
+    "watermark": "10",
+    "generation": 1,
+    "extraction": "parser-v1",
+    "expected": "ok"
+  },
+  {
+    "name": "another authority",
+    "store": "store-b",
+    "watermark": "10",
+    "generation": 1,
+    "extraction": "parser-v1",
+    "expected": "stale_source"
+  },
+  {
+    "name": "later source writer",
+    "store": "store-a",
+    "watermark": "11",
+    "generation": 1,
+    "extraction": "parser-v1",
+    "expected": "stale_source"
+  },
+  {
+    "name": "other indexer published",
+    "store": "store-a",
+    "watermark": "10",
+    "generation": 2,
+    "extraction": "parser-v1",
+    "expected": "stale_index"
+  },
+  {
+    "name": "parser changed",
+    "store": "store-a",
+    "watermark": "10",
+    "generation": 1,
+    "extraction": "parser-v2",
+    "expected": "stale_index"
+  },
+  {
+    "name": "index removed",
+    "store": "store-a",
+    "watermark": "10",
+    "generation": null,
+    "extraction": "parser-v1",
+    "expected": "stale_index"
+  }
+]

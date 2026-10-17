@@ -1,0 +1,1180 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "f69dc90de0de697dfb75a5a3d1805b69dba982b3",
+  "source": "queries.json",
+  "approvedChangeSources": {
+    "default-natural-order": "current",
+    "typed-group-keys": "proposed",
+    "empty-or-composed": "proposed",
+    "unsupported-link-metadata": "proposed"
+  },
+  "cases": [
+    {
+      "id": "default-natural-order",
+      "request": {
+        "configuration": {
+          "views": [
+            {
+              "type": "table",
+              "name": "Table"
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "z/A.md",
+              "properties": [],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-1",
+                "revision": "r1"
+              },
+              "path": "a/A.md",
+              "properties": [],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-2",
+                "revision": "r1"
+              },
+              "path": "B10.png",
+              "properties": [],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-3",
+                "revision": "r1"
+              },
+              "path": "B2.png",
+              "properties": [],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": null
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "a/A.md",
+          "z/A.md",
+          "B2.png",
+          "B10.png"
+        ],
+        "properties": [
+          "file.name"
+        ]
+      },
+      "expectationSource": "current",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "sort-null-desc",
+      "request": {
+        "configuration": {
+          "views": [
+            {
+              "type": "table",
+              "name": "Table",
+              "sort": [
+                {
+                  "property": "n",
+                  "direction": "DESC"
+                }
+              ]
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "a.md",
+              "properties": [
+                [
+                  "n",
+                  null
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-1",
+                "revision": "r1"
+              },
+              "path": "b.md",
+              "properties": [
+                [
+                  "n",
+                  2
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-2",
+                "revision": "r1"
+              },
+              "path": "c.md",
+              "properties": [
+                [
+                  "n",
+                  10
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": null
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "c.md",
+          "b.md",
+          "a.md"
+        ]
+      },
+      "expectationSource": "current",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "typed-group-keys",
+      "request": {
+        "configuration": {
+          "views": [
+            {
+              "type": "table",
+              "name": "Table",
+              "groupBy": {
+                "property": "key",
+                "direction": "DESC"
+              }
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "a.md",
+              "properties": [
+                [
+                  "key",
+                  2
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-1",
+                "revision": "r1"
+              },
+              "path": "b.md",
+              "properties": [
+                [
+                  "key",
+                  "2"
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-2",
+                "revision": "r1"
+              },
+              "path": "c.md",
+              "properties": [
+                [
+                  "key",
+                  [
+                    1,
+                    2
+                  ]
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-3",
+                "revision": "r1"
+              },
+              "path": "d.md",
+              "properties": [],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": null
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "a.md",
+          "b.md",
+          "c.md",
+          "d.md"
+        ],
+        "groups": [
+          {
+            "key": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "number",
+                  "value": 1
+                },
+                {
+                  "type": "number",
+                  "value": 2
+                }
+              ]
+            },
+            "entryIds": [
+              "fixture-2"
+            ]
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "2"
+            },
+            "entryIds": [
+              "fixture-1"
+            ]
+          },
+          {
+            "key": {
+              "type": "number",
+              "value": 2
+            },
+            "entryIds": [
+              "fixture-0"
+            ]
+          },
+          {
+            "key": {
+              "type": "null"
+            },
+            "entryIds": [
+              "fixture-3"
+            ]
+          }
+        ]
+      },
+      "expectationSource": "proposed",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "filter-error-isolated",
+      "request": {
+        "configuration": {
+          "filters": "enabled || formula.loop",
+          "formulas": {
+            "loop": "formula.loop"
+          },
+          "views": [
+            {
+              "type": "table",
+              "name": "Table"
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "a.md",
+              "properties": [
+                [
+                  "enabled",
+                  true
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-1",
+                "revision": "r1"
+              },
+              "path": "b.md",
+              "properties": [
+                [
+                  "enabled",
+                  false
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": null
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "a.md"
+        ],
+        "diagnostics": [
+          {
+            "phase": "filter",
+            "path": "b.md",
+            "code": "cycle"
+          }
+        ]
+      },
+      "expectationSource": "current",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "empty-or-composed",
+      "request": {
+        "configuration": {
+          "filters": {
+            "or": []
+          },
+          "views": [
+            {
+              "type": "table",
+              "name": "Table",
+              "filters": "true"
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "a.md",
+              "properties": [],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": null
+          }
+        }
+      },
+      "expected": {
+        "paths": []
+      },
+      "expectationSource": "proposed",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "property-identifiers",
+      "request": {
+        "configuration": {
+          "views": [
+            {
+              "type": "table",
+              "name": "Table",
+              "order": [
+                "a.b",
+                "title",
+                "missing",
+                "formula.absent"
+              ]
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "a.md",
+              "properties": [
+                [
+                  "a.b",
+                  4
+                ],
+                [
+                  "Title",
+                  "Name"
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": null
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "a.md"
+        ],
+        "properties": [
+          "note.a.b",
+          "note.title",
+          "note.missing"
+        ],
+        "values": {
+          "a.md": {
+            "note.a.b": {
+              "type": "number",
+              "value": 4
+            },
+            "note.title": {
+              "type": "string",
+              "value": "Name"
+            },
+            "note.missing": {
+              "type": "null"
+            }
+          }
+        }
+      },
+      "expectationSource": "current",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "file-host-facts",
+      "request": {
+        "configuration": {
+          "filters": "file.inFolder(\"Notes\") && file.hasTag(\"work\") && file.hasProperty(\"Status\") && status == \"x\"",
+          "views": [
+            {
+              "type": "table",
+              "name": "Table"
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "Notes/a.md",
+              "properties": [
+                [
+                  "Status",
+                  "x"
+                ]
+              ],
+              "tags": [
+                "#Work/Today"
+              ],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-1",
+                "revision": "r1"
+              },
+              "path": "NotesOld/b.md",
+              "properties": [
+                [
+                  "status",
+                  "x"
+                ]
+              ],
+              "tags": [
+                "#workshop"
+              ],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": null
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "Notes/a.md"
+        ]
+      },
+      "expectationSource": "current",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "unsupported-link-metadata",
+      "request": {
+        "configuration": {
+          "filters": "file.links.length > 0",
+          "views": [
+            {
+              "type": "table",
+              "name": "Table"
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "a.md",
+              "properties": [],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": null
+          }
+        }
+      },
+      "expected": {
+        "paths": [],
+        "diagnostics": [
+          {
+            "phase": "filter",
+            "path": "a.md",
+            "code": "unavailable"
+          }
+        ]
+      },
+      "expectationSource": "proposed",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts",
+        "docs/stage4-base-contract.md:261",
+        "crates/zorid-bases/src/expression.rs (relationship availability guard)",
+        "crates/zorid-bases/src/graph.rs (complete coverage guard)"
+      ]
+    },
+    {
+      "id": "current-file-context",
+      "request": {
+        "configuration": {
+          "filters": "file == this.file || score > this.score",
+          "formulas": {
+            "owner": "this.name"
+          },
+          "views": [
+            {
+              "type": "table",
+              "name": "Table",
+              "order": [
+                "formula.owner"
+              ]
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "local.md",
+              "properties": [
+                [
+                  "score",
+                  3
+                ],
+                [
+                  "name",
+                  "Local"
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-1",
+                "revision": "r1"
+              },
+              "path": "small.md",
+              "properties": [
+                [
+                  "score",
+                  2
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-2",
+                "revision": "r1"
+              },
+              "path": "big.md",
+              "properties": [
+                [
+                  "score",
+                  5
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "local.md",
+              "properties": [
+                [
+                  "score",
+                  3
+                ],
+                [
+                  "name",
+                  "Local"
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "big.md",
+          "local.md"
+        ],
+        "values": {
+          "big.md": {
+            "formula.owner": {
+              "type": "string",
+              "value": "Local"
+            }
+          }
+        }
+      },
+      "expectationSource": "current",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    },
+    {
+      "id": "group-search-limit-pipeline",
+      "request": {
+        "configuration": {
+          "filters": "enabled",
+          "views": [
+            {
+              "type": "table",
+              "name": "Table",
+              "order": [
+                "label"
+              ],
+              "groupBy": {
+                "property": "state",
+                "direction": "ASC"
+              },
+              "groupOrder": [
+                "todo",
+                "done",
+                "empty"
+              ],
+              "sort": [
+                {
+                  "property": "rank",
+                  "direction": "DESC"
+                }
+              ],
+              "limit": 1
+            }
+          ]
+        },
+        "snapshot": {
+          "snapshotId": {
+            "localStoreId": "fixture-store",
+            "generationEpoch": "fixture-epoch",
+            "generation": "1",
+            "versions": {
+              "schema": 1,
+              "extraction": "zorid-markdown-1:metadata-1",
+              "resolver": "link-nfc-lower-segment-utf16-v1",
+              "query": "literal-lines-exact-v1"
+            }
+          },
+          "records": [
+            {
+              "witness": {
+                "entryId": "fixture-0",
+                "revision": "r1"
+              },
+              "path": "a.md",
+              "properties": [
+                [
+                  "enabled",
+                  true
+                ],
+                [
+                  "label",
+                  "match"
+                ],
+                [
+                  "state",
+                  "todo"
+                ],
+                [
+                  "rank",
+                  1
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-1",
+                "revision": "r1"
+              },
+              "path": "b.md",
+              "properties": [
+                [
+                  "enabled",
+                  true
+                ],
+                [
+                  "label",
+                  "match"
+                ],
+                [
+                  "state",
+                  "done"
+                ],
+                [
+                  "rank",
+                  9
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-2",
+                "revision": "r1"
+              },
+              "path": "c.md",
+              "properties": [
+                [
+                  "enabled",
+                  true
+                ],
+                [
+                  "label",
+                  "miss"
+                ],
+                [
+                  "state",
+                  "done"
+                ],
+                [
+                  "rank",
+                  12
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-3",
+                "revision": "r1"
+              },
+              "path": "d.md",
+              "properties": [
+                [
+                  "enabled",
+                  true
+                ],
+                [
+                  "label",
+                  "match"
+                ],
+                [
+                  "state",
+                  "unlisted"
+                ],
+                [
+                  "rank",
+                  20
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            },
+            {
+              "witness": {
+                "entryId": "fixture-4",
+                "revision": "r1"
+              },
+              "path": "e.md",
+              "properties": [
+                [
+                  "enabled",
+                  false
+                ],
+                [
+                  "label",
+                  "match"
+                ],
+                [
+                  "state",
+                  "todo"
+                ],
+                [
+                  "rank",
+                  30
+                ]
+              ],
+              "tags": [],
+              "size": null,
+              "ctimeMs": null,
+              "mtimeMs": null
+            }
+          ]
+        },
+        "options": {
+          "searchTerms": [
+            "match"
+          ],
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC",
+            "currentRecord": null
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "b.md"
+        ],
+        "counts": {
+          "scanned": 5,
+          "matched": 4,
+          "afterGroupOrder": 3,
+          "afterSearch": 2,
+          "returned": 1
+        },
+        "groupOptions": [
+          {
+            "key": {
+              "type": "string",
+              "value": "todo"
+            },
+            "count": 1,
+            "listed": true
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "done"
+            },
+            "count": 2,
+            "listed": true
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "empty"
+            },
+            "count": 0,
+            "listed": true
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "unlisted"
+            },
+            "count": 1,
+            "listed": false
+          }
+        ]
+      },
+      "expectationSource": "current",
+      "evidence": [
+        "src/bases/query.ts",
+        "tests/bases-query.test.ts",
+        "tests/bases-query-review.test.ts"
+      ]
+    }
+  ]
+}

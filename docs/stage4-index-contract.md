@@ -250,3 +250,22 @@ owner Vault/workspace, backlink navigation and draft overlays; mobile owner
 bindings/shell. This worker now also owns `crates/zorid-index/**` for the initial portable
 slice; other implementation seams remain future assignments. Root owns final
 metadata type freeze and must name implementers before consumer/schema changes.
+
+
+## Initial source slice status
+
+`crates/zorid-index` now contains immutable source/index/version identities,
+complete namespace validation and entry witnesses, pure publication-fence checks,
+and a borrowed namespace resolver. Own manifest pins approved Unicode NFC0.1.25
+and percent-encoding2.3.2 and depends on the canonical `zorid-document` projection.
+Root composes that metadata crate and resolves the shared lock before execution.
+Resolver corpus has15 cases; publication corpus has6 cases plus stale
+write/move/delete/recreate and malformed-manifest/watermark tests. Source is
+formatted; tests/builds have not run. This is not a persistence adapter, finished
+index generation planner, literal-query engine or consumer migration.
+
+The resolver's percent-only input seam is explicit pending root's reviewed
+CommonMark entity/backslash normalization versus literal wiki target decision.
+Metadata must preserve raw source ranges and provide the agreed logical target;
+this crate will not invent a Markdown URL parser. Encoded external schemes and
+encoded hash filename characters already have percent-order regression cases.

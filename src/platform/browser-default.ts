@@ -12,11 +12,13 @@ import { legacyBrowserExport } from './browser-legacy-export.ts';
 import { binaryLength, writeBinarySource } from '../core/binary-transfer.ts';
 import type { BinaryTarget, BinaryStageRef, BinaryReadRef } from '../core/binary-streams.ts';
 import { vaultPath } from './path.ts';
+import {createDocumentService} from '../core/document-semantics.ts';
+import type {DocumentSemanticsCapability} from '../core/document-semantics.ts';
 
 export const DEFAULT_BROWSER_DATABASE='zorid-core-vault:default-v1';
 /** Normal browser commands retain the exact request after uncertain transport.
  * The admitted consumer owns durable command checkpoints and terminal ACKs. */
-export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:BrowserClientContext):VaultAdapter{
+export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:BrowserClientContext):VaultAdapter&DocumentSemanticsCapability{
   if(!consumer.fileCommand||!consumer.recoverCommands)throw new BrowserVaultError('file_commands_unavailable','Browser core has no admitted file-command consumer');
   const facade=new BrowserCoreAdapter(runtime);
   const pending=new Map<string,{signature:string;request:BrowserFileCommandInput}>();
@@ -101,7 +103,7 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
     }catch(error){return Promise.reject(error);}
   }
   return {
-    durableWrites:consumer.durableWrites,durableNamespace:true,...(streams?{binaryStreams:streams}:{}),
+    durableWrites:consumer.durableWrites,durableNamespace:true,...(consumer.documentIndex?{documentSemantics:createDocumentService(consumer.documentIndex)}:{}),...(streams?{binaryStreams:streams}:{}),
     list:()=>facade.list(),stat:path=>facade.stat(path),read:path=>facade.read(path),readBinary:path=>facade.readBinary(path),subscribe:listener=>facade.subscribe(listener),
     createText:(path,content)=>execute({kind:'createText',path,content}),
     write:(path,content)=>execute({kind:'writeText',path,content}),
@@ -147,7 +149,7 @@ export async function openDefaultBrowserVault():Promise<PlatformVault>{
     const retire=()=>{active=false;opened.close();slot.retire();};
     window.addEventListener('pagehide',retire,{once:true});
     const release=createBrowserRelease(consumer,slot,()=>{active=false;window.removeEventListener('pagehide',retire);});
-    return {adapter,label:'Browser vault',id:`browser:core:${consumer.scope.vaultId}:client:${consumer.scope.clientId}`,
+    return {adapter,...(adapter.documentSemantics?{documentSemantics:adapter.documentSemantics}:{}),label:'Browser vault',id:`browser:core:${consumer.scope.vaultId}:client:${consumer.scope.clientId}`,
       legacyExport:legacyBrowserExport(),recoverCommands:()=>consumer.recoverCommands!(),
       release,
     };

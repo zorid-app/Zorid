@@ -1,6 +1,7 @@
 'use strict';
 const { desktopDurableWrites } = require('./durable-writes.cjs');
 const { desktopTextCreates } = require('./text-create.cjs');
+const { createDesktopDocumentSemantics } = require('./document-semantics.cjs');
 const { MAX_BINARY_FRAME } = require('./rust-vault-service.cjs');
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 function fail(code, uncertain = false) { return Object.assign(new Error('Desktop fixture consumer is not admitted.'), { code, commitUncertain: uncertain }); }
@@ -69,10 +70,13 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
       binaryPending=true;
       return invoke(()=>guarded.binaryCommand(clientId,bytes),null).finally(()=>{binaryPending=false;});
     };
+    const documents=host.capabilities?.includes('documents')?createDesktopDocumentSemantics(guarded,clientId,reference.local_store_id):null;
+    const documentCommand=input=>invoke(async()=>{const value=await documents.invoke(input);live();return value;},null);
     const writes = wrap(null);
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
+      ...(documents?{documentCommand}:{}),
       ...(host.capabilities?.includes('binary_streams')?{binaryCommand,binaryLimits:host.binaryLimits}:{}),
       ...(creates?{createText:input=>invoke(()=>creates.create(input),null),fileCommand:input=>invoke(()=>creates.execute(input),null)}:{}),
       async retire() {
@@ -81,7 +85,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
         if(phase==='released')return;
         if(closing)await closing.catch(()=>{});
         phase='retiring';activeFlush=null;
-        await drain();await host.releaseClient(reference);phase='released';
+        await drain();await host.releaseClient(reference);documents?.forget();phase='released';
       },
       release(flushGate) {
         if (phase === 'released') return Promise.resolve();
@@ -114,7 +118,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
             } catch (reason) { phase = 'active'; throw reason; }
           }
           phase = 'releasing';
-          try { await host.releaseClient(reference); phase = 'released'; }
+          try { await host.releaseClient(reference); documents?.forget(); phase = 'released'; }
           catch (reason) { phase = 'release_unknown'; throw reason; }
         })().finally(() => { closing = null; });
         return closing;

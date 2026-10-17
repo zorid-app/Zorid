@@ -3,6 +3,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { checkpointBytes } = require('./durable-checkpoints.cjs');
+const { captureDocumentRequest, decodeDocumentReply, validDocumentReply } = require('./document-semantics.cjs');
 const { familyStatus, syncStatus, syncReport, familyCommand } = require('./family-sync-protocol.cjs');
 
 const MAX_HEADER = 1024 * 1024;
@@ -128,8 +129,9 @@ function checkpointResult({ result, bytes }) {
 function successful(command, result, bytes, expectedBytes) {
   if (!object(result)) return false;
   if (!command) return bytes.length === 0; // Full startup validation follows.
-  if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas', 'binary'].includes(command.method) && bytes.length) return false;
+  if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas', 'binary', 'documents'].includes(command.method) && bytes.length) return false;
   switch (command.method) {
+    case 'documents': return validDocumentReply(command, result, bytes);
     case 'binary': return result.binary === true && bytes.length > 0 && bytes.length <= MAX_BINARY_FRAME;
     case 'create_text': return successful({method:'apply',operation_id:command.operation_id,mutation:{type:'create',id:command.id,path:command.path,kind:'file'}}, result, bytes, expectedBytes);
     case 'fixture_family_enroll': return familyStatus(result.family);
@@ -388,9 +390,14 @@ class RustVaultService {
   withClientLease(reference, beforeRequest = () => {}) {
     const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
     const context = { request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
-    const methods = ['binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
+    const methods = ['documentCommand', 'binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
       'checkpointLoad', 'checkpointCompareAndSwap', 'checkpointList', 'checkpointChanges'];
     return Object.freeze(Object.fromEntries(methods.map(name => [name, (...args) => RustVaultService.prototype[name].apply(context, args)])));
+  }
+  documentCommand(clientId, request) {
+    const captured = captureDocumentRequest(request);
+    if (!identity(clientId)) return Promise.reject(failure('invalid_document_request'));
+    return this.request({method:'documents',client_id:clientId,request:captured}).then(({result,bytes})=>decodeDocumentReply(captured,result,bytes));
   }
   binaryCommand(clientId, bytes) {
     if (!identity(clientId) || !(bytes instanceof Uint8Array) || !bytes.length || bytes.byteLength > MAX_BINARY_FRAME) return Promise.reject(failure('request_limit'));

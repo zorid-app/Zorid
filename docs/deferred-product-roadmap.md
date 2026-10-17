@@ -116,7 +116,360 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
-Current authoritative update (older bullets below record preceding stages):
+Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
+- Subsequent21:36 checkpoint: native facade21944 exit0, all6 tests PASS,
+  including explicit external import and authenticated sync receive with exact
+  bytes, metadata/search/backlink retarget, old-pin coherence, rebuild equivalence
+  and no authored receive echo. Reviewed tests29bdb786 integrated mainecd52a4f.
+  Native hotfix simulator51d8b84f/build5 now verifies actual open/Back/Forward/type
+  and exact67-byte save without UIKit crash. Phone87290 stopped before compile
+  because destination unavailable; native checks connection/generic build. Root
+  returned brief Rust slot in msg_e7b43ac5d754; no root compiler currently live.
+- Remaining consumer candidate: Base context/options e224f491 plus controller
+  b067f8b3/datec13ff75d/late-pin97a63eff composed isolated. Focused TS passes;
+  native/WASM proof pending. Independent review caught a shared `stale-source`
+  diagnostic incompatible with desktop frame error spelling; contract owner fixes
+  mapping without relaxing framing. Shared-row mutation identity freshness is
+  under source audit; do not integrate controller until resolved. Search57dafece
+  source frozen,16 focused tests/typecheck pass, independent review pending.
+- Reviewed engine39a306e7 composed into main without source conflicts. Normal
+  browser backlink removal also PASS. Main full frontend typecheck7046 exit0,
+  focused document/browser/desktop/backlink/workspace tests24094 PASS48/48.
+  No Rust engine changes since recorded native/WASM proof. Final merge commit
+  records these gates; remaining search/Base migrations keep Stage4 active.
+- Candidate39a306e7 actual production browser/IDB full suite PASS18.235s, then
+  page-reload cache PASS, watermark12/rawBytesPreserved:true. Actual WASM
+  Markdown49/49 and Base51/51 remain verified with matching binary provenance.
+- Normal rebuilt Electron UI PASS: shared backlink shown, Source navigation,
+  editor save removes backlink; independent physical Source exact42 bytes.
+  App8635 exited0 and closed. Normal web bundle87821 exit0, server52415(port8767):
+  create/rename/normal save/shared backlink/navigation and reload restored source
+  pass; final backlink removal after edit also passes. Earlier closed-worker under resource
+  pressure did not recur after reload; root cause is not established.
+- Independent review approved staged integration but identified remaining normal
+  sidebar search and Base controller TS evaluation. Assigned isolated workers
+  stage4_native_consumer(search) and stage4_base_reuse(Base controller), with
+  stage4_contract_review owning missing retained current-entry/step-limit options.
+  stage4_native_index strengthens external-import and received-sync index tests.
+  No worker may mutate main; current caches/logs remain preserved.
+- Native build4 opening crash is independently reproduced (UIKit hosting-controller
+  containment). Native owns hotfix51d8b84f/build5, slotmsg_d40cc87b1ea0. Initial
+  simulator build71295 failed linking ENOSPC; native recovered space by cleaning
+  only its own regenerable dependency caches. Retry50983 live; simulator actual
+  file-open verification must precede phone update. Build4 is unaccepted.
+- Reviewed mobile fixture-sync plan dc2a6c1b granted in msg_7efc3aa3b3cf to named
+  term_86199dce-0f1c-45f0-9ca0-8942cba829c5, acknowledgedmsg_58ee54c32890:
+  isolated tingkai-c/mobile-host-fixture-sync based39a306e7, only hostlib minimal
+  field/module/export and new embedded_fixture_sync source/test. Existing-vault
+  binding before initialization, same admitted lease, no renderer sync access,
+  bounded redacted native DTOs; no Rust tests before hotfix terminal checkpoint.
+  Simulator-only fixture; no phone remote-sync or production enrollment claim.
+
+
+Current authoritative update — 2026-10-17 20:42 UTC. The bullets below
+this update are historical checkpoints where their status differs:
+- Browser publication defect is now identified and fixed: order-sensitive JSON
+  string equality rejected equivalent source/Rust DTOs whose object fields were
+  serialized in different orders. Diagnostic cf8f8ed6 + guarded retryb64de88d
+  observed index_capture_descriptor/sameEntry:false on the original6 entries.
+  Strict structural comparator03b0b6b4 (root0d35e292) ignores object key order
+  only; exact fields, values, types and array order remain checked. Independent
+  source review approved; host21/21 tests pass. Actual same-database retry now
+  publishes successfully, source watermark6/currenttrue, all6 entries present,
+  rawBytesPreserved:true. No source reset or relaxed validation.
+- Full fresh browser suite advanced through metadata/graph/Base/24 literal pages
+  and reached retained edits. It then exposed fixture-only invalid YAML Boolean
+  filters:false; frozen compiler requires expression text or logical mapping.
+  Base owner confirmed correctiona35ac698 to filters:"false" text; composed,
+  awaiting next lightweight bundle/full run. Preserve failed suite database
+  zorid-core-vault:document-index-28dd0a09-e973-4fa2-91f4-220d08c3b8da.
+  Current server40946(port8766) serves tmp/stage4-browser-index-app-fixed,
+  source0d35e292; root Chrome tab1268039028 is marked for continuation.
+  Old corpus server22178 stopped after downloaded reports; no Rust/Electron
+  process live. Full frontend tsc18913 exit0; desktop app webpack70127 exit0,
+  but normal desktop UI has not yet run. Temporary node_modules symlink removed.
+- New actual browser evidence: WASM63741 exit0 (official1.95, release/j1,
+  2m35s). BinarySHA2566c67442d272195269eb2d92e723c3fc8fd92e237c33c9368e046a92134903256.
+  Chrome real-worker Markdown49/49 +4 malformed checks PASS, downloaded actual
+  results independently pass verify.mjs. Real-worker Base51/51 +5 request checks
+  PASS after explicit missing-graph unavailable fixture decisionf76fa1bf
+  (root88a5ee9f); historical TS unsupported observation preserved. No engine
+  change or WASM rebuild for that fixture correction. Reports/results retained
+  tmp/stage4-browser-document-{report,results}.json and
+  tmp/stage4-browser-base-{report,results}-run2.json; failed run1 retained too.
+- Current native query12117 passes3 tests including all10 accepted queries and
+  resource/missing-witness/YAML checks. Current portable index18432 passes
+  contracts7, generations15, metadata restore2 (tmp/stage4-index-run3.log).
+- Actual production worker/IndexedDB harness does NOT yet pass: browser
+  database zorid-core-vault:document-index-94d2dfce-0645-4e09-9a8e-b7c4dbe6fb9c
+  failed during Rust generation publication with storage_corrupt / could not
+  refresh committed state. Report tmp/stage4-browser-index-actual-run1.json.
+  Browser owner is diagnosing; independent reviewer checks source/control
+  validation. Preserve database/failure evidence; no resets, weakening source
+  validation, or passing corpus results substituted for persistence proof.
+  Bundle tmp/stage4-browser-index-app-d89dbd56 uses exact content-addressed pair.
+  Local fixture servers22178(port8765) and48874(port8766) remain live; root Chrome
+  tab1268039028 holds failing harness. No Rust compiler live at this checkpoint.
+- Actual desktop transport now passes: run33242 exit0 in1.86s with freshly
+  built CLI `target/stage4-verified/debug/zorid` and desktop host; log
+  tmp/stage4-desktop-actual-run3.log. Earlier run2 reached Base then failed a
+  fixture assertion: column IDs use literal dotted property names. Fixture-only
+  4e7e0b60 (rootd89dbd56) uses an explicit nested-member formula, independently
+  confirmed by the Base owner. No evaluator or source-authority change.
+- Browser storage/transport unit20/20 and focused production TS check pass at
+  a81de486 (160 transitive files,118MiB compiler memory), log
+  tmp/stage4-browser-index-focused-ts-run1.log. These are not real WASM evidence.
+  First actual WASM build63741 is LIVE, official Rust1.95/pinnedbindgen0.2.129,
+  offline/j1, candidate frozen d89dbd56; log tmp/stage4-wasm-build-run1.log.
+  Allowlisted corpus/worker assets staged in tmp/stage4-browser-proof-a81de486,
+  generated WASM not yet copied. Preserve process until terminal; native ACK
+  phone compile15167 and install/launch50642 both terminal0, UI checks only.
+  Native retains owned simulator booted per user; full Rust/Xcode load coordinated.
+- Latest user resource policy supersedes blanket check slots: explicit slots
+  only for iOS build/simulator; bounded desktop/frontend checks proceed without
+  per-check approval. Full Rust/Xcode still coordinate actual8GB load. Recorded
+  in AGENTS.md from native relaymsg_e825ad204547. Native ACKmsg_80f4472a25a9
+  owns iOS slot now; root has no live Rust job and defers fullRust/WASM until
+  compile terminal. Bounded Node/CJS work may continue.
+- New actual candidatea81de486 evidence: native enrolled reconciliation57303
+  passes1/1 (remaining four facade cases passed run2); CLI34144 passes3 indexed
+  documents+4 metadata subprocess cases, including moves/deletes/rebuild and
+  raw-source preservation. Logs tmp/stage4-native-documents-run3.log and
+  tmp/stage4-cli-documents-run1.log. Desktop host31416 compiles and clock3/3
+  passes (tmp/stage4-host-clock-run1.log). Real host child fixture still pending.
+- Focused frontend candidate checks pass3/3 maintenance/default probes with
+  strict shared-service/desktop-adapter TS0 diagnostics (owner report). Root
+  CJS protocol4/4 and desktop adapter3/3 pass, logs
+  tmp/stage4-desktop-protocol-run1.log and stage4-desktop-adapter-run1.log.
+  These controlled transports are not substitutes for actual Rust child proof.
+- Workspace backlink hook9f259800 is now committed on the isolated candidate;
+  actual Node/JSDOM run2 passed4/4 in0.77s, covering post-save pane/replaced-ID
+  cancellation, valid navigation after save, and blank-tab pin retirement.
+  Log tmp/stage4-workspace-backlinks-run2.log. This is controlled service/DOM
+  evidence, not actual desktop/browser Rust transport or visual app proof.
+- Source review caught Base defaults diverging across hosts (desktop epoch clock
+  and1000 rows versus browser invocation clock and10000 rows). Shared frontend
+ 06cbfb7f and direct browserd62e2b60 align current-clock/1000-row defaults;
+  explicit values remain explicit. Direct desktop clock correction is owned by
+  stage4_markdown_contracts. Shared lost-publication-ACK helper2cdfd9ba and
+  focused probes are composed; owner probes passed2/2, integrated retry pending.
+- Native acknowledged exclusive slot ownershipmsg_fbdde0270743. It granted only
+  the bounded workspace Node passmsg_a3b456455733; root returned that slot after
+  terminal results in msg_238a603ec463. No root heavy job is live. Native owns
+  editor-only recovery/error visibility plus keyboard accessory verification.
+- Subsequent root checks: Base graph corpus44023 passed2/2 after the fixture
+  correction (tmp/stage4-base-generation-run4.log); changed Store discard6800
+  passed1/1 (tmp/stage4-store-discard-run4.log). Native retry57384 compiled and
+  passed4/5; external reconciliation fixture lacked required enrollment. Fixture
+  correction8619664e is composed but not executed. No authority checks relaxed.
+- Root released the heavy slot to native in msg_653a697e7e30; no root heavy
+  process remains live. Await explicit native release before new heavy checks.
+  Isolated candidatebc374d91 includes reviewed browser discard/pruning fixes
+  through e4b68158 and desktop preservation fixture2545c70b; actual browser/
+  host proof remains pending. Root workspace hook is still isolated/uncommitted.
+- Native owner reports successful physical iPhone build39896, install80894 and
+  launch63110; simulator flow independently read the exact43 saved body bytes
+  after create/rename/back/reopen. This verifies that bounded flow, not complete
+  mobile UX. User now requests editor-content-only embedding, native bottom tabs
+  and a glass keyboard accessory. Native owns those isolated changes plus the
+  exact dedicated CSS import in src/main.ts (ACK msg_a71de90a3ac7).
+- Native released the heavy slot in msg_5233e992aee5; root acquired it in
+  msg_f81617bee619. Root facade check73261 has exited101: Store document index
+  types lack root re-exports required by the native facade. Store owner is fixing
+  only that wiring. No heavy process is live at this checkpoint; root retains
+  the short slot for the focused retry pending native readiness notification.
+- Actual Store run98013 passed19/19 (tmp/stage4-store-index-run3.log).
+  Later published-stage discard no-op correction61b5d6e1 is composed and needs
+  only its changed focused case rerun. Actual engine run39411 stopped at three
+  Base graph fixture mismatches; input/oracle correctionf2893726 and explicit
+  selected-cell runner06e2dc5b are composed, awaiting runtime retry. Earlier
+  passing index proof does not cover the later controlled callback changes.
+- Root isolated candidate f21facb4 includes desktop RPC/shared service and normal
+  platform capability wiring, browser durable-index harness, plus new workspace
+  backlink testsced0ec23. Root workspace hook remains uncommitted in that isolated
+  worktree pending focused execution. Stage4 runtime source is not on main.
+  Actual WASM parity, production browser harness, real host/CJS transport and
+  normal app backlink integration remain required; source review is not proof.
+- Disk recovery removed only old generated root target/debug deps/build/
+  .fingerprint (~148MiB). Current Stage4 cache, shared Rust toolchain, binaries
+  and logs were preserved. Native separately removed its own761MiB cache.
+
+Historical preceding updates:
+- Root candidate checkpoint54d2123d in stage4-integrated-engine is clean and
+  includes the browser index module wiring. Next after native release: actual
+  Store17 retry for906956ec; recheck changed controlled-index/Base APIs; native
+  facade five cases and CLI metadata/documents subprocess cases; then build and
+  execute actual WASM corpora and durable browser harness. Do not repeat unchanged
+  component suites unless new changes/failures justify them. Desktop RPC/shared
+  frontend source is still being authored; main runtime integration remains
+  pending, not implied by source approval or candidate composition.
+- Current resource priority: user plugged in a physical iPhone and explicitly
+  wants to try the app now. Root released all heavy work in msg_486119a46d6d /
+  msg_6b654f918bbd. Native owns TypeScript/webpack/Xcode/device-install slot;
+  confirmed live8510 in tmp/mobile-simulator-app-build.log. Full tsc54737 and
+  webpack/capcopy passed; no app/device UX proof yet. Root must not launch new
+  builds until explicit release. Existing offline development signing is ready
+  per native owner; separate app.zorid.notes.dev preserves other app data.
+- New actual Stage4 proof: index64419 exited0 at e8615ecb, contracts7/7,
+  generations14/14 and metadata restore2/2 including all49 canonical cases and
+  relationship coverage pagination (tmp/stage4-index-run2.log). First run66659
+  failed only test compilation; typed JSON assignment fixeda9936a34. Store
+  first run63038 also failed only test compilation, corrected14755018. Actual
+  run81126 then passed16/17 checks (tmp/stage4-store-index-run2.log); remaining
+  draft-preservation test failed before index setup because its checkpoint
+  revision was not a canonical UUID. Fixture-only906956ec preserves the opaque
+  draft payload and fixes that ID; actual retry remains pending phone priority.
+- Isolated composition now includes reviewed native facade242e1a74/8b0afefc,
+  CLI indexed commands ab8bbf0e/2fd6ae71, Base graph factory throughafc5c7fb,
+  index controlled graph/resolver4c6c405e/89529d21 and browser durable index
+  b48dab11/ad686a3d/2d9aceb1. New controlled APIs/Base factory/browser source
+  require actual compilation and native/WASM parity; earlier engine passes do
+  not verify these later deltas. Root owns WASM module/manifest/lock wiring.
+- Desktop transport ownership granted to stage4_markdown_contracts: new host
+  documents.rs and minimal extracted lib.rs dispatch, new CJS protocol and
+  narrow admitted service routing. Mobile ACK msg_de4f40608f1f preserves host
+  main/FFI/cfg/admission boundaries. Typed semantic JSON uses bounded raw body,
+  avoiding serde_json::Value sorting recursive YAML maps. Host extraction
+  edcbc8b/3fae504/7932b4b/736cc823 is separately queued mobile batch, not yet
+  integrated into root/main. Shared frontend capability/adapters assigned to
+  stage4_contract_review; normal browser/desktop UI semantic consumers remain
+  incomplete. Workspace/platform activation seams frozen aff0665c by mobile;
+  new edits still require named coordination.
+- Latest composition is fa4d4aaf in stage4-integrated-engine: portable index
+  through6867ab9b/7c5876b6, CLI metadata dcdcff38, native Store through40109019
+  plus reviewed corrupt-key/provenance/decode-bound fixes a0faa65f/7e4efc93/
+  ca97529b. Lock7eddb413 adds unicode-normalization0.1.25 and tinyvec1.13.3
+  without upgrading existing dependencies. Store/index/CLI runtime checks await
+  release of mobile's confirmed live host opt1 handle22634; do not overlap it.
+- Eight useful workers now include stage4_browser_index_host in isolated
+  stage4-browser-index-host (new browser-document-index.ts/tests and WASM
+  document_index.rs, narrowly owned factory/worker/runtime dispatch seams) and
+  stage4_native_consumer in isolated stage4-native-consumer (new native
+  document_api.rs/document_index.rs, minimal module/reexports/dependencies).
+  Native owner acknowledged that wiring in msg_30db1a73c806; mobile retains
+  iOS cfg/admission/filesystem/embedded-host ownership. A separate native
+  semantic error wrapper preserves existing exhaustive Error consumers.
+  Both adapters must use shared Rust engines and coherent retained generations;
+  no JavaScript parser, duplicate resolver or current-body-as-old-snapshot path.
+- Latest Stage4 verification supersedes the first-run failures below. Isolated
+  candidate0ce5cd40 in stage4-integrated-engine includes metadata fixes5590df2,
+  dac1f0c and59863af plus Base accepted fixture projection12e05248. Official
+  Rust1.95 native run66340 passed ordered values5/5, bounds8/8, all49 shared
+  Markdown cases and public YAML5/5 (tmp/stage4-parser-run3.log). Its final
+  doctest invocation used the wrong ambient Rust1.99 rustdoc; scoped rerun70152
+  with explicit matching RUSTDOC exited0. No metadata runtime failure remains
+  in that candidate. Base run50383 exited0:30 accepted expressions,10 accepted
+  queries, all focused budget/numeric/calendar/cancellation/source tests and
+  ordering unit pass (tmp/stage4-base-run2.log). Actual WASM parity, durable
+  indexes and CLI/web/desktop semantic consumers remain unverified.
+- Root released the exclusive heavy slot to native mobile in durable reply
+  msg_77abcb590bc5 after those terminal checks. Native owns the queued matching
+  opt-level1 host regression, ABI/staticlib and web/Xcode/simulator sequence;
+  report live handles and release before root Store/WASM verification. Mobile
+  also owns the exact optional PlatformVault initialPath/noteOpened and existing
+  workspace successful-activation hook, with stale-vault fences and nonfatal
+  notification failures. Stage4 must not edit those shared seams until freeze.
+- Useful parallel scopes are assigned to six workers: Base implementation,
+  portable index implementation, WASM wrappers/harness, independent portable
+  index review, independent native Store review and Store snapshot accessors.
+  CLI metadata dcdcff38 is source-complete, not runtime-verified. Native cache
+  source947e08ff..40109019 plus a0faa65f is under independent review; targeted
+  tests are written but not executed. Validated shared relationship snapshots
+  must derive from actual Rust generations; detached Base JSON rejects supplied
+  graphs. A Rust-owned generation path is still required for real WASM graph
+  parity; graph-less corpus wrappers do not complete that requirement.
+- First Stage4 execution (2026-10-17 19:26Z onward): root owns the exclusive
+  heavy slot after native release71034 exit101. Metadata compiled successfully
+  on official Rust1.95 in17.72s. Run52242: ordered values5/5 and bounds6/7 pass;
+  upstream scanner depth exhaustion was misclassified Syntax instead of Resource.
+  Source067a2e8 corrects this without changing the depth oracle. Separate corpus
+  run caught an omitted wiki embed. Updated actual run31770: values5/5, bounds7/7
+  pass,44/46 corpus cases match; remaining cases are upstream greedy wiki-image
+  parsing and collapsed-reference occurrence span excluding trailing[]. Root log
+  tmp/stage4-parser-run2.log; metadata owner is preparing narrow parser-backed
+  repairs, not regenerating expected results. Generic shared YAML mapping tests
+  were not reached in that failing command. No Rust semantic code is on main yet.
+- Current isolated candidate is0d2d9a6 in stage4-integrated-engine: includes
+  metadata through067a2e8, shared YAML3c915e2, attributed noticesfa7ba7c, browser
+  wrapper/harnessd42ab9d+c9a42aa, root WASM wiring50bd72e and Base source through
+  e1f560c with locked dependencies. Actual Base proof55971 is the sole heavy
+  handle; log tmp/stage4-base-run1.log. Root retains slot for short first proofs,
+  will report release before another native job. No source migration/native app
+  rollout/parity claim follows from source composition or baseline checks.
+- Native progress: iOS simulator staticlib41020 built successfully in1m15s,
+  compilation/link only. Affected host71034 terminal101:8/8 lib checks and13/15
+  subprocess checks pass; failures are stale v1/no-transport fixture and a
+  >16MiB stream watchdog under unoptimized test profile. Bounded actual startup
+  probe independently confirms v1 credentials_invalid versus v2/grpc success.
+  Mobile owns fixture-only tests/process.rs correction736cc82 and later matching
+  opt-level1 focused rerun; production timeout/protocol/fallback stay unchanged.
+  These failures are not accepted as verified extraction/runtime readiness.
+- Native index persistence owner stage4_native_index uses isolated Orca
+  stage4-native-index. Owns store/document_index.rs, its tests and minimal store
+  lib/Cargo.toml wiring only; native/host/browser/CLI seams still separately owned.
+  Approved exact registered optional derived SQL objects: source11 canonical
+  objects/SQL remain mandatory; optional known SQL must match exactly if present,
+  missing cache objects may rebuild explicitly, arbitrary prefixes/unknown objects
+  remain rejected. Cache data errors are index RebuildRequired; no source repair,
+  source/drop migration or parse inside write transaction. Portable index owner
+  supplies validated persistence DTOs before host use. Source/publication CAS and
+  retained text projection remain to implement/verify.
+- Stage4 source checkpoint (supersedes earlier preparation-only paths below):
+  main74b3f2f contains reviewed Markdown/index/Base contracts and shared corpus.
+  Root baseline verification:42 Markdown source/range checks +42 recorded TS
+  observations and47 Base TS cases pass; subsequent2963ae8 grows Markdown to44
+  cases and fixes recursive map order plus semantic link destinations. This is
+  specification/baseline evidence, not Rust/WASM execution. Public metadata API:
+  zorid-document::{MetadataRequest,DocumentMetadata,PropertyValue,SourceRange,Link},
+  parse_markdown(&MetadataRequest). PropertyValue retains recursively ordered
+  ordinary JSON maps without enabling global serde_json preserve_order; Link
+  keeps raw provenance plus parser-decoded semantic destination for resolution.
+- Metadata source owner restored externally removed stage4-markdown-contracts
+  into `/Users/ctk/orca/workspaces/Zorid/stage4-markdown-engine`, branch matching
+  that name, based on9849ad1. No committed work was lost. Crate source12017c6,
+  value05add61 and focused limits75add5c are uncompiled; root composed them in
+  `/Users/ctk/orca/workspaces/Zorid/stage4-integrated-engine`, branch matching,
+  candidate3c4d8c3 (root's earlier stage4-core-integration also disappeared).
+  Its Cargo.lock adds9 reviewed packages only, no existing package upgrades.
+  Exact parser pins: pulldown-cmark0.13.4/defaults off, saphyr-parser0.2.2/defaults
+  off, regex1.13.1. Exact saphyr archive hash matches selected registry checksum.
+  Independent reviewer owns value.rs only; metadata worker owns remaining crate.
+- Index sourcec5efb66 and subsequent epoch/generation/query work remain isolated
+  in stage4-index-contract. Snapshot identities include a fresh host-random epoch
+  to prevent token ABA after disposable-cache rebuild. Pump1MiB is a soft batch
+  target, allowing one document up to16MiB; do not silently exclude documents
+  above1MiB. Initial derived-facts64MiB guard must fail explicitly/retain prior
+  coherent generation without advancing coverage. Native/IDB persistence and
+  consumer migration are still required, not established by portable plans.
+- Base source3bb5e7f and review correctionsa4fda50 remain isolated; no compile or
+  runtime reuse result yet. Pinned MDBASE evaluator is extracted with provenance,
+  explicit clock/timezone and shared ordered PropertyValue input. Review found
+  and owner is correcting swallowed errors, nonfinite values, date formatting/
+  arithmetic and builtin allocation/work guards before its first proof. Full
+  query reducer/consumer integration remain. All workers remain source-only
+  until a serialized build grant; first metadata proof is queued next.
+- Native-mobile recovered after its original checkout/toolchain disappeared:
+  `/Users/ctk/orca/workspaces/Zorid/native-mobile-recovery`, matching branch;
+  source backed up through1c0aa7f, not merge_ready. Root has issued no worktree
+  removal/clean/reset commands. Mobile scope now includes the exact native
+  selection branch in platform/index.ts and revised workspace.ts lifecycle hook:
+  background flushes without destruction; switch flushes then acknowledges,
+  restores editing on failure, and native host owns final closure. Earlier
+  destroy-before-ACK proposal is rejected. No Stage4 worker edits these seams
+  concurrently. Direct user approval here resolves the automatic-review blocker
+  on mobile signing/TestFlight/CI: NEW mobile-ios workflow/mobile scripts/iOS
+  project settings authorized via msg_0ed8b92052de; outcomes stay mobile-owned
+  and outside Stage4 acceptance. No credentials belong in records/source/logs.
+- Current heavy slot: native mobile's bounded staticlib simulator build and
+  affected host checks only, acknowledged msg_f857cdf7e5ca/msg_98aa3916f1ee at
+  19:20Z. No root compile is running. Mobile must report handle/result/release
+  before Stage4 first parser proof; webpack/Xcode/simulator needs the next grant.
+  Shared official Rust1.95 restored at canonical ignored
+  tmp/shared-rust-toolchain/toolchains/stable-aarch64-apple-darwin, explicit
+  bin/cargo plus RUSTC needed. Official wasm-bindgen0.2.129 archive digest verified
+  and binary --version passes at tmp/stage4-tools/wasm-bindgen; approved portable
+  dependencies prefetched67204 exit0 without building. Do not assume a recorded
+  toolchain/worktree/process path still exists: revalidate before reuse.
 - Stage4 is now explicitly authorized and active. First-goal acceptance is
   committed as f69dc90; new built-in goal covers all shared document semantics
   and actual native/WASM/CLI/web/desktop consumer parity. Main integration stays

@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 zorid-core = { path = "../zorid-core" }
+zorid-document = { path = "../zorid-document" }
 zorid-native = { path = "../zorid-native" }
 zorid-native-sync = { path = "../zorid-native-sync" }
 zorid-store = { path = "../zorid-store" }
