@@ -136,3 +136,19 @@ blocked by missing yaml resolution after the prior dependency symlink cleanup;
 restoring the existing-dependency symlink made the focused test pass. No install
 ran. Renderer build and actual New note interaction are still pending, and the
 user's live editor/draft have not been closed or changed by this work.
+
+
+New-note combined verification: native owner built CLI+host candidate `292cd27`
+(including host `9fe9571`) in session83593, exit0. Desktop candidate `503f479`
+then passed full TypeScript plus development webpack sequentially in session23419,
+exit0 (webpack1698ms). Focused creation regressions pass4/4 and Vault explicit
+create dispatch passes1/1. Source review found the sanitized native rejection
+codes `invalid_request` and `not_found`; `503f479` classifies these deterministic
+errors as retained terminal rejections so they cannot poison restart recovery.
+Corruption/unknown/storage errors remain pending. Reviewer confirmed the fix.
+
+Matching host is `core-native-cli-combined/target-native-family-create/debug/`
+`zorid-desktop-host`; use the fresh schema8 fixture required by its namespace
+batch. The user's live old editor and current document were not closed or
+replaced. Actual New note UI/sync evidence remains pending. Temporary dependency
+symlink was removed after compilation; no package install ran.
