@@ -167,9 +167,16 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             return Err(StoreError::Corrupt("wrong application ID".into()));
         }
         let expected = schema_objects();
-        if expected
+        // SQLite trigger names occupy a separate namespace. A duplicate name
+        // must not hide an extra trigger behind a registered table's SQL.
+        if names
             .iter()
-            .any(|(name, _)| !names.iter().any(|actual| actual.as_str() == *name))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != names.len()
+            || expected
+                .iter()
+                .any(|(name, _)| !names.iter().any(|actual| actual.as_str() == *name))
             || names.iter().any(|name| {
                 !expected
                     .iter()

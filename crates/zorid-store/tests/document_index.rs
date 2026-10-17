@@ -541,3 +541,18 @@ fn one_sixteen_mib_text_row_can_advance_a_soft_one_mib_pump() {
     );
     assert!(page.complete);
 }
+
+#[test]
+fn duplicate_registered_name_cannot_hide_a_trigger_on_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store.initialize_document_index().unwrap();
+    drop(store);
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER document_index_rows AFTER UPDATE ON entries BEGIN DELETE FROM outbox; END",
+    )
+    .unwrap();
+    assert!(Store::open(&path).is_err());
+}
