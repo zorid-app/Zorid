@@ -29,7 +29,7 @@ work and future hotkey-default changes remain separate. The PDF outline menu
 change is inherited from the reconciled main checkpoint below, not part of the
 authored Canvas/Table feature slice.
 
-## Main reconciliation and pending gate
+## Main reconciliation and completed gate
 
 The isolated candidate merged committed main `c724601` without conflicts as
 `03e3c1bb5206ef902fc929ec3659470e9b2b4818`. Main adds the independently reviewed
@@ -48,16 +48,34 @@ After reconciliation, six selected PDF outline/menu and retained Canvas owner
 checks passed serially (no failures; 1.356 seconds). Independent reconciliation
 review confirmed the unchanged Canvas/Bases source and passed five selected
 owner/resize/menu retirement checks. These bounded checks do not replace the
-pending full integration gate.
+full integration gate recorded below.
 
-Full validation is deliberately pending the explicitly acknowledged cross-session
-heavy-work slot on the 8 GB host. Run the following serially in this candidate:
+The core coordinator explicitly granted the cross-session heavy-work slot
+(`msg_961788743b51`); root assigned it to this integration lane. The following
+commands then ran serially against clean source/documentation checkpoint
+`177702571a4552b68ffa1e0fdd3a3d3be7fbe284`:
 
 1. `node --test --test-concurrency=2 tests/*.test.*`
 2. `node ../../node_modules/typescript/bin/tsc --noEmit --project ./tsconfig.json`
 3. `node ../../node_modules/webpack-cli/bin/cli.js --config ./webpack.config.cjs --mode production`
 
-Record terminal results and the exact tested source commit before requesting
-canonical-main promotion. Root remains the sole main integrator and native
-verification owner; this reconciliation does not establish native/reference
-geometry or clipboard parity.
+All commands reached terminal exit 0:
+
+- Full suite: 1,873 passed, zero failures, cancellations or skips; 55.620 seconds.
+- Typecheck: no diagnostics; 1.67 seconds elapsed.
+- Production webpack: compiled in 5.730 seconds (6.23 seconds process elapsed),
+  with three asset/entrypoint/runtime-chunk performance warnings.
+
+The full-suite, compiler and build sessions were respectively 20754, 52454 and
+2177. Local evidence logs are `/private/tmp/zorid-canvas-table-fullsuite.txt`,
+`/private/tmp/zorid-canvas-table-tsc.txt` and
+`/private/tmp/zorid-canvas-table-build.txt`. Generated renderer assets are in this
+worktree's ignored `dist/` directory. No source changes followed this gate; the
+final checkpoint update is documentation only. The reconciled candidate and
+preceding documentation delta also passed an independent credential/private-path
+scan.
+
+Root remains the sole main integrator and native verification owner. No native,
+browser, packaging or core task ran in this lane; passing these checks does not
+establish native/reference geometry or clipboard parity. Root coordinates release
+of the cross-session heavy-work slot after receiving this completed checkpoint.
