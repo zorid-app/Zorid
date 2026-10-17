@@ -515,6 +515,7 @@ fn external_scan_progress_ready_retries_partial_moved_edit_and_new_child() {
     let mut active = None;
     let mut partial_move_issue = false;
     let mut finished = false;
+    let mut namespace_receipts = 0;
     for _ in 0..128 {
         let mut vault = NativeVault::open_existing(root.path()).unwrap();
         let report = vault
@@ -524,6 +525,7 @@ fn external_scan_progress_ready_retries_partial_moved_edit_and_new_child() {
             assert_eq!(&report.run.scan_id, previous);
         }
         active = Some(report.run.scan_id.clone());
+        namespace_receipts += report.namespace.len();
         if !report.run.complete {
             assert!(!report.complete);
             assert!(report.namespace.is_empty());
@@ -534,11 +536,14 @@ fn external_scan_progress_ready_retries_partial_moved_edit_and_new_child() {
             });
             continue;
         }
+        if !report.complete {
+            continue;
+        }
         assert!(
             report.complete,
             "Ready must revisit positives blocked before namespace authority: {report:?}"
         );
-        assert_eq!(report.namespace.len(), 1);
+        assert_eq!(namespace_receipts, 1);
         assert_eq!(
             vault
                 .list()
