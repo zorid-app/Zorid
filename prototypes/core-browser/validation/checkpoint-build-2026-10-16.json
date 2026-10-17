@@ -1,0 +1,75 @@
+{
+  "recorded_at_utc": "2026-10-17 03:01:59 UTC",
+  "local_date": "2026-10-16",
+  "kind": "focused-unit-and-build-verification",
+  "node": "v26.10.0",
+  "application_source": {
+    "worktree": "/Users/ctk/orca/workspaces/Zorid/core-web-app-integration",
+    "commit": "5e2d0d5c07c0516e8c3444935dfdcd7b5552f26b",
+    "unchanged_after_checks": true,
+    "status": "Only the coordinator-provided node_modules link was untracked. No source differences."
+  },
+  "fixture_source": {
+    "worktree": "/Users/ctk/Projects/Zorid/.worktrees/core-sync-foundation",
+    "commit": "87f9ef6468b219c69cc305c5eedc9137b323c1bf",
+    "unchanged_after_checks": true,
+    "status": "Clean before and after generated-artifact builds."
+  },
+  "checks": [
+    {
+      "name": "Focused Node tests",
+      "source": "application_source",
+      "command": "node --test --test-concurrency=1 tests/browser-core-adapter.test.ts tests/browser-core-runtime.test.ts tests/browser-core-fixture.test.ts tests/browser-durable-writes.test.ts tests/checkpoint-input.test.ts tests/core-wasm-assets-plugin.test.cjs",
+      "session": 20405,
+      "exit_code": 0,
+      "passed": 33,
+      "failed": 0,
+      "duration_ms": 1072.687791,
+      "log": "/private/tmp/zorid-browser-focused-5e2d0d5.log",
+      "log_sha256": "1b05aa52d589de54169e6380d00fe675921e42c9e3022da7a7ef1ee11d8092d1"
+    },
+    {
+      "name": "Full application TypeScript check",
+      "source": "application_source",
+      "command": "node /Users/ctk/Projects/Zorid/node_modules/typescript/bin/tsc --noEmit",
+      "session": 95470,
+      "exit_code": 0,
+      "diagnostics": [],
+      "log": "/private/tmp/zorid-browser-tsc-5e2d0d5.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "Current Rust/WASM release and bindgen package",
+      "source": "fixture_source",
+      "command": "RUSTUP_HOME=/Users/ctk/Projects/Zorid/.worktrees/core-sync-foundation/.tools/rustup RUSTUP_TOOLCHAIN=stable RUSTC=/Users/ctk/.cargo/bin/rustc CARGO=/Users/ctk/.cargo/bin/cargo WASM_BINDGEN=/Users/ctk/Projects/Zorid/.worktrees/core-sync-foundation/.tools/wasm-bindgen-0.2.129-aarch64-apple-darwin/wasm-bindgen prototypes/core-wasm/build.sh",
+      "session": 36019,
+      "exit_code": 0,
+      "cargo_reported_seconds": 5.29,
+      "generated_named_exports_confirmed": ["checkIdempotency", "planMutation", "validateSnapshot"],
+      "log": "/private/tmp/zorid-browser-wasm-87f9ef6.log",
+      "log_sha256": "da057ddcf316312bfd1de5c9d612436d64c3ec6ae90af25111de6d65ab105655"
+    },
+    {
+      "name": "Browser fixture TypeScript emission",
+      "source": "fixture_source",
+      "command": "node /Users/ctk/Projects/Zorid/node_modules/typescript/bin/tsc -p prototypes/core-vault-browser/tsconfig.json",
+      "exit_code": 0,
+      "diagnostics": [],
+      "log": "/private/tmp/zorid-browser-fixture-tsc-87f9ef6.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "artifact_sha256": {
+    "prototypes/core-wasm/pkg/zorid_wasm.js": "888c4dcb5005ae1d7b5c3f7b0ce934ecd067d8212e2273b93ee460068110437c",
+    "prototypes/core-wasm/pkg/zorid_wasm_bg.wasm": "b34f2999fce980450c91c2e4a7bb492bd3440cb5bc04aee35814eede51b08836",
+    "prototypes/core-vault-browser/generated/browser-vault.js": "47ae865ceaf6230f397692c8cddbc5bdfc9c4892d713db7967dfd80e420b89a9",
+    "prototypes/core-vault-browser/generated/browser-checkpoints.js": "d45c676959cb995322fa9f8f2fb5156d15b517618a299bc57a3a78763f295a28",
+    "prototypes/core-vault-browser/generated/checkpoint-input.js": "77e2ad9d081883177b67d7dc7a9a8985c43ea181851ea364be66fcf7f2f05f83"
+  },
+  "limits": [
+    "The Node suite uses facade/runtime fakes; it does not establish durable editor checkpoint handoff or actual IndexedDB behavior.",
+    "No browser, application server, native app or full JavaScript suite was launched in this verification pass.",
+    "The 27-group current browser fixture, actual worker/tab recovery, real application consumer integration, native/CLI restart and mobile behavior remain separate gates."
+  ],
+  "cleanup": "All started command sessions completed. No browser tabs/server/apps were opened. Heavy slot explicitly released to the coordinator."
+}
