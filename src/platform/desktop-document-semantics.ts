@@ -1,4 +1,4 @@
-import {createDocumentService,documentSnapshot,documentSource,DocumentSemanticsError} from '../core/document-semantics.ts';
+import {createDocumentService,documentSnapshot,documentSource,DocumentSemanticsError,documentErrorCode} from '../core/document-semantics.ts';
 import type {DocumentService,DocumentSnapshotId,DocumentTransport} from '../core/document-semantics.ts';
 
 export interface DesktopDocumentRequest {schemaVersion:1;command:Readonly<Record<string,unknown>>&{op:string}}
@@ -38,7 +38,7 @@ export function desktopDocumentService(invoke:(request:DesktopDocumentRequest)=>
       if(opening)return opening.then(()=>transport.open());
       if(!pendingPin){if(pinSequence===18446744073709551615n)return Promise.reject(new DocumentSemanticsError('pin_sequence_exhausted'));pendingPin=String(++pinSequence);}
       const pinId=pendingPin;
-      opening=command('open',{pinId}).then(value=>{pendingPin=undefined;return value;}).finally(()=>{opening=undefined;});return opening;
+      opening=command('open',{pinId}).then(value=>{pendingPin=undefined;return value;},error=>{if(documentErrorCode(error)==='snapshot_expired')pendingPin=undefined;throw error;}).finally(()=>{opening=undefined;});return opening;
     },
     async closePin(pinId){await command('close',{pinId});},
     metadata:input=>command('metadata',input),

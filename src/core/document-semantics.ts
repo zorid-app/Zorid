@@ -167,15 +167,15 @@ export async function catchUpDocumentIndex(service:DocumentService,options:Catch
       for(;;){
         try{
           let status=await step(()=>service.status());
-          if(status.current){owned.rebuildAttempted=false;return status;}
+          if(status.current){if(owned.stage){active();await service.discard(owned.stage.stageId);owned.stage=undefined;active();}owned.rebuildAttempted=false;return status;}
           if(status.rebuildRequired){
             if(owned.rebuildAttempted)throw new DocumentSemanticsError('rebuild_required');
-            owned.rebuildAttempted=true;progress({phase:'rebuild'});await step(()=>service.rebuild());owned.stage=undefined;
+            owned.rebuildAttempted=true;progress({phase:'rebuild'});active();await service.rebuild();owned.stage=undefined;active();
             status=await step(()=>service.status());
             if(status.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');
           }
           if(!status.snapshot&&!owned.stage){progress({phase:'initialize'});await step(()=>service.initialize());}
-          if(!owned.stage)owned.stage=await step(()=>service.begin());
+          if(!owned.stage){active();owned.stage=await service.begin();active();}
           while(used<pumps){
             if(!owned.stage.progress?.ready){
               // Assign the returned checkpoint before checking caller liveness;
@@ -199,7 +199,7 @@ export async function catchUpDocumentIndex(service:DocumentService,options:Catch
           // Corruption reported by a bounded operation is handled once by the
           // same visible policy as a status report; source motion never resets.
           if(code&&rebuildCodes.has(code)&&!owned.rebuildAttempted){
-            owned.rebuildAttempted=true;progress({phase:'rebuild'});await step(()=>service.rebuild());owned.stage=undefined;continue;
+            owned.rebuildAttempted=true;progress({phase:'rebuild'});active();await service.rebuild();owned.stage=undefined;active();continue;
           }
           throw error;
         }
