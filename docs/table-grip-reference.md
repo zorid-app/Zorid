@@ -40,3 +40,14 @@ commit launched successfully with Electron 44.8.0 and a synthetic vault. Native
 accessibility confirmed the table handles and cell editor, but screenshot
 capture returned a mostly white/clipped image: the six-dot appearance was not
 visually verified. The agent-owned packaged app was closed after the pass.
+
+A subsequent browser visual pass used the same production table implementation
+in the built tab/Kanban candidate (`7b1dc8d`, whose later candidate changes were
+documentation only). Chrome opened the locally served renderer with an empty,
+synthetic browser vault. Creating a two-column table, selecting its body-row
+handle, then its first-column handle showed compact vertical and horizontal
+six-dot icons respectively. The corresponding whole row/column was highlighted.
+The pointer was moved away through the Files button so it did not obscure the
+icons. Screenshots were readable in this browser pass. The tab and local server
+were closed afterward. This verifies the renderer appearance in that browser,
+not exact Electron pixels, touch targets, drag reordering or every theme/zoom.
