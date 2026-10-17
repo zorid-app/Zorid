@@ -77,6 +77,19 @@ pub(super) fn execute(
             json!({"sync":sync.once(vault, SyncLimits { max_push, max_pages })
                 .map_err(|error| sync_fault(error, true))?})
         }
+        Command::CreateText { operation_id, id, path, .. } => {
+            std::str::from_utf8(&body).map_err(|_| fault("invalid_text"))?;
+            let command = FamilyCommand {
+                version: 1,
+                request: MutationRequest { operation_id, mutation: Mutation::Create {
+                    id, path, kind: EntryKind::File, content: Some(body),
+                }},
+                create_mode: Some(CreateMode::Text),
+            };
+            command.validate().map_err(|_| fault("invalid_family_command"))?;
+            sync.check_binding(vault).map_err(|error| sync_fault(error, false))?;
+            apply_reply(vault.family_apply(&command.request, command.create_mode).map_err(native_fault)?)
+        }
         Command::FixtureFamilyApply { family } => {
             let command = family.decode(body)?;
             // Validate the already-enrolled authority against this startup-only
