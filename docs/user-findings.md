@@ -289,6 +289,15 @@ confirmed for Zorid app actions, not shell commands; owner notified.
 
 ### 2026-10-17 — Native follow-up ownership and phone7
 
+Native document tabs source checkpoint23:51UTC: worker2f48a270, isolated
+tingkai-c/mobile-document-tabs, ordered5824bbfe(model)/2d5e934e(overview), only two
+new Swift files. Root reviewed complete drafted files and final bounded-metadata/
+adaptive-appearance changes; no source blocker identified. Document tabs use local
+vault UUID plus opaque store/file identity, acknowledged save/close transitions,
+fresh Home on last close, explicit64-tab/128KiB caps and bounded decorative cache.
+No compiler/tests/project registration/editor wiring or runtime acceptance yet;
+not in build9. Existing lifecycle/project seams require named proposal first.
+
 Simulator8 owner evidence23:41UTC (msg814cedb8c784): full native Settings push,
 navigation configuration and back pass; Rust literal search returns two enabled
 hits at lines7/9 and opens the matched note, with return/clear working. Notes was
