@@ -1,6 +1,40 @@
 import { MetadataCache } from './metadata.ts';
 import { isMarkdown, normalizePath, parentPath } from './types.ts';
 import type { VaultAdapter, VaultChange, VaultEntry, VaultEvent } from './types.ts';
+import type { DurableWrites, DurableWriteIntent, DurableWriteRead, DurableWriteRef } from './durable-writes.ts';
+
+export type DurableCommitReceipt = Extract<DurableWriteIntent, { state: 'committed' }>['receipt'];
+export type DurableWriteReconciliation =
+  | { readonly status: 'current' | 'advanced'; readonly current: DurableWriteRead }
+  | { readonly status: 'missing'; readonly current: null };
+interface DurableBinding {
+  adapter: VaultAdapter;
+  capability: DurableWrites;
+  checkpoints: DurableWrites['checkpoints'];
+  vaultId: string;
+  clientId: string;
+}
+function durableFailure(code: string, message: string): Error & { code: string; source: 'host' } {
+  return Object.assign(new Error(message), { code, source: 'host' as const });
+}
+function copyRef(ref: DurableWriteRef): DurableWriteRef {
+  return Object.freeze({ vaultId: ref.vaultId, clientId: ref.clientId, token: ref.token,
+    operationId: ref.operationId, entryId: ref.entryId });
+}
+function sameRef(left: DurableWriteRef, right: DurableWriteRef): boolean {
+  return left.vaultId === right.vaultId && left.clientId === right.clientId && left.token === right.token
+    && left.operationId === right.operationId && left.entryId === right.entryId;
+}
+function validReceipt(receipt: DurableCommitReceipt): boolean {
+  return typeof receipt.operationId === 'string' && receipt.operationId.length > 0
+    && typeof receipt.entryId === 'string' && receipt.entryId.length > 0
+    && typeof receipt.revision === 'string' && receipt.revision.length > 0
+    && typeof receipt.sequence === 'string' && /^(0|[1-9][0-9]*)$/.test(receipt.sequence);
+}
+function sameReceipt(left: DurableCommitReceipt, right: DurableCommitReceipt): boolean {
+  return left.operationId === right.operationId && left.sequence === right.sequence
+    && left.entryId === right.entryId && left.revision === right.revision;
+}
 
 function relativePath(source: string, target: string): string {
   const from = parentPath(source).split('/').filter(Boolean), to = target.split('/');
@@ -76,6 +110,141 @@ export class Vault {
 
   initialize(): Promise<void> { return this.enqueue(async () => { await this.refresh(); this.emit('ready', { path: '' }); }); }
   load(): Promise<void> { return this.initialize(); }
+
+  private captureDurableBinding(): DurableBinding {
+    const adapter = this.adapter, capability = adapter.durableWrites;
+    const checkpoints = capability?.checkpoints;
+    const scope = checkpoints?.scope;
+    if (!capability || !checkpoints || !scope?.vaultId || !scope.clientId) {
+      throw durableFailure('durable_writes_unavailable', 'This vault has no scoped durable text-save capability');
+    }
+    return { adapter, capability, checkpoints, vaultId: scope.vaultId, clientId: scope.clientId };
+  }
+
+  private validateDurableBinding(binding: DurableBinding, ref?: DurableWriteRef): void {
+    const scope = binding.capability.checkpoints?.scope;
+    if (this.adapter !== binding.adapter || this.adapter.durableWrites !== binding.capability
+        || binding.capability.checkpoints !== binding.checkpoints
+        || scope?.vaultId !== binding.vaultId || scope.clientId !== binding.clientId
+        || ref && (ref.vaultId !== binding.vaultId || ref.clientId !== binding.clientId)) {
+      throw durableFailure('intent_identity_mismatch', 'Durable operation belongs to a different adapter or local storage authority');
+    }
+  }
+
+  /** Copy one provider observation, including stats; never assemble read + stat. */
+  private durableObservation(read: DurableWriteRead, expected: { path?: string; entryId?: string }): DurableWriteRead {
+    if (!read || typeof read.content !== 'string' || typeof read.path !== 'string'
+        || normalizePath(read.path) !== read.path || typeof read.entryId !== 'string' || !read.entryId
+        || typeof read.revision !== 'string' || !read.revision
+        || expected.path !== undefined && read.path !== expected.path
+        || expected.entryId !== undefined && read.entryId !== expected.entryId
+        || !read.stat || ![read.stat.ctime, read.stat.mtime, read.stat.size].every(value => Number.isSafeInteger(value) && value >= 0)) {
+      throw durableFailure('durable_read_invalid', 'Durable read did not return the requested coherent file observation');
+    }
+    return Object.freeze({ path: read.path, content: read.content, entryId: read.entryId, revision: read.revision,
+      stat: Object.freeze({ ctime: read.stat.ctime, mtime: read.stat.mtime, size: read.stat.size }) });
+  }
+
+  readDurableText(rawPath: string, validate?: () => void): Promise<DurableWriteRead> {
+    const binding = this.captureDurableBinding(), path = normalizePath(rawPath);
+    return this.enqueue(async () => {
+      this.validateDurableBinding(binding); validate?.(); this.validateDurableBinding(binding);
+      const read = await binding.capability.readText(path);
+      this.validateDurableBinding(binding);
+      return this.durableObservation(read, { path });
+    });
+  }
+
+  readDurableTextById(entryId: string): Promise<DurableWriteRead | null> {
+    const binding = this.captureDurableBinding();
+    return this.enqueue(async () => {
+      this.validateDurableBinding(binding);
+      const read = await binding.capability.readTextById(entryId);
+      this.validateDurableBinding(binding);
+      return read === null ? null : this.durableObservation(read, { entryId });
+    });
+  }
+
+  /** Admission may authorize one exact write. Publication is a separate read-only step. */
+  commitDurableWrite(input: DurableWriteRef, options: { validate?: () => void } = {}): Promise<DurableWriteIntent> {
+    const binding = this.captureDurableBinding(), ref = copyRef(input), validate = options.validate;
+    return this.enqueue(async () => {
+      this.validateDurableBinding(binding, ref);
+      validate?.();
+      this.validateDurableBinding(binding, ref);
+      let outcome: DurableWriteIntent;
+      try { outcome = await binding.capability.commit(ref); }
+      catch (cause) {
+        throw Object.assign(durableFailure('outcome_unknown', 'Commit did not return a validated terminal outcome; retain its original ref'), { cause });
+      }
+      this.validateDurableBinding(binding, ref);
+      if (!sameRef(outcome.ref, ref)) throw durableFailure('intent_identity_mismatch', 'Commit returned another operation identity');
+      if (outcome.state === 'committed') {
+        if (!validReceipt(outcome.receipt) || outcome.receipt.operationId !== ref.operationId || outcome.receipt.entryId !== ref.entryId) {
+          throw durableFailure('intent_outcome_mismatch', 'Commit receipt identifies another operation or entry');
+        }
+      } else if (outcome.state !== 'rejected' || outcome.error.operationId !== ref.operationId) {
+        throw durableFailure('outcome_unknown', 'Commit did not return a terminal outcome for the original operation');
+      }
+      if (outcome.state === 'committed') {
+        return Object.freeze({ state: 'committed', acknowledged: outcome.acknowledged, ref: copyRef(outcome.ref),
+          receipt: Object.freeze({ ...outcome.receipt }) });
+      }
+      return Object.freeze({ state: 'rejected', acknowledged: outcome.acknowledged, ref: copyRef(outcome.ref),
+        error: Object.freeze({ ...outcome.error, details: structuredClone(outcome.error.details) }) });
+    });
+  }
+
+  /** Reconcile a historical receipt even after a view retires. Never writes or ACKs.
+   * A newer/missing entry is a conflict observation, not evidence the write failed.
+   * Those cases need separate coherent namespace recovery; no path-based
+   * replacement is removed or rebound by a receipt for an older identity.
+   */
+  reconcileDurableWrite(input: DurableWriteRef, witness: DurableCommitReceipt): Promise<DurableWriteReconciliation> {
+    const binding = this.captureDurableBinding(), ref = copyRef(input), receipt = Object.freeze({ ...witness });
+    return this.enqueue(async () => {
+      this.validateDurableBinding(binding, ref);
+      if (!validReceipt(receipt) || receipt.operationId !== ref.operationId || receipt.entryId !== ref.entryId) {
+        throw durableFailure('intent_outcome_mismatch', 'Receipt does not identify the checkpointed operation and entry');
+      }
+      let outcome: DurableWriteIntent | null;
+      try { outcome = await binding.capability.query(ref); }
+      catch (cause) {
+        throw Object.assign(durableFailure('outcome_unknown', 'Historical write verification failed; preserve its original receipt'), { cause });
+      }
+      this.validateDurableBinding(binding, ref);
+      if (!outcome) throw durableFailure('intent_not_found', 'Historical write intent is missing; reconciliation cannot recreate it');
+      if (!sameRef(outcome.ref, ref) || outcome.state !== 'committed' || !sameReceipt(outcome.receipt, receipt)) {
+        throw durableFailure('intent_outcome_mismatch', 'Historical receipt disagrees with the durable operation outcome');
+      }
+      let observed: DurableWriteRead | null;
+      try { observed = await binding.capability.readTextById(ref.entryId); }
+      catch (cause) {
+        throw Object.assign(durableFailure('outcome_unknown', 'Historical write readback failed; preserve its original receipt'), { cause });
+      }
+      this.validateDurableBinding(binding, ref);
+      if (observed === null) return { status: 'missing', current: null };
+      const current = this.durableObservation(observed, { entryId: ref.entryId });
+      if (current.revision !== receipt.revision) return { status: 'advanced', current };
+
+      const path = current.path, old = this.entries.get(path), oldContent = this.contents.get(path);
+      if (old && old.type !== 'file') throw durableFailure('durable_read_invalid', 'Committed file conflicts with a cached folder; refresh the namespace');
+      const entry: VaultEntry = { path, type: 'file', revision: current.revision,
+        ctime: current.stat.ctime, mtime: current.stat.mtime, size: current.stat.size };
+      const entries = new Map(this.entries), contents = new Map(this.contents);
+      entries.set(path, entry);
+      if (isMarkdown(path)) contents.set(path, current.content);
+      // Parse before publishing maps or dispatching events. indexBatch itself
+      // parses every item before touching the existing metadata cache.
+      if (isMarkdown(path)) this.metadata.indexBatch([[path, current.content]]);
+      this.metadata.setFiles([...entries.values()].filter(item => item.type === 'file').map(item => item.path));
+      this.entries = entries; this.contents = contents;
+      if (!old) this.emit('create', { path, entry });
+      else if (old.revision !== entry.revision || old.mtime !== entry.mtime || old.size !== entry.size
+          || isMarkdown(path) && current.content !== oldContent) this.emit('modify', { path, entry });
+      return { status: 'current', current };
+    });
+  }
 
   /** Refresh known files only when a watcher provides exact paths; structural changes rescan. */
   private async refreshPaths(rawPaths: readonly string[]): Promise<boolean> {

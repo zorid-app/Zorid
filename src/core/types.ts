@@ -1,3 +1,5 @@
+import type { DurableWrites } from './durable-writes.ts';
+
 export interface VaultEntry {
   path: string;
   type: 'file' | 'folder';
@@ -11,6 +13,8 @@ export interface VaultEntry {
 
 /** Paths are relative to the vault. Implementations must enforce the vault boundary. */
 export interface VaultAdapter {
+  /** Optional durable text-save protocol; commit/publication run through Vault. */
+  readonly durableWrites?: DurableWrites;
   list(): Promise<VaultEntry[]>;
   /** Read one entry's current metadata without listing the entire vault. Missing paths return null. */
   stat?(path: string): Promise<VaultEntry | null>;
