@@ -7,10 +7,10 @@ import type { EditorOptions } from '../ui/editor.ts';
 import type { EmbedRequest } from '../ui/markdown.ts';
 import { createCanvasMarkdownCard } from './markdown-card.ts';
 import type { CanvasMarkdownCard, CanvasMarkdownSession } from './markdown-card.ts';
-import { CANVAS_RESIZE_DIRECTIONS, canvasBounds, canvasResizeGrid, canvasResizeRecordIndices, canvasSnapCoordinates, resizeCanvasBounds, scaleCanvasBounds, snapCanvasCoordinate } from './resize.ts';
+import { CANVAS_RESIZE_DIRECTIONS, canvasBounds, canvasResizeGrid, canvasResizeRecordIndices, resizeCanvasBounds, scaleCanvasBounds } from './resize.ts';
 import type { CanvasBounds, CanvasResizeDirection } from './resize.ts';
-import { createCanvasResizeAutoPan, fitCanvasMarkdown } from './resize-interactions.ts';
-import type { CanvasResizeAutoPan } from './resize-interactions.ts';
+import { createCanvasResizeAutoPan, fitCanvasMarkdown, indexCanvasResizeSnaps, snapVisibleCanvasCoordinate } from './resize-interactions.ts';
+import type { CanvasResizeAutoPan, CanvasResizeSnapIndex } from './resize-interactions.ts';
 
 export interface CanvasViewOptions {
   document: CanvasDocument;
@@ -101,7 +101,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const attachments = new Map<string, { file: string; subpath: string; owner: { element: HTMLElement; destroy(): void } }>();
   const fileCards = new Map<string, { file: string; subpath: string; card: CanvasMarkdownCard }>();
   let drag: { id: number; mode: 'move' | 'pan' | 'select' | 'resize'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
-  let resizing: { direction: CanvasResizeDirection; initial: CanvasBounds; minimum: { width: number; height: number }; ratio: number; targets: Map<string, { original: CanvasNode; bounds: CanvasBounds }>; preview: Map<string, CanvasBounds>; edges: string[]; snaps: { x: number[]; y: number[] }; started: boolean; multiple: boolean } | undefined;
+  let resizing: { direction: CanvasResizeDirection; initial: CanvasBounds; minimum: { width: number; height: number }; ratio: number; targets: Map<string, { original: CanvasNode; bounds: CanvasBounds }>; preview: Map<string, CanvasBounds>; edges: string[]; snaps: CanvasResizeSnapIndex; started: boolean; multiple: boolean } | undefined;
   let resizeAutoPan: CanvasResizeAutoPan | undefined;
   let autoFitting = false;
   const fittedPreview = new Map<string, CanvasBounds>();
@@ -324,6 +324,9 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   }
   function render(refreshTextPreviews = false): void {
     menuVersion++;
+    // A reentrant host replacement can arrive after a measurement has already
+    // applied preview dimensions. Never project those into a rebuilt owner.
+    fittedPreview.clear();
     const focused = dom.activeElement instanceof win.HTMLElement && world.contains(dom.activeElement) ? dom.activeElement : undefined;
     finishEditing?.(false); projection = projectCanvas(document); renderedSource = document.toString();
     for (const [id, entry] of textCards) {
@@ -537,8 +540,8 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     const initial = canvasBounds([...targets.values()].map(target => target.bounds)), multiple = targets.size > 1;
     const minimum = { width: 50, height: 50 };
     if (multiple) for (const target of targets.values()) { minimum.width = Math.max(minimum.width, 50 * initial.width / target.bounds.width); minimum.height = Math.max(minimum.height, 50 * initial.height / target.bounds.height); }
-    const visible = [...projection.nodes.values()].map(node => node.data).filter(node => !targets.has(node.id) && node.x * scale + tx <= (viewport.clientWidth || 800) && (node.x + node.width) * scale + tx >= 0 && node.y * scale + ty <= (viewport.clientHeight || 600) && (node.y + node.height) * scale + ty >= 0);
-    resizing = { direction: handle.dataset.resize as CanvasResizeDirection, initial, minimum, ratio: ratio && multiple ? initial.width / initial.height : ratio, targets, preview: new Map(), snaps: canvasSnapCoordinates(visible), started: false, multiple, edges: [...projection.edges].filter(([, edge]) => targets.has(edge.fromNode) || targets.has(edge.toNode)).map(([id]) => id) };
+    const snapTargets = [...projection.nodes.values()].map(node => node.data).filter(node => !targets.has(node.id));
+    resizing = { direction: handle.dataset.resize as CanvasResizeDirection, initial, minimum, ratio: ratio && multiple ? initial.width / initial.height : ratio, targets, preview: new Map(), snaps: indexCanvasResizeSnaps(snapTargets), started: false, multiple, edges: [...projection.edges].filter(([, edge]) => targets.has(edge.fromNode) || targets.has(edge.toNode)).map(([id]) => id) };
     drag = { id: event.pointerId, mode: 'resize', startX: event.clientX, startY: event.clientY, x: tx, y: ty, dx: 0, dy: 0, positions: new Map(), prior: new Set() };
     const gesture = resizing;
     resizeAutoPan = createCanvasResizeAutoPan({
@@ -595,7 +598,10 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       resizing.started = true;
       const rect = viewport.getBoundingClientRect(), point = { x: (event.clientX - rect.left - tx) / scale, y: (event.clientY - rect.top - ty) / scale };
       const disableSnap = /Mac|iPhone|iPad/.test(win.navigator.platform) ? event.ctrlKey : event.altKey;
-      if (!disableSnap) { point.x = snapCanvasCoordinate(point.x, resizing.snaps.x, Math.ceil(15 / scale), canvasResizeGrid(scale)); point.y = snapCanvasCoordinate(point.y, resizing.snaps.y, Math.ceil(15 / scale), canvasResizeGrid(scale)); }
+      if (!disableSnap) {
+        const visible = { x: -tx / scale, y: -ty / scale, width: (viewport.clientWidth || rect.width || 800) / scale, height: (viewport.clientHeight || rect.height || 600) / scale };
+        point.x = snapVisibleCanvasCoordinate(point.x, resizing.snaps.x, visible, Math.ceil(15 / scale), canvasResizeGrid(scale)); point.y = snapVisibleCanvasCoordinate(point.y, resizing.snaps.y, visible, Math.ceil(15 / scale), canvasResizeGrid(scale));
+      }
       const ratio = resizing.multiple && event.shiftKey ? resizing.ratio ? 0 : resizing.initial.width / resizing.initial.height : resizing.ratio;
       const bounds = resizeCanvasBounds(resizing.initial, resizing.direction, point, resizing.minimum, ratio);
       for (const [id, target] of resizing.targets) { resizing.preview.set(id, resizing.multiple ? scaleCanvasBounds(target.bounds, resizing.initial, bounds) : bounds); drawNode(id); }
@@ -645,18 +651,22 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (owner && nodeEls.get(owner.dataset.nodeId!) !== owner || !owner && handle.parentElement !== resizeOutline) return;
     event.preventDefault(); event.stopPropagation(); menuVersion++;
     const ids = owner ? [owner.dataset.nodeId!] : [...selectedNodes], sourceOwner = document;
-    const targets = ids.flatMap(id => {
-      const entry = textCards.get(id) ?? fileCards.get(id), node = projection.nodes.get(id), item = nodeEls.get(id);
-      const preview = entry?.card.element.querySelector<HTMLElement>('.zorid-canvas-note-preview');
-      return entry && node && item && preview && !entry.card.isEditing() && !preview.hidden && preview.getClientRects().length && preview.clientHeight > 0 ? [{ id, original: node.original, bounds: { ...node.data }, item, preview }] : [];
-    });
-    if (!targets.length) return;
+    const targets: { id: string; original: CanvasNode; bounds: CanvasBounds; item: HTMLElement; preview: HTMLElement }[] = [];
+    let edges: string[] = [];
     autoFitting = true;
-    const targetIds = new Set(targets.map(target => target.id));
-    const edges = [...projection.edges].filter(([, edge]) => targetIds.has(edge.fromNode) || targetIds.has(edge.toNode)).map(([id]) => id);
     const current = () => !closed && document === sourceOwner;
     const allCurrent = () => current() && targets.every(target => nodeEls.get(target.id) === target.item);
     try {
+      // Visibility checks may themselves force layout. Keep them within the
+      // same error/owner boundary as all subsequent measurements.
+      for (const id of ids) {
+        const entry = textCards.get(id) ?? fileCards.get(id), node = projection.nodes.get(id), item = nodeEls.get(id);
+        const preview = entry?.card.element.querySelector<HTMLElement>('.zorid-canvas-note-preview');
+        if (entry && node && item && preview && !entry.card.isEditing() && !preview.hidden && preview.getClientRects().length && preview.clientHeight > 0) targets.push({ id, original: node.original, bounds: { x: node.data.x, y: node.data.y, width: node.data.width, height: node.data.height }, item, preview });
+      }
+      if (!targets.length || !allCurrent()) return;
+      const targetIds = new Set(targets.map(target => target.id));
+      edges = [...projection.edges].filter(([, edge]) => targetIds.has(edge.fromNode) || targetIds.has(edge.toNode)).map(([id]) => id);
       canvasResizeRecordIndices(document.nodes, targets.map(target => target.original));
       for (const target of targets) {
         const oldHeight = target.preview.style.getPropertyValue('height'), oldPriority = target.preview.style.getPropertyPriority('height');
