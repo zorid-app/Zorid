@@ -8,8 +8,8 @@ import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints
 
 /** Native chooses/opens the vault before loading the editor. No vault root crosses this API. */
 export interface NativeVaultPlugin {
-  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string }>;
-  noteOpened(input: { path: string }): Promise<void>;
+  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string }>;
+  noteOpened(input: { path: string; entryId: string }): Promise<void>;
   refresh(): Promise<{ reconciliation: DesktopReconciliation }>;
   request(input: { header: string; body: string }): Promise<{ header: string; body: string }>;
   addListener(event: 'lifecycleRequest', handler: (event: { id: string; reason: MobileLifecycleReason }) => void): Promise<{ remove(): Promise<void> }>;
@@ -20,7 +20,7 @@ export interface MobileLifecycle {
   subscribe(handler: (reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>): () => void;
 }
 // Keep this owned surface until the coordinator lands the PlatformVault declaration.
-type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; initialPath?: string; noteOpened(path: string): Promise<void> };
+type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; initialPath?: string; initialEntryId?: string; noteOpened(path: string, entryId: string): Promise<void> };
 const FILE_LIMIT = 16 * 1024 * 1024, PLAN_LIMIT = 8 * 1024 * 1024, CHECKPOINT_LIMIT = 32 * 1024 * 1024;
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 // Wire objects are validated at their consumer boundary; never cast them to editor state directly.
@@ -159,7 +159,8 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { if (lifecycleHandler === handler) lifecycleHandler = undefined; };
     },
   };
-  let initialPath: string | undefined;
+  let initialPath: string | undefined, initialEntryId: string | undefined;
+  let initialSelection: { path: string; entryId: string; phase: 'pending' | 'consumed' } | undefined;
   let context: Awaited<ReturnType<NativeVaultPlugin['context']>>;
   let reconciliationState: DesktopReconciliation | null = null;
   const reconciliationListeners = new Set<(status: DesktopReconciliation) => void>();
@@ -201,8 +202,12 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   try {
     context = await bridge.context();
     if (typeof context.clientId !== 'string' || !uuid(context.clientId) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
+    if ((context.initialPath === undefined) !== (context.initialEntryId === undefined)) throw fail('invalid_native_context');
     if (context.initialPath !== undefined) {
+      if (!id(context.initialEntryId)) throw fail('invalid_native_context');
       try { initialPath = nativeNotePath(context.initialPath); } catch { throw fail('invalid_native_context'); }
+      initialEntryId = context.initialEntryId;
+      initialSelection = { path: initialPath, entryId: initialEntryId, phase: 'pending' };
     }
     if (context.reconciliation !== undefined) reconciliationState = reconciliationStatus(context.reconciliation);
     clientId = context.clientId;
@@ -290,11 +295,22 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     list: options => page('checkpoint_list', options), changes: options => page('checkpoint_changes', options),
   });
   async function readRow(method: string, fields: Wire): Promise<Wire | null> { const reply = await request({ method, ...fields }); return reply.result.entry === null ? null : { ...reply.result, bytes: reply.bytes }; }
-  function observation(row: Wire | null): DurableWriteRead {
+  function presentedFile(row: Wire | null): Omit<DurableWriteRead,'content'> {
     if (!row) throw fail('not_found');
     const p = row.presentation, e = row.entry;
     if (!row.has_content || !e || !id(e.id) || !id(e.revision) || e.kind !== 'file' || e.deleted || !p || p.id !== e.id || ![p.ctime_ms,p.mtime_ms,p.size_bytes].every(v => Number.isSafeInteger(v) && v >= 0) || p.size_bytes !== row.bytes.length) throw fail('invalid_presentation');
-    return Object.freeze({ path: normalizePath(e.path), content: decoder.decode(row.bytes), entryId: e.id, revision: e.revision, stat: Object.freeze({ ctime: p.ctime_ms, mtime: p.mtime_ms, size: p.size_bytes }) });
+    return Object.freeze({ path: normalizePath(e.path), entryId: e.id, revision: e.revision, stat: Object.freeze({ ctime: p.ctime_ms, mtime: p.mtime_ms, size: p.size_bytes }) });
+  }
+  function observation(row: Wire | null): DurableWriteRead {
+    return Object.freeze({ ...presentedFile(row), content: decoder.decode(row!.bytes) });
+  }
+  function selectedRead(path: string) {
+    return initialSelection?.phase === 'pending' && initialSelection.path === path ? initialSelection : undefined;
+  }
+  function checkSelection(selection: typeof initialSelection, entryId: string) {
+    if (!selection) return;
+    selection.phase = 'consumed';
+    if (entryId !== selection.entryId) throw fail('revision_conflict');
   }
   function bound(ref: DurableWriteRef): DurableWriteRef { active(); if (ref?.vaultId !== scope.vaultId || ref.clientId !== clientId || !id(ref.operationId) || !id(ref.entryId) || !id(ref.token)) throw fail('intent_identity_mismatch'); return Object.freeze({ ...ref }); }
   const nativeRef = (ref: DurableWriteRef) => ({ client_id: clientId, token: ref.token });
@@ -313,8 +329,21 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     return Object.freeze({ ref, state: 'rejected', acknowledged: row.acknowledged, error: Object.freeze({ operationId: ref.operationId, code: row.error.code, message: 'The stored write was rejected; its original request is retained.' }) });
   }
   async function required(ref: DurableWriteRef) { const row = (await call('query_intent', { reference: nativeRef(ref) })).intent; if (!row) throw fail('intent_not_found'); return view(row, ref); }
+  async function readTextObservation(path: string): Promise<DurableWriteRead> {
+    const result = observation(await readRow('read_path',{ path }));
+    if (result.path !== path) throw fail('invalid_presentation');
+    return result;
+  }
   const durableWrites: DurableWrites = Object.freeze<DurableWrites>({ checkpoints,
-    readText: async path => observation(await readRow('read_path', { path: normalizePath(path) })),
+    async readText(input) {
+      const path = normalizePath(input);
+      // Capture at invocation: concurrent initial activation reads all remain
+      // fenced even if another read consumes the one-shot selection first.
+      const selection = selectedRead(path);
+      const result = await readTextObservation(path);
+      checkSelection(selection,result.entryId);
+      return result;
+    },
     async readTextById(entryId) { if (!id(entryId)) throw fail('invalid_entry_id'); const row = await readRow('read_presented', { id: entryId }); if (!row) return null; const result = observation(row); if (result.entryId !== entryId) throw fail('intent_identity_mismatch'); return result; },
     async planWrite(input) {
       const captured = { ...input, path: normalizePath(input.path) };
@@ -322,7 +351,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       textBytes(captured.expectedContent, PLAN_LIMIT); const bytes = textBytes(captured.content, PLAN_LIMIT);
       const encodedPlan = JSON.stringify({ operation_id: captured.operationId, mutation: { type: 'write', id: captured.expectedEntryId, expected: captured.expectedRevision }, content_base64: bytesToBase64(bytes) });
       textBytes(encodedPlan, PLAN_LIMIT);
-      const current = await durableWrites.readText(captured.path);
+      const current = await readTextObservation(captured.path);
       if (current.entryId !== captured.expectedEntryId || current.revision !== captured.expectedRevision || current.content !== captured.expectedContent) throw fail('revision_conflict');
       return Object.freeze({ version: 1, ...scope, operationId: captured.operationId, entryId: captured.expectedEntryId, encodedPlan });
     },
@@ -478,8 +507,18 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     durableWrites, durableNamespace: true,
     async list() { return (await snapshot()).filter(row => visible(row.state.path)).map(row => ({ path: row.state.path, entryId: row.state.id, revision: row.state.revision, type: row.state.kind, ctime: row.presentation.ctime_ms, mtime: row.presentation.mtime_ms, size: row.presentation.size_bytes } as VaultEntry)); },
     async stat(path) { const target = normalizePath(path), row = (await snapshot()).find(row => row.state.path === target); return row ? { path: target, entryId: row.state.id, revision: row.state.revision, type: row.state.kind, ctime: row.presentation.ctime_ms, mtime: row.presentation.mtime_ms, size: row.presentation.size_bytes } : null; },
-    read: async path => (await durableWrites.readText(path)).content,
-    async readBinary(path) { const row = await readRow('read_path',{ path: normalizePath(path) }); if (!row) throw fail('not_found'); if (!row.has_content || row.entry.kind !== 'file') throw fail('not_file'); return row.bytes; },
+    // Background metadata/index reads must not consume the initial activation guard.
+    read: async path => (await readTextObservation(normalizePath(path))).content,
+    async readBinary(input) {
+      const path = normalizePath(input), selection = selectedRead(path);
+      const row = await readRow('read_path',{ path });
+      if (!row) throw fail('not_found');
+      if (!row.has_content || row.entry.kind !== 'file') throw fail('not_file');
+      const result = presentedFile(row);
+      if (result.path !== path) throw fail('invalid_presentation');
+      checkSelection(selection,result.entryId);
+      return row.bytes;
+    },
     write: (path,content) => execute({kind:'writeText',path,body:bodyText(content)}),
     createText: (path,content) => execute({kind:'createText',path,body:bodyText(content)}),
     compareAndWrite: (path,expectedContent,content,identity) => execute({kind:'writeText',path,body:bodyText(content),expectedBody:bodyText(expectedContent),...(identity?{expectedEntryId:identity.entryId,expectedRevision:identity.revision}:{})}),
@@ -499,15 +538,16 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { listeners.delete(listener); if (!listeners.size && timer) { clearInterval(timer); timer = undefined; } };
     },
   };
-  return { adapter, mobileLifecycle, reconciliation, ...(initialPath === undefined ? {} : { initialPath }),
-    async noteOpened(path) {
+  return { adapter, mobileLifecycle, reconciliation, ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
+    async noteOpened(path,entryId) {
       active(); if (releasePromise) throw fail('storage_closed');
       const captured = nativeNotePath(path);
+      if (!id(entryId)) throw fail('invalid_entry_id');
       // This optional notification follows actual workspace activation. It only
       // updates native device-local Recents; errors never change durable saves.
       const task = tail.then(async () => {
         active();
-        await bridge.noteOpened({ path: captured });
+        await bridge.noteOpened({ path: captured, entryId });
         active();
       });
       tail = task.catch(() => {});

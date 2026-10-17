@@ -4,6 +4,7 @@ import { registerHooks } from 'node:module';
 import { openNativeMobileVault, type NativeVaultPlugin, type MobileLifecycleReason } from '../src/platform/mobile-native.ts';
 
 const clientId = 'a1b2c3d4-abcd-4abc-8abc-abcdef012345';
+const entryUuid='c3d4e5f6-cdef-4cde-acde-cdef01234567';
 const token = 'b2c3d4e5-bcde-4bcd-9bcd-bcdef0123456';
 const encoder = new TextEncoder(), decoder = new TextDecoder();
 const body = (text: string) => btoa(String.fromCharCode(...encoder.encode(text)));
@@ -15,20 +16,21 @@ function fixture() {
   let activeLease: {local_store_id:string;client_id:string;token:string} | undefined, claims=0;
   const releasedLeases=new Map<string,any>();
   let injectedError: {method:string;error:any;after:boolean} | undefined;
-  const state = () => ({ id:'entry', path, kind:'file', revision, deleted:false });
-  const presentation = () => ({id:'entry',ctime_ms:1,mtime_ms:2,size_bytes:encoder.encode(content).length});
+  let entryIdentity='entry';
+  const state = () => ({ id:entryIdentity, path, kind:'file', revision, deleted:false });
+  const presentation = () => ({id:entryIdentity,ctime_ms:1,mtime_ms:2,size_bytes:encoder.encode(content).length});
   const acks: {id:string;ok:boolean}[] = [], lifecycleOrder: string[] = [], expired = new Set<string>();
   const lifecycleCallbacks=new Set<(event:{id:string;reason:MobileLifecycleReason})=>void>();let removals = 0;
   let contextEvent: MobileLifecycleReason | undefined, wrongAuthority = false;
   let ackHook: ((input:{id:string;ok:boolean})=>Promise<void>) | undefined;
   let initialReconciliation: any = undefined, refreshValue: any = {reconciliation:scanStatus()}, refreshCalls=0;
   let refreshHook: (()=>Promise<void>) | undefined;
-  let initialPath: any = undefined, openedHook: ((path:string)=>Promise<void>) | undefined; const opened: string[] = [];
+  let initialPath: any = undefined, initialEntryId: any = undefined, openedHook: ((path:string)=>Promise<void>) | undefined; const opened: string[] = [],openedRefs:{path:string;entryId:string}[]=[];
   const plugin: NativeVaultPlugin & {close():Promise<void>} = {
     async addListener(event,handler) { assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
     async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
-    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
-    async noteOpened({path}) { active++;maxActive=Math.max(maxActive,active);opened.push(path);try{if(openedHook)await openedHook(path);await new Promise<void>(r=>setImmediate(r));}finally{active--;} },
+    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialEntryId===undefined?{}:{initialEntryId}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
+    async noteOpened({path,entryId}) { openedRefs.push({path,entryId}); active++;maxActive=Math.max(maxActive,active);opened.push(path);try{if(openedHook)await openedHook(path);await new Promise<void>(r=>setImmediate(r));}finally{active--;} },
     async refresh() { active++;maxActive=Math.max(maxActive,active);refreshCalls++;try {if(refreshHook)await refreshHook();await new Promise<void>(r=>setImmediate(r));return refreshValue;}finally{active--;} },
     async request(input) {
       active++; maxActive = Math.max(maxActive,active);
@@ -99,7 +101,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, opened, selectPath(value:any){initialPath=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, opened, openedRefs, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -516,7 +518,7 @@ test('optional native selected path preserves Unicode spelling without auto-noti
   const f=fixture(),selected='資料/e\u0301/你好 📝.md';f.selectPath(selected);
   const v=await openNativeMobileVault(f.plugin);assert.equal(v.initialPath,selected);assert.deepEqual(f.opened,[]);
   await v.adapter.list();await v.adapter.read('Note.md');await v.adapter.write('Note.md','saved');assert.deepEqual(f.opened,[]);
-  await v.noteOpened(selected);assert.deepEqual(f.opened,[selected]);assert.equal(v.initialPath,selected);await v.release!();
+  await v.noteOpened(selected,entryUuid);assert.deepEqual(f.opened,[selected]);assert.equal(v.initialPath,selected);await v.release!();
   const other=fixture(),plain=await openNativeMobileVault(other.plugin);assert.equal(Object.hasOwn(plain,'initialPath'),false);await plain.release!();
 });
 
@@ -528,19 +530,19 @@ for(const selected of [null,42,'','/tmp/vault/Note.md','C:/Note.md','a\\b.md','a
 test('noteOpened shares native request/refresh queue and release waits for accepted notification',async()=>{
   const f=fixture(),v=await openNativeMobileVault(f.plugin),entered=deferred(),gate=deferred();
   f.onOpened(async()=>{entered.resolve();await gate.promise;});
-  const first=v.adapter.read('Note.md'),opened=v.noteOpened('nested/你好.md'),refresh=v.reconciliation!.retry(),last=v.adapter.read('Note.md');
+  const first=v.adapter.read('Note.md'),opened=v.noteOpened('nested/你好.md',entryUuid),refresh=v.reconciliation!.retry(),last=v.adapter.read('Note.md');
   await entered.promise;assert.equal(f.requests.filter(r=>r.command.method==='read_path').length,1);assert.equal(f.refreshCalls,0);
-  const release=v.release!();await assert.rejects(v.noteOpened('later.md'),{code:'storage_closed'});assert.equal(f.removals,0);
+  const release=v.release!();await assert.rejects(v.noteOpened('later.md',entryUuid),{code:'storage_closed'});assert.equal(f.removals,0);
   gate.resolve();await Promise.all([first,opened,refresh,last,release]);assert.equal(f.maxActive,1);assert.deepEqual(f.opened,['nested/你好.md']);assert.equal(f.removals,1);
-  await assert.rejects(v.noteOpened('closed.md'),{code:'storage_closed'});assert.equal(f.closes,0);
+  await assert.rejects(v.noteOpened('closed.md',entryUuid),{code:'storage_closed'});assert.equal(f.closes,0);
 });
 
 test('native Recents failure is caller-visible and cannot poison a durable save or future notification',async()=>{
   const f=fixture(),v=await openNativeMobileVault(f.plugin);f.onOpened(async()=>{throw Object.assign(new Error('Native identity no longer exists'),{code:'not_found'});});
-  await assert.rejects(v.noteOpened('removed.md'),{code:'not_found'});
+  await assert.rejects(v.noteOpened('removed.md',entryUuid),{code:'not_found'});
   assert.equal((await v.adapter.durableWrites!.readText('Note.md')).content,'before');
   await v.adapter.write('Note.md','durable despite recents');assert.equal(f.content,'durable despite recents');
-  f.onOpened(async()=>{});await v.noteOpened('Note.md');assert.deepEqual(f.opened,['removed.md','Note.md']);await v.release!();
+  f.onOpened(async()=>{});await v.noteOpened('Note.md',entryUuid);assert.deepEqual(f.opened,['removed.md','Note.md']);await v.release!();
 });
 
 test('queued noteOpened is never dispatched after successful switch ACK',async()=>{
@@ -548,14 +550,107 @@ test('queued noteOpened is never dispatched after successful switch ACK',async()
   const original=f.plugin.request.bind(f.plugin);
   f.plugin.request=async input=>{if(JSON.parse(input.header).command.method==='read_path'){entered.resolve();await gate.promise;}return original(input);};
   const read=v.adapter.read('Note.md');await entered.promise;
-  const queued=assert.rejects(v.noteOpened('Note.md'),{code:'storage_closed'});
+  const queued=assert.rejects(v.noteOpened('Note.md',entryUuid),{code:'storage_closed'});
   v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('switchVault');await done.promise;
-  await assert.rejects(v.noteOpened('later.md'),{code:'storage_closed'});gate.resolve();await read;await queued;
+  await assert.rejects(v.noteOpened('later.md',entryUuid),{code:'storage_closed'});gate.resolve();await read;await queued;
   assert.deepEqual(f.opened,[]);await v.release!();assert.equal(f.closes,0);
 });
 
 test('invalid activation notification paths are rejected before native dispatch',async()=>{
   const f=fixture(),v=await openNativeMobileVault(f.plugin);
-  for(const path of ['../Note.md','/Note.md','folder//Note.md','.ZORID/private','folder\\Note.md','bad\ud800.md'])await assert.rejects(v.noteOpened(path),{code:'invalid_path'});
-  assert.deepEqual(f.opened,[]);await v.noteOpened('folder/My note.canvas');assert.deepEqual(f.opened,['folder/My note.canvas']);await v.release!();
+  for(const path of ['../Note.md','/Note.md','folder//Note.md','.ZORID/private','folder\\Note.md','bad\ud800.md'])await assert.rejects(v.noteOpened(path,entryUuid),{code:'invalid_path'});
+  assert.deepEqual(f.opened,[]);await v.noteOpened('folder/My note.canvas',entryUuid);assert.deepEqual(f.opened,['folder/My note.canvas']);await v.release!();
+});
+
+for(const [path,entryId] of [['Note.md',undefined],[undefined,entryUuid],['Note.md',null],['Note.md','entry bad'],['Note.md','x'.repeat(129)]] as const) test(`native initial path/identity pair rejects ${JSON.stringify([path,entryId])}`,async()=>{
+  const f=fixture();f.selection(path,entryId);await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});
+  assert.equal(f.requests.length,0);assert.equal(f.removals,1);assert.equal(f.closes,0);
+});
+
+test('paired native selection and successful-open notification preserve exact stable identity',async()=>{
+  const f=fixture();f.selection('資料/你好.md',entryUuid);const v=await openNativeMobileVault(f.plugin);
+  assert.equal(v.initialPath,'資料/你好.md');assert.equal(v.initialEntryId,entryUuid);assert.deepEqual(f.openedRefs,[]);
+  await v.noteOpened('資料/你好.md',entryUuid);assert.deepEqual(f.openedRefs,[{path:'資料/你好.md',entryId:entryUuid}]);
+  for(const id of [undefined,null,'entry bad','x'.repeat(129)] as any[])await assert.rejects(v.noteOpened('Note.md',id),{code:'invalid_entry_id'});
+  assert.equal(f.openedRefs.length,1);await v.release!();
+});
+
+test('initial durable activation rejects path reuse once, then permits a later intentional replacement open',async()=>{
+  const f=fixture();f.selection('Note.md',entryUuid);const v=await openNativeMobileVault(f.plugin),w=v.adapter.durableWrites!;
+  // Fixture already represents a replacement at the native-selected path.
+  await assert.rejects(w.readText('Note.md'),{code:'revision_conflict'});
+  assert.equal((await w.readText('Note.md')).entryId,'entry');assert.equal(v.initialEntryId,entryUuid);
+  assert.deepEqual(f.openedRefs,[]);await v.release!();
+});
+
+test('matching initial activation consumes its guard and does not pin later reads forever',async()=>{
+  const f=fixture();f.selection('Note.md',entryUuid);f.replaceIdentity(entryUuid,'selected bytes');
+  const v=await openNativeMobileVault(f.plugin),w=v.adapter.durableWrites!;
+  assert.equal((await w.readText('Note.md')).content,'selected bytes');
+  f.replaceIdentity('replacement','new file');assert.equal((await w.readText('Note.md')).content,'new file');await v.release!();
+});
+
+test('metadata/index reads and ID recovery cannot consume initial activation identity fence',async()=>{
+  const f=fixture();f.selection('Note.md',entryUuid);f.replaceIdentity(entryUuid,'selected bytes');
+  const v=await openNativeMobileVault(f.plugin),w=v.adapter.durableWrites!;
+  await v.adapter.list();await v.adapter.stat!('Note.md');await v.adapter.read('Note.md');
+  assert.equal((await w.readTextById(entryUuid))!.entryId,entryUuid);
+  await w.planWrite({operationId:'background-plan',path:'Note.md',expectedEntryId:entryUuid,expectedRevision:'replacement-rev',expectedContent:'selected bytes',content:'planned'});
+  f.replaceIdentity('replacement','replacement bytes');
+  assert.equal(await v.adapter.read('Note.md'),'replacement bytes'); // An index rebuild is not activation.
+  await assert.rejects(w.readText('Note.md'),{code:'revision_conflict'});await v.release!();
+});
+
+test('failed initial transport or missing file read cannot silently consume the selection guard',async()=>{
+  const f=fixture();f.selection('Note.md',entryUuid);const v=await openNativeMobileVault(f.plugin),w=v.adapter.durableWrites!;
+  f.hostError('read_path',{code:'storage_io',message:'Retry later',commit_uncertain:true});
+  await assert.rejects(w.readText('Note.md'),{code:'storage_io'});f.present(false);
+  await assert.rejects(w.readText('Note.md'),{code:'not_found'});f.present();
+  await assert.rejects(w.readText('Note.md'),{code:'revision_conflict'});await v.release!();
+});
+
+test('all concurrently started initial activation reads remain fenced after first mismatch consumes selection',async()=>{
+  const f=fixture();f.selection('Note.md',entryUuid);const v=await openNativeMobileVault(f.plugin),w=v.adapter.durableWrites!;
+  await Promise.all([assert.rejects(w.readText('Note.md'),{code:'revision_conflict'}),assert.rejects(w.readText('Note.md'),{code:'revision_conflict'})]);
+  assert.equal((await w.readText('Note.md')).entryId,'entry');await v.release!();
+});
+
+test('opaque mixed-case entry IDs are preserved exactly and compared case-sensitively',async()=>{
+  const selected='Native_Aa-01',f=fixture();f.selection('Note.md',selected);f.replaceIdentity(selected,'selected');
+  const v=await openNativeMobileVault(f.plugin);assert.equal(v.initialEntryId,selected);
+  await v.noteOpened('Note.md',selected);assert.deepEqual(f.openedRefs,[{path:'Note.md',entryId:selected}]);
+  f.replaceIdentity(selected.toLowerCase(),'different identity');
+  await assert.rejects(v.adapter.durableWrites!.readText('Note.md'),{code:'revision_conflict'});
+  assert.equal((await v.adapter.durableWrites!.readText('Note.md')).entryId,selected.toLowerCase());await v.release!();
+});
+
+test('binary activation identity fence rejects replacement bytes then allows intentional later open',async()=>{
+  const f=fixture();f.selection('Note.md','Selected_Binary');const v=await openNativeMobileVault(f.plugin);
+  await assert.rejects(v.adapter.readBinary!('Note.md'),{code:'revision_conflict'});
+  assert.equal(decoder.decode(await v.adapter.readBinary!('Note.md')),'before');await v.release!();
+});
+
+test('matching binary activation accepts arbitrary bytes and consumes initial identity fence',async()=>{
+  const f=fixture();f.selection('Note.md','Selected_Binary');f.replaceIdentity('Selected_Binary');
+  const original=f.plugin.request.bind(f.plugin);
+  f.plugin.request=async input=>{
+    const reply=await original(input);if(JSON.parse(input.header).command.method!=='read_path')return reply;
+    const header=JSON.parse(reply.header);header.result.presentation.size_bytes=2;
+    return {header:JSON.stringify(header),body:btoa(String.fromCharCode(0,255))};
+  };
+  const v=await openNativeMobileVault(f.plugin);assert.deepEqual(await v.adapter.readBinary!('Note.md'),new Uint8Array([0,255]));
+  f.replaceIdentity('new-binary');assert.deepEqual(await v.adapter.readBinary!('Note.md'),new Uint8Array([0,255]));await v.release!();
+});
+
+test('invalid coherent binary presentation does not consume initial selection',async()=>{
+  const f=fixture();f.selection('Note.md','selected');const v=await openNativeMobileVault(f.plugin),original=f.plugin.request.bind(f.plugin);
+  f.plugin.request=async input=>{const reply=await original(input);if(JSON.parse(input.header).command.method==='read_path'){const header=JSON.parse(reply.header);header.result.presentation.size_bytes++;reply.header=JSON.stringify(header);}return reply;};
+  await assert.rejects(v.adapter.readBinary!('Note.md'),{code:'invalid_presentation'});f.plugin.request=original;
+  await assert.rejects(v.adapter.readBinary!('Note.md'),{code:'revision_conflict'});await v.release!();
+});
+
+test('concurrent text and binary activation both keep the captured initial identity fence',async()=>{
+  const f=fixture();f.selection('Note.md','selected');const v=await openNativeMobileVault(f.plugin);
+  await Promise.all([assert.rejects(v.adapter.durableWrites!.readText('Note.md'),{code:'revision_conflict'}),assert.rejects(v.adapter.readBinary!('Note.md'),{code:'revision_conflict'})]);
+  assert.equal((await v.adapter.durableWrites!.readText('Note.md')).entryId,'entry');await v.release!();
 });
