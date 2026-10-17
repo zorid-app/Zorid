@@ -238,6 +238,7 @@ private final class NativePagesCoordinator {
     private let root: URL
     private var session: NativeMobileSession?
     private var generation = 0
+    private var editorOpenGeneration = 0
     private var busy = false
     private var editorActive = false
     private var visible = false
@@ -272,6 +273,9 @@ private final class NativePagesCoordinator {
 
     func recordPageNavigation(_ route: NativeRoute) {
         guard !editorActive else { return }
+        // Cancel admission, not the in-flight Rust read/host ownership. Its reply
+        // must still clear loading (or close a failed host), without pushing.
+        editorOpenGeneration += 1
         // A reachable Settings tab/new native selection wins over a staged
         // history destination while its read is still in flight.
         pendingHistoryIndex = nil
@@ -496,6 +500,8 @@ private final class NativePagesCoordinator {
         guard pageActive, !busy, !editorActive, let session = session, owner?.navigationController != nil else { return }
         generation += 1
         let ticket = generation
+        editorOpenGeneration += 1
+        let navigationTicket = editorOpenGeneration
         guard let entry = entry else { transfer(session, initialEntry: nil, origin: origin); return }
         busy = true
         owner?.setLoading()
@@ -506,6 +512,14 @@ private final class NativePagesCoordinator {
             switch result {
             case .success(let listing):
                 guard self.pageActive else { self.busy = false; return }
+                guard self.editorOpenGeneration == navigationTicket else {
+                    // A newer native tab/folder choice wins over this lookup.
+                    self.busy = false
+                    self.owner?.showListing(listing)
+                    self.updateRouteControls()
+                    self.drainAutomaticRefresh()
+                    return
+                }
                 guard let current = listing.entries.first(where: { $0.id == entry.id && $0.kind == .file }) else {
                     self.fail(session, ticket: ticket, missingSelection: true)
                     return
@@ -646,7 +660,7 @@ private final class NativePagesModel: ObservableObject {
         }
     }
     func select(_ page: NativePage) {
-        guard supports(page) else { return }
+        guard supports(page), preferences.selected != page else { return }
         preferences.selected = page
         preferences.persist()
         focusedEntryId = nil
