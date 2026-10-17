@@ -1408,10 +1408,21 @@ export class Workspace {
       const match=/^action-(\d+)$/.exec(id);if(match)await items[Number(match[1])]?.action();
     });
   }
-  private fileMenu(entry:VaultEntry,x:number,y:number,inlineRename=false):void{const folder=entry.type==='folder';this.menu([
-    ...(folder?[{name:'New note',action:()=>this.newNote(entry.path)},{name:'New folder',action:()=>this.newFolder(entry.path)}]:[{name:'Open in new tab',action:()=>this.openNote(entry.path,true)},{name:this.bookmarks.has(entry.path)?'Remove bookmark':'Bookmark',action:()=>{if(this.bookmarks.has(entry.path))this.bookmarks.delete(entry.path);else this.bookmarks.add(entry.path);this.saveSession();this.renderSidebar();}}]),
-    {name:'Rename…',action:()=>inlineRename?this.beginTreeRename(entry.path):this.renameDialog(entry.path)}, {name:'Move to trash',action:()=>this.deletePath(entry.path)},
-  ],x,y,()=>this.vault.entries.get(entry.path)===entry);}
+  private fileMenu(entry:VaultEntry,x:number,y:number,inlineRename=false):void{
+    // Explorer rows survive harmless snapshot refreshes. Capture the current
+    // observation and stable path token rather than the row's old entry object.
+    const vault=this.vault,path=entry.path,current=vault.entries.get(path);
+    if(!current)return;
+    const token=this.treeEntryToken(path),type=current.type,revision=current.revision,folder=type==='folder';
+    this.menu([
+      ...(folder?[{name:'New note',action:()=>this.newNote(path)},{name:'New folder',action:()=>this.newFolder(path)}]:[{name:'Open in new tab',action:()=>this.openNote(path,true)},{name:this.bookmarks.has(path)?'Remove bookmark':'Bookmark',action:()=>{if(this.bookmarks.has(path))this.bookmarks.delete(path);else this.bookmarks.add(path);this.saveSession();this.renderSidebar();}}]),
+      {name:'Rename…',action:()=>inlineRename?this.beginTreeRename(path):this.renameDialog(path)}, {name:'Move to trash',action:()=>this.deletePath(path)},
+    ],x,y,()=>{
+      const latest=vault.entries.get(path);
+      return this.vault===vault&&token!==undefined&&this.treeEntryToken(path)===token
+        &&latest?.path===path&&latest.type===type&&latest.revision===revision;
+    });
+  }
   private tabMenu(pane:Pane,tab=this.current(pane),x?:number,y?:number):void{
     this.activate(pane);
     const markdown=tab.kind==='note'&&(!tab.path||isMarkdown(tab.path));

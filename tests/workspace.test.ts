@@ -893,3 +893,50 @@ test('desktop reconciliation warning persists over usable notes and cleans its s
   await workspace.openVault({adapter:new MemoryAdapter(),label:'Next',id:'test:no-status'});
   assert.equal(stops,1);assert.equal(root.querySelector('.import-status'),null);
 });
+
+for(const timing of ['before opening','while open'] as const)test(`folder context menu creates a child after unchanged reload ${timing}`,async t=>{
+  const {workspace,root,dom,adapter}=await setup(t,new MemoryAdapter({'Folder/Keep.md':'keep'}));
+  const row=root.querySelector<HTMLElement>('.tree-row[data-path="Folder"]')!,old=workspace.vault.entries.get('Folder');
+  const open=()=>row.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  if(timing==='while open')open();
+  await workspace.vault.reload();
+  assert.notEqual(workspace.vault.entries.get('Folder'),old,'reload publishes a cloned folder observation');
+  assert.equal(row.isConnected,true,'unchanged reload preserves the row and its event closures');
+  if(timing==='before opening')open();
+  const choice=[...document.querySelectorAll<HTMLButtonElement>('.context-menu-item')].find(item=>item.textContent==='New note')!;
+  assert.ok(choice);choice.click();
+  await until(()=>workspace.vault.entries.has('Folder/Untitled.md'),'folder menu child creation');
+  assert.equal(await adapter.read('Folder/Untitled.md'),'');
+});
+
+for(const change of ['recreate','rename','revision','type'] as const)test(`folder context menu rejects target ${change} before choosing an action`,async t=>{
+  const {workspace,root,dom,adapter}=await setup(t,new MemoryAdapter({'Folder/Keep.md':'keep'}));
+  let choose!:(id:string)=>void;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:()=>new Promise<string>(resolve=>choose=resolve),dismissContextMenu:async()=>{}}});
+  root.querySelector<HTMLElement>('.tree-row[data-path="Folder"]')!.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  assert.ok(choose);
+  if(change==='recreate') {await workspace.vault.trash('Folder');await workspace.vault.createFolder('Folder');}
+  else if(change==='rename')await workspace.vault.rename('Folder','Renamed');
+  else {
+    const current=workspace.vault.entries.get('Folder')!;
+    // These observations preserve the path token, exercising its independent
+    // revision/type guards rather than the create/delete/rename event fence.
+    workspace.vault.entries.set('Folder',{...current,...(change==='revision'?{revision:'changed-revision'}:{type:'file' as const})});
+  }
+  let creations=0;const create=workspace.vault.create.bind(workspace.vault);
+  workspace.vault.create=(...args)=>{creations++;return create(...args);};
+  choose('action-0');await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(creations,0,'stale popup must not issue any create request');
+  assert.equal((await adapter.list()).some(entry=>entry.path==='Folder/Untitled.md'||entry.path==='Renamed/Untitled.md'),false);
+});
+
+test('folder context menu retains vault ownership when another vault has the same path',async t=>{
+  const {workspace,root,dom,adapter}=await setup(t,new MemoryAdapter({'Folder/Keep.md':'keep'}));
+  let choose!:(id:string)=>void;
+  Object.defineProperty(dom.window,'zorid',{value:{showContextMenu:()=>new Promise<string>(resolve=>choose=resolve),dismissContextMenu:async()=>{}}});
+  root.querySelector<HTMLElement>('.tree-row[data-path="Folder"]')!.dispatchEvent(new dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+  const replacement=new MemoryAdapter({'Folder/Other.md':'other'});
+  await workspace.openVault({adapter:replacement,id:'replacement',label:'Replacement'});
+  choose('action-0');await new Promise(resolve=>setImmediate(resolve));
+  for(const owner of [adapter,replacement])assert.equal((await owner.list()).some(entry=>entry.path==='Folder/Untitled.md'),false);
+});
