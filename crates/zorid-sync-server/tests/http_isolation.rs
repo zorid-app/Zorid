@@ -1,8 +1,10 @@
 //! Actual TCP authorization boundaries; disposable fixtures only.
 use rusqlite::Connection;
 use serde_json::Value;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::{
+    io::{Read, Write},
+    time::{Duration, Instant},
+};
 use zorid_crypto::{seal, SystemEntropy, VaultKey};
 use zorid_sync_protocol::{Cursor, DeviceId, Header, RealmId, UpdateId, VaultId};
 use zorid_sync_server::{http::router, BearerToken, RelayStore};
@@ -105,25 +107,33 @@ async fn request(
     token: &str,
     body: &[u8],
 ) -> (u16, Value) {
-    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
-    let header = format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nAuthorization: Bearer {token}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n", body.len());
-    stream.write_all(header.as_bytes()).await.unwrap();
-    stream.write_all(body).await.unwrap();
-    let mut response = Vec::new();
-    stream
-        .take(1024 * 1024)
-        .read_to_end(&mut response)
-        .await
-        .unwrap();
-    let end = response.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4;
-    let status = std::str::from_utf8(&response[..end])
-        .unwrap()
-        .split_whitespace()
-        .nth(1)
-        .unwrap()
-        .parse()
-        .unwrap();
-    (status, serde_json::from_slice(&response[end..]).unwrap())
+    let method = method.to_owned();
+    let path = path.to_owned();
+    let token = token.to_owned();
+    let body = body.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let limit = Duration::from_secs(5);
+        let deadline = Instant::now() + limit;
+        let mut stream = std::net::TcpStream::connect_timeout(&address, limit).unwrap();
+        let remaining = || deadline.checked_duration_since(Instant::now()).expect("HTTP fixture deadline exceeded");
+        stream.set_write_timeout(Some(remaining())).unwrap();
+        let header = format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nAuthorization: Bearer {token}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n", body.len());
+        stream.write_all(header.as_bytes()).expect("HTTP fixture header write failed");
+        stream.set_write_timeout(Some(remaining())).unwrap();
+        stream.write_all(&body).expect("HTTP fixture body write failed");
+        let mut response = Vec::new();
+        loop {
+            stream.set_read_timeout(Some(remaining())).unwrap();
+            let mut chunk = [0; 4096];
+            let count = stream.read(&mut chunk).expect("HTTP fixture read failed or timed out");
+            if count == 0 { break; }
+            assert!(response.len() + count <= 1024 * 1024, "HTTP fixture response exceeded bound");
+            response.extend_from_slice(&chunk[..count]);
+        }
+        let end = response.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4;
+        let status = std::str::from_utf8(&response[..end]).unwrap().split_whitespace().nth(1).unwrap().parse().unwrap();
+        (status, serde_json::from_slice(&response[end..]).unwrap())
+    }).await.unwrap()
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -278,7 +288,7 @@ async fn accounts_vaults_readers_and_permission_changes_are_enforced_over_http()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn fresh_http_append_waiting_for_revocation_cannot_commit() {
+async fn fresh_http_append_overlapping_revocation_is_denied() {
     let f = Fixture::new().await;
     let db = Connection::open(f._dir.path().join("relay.db")).unwrap();
     db.execute_batch("BEGIN IMMEDIATE; UPDATE devices SET revoked=1 WHERE id='da';")
@@ -295,7 +305,10 @@ async fn fresh_http_append_waiting_for_revocation_cannot_commit() {
         )
         .await
     });
-    // Separate SQLite connection holds the write fence while HTTP is in flight.
+    // Overlap smoke test only: the request is pending while another connection
+    // holds the write fence. Scheduling does not prove the HTTP handler reached
+    // SQLite before COMMIT; deterministic transaction-boundary coverage requires
+    // a separate observable lock-attempt seam.
     tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(150)))
         .await
         .unwrap();
