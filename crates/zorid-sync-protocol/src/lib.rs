@@ -1,5 +1,7 @@
 //! Bounded ciphertext framing, not an authenticated server or document merger.
 //! Decode before AEAD only establishes structure; header claims remain untrusted.
+pub mod transport;
+
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 
