@@ -222,3 +222,6 @@ This closes the pure generated crate WASM compile gap; it does not prove WASM
 execution, browser adapter activation or the full app's WASM build. The official
 toolchain remains cached at the explicit path for later reviewed checks. Root
 was notified and the heavy slot released before further doc-only work.
+
+Next codec review is the separate doc-only
+[versioned sync mapping proposal](protobuf-sync-mapping-proposal.md).
