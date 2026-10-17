@@ -188,6 +188,7 @@ fn value_expression(property: &str) -> String {
 fn canonical(value: &BaseValue) -> String {
     fn normalized(value: &BaseValue) -> BaseValue {
         match value {
+            BaseValue::Number { value } if *value == 0.0 => BaseValue::Number { value: 0.0 },
             BaseValue::Object { value } => {
                 let mut entries = value
                     .iter()
@@ -537,15 +538,26 @@ pub fn query_base(
     }
     rows.sort_by(|a, b| {
         for criterion in &sort {
-            let a = scalars
-                .get(&(a.entry_id.clone(), criterion.property.clone()))
-                .unwrap_or(&null);
-            let b = scalars
-                .get(&(b.entry_id.clone(), criterion.property.clone()))
-                .unwrap_or(&null);
-            let order = order::compare(a, b, criterion.descending);
-            if !order.is_eq() {
-                return order;
+            let left = a.values.get(&criterion.property).unwrap_or(&null);
+            let right = b.values.get(&criterion.property).unwrap_or(&null);
+            let comparison = if matches!(
+                (left, right),
+                (BaseValue::Duration { .. }, BaseValue::Duration { .. })
+            ) {
+                order::compare(
+                    scalars
+                        .get(&(a.entry_id.clone(), criterion.property.clone()))
+                        .unwrap_or(&null),
+                    scalars
+                        .get(&(b.entry_id.clone(), criterion.property.clone()))
+                        .unwrap_or(&null),
+                    criterion.descending,
+                )
+            } else {
+                order::compare(left, right, criterion.descending)
+            };
+            if !comparison.is_eq() {
+                return comparison;
             }
         }
         a.path.cmp(&b.path)

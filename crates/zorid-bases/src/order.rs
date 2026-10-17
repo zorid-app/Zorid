@@ -84,7 +84,9 @@ fn ascending(left: &BaseValue, right: &BaseValue) -> Ordering {
     }
     match (left, right) {
         (BaseValue::Boolean { value: a }, BaseValue::Boolean { value: b }) => a.cmp(b),
-        (BaseValue::Number { value: a }, BaseValue::Number { value: b }) => a.total_cmp(b),
+        (BaseValue::Number { value: a }, BaseValue::Number { value: b }) => {
+            a.partial_cmp(b).unwrap_or(Ordering::Equal)
+        }
         (BaseValue::Date { timestamp: a, .. }, BaseValue::Date { timestamp: b, .. }) => a.cmp(b),
         (BaseValue::String { value: a }, BaseValue::String { value: b }) => natural_text(a, b),
         (BaseValue::File { path: a }, BaseValue::File { path: b }) => natural_text(a, b),
@@ -128,7 +130,7 @@ fn ascending(left: &BaseValue, right: &BaseValue) -> Ordering {
         ) => [a0, a1, a2, a3, a4, a5, a6, a7]
             .into_iter()
             .zip([b0, b1, b2, b3, b4, b5, b6, b7])
-            .map(|(a, b)| a.total_cmp(b))
+            .map(|(a, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
             .find(|order| *order != Ordering::Equal)
             .unwrap_or(Ordering::Equal),
         _ => Ordering::Equal,

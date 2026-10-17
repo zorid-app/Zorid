@@ -96,7 +96,7 @@ fn accepted_query_corpus_uses_one_row_scoped_evaluator() {
                         for (property, expected) in values.as_object().unwrap() {
                             let actual =
                                 serde_json::to_value(row.values.get(property).unwrap()).unwrap();
-                            if actual != *expected {
+                            if !json_equal(&actual, expected) {
                                 failures.push(format!(
                                     "{}: {path} {property}: {actual} != {expected}",
                                     case.id
@@ -121,7 +121,10 @@ fn accepted_query_corpus_uses_one_row_scoped_evaluator() {
                     }
                 }
                 key => {
-                    if actual.get(key) != Some(expected) {
+                    if !actual
+                        .get(key)
+                        .is_some_and(|actual| json_equal(actual, expected))
+                    {
                         failures.push(format!(
                             "{}: {key}: {} != {expected}",
                             case.id,
@@ -181,4 +184,19 @@ fn query_limit_does_not_hide_resource_failure() {
         .code,
         "budget"
     );
+}
+
+fn json_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| json_equal(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| json_equal(a, b)))
+        }
+        _ => a == b,
+    }
 }

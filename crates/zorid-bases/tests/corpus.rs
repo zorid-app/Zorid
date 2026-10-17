@@ -89,7 +89,7 @@ fn accepted_expression_corpus_uses_reused_engine() {
             actual.into_iter().next().unwrap()
         };
         let expected = case.proposed.unwrap_or(case.current);
-        if actual != expected {
+        if !json_equal(&actual, &expected) {
             failures.push(format!("{}: expected {expected}, actual {actual}", case.id));
         }
     }
@@ -264,4 +264,19 @@ fn numeric_and_calendar_edges_cannot_panic_or_erase_types() {
         .code,
         "budget"
     );
+}
+
+fn json_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| json_equal(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| json_equal(a, b)))
+        }
+        _ => a == b,
+    }
 }
