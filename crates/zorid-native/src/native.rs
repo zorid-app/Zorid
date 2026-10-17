@@ -212,6 +212,10 @@ impl NativeVault {
             {
                 if a.baseline.as_ref().is_none_or(|b| b.content != old.bytes) {
                     self.capture(&a, old.bytes)?;
+                    report.blocked.push((
+                        a.target.state.path.clone(),
+                        "retained external divergence needs reconciliation".into(),
+                    ));
                 }
             }
         }

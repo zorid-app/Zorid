@@ -346,3 +346,50 @@ fn committed_but_projection_pending_is_success_with_receipt() {
         b"external divergence"
     );
 }
+
+#[test]
+fn recovery_reports_late_displaced_writes_as_incomplete_across_invocations() {
+    use std::io::{Seek, SeekFrom};
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    let created = create(dir.path(), b"initial");
+    let mut external = fs::OpenOptions::new()
+        .write(true)
+        .open(dir.path().join(".unknown.bin"))
+        .unwrap();
+    let written = success(invoke(
+        dir.path(),
+        &[
+            "write",
+            "--id",
+            "file1",
+            "--expected-revision",
+            revision(&created),
+            "--operation-id",
+            "write1",
+            "--input",
+            "-",
+        ],
+        Some(b"new committed bytes"),
+    ));
+    assert_eq!(written["projection"]["state"], "projected");
+    external.seek(SeekFrom::Start(0)).unwrap();
+    external.set_len(0).unwrap();
+    external.write_all(b"late private external text").unwrap();
+    external.sync_all().unwrap();
+    for _ in 0..2 {
+        let output = invoke(dir.path(), &["recover"], None);
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("late private external text"));
+        let recovered = success(output);
+        assert_eq!(recovered["complete"], false);
+        assert!(recovered["report"]["blocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == ".unknown.bin"));
+        assert_eq!(
+            fs::read(dir.path().join(".unknown.bin")).unwrap(),
+            b"new committed bytes"
+        );
+    }
+}

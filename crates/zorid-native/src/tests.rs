@@ -402,7 +402,8 @@ fn late_external_write_to_completed_displacement_is_captured() {
     external.set_len(0).unwrap();
     external.write_all(b"late external write").unwrap();
     external.sync_all().unwrap();
-    v.recover().unwrap();
+    let report = v.recover().unwrap();
+    assert!(report.blocked.iter().any(|(p, _)| *p == path()));
     assert_eq!(disk(root), b"new bytes");
     let observations = Store::open(root.join(".zorid/vault.sqlite"))
         .unwrap()
@@ -417,6 +418,11 @@ fn late_external_write_to_completed_displacement_is_captured() {
         .observations
         .iter()
         .any(|o| o.byte_length == "19" && !o.resolved));
+    drop(v);
+    let mut reopened = NativeVault::open_existing(root).unwrap();
+    let report = reopened.recover().unwrap();
+    assert!(report.blocked.iter().any(|(p, _)| *p == path()));
+    assert_eq!(disk(root), b"new bytes");
 }
 #[test]
 fn observed_parent_relocation_stops_publication() {
