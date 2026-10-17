@@ -2,8 +2,8 @@
 
 Owner: terminal `term_bbf1787b-d2e5-402a-b366-24d40a2385c3`, original base
 main `f69dc90`. Current isolated branch `tingkai-c/native-mobile-recovery`, Orca
-worktree `/Users/ctk/orca/workspaces/Zorid/native-mobile-recovery`. Canonical main
-`a160739` was merged into this isolated branch. Coordinator inbox
+worktree `/Users/ctk/orca/workspaces/Zorid/native-mobile-recovery`. Published canonical main through `d94c3ae3` is included in this isolated branch
+via reviewed reconciliation `7d04f2f3` and additive merge `ecf6f1a0`. Coordinator inbox
 `run:run_3e72b2c9ab72` is sole main integrator; this owner never mutates main/pushes.
 
 ## Framework and binding decision
@@ -14,8 +14,9 @@ UIKit retains safe-area/keyboard viewport layout around the existing Capacitor8
 WKWebView and shared web editor. A small independent `mobile/rust` staticlib/C ABI
 embeds the existing Rust host dispatcher/vault/SQLite core in-process. No third-party
 UI framework, daemon, new editor or Swift Markdown/Base/index implementation is
-introduced. Stage4 query APIs will
-be consumed incrementally. Existing Capacitor/filesystem code stays in source.
+introduced. Mobile now exposes the existing shared typed DocumentService through
+admitted Rust Documents frames; actual combined WebView query verification
+remains a build/runtime gate. Existing Capacitor/filesystem code stays in source.
 
 Native selects trusted roots before editor launch; web requests cannot select a
 filesystem root, executable, sync endpoint or credentials. Same bounded typed
@@ -639,3 +640,36 @@ reported no input sent. Skill-directed orca open restored runtimef7efea81; worke
 terminal371 was re-listed live before retry. Root durable inbox was notified.
 Owner terminal listing changed, while orchestration caller still reports the
 originalbbf identity; do not assume a new listed shell is the active agent.
+
+
+## Single Notes page source ready — 2026-10-17 22:24 UTC
+
+NativePages-only worker commit a23232f8 imported as0afe303c after scoped owner
+and independent worker source review. One native Notes tab contains persistent
+Recents/Files modes via the heading’s native Menu/Picker. Root-only top-left
+glass settings gear opens a native sheet with Done and Choose vault. Folder
+history capsule replaces the gear; editor contains no settings gear. Modal
+dismissal precedes Choose vault; an intent arriving before page reappearance or
+while reads drain is retained until the existing session can close safely.
+Legacy Settings/invalid/empty optional-page preferences become Recents; valid
+Files selection is retained. Both modes remain available and old inclusion
+toggles are removed. Listing identities, direct file opens, folder disclosure,
+compose, skeletons, glass shadow stacking and accessibility behavior are retained.
+Worker Swift parse, diff check and focused source checks pass; actual Swift type/
+link, menu/tab/sheet/persistence/accessibility/visual behavior are NOT yet proven.
+No new Xcode build, Simulator pass or phone update followed this source import.
+
+The remaining initial selected-entry overlay gap was closed in ec1ba9bd:
+missing/replaced launch identity reveals the visible error notice immediately,
+using only that original admitted launch identity, with no successful noteOpened
+or replacement acknowledgement. Navigation suite43/43 and full tsc54340 pass0;
+independent source review msg_612846095fe1 clean. Actual native overlay remains
+a runtime gate.
+
+Apple read-only retry22:22:39 UTC still returns403
+FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED for GET apps and users. No
+resource/account/legal changes, invites, upload or duplicate support case ran.
+Existing Apple support case103000040642 remains the escalation. This does not
+block the already installed signed development build5, but TestFlight remains
+unavailable. Root retains its bounded desktop retry/build resources and will
+announce canonical consumer integration before the next native build.
