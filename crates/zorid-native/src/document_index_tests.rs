@@ -70,7 +70,7 @@ fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
         &mut vault,
         "base",
         "All.base",
-        "views:\n  - type: table\n    name: All\n    order: [file.path, file.size, file.mtime]\n",
+        "views:\n  - type: table\n    name: All\n    order: [file.path, file.size, file.mtime]\n  - type: table\n    name: Linked\n    filters: 'file.hasLink(\"Target\")'\n    order: [file.path]\n",
     );
     vault.initialize_document_index().unwrap();
     let snapshot = build(&mut vault);
@@ -158,6 +158,13 @@ fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
     assert_eq!(base.value.definition.revision, base_revision);
     assert_eq!(base.value.result.rows, old_rows); // includes original sizes/times
     assert_eq!(base.value.result.snapshot_id, snapshot);
+    let linked = vault
+        .query_base_document_view(&old, &id("base"), "Linked", &QueryOptions::default())
+        .unwrap();
+    assert_eq!(linked.value.result.rows.len(), 1);
+    assert_eq!(linked.value.result.rows[0].path, "Source.md");
+    assert_eq!(linked.value.result.rows[0].entry_id, id("source"));
+
     let encoded = serde_json::to_value(&base).unwrap();
     assert!(encoded.get("source").is_some());
     assert!(encoded.get("snapshot").is_some());
