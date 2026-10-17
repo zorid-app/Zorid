@@ -345,7 +345,7 @@ fn coherent_relationship_pages_keep_exact_witnesses_and_expire_old_tokens() {
     let documents = [
         (
             "A.md",
-            "[[B]] ![[B]] [[Missing]] [web](https://example.org)",
+            "[[B]] ![[B]] [[Missing]] [web](https%3A%2F%2Fexample.org)",
             true,
         ),
         ("B.md", "target", true),
