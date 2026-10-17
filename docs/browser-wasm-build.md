@@ -20,7 +20,7 @@ Explicit `CARGO`, `WASM_BINDGEN` and `CARGO_TARGET_DIR` overrides remain availab
 for development machines. `npm run build:core` regenerates/checks only the core.
 The pinned CLI must match `crates/zorid-wasm/Cargo.toml`.
 
-Webpack verifies the current browser storage, durable family command, recovery,
+The Vite asset pipeline verifies the current browser storage, durable family command, recovery,
 sync codec and returned plan class bindings before emitting assets. It defines
 `__ZORID_CORE_MODULE_PATH__` as `lib/core/<pair-sha256>/zorid_wasm.js`. Resolve it
 against `document.baseURI` in the app, then pass the absolute URL to the worker.
