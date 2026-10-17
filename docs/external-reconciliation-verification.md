@@ -122,3 +122,22 @@ Three new fault fixtures and the updated rollback fixture accompany it. Desktop
 diagnostic activation must wait for its coordinated validation. The >256 held
 directory progress wall is a separate required follow-up, not solved by treating
 incomplete inventory as complete namespace authority.
+
+Coordinator follow-up: aggregate `e9bc2be` passes native external gate `10156`
+**51/51**. Prior gate `21576` passed50/51; the corrupt-graph fixture's assertion
+incorrectly reloaded the deliberately corrupt graph. Test-only `deaaf95` checks
+the durable pending outbox count directly while retaining the typed fatal error,
+binding, receipt and physical-byte assertions. Main `4816771` integrates this
+batch; native/store sources are identical to the tested aggregate.
+
+Rebuilt CLI/host gate `7548` exited0. The retained actual disposable fixture
+`/private/tmp/zorid-native-default-8o5uj29z/vault` then reconciled its original
+folder move plus text edit and binary child deletion: folder/text stable IDs
+remain, the edited text is exactly33 bytes (SHA256
+`4c229322000382c309ae5e2e6bdb8d14b4dfef5afb4237fcb018063385258b9c`),
+and deleted binary is absent from the live list. Independent process restart and
+repeat rescan return complete with no imports, namespace changes or issues.
+Original CLI note and retained recovery-copy hashes remain unchanged. Report:
+`/private/tmp/zorid-compound-reconciliation-1017.json`. No test Electron process
+was left running; this follow-up is actual CLI/physical-file evidence, not a new
+Electron UI or network sync proof.

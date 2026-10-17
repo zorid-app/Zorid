@@ -116,6 +116,28 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Main4816771 integrates fatal routing2cceb6e, compound move/delete10479ea and
+  test-only corruption oracle4816771. Native/store sources exactly match tested
+  aggregate e9bc2be. Native external gate10156 passes51/51; prior21576 was50/51
+  because the corruption test reloaded its deliberately corrupt graph in its
+  assertion. Corrected oracle independently counts durable pending outbox rows;
+  runtime behavior was unchanged. Host incomplete-process gate68733 passes2/2
+  and bounded-diagnostic check passes1/1; CLI/host build7548 exit0.
+- Retained actual fixture now reconciles ExternalTools->ExternalRenamed plus
+  text edit and binary-child deletion through the rebuilt standalone CLI.
+  Folder/text IDs unchanged; exact33textbytes hash
+  4c229322000382c309ae5e2e6bdb8d14b4dfef5afb4237fcb018063385258b9c,
+  deleted binary absent from live list. Independent restart/rescan is complete,
+  zero imports/namespace/issues. Original CLI/recovery-copy hashes unchanged.
+  Report /private/tmp/zorid-compound-reconciliation-1017.json. No test Electron
+  process was present. Diagnostic activation remains isolated until UI wiring
+  joins it; do not copy its changed host into main before that coherent batch.
+- Browser rebuild9631 exit0 (webpack6.074sec, unchanged Rust cache). Actual normal
+  browser create/save/reload without credentials passed on8791; namespace,
+  simultaneous-tab and recovery evidence remain with browser owner. CLI
+  search/watch proposal approved, implementation package_sol. Streaming requires
+  normalized authenticated chunk storage/content references, not raising a cap;
+  desktop_default_sol owns a concrete contract proposal before broad edits.
 - Main04ca6f3 is clean. Isolated aggregate e42d7fe now composes native fatal-error
   propagation61236b2 (source0fcf8fe), atomic moved-folder/child-deletion37c77b4
   (source5404a50), status seam9a200fb and live incomplete diagnostics e42d7fe.
