@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/connectrpc/connect-es.git",
+  "tag": "v2.2.0",
+  "commit": "378bb8fde1209afc3ab6a9b0aa97c00d0db58c24",
+  "packages": {
+    "@connectrpc/connect": "2.2.0",
+    "@connectrpc/connect-web": "2.2.0"
+  },
+  "license": "Apache-2.0",
+  "notices": [
+    {
+      "file": "LICENSE",
+      "sourcePath": "LICENSE",
+      "sourceUrl": "https://raw.githubusercontent.com/connectrpc/connect-es/378bb8fde1209afc3ab6a9b0aa97c00d0db58c24/LICENSE",
+      "sourceSha256": "445e3398edab2a40d8d5e5c1a1d533af6464fbae8378ecc0caaf2668e9bbea73",
+      "sha256": "445e3398edab2a40d8d5e5c1a1d533af6464fbae8378ecc0caaf2668e9bbea73"
+    }
+  ]
+}
