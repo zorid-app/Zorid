@@ -149,6 +149,7 @@ Latest user sequence correction — 2026-10-17:
   as capability input, prioritize Zorid UX, and settle bounded behavior/contracts
   before parallel implementation. No speculative plugin framework is needed.
 - Native mobile improvements continue independently under its named owner.
+  Preparation/dependency map: docs/bases-tasks-calendar-plan.md.
   Stage5 enrollment/history/backups/management remain required, resequenced rather
   than dropped. Built-in active goal text predates this correction; this durable
   checkpoint is authoritative for execution order after Vite.
