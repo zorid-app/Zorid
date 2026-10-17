@@ -136,6 +136,18 @@ User confirms ownership of zorid.app and proposes it as the main-site entry, wit
 
 User questions whether excessive testing is delaying completion and asks for honest status. Coordinator acknowledged overly fragmented validation. Prioritize completing native/CLI and browser/relay flows, then batch meaningful integration checks. Keep regression tests for concrete data-loss, isolation, ordering and recovery bugs; avoid repeated unchanged component checks or new standalone audit projects. This does not reduce the original end-to-end acceptance requirements.
 
+## Native mobile shell steering — 2026-10-17
+
+Native mobile owner relayed direct user choices in durable messages
+msg_febbf11dd950 and msg_74bd1ce89ebb: top-left Settings, a configurable
+horizontal pill tab row, and native Recents and Files pages now. Home, Tasks and
+Calendar remain later page inventory, not implementation scope. Selecting a note
+pushes the shared web editor; Back returns to the originating native page. Use
+SwiftUI, appropriate Liquid Glass and animations with system preference support.
+The native session owns implementation and isolated evidence; source work does
+not establish actual device/simulator UX. Shared-core coordinator granted only
+the bounded initialPath/noteOpened workspace/platform seams in msg_77abcb590bc5.
+
 ## Canvas and Bases UX scope — 2026-10-17
 
 User replaced the active task with Canvas edit-button hit ownership, consistent

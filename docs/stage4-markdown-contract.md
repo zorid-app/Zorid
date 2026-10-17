@@ -338,8 +338,6 @@ They must not copy `expected` into their result. The checker itself validates
 IDs/provenance, byte/UTF-16 boundaries/source slices, ordering, line positions and
 task invariants; it does not implement parsing. Fixtures with quoted/escaped keys
 include separate `propertyKeySpellings` source assertions; decoded keys must not
-be mistaken for raw YAML spelling. Fixtures with quoted/escaped keys
-include separate `propertyKeySpellings` source assertions; decoded keys must not
 be mistaken for raw YAML spelling. The TypeScript option checks all
 recorded baseline observations, including intentional mismatches with the target.
 
