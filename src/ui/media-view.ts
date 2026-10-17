@@ -28,6 +28,7 @@ export function createMediaView(container: HTMLElement, path: string,
   if (!win) throw new Error('Media view requires an owning window');
   const root = doc.createElement('div');
   root.className = `zorid-media-view media-embed ${kind}-embed is-loading`;
+  root.dataset.nativeLoading = 'true'; root.setAttribute('aria-busy', 'true');
   const status = doc.createElement('span');
   status.className = 'zorid-media-status'; status.setAttribute('role', 'status');
   status.textContent = 'Loading…'; root.append(status); container.append(root);
@@ -42,6 +43,7 @@ export function createMediaView(container: HTMLElement, path: string,
     timer = undefined;
     if (media) media.style.height = '';
     root.classList.remove('is-loading');
+    delete root.dataset.nativeLoading; root.setAttribute('aria-busy', 'false');
     if (!root.classList.contains('is-error')) status.hidden = true;
     if (!settled) { settled = true; resolveReady(); }
   };

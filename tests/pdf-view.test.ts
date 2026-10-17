@@ -413,3 +413,29 @@ test('sidebar options menu reflects missing outline and opens functional thumbna
   items[0].click();await ticks();assert.equal(f.root.querySelector<HTMLElement>('.zorid-pdf-sidebar')!.hidden,false);
   button.click();f.env.window.document.querySelector<HTMLButtonElement>('.context-menu-item')!.click();await ticks();assert.equal(f.root.querySelector<HTMLElement>('.zorid-pdf-sidebar')!.hidden,true);
 });
+
+test('PDF native busy clears on initialized pages and on load failure with visible error',async t=>{
+  const f=fixture(t),root=f.root.querySelector<HTMLElement>('.zorid-pdf-view')!;
+  assert.equal(root.dataset.nativeLoading,'true');assert.equal(root.getAttribute('aria-busy'),'true');f.resolve();await f.view.ready;
+  assert.equal(root.hasAttribute('data-native-loading'),false);assert.equal(root.getAttribute('aria-busy'),'false');
+  const failed=fixture(t),failedRoot=failed.root.querySelector<HTMLElement>('.zorid-pdf-view')!;await ticks();failed.loading.reject(new Error('Invalid PDF'));
+  await assert.rejects(failed.view.ready,/Invalid PDF/);assert.equal(failedRoot.getAttribute('aria-busy'),'false');assert.equal(failedRoot.hasAttribute('data-native-loading'),false);
+  assert.equal(failed.root.querySelector<HTMLElement>('.zorid-pdf-status')!.hidden,false);assert.match(failedRoot.textContent!,/Unable to display PDF: Invalid PDF/);
+});
+
+test('disposing PDF before acquisition clears busy and releases the late lease without mounting',async t=>{
+  const {env,root}=dom(t),pending=deferred<any>();let releases=0;
+  const view=createPdfView(root,'late.pdf',{acquire:()=>pending.promise},{loadEngine:async()=>({} as PdfEngine)});const removed=root.querySelector<HTMLElement>('.zorid-pdf-view')!;
+  await ticks();view.destroy();pending.resolve({url:'blob:late',type:'application/pdf',release(){releases++;}});await view.ready;await ticks();
+  assert.equal(removed.hasAttribute('data-native-loading'),false);assert.equal(removed.getAttribute('aria-busy'),'false');assert.equal(releases,1);assert.equal(root.childElementCount,0);
+});
+
+test('password challenge suspends busy while user input is required and rearms on submitted retry',async t=>{
+  const f=fixture(t);await ticks();const root=f.root.querySelector<HTMLElement>('.zorid-pdf-view')!;
+  f.task.onPassword!(()=>{},1);assert.equal(root.hasAttribute('data-native-loading'),false);assert.equal(root.getAttribute('aria-busy'),'false');
+  const form=f.root.querySelector<HTMLFormElement>('form')!,input=form.querySelector('input')!;assert.equal(form.hidden,false);
+  form.dispatchEvent(new f.env.window.Event('submit',{cancelable:true}));assert.equal(root.getAttribute('aria-busy'),'false','empty submit still waits for input');
+  input.value='password';form.dispatchEvent(new f.env.window.Event('submit',{cancelable:true}));assert.equal(root.dataset.nativeLoading,'true');assert.equal(root.getAttribute('aria-busy'),'true');
+  f.task.onPassword!(()=>{},2);assert.equal(root.getAttribute('aria-busy'),'false');assert.equal(form.hidden,false);
+  f.view.destroy();assert.equal(root.hasAttribute('data-native-loading'),false);
+});
