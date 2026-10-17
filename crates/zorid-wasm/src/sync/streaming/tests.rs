@@ -191,3 +191,74 @@ fn source_metadata_and_binary_bytes_have_separate_bounds() {
     .unwrap();
     assert!(proof.check_preconditions(&changed).is_err());
 }
+
+#[test]
+fn local_stage_restart_replays_exact_chunk_page_payloads_and_manifest() {
+    let mut source = binary::BinaryManifestBuilder::new(scope());
+    let chunk = source
+        .push_chunk(
+            id("restart-chunk").unwrap(),
+            &vec![17; zorid_file_sync::MAX_CHUNK_BYTES],
+        )
+        .unwrap();
+    let tail = source
+        .push_chunk(id("restart-tail").unwrap(), b"tail")
+        .unwrap();
+    let page = source.flush_page(id("restart-page").unwrap()).unwrap();
+    let manifest = source.finish().unwrap();
+    let mut restored = WasmBinaryBuilder::from_scope(scope());
+    for chunk in [&chunk, &tail] {
+        let result = restored
+            .restore_chunk(chunk.id().as_str(), chunk.payload_bytes())
+            .unwrap();
+        assert_eq!(result.record.payload_bytes(), chunk.payload_bytes());
+        assert_eq!(result.record.record(), chunk.record());
+    }
+    let restored_page = restored
+        .restore_page(page.id().as_str(), page.payload_bytes())
+        .unwrap();
+    assert_eq!(restored_page.record.payload_bytes(), page.payload_bytes());
+    assert_eq!(
+        restored.builder.unwrap().finish().unwrap().manifest(),
+        manifest.manifest()
+    );
+}
+#[test]
+fn local_stage_replay_rejects_scope_id_role_and_noncanonical_sources_without_advancing() {
+    let mut source = binary::BinaryManifestBuilder::new(scope());
+    let chunk = source.push_chunk(id("chunk").unwrap(), b"tail").unwrap();
+    let page = source.flush_page(id("page").unwrap()).unwrap();
+    let mut restored = WasmBinaryBuilder::from_scope(scope());
+    let mut padded = b" \n".to_vec();
+    padded.extend(chunk.payload_bytes());
+    assert!(restored.restore_chunk("chunk", &padded).is_err());
+    assert!(restored
+        .restore_chunk("wrong-id", chunk.payload_bytes())
+        .is_err());
+    assert!(restored
+        .restore_chunk("page", page.payload_bytes())
+        .is_err());
+    let mut wrong = files::Payload::decode(chunk.payload_bytes()).unwrap();
+    wrong.scope.vault_id = zorid_sync_protocol::VaultId::new("other").unwrap();
+    assert!(restored
+        .restore_chunk("chunk", &wrong.encode().unwrap())
+        .is_err());
+    assert_eq!(restored.builder.as_ref().unwrap().accepted_length(), 0);
+    assert!(restored.pending.is_empty());
+    restored
+        .restore_chunk("chunk", chunk.payload_bytes())
+        .unwrap();
+    assert!(restored
+        .restore_page("chunk", chunk.payload_bytes())
+        .is_err());
+    let mut wrong_page = files::Payload::decode(page.payload_bytes()).unwrap();
+    if let files::Body::Page { page } = &mut wrong_page.body {
+        page.chunks[0].digest = Sha256Digest([0; 32]);
+    }
+    assert!(restored
+        .restore_page("page", &wrong_page.encode().unwrap())
+        .is_err());
+    assert_eq!(restored.pending.len(), 1);
+    restored.restore_page("page", page.payload_bytes()).unwrap();
+    assert!(restored.pending.is_empty());
+}

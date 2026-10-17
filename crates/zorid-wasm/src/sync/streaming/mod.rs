@@ -297,15 +297,99 @@ impl WasmMetadataState {
 }
 #[wasm_bindgen]
 pub struct WasmBinaryBuilder {
-    builder: binary::BinaryManifestBuilder,
+    scope: Scope,
+    builder: Option<binary::BinaryManifestBuilder>,
+    pending: Vec<zorid_file_sync::ChunkRef>,
+}
+impl WasmBinaryBuilder {
+    fn from_scope(scope: Scope) -> Self {
+        Self {
+            builder: Some(binary::BinaryManifestBuilder::new(scope.clone())),
+            scope,
+            pending: vec![],
+        }
+    }
+    fn push(&mut self, key: UpdateId, bytes: &[u8]) -> Result<binary::AuthoredRecord> {
+        let record = domain(
+            self.builder
+                .as_mut()
+                .ok_or("binary builder is unusable")?
+                .push_chunk(key.clone(), bytes),
+        )?;
+        // Derive the same bounded reference without another fallible operation
+        // after the portable builder advances its cursor.
+        self.pending.push(zorid_file_sync::ChunkRef {
+            id: key,
+            bytes: bytes.len() as u32,
+            digest: Sha256Digest::of(bytes),
+        });
+        Ok(record)
+    }
+    fn flush(&mut self, key: UpdateId) -> Result<binary::AuthoredRecord> {
+        let record = domain(
+            self.builder
+                .as_mut()
+                .ok_or("binary builder is unusable")?
+                .flush_page(key),
+        )?;
+        self.pending.clear();
+        Ok(record)
+    }
+    fn checked_restore(&self, key: &str, exact: &[u8]) -> Result<files::Payload> {
+        if self.builder.is_none() {
+            return Err("binary builder is unusable".into());
+        }
+        let payload = domain(files::Payload::decode(exact))?;
+        if payload.scope != self.scope || payload.id != id(key)? {
+            return Err("stage payload scope or identity mismatch".into());
+        }
+        // This API restores LOCAL builder emissions only. Reject a noncanonical
+        // source before mutation; never normalize a received/remote payload.
+        if domain(payload.encode())? != exact {
+            return Err("local stage payload is not an exact canonical builder emission".into());
+        }
+        Ok(payload)
+    }
+    fn retained_emission(
+        &mut self,
+        record: binary::AuthoredRecord,
+        exact: &[u8],
+    ) -> Result<WasmAuthoredRecord> {
+        // Scope/id/body plus canonical encoding were checked before mutation.
+        // Still fail closed if the portable encoder ever diverges: callers must
+        // discard/rebuild this transient replay cache, never continue advanced.
+        if record.payload_bytes() != exact {
+            self.builder = None;
+            self.pending.clear();
+            return Err("binary replay mismatch; builder is unusable".into());
+        }
+        Ok(WasmAuthoredRecord { record })
+    }
+    fn restore_chunk(&mut self, key: &str, exact: &[u8]) -> Result<WasmAuthoredRecord> {
+        let payload = self.checked_restore(key, exact)?;
+        let files::Body::Chunk { bytes } = payload.body else {
+            return Err("stage payload is not a chunk".into());
+        };
+        let record = self.push(payload.id, &bytes)?;
+        self.retained_emission(record, exact)
+    }
+    fn restore_page(&mut self, key: &str, exact: &[u8]) -> Result<WasmAuthoredRecord> {
+        let payload = self.checked_restore(key, exact)?;
+        let files::Body::Page { page } = payload.body else {
+            return Err("stage payload is not a page".into());
+        };
+        if page.chunks != self.pending {
+            return Err("stage page differs from pending chunk order".into());
+        }
+        let record = self.flush(payload.id)?;
+        self.retained_emission(record, exact)
+    }
 }
 #[wasm_bindgen]
 impl WasmBinaryBuilder {
     #[wasm_bindgen(constructor)]
     pub fn new(scope_json: &str) -> std::result::Result<Self, JsValue> {
-        Ok(Self {
-            builder: binary::BinaryManifestBuilder::new(control(scope_json).map_err(error)?),
-        })
+        Ok(Self::from_scope(control(scope_json).map_err(error)?))
     }
     #[wasm_bindgen(js_name=pushChunk)]
     pub fn push_chunk(
@@ -314,28 +398,46 @@ impl WasmBinaryBuilder {
         bytes: &[u8],
     ) -> std::result::Result<WasmAuthoredRecord, JsValue> {
         Ok(WasmAuthoredRecord {
-            record: self
-                .builder
-                .push_chunk(id(key).map_err(error)?, bytes)
-                .map_err(error)?,
+            record: self.push(id(key).map_err(error)?, bytes).map_err(error)?,
         })
     }
     #[wasm_bindgen(js_name=flushPage)]
     pub fn flush_page(&mut self, key: &str) -> std::result::Result<WasmAuthoredRecord, JsValue> {
         Ok(WasmAuthoredRecord {
-            record: self
-                .builder
-                .flush_page(id(key).map_err(error)?)
-                .map_err(error)?,
+            record: self.flush(id(key).map_err(error)?).map_err(error)?,
         })
+    }
+    #[wasm_bindgen(js_name=restoreChunkPayload)]
+    pub fn restore_chunk_payload(
+        &mut self,
+        key: &str,
+        exact: &[u8],
+    ) -> std::result::Result<WasmAuthoredRecord, JsValue> {
+        self.restore_chunk(key, exact).map_err(error)
+    }
+    #[wasm_bindgen(js_name=restorePagePayload)]
+    pub fn restore_page_payload(
+        &mut self,
+        key: &str,
+        exact: &[u8],
+    ) -> std::result::Result<WasmAuthoredRecord, JsValue> {
+        self.restore_page(key, exact).map_err(error)
     }
     #[wasm_bindgen(js_name=statusJson)]
     pub fn status_json(&self) -> std::result::Result<String, JsValue> {
-        json(&value!({"accepted_length":self.builder.accepted_length().to_string(),"pending_chunks":self.builder.pending_chunks()})).map_err(error)
+        let builder = self
+            .builder
+            .as_ref()
+            .ok_or_else(|| error("binary builder is unusable"))?;
+        json(&value!({"accepted_length":builder.accepted_length().to_string(),"pending_chunks":builder.pending_chunks()})).map_err(error)
     }
     pub fn finish(self) -> std::result::Result<WasmBuiltManifest, JsValue> {
         Ok(WasmBuiltManifest {
-            built: self.builder.finish().map_err(error)?,
+            built: self
+                .builder
+                .ok_or_else(|| error("binary builder is unusable"))?
+                .finish()
+                .map_err(error)?,
         })
     }
 }
