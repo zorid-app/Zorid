@@ -1,0 +1,17 @@
+[package]
+name = "zorid-desktop-host"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+description = "Private framed stdio host for the shared native vault core"
+
+[dependencies]
+zorid-core = { path = "../zorid-core" }
+zorid-native = { path = "../zorid-native" }
+zorid-store = { path = "../zorid-store" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

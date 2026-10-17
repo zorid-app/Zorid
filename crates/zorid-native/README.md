@@ -141,3 +141,45 @@ Presentation times are local replica display times (legacy zero means unknown),
 not source filesystem dates. The decimal local cursor is independent of sync and
 command receipt sequences. Consumers must reload on bootstrap events and use
 opaque entry revisions for compare-and-write.
+
+
+Host handoff uses `prepare_host_intent`, `commit_host_intent`, `query_host_intent`,
+`list_host_intents` and `acknowledge_host_intent`. Preparing persists an inert token;
+commit is the separate execution authorization after a consumer checkpoint.
+Commit returns a metadata view with the durable receipt or persisted semantic
+rejection. Only its optional projection field reports that call's physical
+publication outcome; query/list omit it rather than claiming current filesystem
+state. Recovery must use the same client/token and exact persisted command.
+Native `recover()` does not execute merely prepared host intents. The application
+consumer owns selecting authorized retries and acknowledging reconciled outcomes.
+
+## Managed text and durable consumers
+
+`identity()` returns the persisted local authority UUID plus optional logical
+realm/vault binding. `read_presented(entry_id)` supplies a coherent committed read
+for recovery after rename. Host-intent query metadata includes the stored mutation
+kind. Checkpoint load/CAS/list/changes delegate to the same SQLite authority under
+the native metadata lock; path/lock failures remain uncertain storage errors.
+
+Text binding/adoption and authenticated receive use the same bounded native lock.
+Receive commits its database transaction before attempting publication and returns
+that commit separately from `Projected`/`Pending`; it does not author filesystem
+imports as a side effect. A crash after receive commit can replay pending projection
+without reauthoring the update. Observed edits against a managed physical baseline
+use the persisted causal branch, merge into current text, and retain both histories.
+An undisplaced blocked stage may be cancelled to allow this merge only when no
+previous inode exists and the destination is not the staged inode. Displaced or
+otherwise uncertain attempts remain blocked and preserve external bytes.
+
+This source slice does not implement enrollment/key recovery, network sessions,
+actor-history garbage collection, arbitrary-file remote ingestion, or physical
+namespace move/delete completion. Keys and authorized delivery context remain
+explicit host capabilities. Existing documented filesystem trust boundaries and
+platform limits still apply.
+
+Focused validation for this schema6 slice: 108 native/store tests passed in this
+worktree's own Cargo target with one build job and one test thread. This includes
+fixture-only process crashes/restarts, two-way encrypted text updates through the
+native adapter, offline external edits, and existing filesystem race fixtures.
+It does not establish a real server/network, Electron renderer, browser, mobile,
+or arbitrary-file synchronization acceptance gate.

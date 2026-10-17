@@ -7,6 +7,11 @@ pub(super) const SCHEMA: &[(&str,&str)] = &[
     ("directory_attempts","CREATE TABLE directory_attempts (attempt_id TEXT PRIMARY KEY NOT NULL, entry_id TEXT NOT NULL REFERENCES entries(id), operation_id TEXT NOT NULL REFERENCES operations(operation_id), completed INTEGER NOT NULL CHECK(completed IN (0,1)), record TEXT NOT NULL)"),
     ("active_directory_projection","CREATE UNIQUE INDEX active_directory_projection ON directory_attempts(entry_id) WHERE completed = 0"),
 ];
+pub(super) const SCHEMA_V6: &[(&str,&str)] = &[
+    ("directory_baselines","CREATE TABLE directory_baselines (entry_id TEXT PRIMARY KEY NOT NULL REFERENCES entries(id), record TEXT NOT NULL)"),
+    ("directory_attempts","CREATE TABLE directory_attempts (attempt_id TEXT PRIMARY KEY NOT NULL, entry_id TEXT NOT NULL REFERENCES entries(id), job_id TEXT NOT NULL REFERENCES projection_jobs(job_id), completed INTEGER NOT NULL CHECK(completed IN (0,1)), record TEXT NOT NULL)"),
+    ("active_directory_projection","CREATE UNIQUE INDEX active_directory_projection ON directory_attempts(entry_id) WHERE completed = 0"),
+];
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DirectoryBaseline {
@@ -25,8 +30,8 @@ pub enum DirectoryPhase {
 #[serde(deny_unknown_fields)]
 pub struct DirectoryAttempt {
     pub attempt_id: OperationId,
-    pub operation_id: OperationId,
-    pub sequence: String,
+    pub job_id: OperationId,
+    pub origin: ProjectionOrigin,
     pub target: EntryState,
     pub phase: DirectoryPhase,
     pub stage_identity: Option<String>,
@@ -43,21 +48,16 @@ fn valid_identity(value: &str) -> bool {
 fn decode(
     id: &str,
     entry: &str,
-    operation: &str,
+    job: &str,
     completed: i64,
     json: &str,
 ) -> Result<DirectoryAttempt> {
     let a: DirectoryAttempt = serde_json::from_str(json)?;
     valid_directory(&a.target, entry)?;
     if a.attempt_id.as_str() != id
-        || a.operation_id.as_str() != operation
+        || a.job_id.as_str() != job
         || !matches!(completed, 0 | 1)
         || (a.phase == DirectoryPhase::Complete) != (completed == 1)
-        || !a
-            .sequence
-            .parse::<i64>()
-            .ok()
-            .is_some_and(|n| n > 0 && n.to_string() == a.sequence)
         || a.stage_identity
             .as_ref()
             .is_some_and(|s| !valid_identity(s))
@@ -71,22 +71,25 @@ fn decode(
 }
 fn get(tx: &Connection, id: &OperationId) -> Result<DirectoryAttempt> {
     let (entry, op, done, s): (String, String, i64, String) = tx.query_row(
-        "SELECT entry_id,operation_id,completed,record FROM directory_attempts WHERE attempt_id=?1",
+        "SELECT entry_id,job_id,completed,record FROM directory_attempts WHERE attempt_id=?1",
         [id.as_str()],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
-    decode(id.as_str(), &entry, &op, done, &s)
+    let value = decode(id.as_str(), &entry, &op, done, &s)?;
+    validate_job(tx, &value)?;
+    Ok(value)
 }
 fn put(tx: &Connection, a: &DirectoryAttempt) -> Result<()> {
     let s = serde_json::to_string(a)?;
     decode(
         a.attempt_id.as_str(),
         a.target.id.as_str(),
-        a.operation_id.as_str(),
+        a.job_id.as_str(),
         i64::from(a.phase == DirectoryPhase::Complete),
         &s,
     )?;
-    tx.execute("INSERT INTO directory_attempts(attempt_id,entry_id,operation_id,completed,record) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(attempt_id) DO UPDATE SET completed=excluded.completed,record=excluded.record",params![a.attempt_id.as_str(),a.target.id.as_str(),a.operation_id.as_str(),a.phase==DirectoryPhase::Complete,s])?;
+    validate_job(tx, a)?;
+    tx.execute("INSERT INTO directory_attempts(attempt_id,entry_id,job_id,completed,record) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(attempt_id) DO UPDATE SET completed=excluded.completed,record=excluded.record",params![a.attempt_id.as_str(),a.target.id.as_str(),a.job_id.as_str(),a.phase==DirectoryPhase::Complete,s])?;
     Ok(())
 }
 fn current(tx: &Connection, id: &EntryId) -> Result<EntryState> {
@@ -126,25 +129,17 @@ fn put_baseline(tx: &Connection, b: &DirectoryBaseline) -> Result<()> {
 }
 impl Store {
     pub fn pending_directory_create(&self, id: &EntryId) -> Result<bool> {
-        let rows = self
-            .connection
-            .prepare("SELECT o.request FROM operations o JOIN projection_queue q USING(sequence)")?
-            .query_map([], |r| r.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        for s in rows {
-            let req: MutationRequest = serde_json::from_str(&s)?;
-            if matches!(req.mutation,Mutation::Create{id:target,kind:EntryKind::Folder,..} if target==*id)
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        Ok(
+            !projection_jobs::pending(&self.connection, id, ProjectionWork::CreateDirectory)?
+                .is_empty(),
+        )
     }
+
     pub fn directory_baseline(&self, id: &EntryId) -> Result<Option<DirectoryBaseline>> {
         baseline(&self.connection, id)
     }
     pub fn directory_attempts(&self, include_completed: bool) -> Result<Vec<DirectoryAttempt>> {
-        let mut stmt=self.connection.prepare("SELECT attempt_id,entry_id,operation_id,completed,record FROM directory_attempts ORDER BY rowid")?;
+        let mut stmt=self.connection.prepare("SELECT attempt_id,entry_id,job_id,completed,record FROM directory_attempts ORDER BY rowid")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok((
@@ -158,7 +153,11 @@ impl Store {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let all: Vec<_> = rows
             .into_iter()
-            .map(|(id, entry, op, done, s)| decode(&id, &entry, &op, done, &s))
+            .map(|(id, entry, op, done, s)| {
+                let a = decode(&id, &entry, &op, done, &s)?;
+                validate_job(&self.connection, &a)?;
+                Ok(a)
+            })
             .collect::<Result<_>>()?;
         Ok(all
             .into_iter()
@@ -209,34 +208,16 @@ impl Store {
         {
             return get(&tx, &OperationId::new(prior)?);
         }
-        let rows=tx.prepare("SELECT o.sequence,o.operation_id,o.request,o.result FROM operations o JOIN projection_queue q USING(sequence) ORDER BY o.sequence")?.query_map([],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
-        let mut selected = None;
-        for (sequence, op, request, result) in rows {
-            let record = RecordedOperation {
-                request: serde_json::from_str(&request)?,
-                result: serde_json::from_str(&result)?,
-            };
-            check_idempotency(&record.request, Some(&record))?;
-            if record.request.operation_id.as_str() != op
-                || record.result.sequence != sequence as u64
-            {
-                return Err(StoreError::Corrupt(
-                    "queued operation columns disagree".into(),
-                ));
-            }
-            if matches!(&record.request.mutation,Mutation::Create{id:target,path,kind:EntryKind::Folder,..} if target==id&&path==&state.path)
-            {
-                selected = Some((op, sequence));
-                break;
-            }
-        }
-        let (operation, sequence) = selected.ok_or_else(|| {
-            StoreError::Corrupt("no pending folder-create operation for this path".into())
-        })?;
+        let job = projection_jobs::pending(&tx, id, ProjectionWork::CreateDirectory)?
+            .into_iter()
+            .find(|job| job.target.path == state.path)
+            .ok_or_else(|| {
+                StoreError::Corrupt("no pending folder-create job for this path".into())
+            })?;
         let a = DirectoryAttempt {
             attempt_id: OperationId::new(uuid::Uuid::new_v4().to_string())?,
-            operation_id: OperationId::new(operation)?,
-            sequence: sequence.to_string(),
+            job_id: job.job_id,
+            origin: job.origin,
             target: state,
             phase: DirectoryPhase::Prepared,
             stage_identity: None,
@@ -302,30 +283,98 @@ impl Store {
                 return Err(StoreError::Corrupt("directory provenance changed".into()));
             }
         }
-        let (sequence, request, result): (i64, String, String) = tx.query_row(
-            "SELECT sequence,request,result FROM operations WHERE operation_id=?1",
-            [a.operation_id.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?;
-        let record = RecordedOperation {
-            request: serde_json::from_str(&request)?,
-            result: serde_json::from_str(&result)?,
-        };
-        check_idempotency(&record.request, Some(&record))?;
-        if record.request.operation_id != a.operation_id
-            || sequence.to_string() != a.sequence
-            || record.result.sequence != sequence as u64
-            || !matches!(&record.request.mutation,Mutation::Create{id,path,kind:EntryKind::Folder,..} if id==&state.id&&path==&state.path)
-        {
-            return Err(StoreError::Corrupt(
-                "folder attempt does not represent queued create".into(),
-            ));
-        }
+        let job = validate_job(&tx, &a)?;
         put_baseline(&tx, &DirectoryBaseline { state, identity })?;
-        tx.execute("DELETE FROM projection_queue WHERE sequence=?1", [sequence])?;
+        projection_jobs::finish(&tx, &job)?;
         a.phase = DirectoryPhase::Complete;
         put(&tx, &a)?;
         tx.commit()?;
         Ok(())
     }
+}
+
+fn validate_job(tx: &Connection, attempt: &DirectoryAttempt) -> Result<ProjectionJob> {
+    let job = projection_jobs::get(tx, &attempt.job_id)?;
+    if job.origin != attempt.origin
+        || job.work != ProjectionWork::CreateDirectory
+        || job.target.id != attempt.target.id
+        || job.target.path != attempt.target.path
+        || job.target.kind != EntryKind::Folder
+    {
+        return Err(StoreError::Corrupt(
+            "directory attempt does not represent its exact create job".into(),
+        ));
+    }
+    Ok(job)
+}
+pub(super) fn migrate_job_schema(tx: &Connection) -> Result<()> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Legacy {
+        attempt_id: OperationId,
+        operation_id: OperationId,
+        sequence: String,
+        target: EntryState,
+        phase: DirectoryPhase,
+        stage_identity: Option<String>,
+    }
+    let rows = tx
+        .prepare(
+            "SELECT attempt_id,entry_id,operation_id,completed,record FROM directory_attempts",
+        )?
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    tx.execute_batch("DROP INDEX active_directory_projection; ALTER TABLE directory_attempts RENAME TO legacy_directory_attempts;")?;
+    tx.execute_batch(SCHEMA_V6[1].1)?;
+    tx.execute_batch(SCHEMA_V6[2].1)?;
+    for (id, entry, operation, completed, json) in rows {
+        let old: Legacy = serde_json::from_str(&json)?;
+        if old.attempt_id.as_str() != id
+            || old.target.id.as_str() != entry
+            || old.operation_id.as_str() != operation
+            || !matches!(completed, 0 | 1)
+            || (old.phase == DirectoryPhase::Complete) != (completed == 1)
+            || !old
+                .sequence
+                .parse::<i64>()
+                .ok()
+                .is_some_and(|n| n > 0 && n.to_string() == old.sequence)
+        {
+            return Err(StoreError::Corrupt(
+                "legacy directory attempt identity mismatch".into(),
+            ));
+        }
+        let job_id = OperationId::new(format!("legacy_projection_{}", old.sequence))?;
+        let job = projection_jobs::get(tx, &job_id)?;
+        if job.origin
+            != (ProjectionOrigin::LocalCommand {
+                operation_id: old.operation_id,
+            })
+        {
+            return Err(StoreError::Corrupt(
+                "legacy directory attempt operation mismatch".into(),
+            ));
+        }
+        put(
+            tx,
+            &DirectoryAttempt {
+                attempt_id: old.attempt_id,
+                job_id,
+                origin: job.origin,
+                target: old.target,
+                phase: old.phase,
+                stage_identity: old.stage_identity,
+            },
+        )?;
+    }
+    tx.execute_batch("DROP TABLE legacy_directory_attempts")?;
+    Ok(())
 }

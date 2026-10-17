@@ -7,8 +7,10 @@ coordination. This initial slice supports macOS and Linux; other platforms retur
 `unsupported_platform` until their native adapter exists.
 
 This is not the completed full-vault CLI milestone. Move/delete, search,
-automatic watcher integration, E2EE sync and real Electron
-concurrency verification remain required. This executable never uploads data.
+automatic watcher integration, full-vault E2EE sync and real Electron
+concurrency verification remain required. An explicitly selected fixture text-sync
+surface now sends encrypted native-authored updates to a local relay; its source
+and fixture presence do not establish runtime acceptance.
 
 ## Commands
 
@@ -134,3 +136,90 @@ have not been executed as part of source preparation.
 Source presence alone does not establish these checks passed. The coordinator's
 execution ledger records actual runs. These tests do not establish Electron
 integration, server sync, Windows support or the completed CLI milestone.
+
+## Explicit fixture text sync
+
+This source slice uses the standalone process's embedded NativeVault, including
+its persisted text CRDT, authored queue, seal-once encrypted wire and atomic
+received-update/cursor transaction. It never requires desktop IPC, sends local
+MutationRequests as sync payloads, or treats the local command outbox as the
+network queue. Current native limits apply: managed UTF-8 text is at most 256 KiB,
+with an 8,192-character whole-text diff work bound. Binary files, namespace
+operations, creation/discovery over sync, continuous watching, production
+onboarding and service deployment remain unsupported by these commands.
+
+Each invocation takes `sync --credentials /absolute/path/to/fixture.json` followed
+by one of the commands below. Provision the file through the synthetic relay
+fixture host. The schema is version 1 with `endpoint`, `realm_id`, `vault_id`,
+`server_epoch`, `key_epoch`, `key_base64` (32-byte vault key, canonical padded
+base64) and `bearer_token` (relay-issued 64-character lowercase hex). Never put
+keys or tokens in argv. Credentials must be outside the vault, in an owner-only
+regular file owned by the current effective user, with one link; final-component symlinks and
+files over 16 KiB are rejected. Ancestor symlinks are resolved normally; this
+fixture check is not a sandbox against hostile same-user path replacement. Credential bodies and low-level diagnostics are
+never printed. These fixture inputs are not production enrollment/secret storage.
+
+The endpoint must be HTTP on an explicit literal loopback IP and port, without
+userinfo, query, fragment or a non-root path. DNS names, redirects, system proxies,
+implicit retries and remote endpoints are disabled. The expected realm and server
+epoch are independently pinned in the file. An epoch change fails explicitly;
+this CLI does not reset a receive cursor or rotate keys automatically.
+
+```sh
+zorid --vault /tmp/fixture-a sync --credentials /tmp/fixture-credentials.json fixture-bind-empty --id note1 --bootstrap-id shared-bootstrap --expected-revision REVISION
+zorid --vault /tmp/fixture-a sync --credentials /tmp/fixture-credentials.json fixture-adopt --id note1 --bootstrap-id shared-bootstrap --expected-revision REVISION --operation-id adopt1 --input /tmp/exact-existing-text.md
+zorid --vault /tmp/fixture-a sync --credentials /tmp/fixture-credentials.json status
+zorid --vault /tmp/fixture-a sync --credentials /tmp/fixture-credentials.json once --max-push 64 --max-pages 4
+```
+
+`fixture-bind-empty` binds an existing empty file using explicit entry and bootstrap
+identities; replicas must agree on those identities, even if their local revisions
+are different. `fixture-adopt` authors the initial content once from exact committed
+bytes with a caller-stable operation ID and revision precondition. It is an
+alternative to binding that same nonempty replica, not a command to independently
+seed every replica. Both commands work offline. After binding/adoption, ordinary
+revision-checked CLI writes and native external reconciliation use the shared text
+mutation pipeline. Other replicas initially bind an empty file to the agreed
+identity and receive the authored seed. Matching paths or matching content never
+infer document identity. Unknown incoming entry/bootstrap identities stop receive;
+they do not cause implicit file creation or a skipped cursor position.
+
+`once` first pushes up to `max-push` pending native-authored updates, then pulls at
+most `max-pages` pages of at most 64 entries each. Zero disables the corresponding
+phase. Pull uses one fixed server high-water boundary for that invocation. The
+transport caps each response before JSON/base64 decoding, validates contiguous
+sequences, snapshot bounds, epoch and protocol extensions, and authenticates all
+bounded page envelopes before committing any of that page. Upload ACKs validate
+the exact update/vault/epoch and do not advance receive cursors.
+
+A lost upload ACK retains the previously sealed wire. Run the same sync command
+again: the next process sends the exact persisted ciphertext with the same update
+ID. A failed receive never authorizes a cursor advance. A successfully committed
+receive may have pending filesystem publication; its persisted cursor is still
+valid, and `recover` retries publication. Native cursor/state CAS rejects concurrent
+stale workers. Partial progress before a later error remains durable; another
+invocation continues from persisted state without new local operations or echoing
+received updates into the authored queue.
+
+Success reports `server_accepted`, `locally_received`,
+`receive_projection_pending`, and `pull_snapshot_complete` separately. `synced`
+remains false and `all_file_sync_supported` remains false: completing a text pull
+snapshot does not complete full-vault sync. `local_command_outbox_unclassified`
+reports the older local command queue, which is not acknowledged by this text
+transport and can include already transported text commands. It must not be used
+as a count of missing server text updates. `pending_text_sample` is bounded at
+1,000 entries; inspect `pending_text_sample_complete` rather than assuming a full
+count. `status` is offline and never seals/uploads data. `sync_available: false`
+on ordinary status refers to full-vault sync; `fixture_text_sync_available: true`
+identifies this limited surface.
+
+Focused source fixtures in `tests/sync.rs` use a real loopback relay and repeated
+independent CLI executable processes. They cover offline concurrent edits,
+received-no-echo, lost remote ACK after real server commit, exact ciphertext retry,
+BOM/line-ending preservation, revoked credentials, wrong epoch, invalid encryption
+and protected credential inputs. Transport unit fixtures reject malformed page
+chains and excessive response bodies. Runtime results belong in the coordinator's
+execution ledger; no production or complete full-vault-sync claim follows from
+these fixtures. The conventional blocking HTTP client uses the
+[reqwest 0.13.5 client controls](https://docs.rs/reqwest/0.13.5/reqwest/blocking/struct.ClientBuilder.html)
+and [bounded Read response interface](https://docs.rs/reqwest/0.13.5/reqwest/blocking/struct.Response.html).

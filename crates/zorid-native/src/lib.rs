@@ -6,8 +6,11 @@ use zorid_core::{
     CommitResult, EntryId, EntryState, MutationRequest, OperationId, Revision, VaultPath,
 };
 pub use zorid_store::{
-    ChangeOrigin, ChangePage, EntryPresentation, ListingSnapshot, LocalChange, PresentedEntry,
-    PresentedState,
+    AuthoredTextStatus, AuthorityIdentity, ChangeOrigin, ChangePage, Checkpoint, CheckpointError,
+    CheckpointMetadata, CheckpointPage, CheckpointScope, CheckpointWrite, EntryPresentation,
+    HostIntentAcknowledgment, HostIntentPage, HostIntentRef, HostIntentState, HostIntentView,
+    HostMutationKind, HostProjectionState, HostRejection, HostRejectionCode, ListingSnapshot,
+    LocalChange, PresentedEntry, PresentedState, TextReceiveOutcome, MAX_CHECKPOINT_BYTES,
 };
 use zorid_store::{DirectoryPhase, ProjectionPhase, ScanRun, StoredEntry};
 
@@ -57,6 +60,11 @@ impl From<rustix::io::Errno> for Error {
     }
 }
 pub type Result<T> = std::result::Result<T, Error>;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReceiveOutcome {
+    pub commit: TextReceiveOutcome,
+    pub projection: ProjectionStatus,
+}
 #[derive(Debug, Clone)]
 pub struct Options {
     pub lock_timeout: Duration,
@@ -168,6 +176,109 @@ impl NativeVault {
     pub fn open_existing_with_options(_: impl AsRef<std::path::Path>, _: Options) -> Result<Self> {
         unsupported()
     }
+    pub fn checkpoint_load(
+        &mut self,
+        _: &CheckpointScope,
+        _: &str,
+    ) -> std::result::Result<Option<Checkpoint>, CheckpointError> {
+        Err(CheckpointError::ExternalStorage(std::io::Error::other(
+            "unsupported platform",
+        )))
+    }
+    pub fn checkpoint_compare_and_swap(
+        &mut self,
+        _: &CheckpointScope,
+        _: CheckpointWrite<'_>,
+    ) -> std::result::Result<Checkpoint, CheckpointError> {
+        Err(CheckpointError::ExternalStorage(std::io::Error::other(
+            "unsupported platform",
+        )))
+    }
+    pub fn checkpoint_list(
+        &mut self,
+        _: &CheckpointScope,
+        _: u32,
+        _: Option<&str>,
+    ) -> std::result::Result<CheckpointPage, CheckpointError> {
+        Err(CheckpointError::ExternalStorage(std::io::Error::other(
+            "unsupported platform",
+        )))
+    }
+    pub fn checkpoint_changes(
+        &mut self,
+        _: &CheckpointScope,
+        _: &str,
+        _: u32,
+        _: Option<&str>,
+    ) -> std::result::Result<CheckpointPage, CheckpointError> {
+        Err(CheckpointError::ExternalStorage(std::io::Error::other(
+            "unsupported platform",
+        )))
+    }
+    pub fn text_state(&self, _: &EntryId) -> Result<Option<zorid_client_sync::TextState>> {
+        unsupported()
+    }
+    pub fn bind_empty_text(
+        &mut self,
+        _: &zorid_client_sync::TextIdentity,
+        _: &Revision,
+    ) -> Result<zorid_client_sync::TextState> {
+        unsupported()
+    }
+    pub fn adopt_text(
+        &mut self,
+        _: &zorid_client_sync::TextIdentity,
+        _: &MutationRequest,
+    ) -> Result<ApplyOutcome> {
+        unsupported()
+    }
+    pub fn receive_text(
+        &mut self,
+        _: &zorid_client_sync::AuthenticatedText,
+        _: &zorid_client_sync::ReceiveRequest,
+    ) -> Result<ReceiveOutcome> {
+        unsupported()
+    }
+    pub fn text_receive_cursor(
+        &self,
+        _: &zorid_sync_protocol::RealmId,
+        _: &zorid_sync_protocol::VaultId,
+    ) -> Result<Option<zorid_client_sync::ReceiveCursor>> {
+        unsupported()
+    }
+    pub fn set_text_receive_cursor(
+        &mut self,
+        _: Option<&zorid_client_sync::ReceiveCursor>,
+        _: &zorid_client_sync::ReceiveCursor,
+    ) -> Result<()> {
+        unsupported()
+    }
+    pub fn seal_authored_text(
+        &mut self,
+        _: &zorid_sync_protocol::ExpectedContext,
+        _: &zorid_crypto::VaultKey,
+    ) -> Result<Vec<u8>> {
+        unsupported()
+    }
+    pub fn pending_authored_text(
+        &self,
+        _: Option<&zorid_sync_protocol::UpdateId>,
+        _: u32,
+    ) -> Result<Vec<AuthoredTextStatus>> {
+        unsupported()
+    }
+    pub fn acknowledge_authored_text(
+        &mut self,
+        _: &zorid_sync_protocol::RealmId,
+        _: &zorid_sync_protocol::VaultId,
+        _: &zorid_sync_protocol::UpdateId,
+        _: &[u8],
+    ) -> Result<()> {
+        unsupported()
+    }
+    pub fn identity(&self) -> Result<AuthorityIdentity> {
+        Err(Error::Unsupported("platform"))
+    }
     pub fn list(&self) -> Result<Vec<EntryState>> {
         unsupported()
     }
@@ -177,10 +288,36 @@ impl NativeVault {
     pub fn read_path(&self, _: &VaultPath) -> Result<Option<PresentedEntry>> {
         unsupported()
     }
+    pub fn read_presented(&self, _: &EntryId) -> Result<Option<PresentedEntry>> {
+        Err(Error::Unsupported("platform"))
+    }
     pub fn list_snapshot(&self) -> Result<ListingSnapshot> {
         unsupported()
     }
     pub fn changes_after(&self, _: &str, _: u32) -> Result<ChangePage> {
+        unsupported()
+    }
+    pub fn prepare_host_intent(
+        &mut self,
+        _: &OperationId,
+        _: &MutationRequest,
+    ) -> Result<HostIntentView> {
+        unsupported()
+    }
+    pub fn commit_host_intent(&mut self, _: &HostIntentRef) -> Result<HostIntentView> {
+        unsupported()
+    }
+    pub fn query_host_intent(&self, _: &HostIntentRef) -> Result<Option<HostIntentView>> {
+        unsupported()
+    }
+    pub fn list_host_intents(&self, _: &OperationId, _: &str, _: u32) -> Result<HostIntentPage> {
+        unsupported()
+    }
+    pub fn acknowledge_host_intent(
+        &mut self,
+        _: &HostIntentRef,
+        _: &HostIntentAcknowledgment,
+    ) -> Result<HostIntentView> {
         unsupported()
     }
     pub fn status(&self) -> Result<Status> {
@@ -211,3 +348,6 @@ fn unsupported<T>() -> Result<T> {
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests;
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod sync_tests;

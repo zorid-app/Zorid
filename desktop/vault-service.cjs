@@ -16,7 +16,14 @@ function normalizePath(input, allowRoot = false) {
 
 class VaultService {
   constructor(root) { this.root = root; }
-  static async open(root) {
+  static async open(root, options = {}) {
+    // Explicit trusted-host fixture opt-in only. Normal application selection
+    // remains the existing service until the durable editor integration gate.
+    if (options.coreFixture !== undefined) {
+      if (!options.coreFixture || typeof options.coreFixture !== 'object') throw new TypeError('Expected core fixture options');
+      const { CoreVaultFixtureService } = require('./core-vault-fixture-service.cjs');
+      return CoreVaultFixtureService.open(root, { ...options.coreFixture, fixture: true });
+    }
     if (typeof root !== 'string' || !path.isAbsolute(root)) throw new Error('An absolute vault folder is required');
     const resolved = await fs.realpath(root);
     if (!(await fs.stat(resolved)).isDirectory()) throw new Error('Vault must be a folder');

@@ -161,11 +161,26 @@ pub(crate) fn presentation(tx: &Connection, state: &EntryState) -> Result<EntryP
     })
 }
 pub(crate) fn record_local(tx: &Connection, result: &CommitResult, now: u64) -> Result<()> {
+    record_changes(
+        tx,
+        ChangeOrigin::LocalCommand {
+            operation_id: result.operation_id.clone(),
+        },
+        &result.changes,
+        now,
+    )
+}
+pub(crate) fn record_changes(
+    tx: &Connection,
+    origin: ChangeOrigin,
+    changes: &[zorid_core::EntryChange],
+    now: u64,
+) -> Result<()> {
     validate_number(now)?;
     let now_sql = i64::try_from(now)
         .map_err(|_| StoreError::Corrupt("display clock conversion overflow".into()))?;
     let mut entries = Vec::new();
-    for change in &result.changes {
+    for change in changes {
         let state = &change.after;
         let size: i64 = tx.query_row(
             "SELECT coalesce(length(content),0) FROM entries WHERE id=?1",
@@ -181,14 +196,7 @@ pub(crate) fn record_local(tx: &Connection, result: &CommitResult, now: u64) -> 
             presentation: presentation(tx, state)?,
         });
     }
-    append(
-        tx,
-        ChangeOrigin::LocalCommand {
-            operation_id: result.operation_id.clone(),
-        },
-        false,
-        entries,
-    )?;
+    append(tx, origin, false, entries)?;
     Ok(())
 }
 fn append(
@@ -261,6 +269,37 @@ impl Store {
         tx.commit()?;
         Ok(result)
     }
+    /// Entry identity is the recovery key; renamed paths remain display locators.
+    pub fn read_presented(&self, id: &EntryId) -> Result<Option<PresentedEntry>> {
+        let tx = self.connection.unchecked_transaction()?;
+        let raw = tx
+            .query_row(
+                "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND deleted=0",
+                [id.as_str()],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<Vec<u8>>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let result = raw
+            .map(|(path, deleted, json, content)| -> Result<PresentedEntry> {
+                let state = decode_state(id.as_str(), &path, deleted, &json, content.is_some())?;
+                let presentation = presentation(&tx, &state)?;
+                Ok(PresentedEntry {
+                    state,
+                    content,
+                    presentation,
+                })
+            })
+            .transpose()?;
+        tx.commit()?;
+        Ok(result)
+    }
     pub fn list_snapshot(&self) -> Result<ListingSnapshot> {
         let tx = self.connection.unchecked_transaction()?;
         let entries = read_states(&tx, false)?
@@ -289,9 +328,7 @@ impl Store {
         let tx = self.connection.unchecked_transaction()?;
         let head = head(&tx)?;
         if start > head {
-            return Err(StoreError::Corrupt(
-                "cursor is ahead of this database; reload required".into(),
-            ));
+            return Err(StoreError::ReloadRequired(ReloadReason::CursorAhead));
         }
         let sizes = tx.prepare("SELECT cursor,length(CAST(record AS BLOB)) FROM local_changes WHERE cursor>?1 ORDER BY cursor LIMIT ?2")?.query_map(params![start,limit],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
         let mut changes = Vec::new();
@@ -305,14 +342,10 @@ impl Store {
                     .checked_add(1)
                     .ok_or_else(|| StoreError::Corrupt("cursor overflow".into()))?
             {
-                return Err(StoreError::Corrupt(
-                    "local journal gap; reload required".into(),
-                ));
+                return Err(StoreError::ReloadRequired(ReloadReason::JournalGap));
             }
             if size > MAX_PAGE_BYTES {
-                return Err(StoreError::Contract(ContractError::InvalidMutation {
-                    reason: "journal event exceeds page byte limit; reload required".into(),
-                }));
+                return Err(StoreError::ReloadRequired(ReloadReason::EventTooLarge));
             }
             if total + size > MAX_PAGE_BYTES {
                 break;
@@ -346,9 +379,7 @@ impl Store {
             changes.push(change);
         }
         if next < head && changes.is_empty() {
-            return Err(StoreError::Corrupt(
-                "local journal gap; reload required".into(),
-            ));
+            return Err(StoreError::ReloadRequired(ReloadReason::JournalGap));
         }
         tx.commit()?;
         Ok(ChangePage {

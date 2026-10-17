@@ -78,3 +78,61 @@ fn reads_persisted_yjs13_fixture() {
     assert_eq!(doc.text(), fixture["expected"].as_str().unwrap());
     assert_eq!(doc.state_vector(), bytes("before"));
 }
+
+#[test]
+fn text_transaction_rejects_foreign_roots_and_preserves_pending_actor_ids() {
+    use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
+    let foreign = Doc::with_client_id(7);
+    let map = foreign.get_or_insert_map("settings");
+    map.insert(&mut foreign.transact_mut(), "enabled", true);
+    let bytes = foreign
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    let plain = TextReplica::new(8);
+    plain.apply(&bytes).unwrap();
+    assert!(plain.validate_plain_text().is_err());
+
+    let writer = TextReplica::new(42);
+    writer.insert(0, "one").unwrap();
+    let vector = writer.state_vector();
+    writer.insert(3, "two").unwrap();
+    let dependent = writer.changes_since(&vector).unwrap();
+    assert_eq!(TextReplica::update_actors(&dependent).unwrap(), vec![42]);
+    let pending = TextReplica::new(99);
+    pending.apply(&dependent).unwrap();
+    assert!(pending.has_missing_updates());
+    assert_eq!(
+        TextReplica::update_actors(&pending.snapshot()).unwrap(),
+        vec![42]
+    );
+}
+
+#[test]
+fn hidden_map_under_text_root_is_rejected_directly_and_after_dependencies() {
+    use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
+    let foreign = Doc::with_client_id(7);
+    let map = foreign.get_or_insert_map("content");
+    map.insert(&mut foreign.transact_mut(), "hidden", "first");
+    let first = foreign
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    let first_vector = foreign.transact().state_vector();
+    map.insert(&mut foreign.transact_mut(), "hidden", "second");
+    let second = foreign.transact().encode_state_as_update_v1(&first_vector);
+
+    let direct = TextReplica::new(8);
+    direct.apply(&first).unwrap();
+    assert_eq!(direct.text(), "");
+    assert!(direct.validate_plain_text().is_err());
+
+    let pending = TextReplica::new(9);
+    pending.apply(&second).unwrap();
+    assert!(pending.has_missing_updates());
+    pending.validate_plain_text().unwrap();
+    let restored = TextReplica::new(10);
+    restored.apply(&pending.snapshot()).unwrap();
+    restored.apply(&first).unwrap();
+    assert!(!restored.has_missing_updates());
+    assert_eq!(restored.text(), "");
+    assert!(restored.validate_plain_text().is_err());
+}

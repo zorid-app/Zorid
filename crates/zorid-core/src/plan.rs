@@ -10,6 +10,34 @@ fn invalid(reason: &str) -> ContractError {
     }
 }
 
+/// Validate a complete persisted metadata snapshot without planning a mutation.
+/// Hosts still validate byte/presentation storage consistency separately.
+pub fn validate_snapshot(entries: &[EntryState]) -> Result<(), ContractError> {
+    Snapshot::new(entries).map(|_| ())
+}
+
+/// Plan metadata changes for newly materialized content of an existing live file.
+///
+/// This is not a local command: it creates no operation ID, receipt or outbox
+/// record and does not authenticate or interpret content bytes. The host checks
+/// receive deduplication/authentication first, then atomically persists this plan
+/// with the materialized bytes, received state and cursor. The complete snapshot
+/// must be transaction-current. IDs, paths, kinds and tombstones are unchanged;
+/// only the file and its live ancestors receive the freshly allocated revision.
+/// The allocator must also avoid reuse of revisions absent from this snapshot.
+pub fn plan_file_materialization(
+    id: &EntryId,
+    expected_revision: &Revision,
+    next_revision: &Revision,
+    entries: &[EntryState],
+) -> Result<Vec<EntryChange>, ContractError> {
+    let snapshot = Snapshot::new(entries)?;
+    snapshot.require_fresh_revision(next_revision)?;
+    let mut changed = BTreeMap::new();
+    snapshot.materialize_file(id, expected_revision, next_revision, &mut changed)?;
+    Ok(snapshot.changes(changed))
+}
+
 /// Plan one local mutation from a complete, transaction-current metadata snapshot.
 ///
 /// Returns a deterministic batch ordered by stable entry ID, with ancestor
@@ -29,11 +57,7 @@ pub fn plan_mutation(
 ) -> Result<Vec<EntryChange>, ContractError> {
     request.validate()?;
     let snapshot = Snapshot::new(entries)?;
-    // The allocator must also avoid revisions from earlier, no-longer-current
-    // states. The snapshot can only guard against reuse visible right now.
-    if entries.iter().any(|entry| entry.revision == *next_revision) {
-        return Err(invalid("next revision must be freshly allocated"));
-    }
+    snapshot.require_fresh_revision(next_revision)?;
     let mut changed = BTreeMap::<EntryId, EntryState>::new();
     match &request.mutation {
         Mutation::Create { id, path, kind, .. } => {
@@ -59,14 +83,7 @@ pub fn plan_mutation(
             snapshot.bump_ancestors(path, next_revision, &mut changed);
         }
         Mutation::Write { id, expected, .. } => {
-            let current = validate_target(snapshot.by_id.get(id).copied(), id, expected)?;
-            if current.kind != EntryKind::File {
-                return Err(invalid("cannot write content to a folder"));
-            }
-            let mut after = current.clone();
-            after.revision = next_revision.clone();
-            changed.insert(id.clone(), after);
-            snapshot.bump_ancestors(&current.path, next_revision, &mut changed);
+            snapshot.materialize_file(id, expected, next_revision, &mut changed)?;
         }
         Mutation::Move { id, expected, path } => {
             let current = validate_target(snapshot.by_id.get(id).copied(), id, expected)?;
@@ -132,13 +149,7 @@ pub fn plan_mutation(
             snapshot.bump_ancestors(&current.path, next_revision, &mut changed);
         }
     }
-    Ok(changed
-        .into_values()
-        .map(|after| EntryChange {
-            before: snapshot.by_id.get(&after.id).map(|entry| (*entry).clone()),
-            after,
-        })
-        .collect())
+    Ok(snapshot.changes(changed))
 }
 
 struct Snapshot<'a> {
@@ -169,6 +180,42 @@ impl<'a> Snapshot<'a> {
             snapshot.require_parent(&entry.path)?;
         }
         Ok(snapshot)
+    }
+
+    fn require_fresh_revision(&self, revision: &Revision) -> Result<(), ContractError> {
+        // Historical uniqueness still belongs to the host's revision allocator.
+        if self.by_id.values().any(|entry| entry.revision == *revision) {
+            return Err(invalid("next revision must be freshly allocated"));
+        }
+        Ok(())
+    }
+
+    fn materialize_file(
+        &self,
+        id: &EntryId,
+        expected: &Revision,
+        next_revision: &Revision,
+        changed: &mut BTreeMap<EntryId, EntryState>,
+    ) -> Result<(), ContractError> {
+        let current = validate_target(self.by_id.get(id).copied(), id, expected)?;
+        if current.kind != EntryKind::File {
+            return Err(invalid("cannot write content to a folder"));
+        }
+        let mut after = current.clone();
+        after.revision = next_revision.clone();
+        changed.insert(id.clone(), after);
+        self.bump_ancestors(&current.path, next_revision, changed);
+        Ok(())
+    }
+
+    fn changes(&self, changed: BTreeMap<EntryId, EntryState>) -> Vec<EntryChange> {
+        changed
+            .into_values()
+            .map(|after| EntryChange {
+                before: self.by_id.get(&after.id).map(|entry| (*entry).clone()),
+                after,
+            })
+            .collect()
     }
 
     fn require_parent(&self, path: &VaultPath) -> Result<(), ContractError> {

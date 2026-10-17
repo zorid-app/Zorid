@@ -1097,3 +1097,156 @@ fn external_scan_imports_update_presentation_and_change_stream_once() {
     assert!(vault.rescan().unwrap().run.complete);
     assert_eq!(vault.list_snapshot().unwrap(), after);
 }
+
+#[test]
+fn host_intent_worker() {
+    let Some(root) = std::env::var_os("ZORID_HOST_INTENT_ROOT") else {
+        return;
+    };
+    let mut vault = NativeVault::open(root).unwrap();
+    vault.fault = Some(|point| {
+        if std::env::var("ZORID_HOST_INTENT_PHASE").ok().as_deref() == Some(point) {
+            std::process::exit(86);
+        }
+    });
+    let client = OperationId::new("desktop").unwrap();
+    let prepared = vault.prepare_host_intent(&client, &create()).unwrap();
+    let reference = HostIntentRef {
+        client_id: client,
+        token: prepared.token,
+    };
+    let committed = vault.commit_host_intent(&reference).unwrap();
+    let receipt = committed.receipt.unwrap();
+    vault
+        .acknowledge_host_intent(
+            &reference,
+            &HostIntentAcknowledgment::Committed {
+                operation_id: receipt.operation_id,
+                sequence: receipt.sequence.to_string(),
+            },
+        )
+        .unwrap();
+}
+#[test]
+fn host_intent_crash_boundaries_preserve_authorization_and_exact_receipt() {
+    for phase in [
+        "host_intent_prepared",
+        "host_intent_commit_requested",
+        "committed",
+        "host_intent_core_committed",
+        "host_intent_settled",
+        "host_intent_acknowledged",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::host_intent_worker", "--nocapture"])
+            .env("ZORID_HOST_INTENT_ROOT", root.path())
+            .env("ZORID_HOST_INTENT_PHASE", phase)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(86), "{phase}");
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        let client = OperationId::new("desktop").unwrap();
+        let page = vault.list_host_intents(&client, "0", 10).unwrap();
+        assert_eq!(page.intents.len(), 1);
+        let intent = &page.intents[0];
+        let reference = HostIntentRef {
+            client_id: client,
+            token: intent.token.clone(),
+        };
+        vault.recover().unwrap();
+        if phase == "host_intent_prepared" {
+            assert!(vault.list().unwrap().is_empty());
+            assert_eq!(
+                vault.query_host_intent(&reference).unwrap().unwrap().state,
+                HostIntentState::Prepared
+            );
+            assert!(!root.path().join(path().as_str()).exists());
+        }
+        let settled = vault.commit_host_intent(&reference).unwrap();
+        assert_eq!(settled.state, HostIntentState::Committed);
+        let receipt = settled.receipt.clone().unwrap();
+        let snapshot = vault.list_snapshot().unwrap();
+        assert_eq!(
+            vault.commit_host_intent(&reference).unwrap().receipt,
+            Some(receipt.clone())
+        );
+        assert_eq!(vault.list_snapshot().unwrap(), snapshot);
+        assert_eq!(disk(root.path()), b"base");
+        let ack = HostIntentAcknowledgment::Committed {
+            operation_id: receipt.operation_id,
+            sequence: receipt.sequence.to_string(),
+        };
+        assert!(
+            vault
+                .acknowledge_host_intent(&reference, &ack)
+                .unwrap()
+                .acknowledged
+        );
+    }
+}
+#[test]
+fn host_prepared_fence_precedes_external_import_and_semantic_rejection_persists() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    vault.apply(&create()).unwrap();
+    let old = revision(&vault);
+    let req = write("prepared", old.clone(), b"authored");
+    let client = OperationId::new("desktop").unwrap();
+    let prepared = vault.prepare_host_intent(&client, &req).unwrap();
+    let reference = HostIntentRef {
+        client_id: client,
+        token: prepared.token,
+    };
+    let before = vault.list_snapshot().unwrap();
+    stdfs::write(root.path().join(path().as_str()), b"external").unwrap();
+    assert!(vault.apply(&req).is_err());
+    assert_eq!(vault.list_snapshot().unwrap(), before);
+    let rejected = vault.commit_host_intent(&reference).unwrap();
+    assert_eq!(rejected.state, HostIntentState::Rejected);
+    assert_eq!(
+        rejected.error.unwrap().code,
+        HostRejectionCode::RevisionConflict
+    );
+    assert_eq!(
+        vault.read_path(&path()).unwrap().unwrap().content,
+        Some(b"external".to_vec())
+    );
+    drop(vault);
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    assert_eq!(
+        vault.commit_host_intent(&reference).unwrap().state,
+        HostIntentState::Rejected
+    );
+    assert!(vault.apply(&req).is_err());
+}
+#[test]
+fn environmental_failure_keeps_requested_intent_replayable() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    vault.apply(&create()).unwrap();
+    let req = write("intent-write", revision(&vault), b"authored");
+    let prepared = vault
+        .prepare_host_intent(&OperationId::new("desktop").unwrap(), &req)
+        .unwrap();
+    let reference = HostIntentRef {
+        client_id: prepared.client_id,
+        token: prepared.token,
+    };
+    stdfs::remove_file(root.path().join(path().as_str())).unwrap();
+    assert!(vault.commit_host_intent(&reference).is_err());
+    assert_eq!(
+        vault.query_host_intent(&reference).unwrap().unwrap().state,
+        HostIntentState::CommitRequested
+    );
+    stdfs::write(root.path().join(path().as_str()), b"base").unwrap();
+    assert_eq!(
+        vault.commit_host_intent(&reference).unwrap().state,
+        HostIntentState::Committed
+    );
+    assert_eq!(
+        vault.read_path(&path()).unwrap().unwrap().content,
+        Some(b"authored".to_vec())
+    );
+}

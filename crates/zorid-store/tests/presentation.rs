@@ -1,3 +1,4 @@
+mod common;
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
 use zorid_store::{ChangeOrigin, EntryPresentation, Store};
 fn create(name: &str, bytes: &[u8]) -> MutationRequest {
@@ -97,7 +98,8 @@ fn v3_migration_has_explicit_unknown_times_and_reload_boundary() {
         let req = create("a", b"old");
         let receipt = Store::open(&path).unwrap().apply_at(&req, 900).unwrap();
         let db = rusqlite::Connection::open(&path).unwrap();
-        db.execute_batch("DROP TABLE entry_presentation; DROP TABLE local_changes; PRAGMA user_version=3; PRAGMA journal_mode=DELETE;").unwrap();
+        common::downgrade_v6_to_v5(&db);
+        db.execute_batch("DROP TABLE host_intents; DROP TABLE entry_presentation; DROP TABLE local_changes; PRAGMA user_version=3; PRAGMA journal_mode=DELETE;").unwrap();
         if corrupt {
             db.execute_batch("DROP INDEX active_directory_projection")
                 .unwrap();
@@ -305,4 +307,42 @@ fn subtree_move_and_delete_events_keep_identity_creation_time_and_tombstones() {
             .size_bytes,
         9
     );
+}
+
+#[test]
+fn recoverable_stream_failures_are_typed_without_masking_corruption() {
+    use zorid_store::{ReloadReason, StoreError};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    assert!(matches!(
+        store.changes_after("2", 10),
+        Err(StoreError::ReloadRequired(ReloadReason::CursorAhead))
+    ));
+    store.apply_at(&create("a", b"a"), 1).unwrap();
+    store.apply_at(&create("b", b"b"), 2).unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute("DELETE FROM local_changes WHERE cursor=2", [])
+        .unwrap();
+    assert!(matches!(
+        store.changes_after("1", 10),
+        Err(StoreError::ReloadRequired(ReloadReason::JournalGap))
+    ));
+    assert!(store.list_snapshot().is_ok());
+    db.execute(
+        "UPDATE local_changes SET record=?1 WHERE cursor=3",
+        [" ".repeat(1024 * 1024 + 1)],
+    )
+    .unwrap();
+    assert!(matches!(
+        store.changes_after("2", 10),
+        Err(StoreError::ReloadRequired(ReloadReason::EventTooLarge))
+    ));
+    db.execute("DELETE FROM local_changes WHERE cursor=3", [])
+        .unwrap();
+    assert!(matches!(
+        store.changes_after("1", 10),
+        Err(StoreError::Corrupt(_))
+    ));
+    assert!(store.list_snapshot().is_err());
 }

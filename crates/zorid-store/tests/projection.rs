@@ -1,3 +1,4 @@
+mod common;
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
 use zorid_store::{ProjectionPhase, Store};
 fn create(id: &str, path: &str, kind: EntryKind) -> MutationRequest {
@@ -13,7 +14,8 @@ fn create(id: &str, path: &str, kind: EntryKind) -> MutationRequest {
 }
 fn downgrade(path: &std::path::Path) {
     let c = rusqlite::Connection::open(path).unwrap();
-    c.execute_batch("DROP TABLE entry_presentation; DROP TABLE local_changes; DROP TABLE directory_baselines; DROP TABLE directory_attempts; DROP TABLE scan_observations; DROP TABLE scan_directories; DROP TABLE scan_runs; DROP TABLE projection_baselines; DROP TABLE projection_attempts; DROP TABLE external_observations; PRAGMA user_version=1; PRAGMA journal_mode=DELETE;").unwrap();
+    common::downgrade_v6_to_v5(&c);
+    c.execute_batch("DROP TABLE host_intents; DROP TABLE entry_presentation; DROP TABLE local_changes; DROP TABLE directory_baselines; DROP TABLE directory_attempts; DROP TABLE scan_observations; DROP TABLE scan_directories; DROP TABLE scan_runs; DROP TABLE projection_baselines; DROP TABLE projection_attempts; DROP TABLE external_observations; PRAGMA user_version=1; PRAGMA journal_mode=DELETE;").unwrap();
 }
 #[test]
 fn migrates_v1_preserving_receipts_and_intents() {
@@ -30,7 +32,7 @@ fn migrates_v1_preserving_receipts_and_intents() {
     assert_eq!(
         c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        4
+        6
     );
 }
 #[test]

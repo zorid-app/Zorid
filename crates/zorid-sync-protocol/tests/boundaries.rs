@@ -198,3 +198,64 @@ fn control_optional_additions_are_retained_but_required_changes_fail() {
     );
     assert_eq!(negotiate_transport(&[1; 17]), Err(ProtocolError::TooLarge));
 }
+
+#[test]
+fn standalone_control_extensions_share_compatibility_policy_and_bounds() {
+    assert_eq!(
+        ControlExtensions::decode(b"{}").unwrap(),
+        ControlExtensions::default()
+    );
+    let optional = serde_json::json!({"required_features":[],"optional_extensions":{"future_hint":{"nested":[true,42,"ok"]}}});
+    let extensions = ControlExtensions::decode(&serde_json::to_vec(&optional).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(extensions).unwrap(), optional);
+    assert_eq!(
+        ControlExtensions::decode(br#"{"required_features":["future-ordering"]}"#).unwrap_err(),
+        ProtocolError::UnsupportedRequiredFeature
+    );
+    for invalid in [
+        br#"{"unknown_required_field":true}"#.as_slice(),
+        br#"{"required_features":[],"required_features":[]}"#.as_slice(),
+        br#"{"optional_extensions":{"":true}}"#.as_slice(),
+        b"null".as_slice(),
+    ] {
+        assert_eq!(
+            ControlExtensions::decode(invalid).unwrap_err(),
+            ProtocolError::InvalidHeader
+        );
+    }
+    let mut fields = serde_json::Map::new();
+    for index in 0..16 {
+        fields.insert(format!("hint-{index}"), true.into());
+    }
+    let accepted = serde_json::json!({"optional_extensions":fields});
+    assert!(ControlExtensions::decode(&serde_json::to_vec(&accepted).unwrap()).is_ok());
+    fields.insert("seventeenth".into(), true.into());
+    assert_eq!(
+        ControlExtensions::decode(
+            &serde_json::to_vec(&serde_json::json!({"optional_extensions":fields})).unwrap()
+        )
+        .unwrap_err(),
+        ProtocolError::InvalidHeader
+    );
+    for (length, valid) in [(64, true), (65, false)] {
+        let input = serde_json::json!({"optional_extensions":{ "x".repeat(length):true }});
+        assert_eq!(
+            ControlExtensions::decode(&serde_json::to_vec(&input).unwrap()).is_ok(),
+            valid
+        );
+    }
+    // Whitespace makes valid JSON exactly the accepted input bound, then one
+    // byte over. Malformed oversized JSON must also fail before parsing.
+    let mut boundary = b"{}".to_vec();
+    boundary.resize(MAX_CONTROL_BYTES, b' ');
+    assert!(ControlExtensions::decode(&boundary).is_ok());
+    boundary.push(b' ');
+    assert_eq!(
+        ControlExtensions::decode(&boundary).unwrap_err(),
+        ProtocolError::TooLarge
+    );
+    assert_eq!(
+        ControlExtensions::decode(&vec![b'!'; MAX_CONTROL_BYTES + 1]).unwrap_err(),
+        ProtocolError::TooLarge
+    );
+}

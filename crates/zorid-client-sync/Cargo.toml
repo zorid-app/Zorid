@@ -1,0 +1,18 @@
+[package]
+name = "zorid-client-sync"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+
+[dependencies]
+zorid-core = { path = "../zorid-core" }
+zorid-crdt = { path = "../zorid-crdt" }
+zorid-sync-protocol = { path = "../zorid-sync-protocol" }
+zorid-crypto = { path = "../zorid-crypto", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+similar = "=3.2.0"
+
+[dev-dependencies]
+yrs = { version = "=0.28.0", features = ["small-client"] }

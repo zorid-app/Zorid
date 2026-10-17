@@ -9,6 +9,9 @@ description = "Conservative native filesystem projection for Zorid's vault autho
 [dependencies]
 zorid-core = { path = "../zorid-core" }
 zorid-store = { path = "../zorid-store" }
+zorid-client-sync = { path = "../zorid-client-sync" }
+zorid-sync-protocol = { path = "../zorid-sync-protocol" }
+zorid-crypto = { path = "../zorid-crypto" }
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 

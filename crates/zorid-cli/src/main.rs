@@ -1,3 +1,5 @@
+mod sync;
+
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use std::{
@@ -12,7 +14,7 @@ const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
 #[command(
     name = "zorid",
     version,
-    about = "Standalone Zorid vault access (initial native slice)"
+    about = "Standalone Zorid vault access and explicit fixture text sync"
 )]
 struct Args {
     /// Existing vault directory. Only init may initialize its private storage.
@@ -96,8 +98,14 @@ enum Command {
     Delete,
     /// Not implemented in this slice.
     Search,
-    /// Not implemented in this slice; pending outbox does not mean uploaded.
-    Sync,
+    /// Explicit loopback fixture text sync; full-vault/binary sync is not implemented.
+    Sync {
+        /// Owner-only credential JSON outside the vault; never pass secrets as flags.
+        #[arg(long, value_name = "FILE")]
+        credentials: PathBuf,
+        #[command(subcommand)]
+        command: sync::Command,
+    },
 }
 
 struct Failure {
@@ -258,10 +266,45 @@ impl From<zorid_native::Error> for Failure {
             LockTimeout => Self::new("lock_timeout", "Timed out acquiring the vault lock", 3),
             Store(zorid_store::StoreError::UnsupportedSchema(_)) => Self::new("unsupported_schema", "Database schema is unsupported", 5),
             Store(zorid_store::StoreError::Corrupt(_)) | Store(zorid_store::StoreError::Json(_)) => Self::new("corrupt_storage", "Stored data failed validation", 1),
+            Store(zorid_store::StoreError::Sync(error)) => {
+                use zorid_client_sync::SyncError::*;
+                let (code, exit) = match error {
+                    TooLarge => ("sync_limit", 2),
+                    UnsupportedFormat => ("sync_unsupported_format", 5),
+                    VersionConflict | CursorConflict => ("sync_conflict", 3),
+                    IdentityMismatch => ("sync_identity_mismatch", 3),
+                    InvalidEdit => ("sync_invalid_edit", 2),
+                    AuthenticationFailed => ("sync_authentication_failed", 1),
+                    _ => ("sync_validation_failed", 1),
+                };
+                Self::new(code, "Sync validation failed; preserve the existing state and exact pending work", exit)
+            },
+            Store(zorid_store::StoreError::Protocol(error)) => protocol_failure(error),
+            Store(zorid_store::StoreError::Crypto(zorid_crypto::CryptoError::Protocol(error))) => protocol_failure(error),
+            Store(zorid_store::StoreError::Crypto(_)) => Self::new("sync_crypto_failed", "Encryption or authentication failed; pending work is retained", 1),
             Store(_) => Self::new("storage_io", "Database operation failed; retry mutations only with the identical operation ID and request", 1),
             Io(_) => Self::new("filesystem_io", "Filesystem operation failed", 1),
         }
     }
+}
+
+fn protocol_failure(error: zorid_sync_protocol::ProtocolError) -> Failure {
+    use zorid_sync_protocol::ProtocolError::*;
+    let (code, exit) = match error {
+        TooLarge => ("sync_limit", 2),
+        EpochMismatch => ("sync_epoch_mismatch", 3),
+        ContextMismatch | IdempotencyConflict => ("sync_identity_mismatch", 3),
+        UnsupportedTransport
+        | UnsupportedEnvelope
+        | UnsupportedDocumentFormat
+        | UnsupportedRequiredFeature => ("sync_unsupported_protocol", 5),
+        _ => ("sync_invalid_protocol", 1),
+    };
+    Failure::new(
+        code,
+        "Sync protocol validation failed; no replacement operation or cursor is authorized",
+        exit,
+    )
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -283,7 +326,7 @@ fn run(args: Args) -> Result<Output> {
 
     if matches!(
         args.command,
-        Command::Move | Command::Delete | Command::Search | Command::Sync
+        Command::Move | Command::Delete | Command::Search
     ) {
         return Err(Failure::new(
             "unsupported",
@@ -370,13 +413,17 @@ fn run(args: Args) -> Result<Output> {
         NativeVault::open_existing(&args.vault)?
     };
     let value = match args.command {
+        Command::Sync {
+            credentials,
+            command,
+        } => sync::run(&mut vault, &args.vault, &credentials, command)?,
         Command::Init => {
-            json!({"initialized":true,"imported_existing_files":false,"max_file_bytes":MAX_FILE_BYTES,"sync_available":false})
+            json!({"initialized":true,"imported_existing_files":false,"max_file_bytes":MAX_FILE_BYTES,"sync_available":false,"fixture_text_sync_available":true})
         }
         Command::Status => {
             let status = vault.status()?;
             // Keep status limited to operational counts, without recovery bodies.
-            json!({"pending_outbox":status.pending_outbox,"pending_projection":status.pending_projection,"projection_attempts":status.attempts.len(),"external_observations":status.observations.len(),"max_file_bytes":MAX_FILE_BYTES,"sync_available":false})
+            json!({"pending_outbox":status.pending_outbox,"pending_projection":status.pending_projection,"projection_attempts":status.attempts.len(),"external_observations":status.observations.len(),"max_file_bytes":MAX_FILE_BYTES,"sync_available":false,"fixture_text_sync_available":true})
         }
         Command::List => json!({"entries":vault.list()?}),
         Command::Read { id, raw } => {
@@ -427,7 +474,7 @@ fn run(args: Args) -> Result<Output> {
             let issues: Vec<_> = report.issues.into_iter().map(|issue| json!({"path":issue.path,"code":"scan_issue","message":"This path could not be fully reconciled; data is preserved"})).collect();
             json!({"complete":report.run.complete,"run":{"scan_id":report.run.scan_id,"max_entries":report.run.max_entries,"finished":report.run.finished,"complete":report.run.complete,"observed":report.run.observed,"imported":report.run.imported,"issue":report.run.issue.map(|_| "scan_incomplete")},"issues":issues,"missing":report.missing,"missing_are_deletions":false,"limits":limits,"synced":false})
         }
-        Command::Move | Command::Delete | Command::Search | Command::Sync => unreachable!(),
+        Command::Move | Command::Delete | Command::Search => unreachable!(),
     };
     Ok(Output::Json(value))
 }

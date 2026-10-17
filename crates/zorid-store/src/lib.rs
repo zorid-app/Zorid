@@ -3,25 +3,39 @@
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
+mod checkpoints;
 mod directory;
+pub use checkpoints::{
+    Checkpoint, CheckpointError, CheckpointMetadata, CheckpointPage, CheckpointScope,
+    CheckpointWrite, MAX_CHECKPOINT_BYTES,
+};
+mod host_intents;
+pub use host_intents::{
+    HostIntentAcknowledgment, HostIntentPage, HostIntentRef, HostIntentState, HostIntentView,
+    HostMutationKind, HostProjectionState, HostRejection, HostRejectionCode,
+};
 mod presentation;
 mod projection;
+mod projection_jobs;
 pub use presentation::{
     ChangeOrigin, ChangePage, EntryPresentation, ListingSnapshot, LocalChange, PresentedEntry,
     PresentedState,
 };
+pub use projection_jobs::{ProjectionJob, ProjectionOrigin, ProjectionWork};
 mod scan;
+mod text_sync;
 pub use directory::{DirectoryAttempt, DirectoryBaseline, DirectoryPhase};
 pub use projection::{ExternalObservation, ProjectionAttempt, ProjectionBaseline, ProjectionPhase};
 pub use scan::{DirectoryCoverage, ScanObservation, ScanObservationKind, ScanRun};
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
+pub use text_sync::{AuthoredTextStatus, AuthorityIdentity, TextReceiveOutcome};
 use zorid_core::{
     check_idempotency, plan_mutation, CommitResult, ContractError, EntryId, EntryKind, EntryState,
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 6;
 const APPLICATION_ID: i64 = 0x5a4f5244; // ZORD
 const SCHEMA: &[(&str, &str)] = &[
     ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB)"),
@@ -34,7 +48,7 @@ const SCHEMA: &[(&str, &str)] = &[
 fn check_schema(connection: &Connection) -> Result<i64> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
-    if !matches!(version, 0 | 1 | 2 | 3 | SCHEMA_VERSION) {
+    if !matches!(version, 0 | 1 | 2 | 3 | 4 | 5 | SCHEMA_VERSION) {
         return Err(StoreError::UnsupportedSchema(version));
     }
     if version == 0 {
@@ -60,15 +74,38 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             .collect::<std::result::Result<_, _>>()?;
         let expected_names: Vec<&str> = SCHEMA
             .iter()
+            .filter(|(name, _)| version < 6 || *name != "projection_queue")
             .chain(if version >= 2 {
                 projection::SCHEMA
             } else {
                 &[]
             })
-            .chain(if version >= 3 { directory::SCHEMA } else { &[] })
+            .chain(if version >= 6 {
+                directory::SCHEMA_V6
+            } else if version >= 3 {
+                directory::SCHEMA
+            } else {
+                &[]
+            })
             .chain(if version >= 3 { scan::SCHEMA } else { &[] })
             .chain(if version >= 4 {
                 presentation::SCHEMA
+            } else {
+                &[]
+            })
+            .chain(if version >= 5 {
+                host_intents::SCHEMA
+            } else {
+                &[]
+            })
+            .chain(if version >= 6 {
+                projection_jobs::SCHEMA
+            } else {
+                &[]
+            })
+            .chain(if version >= 6 { text_sync::SCHEMA } else { &[] })
+            .chain(if version >= 6 {
+                checkpoints::SCHEMA
             } else {
                 &[]
             })
@@ -89,15 +126,38 @@ fn check_schema(connection: &Connection) -> Result<i64> {
         };
         for (name, expected) in SCHEMA
             .iter()
+            .filter(|(name, _)| version < 6 || *name != "projection_queue")
             .chain(if version >= 2 {
                 projection::SCHEMA
             } else {
                 &[]
             })
-            .chain(if version >= 3 { directory::SCHEMA } else { &[] })
+            .chain(if version >= 6 {
+                directory::SCHEMA_V6
+            } else if version >= 3 {
+                directory::SCHEMA
+            } else {
+                &[]
+            })
             .chain(if version >= 3 { scan::SCHEMA } else { &[] })
             .chain(if version >= 4 {
                 presentation::SCHEMA
+            } else {
+                &[]
+            })
+            .chain(if version >= 5 {
+                host_intents::SCHEMA
+            } else {
+                &[]
+            })
+            .chain(if version >= 6 {
+                projection_jobs::SCHEMA
+            } else {
+                &[]
+            })
+            .chain(if version >= 6 { text_sync::SCHEMA } else { &[] })
+            .chain(if version >= 6 {
+                checkpoints::SCHEMA
             } else {
                 &[]
             })
@@ -159,9 +219,20 @@ fn read_states(connection: &Connection, include_deleted: bool) -> Result<Vec<Ent
         .collect()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReloadReason {
+    CursorAhead,
+    JournalGap,
+    EventTooLarge,
+}
+
 #[derive(Debug)]
 pub enum StoreError {
+    ReloadRequired(ReloadReason),
     Sql(rusqlite::Error),
+    Sync(zorid_client_sync::SyncError),
+    Crypto(zorid_crypto::CryptoError),
+    Protocol(zorid_sync_protocol::ProtocolError),
     Json(serde_json::Error),
     Contract(ContractError),
     UnsupportedSchema(i64),
@@ -170,6 +241,12 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ReloadRequired(reason) => {
+                write!(f, "Coherent snapshot reload required: {reason:?}")
+            }
+            Self::Sync(e) => write!(f, "Text synchronization error: {e}"),
+            Self::Crypto(e) => write!(f, "Envelope encryption error: {e}"),
+            Self::Protocol(e) => write!(f, "Envelope protocol error: {e}"),
             Self::Sql(e) => write!(f, "Storage error: {e}"),
             Self::Json(e) => write!(f, "Invalid stored record: {e}"),
             Self::Contract(e) => e.fmt(f),
@@ -192,6 +269,21 @@ impl From<serde_json::Error> for StoreError {
 impl From<ContractError> for StoreError {
     fn from(e: ContractError) -> Self {
         Self::Contract(e)
+    }
+}
+impl From<zorid_client_sync::SyncError> for StoreError {
+    fn from(e: zorid_client_sync::SyncError) -> Self {
+        Self::Sync(e)
+    }
+}
+impl From<zorid_crypto::CryptoError> for StoreError {
+    fn from(e: zorid_crypto::CryptoError) -> Self {
+        Self::Crypto(e)
+    }
+}
+impl From<zorid_sync_protocol::ProtocolError> for StoreError {
+    fn from(e: zorid_sync_protocol::ProtocolError) -> Self {
+        Self::Protocol(e)
     }
 }
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -269,6 +361,17 @@ impl Store {
         }
         if version < 4 {
             presentation::migrate(&tx)?;
+        }
+        if version < 5 {
+            for (_, sql) in host_intents::SCHEMA {
+                tx.execute_batch(sql)?;
+            }
+        }
+        if version < 6 {
+            projection_jobs::migrate(&tx)?;
+            directory::migrate_job_schema(&tx)?;
+            text_sync::migrate(&tx)?;
+            checkpoints::migrate(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -333,6 +436,15 @@ impl Store {
         request: &MutationRequest,
         now_ms: Option<u64>,
     ) -> Result<CommitResult> {
+        Self::apply_transaction_text(tx, request, now_ms, None, None)
+    }
+    fn apply_transaction_text(
+        tx: &Connection,
+        request: &MutationRequest,
+        now_ms: Option<u64>,
+        adoption: Option<&zorid_client_sync::TextIdentity>,
+        prepared: Option<text_sync::PreparedText>,
+    ) -> Result<CommitResult> {
         request.validate()?;
         let prior = tx
             .query_row(
@@ -351,6 +463,7 @@ impl Store {
         if let IdempotencyCheck::Replay(receipt) = check_idempotency(request, prior.as_ref())? {
             return Ok(receipt.clone());
         }
+        host_intents::check_execution(tx, request)?;
         let now_ms = match now_ms {
             Some(value) => value,
             None => presentation::now_ms()?,
@@ -361,8 +474,17 @@ impl Store {
         // after this Store was opened or after the caller last read the file.
         // Initial planner loads metadata only, never whole-vault content blobs.
         let entries = read_states(&tx, true)?;
-        let revision = Revision::new(uuid::Uuid::new_v4().to_string())?;
+        let revision = match &prepared {
+            Some(text) => text.plan.next_state.version.clone(),
+            None => Revision::new(uuid::Uuid::new_v4().to_string())?,
+        };
         let changes = plan_mutation(request, &entries, &revision)?;
+        text_sync::reserve_revision(tx, &revision)?;
+        text_sync::check_namespace(tx, request, &changes)?;
+        let text = match prepared {
+            Some(text) => Some(text),
+            None => text_sync::prepare_local(tx, request, &revision, adoption)?,
+        };
         for change in &changes {
             if let Some(before) = &change.before {
                 presentation::presentation(tx, before)?;
@@ -427,12 +549,14 @@ impl Store {
             "UPDATE operations SET result=?1 WHERE sequence=?2",
             params![serde_json::to_string(&result)?, sql_sequence],
         )?;
-        tx.execute("INSERT INTO outbox(sequence) VALUES (?1)", [sql_sequence])?;
-        tx.execute(
-            "INSERT INTO projection_queue(sequence) VALUES (?1)",
-            [sql_sequence],
-        )?;
+        if let Some(text) = text {
+            text_sync::finish_local(tx, text)?;
+        } else {
+            tx.execute("INSERT INTO outbox(sequence) VALUES (?1)", [sql_sequence])?;
+        }
+        projection_jobs::enqueue_local(tx, request, &result)?;
         presentation::record_local(tx, &result, now_ms)?;
+        host_intents::record_commit(tx, request)?;
         Ok(result)
     }
 
@@ -464,7 +588,7 @@ impl Store {
 
     pub fn pending_counts(&self) -> Result<(u64, u64)> {
         let (outbox, projections) = self.connection.query_row(
-            "SELECT (SELECT count(*) FROM outbox),(SELECT count(*) FROM projection_queue)",
+            "SELECT ((SELECT count(*) FROM outbox)+(SELECT count(*) FROM authored_text WHERE accepted=0)),(SELECT count(*) FROM projection_jobs WHERE completed=0)",
             [],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
         )?;

@@ -120,6 +120,19 @@ pub struct ControlExtensions {
     required_features: Vec<String>,
     optional_extensions: BTreeMap<String, serde_json::Value>,
 }
+impl ControlExtensions {
+    /// Decode a standalone extensions object under the shared control policy.
+    /// Bounds input before parsing. A containing message must independently bound
+    /// its entire transport body before allocation and validate its own fields.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > MAX_CONTROL_BYTES {
+            return Err(ProtocolError::TooLarge);
+        }
+        let raw: RawControlExtensions =
+            serde_json::from_slice(bytes).map_err(|_| ProtocolError::InvalidHeader)?;
+        Self::try_from(raw)
+    }
+}
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawControlExtensions {

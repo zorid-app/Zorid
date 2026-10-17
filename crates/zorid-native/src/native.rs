@@ -5,10 +5,16 @@ use crate::{
 use std::{fs::File, path::Path};
 use zorid_core::{EntryKind, Mutation, OperationId};
 use zorid_store::{ProjectionAttempt, ProjectionPhase, Store};
+#[path = "checkpoints.rs"]
+mod checkpoints;
 #[path = "directory.rs"]
 mod directory;
+#[path = "host_intents.rs"]
+mod host_intents;
 #[path = "rescan.rs"]
 mod rescan;
+#[path = "text_sync.rs"]
+mod text_sync;
 
 pub struct NativeVault {
     paths: Paths,
@@ -65,6 +71,10 @@ impl NativeVault {
             f(_name);
         }
     }
+    pub fn identity(&self) -> Result<AuthorityIdentity> {
+        self.paths.verify()?;
+        Ok(self.store.identity()?)
+    }
     pub fn list(&self) -> Result<Vec<EntryState>> {
         self.paths.verify()?;
         Ok(self.store.list()?)
@@ -76,6 +86,10 @@ impl NativeVault {
     pub fn read_path(&self, path: &VaultPath) -> Result<Option<PresentedEntry>> {
         self.paths.verify()?;
         Ok(self.store.read_path(path)?)
+    }
+    pub fn read_presented(&self, id: &EntryId) -> Result<Option<PresentedEntry>> {
+        self.paths.verify()?;
+        Ok(self.store.read_presented(id)?)
     }
     pub fn list_snapshot(&self) -> Result<ListingSnapshot> {
         self.paths.verify()?;
@@ -132,10 +146,14 @@ impl NativeVault {
     /// no desktop process, daemon, IPC endpoint, network or background thread.
     pub fn apply(&mut self, request: &MutationRequest) -> Result<ApplyOutcome> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.apply_locked(request)
+    }
+    fn apply_locked(&mut self, request: &MutationRequest) -> Result<ApplyOutcome> {
         if let Some(commit) = self.store.replay(request)? {
             let projection = self.project_status(request.mutation.id());
             return Ok(ApplyOutcome { commit, projection });
         }
+        self.store.validate_host_execution(request)?;
         let (path, bytes): (VaultPath, &[u8]) = match &request.mutation {
             Mutation::Create {
                 path,
@@ -382,14 +400,39 @@ impl NativeVault {
         let active = self
             .store
             .projection_attempts(false)?
-            .iter()
-            .any(|a| a.target.state.path == *path);
+            .into_iter()
+            .find(|a| a.target.state.path == *path);
         let observation = self
             .store
             .record_external(path, base.clone(), disk.bytes.clone())?;
-        if active {
-            return Err(Error::Busy(
-                "unresolved projection; external observation retained",
+        let managed = match &state {
+            Some(state) => self.store.text_state(&state.id)?.is_some(),
+            None => false,
+        };
+        if let Some(active) = active {
+            // A receive can leave an unpublished intent blocked by external edits.
+            // Cancelling only a provably undisplaced stage retains its bytes and
+            // queue; the observed branch can then merge before a new publication.
+            let previous = format!("{}.previous", active.attempt_id.as_str());
+            let undisplaced = matches!(
+                active.phase,
+                ProjectionPhase::Prepared | ProjectionPhase::Staged
+            ) && active.stage_identity.as_ref() != Some(&disk.identity)
+                && fs::node_type(&self.paths.private, &previous)?.is_none();
+            if managed && undisplaced {
+                self.paths.verify_parent(path, parent)?;
+                self.store.finish_projection(&active.attempt_id, false)?;
+            } else {
+                return Err(Error::Busy(
+                    "unresolved projection; external observation retained",
+                ));
+            }
+        }
+        if managed {
+            self.paths.verify_parent(path, parent)?;
+            return Ok(Some(
+                self.store
+                    .import_text_observation(&observation.observation_id)?,
             ));
         }
         let mutation = match (state, base) {

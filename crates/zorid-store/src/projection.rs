@@ -33,6 +33,9 @@ pub struct ProjectionAttempt {
     pub baseline: Option<ProjectionBaseline>,
     /// Decimal string, including at native JSON boundaries.
     pub through_sequence: String,
+    /// Exact immutable job IDs represented by this target; legacy cutoff is audit only.
+    #[serde(default)]
+    pub covered_jobs: Vec<OperationId>,
     pub phase: ProjectionPhase,
     /// Adapter inode identity, persisted before publication. Never a content hash.
     pub stage_identity: Option<String>,
@@ -62,7 +65,7 @@ fn validate_baseline(value: &ProjectionBaseline, id: &str) -> Result<()> {
     }
     Ok(())
 }
-fn decode_attempt(
+pub(super) fn decode_attempt(
     id: &str,
     entry_id: &str,
     completed: i64,
@@ -73,11 +76,17 @@ fn decode_attempt(
     if let Some(base) = &value.baseline {
         validate_baseline(base, entry_id)?;
     }
+    let unique: std::collections::BTreeSet<_> = value.covered_jobs.iter().collect();
+    if unique.len() != value.covered_jobs.len() {
+        return Err(StoreError::Corrupt(
+            "duplicate covered projection job".into(),
+        ));
+    }
     let sequence = value.through_sequence.parse::<i64>().ok();
     if value.attempt_id.as_str() != id
         || !matches!(completed, 0 | 1)
         || value.completed() != (completed == 1)
-        || !sequence.is_some_and(|n| n > 0 && n.to_string() == value.through_sequence)
+        || !sequence.is_some_and(|n| n >= 0 && n.to_string() == value.through_sequence)
         || value
             .stage_identity
             .as_ref()
@@ -96,7 +105,7 @@ fn decode_attempt(
     }
     Ok(value)
 }
-fn decode_observation(id: &str, json: &str) -> Result<ExternalObservation> {
+pub(super) fn decode_observation(id: &str, json: &str) -> Result<ExternalObservation> {
     let value: ExternalObservation = serde_json::from_str(json)?;
     if value.observation_id.as_str() != id {
         return Err(StoreError::Corrupt("observation identity mismatch".into()));
@@ -111,7 +120,7 @@ fn decode_observation(id: &str, json: &str) -> Result<ExternalObservation> {
     }
     Ok(value)
 }
-fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<ProjectionBaseline>> {
+pub(super) fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<ProjectionBaseline>> {
     tx.query_row(
         "SELECT record FROM projection_baselines WHERE entry_id=?1",
         [id.as_str()],
@@ -125,7 +134,7 @@ fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<ProjectionBaseline>>
     })
     .transpose()
 }
-fn put_baseline(tx: &Connection, value: &ProjectionBaseline) -> Result<()> {
+pub(super) fn put_baseline(tx: &Connection, value: &ProjectionBaseline) -> Result<()> {
     validate_baseline(value, value.state.id.as_str())?;
     tx.execute("INSERT INTO projection_baselines(entry_id,record) VALUES (?1,?2) ON CONFLICT(entry_id) DO UPDATE SET record=excluded.record",
         params![value.state.id.as_str(), serde_json::to_string(value)?])?;
@@ -154,22 +163,7 @@ fn attempt(tx: &Connection, id: &OperationId) -> Result<ProjectionAttempt> {
 /// Retire only file create/write requests actually represented by this baseline.
 /// Ancestor revisions are metadata, so require no physical write; a folder create,
 /// move or deletion remains queued, even if a descendant file was published.
-fn retire_file(tx: &Connection, id: &EntryId, through: i64) -> Result<()> {
-    let mut stmt = tx.prepare("SELECT q.sequence,o.request FROM projection_queue q JOIN operations o USING(sequence) WHERE q.sequence<=?1")?;
-    let rows = stmt
-        .query_map([through], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    for (seq, request) in rows {
-        let req: MutationRequest = serde_json::from_str(&request)?;
-        if matches!(&req.mutation, Mutation::Create { id: target, kind: EntryKind::File, .. } | Mutation::Write { id: target, .. } if target == id)
-        {
-            tx.execute("DELETE FROM projection_queue WHERE sequence=?1", [seq])?;
-        }
-    }
-    Ok(())
-}
+
 impl Store {
     pub fn projection_baseline(&self, id: &EntryId) -> Result<Option<ProjectionBaseline>> {
         baseline(&self.connection, id)
@@ -224,6 +218,10 @@ impl Store {
             baseline: baseline(&tx, id)?,
             target: ProjectionBaseline { state, content },
             through_sequence: seq.to_string(),
+            covered_jobs: projection_jobs::pending(&tx, id, ProjectionWork::MaterializeFile)?
+                .into_iter()
+                .map(|job| job.job_id)
+                .collect(),
             phase: ProjectionPhase::Prepared,
             stage_identity: None,
         };
@@ -285,11 +283,7 @@ impl Store {
                 return Err(StoreError::Corrupt("publication provenance changed".into()));
             }
             put_baseline(&tx, &value.target)?;
-            let seq: i64 = value
-                .through_sequence
-                .parse()
-                .map_err(|_| StoreError::Corrupt("invalid projection sequence".into()))?;
-            retire_file(&tx, &value.target.state.id, seq)?;
+            projection_jobs::retire_file(&tx, &value.target.state.id, &value.covered_jobs)?;
         }
         value.phase = if published {
             ProjectionPhase::Complete
@@ -427,7 +421,15 @@ impl Store {
                     content: obs.content.clone(),
                 },
             )?;
-            retire_file(&tx, request.mutation.id(), result.sequence as i64)?;
+            let jobs = projection_jobs::pending(
+                &tx,
+                request.mutation.id(),
+                ProjectionWork::MaterializeFile,
+            )?
+            .into_iter()
+            .map(|job| job.job_id)
+            .collect::<Vec<_>>();
+            projection_jobs::retire_file(&tx, request.mutation.id(), &jobs)?;
             obs.resolution = Some(request.operation_id.clone());
             tx.execute(
                 "UPDATE external_observations SET record=?1 WHERE observation_id=?2",
@@ -453,10 +455,7 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let result = Self::apply_transaction(&tx, request)?;
-        tx.execute(
-            "DELETE FROM projection_queue WHERE sequence=?1",
-            [result.sequence as i64],
-        )?;
+        projection_jobs::retire_local(&tx, &request.operation_id)?;
         tx.commit()?;
         Ok(result)
     }

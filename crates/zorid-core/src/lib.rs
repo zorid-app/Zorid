@@ -16,7 +16,7 @@ pub use mutation::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation,
 };
 pub use path::VaultPath;
-pub use plan::plan_mutation;
+pub use plan::{plan_file_materialization, plan_mutation, validate_snapshot};
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
