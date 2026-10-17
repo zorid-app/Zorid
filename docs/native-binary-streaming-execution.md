@@ -187,3 +187,15 @@ new fixture needs only a test-only serde_json dependency and its existing lock
 package edge to inspect the persisted prepared journal; it does not decode body
 JSON. Formatting and whitespace checks pass. These fixtures have not compiled or
 run; coordinator serialization still applies.
+
+### Exact terminal input retries
+
+CLI retry review identified that terminal status deliberately omits the verified
+sealed handle, so a caller still needs original length/digest metadata to compare
+replayed input without touching a newer graph/source. The agreed additive Store
+and Native `binary_stage_content_manifest(StageRef)` returns an inert original
+Manifest, including terminal diagnostics; it grants no source or commit proof.
+The Native wrapper is independently source-reviewed, and the existing staged
+fixture now checks its original digest after a newer write. Its Store method and
+`BinaryContentManifest` alias are a required follow-up dependency; no compile or
+runtime claim is made for this seam.

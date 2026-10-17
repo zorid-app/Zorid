@@ -238,6 +238,12 @@ fn native_large_stage_restart_receipt_and_lost_open_ack_keep_original_sources() 
         "{changed:?}"
     );
     assert_file(&root.path().join("large.bin"), 19);
+    let original_manifest = vault
+        .binary_stage_content_manifest(&resumed)
+        .unwrap()
+        .unwrap();
+    assert_eq!(original_manifest.bytes, LENGTH);
+    assert_eq!(original_manifest.digest, digest(3));
     let retry = vault
         .open_binary_read(&client, &op("lost-open-ack"), &id, None)
         .unwrap();

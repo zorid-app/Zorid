@@ -25,6 +25,19 @@ impl NativeVault {
         Ok(outcome?)
     }
 
+    /// Original sealed metadata for diagnostics and exact input retry checks.
+    /// This value does not construct a verified source or authorize publication.
+    pub fn binary_stage_content_manifest(
+        &self,
+        reference: &BinaryStageRef,
+    ) -> Result<Option<zorid_store::BinaryContentManifest>> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.paths.verify()?;
+        let outcome = self.store.binary_stage_content_manifest(reference);
+        self.paths.verify()?;
+        Ok(outcome?)
+    }
+
     pub fn binary_stage_request(&self, reference: &BinaryStageRef) -> Result<BinaryStageRequest> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.paths.verify()?;

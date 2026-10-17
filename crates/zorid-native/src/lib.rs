@@ -15,8 +15,8 @@ pub use zorid_store::{
     LocalChange, PresentedEntry, PresentedState, TextReceiveOutcome, MAX_CHECKPOINT_BYTES,
 };
 pub use zorid_store::{
-    BinaryCaptureRequest, BinaryReadChunk, BinaryReadRef, BinaryReadSession, BinarySourceRef,
-    BinaryStageCommit, BinaryStageLocator, BinaryStageRef, BinaryStageRejection,
+    BinaryCaptureRequest, BinaryContentManifest, BinaryReadChunk, BinaryReadRef, BinaryReadSession,
+    BinarySourceRef, BinaryStageCommit, BinaryStageLocator, BinaryStageRef, BinaryStageRejection,
     BinaryStageRejectionCode, BinaryStageRequest, BinaryStageStatus, BinaryStageTerminal,
     BinaryTarget, CapturedBinaryRef, ContentMetadata, PublishedBinaryRef, Sha256Digest,
     StageChunkReceipt, StagePhase, StagedBinaryRef, StoredContent, StoredEntryMetadata,
