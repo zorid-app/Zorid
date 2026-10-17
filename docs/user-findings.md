@@ -277,3 +277,12 @@ Earlier task/calendar deferral is superseded. Shared Rust Base/index semantics
 remain the foundation, web/native presentation respects existing ownership. This
 request is recorded for implementation after Vite, not marked complete by the
 existing Stage4 query engine. Mobile UX work continues in parallel.
+
+Mobile follow-up per owner msg9bf2f3292f1c: user asks silent refresh on Notes Files
+page (remove Updating vault spinner while retaining list; keep initial skeleton
+and actionable errors). NativePages source assigned371. Actual invalid-PDF build6
+error appears but loading overlay clears only at8s editorTimeout, without ready;
+source-only callbacks were insufficient. Native owner diagnoses bounded shared
+presentation seam; root Vite pdf-view changes only import ignore comments. Neither
+finding is complete until actual behavior passes. Search field leading icon toggle
+confirmed for Zorid app actions, not shell commands; owner notified.
