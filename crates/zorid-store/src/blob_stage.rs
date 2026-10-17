@@ -211,8 +211,21 @@ pub struct BinaryStageStatus {
     pub accepted_length: u64,
     pub next_sequence: u32,
     pub seal_requested: bool,
-    pub finalized: Option<StagedBinaryRef>,
+    pub finalized: Option<BinaryStageManifest>,
     pub terminal: Option<super::binary_commit::BinaryStageTerminal>,
+}
+
+/// Sealed commitment diagnostics only. This wrapper grants no verified source,
+/// read, Capture or publication authority; those paths reverify actual bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BinaryStageManifest {
+    #[serde(serialize_with = "serialize_manifest")]
+    manifest: Manifest,
+}
+impl BinaryStageManifest {
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
 }
 
 /// Inert private capability, not a receipt. Only actual durable source
@@ -803,9 +816,10 @@ impl Store {
         // A durable operation result is authoritative after an unknown commit
         // ACK, even if a later write changed the entry or a source is damaged.
         if let Some(terminal) = super::binary_commit::terminal_status(&tx, reference)? {
-            let (accepted_length, next_sequence) =
-                super::binary_commit::terminal_progress(&tx, reference)?
-                    .ok_or_else(|| corrupt("terminal binary stage lacks original progress"))?;
+            let manifest = super::binary_commit::terminal_manifest(&tx, reference)?
+                .ok_or_else(|| corrupt("terminal binary stage lacks original manifest"))?;
+            let accepted_length = manifest.bytes;
+            let next_sequence = manifest.bytes.div_ceil(BINARY_STAGE_MAX_CHUNK_BYTES as u64) as u32;
             let state = match &terminal {
                 super::binary_commit::BinaryStageTerminal::Committed(_) => StagePhase::Committed,
                 super::binary_commit::BinaryStageTerminal::Rejected(_) => StagePhase::Rejected,
@@ -815,7 +829,7 @@ impl Store {
                 accepted_length,
                 next_sequence,
                 seal_requested: true,
-                finalized: None,
+                finalized: Some(BinaryStageManifest { manifest }),
                 terminal: Some(terminal),
             };
             tx.commit()?;
@@ -826,8 +840,14 @@ impl Store {
             stage.phase,
             StagePhase::Sealed | StagePhase::CommitRequested | StagePhase::Committed
         ) {
-            let verified = verify_stage(&tx, &stage)?;
-            Some(verified.reference)
+            // Status is not a new content proof. The durable seal commitment
+            // is diagnostic; authority-producing operations verify bytes.
+            Some(BinaryStageManifest {
+                manifest: stage
+                    .manifest
+                    .clone()
+                    .ok_or_else(|| corrupt("sealed stage lacks manifest"))?,
+            })
         } else {
             None
         };
@@ -1771,8 +1791,13 @@ mod tests {
             sealed
         );
         assert_eq!(
-            store.query_binary_stage(&resumed).unwrap().finalized,
-            Some(sealed)
+            store
+                .query_binary_stage(&resumed)
+                .unwrap()
+                .finalized
+                .as_ref()
+                .map(BinaryStageManifest::manifest),
+            Some(sealed.manifest())
         );
         store.abort_binary_stage(&resumed).unwrap();
         assert_eq!(
@@ -1845,8 +1870,14 @@ mod tests {
             .execute_batch("DROP TRIGGER immutable_payloads_no_update")
             .unwrap();
         store.connection.execute("UPDATE immutable_payloads SET payload=?1 WHERE update_id IN (SELECT update_id FROM binary_stage_allocations WHERE stage_id=?2 AND kind='chunk')",params![payload.encode().unwrap(),good.stage_id.as_str()]).unwrap();
-        assert!(store.query_binary_stage(&good).is_err());
+        let diagnostic = store.query_binary_stage(&good).unwrap();
+        assert_eq!(diagnostic.state, StagePhase::Sealed);
+        let diagnostic = diagnostic.finalized.unwrap();
+        assert_eq!(diagnostic.manifest().bytes, 8);
+        assert_eq!(diagnostic.manifest().digest, Sha256Digest::of(b"original"));
+        // Metadata remains observable, but cannot authorize corrupt sources.
         assert!(store.seal_binary_stage(&good, 8, None).is_err());
+        assert!(store.request_commit_binary_stage(&good).is_err());
         invisible(&store);
     }
 

@@ -1340,7 +1340,7 @@ pub(super) fn terminal_status(
         &raw,
     )?)))
 }
-fn terminal_manifest(
+pub(super) fn terminal_manifest(
     tx: &Connection,
     stage: &BinaryStageRef,
 ) -> Result<Option<zorid_file_sync::Manifest>> {
@@ -1361,17 +1361,6 @@ fn terminal_manifest(
     Ok(request.map(|request| request.manifest))
 }
 
-pub(super) fn terminal_progress(
-    tx: &Connection,
-    stage: &BinaryStageRef,
-) -> Result<Option<(u64, u32)>> {
-    Ok(terminal_manifest(tx, stage)?.map(|manifest| {
-        (
-            manifest.bytes,
-            manifest.bytes.div_ceil(BINARY_STAGE_MAX_CHUNK_BYTES as u64) as u32,
-        )
-    }))
-}
 pub(super) fn update_reserved(tx: &Connection, key: &EnvelopeKey) -> Result<bool> {
     Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM binary_commit_plans WHERE realm_id=?1 AND vault_id=?2 AND final_event_id=?3)",params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],|r|r.get(0))?)
 }
@@ -1638,6 +1627,15 @@ mod tests {
             Some(BinaryStageTerminal::Committed(original.clone()))
         );
         assert_eq!(store.commit_binary_stage(&stage).unwrap(), original);
+        assert_eq!(
+            store
+                .query_binary_stage(&stage)
+                .unwrap()
+                .finalized
+                .as_ref()
+                .map(BinaryStageManifest::manifest),
+            Some(&manifest)
+        );
         assert_eq!(
             store.binary_stage_content_manifest(&stage).unwrap(),
             Some(manifest)

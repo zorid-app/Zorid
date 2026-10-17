@@ -128,9 +128,12 @@ length/hash. Bounded manifest/source metadata binds stage identity, scope,
 request, exact ordered payload commitments and manifest. Page persistence and
 the Sealed transition are atomic. No private hasher memory is persisted.
 
-Seal retries and queries that return finalized references repeat actual source
-verification, including exact stored page payload comparisons. A persisted
-manifest/hash alone never becomes a verification flag. Abort is idempotent for
+Seal retries repeat actual source verification, including exact stored page
+payload comparisons. Status queries return an inert `BinaryStageManifest`
+diagnostic with the same manifest getter, without rehashing file bytes or
+constructing a `StagedBinaryRef` proof. Terminal queries use the original durable
+operation manifest. A persisted manifest/hash never becomes a verification flag;
+actual seal, commit, read and Capture issuance retain byte verification. Abort is idempotent for
 Receiving, Sealed or already Aborted command stages; Capture allows abort only
 before sealing. Authorization/committed phases reject abort.
 CommitRequested/Committed/Rejected belong to the parent command integration;

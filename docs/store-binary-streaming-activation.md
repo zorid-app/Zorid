@@ -120,3 +120,23 @@ separate family/integration test targets were not run by this activation gate.
 The existing256KiB Graph-backed restart/range test passed. Root owns composing
 native/host/client counterparts and actual publication, transport performance,
 restart and editor checks before any main/runtime activation.
+
+## Sampled status-query followup (source only)
+
+Root requested a two-second sample of live native test PID77920 during gate47955.
+The stack-only sample is `/private/tmp/zorid-store-hotpath-77920.sample.txt`.
+All1555 worker samples were in Native/Store `query_binary_stage`;1189 were under
+`verify_stage`, including exact payload descriptor reconstruction and file-v2 JSON
+byte-array decoding. At sample time the test had advanced to
+`native_large_stage_restart_receipt_and_lost_open_ack_keep_original_sources`.
+This is a sampled location, not a benchmark or whole-test timing attribution.
+
+Root approved separating status diagnostics from private source proofs. The
+followup changes only `BinaryStageStatus.finalized` to an inert
+`BinaryStageManifest` with the existing `.manifest()` getter. Query now returns
+retained metadata, including the original terminal manifest. It issues no read,
+Capture or publication authority. Actual seal, commit, pinned reads and Capture
+issuance still verify bytes. Existing regression assertions compare diagnostic
+manifest metadata and require corrupt sources to fail real sealing/authorization.
+The prior86-pass gate predates this followup; no build was run while the live
+native gate retained the exclusive resource slot.

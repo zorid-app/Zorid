@@ -31,9 +31,10 @@ mod checkpoints;
 mod content;
 pub use blob_stage::BinaryCaptureRequest as CaptureRequest;
 pub use blob_stage::{
-    BinaryCaptureRequest, BinaryStageRef, BinaryStageRequest, BinaryStageStatus, BinaryTarget,
-    StageChunkReceipt, StagePhase, StagedBinaryRef, StreamingLimits, BINARY_STAGE_MAX_CHUNK_BYTES,
-    BINARY_STAGE_MAX_FILE_BYTES, BINARY_STAGE_MAX_PATH_BYTES, BINARY_STAGE_MAX_PAYLOAD_BYTES,
+    BinaryCaptureRequest, BinaryStageManifest, BinaryStageRef, BinaryStageRequest,
+    BinaryStageStatus, BinaryTarget, StageChunkReceipt, StagePhase, StagedBinaryRef,
+    StreamingLimits, BINARY_STAGE_MAX_CHUNK_BYTES, BINARY_STAGE_MAX_FILE_BYTES,
+    BINARY_STAGE_MAX_PATH_BYTES, BINARY_STAGE_MAX_PAYLOAD_BYTES,
 };
 pub use content::{
     BinarySourceRef, BinaryStageLocator, CapturedBinaryRef, ContentMetadata, PublishedBinaryRef,
