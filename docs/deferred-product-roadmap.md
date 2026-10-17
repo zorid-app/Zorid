@@ -72,6 +72,13 @@ areas rather than claiming that every upstream edge case has been exhausted.
   family persistence + standalone CLI and browser storage + worker/relay flows;
   batch validation around those consumers. Keep actual bug regressions and all
   milestone requirements, but stop unnecessary repeated component gates.
+- Native schema8 activation has a separate automatic-review block. Exact
+  unapplied artifact `/tmp/zorid-schema8-activation.patch` was read by root;
+  user approval requested for isolated source application. It changes fresh-only
+  initialization/version rejection and visibility/legacy mutation gates, not
+  a real-vault migration. Do not bypass review or apply while approval is pending.
+  `recovery_review` now owns native family wrapper source with API/lock constraints
+  from `data_readiness`; the latter retains atomic store/apply/receipt ownership.
 - Current resource handoff: editor coordinator owns bounded Canvas/Bases tests
   and TypeScript via Orca `msg_4c1acfc31c9b`; root's last WASM session45875 exited0
   with21 wrapper tests. No core heavy checks until editor explicitly releases.
