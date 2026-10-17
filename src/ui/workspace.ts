@@ -274,6 +274,63 @@ export class Workspace {
     return result;
   }
 
+  private nativeReadyViews=new WeakSet<TabViewRuntime>();
+  private nativeObservedViews=new WeakSet<TabViewRuntime>();
+
+  private observeNativeNoteView(pane:Pane):void{
+    if(!this.platform?.noteOpened||!pane.runtime||!pane.viewReady)return;
+    const runtime=pane.runtime,generation=this.vaultGeneration,path=pane.viewPath,content=pane.content;
+    if(this.nativeObservedViews.has(runtime))return;
+    this.nativeObservedViews.add(runtime);
+    const ready=()=>{
+      if(generation!==this.vaultGeneration||runtime.phase==='disposed')return;
+      this.nativeReadyViews.add(runtime);
+      const owner=this.panes.find(candidate=>candidate.runtime===runtime);
+      if(owner)this.notifyNativeNoteOpened(owner);
+    };
+    if(!path)return;
+    if(isMarkdown(path)){if(pane.editor||pane.refreshPreview)ready();return;}
+    const pending=pane.baseView?.ready??pane.pdfView?.ready;
+    if(pending){void pending.then(ready,()=>{});return;}
+    if(pane.canvasView){ready();return;}
+    // ImageView has no success promise; use the actual image's load result.
+    const image=pane.imageView?content?.querySelector('img'):null;
+    if(image){if(image.complete&&image.naturalWidth>0)ready();else image.addEventListener('load',()=>{if(image.naturalWidth>0)ready();},{once:true});return;}
+    // MediaView.ready also settles on errors/timeouts. Only metadata is success.
+    if(pane.mediaView){
+      const check=()=>{const media=content?.querySelector('audio,video') as HTMLMediaElement|null;if(media&&media.readyState>=1&&!media.error)ready();};
+      check();content?.addEventListener('loadedmetadata',check,{capture:true,once:true});
+      void pane.mediaView.ready.then(check,()=>{});
+    }
+  }
+
+  private nativeOpening?:PlatformVault;
+  private nativeOpened?:{platform:PlatformVault;entryId:string;tabId:string};
+
+  private notifyNativeNoteOpened(pane:Pane):void {
+    const platform=this.platform;
+    if(!platform?.noteOpened||this.nativeOpening===platform||this.closing||this.startupFailed||this.platformReleased||this.activePane!==pane||!this.panes.includes(pane))return;
+    const tab=this.current(pane);
+    if(!tab?.path||tab.kind!=='note'){this.nativeOpened=undefined;return;}
+    if(!pane.viewReady||pane.viewTabId!==tab.id||pane.viewPath!==tab.path||pane.runtime?.phase!=='active')return;
+    if(!this.nativeReadyViews.has(pane.runtime))return;
+    const entry=this.vault.entries.get(tab.path);
+    if(entry?.type!=='file'||!entry.entryId)return;
+    const previous=this.nativeOpened;
+    if(previous?.platform===platform&&previous.entryId===entry.entryId&&previous.tabId===tab.id)return;
+    this.nativeOpened={platform,entryId:entry.entryId,tabId:tab.id};
+    // Recents is presentation state. Never make a rejected/stale notification
+    // fail the shared editor's activation, durable checkpoint or save path.
+    try{void platform.noteOpened(tab.path,entry.entryId).catch(()=>{});}catch{/* Optional native history is nonfatal. */}
+  }
+
+  private async openNativeInitialNote(platform:PlatformVault):Promise<void>{
+    if(platform.initialPath===undefined)return;
+    const entry=this.vault.entries.get(platform.initialPath);
+    if(!platform.initialEntryId||entry?.type!=='file'||entry.entryId!==platform.initialEntryId){notice('The selected note changed or is no longer available. Return to Files and select it again.');return;}
+    await this.openNote(platform.initialPath);
+  }
+
   async openVault(platform: PlatformVault): Promise<void> {
     const request=++this.vaultRequest,next=new Vault(platform.adapter);
     // Initialization is read-only and can overlap; only the latest request may
@@ -281,7 +338,16 @@ export class Workspace {
     // a new adapter initializes, and a late request cannot acquire a watcher.
     await next.initialize();
     if(request!==this.vaultRequest)return;
-    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){let recovered=await this.recoverDurableBuffers(next);if(await platform.recoverCommands?.()){await next.initialize();recovered=await this.recoverDurableBuffers(next);}await this.replaceVault(platform,next,recovered);}});
+    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){
+      this.nativeOpening=platform;
+      try{
+        let recovered=await this.recoverDurableBuffers(next);
+        if(await platform.recoverCommands?.()){await next.initialize();recovered=await this.recoverDurableBuffers(next);}
+        await this.replaceVault(platform,next,recovered);
+        if(request===this.vaultRequest&&this.platform===platform)await this.openNativeInitialNote(platform);
+      }finally{if(this.nativeOpening===platform)this.nativeOpening=undefined;}
+      if(request===this.vaultRequest&&this.platform===platform)this.notifyNativeNoteOpened(this.activePane);
+    }});
     this.vaultTransition=transition.catch(()=>{});
     await transition;
   }
@@ -512,7 +578,7 @@ export class Workspace {
     this.panes.push(pane); this.paneContainer.append(pane.element); return pane;
   }
   private focusPane(pane:Pane):void{if(pane.editor)pane.editor.focus();else pane.element.focus({preventScroll:true});}
-  private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
+  private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); if(changed)this.notifyNativeNoteOpened(pane); }
   async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath='',expectedActivation?:number): Promise<void> {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
@@ -587,6 +653,12 @@ export class Workspace {
   }
 
   async renderPane(initialPane:Pane,options:{flush?:boolean;refresh?:boolean}={}):Promise<void>{
+    await this.renderPaneContent(initialPane,options);
+    this.observeNativeNoteView(initialPane);
+    this.notifyNativeNoteOpened(initialPane);
+  }
+
+  private async renderPaneContent(initialPane:Pane,options:{flush?:boolean;refresh?:boolean}={}):Promise<void>{
     let pane=initialPane;
     const request=(this.renderRequests.get(initialPane)??0)+1,generation=this.vaultGeneration;this.renderRequests.set(initialPane,request);
     const current=()=>generation===this.vaultGeneration&&this.panes.includes(initialPane)&&this.renderRequests.get(initialPane)===request;
