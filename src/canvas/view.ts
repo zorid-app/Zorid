@@ -20,6 +20,9 @@ export interface CanvasViewOptions {
   /** Shared NoteBuffer lease for an existing Markdown file, never Canvas JSON. */
   openMarkdownFile?(path: string): Promise<CanvasMarkdownSession>;
   textEditorOptions?: Omit<EditorOptions, 'value' | 'mode' | 'onChange'>;
+  /** Pane-owned embedded drafts outlive individual text-card renderer widgets.
+   * The host coalesces concurrent flushes and retains drafts after teardown. */
+  textEmbedLifecycle?: { flush(): Promise<void>; hasPendingChanges(): boolean };
   chooseFile?(kind?: 'note' | 'media'): Promise<string | null>;
   filePathsFromDrop?(transfer: DataTransfer): readonly string[];
   renderFile?(path: string, subpath?: string): { element: HTMLElement; destroy(): void };
@@ -203,7 +206,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     const projected = projectCanvas(next);
     for (const [id, entry] of textCards) {
       const node = projected.nodes.get(id)?.data;
-      if ((!node || node.type !== 'text' || String(node.text ?? '') !== entry.text) && (entry.card.hasUnacceptedChanges() || !!failedSave || !allowQueuedText && saveVersion > completedSaveVersion)) throw new Error('The text card has unsaved changes. Save it before removing or replacing the card.');
+      if ((!node || node.type !== 'text' || String(node.text ?? '') !== entry.text) && (entry.card.hasUnacceptedChanges() || !!failedSave || !!options.textEmbedLifecycle?.hasPendingChanges() || !allowQueuedText && saveVersion > completedSaveVersion)) throw new Error('The text card has unsaved changes. Save it before removing or replacing the card.');
     }
     for (const [id, entry] of fileCards) {
       const node = projected.nodes.get(id)?.data;
@@ -266,8 +269,8 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         undoButton.disabled = false; redoButton.disabled = true; publish(true);
       },
       subscribe(listener) { entry.listeners.add(listener); return () => { entry.listeners.delete(listener); }; },
-      flush: flushPersistence,
-      hasPendingChanges: () => saveVersion > completedSaveVersion || !!failedSave,
+      async flush() { await options.textEmbedLifecycle?.flush(); await flushPersistence(); },
+      hasPendingChanges: () => saveVersion > completedSaveVersion || !!failedSave || !!options.textEmbedLifecycle?.hasPendingChanges(),
       editorOptions: {
         paths: () => [], ...options.textEditorOptions,
         open(target, kind = 'markdown', event) {
@@ -404,6 +407,9 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       finishEditing?.(true);
       if (editorFailure) throw editorFailure;
       for (const entry of [...fileCards.values(), ...textCards.values()]) await entry.card.flush();
+      // Also cover retained host drafts whose source embed was removed while
+      // editing, including the case with no currently mounted text card.
+      await options.textEmbedLifecycle?.flush();
     }
     await flushPersistence();
   }
@@ -721,7 +727,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   render();
   return {
     element, get document() { return document; }, undo, redo, flush,
-    hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave || [...fileCards.values(), ...textCards.values()].some(entry => entry.card.hasPendingChanges()),
+    hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave || !!options.textEmbedLifecycle?.hasPendingChanges() || [...fileCards.values(), ...textCards.values()].some(entry => entry.card.hasPendingChanges()),
     setDocument(next) {
       // File watchers also report our own completed writes. Replacing identical
       // source would discard undo/redo, active drafts and rich renderer owners.
