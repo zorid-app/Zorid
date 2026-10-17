@@ -96,6 +96,12 @@ fn put(tx: &Connection, a: &DirectoryAttempt) -> Result<()> {
     Ok(())
 }
 fn current(tx: &Connection, id: &EntryId) -> Result<EntryState> {
+    if !is_visible(tx, id)? {
+        return Err(ContractError::InvalidMutation {
+            reason: "hidden directory retains its physical publication state".into(),
+        }
+        .into());
+    }
     let (path, deleted, json, content): (String, i64, String, bool) = tx.query_row(
         "SELECT path,deleted,state,content IS NOT NULL FROM entries WHERE id=?1",
         [id.as_str()],
@@ -201,6 +207,13 @@ impl Store {
                     "directory replaced; original provenance retained".into(),
                 ));
             }
+            if !family_materialization::same_directory_publication(&tx, &old.state, &state)? {
+                return Err(ContractError::InvalidMutation {
+                    reason: "directory namespace witness changed; physical work remains pending"
+                        .into(),
+                }
+                .into());
+            }
         }
         if let Some(physical) = physical {
             let prior = physical_bindings::binding(&tx, &state.id)?.ok_or_else(|| {
@@ -214,6 +227,7 @@ impl Store {
                 ));
             }
         }
+        family_materialization::check_publication(&tx, &state, None)?;
         put_baseline(
             &tx,
             &DirectoryBaseline {
@@ -382,6 +396,12 @@ impl Store {
         if a.phase == DirectoryPhase::Complete {
             return Err(StoreError::Corrupt("directory attempt complete".into()));
         }
+        if !is_visible(&tx, &a.target.id)? {
+            return Err(ContractError::InvalidMutation {
+                reason: "hidden directory retains its pending publication".into(),
+            }
+            .into());
+        }
         if let Some(identity) = identity {
             if a.stage_identity
                 .as_ref()
@@ -420,12 +440,15 @@ impl Store {
         if a.phase == DirectoryPhase::Complete {
             return Ok(());
         }
-        let state = current(&tx, &a.target.id)?;
-        if state.path != a.target.path {
+        let current_state = current(&tx, &a.target.id)?;
+        if current_state.path != a.target.path {
             return Err(StoreError::Corrupt(
                 "folder moved before publication completion".into(),
             ));
         }
+        // Publication proves this attempt's saved target, even when unrelated
+        // child metadata has advanced the folder's current revision.
+        let state = a.target.clone();
         let identity = a
             .stage_identity
             .clone()
@@ -453,6 +476,7 @@ impl Store {
                 ))
             }
         }
+        family_materialization::check_publication(&tx, &state, None)?;
         put_baseline(
             &tx,
             &DirectoryBaseline {

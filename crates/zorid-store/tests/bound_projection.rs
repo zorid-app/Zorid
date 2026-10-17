@@ -137,3 +137,157 @@ fn first_folder_import_rolls_back_without_splitting_baseline_and_logical_state()
         Some(binding)
     );
 }
+
+#[test]
+fn hidden_active_publications_preserve_attempts_baselines_and_jobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db");
+    let mut store = Store::open(&db).unwrap();
+    for (name, kind) in [
+        ("hidden-file", EntryKind::File),
+        ("hidden-folder", EntryKind::Folder),
+    ] {
+        let id = EntryId::new(name).unwrap();
+        store
+            .apply(&MutationRequest {
+                operation_id: op(name),
+                mutation: Mutation::Create {
+                    id: id.clone(),
+                    path: VaultPath::new(name).unwrap(),
+                    kind,
+                    content: (kind == EntryKind::File).then(|| b"pending".to_vec()),
+                },
+            })
+            .unwrap();
+        let attempt = if kind == EntryKind::File {
+            let attempt = store.begin_projection_bound(&id, "parent").unwrap();
+            store
+                .mark_projection(
+                    &attempt.attempt_id,
+                    ProjectionPhase::Staged,
+                    Some("stage".into()),
+                )
+                .unwrap();
+            attempt.attempt_id
+        } else {
+            let attempt = store
+                .begin_directory_projection_bound(&id, "parent")
+                .unwrap();
+            store
+                .mark_directory_projection(
+                    &attempt.attempt_id,
+                    zorid_store::DirectoryPhase::Staged,
+                    Some("stage".into()),
+                )
+                .unwrap();
+            attempt.attempt_id
+        };
+        let jobs = store.pending_projection_jobs(100).unwrap();
+        let files = store.projection_attempts(false).unwrap();
+        let folders = store.directory_attempts(false).unwrap();
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        // Simulate the visibility transition committed by family materialization.
+        assert_eq!(
+            connection
+                .execute("UPDATE entries SET visible=0 WHERE id=?1", [id.as_str()])
+                .unwrap(),
+            1
+        );
+        assert!(!store.is_visible_entry(&id).unwrap());
+        if kind == EntryKind::File {
+            assert!(store.begin_projection_bound(&id, "parent").is_err());
+            assert!(store
+                .mark_projection(&attempt, ProjectionPhase::Published, None)
+                .is_err());
+            assert!(store
+                .finish_projection_bound(&attempt, &physical("stage", "parent"))
+                .is_err());
+            assert!(store.finish_projection(&attempt, false).is_err());
+        } else {
+            assert!(store
+                .begin_directory_projection_bound(&id, "parent")
+                .is_err());
+            assert!(store
+                .mark_directory_projection(&attempt, zorid_store::DirectoryPhase::Published, None)
+                .is_err());
+            assert!(store
+                .finish_directory_projection_bound(&attempt, &physical("stage", "parent"))
+                .is_err());
+        }
+        assert_eq!(store.projection_attempts(false).unwrap(), files);
+        assert_eq!(store.directory_attempts(false).unwrap(), folders);
+        assert_eq!(store.pending_projection_jobs(100).unwrap(), jobs);
+        assert!(store.projection_baseline(&id).unwrap().is_none());
+        assert!(store.directory_baseline(&id).unwrap().is_none());
+        assert!(store.physical_binding(&id).unwrap().is_none());
+    }
+}
+
+#[test]
+fn directory_completion_records_attempt_target_after_child_revision_advances() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    let folder = EntryId::new("folder").unwrap();
+    store
+        .apply(&MutationRequest {
+            operation_id: op("create-folder"),
+            mutation: Mutation::Create {
+                id: folder.clone(),
+                path: VaultPath::new("folder").unwrap(),
+                kind: EntryKind::Folder,
+                content: None,
+            },
+        })
+        .unwrap();
+    let attempt = store
+        .begin_directory_projection_bound(&folder, "parent")
+        .unwrap();
+    store
+        .mark_directory_projection(
+            &attempt.attempt_id,
+            zorid_store::DirectoryPhase::Staged,
+            Some("stage".into()),
+        )
+        .unwrap();
+    store
+        .apply(&MutationRequest {
+            operation_id: op("create-child"),
+            mutation: Mutation::Create {
+                id: EntryId::new("child").unwrap(),
+                path: VaultPath::new("folder/child").unwrap(),
+                kind: EntryKind::File,
+                content: Some(b"child".to_vec()),
+            },
+        })
+        .unwrap();
+    assert_ne!(
+        store.read(&folder).unwrap().unwrap().state.revision,
+        attempt.target.revision
+    );
+    store
+        .finish_directory_projection_bound(&attempt.attempt_id, &physical("stage", "parent"))
+        .unwrap();
+    assert_eq!(
+        store.directory_baseline(&folder).unwrap().unwrap().state,
+        attempt.target
+    );
+    assert_eq!(
+        store.physical_binding(&folder).unwrap().unwrap().state,
+        attempt.target
+    );
+    let pending = store.pending_projection_jobs(100).unwrap();
+    assert_eq!(pending.len(), 1);
+    let current = store.read(&folder).unwrap().unwrap().state;
+    store
+        .bind_directory_bound(&current, &physical("stage", "parent"))
+        .unwrap();
+    assert_eq!(
+        store.directory_baseline(&folder).unwrap().unwrap().state,
+        current
+    );
+    assert_eq!(
+        store.physical_binding(&folder).unwrap().unwrap().state,
+        current
+    );
+    assert_eq!(store.pending_projection_jobs(100).unwrap(), pending);
+}

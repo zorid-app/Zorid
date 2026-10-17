@@ -78,6 +78,53 @@ old physical content branch under a newly reserved physical revision and new
 location witness; it cannot label old disk bytes with the latest logical revision.
 The text witness and coalescing contract are being finalized with the family owner.
 
+## Family publication and visibility hooks
+
+The follow-up source gates file and directory begin, progress and completion on
+entry visibility, including an already-active attempt. Hidden attempts, stage
+files, physical baselines and jobs remain retained. Native project/resume paths
+check visibility before filesystem work; scanner absence confirmation checks it
+again inside its database transaction. Physical ownership lookup still includes
+hidden rows so observation and parent import cannot create a new identity over
+retained data.
+
+File and directory completion call the family owner's `check_publication` inside
+the finish transaction before baseline advancement or exact job retirement.
+Directory completion saves the attempt's immutable target, not a newer current
+revision. For later metadata-only folder revisions, native rechecks the bound
+inode and parent, then `bind_directory_bound` requires
+`same_directory_publication` to compare old/current immutable family witnesses.
+Only an identical witness may advance the physical revision; changed location or
+namespace heads stay pending. This advancement retires no namespace jobs.
+
+These calls depend on the family source and approval-blocked schema8 aggregation:
+`is_visible`, `Store::is_visible_entry`, and the family publication helpers. The
+schema activation patch and namespace binding patch are not applied by this
+follow-up. Runtime compilation waits for the coordinator's coherent assembly.
+
+The remaining physical Move/Delete implementation sequence is concrete:
+
+1. Resolve approval for the two existing exact patches and integrate their
+   source with this hook slice. The local namespace journal then preserves
+   physical binding CAS through Move/Delete completion.
+2. Add received namespace attachment alongside the local journal. In one store
+   transaction, validate current desired materialization, explicit affected
+   members and exact covered received job IDs, CAS prior physical bindings,
+   and persist immutable evidence. Existing active publications must settle or
+   explicitly transfer responsibility before attachment.
+3. Persist any lagging-content physical branch and its globally fresh revision
+   before filesystem execution. Direct entry Move joins the old physical frontier
+   with the applied Move via the portable helper. Descendants of an ancestor Move
+   retain their own entry frontier and carry the explicit journal ancestry/path
+   proof; they must never graft the parent event into their graph.
+4. Execute the existing explicit-member capture/stage/publish phases with those
+   proofs. Finish the exact plan atomically with binding/baseline updates and
+   covered job retirement; semantic Delete removes active bindings and retains
+   recovery evidence. Recovery/Pending classifications never fabricate Delete.
+5. Route native family apply/receive/recover through attachment and replay, then
+   run the combined store/native/CLI fixtures. `Pending` is an intermediate state,
+   not the completed Move/Delete milestone.
+
 ## Verification
 
 Source tests cover bound fresh import/restart, immutable proof validation,

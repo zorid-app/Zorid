@@ -210,6 +210,14 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Hidden retained entries keep their active attempt and private bytes.
+        // Check before returning an existing attempt, not only at target lookup.
+        if !is_visible(&tx, id)? {
+            return Err(ContractError::InvalidMutation {
+                reason: "hidden entry cannot begin physical publication".into(),
+            }
+            .into());
+        }
         if let Some(s) = tx
             .query_row(
                 "SELECT attempt_id FROM projection_attempts WHERE entry_id=?1 AND completed=0",
@@ -304,6 +312,12 @@ impl Store {
         if value.completed() {
             return Err(StoreError::Corrupt("attempt already complete".into()));
         }
+        if !is_visible(&tx, &value.target.state.id)? {
+            return Err(ContractError::InvalidMutation {
+                reason: "hidden entry retains its pending publication".into(),
+            }
+            .into());
+        }
         if let Some(identity) = identity {
             if value
                 .stage_identity
@@ -345,7 +359,18 @@ impl Store {
         if value.completed() {
             return Ok(());
         }
+        if !is_visible(&tx, &value.target.state.id)? {
+            return Err(ContractError::InvalidMutation {
+                reason: "hidden entry retains its pending publication".into(),
+            }
+            .into());
+        }
         if published {
+            family_materialization::check_publication(
+                &tx,
+                &value.target.state,
+                Some(&value.target.content),
+            )?;
             if value.stage_identity.is_none()
                 || baseline(&tx, &value.target.state.id)? != value.baseline
             {

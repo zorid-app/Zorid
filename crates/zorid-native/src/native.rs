@@ -563,6 +563,9 @@ impl NativeVault {
         )?))
     }
     fn project(&mut self, id: &EntryId) -> Result<()> {
+        if !self.store.is_visible_entry(id)? {
+            return Err(Error::Busy("hidden entry retains its physical publication"));
+        }
         if let Some(entry) = self.store.read(id)? {
             self.namespace_clear(&entry.state.path)?;
         }
@@ -644,6 +647,9 @@ impl NativeVault {
         Ok(())
     }
     fn resume(&mut self, original: &ProjectionAttempt) -> Result<()> {
+        if !self.store.is_visible_entry(&original.target.state.id)? {
+            return Err(Error::Busy("hidden entry retains its physical publication"));
+        }
         self.paths.verify()?;
         let mut a = original.clone();
         let stage = format!("{}.stage", a.attempt_id.as_str());

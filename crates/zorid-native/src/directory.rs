@@ -86,6 +86,11 @@ impl NativeVault {
         Ok(imported)
     }
     pub(super) fn project_directory(&mut self, id: &EntryId) -> Result<()> {
+        if !self.store.is_visible_entry(id)? {
+            return Err(Error::Busy(
+                "hidden directory retains its physical publication",
+            ));
+        }
         if let Some(entry) = self.store.read(id)? {
             self.namespace_clear(&entry.state.path)?;
         }
@@ -122,6 +127,11 @@ impl NativeVault {
                 return Err(Error::Busy("directory identity changed"));
             }
             self.paths.verify_parent(&current.state.path, &parent)?;
+            // Child metadata can advance a folder's revision without changing
+            // its publication witness. Store compares the immutable old/new
+            // family records and advances only this proven same-inode binding.
+            self.store
+                .bind_directory_bound(&current.state, &binding.physical)?;
             return Ok(());
         }
         self.paths.verify_parent(&current.state.path, &parent)?;
@@ -132,6 +142,11 @@ impl NativeVault {
         self.resume_directory(&a)
     }
     pub(super) fn resume_directory(&mut self, a: &DirectoryAttempt) -> Result<()> {
+        if !self.store.is_visible_entry(&a.target.id)? {
+            return Err(Error::Busy(
+                "hidden directory retains its physical publication",
+            ));
+        }
         self.paths.verify()?;
         let state = self
             .store

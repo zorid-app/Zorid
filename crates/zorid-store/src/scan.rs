@@ -325,6 +325,12 @@ impl Store {
                     .entry
                     .as_ref()
                     .ok_or_else(|| StoreError::Corrupt("absence missing entry".into()))?;
+                if !is_visible(&tx, &expected.id)? {
+                    return Err(ContractError::InvalidMutation {
+                        reason: "hidden entry cannot become a scanner absence".into(),
+                    }
+                    .into());
+                }
                 let (path, deleted, state, has_content): (String, i64, String, bool) = tx
                     .query_row(
                         "SELECT path,deleted,state,content IS NOT NULL FROM entries WHERE id=?1",
