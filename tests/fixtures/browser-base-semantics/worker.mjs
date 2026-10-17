@@ -145,7 +145,8 @@ self.onmessage = async ({ data: config }) => {
     const checks = requestChecks(bindings);
     for (const check of checks) if (!check.passed) failures.push({ id: check.id, operation: 'request-rejection', ...check });
     self.postMessage({ type: 'complete', report: {
-      status: failures.length ? 'failed' : 'passed', runtime: 'actual-browser-worker-generated-rust-wasm', ...config,
+      status: failures.length ? 'failed' : 'passed', runtime: 'actual-browser-worker-generated-rust-wasm',
+      relationshipCoverage: 'not-exercised-graphless-detached-snapshots', ...config,
       corpusHashes: { expressions: expressions.sha256, queries: queries.sha256, documents: documents.sha256 },
       wasmSha256: await hash(wasmBytes), actualResultsSha256: await hash(encoder.encode(JSON.stringify(results))),
       totals: { expressions: expressions.value.cases.length, queries: queries.value.cases.length, compile: documents.value.cases.length },

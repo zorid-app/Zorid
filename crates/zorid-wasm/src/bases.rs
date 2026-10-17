@@ -58,6 +58,9 @@ struct QueryRequest {
     configuration: PropertyValue,
     // The shared engine owns snapshot identity and its validation. Never replace
     // this with a local String token or weaker duplicate DTO at the binding.
+    // This detached JSON seam is graph-less: shared snapshot deserialization
+    // rejects caller-authored relationship graphs. Graph parity needs a later
+    // Rust-owned generation/ResolutionSnapshot handle, never a JSON graph DTO.
     snapshot: BaseSnapshot,
     #[serde(default)]
     options: QueryOptions,

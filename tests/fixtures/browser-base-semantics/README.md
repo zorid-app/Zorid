@@ -20,7 +20,12 @@ mod bases;
 
 The wrappers deserialize the shared engine's `DetachedRecord`,
 `EvaluationOptions`, `BaseSnapshot` and `QueryOptions` directly. Snapshot identity
-validation remains with the shared index type. The only local request envelopes
+validation remains with the shared index type. This JSON transport accepts
+**graph-less detached snapshots only**; shared deserialization must reject a
+non-null relationship graph rather than trust a caller-authored resolver result.
+Relationship-dependent Base queries require a later Rust-owned generation/graph
+handle seam and their own actual-browser fixtures. A passing run here does not
+establish relationship parity. The only local request envelopes
 are `{expression, record, options}` and `{configuration, snapshot, options}`.
 `compileBaseSource` takes a JSON-encoded source string and returns read-only
 decoded semantic configuration; this output must never overwrite the `.base`
