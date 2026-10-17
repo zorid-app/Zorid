@@ -8,6 +8,7 @@ them or interrupting the current work.
 
 | Finding / requested behavior | Current state | Next evidence or work |
 | --- | --- | --- |
+| Prioritize the best Zorid UX; Obsidian is a starting point, not an exact parity requirement | Directly confirmed by user on 2026-10-16; shared instructions and execution checkpoint updated | Apply to subsequent design/review decisions; retain capability requests and correctness, accessibility, data integrity and native verification gates |
 | Packaged Electron runtime security update | Dependency audit found all 36 GitHub alerts concern shipped Electron 31.6.0; Promise-returning preload bridge matches one conditional advisory prerequisite, with no exploit demonstrated | User preference requested for supported macOS minimum before runtime/lockfile upgrade; revalidate packaging, native editor and supported OS claims |
 | Embed controls need type-specific placement and behavior | Packaged-reference per-type matrix committed in `c211dcc`; audio correction integrated | Implement distinct image, note, PDF/Bases, video and Canvas control policies; native behavior and exact appearance require separate checks |
 | Audio embed looks unlike Obsidian: source button overlaps player controls and spacing looks excessive | `3a46189` removes the audio-only overlay and generic padding; 33 focused tests and native Play/Pause through 0:02 pass | Native screenshot capture is clipped; exact pixel comparison remains unverified |

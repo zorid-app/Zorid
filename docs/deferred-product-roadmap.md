@@ -5,6 +5,12 @@
 Updated 2026-10-16. Read this section before resuming after a context reset;
 earlier discussion restrictions below are historical where superseded here.
 
+Direct user confirmation on 2026-10-16 sets the product priority to the best
+Zorid UX, with Obsidian as a starting point rather than an exact parity target.
+Older reference/parity ledgers remain evidence and capability inventories, not
+requirements to reproduce every interaction or visual detail. This does not
+relax correctness, data integrity, accessibility or native verification gates.
+
 The user requested durable written decisions, execution tracking and a Codex
 built-in goal. An active goal now targets the first integrated Rust core + web +
 Electron + standalone full-vault CLI + E2EE server-sync milestone. This is not a
