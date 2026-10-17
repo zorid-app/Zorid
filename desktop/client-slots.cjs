@@ -41,12 +41,14 @@ async function openClientSlots(file) {
   };
   async function persist(next) {
     validate(next);
+    const encoded = JSON.stringify(next);
+    if (Buffer.byteLength(encoded, 'utf8') > 1024 * 1024) throw failure('client_registry_limit');
     const directory = path.dirname(file), temporary = path.join(directory, `.client-slots-${randomUUID()}.tmp`);
     let handle;
     try {
       await fs.mkdir(directory, {recursive: true, mode: 0o700});
       handle = await fs.open(temporary, 'wx', 0o600);
-      await handle.writeFile(JSON.stringify(next)); await handle.sync(); await handle.close(); handle = undefined;
+      await handle.writeFile(encoded); await handle.sync(); await handle.close(); handle = undefined;
       await fs.rename(temporary, file);
       // Windows does not expose directory fsync through Node's filesystem API.
       if (process.platform !== 'win32') {

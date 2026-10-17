@@ -44,3 +44,13 @@ test('malformed or duplicate identity registry never silently rotates clients',a
   await fs.writeFile(file,'not json');await assert.rejects(openClientSlots(file));
   assert.equal(await fs.readFile(file,'utf8'),'not json');
 });
+
+test('oversize UTF8 registry update preserves prior disk and live ownership',async t => {
+  const file=await fixture(t), registry=await openClientSlots(file), slot=await registry.claim({primary:true});
+  const original=await fs.readFile(file,'utf8');
+  await assert.rejects(registry.setVault(slot.slotId,path.resolve('/'+'🌱'.repeat(270000))),{code:'client_registry_limit'});
+  assert.equal(await fs.readFile(file,'utf8'),original);
+  await registry.setVault(slot.slotId,path.resolve('/retained'));
+  const reopened=await openClientSlots(file), restored=await reopened.claim({primary:true});
+  assert.equal(restored.clientId,slot.clientId);assert.equal(restored.vaultPath,path.resolve('/retained'));
+});
