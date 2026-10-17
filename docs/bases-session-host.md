@@ -98,3 +98,17 @@ value shape does not establish this registry type. Zorid's property selection is
 currently UI-local, so this session does not invent global type inference. Null
 move destinations remove the existing property (reference `3156373`) through the
 normal guarded controller mutation. Full registry-driven coercion remains open.
+
+## Reviewed isolated checkpoint
+
+At implementation checkpoint `e75f319`, all **179 Bases-focused tests** pass with
+`node --test --test-concurrency=1 tests/bases-*.test.ts`; TypeScript and diff
+whitespace checks pass. Independent review separately ran 46 serial probes/tests,
+including real Vault/NoteBuffer sessions and synthetic composing-input/final-input
+ordering. Review fixes cover failed-save retry falsely reporting success, clean
+buffer ownership at close, typed root-folder moves, and failed custom widget
+mounts leaving phantom draft markers. Cards/List retain active, failed, composing
+and pending checkbox edits through deferred refresh and virtualized scrolling.
+
+No whole-repository gate, production build, Workspace mount, real IME/native
+geometry, or mobile verification was performed in this isolated session batch.
