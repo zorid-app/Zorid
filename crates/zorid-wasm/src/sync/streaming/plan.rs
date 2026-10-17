@@ -445,6 +445,15 @@ impl WasmMetadataState {
         };
         run().map_err(error)
     }
+    #[wasm_bindgen(js_name=recoveryContent)]
+    pub fn recovery_content(
+        &self,
+        proof: &WasmVerifiedBinarySet,
+        texts_json: &str,
+        entry_id: &str,
+    ) -> std::result::Result<WasmMetadataRecovery, JsValue> {
+        recovery(&self.state, &proof.verified, texts_json, entry_id).map_err(error)
+    }
     pub fn classify(
         &self,
         proof: &WasmVerifiedBinarySet,
@@ -752,12 +761,71 @@ fn classify(
         ))?,
     })
 }
+fn content_metadata(content: &classifier::ContentRef) -> Result<serde_json::Value> {
+    Ok(match content {
+        classifier::ContentRef::Binary(reference) => {
+            value!({"kind":"binary","content":{"scope":reference.scope(),"entry":reference.entry(),"selected_event":reference.selected_event(),"manifest":manifest_json(reference.manifest())?}})
+        }
+        classifier::ContentRef::Text(text) => {
+            value!({"kind":"text","content":{"byte_length":text.bytes.len().to_string(),"digest":text.digest,"witness":text.witness}})
+        }
+    })
+}
+/// Recovery is current retained causal content, never a cached publication.
+/// A pending result deliberately contains no replacement/empty byte fallback.
+#[wasm_bindgen]
+pub struct WasmMetadataRecovery {
+    content: Option<classifier::ContentRef>,
+}
+fn recovery(
+    state: &meta::MetadataState,
+    proof: &binary::VerifiedBinarySet,
+    raw: &str,
+    entry_id: &str,
+) -> Result<WasmMetadataRecovery> {
+    let texts: Vec<TextState> = bounded(raw, super::super::MAX_STATE_JSON_BYTES)?;
+    if texts.len() > zorid_file_sync::MAX_RECORDS {
+        return Err("too many Text states".into());
+    }
+    let entry = domain(EntryId::new(entry_id))?;
+    Ok(WasmMetadataRecovery {
+        content: domain(classifier::recovery_content_ref(
+            state,
+            proof,
+            &texts,
+            &entry,
+            zorid_file_sync::MAX_FILE_BYTES,
+        ))?,
+    })
+}
+impl WasmMetadataRecovery {
+    fn metadata(&self) -> Result<serde_json::Value> {
+        Ok(match &self.content {
+            None => value!({"status":"pending"}),
+            Some(content) => value!({"status":"complete","content":content_metadata(content)?}),
+        })
+    }
+}
+#[wasm_bindgen]
+impl WasmMetadataRecovery {
+    #[wasm_bindgen(js_name=metadataJson)]
+    pub fn metadata_json(&self) -> std::result::Result<String, JsValue> {
+        json(&self.metadata().map_err(error)?).map_err(error)
+    }
+    #[wasm_bindgen(js_name=textBytes)]
+    pub fn text_bytes(&self) -> Option<Vec<u8>> {
+        match &self.content {
+            Some(classifier::ContentRef::Text(text)) => Some(text.bytes.clone()),
+            _ => None,
+        }
+    }
+}
 pub(super) fn classified_entry(
     entry: &classifier::EntryMaterializationRef,
 ) -> Result<serde_json::Value> {
     // Build the metadata projection BEFORE serde serialization. In particular,
     // never serialize Text VerifiedContent.bytes only to delete it afterwards.
-    use classifier::{ContentRef, OutcomeRef};
+    use classifier::OutcomeRef;
     let outcome = match &entry.outcome {
         OutcomeRef::Normal {
             path,
@@ -768,12 +836,7 @@ pub(super) fn classified_entry(
         } => {
             let content = match content {
                 None => serde_json::Value::Null,
-                Some(ContentRef::Binary(reference)) => {
-                    value!({"kind":"binary","content":{"scope":reference.scope(),"entry":reference.entry(),"selected_event":reference.selected_event(),"manifest":manifest_json(reference.manifest())?}})
-                }
-                Some(ContentRef::Text(text)) => {
-                    value!({"kind":"text","content":{"byte_length":text.bytes.len().to_string(),"digest":text.digest,"witness":text.witness}})
-                }
+                Some(content) => content_metadata(content)?,
             };
             value!({"status":"normal","path":path,"kind":kind,"content":content,"namespace_heads":namespace_heads,"location_event":location_event})
         }

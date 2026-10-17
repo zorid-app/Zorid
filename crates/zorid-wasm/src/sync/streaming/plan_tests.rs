@@ -279,3 +279,66 @@ fn staged_binary_create_returns_real_child_and_ancestor_metadata_changes() {
     );
     assert_eq!(child.after.revision, revision("child-meta").unwrap());
 }
+
+#[test]
+fn recovery_bridge_keeps_binary_references_and_missing_text_pending() {
+    let (state, payloads) = fixture();
+    let proof = verify(&state, &payloads);
+    let result = recovery(&state, &proof, "[]", "file").unwrap();
+    let metadata = result.metadata().unwrap();
+    assert_eq!(metadata["status"], "complete");
+    assert_eq!(metadata["content"]["kind"], "binary");
+    assert_eq!(metadata["content"]["content"]["selected_event"], "create");
+    assert!(!metadata.to_string().contains("binary bytes stay"));
+    assert!(result.text_bytes().is_none());
+    let empty = meta::MetadataState::empty(scope(), revision("empty").unwrap());
+    let wrong = binary::AllBinaryVerificationSession::new(empty)
+        .unwrap()
+        .finish()
+        .unwrap();
+    assert!(recovery(&state, &wrong, "[]", "file").is_err());
+    let exact = files::Payload {
+        family: zorid_file_sync::Family::Files,
+        format_version: 2,
+        scope: scope(),
+        id: id("text-create").unwrap(),
+        body: files::Body::Events {
+            events: vec![files::EntryEvent {
+                id: id("text-create").unwrap(),
+                identity: zorid_file_sync::EntryIdentity {
+                    entry_id: EntryId::new("note").unwrap(),
+                    bootstrap_id: id("text-create").unwrap(),
+                },
+                parents: vec![],
+                effect: files::Effect::Create {
+                    entry_kind: zorid_core::EntryKind::File,
+                    location: zorid_file_sync::Location {
+                        parent: None,
+                        name: "note.md".into(),
+                    },
+                    content: Some(files::ContentSeed::Text {
+                        text_bootstrap_id: id("text-seed").unwrap(),
+                        text_format: 2,
+                    }),
+                },
+            }],
+        },
+    }
+    .encode()
+    .unwrap();
+    let (_, key, record) = meta::GraphRecord::from_authored_exact(&exact).unwrap();
+    let state = meta::MetadataState::from_records(
+        scope(),
+        revision("text-graph").unwrap(),
+        BTreeMap::from([(key, record)]),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let proof = binary::AllBinaryVerificationSession::new(state.clone())
+        .unwrap()
+        .finish()
+        .unwrap();
+    let pending = recovery(&state, &proof, "[]", "note").unwrap();
+    assert_eq!(pending.metadata().unwrap(), value!({"status":"pending"}));
+    assert!(pending.text_bytes().is_none());
+}
