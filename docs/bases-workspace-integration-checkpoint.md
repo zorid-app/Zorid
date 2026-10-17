@@ -49,7 +49,7 @@ status from Todo to In progress in the table saved the actual Markdown file;
 Cards and List subsequently displayed the new value with the existing priority.
 
 The Board exposed only Todo and Done after that edit when the fixture explicitly
-specified `groupOrder: [Todo, Done]`. Whether the missing new group follows the
-reference contract is under audit; this observation is not a full grouping-parity
-pass. Native drag/drop, selection geometry, IME, failed writes and restart recovery
+specified `groupOrder: [Todo, Done]`. A subsequent packaged-reference audit confirmed that explicit groupOrder
+filters out unlisted groups; this behavior is expected. The remaining gap is the
+Edit columns interface for showing, hiding and reordering those groups. Native drag/drop, selection geometry, IME, failed writes and restart recovery
 remain unverified by this pass. The owned app exited normally after verification.
