@@ -18,3 +18,4 @@ zorid-sync-protocol = { path = "../zorid-sync-protocol" }
 zeroize = "=1.9.1"
 zorid-client-sync = { path = "../zorid-client-sync" }
 zorid-file-sync = { path = "../zorid-file-sync" }
+zorid-document = { path = "../zorid-document" }
