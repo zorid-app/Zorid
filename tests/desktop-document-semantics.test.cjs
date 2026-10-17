@@ -38,10 +38,11 @@ test('typed semantic body validates marker, operation, Unicode metadata identity
     [{documents:true,schemaVersion:1,bytes:MAX_DOCUMENT_RESPONSE+1},Buffer.alloc(1)],
     [{documents:true,schemaVersion:1,bytes:1},Buffer.from([255])],
   ])assert.throws(()=>decodeDocumentReply(input,badMarker,badBytes),{code:'invalid_document_response'});
-  const page={snapshot,hits:[],next:null,scanComplete:true,coverageComplete:false,complete:false};
+  const page={snapshot,hits:[],next:null,scanComplete:true,coverageComplete:false,complete:false,sourceBytes:0,documents:0};
   const search=request('search',{pinId:'1',query:'x',cursor:null,limit:1});
   assert.equal(decodeDocumentReply(search,...wire('search',{result:{snapshot,source,coverageComplete:false,value:page},cursor:null})).result.value.complete,false);
-  assert.throws(()=>decodeDocumentReply(search,...wire('search',{result:{snapshot,source,coverageComplete:false,value:{...page,complete:true}},cursor:null})),{code:'invalid_document_response'});
+  for(const invalid of [{...page,complete:true},{...page,sourceBytes:16*1024*1024+1},{...page,documents:33},{...page,documents:undefined}])
+    assert.throws(()=>decodeDocumentReply(search,...wire('search',{result:{snapshot,source,coverageComplete:false,value:invalid},cursor:null})),{code:'invalid_document_response'});
 });
 
 test('admitted semantic controller enforces pin identity across asynchronous replies',async()=>{
