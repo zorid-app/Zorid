@@ -124,6 +124,8 @@ final class NativeMobileSession {
     private static let worker = DispatchQueue(label: "app.zorid.mobile.core", qos: .userInitiated)
     private var handle: OpaquePointer?
     let vault: LocalVault
+    private var nativeAdmission: NativeSessionAdmission? // Static worker only, never web context.
+    private var nativeRequestId: UInt64 = 0
     private var reconciliation: [String: Any] // Access only on worker.
     private let documentSemantics: Bool // Immutable startup capability, never inferred.
     private static let headerLimit = 1_048_576
@@ -287,10 +289,87 @@ final class NativeMobileSession {
         return object
     }
 
+    // NativePages lends this same host exclusively. No new host or renderer
+    // authority is created; row actions and imports share these fixed wrappers.
+    func acquireNativeAdmission(expectedStoreId: String, completion: @escaping (Result<NativeSessionAdmission, Error>) -> Void) {
+        Self.worker.async {
+            let result: Result<NativeSessionAdmission, Error>
+            if self.nativeAdmission != nil {
+                result = .failure(NativeSessionOperationFailure(code: "native_busy", commitUncertain: false, sessionFenced: false))
+            } else {
+                do {
+                    guard UUID(uuidString: expectedStoreId)?.uuidString.lowercased() == expectedStoreId else { throw MobileFailure.invalidFrame }
+                    let object = try self.nativeCommandOnWorker(["method": "claim_client", "client_id": self.vault.clientId])
+                    guard let lease = object["lease"] as? [String: String],
+                          Set(lease.keys) == Set(["local_store_id", "client_id", "token"]),
+                          lease["local_store_id"] == expectedStoreId, lease["client_id"] == self.vault.clientId,
+                          let token = lease["token"], UUID(uuidString: token)?.uuidString.lowercased() == token else { throw MobileFailure.invalidFrame }
+                    let admission = NativeSessionAdmission(localStoreId: expectedStoreId, clientId: self.vault.clientId, token: token)
+                    self.nativeAdmission = admission; result = .success(admission)
+                } catch {
+                    // A claim reply can be lost after admission. Fence even a
+                    // rejected claim here so no invisible lease survives return.
+                    self.closeOnWorker()
+                    result = .failure(NativeSessionOperationFailure(code: "native_admission_failed", commitUncertain: true, sessionFenced: true))
+                }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    func releaseNativeAdmission(_ admission: NativeSessionAdmission, completion: @escaping (Result<Void, Error>) -> Void) {
+        Self.worker.async {
+            let result: Result<Void, Error>
+            if self.nativeAdmission != admission {
+                // A late duplicate release owns no authority over a newer loan.
+                result = .failure(NativeSessionOperationFailure(code: "native_admission_stale", commitUncertain: false, sessionFenced: self.handle == nil))
+            } else { do {
+                let object = try self.nativeCommandOnWorker(["method": "release_client", "reference": admission.wireReference])
+                guard Self.nativeTrue(object["released"]), let reference = object["reference"] as? [String: String],
+                      reference == admission.wireReference else { throw MobileFailure.invalidFrame }
+                self.nativeAdmission = nil; result = .success(())
+            } catch {
+                // Unknown release must never re-enable an editor on this host.
+                self.closeOnWorker()
+                result = .failure(NativeSessionOperationFailure(code: "native_release_failed", commitUncertain: true, sessionFenced: true))
+            } }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    private static func nativeTrue(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID() && number.boolValue
+    }
+    private func nativeCommandOnWorker(_ command: [String: Any]) throws -> [String: Any] {
+        dispatchPrecondition(condition: .onQueue(Self.worker))
+        guard let handle = handle else { throw MobileFailure.unavailable }
+        guard nativeRequestId < UInt64.max else { throw MobileFailure.unavailable }
+        nativeRequestId += 1
+        let id = String(nativeRequestId)
+        let header = try JSONSerialization.data(withJSONObject: ["version": 1, "request_id": id, "command": command])
+        guard header.count <= 8192 else { throw MobileFailure.invalidFrame }
+        var frame = Data(), length = UInt32(header.count).bigEndian, zero: UInt32 = 0
+        withUnsafeBytes(of: &length) { frame.append(contentsOf: $0) }
+        withUnsafeBytes(of: &zero) { frame.append(contentsOf: $0) }; frame.append(header)
+        let reply = frame.withUnsafeBytes { bytes in
+            zorid_mobile_request(handle, bytes.bindMemory(to: UInt8.self).baseAddress, frame.count)
+        }
+        defer { zorid_mobile_buffer_free(reply) }
+        guard reply.len >= 8, reply.len <= Self.headerLimit + 8, let pointer = reply.data else { throw MobileFailure.invalidFrame }
+        let bytes = UnsafeBufferPointer(start: pointer, count: reply.len)
+        let headerCount = (0..<4).reduce(0) { ($0 << 8) | Int(bytes[$1]) }
+        guard (4..<8).allSatisfy({ bytes[$0] == 0 }), headerCount == reply.len - 8 else { throw MobileFailure.invalidFrame }
+        let object = try Self.validateHeader(Data(bytes: pointer.advanced(by: 8), count: headerCount))
+        guard let version = object["version"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(), version == 1,
+              object["request_id"] as? String == id, Self.nativeTrue(object["ok"]),
+              let result = object["result"] as? [String: Any] else { throw MobileFailure.invalidFrame }
+        return result
+    }
+
     private func closeOnWorker() {
         dispatchPrecondition(condition: .onQueue(Self.worker))
         if let handle = handle {
             self.handle = nil
+            self.nativeAdmission = nil
             zorid_mobile_close(handle)
         }
     }
