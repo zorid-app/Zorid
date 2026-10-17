@@ -1040,3 +1040,60 @@ fn explicit_directory_hint_imports_and_missing_directory_stays_retained() {
     assert!(v.list().unwrap().iter().any(|s| s.path == path));
     assert!(!root.join("existing").exists());
 }
+
+#[test]
+fn coherent_path_reads_use_committed_bytes_while_projection_is_pending() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    vault.apply(&create()).unwrap();
+    let before = vault.list_snapshot().unwrap();
+    let mut store = Store::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+    let req = write(
+        "database-only",
+        revision(&vault),
+        b"unprojected binary\0\xff",
+    );
+    let receipt = store.apply_at(&req, 1).unwrap();
+    let entry = vault.read_path(&path()).unwrap().unwrap();
+    assert_eq!(entry.state.id, id());
+    assert_eq!(
+        entry.state.revision,
+        receipt
+            .changes
+            .iter()
+            .find(|c| c.after.id == id())
+            .unwrap()
+            .after
+            .revision
+    );
+    assert_eq!(entry.content, Some(b"unprojected binary\0\xff".to_vec()));
+    assert_eq!(entry.presentation.size_bytes, 20);
+    assert_eq!(disk(root.path()), b"base");
+    let page = vault.changes_after(&before.cursor, 100).unwrap();
+    assert_eq!(page.changes.len(), 1);
+    assert_eq!(page.changes[0].entries[0].state, entry.state);
+    vault.recover().unwrap();
+    assert_eq!(vault.list_snapshot().unwrap().cursor, page.next_cursor);
+}
+#[test]
+fn external_scan_imports_update_presentation_and_change_stream_once() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    let initial = vault.list_snapshot().unwrap();
+    stdfs::create_dir(root.path().join("external")).unwrap();
+    stdfs::write(root.path().join("external/file.unknown"), [0, 255, 17]).unwrap();
+    assert!(vault.rescan().unwrap().run.complete);
+    let after = vault.list_snapshot().unwrap();
+    assert_eq!(after.entries.len(), 2);
+    let file = vault
+        .read_path(&VaultPath::new("external/file.unknown").unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(file.presentation.size_bytes, 3);
+    assert!(file.presentation.ctime_ms > 0);
+    let page = vault.changes_after(&initial.cursor, 100).unwrap();
+    assert_eq!(page.changes.len(), 2);
+    assert_eq!(page.next_cursor, after.cursor);
+    assert!(vault.rescan().unwrap().run.complete);
+    assert_eq!(vault.list_snapshot().unwrap(), after);
+}

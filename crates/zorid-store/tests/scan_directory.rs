@@ -11,7 +11,7 @@ fn folder() -> MutationRequest {
         },
     }
 }
-const REMOVE_V3:&str="DROP TABLE directory_baselines; DROP TABLE directory_attempts; DROP TABLE scan_observations; DROP TABLE scan_directories; DROP TABLE scan_runs; PRAGMA user_version=2; PRAGMA journal_mode=DELETE;";
+const REMOVE_V3:&str="DROP TABLE entry_presentation; DROP TABLE local_changes; DROP TABLE directory_baselines; DROP TABLE directory_attempts; DROP TABLE scan_observations; DROP TABLE scan_directories; DROP TABLE scan_runs; PRAGMA user_version=2; PRAGMA journal_mode=DELETE;";
 #[test]
 fn canonical_v2_migrates_and_bad_v2_does_not_change_journal() {
     for corrupt in [false, true] {

@@ -73,6 +73,18 @@ impl NativeVault {
         self.paths.verify()?;
         Ok(self.store.read(id)?)
     }
+    pub fn read_path(&self, path: &VaultPath) -> Result<Option<PresentedEntry>> {
+        self.paths.verify()?;
+        Ok(self.store.read_path(path)?)
+    }
+    pub fn list_snapshot(&self) -> Result<ListingSnapshot> {
+        self.paths.verify()?;
+        Ok(self.store.list_snapshot()?)
+    }
+    pub fn changes_after(&self, cursor: &str, limit: u32) -> Result<ChangePage> {
+        self.paths.verify()?;
+        Ok(self.store.changes_after(cursor, limit)?)
+    }
     pub fn status(&self) -> Result<Status> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         let (outbox, projection) = self.store.pending_counts()?;

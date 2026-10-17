@@ -5,6 +5,10 @@ use std::{fmt, time::Duration};
 use zorid_core::{
     CommitResult, EntryId, EntryState, MutationRequest, OperationId, Revision, VaultPath,
 };
+pub use zorid_store::{
+    ChangeOrigin, ChangePage, EntryPresentation, ListingSnapshot, LocalChange, PresentedEntry,
+    PresentedState,
+};
 use zorid_store::{DirectoryPhase, ProjectionPhase, ScanRun, StoredEntry};
 
 #[derive(Debug)]
@@ -168,6 +172,15 @@ impl NativeVault {
         unsupported()
     }
     pub fn read(&self, _: &EntryId) -> Result<Option<StoredEntry>> {
+        unsupported()
+    }
+    pub fn read_path(&self, _: &VaultPath) -> Result<Option<PresentedEntry>> {
+        unsupported()
+    }
+    pub fn list_snapshot(&self) -> Result<ListingSnapshot> {
+        unsupported()
+    }
+    pub fn changes_after(&self, _: &str, _: u32) -> Result<ChangePage> {
         unsupported()
     }
     pub fn status(&self) -> Result<Status> {

@@ -4,7 +4,12 @@
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 mod directory;
+mod presentation;
 mod projection;
+pub use presentation::{
+    ChangeOrigin, ChangePage, EntryPresentation, ListingSnapshot, LocalChange, PresentedEntry,
+    PresentedState,
+};
 mod scan;
 pub use directory::{DirectoryAttempt, DirectoryBaseline, DirectoryPhase};
 pub use projection::{ExternalObservation, ProjectionAttempt, ProjectionBaseline, ProjectionPhase};
@@ -16,7 +21,7 @@ use zorid_core::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const APPLICATION_ID: i64 = 0x5a4f5244; // ZORD
 const SCHEMA: &[(&str, &str)] = &[
     ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB)"),
@@ -29,7 +34,7 @@ const SCHEMA: &[(&str, &str)] = &[
 fn check_schema(connection: &Connection) -> Result<i64> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
-    if !matches!(version, 0 | 1 | 2 | SCHEMA_VERSION) {
+    if !matches!(version, 0 | 1 | 2 | 3 | SCHEMA_VERSION) {
         return Err(StoreError::UnsupportedSchema(version));
     }
     if version == 0 {
@@ -62,6 +67,11 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             })
             .chain(if version >= 3 { directory::SCHEMA } else { &[] })
             .chain(if version >= 3 { scan::SCHEMA } else { &[] })
+            .chain(if version >= 4 {
+                presentation::SCHEMA
+            } else {
+                &[]
+            })
             .map(|(name, _)| *name)
             .collect();
         if names.len() != expected_names.len()
@@ -86,6 +96,11 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             })
             .chain(if version >= 3 { directory::SCHEMA } else { &[] })
             .chain(if version >= 3 { scan::SCHEMA } else { &[] })
+            .chain(if version >= 4 {
+                presentation::SCHEMA
+            } else {
+                &[]
+            })
         {
             let actual = connection
                 .query_row("SELECT sql FROM sqlite_master WHERE name=?1", [name], |r| {
@@ -251,6 +266,9 @@ impl Store {
             for (_, sql) in directory::SCHEMA.iter().chain(scan::SCHEMA) {
                 tx.execute_batch(sql)?;
             }
+        }
+        if version < 4 {
+            presentation::migrate(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -296,7 +314,25 @@ impl Store {
         Ok(result)
     }
 
+    /// Injected wall-clock milliseconds affect display metadata only, never revision/CAS.
+    pub fn apply_at(&mut self, request: &MutationRequest, now_ms: u64) -> Result<CommitResult> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let result = Self::apply_transaction_at(&tx, request, Some(now_ms))?;
+        tx.commit()?;
+        Ok(result)
+    }
+
     fn apply_transaction(tx: &Connection, request: &MutationRequest) -> Result<CommitResult> {
+        Self::apply_transaction_at(tx, request, None)
+    }
+
+    fn apply_transaction_at(
+        tx: &Connection,
+        request: &MutationRequest,
+        now_ms: Option<u64>,
+    ) -> Result<CommitResult> {
         request.validate()?;
         let prior = tx
             .query_row(
@@ -315,6 +351,11 @@ impl Store {
         if let IdempotencyCheck::Replay(receipt) = check_idempotency(request, prior.as_ref())? {
             return Ok(receipt.clone());
         }
+        let now_ms = match now_ms {
+            Some(value) => value,
+            None => presentation::now_ms()?,
+        };
+        presentation::validate_number(now_ms)?;
 
         // Reload under the write transaction: another process may have committed
         // after this Store was opened or after the caller last read the file.
@@ -322,6 +363,11 @@ impl Store {
         let entries = read_states(&tx, true)?;
         let revision = Revision::new(uuid::Uuid::new_v4().to_string())?;
         let changes = plan_mutation(request, &entries, &revision)?;
+        for change in &changes {
+            if let Some(before) = &change.before {
+                presentation::presentation(tx, before)?;
+            }
+        }
         tx.execute(
             "INSERT INTO operations(operation_id,request) VALUES (?1,?2)",
             params![
@@ -386,6 +432,7 @@ impl Store {
             "INSERT INTO projection_queue(sequence) VALUES (?1)",
             [sql_sequence],
         )?;
+        presentation::record_local(tx, &result, now_ms)?;
         Ok(result)
     }
 

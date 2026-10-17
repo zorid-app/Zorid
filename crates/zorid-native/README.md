@@ -131,3 +131,13 @@ vaults. Run in the coordinator's serialized build slot:
 ```sh
 cargo test -p zorid-store -p zorid-native -j1 -- --test-threads=1
 ```
+
+
+Committed UI reads are available through `read_path`, `list_snapshot` and
+`changes_after`, delegating to the Store's coherent database snapshots. They return
+committed bytes/presentation even while physical projection is pending; they do
+not perform a filesystem rescan or pretend physical stat is committed metadata.
+Presentation times are local replica display times (legacy zero means unknown),
+not source filesystem dates. The decimal local cursor is independent of sync and
+command receipt sequences. Consumers must reload on bootstrap events and use
+opaque entry revisions for compare-and-write.
