@@ -11,6 +11,7 @@ The only additional root-owned wiring is:
 ```toml
 # crates/zorid-wasm/Cargo.toml [dependencies]
 zorid-bases = { path = "../zorid-bases" }
+zorid-index = { path = "../zorid-index" }
 ```
 
 ```rust
