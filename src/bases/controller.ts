@@ -266,7 +266,7 @@ export class BaseController {
   }
 
   dispose(): void {
-    this.disposed = true; this.epoch++; this.sharedQueries.cancel();
+    this.disposed = true; this.epoch++; this.sharedQueries.dispose();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.subscriptions.forEach(unsubscribe => unsubscribe()); this.subscriptions = [];
   }

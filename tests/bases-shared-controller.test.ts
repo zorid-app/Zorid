@@ -28,14 +28,14 @@ async function until(check: () => boolean) { for (let i = 0; i < 100 && !check()
 async function fixture() {
   const adapter = new IdentityAdapter({ 'Work.base': base, 'One.md': '---\nStatus: From TypeScript\n---\nbody\n' });
   const calls: Parameters<DocumentPin['base']>[0][] = [], pins: { closed: number }[] = [];
-  let hold: ReturnType<typeof deferred<DocumentBaseResult>> | undefined, fail = false;
+  let hold: ReturnType<typeof deferred<DocumentBaseResult>> | undefined, openGate: ReturnType<typeof deferred<void>> | undefined, closeFailures = 0, fail = false;
   const unused = async (): Promise<never> => { throw new Error('Unexpected index operation'); };
   const definition = async () => { const row = (await adapter.stat('Work.base'))!; return { id: row.entryId!, revision: row.revision!, path: row.path, kind: 'file' as const, deleted: false }; };
   adapter.documentSemantics = {
     status: async () => ({ source, snapshot, coveredSource: source, current: true, rebuildRequired: false, coverageComplete: true }),
     initialize: unused, rebuild: unused, begin: unused, pump: unused, publish: unused, discard: unused,
-    open: async () => { const pin = { closed: 0 }; pins.push(pin); return { pinId: String(pins.length) as DocumentPinId, snapshot, source, coverageComplete: true,
-      close: async () => { pin.closed++; }, search: unused, backlinks: unused,
+    open: async () => { const pin = { closed: 0 }; pins.push(pin); const opening = openGate; openGate = undefined; if (opening) await opening.promise; return { pinId: String(pins.length) as DocumentPinId, snapshot, source, coverageComplete: true,
+      close: async () => { pin.closed++; if (closeFailures > 0) { closeFailures--; throw new Error('Close failed once'); } }, search: unused, backlinks: unused,
       metadata: async () => ({ snapshot, source, coverageComplete: true, value: { entry: await definition(), metadata: null, exclusion: null } }),
       base: async input => { calls.push(input); if (fail) throw new Error('Rust unavailable'); const gate = hold; hold = undefined; const value = gate ? await gate.promise : result();
         const document = BaseDocument.parse(await adapter.read('Work.base')); const index = input.options?.viewIndex ?? 0;
@@ -48,7 +48,7 @@ async function fixture() {
     mutations: { async transform(path, transform, validate) { validate(); await vault.modify(path, transform(await vault.read(path))); } },
     onChange: state => { if (state.result) published.push(state.result.rows.map(row => row.path)); } });
   await controller.refresh(); assert.equal(controller.state.error, null);
-  return { adapter, vault, controller, calls, pins, published, hold() { hold = deferred<DocumentBaseResult>(); return hold; }, fail() { fail = true; } };
+  return { adapter, vault, controller, calls, pins, published, hold() { hold = deferred<DocumentBaseResult>(); return hold; }, holdOpen() { openGate = deferred<void>(); return openGate; }, failCloseOnce() { closeFailures = 1; }, fail() { fail = true; } };
 }
 test('capable normal Base controller calls shared query with captured identity/options and preserves edits', async () => {
   const f = await fixture(); try {
@@ -99,4 +99,11 @@ test('shared date-only display uses invocation timezone without shifting timesta
     assert.equal(baseValueToString(baseDate(timestamp, false)), '2024-01-14');
     assert.equal(baseValueToString(baseDate(new Date(2024, 0, 15), false)), '2024-01-15');
   } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
+});
+
+test('a pin opened after dispose remains owned and gets one bounded close retry', async () => {
+  const f = await fixture(), before = f.controller.state;
+  const gate = f.holdOpen(); f.failCloseOnce(); const pending = f.controller.refresh(); await until(() => f.pins.length === 2);
+  f.controller.dispose(); assert.equal(f.pins[1].closed, 0); gate.resolve(); await pending;
+  assert.equal(f.pins[1].closed, 2); assert.equal(f.controller.state, before);
 });
