@@ -368,6 +368,7 @@ pub fn query_base(
         }
         let mut selected = options.clone();
         selected.evaluation.current_record = Some(current.clone());
+        crate::encoded_size(&(snapshot, &selected), crate::MAX_BASE_REQUEST_BYTES)?;
         selected_options = selected;
         &selected_options
     } else {
