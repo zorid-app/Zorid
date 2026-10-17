@@ -116,6 +116,24 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- Latest coupled gate update: Store source2921096/abf0bb4/7bd54e9 passes86
+  library checks in19472 (one optional64MiB fixture ignored). Root isolated
+  `streaming-core-integration` HEAD4dbd3f1 includes those fixes, native2700822,
+  desktopd0bd974 and CLIb2c10ea/fb3008f/fcfabbc with existing sha2 dependency
+  edges curated. Host process fixture compiles60914; standalone CLI binary/sync
+  fixtures compile70839. Native test-only compile95937 found5 stale fixture/
+  helper-visibility errors, fixed in independently reviewed27747ff (not yet
+  picked). Root's only active heavy handle is54910: the previously failing2MiB
+  CLI sync/move/delete case on the new Store candidate. Await its terminal result
+  before any other heavy check or source change in that checkout. First combined
+  compile request timed out in permission review without executing; the one
+  permitted narrower retry started normally. No remaining approval request.
+- User asks about another parallel session. Recommended independent lane is
+  wave4 shared document-semantics preparation: dialect/result contracts and
+  representative metadata/source-span fixtures, using existing reuse assessment.
+  No new owner/session has been assigned. Existing timing gate keeps parser/index
+  activation and consumer migration after wave3; another session must coordinate
+  any proposed earlier isolated implementation before changing that sequencing.
 - RPC integration is isolated in `grpc-core-integration`, currently e9b2d63,
   with root-owned Cargo/pnpm lock resolution still uncommitted. Root gate97900
   passes6 native transport checks; gate51477 passes16 relay checks (plus one
