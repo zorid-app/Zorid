@@ -837,3 +837,117 @@ speculative shared catalog. Swift371 implements a separate follow-up. Search
 5f81f749 and worker silent-refreshce14e9f9 are source-ready; independent117
 Rust DTO/admission review was actually started22:54 after mailbox delivery alone
 left that worker idle. Do not claim search review/typecheck/runtime complete.
+
+
+## Vite/native build 7 delivered — 2026-10-17 23:18 UTC
+
+Previous goal turn made concrete source/runtime progress: isolated silent-refresh
+commitcc13ae80, actual encrypted-PDF unlock/two-page rendering and Recents
+error exclusion proof, corrected cold-load diagnosis, reviewed focus candidate.
+Goal remains active; source readiness never substitutes for native acceptance.
+
+Coordinator22:57:42 granted composition of reviewed Vite103428be with ownercc13
+for one Simulator7/phone7 cycle. Clean merge ac404cc0 preserves all Vite root
+manifest/lock/config/assets/script blobs exactly103. Independent bd57 review
+found native rejected-touch compatibility fallback could bypass state/owner
+rejection. Worker371cb921 imported asce1e0ace: remember tracked touch before
+rejection, preserve initially ineligible status, gate native mouse down AND up
+with current owner, suppress matching compatibility continuation. Full gesture
+regressions39/39 pass; independent recheck closes source P2. Owner full tsc98990
+exits0; prior composed tsc13565 exits0 and four-file focus/Vite batch31664
+passes36/36. No unchanged broad checks were repeated.
+
+FROZEN runtime sourcece1e0acefdb18d3f913c7a2adf018b41d3290739. Owner-only
+untracked node_modules symlink repointed from canonical install to the exact
+Vite candidate install; no dependency install or canonical mutation by owner.
+Simulator build86404 exits0 BUILD SUCCEEDED (Vite1.34sec, cached Rust0.55sec),
+Xcode26.3/official Rust1.95 locked-j1 existing mobile cache, pnpm run build:desktop
+then cap copy ios only. Version7/bundle assertions, install+launch67696 exit0.
+Only untracked symlink remains; no tracked generated-source changes.
+
+Actual iPhone17 Simulator proof under Vite:
+- Native vault/root opens; existing list remains during refresh, no Updating
+  vault text/spinner,33719 PASS. Initial-load skeleton/error policy preserved.
+- Native New note launches the document-only editor. Typed math/Python-fence
+  fixture, returned through native durable save fence. Untitled.md99 bytes on
+  disk contains raw math/fence/ending;59873 PASS. Saved proof retained privately
+  at /private/tmp/mobile-v7-saved-proof.md. Simulator input produced smart quotes
+  inside the code text; literal input substitution is separate from persistence.
+- Native Recents stable-ID4c2f83b0-a524-4725-9c7b-d2edec4e448c reopens saved
+  body;70052 PASS. Viewed screenshot mobile-v7-vite-math-code.png shows rendered
+  MathJax equation/font glyphs and highlighted Python print token.
+- Existing local PDFc9734075-590d-4f9a-8b53-966f73fe1604 renders both page
+  texts;29423 PASS, mobile-v7-vite-pdf.png and mobile-v7-pdf-rendered.json.
+- One transient Orca AX transport failure66125 recovered by reobserving the same
+  live app; no crash evidence. App stopped/helper closed, Simulator stays booted.
+
+Externally copied Orca-vite-assets.md exists175 bytes in the disposable vault but
+did not appear in that incomplete scan. Existing/new native-owned notes remain
+usable; editor shows actionable Vault import needs attention. No data-loss or
+full reconciliation claim. Diagnose bounded reconciliation issue fields before
+changing warning/recovery behavior. Full keyboard title/body/caret/focus-jump
+matrix and loading/performance/shadow/bottom-edge refinements remain separate.
+
+Vite acceptance reported23:12:33. Coordinator integrated verified Vite/native
+source into canonical main165cf17a and pinned pnpm-manager lock follow-up
+60efe609; main dependency activation/typecheck and73 focused checks pass as
+reported by root. No main edits/commit/push by native owner. Exact old runtime
+sourcece1e retained for phone7; docs/notices-only root followups not churned into
+this frozen build.
+
+Physical phone: development build91966 exits0 BUILD SUCCEEDED. Strict/deep
+signature verification and app.zorid.notes.dev/development/version7 assertions
+pass; install+launch12016 both exit0 on connected paired iPhone. User informed
+installed/launched Zorid Dev7, superseding6. Private log paths:
+/private/tmp/mobile-v7-phone-build.log and mobile-phone7-{install,launch}.log.
+Artifact /private/tmp/zorid-ios-vite-v7-phone-20261017/DerivedData/Build/Products/Debug-Dev-iphoneos/App.app.
+No provisioning update, production install, upload or TestFlight change. Actual
+phone interaction remains distinct from Simulator proof.
+
+## Next native UI/import slices — 23:18 UTC
+
+Search source batch5f81f749/ce14e9f9/4ce063df/addff387 remains separate from7.
+Independent117 found deterministic >64-pump preparation starvation and >4-page
+search prefix starvation. addff387 continues SAME owned stage/pin/cursor in
+yielding bounded batches until complete or genuine visible-hit cap; source ACK
+23:01:23 closes both P2s. No fake first-prefix vault-wide result. Actual Swift
+transport/type/link/UI search remains unverified. Prepared2100 tiny Markdown
+fixtures with sole lexical-last literal match outside app only; not copied into
+Vite-proof vault. Rust manifest path ordering checked from snapshot.rs175.
+
+Latest user requests consistent full native Settings and Navigation bar config:
+top replica supports reorder; unused available items below have Add; dragging out
+returns item below. Swift371 owns NativePages-only implementation on fresh
+tingkai-c/mobile-ios-navigation-settings from reviewedaddff387. Existing UIKit
+navigation stack, no second stack/sheet; implemented-item registry currently only
+Notes, Recents/Files stay modes. Explicit empty bar is valid and root/settings
+remain reachable; no fake Home/Tasks/Calendar. Main-actor nonce/revision/page
+guards validate successful drop only; canceled/outside-app drops keep settings.
+Accessible Move earlier/later/Remove/Add and glass/reduced-motion fallbacks.
+Owner regenerated actual Foundation helper harness from worker source, then
+executed Swift11418 after phone compiler terminal:34/34 preference/order/drop
+checks PASS in isolated random UserDefaults domain, cleaned on exit. Log
+/private/tmp/mobile-navigation-state-harness.log. This is real helper execution,
+not UIKit drag/push/pop or iPhone parity; native source/UI review and build pending.
+
+New user external import: Open in/share to Zorid and Files/Photos/video picker
+flows, choose external destination vault, keep existing collision contents,
+stream large payload through Rust authoritative operations. Source assessment
+assigned861: exact reusable core streaming/C ABI and native helper/project/
+AppDelegate/SceneDelegate/AppGroup/share-extension/signing ownership proposal
+before edits. No renderer-native-path shortcut, whole-video base64 or Swift
+vault-write bypass. Swift371 owns Settings/NativePages, so import UI seam must
+coordinate. Root task-query owner may edit document/index/native document-index/
+host/WASM semantics; shared import changes require named grant. No import code,
+entitlement/account changes or real-data operations claimed yet.
+
+New user caret finding23:17: lower-content tap after scrolling leaves cursor
+obscured until typing; must reveal on selection/focus/keyboard viewport settle.
+Assigned d809 fresh source investigation fromce1e with exact shared seam proposal
+before edits; preserve manual scroll without caret change, widget/drag/current-
+owner/parked-view safety. This is queued implementation/actual runtime work.
+
+Exclusive native slot returned23:17:21 after phone7 and bounded Foundation
+harness; no compiler/test app/helper/server remains. Future iOS8/verification
+requires a newly acknowledged slot. Apple API last22:22 still403 and support
+case103000040642 remains; no repeated API loop or TestFlight readiness claim.
