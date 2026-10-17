@@ -155,7 +155,7 @@ test('Editable card property consumes first click, commits once, and supports an
   assert.equal(cell.textContent, 'Doing'); view.destroy(); d.window.close();
 });
 
-test('Pending edit failures cannot redraw newer snapshot; live failures report once and restore value', async () => {
+test('Pending edit failures preserve drafts and defer newer snapshots until Escape', async () => {
   const { dom: d, container, win } = dom(); const failures: unknown[] = []; let reject!: (error: Error) => void;
   const data = result([row('A.md', { 'note.status': 'Todo' })], {}, ['file.name', 'note.status']);
   const view = createBaseListView(container, { result: data, openFile() {}, onError(error) { failures.push(error); },
@@ -171,7 +171,10 @@ test('Pending edit failures cannot redraw newer snapshot; live failures report o
   assert.equal(failed.getAttribute('aria-invalid'), 'true');
   failed.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   const old = edit(); view.update({ ...data, version: 2 }); reject(new Error('stale failed')); await tick();
-  assert.equal(failures.length, 1); assert.equal(old.isConnected, false); assert.match(container.textContent!, /Todo/);
+  assert.equal(failures.length, 2); assert.equal(old.isConnected, true);
+  assert.equal(old.querySelector('input')!.value, 'Changed');
+  old.querySelector('input')!.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await tick();
+  assert.equal(old.isConnected, false); assert.match(container.textContent!, /Todo/);
   view.destroy(); d.window.close();
 });
 

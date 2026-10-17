@@ -87,7 +87,11 @@ test('retired card links and controls cannot invoke host callbacks', async t => 
   t.after(() => view.destroy());
   const oldCard = host.querySelector<HTMLElement>('.bases-cards-item')!, oldLink = oldCard.querySelector('a')!;
   click(oldCard.querySelector('[data-property="note.title"]')!); const oldInput = oldCard.querySelector('input')!;
-  view.update({ ...data, version: 2 }); click(oldLink); click(oldCard);
+  view.update({ ...data, version: 2 });
+  assert.equal(oldInput.isConnected, true, 'active draft defers replacement');
+  oldInput.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await tick();
+  assert.equal(oldCard.isConnected, false, 'cancel releases the queued replacement');
+  click(oldLink); click(oldCard);
   oldInput.value = 'stale'; oldInput.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick();
   assert.equal(opened, 0); assert.equal(edited, 0); assert.match(host.textContent!, /Old/);
 });

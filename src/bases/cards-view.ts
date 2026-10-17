@@ -24,6 +24,7 @@ export function baseCardsSettings(result: BaseQueryResult): BaseCardsSettings {
 export function createBaseCardsView(container: HTMLElement, options: BaseCardsViewOptions): BasePresentationHandle {
   const document = container.ownerDocument;
   let result = options.result; let epoch = 0; let destroyed = false;
+  let pendingResult: BaseQueryResult | undefined;
   const collapsed = new Set<string>();
   const mountCard = (row: BaseQueryRow, settings: BaseCardsSettings, snapshot: BaseQueryResult, height: number) => {
     const owner = epoch; let live = true;
@@ -109,11 +110,15 @@ export function createBaseCardsView(container: HTMLElement, options: BaseCardsVi
       }
     });
     return units;
-  }, error => reportPresentationError(options, error));
+  }, error => reportPresentationError(options, error), {
+    beforeRefresh() { if (pendingResult) { result = pendingResult; pendingResult = undefined; epoch++; } },
+    onEditStateChange: options.onEditStateChange,
+  });
   surface.refresh();
   return {
-    update(next) { if (destroyed) return; result = next; epoch++; surface.refresh(); },
+    update(next) { if (destroyed) return; pendingResult = next; surface.refresh(); },
+    hasActiveEdits() { return surface.hasActiveEdits(); },
     refreshLayout() { if (!destroyed) surface.refresh(); },
-    destroy() { if (destroyed) return; destroyed = true; epoch++; surface.destroy(); collapsed.clear(); },
+    destroy() { if (destroyed) return; destroyed = true; pendingResult = undefined; epoch++; surface.destroy(); collapsed.clear(); },
   };
 }
