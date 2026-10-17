@@ -3,7 +3,7 @@ import { EditorView, ViewPlugin } from '@codemirror/view';
 import { selectAll } from '@codemirror/commands';
 import { showContextMenu } from '../platform/context-menu.ts';
 import type { ContextMenuItem } from '../platform/context-menu.ts';
-import { activeTableEditor, retainTableEditor, tableMenuAt, tableSelectionAt, tableSelectionRanges, tableSelectionAnnotation } from './live-tables.ts';
+import { activeTableEditor, retainTableEditor, tableContextMenuTarget, tableMenuAt, tableSelectionAt, tableSelectionRanges, tableSelectionAnnotation } from './live-tables.ts';
 import type { TableMenuItem } from './live-tables.ts';
 import { formatMenuForEditor } from './format-menu.ts';
 import type { FormatMenuItem } from './format-menu.ts';
@@ -17,7 +17,7 @@ export function editorContextMenu(show = showContextMenu, onError: (error: unkno
     constructor(view: EditorView) { this.view = view; view.dom.addEventListener('contextmenu', this.open); }
     private open = (event: MouseEvent) => {
       if (event.defaultPrevented) return;
-      const target = event.target as HTMLElement | null;
+      const target = tableContextMenuTarget(this.view, event);
       if (!target || target.nodeType !== 1) return;
       const table = tableMenuAt(this.view, target);
       const content = target.closest('.cm-content');

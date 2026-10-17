@@ -15,6 +15,16 @@ import type { MarkdownTable, TableEdit, TableCellPosition, TableCellRange } from
 
 const cellSync = Annotation.define<boolean>();
 const controllers = new WeakMap<HTMLElement, TableController>();
+const contextTargets = new WeakMap<Event, { owner: EditorView; target: HTMLElement }>();
+
+/** Resolve an event-local ownership handoff after a table replaces its clicked
+ * renderer with a cell editor. The original event retains its native coordinates. */
+export function tableContextMenuTarget(view: EditorView, event: Event): HTMLElement | null {
+  const handoff = contextTargets.get(event);
+  if (handoff) return handoff.owner === view && view.dom.contains(handoff.target) ? handoff.target : null;
+  const target = event.target;
+  return target && (target as Node).nodeType === 1 ? target as HTMLElement : null;
+}
 
 /** One child editor at a time. All text changes and history belong to the note. */
 class TableController {
@@ -59,10 +69,17 @@ class TableController {
     this.render();
     this.dom.addEventListener('focusout', () => queueMicrotask(() => this.closeIfUnfocused()));
     this.dom.addEventListener('contextmenu', event => {
+      if (event.defaultPrevented) return;
       const cell = (event.target as HTMLElement).closest<HTMLElement>('th[data-row],td[data-row]');
       if (!cell || (event.target as HTMLElement).closest('.cm-table-grip')) return;
       const row = Number(cell.dataset.row), column = Number(cell.dataset.column);
-      if (this.selected && !this.includesCell(row, column)) { this.deselectCells(); this.activate(row, column); }
+      if (this.selected && !this.includesCell(row, column)) {
+        this.deselectCells(); this.activate(row, column);
+        // Activation replaces rendered descendants, but event.target still
+        // identifies the old DOM. Route this one event into the new cell editor
+        // before the owning editor builds its combined text/table menu.
+        if (this.active) contextTargets.set(event, { owner: this.owner, target: this.active.view.contentDOM });
+      }
     });
     for (const type of ['copy', 'cut', 'paste']) this.dom.addEventListener(type, event => this.clipboard(event as ClipboardEvent), true);
   }
