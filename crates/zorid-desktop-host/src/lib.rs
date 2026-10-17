@@ -3,6 +3,10 @@
 mod binary;
 mod documents;
 mod embedded_fixture_sync;
+mod staged_import;
+pub use staged_import::{
+    ImportProgress, TrustedImportSelection, TrustedStagedImportSource, MAX_IMPORT_RESULT_BYTES,
+};
 pub use embedded_fixture_sync::{
     EmbeddedFixtureSyncLimits, MobileFixtureReport, MobileFixtureStatus, TrustedFixtureSyncOptions,
     MAX_EMBEDDED_FIXTURE_RESULT_BYTES,
@@ -312,6 +316,7 @@ fn report(report: zorid_native::ReconcileReport) -> Value {
 }
 #[derive(Default)]
 struct ClientLeases {
+    staged_import: Option<staged_import::StagedImport>,
     documents: documents::Sessions,
     active: BTreeMap<String, ClientLease>,
     binary_reads: BTreeMap<(OperationId, OperationId), zorid_store::BinaryReadSession>,
