@@ -2,6 +2,7 @@
 //! This non-UUID client cannot be claimed through native renderer admission.
 use super::*;
 use serde::de::DeserializeOwned;
+use zorid_core::OperationId;
 
 const CLIENT: &str = "zorid_core_external_scan";
 const KEY: &str = "external-scan-progress-v1";
