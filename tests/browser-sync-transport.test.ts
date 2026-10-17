@@ -105,3 +105,40 @@ test('fixed response caps differ for controls and pull pages', async () => {
   await assert.rejects(t.hello(),code('sync_response_limit'));
   assert.equal((await t.pull('{}')).length,body.length);
 });
+test('redirected and foreign final response URLs fail closed', async () => {
+  for (const patch of [{redirected:true}, {url:'https://other.example/v1/hello'}]) {
+    const t = transport(async () => {
+      const r = response();
+      for (const [key,value] of Object.entries(patch)) Object.defineProperty(r,key,{value});
+      return r;
+    });
+    await assert.rejects(t.hello(),code('sync_invalid_response'));
+  }
+});
+test('caller abort and close cancel a hanging response stream', async () => {
+  for (const mode of ['abort','close']) {
+    let observed!: () => void;
+    const reading = new Promise<void>(resolve => { observed=resolve; });
+    let cancelled = false;
+    const t = transport(async () => new Response(new ReadableStream<Uint8Array>({
+      pull() { observed(); }, cancel() { cancelled=true; },
+    }),{headers:{'Content-Type':'application/json'}}));
+    const controller = new AbortController();
+    const pending = t.hello(controller.signal);
+    await reading;
+    // Let fetch resolution reach the response reader before cancellation.
+    await Promise.resolve(); await Promise.resolve();
+    if (mode === 'abort') controller.abort(); else t.close();
+    await assert.rejects(pending,code(mode==='abort'?'sync_aborted':'sync_closed'));
+    assert.equal(cancelled,true);
+  }
+});
+test('mutation of factory options cannot retarget scope or replace credentials', async () => {
+  const options = {...config};
+  const calls: {url:string;init:RequestInit}[] = [];
+  const t = transport(async (url,init) => { calls.push({url,init}); return response(); },options);
+  options.endpoint='https://other.example'; options.vaultId='other'; options.bearerToken='other-token';
+  await t.upload('update',bytes('wire'));
+  assert.equal(calls[0].url,'https://relay.example/v1/vaults/vault/updates/update');
+  assert.equal((calls[0].init.headers as Record<string,string>).Authorization,'Bearer secret-token');
+});
