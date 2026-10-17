@@ -170,8 +170,12 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       if (envelope.version !== 1 || envelope.request_id !== request_id || typeof envelope.ok !== 'boolean') throw fail('invalid_response', true);
       const response = unbase64(reply.body, limit);
       if (!envelope.ok) {
-        if (!envelope.error || typeof envelope.error.code !== 'string' || response.length) throw fail('invalid_response', true);
-        throw fail(envelope.error.code, envelope.error.code === 'outcome_unknown');
+        const error = envelope.error;
+        if (!error || typeof error !== 'object' || Array.isArray(error) || typeof error.code !== 'string' || !/^[a-z_]{1,64}$/.test(error.code)
+          || typeof error.message !== 'string' || typeof error.commit_uncertain !== 'boolean' || response.length) throw fail('invalid_response', true);
+        // Storage/checkpoint failures may have committed even when their code is
+        // not outcome_unknown. The validated host flag owns that distinction.
+        throw fail(error.code, error.commit_uncertain);
       }
       if (!envelope.result || typeof envelope.result !== 'object') throw fail('invalid_response', true);
       if (!['read_path','read_presented','checkpoint_load','checkpoint_cas'].includes(command.method) && response.length) throw fail('invalid_response', true);

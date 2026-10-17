@@ -14,6 +14,7 @@ function fixture() {
   let failCommand = false, failCheckpoint = false, failCommit = false, wrongId = false, failReleaseAck = false, failReleaseDispatch = false;
   let activeLease: {local_store_id:string;client_id:string;token:string} | undefined, claims=0;
   const releasedLeases=new Map<string,any>();
+  let injectedError: {method:string;error:any;after:boolean} | undefined;
   const state = () => ({ id:'entry', path, kind:'file', revision, deleted:false });
   const presentation = () => ({id:'entry',ctime_ms:1,mtime_ms:2,size_bytes:encoder.encode(content).length});
   const acks: {id:string;ok:boolean}[] = [], lifecycleOrder: string[] = [], expired = new Set<string>();
@@ -31,12 +32,14 @@ function fixture() {
       active++; maxActive = Math.max(maxActive,active);
       await new Promise(resolve => setImmediate(resolve));
       const header = JSON.parse(input.header), c = header.command; requests.push({ ...header,body:input.body });
-      const reject=(code:string)=>({header:JSON.stringify({version:1,request_id:header.request_id,ok:false,error:{code}}),body:''});
+      const errorReply=(error:any)=>({header:JSON.stringify({version:1,request_id:header.request_id,ok:false,error}),body:''});
+      const reject=(code:string)=>errorReply({code,message:'Native host request rejected',commit_uncertain:false});
       let result: any = {}, output = '';
       try {
         if (header.lease && (!activeLease || JSON.stringify(header.lease)!==JSON.stringify(activeLease))) return reject('client_not_admitted');
         if (header.lease && ['claim_client','release_client'].includes(c.method)) return reject('client_operation_unsupported');
         if (!['claim_client','release_client'].includes(c.method)) assert.deepEqual(header.lease,activeLease);
+        if(injectedError?.method===c.method&&!injectedError.after){const error=injectedError.error;injectedError=undefined;return errorReply(error);}
         switch (c.method) {
           case 'claim_client':
             if(activeLease)return reject('client_in_use');
@@ -89,11 +92,12 @@ function fixture() {
           }
           default: throw new Error(`Unexpected method ${c.method}`);
         }
+        if(injectedError?.method===c.method&&injectedError.after){const error=injectedError.error;injectedError=undefined;return errorReply(error);}
         return {header:JSON.stringify({version:1,request_id:wrongId?'999':header.request_id,ok:true,result}),body:output};
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -452,4 +456,56 @@ test('release transport failure before dispatch retains ownership until exact re
   const releases=f.requests.filter(r=>r.command.method==='release_client');assert.equal(releases.length,2);
   assert.deepEqual(releases[0].command,releases[1].command);assert.equal(releases.every(r=>!Object.hasOwn(r,'lease')),true);
   const reopened=await openNativeMobileVault(f.plugin);await reopened.release!();assert.equal(f.closes,0);
+});
+
+for(const [code,uncertain] of [['storage_io',true],['checkpoint_storage',true],['revision_conflict',false],['outcome_unknown',false]] as const) test(`host ${code} preserves explicit commit_uncertain=${uncertain}`,async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),checkpoint=code==='checkpoint_storage';
+  f.hostError(checkpoint?'checkpoint_load':'read_path',{code,message:'Host storage response',commit_uncertain:uncertain});
+  await assert.rejects(checkpoint?v.adapter.durableWrites!.checkpoints.load('draft'):v.adapter.read('Note.md'),{code,commitUncertain:uncertain,source:'host'});
+  await v.release!();
+});
+
+for(const [label,error] of [
+  ['missing uncertainty',{code:'storage_io',message:'Host failure'}],
+  ['string uncertainty',{code:'storage_io',message:'Host failure',commit_uncertain:'true'}],
+  ['missing message',{code:'storage_io',commit_uncertain:true}],
+  ['non-string message',{code:'storage_io',message:42,commit_uncertain:false}],
+  ['invalid code',{code:'StorageIO',message:'Host failure',commit_uncertain:false}],
+  ['oversized code',{code:'x'.repeat(65),message:'Host failure',commit_uncertain:true}],
+  ['absent error',undefined],
+] as const) test(`malformed host error (${label}) fails uncertain`,async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);f.hostError('read_path',error);
+  await assert.rejects(v.adapter.read('Note.md'),{code:'invalid_response',commitUncertain:true});
+  assert.equal(await v.adapter.read('Note.md'),'before');await v.release!();
+});
+
+for(const malformed of [false,true]) test(`${malformed?'malformed':'uncertain storage_io'} namespace ACK retains exact operation for replay`,async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);
+  f.hostError('file_command',malformed?{code:'revision_conflict',message:'Broken host ACK'}:{code:'storage_io',message:'Projection ACK uncertain',commit_uncertain:true},true);
+  await assert.rejects(v.adapter.rename('Note.md','Moved.md'),{code:malformed?'invalid_response':'storage_io',commitUncertain:true});
+  const first=f.requests.find(r=>r.command.method==='file_command');assert.equal(f.receipts.size,1);
+  await assert.rejects(v.adapter.rename('Note.md','Different.md'),{code:'file_operation_pending'});
+  await v.adapter.rename('Note.md','Moved.md');const calls=f.requests.filter(r=>r.command.method==='file_command');
+  assert.equal(calls.length,2);assert.deepEqual(calls[1].command,first.command);assert.equal(f.receipts.size,1);await v.release!();
+});
+
+test('checkpoint_storage uncertain ACK forbids namespace dispatch until original durable command is loaded',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);
+  f.hostError('checkpoint_cas',{code:'checkpoint_storage',message:'Checkpoint ACK uncertain',commit_uncertain:true},true);
+  await assert.rejects(v.adapter.write('Note.md','checkpoint retained'),{code:'checkpoint_storage',commitUncertain:true});
+  assert.equal(f.requests.filter(r=>r.command.method==='file_command').length,0);
+  const checkpoint=f.requests.find(r=>r.command.method==='checkpoint_cas'),saved=JSON.parse(decoder.decode(Uint8Array.from(atob(checkpoint.body),c=>c.charCodeAt(0))));
+  const loaded=await v.adapter.durableWrites!.checkpoints.load(checkpoint.command.key);
+  assert.equal(loaded!.revision,checkpoint.command.next_revision);assert.equal(JSON.parse(loaded!.encodedState!).operationId,saved.operationId);
+  await v.adapter.write('Note.md','checkpoint retained');
+  const dispatched=f.requests.find(r=>r.command.method==='file_command');assert.deepEqual(dispatched.command.family,saved.commands[0].family);
+  assert.equal(dispatched.body,saved.commands[0].body);assert.equal(f.content,'checkpoint retained');await v.release!();
+});
+
+test('explicit terminal namespace rejection is retained and does not execute on recovery',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);
+  f.hostError('file_command',{code:'revision_conflict',message:'Expected revision is stale',commit_uncertain:false});
+  await assert.rejects(v.adapter.rename('Note.md','Moved.md'),{code:'revision_conflict',commitUncertain:false});
+  await v.recoverCommands!();assert.equal(f.requests.filter(r=>r.command.method==='file_command').length,1);assert.equal(f.receipts.size,0);
+  assert.equal((await v.adapter.list())[0].path,'Note.md');await v.release!();
 });
