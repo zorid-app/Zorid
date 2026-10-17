@@ -1087,3 +1087,47 @@ test('release suppresses a pending watch result instead of emitting a late inven
   const original=f.plugin.request.bind(f.plugin),entered=deferred(),gate=deferred();f.plugin.request=async input=>{const reply=await original(input);if(JSON.parse(input.header).command.method==='list_snapshot'){entered.resolve();await gate.promise;}return reply;};
   polls[0]();await entered.promise;const released=v.release!();gate.resolve();await released;await settleWatch();assert.equal(notices,0);
 });
+
+async function pauseNamespaceQueue(f:ReturnType<typeof fixture>,v:Awaited<ReturnType<typeof openNativeMobileVault>>) {
+  const original=f.plugin.request.bind(f.plugin),entered=deferred(),gate=deferred();let held=false;
+  f.plugin.request=async input=>{const reply=await original(input);if(JSON.parse(input.header).command.method==='checkpoint_list'&&!held){held=true;entered.resolve();await gate.promise;}return reply;};
+  const recovery=v.recoverCommands!();await entered.promise;
+  return async()=>{gate.resolve();await recovery;};
+}
+
+for(const change of ['missing','replaced','revised'] as const)test(`witnessed rename rejects ${change} source after caller check while namespace queue is occupied`,async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),observed=(await v.adapter.stat('Note.md'))!,resume=await pauseNamespaceQueue(f,v);
+  const move=v.adapter.rename('Note.md','Moved.md',{entryId:observed.entryId!,revision:observed.revision!});
+  if(change==='missing')f.absent();else f.replaceIdentity(change==='replaced'?'replacement':observed.entryId!,'changed after caller check');
+  await resume();await assert.rejects(move,{code:'revision_conflict'});assert.equal(f.requests.some(r=>['checkpoint_cas','file_command'].includes(r.command.method)),false);assert.equal(f.heads.size,0);await v.release!();
+});
+
+test('rename captures witness before queueing so caller mutation cannot retarget replacement',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),observed=(await v.adapter.stat('Note.md'))!,resume=await pauseNamespaceQueue(f,v),witness={entryId:observed.entryId!,revision:observed.revision!};
+  const move=v.adapter.rename('Note.md','Moved.md',witness);f.replaceIdentity('replacement','replacement file');witness.entryId='replacement';witness.revision='replacement-rev';
+  await resume();await assert.rejects(move,{code:'revision_conflict'});assert.equal(f.requests.some(r=>['checkpoint_cas','file_command'].includes(r.command.method)),false);assert.equal((await v.adapter.stat('Note.md'))!.entryId,'replacement');await v.release!();
+});
+
+test('captured rename witness remains valid when caller mutates it after invocation',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),resume=await pauseNamespaceQueue(f,v),witness={entryId:'entry',revision:'rev1'};
+  const move=v.adapter.rename('Note.md','Moved.md',witness);witness.entryId='other';witness.revision='other-revision';await resume();await move;
+  const command=f.requests.find(r=>r.command.method==='file_command').command.family.request.mutation;assert.deepEqual(command,{type:'move',id:'entry',expected:'rev1',path:'Moved.md'});await v.release!();
+});
+
+test('witness mismatch cannot replace uncertain pending rename and matching retry preserves original operation',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),witness={entryId:'entry',revision:'rev1'};f.loseFileAck();await assert.rejects(v.adapter.rename('Note.md','Moved.md',witness),{commitUncertain:true});
+  const original=f.requests.find(r=>r.command.method==='file_command'),before=f.requests.length;
+  await assert.rejects(v.adapter.rename('Note.md','Moved.md',{entryId:'replacement',revision:'replacement-rev'}),{code:'file_operation_pending'});
+  await assert.rejects(v.adapter.rename('Note.md','Moved.md',{entryId:'entry',revision:'new-revision'}),{code:'file_operation_pending'});
+  await assert.rejects(v.adapter.rename('Note.md','Moved.md'),{code:'file_operation_pending'});assert.equal(f.requests.length,before);
+  f.replaceIdentity('replacement','replacement must not be moved');await v.adapter.rename('Note.md','Moved.md',{...witness});const replay=f.requests.filter(r=>r.command.method==='file_command');assert.equal(replay.length,2);assert.deepEqual(replay[1].command,original.command);assert.equal(replay[1].body,original.body);assert.equal(f.receipts.size,1);await v.release!();
+});
+
+for(const witness of [null,{}, {entryId:'entry'}, {revision:'rev1'}, {entryId:'',revision:'rev1'}, {entryId:'entry',revision:'bad revision'}, {entryId:1,revision:'rev1'}])test(`rename rejects malformed identity before queue/dispatch ${JSON.stringify(witness)}`,async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),before=f.requests.length;await assert.rejects(v.adapter.rename('Note.md','Moved.md',witness as any),{code:'invalid_file_request'});assert.equal(f.requests.length,before);await v.adapter.rename('Note.md','Moved.md');await v.release!();
+});
+
+test('legacy rename without witness still follows current source metadata',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),resume=await pauseNamespaceQueue(f,v);const move=v.adapter.rename('Note.md','Moved.md');f.replaceIdentity('replacement','legacy replacement');await resume();await move;
+  const command=f.requests.find(r=>r.command.method==='file_command').command.family.request.mutation;assert.equal(command.id,'replacement');assert.equal(command.expected,'replacement-rev');await v.release!();
+});

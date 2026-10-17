@@ -605,6 +605,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       }
       return [step(operationId,{ type: 'write', id: current.id, expected: current.revision },null,input.body!)];
     }
+    if (input.kind === 'move' && input.expectedEntryId !== undefined && (!current || current.id !== input.expectedEntryId || current.revision !== input.expectedRevision)) throw fail('revision_conflict');
     if (!current) throw fail('not_found');
     let destination = input.destination;
     if (input.kind === 'trash') {
@@ -715,7 +716,18 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     compareAndWrite: (path,expectedContent,content,identity) => execute({kind:'writeText',path,body:bodyText(content),expectedBody:bodyText(expectedContent),...(identity?{expectedEntryId:identity.entryId,expectedRevision:identity.revision}:{})}),
     writeBinary: (path,data) => execute({kind:'writeBinary',path,body:bodyBinary(data)}),
     createBinary: (path,data) => execute({kind:'createBinary',path,body:bodyBinary(data)}),
-    mkdir: path => execute({kind:'mkdir',path}), rename: (path,destination) => execute({kind:'move',path,destination}),
+    mkdir: path => execute({kind:'mkdir',path}),
+    rename(path,destination,expectedIdentity) {
+      const input: Input = { kind: 'move', path, destination };
+      if (expectedIdentity !== undefined) {
+        const entryId = expectedIdentity?.entryId, revision = expectedIdentity?.revision;
+        if (!id(entryId) || !id(revision)) return Promise.reject(fail('invalid_file_request'));
+        // Capture primitive witnesses before queueing/signing; later caller
+        // mutation cannot retarget an admitted move or its retained retry.
+        input.expectedEntryId = entryId; input.expectedRevision = revision;
+      }
+      return execute(Object.freeze(input));
+    },
     trash: path => execute({kind:'trash',path}), remove: (path,force) => execute({kind:'delete',path,force}),
     subscribe(listener) {
       active(); listeners.add(listener);
