@@ -272,7 +272,12 @@ Fixed initial defaults, identical on native/WASM: input ≤16 MiB UTF-8; framed
 frontmatter ≤1 MiB; YAML value depth ≤64 with scalar root depth zero; ≤100,000
 expanded JSON value nodes, counting container and scalar values; ≤1,000 values
 created by alias substitution, counting every copied container/scalar including
-nested copies. Exceeding the input cap is an extraction request error; exceeding
+nested copies; and ≤8 MiB aggregate decoded scalar/key UTF-8 bytes across ordinary
+and alias materializations, reserved before any materialization clone. Count all
+decoded scalar spelling bytes, including numeric/bool/null spellings, plus map
+keys. This byte ceiling prevents a large scalar reused by many aliases from
+amplifying into gigabytes while remaining under node caps. Exceeding the input cap is an
+extraction request error; exceeding
 YAML caps yields `frontmatter_resource`, preserving body extraction. Bound
 iteration/recursion before materializing an oversized expansion. Never truncate
 metadata silently or publish a partial YAML map. Fixed defaults are part of this
@@ -315,7 +320,7 @@ notices. [Parser docs](https://docs.rs/saphyr-parser/latest/saphyr_parser/) and
 exact crate, including `Cargo.toml`, `parser.rs`, `scanner.rs` and `LICENSE`, was
 the primary version-specific evidence. No dependency/runtime build is claimed. MDBASE and index/query work have separate owners.
 
-The 44-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
+The 49-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
 invalid/duplicate/tagged YAML, mixed projections, nonfinite/unsafe numbers,
 BOM/CRLF/bare-CR/astral/decomposed Unicode, empty/partial Markdown, exclusions,
 ATX/Setext/container headings, raw/inline/reference links and task dialect.
@@ -341,7 +346,7 @@ include separate `propertyKeySpellings` source assertions; decoded keys must not
 be mistaken for raw YAML spelling. The TypeScript option checks all
 recorded baseline observations, including intentional mismatches with the target.
 
-Verification at preparation completion: the checker and all 44 current TypeScript
+Verification at preparation completion: the checker and all 49 current TypeScript
 observations pass; 22 existing property/metadata tests pass. The first checker
 run caught an accidentally empty status in the final empty task and was corrected;
 fixture IDs were corrected to the existing strong-ID grammar before completion.
@@ -354,3 +359,65 @@ then a minimal WASM JSON seam reading the same requests. Root owns shared/root
 manifests and locks; no worker edits those until assigned. Preserve this corpus
 as an independent oracle and add focused resource/request-error boundary tests.
 Consumer switches and index publication occur in later coherent reviewed changes.
+
+
+## Shared YAML-only consumer seam
+
+Root approved `parse_yaml_mapping(&str) -> Result<PropertyValue, YamlDiagnostic>`
+for Base definition consumers. It uses the same Saphyr event decoder and ordered
+value reconstruction as frontmatter, with no Markdown framing, property inference
+or tags/aliases projection. Input is exactly one YAML mapping; whitespace/comments
+produce an ordered empty object. BOM and CR/LF spellings remain intact.
+
+`YamlDiagnostic { code, range: SourceRange }` has typed snake-case codes `syntax`,
+`duplicate_key`, `mapping`, `tag`, `alias`, `value` and `resource`. A source over
+1 MiB reports Resource at zero-width start without scanning the oversized input;
+other errors cover the whole YAML input in original byte/UTF-16 coordinates.
+Depth/node/alias/8 MiB expanded decoded scalar/key byte limits are shared with
+frontmatter. Base may apply its stricter 256 KiB input limit before calling it.
+There is one parser/decoder, rather than a separate Base YAML implementation.
+
+
+## Parser fixture gaps observed during native candidate validation
+
+Root's actual native 1.95 candidate run compiled successfully. The ordered value
+checks passed 5/5 and resource checks passed 7/7 after classifying Saphyr's pinned
+`recursion limit exceeded` scanner error as Resource. The 46-case shared corpus
+then passed 44/46 before the following adapter fixes; see root's recorded
+`tmp/stage4-parser-run2.log`. These observations do not establish the fixed
+candidate's runtime success or native/WASM/consumer equivalence yet.
+
+- Pulldown 0.13.4 interpreted the first `![[A#Head|Label]]` in the `inline-links`
+  case as an ordinary image spanning the rest of the line, closed by a later
+  escaped-bracket sequence and targeting `Hidden.md`. The narrow OFM adapter
+  considers only parser-confirmed ordinary inline images starting `![[`; a short
+  single-line atom is accepted only if the same established parser independently
+  validates that exact slice as one Wiki Image. An escaped opener protects the
+  confirmed atom from the ordinary-image grammar without changing byte positions
+  or indentation. Its isolated parser supplies link/label data; surrounding text,
+  links and exclusions remain parser-owned. Two adjacent corpus cases cover an
+  escaped literal tail, plain heading text and three-space indentation.
+- Pulldown's collapsed-reference event range excludes the trailing `[]`. The
+  source-range adapter extends only a parser-confirmed Collapsed link whose
+  immediately following source is exactly `[]`, preserving the shared complete
+  occurrence range. The reference definition/destination span is unchanged.
+
+These are concrete capability gaps supporting small compatibility adapters,
+not a new Markdown parser or permission to weaken the independent expectations.
+
+
+Native Base-source integration additionally exposed a Saphyr 0.2.2 scanner BOM
+TODO: an initial BOM before a comment made otherwise valid YAML fail Syntax.
+The common event adapter now strips only the initial BOM for syntax and rebases
+all AST byte spans by three, keeping original BOM/CRLF coordinates and source
+untouched. Focused YAML-only cases cover nonempty BOM content and BOM+comment
+before both a valid map and an invalid null root. This is a framing/offset
+compatibility adapter around the same established YAML parser.
+
+
+Initial Markdown BOM masking also required a source-input correction: three
+synthetic spaces could turn an original 1–3-space ATX heading into indented code.
+The read-only parser input now replaces the three BOM bytes with blank newlines,
+a semantic empty document prefix. Original source positions/line numbers still
+come from the untouched input. The shared corpus covers BOM+three-space heading;
+a focused parameterized test covers zero through three original spaces.

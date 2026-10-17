@@ -1,0 +1,14 @@
+[package]
+name = "zorid-document"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Portable, source-aware document semantics for Zorid"
+
+[dependencies]
+zorid-core = { path = "../zorid-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pulldown-cmark = { version = "=0.13.4", default-features = false }
+saphyr-parser = { version = "=0.2.2", default-features = false }
+regex = "=1.13.1"

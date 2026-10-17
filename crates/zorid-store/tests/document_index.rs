@@ -1,0 +1,973 @@
+//! Actual SQLite authority/cache transactions, using disposable fixtures only.
+use rusqlite::{types::Value, Connection};
+use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, VaultPath};
+use zorid_index::{IndexError, LiteralQuery, SearchHit};
+use zorid_store::{
+    document_index::*, CheckpointScope, CheckpointWrite, FamilyCreateMode, FamilyScope, Store,
+};
+use zorid_sync_protocol::{RealmId, VaultId};
+fn id(value: &str) -> EntryId {
+    EntryId::new(value).unwrap()
+}
+fn op(value: &str) -> OperationId {
+    OperationId::new(value).unwrap()
+}
+fn request(name: &str, mutation: Mutation) -> MutationRequest {
+    MutationRequest {
+        operation_id: op(name),
+        mutation,
+    }
+}
+fn create(name: &str, path: &str, bytes: &[u8]) -> MutationRequest {
+    request(
+        &format!("create_{name}"),
+        Mutation::Create {
+            id: id(name),
+            path: VaultPath::new(path).unwrap(),
+            kind: EntryKind::File,
+            content: Some(bytes.to_vec()),
+        },
+    )
+}
+fn write(store: &mut Store, name: &str, entry: &str, bytes: &[u8]) {
+    let state = store.read_metadata(&id(entry)).unwrap().unwrap().state;
+    store
+        .apply(&request(
+            name,
+            Mutation::Write {
+                id: state.id,
+                expected: state.revision,
+                content: bytes.to_vec(),
+            },
+        ))
+        .unwrap();
+}
+fn build(store: &mut Store) {
+    let stage = store.begin_document_index().unwrap();
+    loop {
+        if store.pump_document_index(&stage).unwrap().ready {
+            break;
+        }
+    }
+    store.publish_document_index(&stage).unwrap();
+}
+fn hits(store: &Store, needle: &str) -> Vec<SearchHit> {
+    let pin = store.open_document_snapshot().unwrap();
+    let mut token = None;
+    let mut hits = Vec::new();
+    loop {
+        let page = store
+            .literal_document_page(
+                &pin,
+                LiteralQuery::new(needle).unwrap(),
+                token.as_ref(),
+                1000,
+            )
+            .unwrap();
+        hits.extend(page.hits);
+        token = page.next;
+        if token.is_none() {
+            break;
+        }
+    }
+    store.close_document_snapshot(pin);
+    hits
+}
+// Compare every authority table, including sync, outbox and draft checkpoints.
+fn authority(path: &std::path::Path) -> Vec<(String, Vec<Vec<String>>)> {
+    let db = Connection::open(path).unwrap();
+    let names=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('document_index_control','document_index_generations','document_index_rows') ORDER BY name").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+    names
+        .into_iter()
+        .map(|name| {
+            let mut statement = db
+                .prepare(&format!(
+                    "SELECT * FROM \"{}\" ORDER BY rowid",
+                    name.replace('"', "\"\"")
+                ))
+                .unwrap();
+            let count = statement.column_count();
+            let rows = statement
+                .query_map([], |row| {
+                    (0..count)
+                        .map(|i| row.get::<_, Value>(i).map(|v| format!("{v:?}")))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            (name, rows)
+        })
+        .collect()
+}
+#[test]
+fn durable_bounded_stage_resumes_after_restart_without_authority_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    for n in 0..33 {
+        store
+            .apply(&create(
+                &format!("file{n}"),
+                &format!("file{n:02}.md"),
+                b"needle\r\n",
+            ))
+            .unwrap();
+    }
+    let local = store.identity().unwrap().local_store_id;
+    store
+        .checkpoint_compare_and_swap(
+            &CheckpointScope {
+                vault_id: local,
+                client_id: op("editor"),
+            },
+            CheckpointWrite {
+                key: "draft",
+                expected_revision: None,
+                next_revision: "00000000-0000-4000-8000-000000000001",
+                encoded_state: Some("unsaved draft"),
+            },
+        )
+        .unwrap();
+    let before = authority(&path);
+    store.initialize_document_index().unwrap();
+    let stage = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&stage).unwrap();
+    assert_eq!(progress.prepared_documents, 32);
+    assert!(!progress.ready);
+    assert!(matches!(
+        store.open_document_snapshot(),
+        Err(DocumentIndexError::NotReady)
+    ));
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    let recovered = store.document_index_stages().unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].snapshot(), stage.snapshot());
+    let stage = store
+        .resume_document_index(recovered[0].snapshot())
+        .unwrap();
+    assert!(store.pump_document_index(&stage).unwrap().ready);
+    store.publish_document_index(&stage).unwrap();
+    assert_eq!(hits(&store, "needle").len(), 33);
+    assert_eq!(authority(&path), before);
+}
+#[test]
+fn independent_connections_reject_stale_source_and_derived_head_publications() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut a = Store::open(&path).unwrap();
+    a.apply(&create("a", "a.md", b"old")).unwrap();
+    a.initialize_document_index().unwrap();
+    let mut b = Store::open(&path).unwrap();
+    let sa = a.begin_document_index().unwrap();
+    let sb = b.begin_document_index().unwrap();
+    a.pump_document_index(&sa).unwrap();
+    b.pump_document_index(&sb).unwrap();
+    a.publish_document_index(&sa).unwrap();
+    assert!(matches!(
+        b.publish_document_index(&sb),
+        Err(DocumentIndexError::Contract(IndexError::StaleIndex))
+    ));
+    let stale = b.begin_document_index().unwrap();
+    b.pump_document_index(&stale).unwrap();
+    write(&mut a, "edit", "a", b"new");
+    assert!(matches!(
+        b.publish_document_index(&stale),
+        Err(DocumentIndexError::Contract(IndexError::StaleSource))
+    ));
+    assert_eq!(hits(&a, "old").len(), 1);
+    assert!(hits(&a, "new").is_empty());
+    assert!(
+        matches!(a.document_index_status().unwrap(),DocumentIndexStatus::Ready {covered_watermark,observed_source_head,..} if covered_watermark!=observed_source_head)
+    );
+    build(&mut b);
+    assert_eq!(hits(&a, "new").len(), 1);
+}
+#[test]
+fn pinned_pages_use_retained_bytes_and_expire_on_rebuild_or_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .apply(&create("a", "a.md", b"needle old one\nneedle old two\n"))
+        .unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let pin = store.open_document_snapshot().unwrap();
+    let page = store
+        .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), None, 1)
+        .unwrap();
+    assert_eq!(page.hits[0].snippet, "needle old one");
+    let token = page.next.unwrap();
+    write(&mut store, "edit", "a", b"needle NEW\n");
+    build(&mut store);
+    let page = store
+        .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), Some(&token), 1)
+        .unwrap();
+    assert_eq!(page.hits[0].snippet, "needle old two");
+    assert_eq!(hits(&store, "NEW").len(), 1);
+    let other = Store::open(&path).unwrap();
+    assert!(matches!(
+        other.literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), Some(&token), 1),
+        Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+    ));
+    let old = pin.generation().id().clone();
+    store.rebuild_document_index().unwrap();
+    assert!(matches!(
+        store.literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), Some(&token), 1),
+        Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+    ));
+    build(&mut store);
+    let current = store.open_document_snapshot().unwrap();
+    assert_ne!(
+        old.generation_epoch(),
+        current.generation().id().generation_epoch()
+    );
+}
+#[test]
+fn move_delete_recreate_and_rebuild_have_identical_results_without_source_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .apply(&create("old", "before.md", b"needle [[target]]"))
+        .unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let s = store.read_metadata(&id("old")).unwrap().unwrap().state;
+    store
+        .apply(&request(
+            "move",
+            Mutation::Move {
+                id: s.id,
+                expected: s.revision,
+                path: VaultPath::new("after.md").unwrap(),
+            },
+        ))
+        .unwrap();
+    build(&mut store);
+    assert_eq!(hits(&store, "needle")[0].entry.path.as_str(), "after.md");
+    let s = store.read_metadata(&id("old")).unwrap().unwrap().state;
+    store
+        .apply(&request(
+            "delete",
+            Mutation::Delete {
+                id: s.id,
+                expected: s.revision,
+                recursive: false,
+            },
+        ))
+        .unwrap();
+    store
+        .apply(&create("new", "after.md", b"needle replacement"))
+        .unwrap();
+    build(&mut store);
+    let incremental = hits(&store, "needle");
+    assert_eq!(incremental[0].entry.id, id("new"));
+    let before = authority(&path);
+    store.rebuild_document_index().unwrap();
+    build(&mut store);
+    assert_eq!(hits(&store, "needle"), incremental);
+    assert_eq!(authority(&path), before);
+}
+#[test]
+fn corrupt_or_missing_cache_is_explicit_and_does_not_block_note_saves() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store.apply(&create("a", "a.md", b"before")).unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let db = Connection::open(&path).unwrap();
+    db.execute("UPDATE document_index_rows SET record='{}'", [])
+        .unwrap();
+    assert!(matches!(
+        store.document_index_status().unwrap(),
+        DocumentIndexStatus::RebuildRequired
+    ));
+    write(&mut store, "save", "a", b"after");
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert!(matches!(
+        store.document_index_status().unwrap(),
+        DocumentIndexStatus::RebuildRequired
+    ));
+    let before = authority(&path);
+    store.rebuild_document_index().unwrap();
+    build(&mut store);
+    assert_eq!(authority(&path), before);
+    db.execute_batch("DROP TABLE document_index_rows").unwrap();
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert!(matches!(
+        store.document_index_status().unwrap(),
+        DocumentIndexStatus::RebuildRequired
+    ));
+    assert!(matches!(
+        store.initialize_document_index(),
+        Err(DocumentIndexError::RebuildRequired)
+    ));
+    let before = authority(&path);
+    store.rebuild_document_index().unwrap();
+    build(&mut store);
+    assert_eq!(authority(&path), before);
+    assert_eq!(hits(&store, "after").len(), 1);
+    db.execute("DELETE FROM document_index_rows", []).unwrap();
+    assert!(matches!(
+        store.document_index_status().unwrap(),
+        DocumentIndexStatus::RebuildRequired
+    ));
+}
+#[test]
+fn optional_schema_is_exact_and_unknown_objects_still_fail_closed() {
+    for sql in [
+        "CREATE TABLE document_index_rows (record TEXT)",
+        "CREATE TABLE document_index_unregistered (record TEXT)",
+        "CREATE TRIGGER document_index_bad AFTER UPDATE ON entries BEGIN DELETE FROM outbox; END",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let store = Store::open(&path).unwrap();
+        drop(store);
+        Connection::open(&path).unwrap().execute_batch(sql).unwrap();
+        assert!(Store::open(&path).is_err(), "{sql}");
+    }
+}
+#[test]
+fn binary_mode_and_invalid_text_are_explicit_while_current_invalid_yaml_keeps_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .family_enroll(&FamilyScope {
+            realm_id: RealmId::new("realm").unwrap(),
+            vault_id: VaultId::new("vault").unwrap(),
+        })
+        .unwrap();
+    store
+        .family_apply(
+            &create("binary", "binary.md", b"needle binary"),
+            Some(FamilyCreateMode::Binary),
+        )
+        .unwrap();
+    store
+        .family_apply(
+            &create("text", "text.md", b"---\na: [\n---\nneedle text\n"),
+            Some(FamilyCreateMode::Text),
+        )
+        .unwrap();
+    let before = authority(&path);
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    assert_eq!(authority(&path), before);
+    let pin = store.open_document_snapshot().unwrap();
+    assert!(matches!(
+        pin.generation().record(&id("binary")).unwrap().exclusion(),
+        Some(zorid_index::Exclusion::Binary)
+    ));
+    let metadata = pin
+        .generation()
+        .record(&id("text"))
+        .unwrap()
+        .metadata()
+        .unwrap();
+    assert!(!metadata.diagnostics.is_empty());
+    assert_eq!(
+        metadata.content_revision,
+        store
+            .read_metadata(&id("text"))
+            .unwrap()
+            .unwrap()
+            .state
+            .revision
+    );
+    let found = hits(&store, "needle");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].entry.id, id("text"));
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("db")).unwrap();
+    store
+        .apply(&create("nul", "nul.unknown", b"needle\0hidden"))
+        .unwrap();
+    store
+        .apply(&create("utf8", "unknown.extension", b"needle plain"))
+        .unwrap();
+    store
+        .apply(&create("invalid_utf8", "invalid.extension", &[0xff, 0xfe]))
+        .unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    assert_eq!(hits(&store, "needle").len(), 1);
+    assert!(matches!(
+        store.document_index_status().unwrap(),
+        DocumentIndexStatus::Ready {
+            coverage_complete: false,
+            ..
+        }
+    ));
+}
+#[test]
+fn count_based_retention_and_pin_limit_are_bounded_with_explicit_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store.apply(&create("a", "a.md", b"needle")).unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let mut pins = Vec::new();
+    for _ in 0..DOCUMENT_INDEX_MAX_QUERY_PINS {
+        pins.push(store.open_document_snapshot().unwrap());
+    }
+    assert!(matches!(
+        store.open_document_snapshot(),
+        Err(DocumentIndexError::Contract(IndexError::GenerationLimit))
+    ));
+    store.close_document_snapshot(pins.pop().unwrap());
+    assert!(store.open_document_snapshot().is_ok());
+    let old = pins.pop().unwrap();
+    drop(pins);
+    for _ in 0..DOCUMENT_INDEX_RETAINED_GENERATIONS {
+        build(&mut store);
+    }
+    assert!(matches!(
+        store.literal_document_page(&old, LiteralQuery::new("needle").unwrap(), None, 1),
+        Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+    ));
+    let db = Connection::open(&path).unwrap();
+    let retained: i64 = db.query_row(
+        "SELECT count(*) FROM document_index_generations WHERE json_extract(record,'$.value.published')=1",
+        [], |r|r.get(0)
+    ).unwrap();
+    assert_eq!(retained, DOCUMENT_INDEX_RETAINED_GENERATIONS as i64);
+    let oldest = store.begin_document_index().unwrap();
+    for _ in 0..DOCUMENT_INDEX_RETAINED_STAGES {
+        store.begin_document_index().unwrap();
+    }
+    assert!(store.resume_document_index(oldest.snapshot()).is_err());
+    assert_eq!(
+        store.document_index_stages().unwrap().len(),
+        DOCUMENT_INDEX_RETAINED_STAGES
+    );
+}
+#[test]
+fn exact_committed_id_revision_read_rejects_stale_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store.apply(&create("a", "a.md", b"old")).unwrap();
+    let manifest = store.capture_document_manifest().unwrap();
+    assert_eq!(
+        store
+            .read_document_source(&manifest, &id("a"))
+            .unwrap()
+            .content,
+        Some(b"old".to_vec())
+    );
+    write(&mut store, "edit", "a", b"new");
+    assert!(matches!(
+        store.read_document_source(&manifest, &id("a")),
+        Err(DocumentIndexError::Contract(IndexError::StaleSource))
+    ));
+    let current = store.capture_document_manifest().unwrap();
+    assert_eq!(
+        store
+            .read_document_source(&current, &id("a"))
+            .unwrap()
+            .content,
+        Some(b"new".to_vec())
+    );
+}
+#[test]
+fn unchanged_records_are_reused_but_changed_or_moved_witnesses_are_reparsed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store.apply(&create("a", "a.md", b"needle a")).unwrap();
+    store.apply(&create("b", "b.md", b"needle b")).unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let unchanged = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&unchanged).unwrap();
+    assert_eq!(progress.reused_documents, 2);
+    assert!(progress.ready);
+    store.publish_document_index(&unchanged).unwrap();
+    write(&mut store, "edit", "a", b"needle updated");
+    let changed = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&changed).unwrap();
+    assert_eq!(progress.reused_documents, 1);
+    assert!(progress.ready);
+    store.publish_document_index(&changed).unwrap();
+    let b = store.read_metadata(&id("b")).unwrap().unwrap().state;
+    store
+        .apply(&request(
+            "move",
+            Mutation::Move {
+                id: b.id,
+                expected: b.revision,
+                path: VaultPath::new("moved.md").unwrap(),
+            },
+        ))
+        .unwrap();
+    let moved = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&moved).unwrap();
+    assert_eq!(progress.reused_documents, 1);
+    assert!(progress.ready);
+    store.publish_document_index(&moved).unwrap();
+    let incremental = hits(&store, "needle");
+    store.rebuild_document_index().unwrap();
+    build(&mut store);
+    assert_eq!(hits(&store, "needle"), incremental);
+}
+#[test]
+fn one_sixteen_mib_text_row_can_advance_a_soft_one_mib_pump() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let mut bytes = vec![b'x'; zorid_store::FAMILY_MAX_INLINE_BYTES as usize];
+    bytes[..6].copy_from_slice(b"needle");
+    store.apply(&create("large", "large.txt", &bytes)).unwrap();
+    drop(bytes);
+    store.initialize_document_index().unwrap();
+    let stage = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&stage).unwrap();
+    assert!(progress.ready);
+    assert_eq!(progress.prepared_documents, 1);
+    store.publish_document_index(&stage).unwrap();
+    let pin = store.open_document_snapshot().unwrap();
+    let page = store
+        .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), None, 1)
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(
+        page.source_bytes,
+        zorid_store::FAMILY_MAX_INLINE_BYTES as usize
+    );
+    assert!(page.complete);
+}
+
+#[test]
+fn duplicate_registered_name_cannot_hide_a_trigger_on_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store.initialize_document_index().unwrap();
+    drop(store);
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER document_index_rows AFTER UPDATE ON entries BEGIN DELETE FROM outbox; END",
+    )
+    .unwrap();
+    assert!(Store::open(&path).is_err());
+}
+
+#[test]
+fn corrupt_cache_entry_keys_require_rebuild_without_blocking_authority_saves() {
+    for key in ["bad/id", "ghost"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let mut store = Store::open(&path).unwrap();
+        store.apply(&create("a", "a.md", b"before")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        Connection::open(&path)
+            .unwrap()
+            .execute("UPDATE document_index_rows SET entry_id=?1", [key])
+            .unwrap();
+        assert!(
+            matches!(
+                store.document_index_status().unwrap(),
+                DocumentIndexStatus::RebuildRequired
+            ),
+            "{key}"
+        );
+        write(&mut store, "save", "a", b"after");
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.read(&id("a")).unwrap().unwrap().content,
+            Some(b"after".to_vec())
+        );
+        assert!(matches!(
+            store.document_index_status().unwrap(),
+            DocumentIndexStatus::RebuildRequired
+        ));
+    }
+}
+
+#[test]
+fn copied_cache_cannot_be_queried_under_another_authority_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let a_path = dir.path().join("a");
+    let b_path = dir.path().join("b");
+    let mut a = Store::open(&a_path).unwrap();
+    let mut b = Store::open(&b_path).unwrap();
+    a.apply(&create("a", "a.md", b"private A")).unwrap();
+    b.apply(&create("b", "b.md", b"private B")).unwrap();
+    a.initialize_document_index().unwrap();
+    build(&mut a);
+    b.initialize_document_index().unwrap();
+    let before = authority(&b_path);
+    let db = Connection::open(&b_path).unwrap();
+    db.execute(
+        "ATTACH DATABASE ?1 AS foreign_cache",
+        [a_path.to_str().unwrap()],
+    )
+    .unwrap();
+    db.execute_batch("DELETE FROM document_index_control; INSERT INTO document_index_control SELECT * FROM foreign_cache.document_index_control; INSERT INTO document_index_generations SELECT * FROM foreign_cache.document_index_generations; INSERT INTO document_index_rows SELECT * FROM foreign_cache.document_index_rows;").unwrap();
+    assert!(matches!(
+        b.document_index_status().unwrap(),
+        DocumentIndexStatus::RebuildRequired
+    ));
+    assert!(matches!(
+        b.open_document_snapshot(),
+        Err(DocumentIndexError::RebuildRequired)
+    ));
+    assert_eq!(authority(&b_path), before);
+    write(&mut b, "save", "b", b"private B retained");
+    b.rebuild_document_index().unwrap();
+    build(&mut b);
+    assert!(hits(&b, "private A").is_empty());
+    assert_eq!(hits(&b, "private B").len(), 1);
+}
+#[test]
+fn oversized_control_headers_and_excess_generation_rows_require_rebuild() {
+    for corruption in ["control", "header", "count"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let mut store = Store::open(&path).unwrap();
+        store.apply(&create("a", "a.md", b"before")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let db = Connection::open(&path).unwrap();
+        match corruption {
+            "control" => {
+                db.execute(
+                    "UPDATE document_index_control SET record=zeroblob(?1)",
+                    [DOCUMENT_INDEX_MAX_CONTROL_BYTES as i64 + 1],
+                )
+                .unwrap();
+            }
+            "header" => {
+                db.execute(
+                    "UPDATE document_index_generations SET record=zeroblob(?1)",
+                    [zorid_index::MAX_GENERATION_METADATA_BYTES as i64 + 1],
+                )
+                .unwrap();
+            }
+            _ => {
+                for n in 0..DOCUMENT_INDEX_RETAINED_GENERATIONS + DOCUMENT_INDEX_RETAINED_STAGES {
+                    db.execute("INSERT INTO document_index_generations SELECT ?1,record FROM document_index_generations LIMIT 1",[format!("extra_{n}")]).unwrap();
+                }
+            }
+        }
+        assert!(
+            matches!(
+                store.document_index_status().unwrap(),
+                DocumentIndexStatus::RebuildRequired
+            ),
+            "{corruption}"
+        );
+        assert!(
+            matches!(
+                store.open_document_snapshot(),
+                Err(DocumentIndexError::RebuildRequired)
+            ),
+            "{corruption}"
+        );
+        write(&mut store, "save", "a", b"after");
+        let before = authority(&path);
+        store.rebuild_document_index().unwrap();
+        build(&mut store);
+        assert_eq!(authority(&path), before);
+        assert_eq!(hits(&store, "after").len(), 1);
+    }
+}
+
+#[test]
+fn checked_snapshot_accessors_keep_frozen_manifest_and_base_definition_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let old = b"views:\n - type: table\n";
+    let new = b"views:\n - type: list\n";
+    store
+        .apply_at(&create("base", "view.base", old), 100)
+        .unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let pin = store.open_document_snapshot().unwrap();
+    let manifest = store.document_snapshot_manifest(&pin).unwrap();
+    let before = store.read_document_projection(&pin, &id("base")).unwrap();
+    assert_eq!(before.content, Some(old.to_vec()));
+    assert!(before.exclusion.is_none());
+    assert_eq!(manifest.presentations()[0].size_bytes, old.len() as u64);
+    assert_eq!(manifest.presentations()[0].mtime_ms, 100);
+    write(&mut store, "edit", "base", new);
+    build(&mut store);
+    let frozen = store.document_snapshot_manifest(&pin).unwrap();
+    assert_eq!(frozen, manifest);
+    let read = store.read_document_projection(&pin, &id("base")).unwrap();
+    assert_eq!(read.content, Some(old.to_vec()));
+    assert_eq!(read.witness.entry(), before.witness.entry());
+    let current = store.open_document_snapshot().unwrap();
+    assert_eq!(
+        store
+            .read_document_projection(&current, &id("base"))
+            .unwrap()
+            .content,
+        Some(new.to_vec())
+    );
+    let reopened = Store::open(&path).unwrap();
+    assert!(matches!(
+        reopened.document_snapshot_manifest(&pin),
+        Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+    ));
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE document_index_rows SET text=?1 WHERE snapshot_key=?2",
+            rusqlite::params![
+                b"tampered".to_vec(),
+                format!(
+                    "{}:{}",
+                    pin.generation().id().generation_epoch().as_str(),
+                    pin.generation().id().generation()
+                )
+            ],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.read_document_projection(&pin, &id("base")),
+        Err(DocumentIndexError::RebuildRequired)
+    ));
+    store.rebuild_document_index().unwrap();
+    assert!(matches!(
+        store.document_snapshot_manifest(&pin),
+        Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+    ));
+    assert!(matches!(
+        store.read_document_projection(&pin, &id("base")),
+        Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+    ));
+}
+#[test]
+fn checked_retained_projection_reports_exclusions_without_binary_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .apply(&create("nul", "nul.txt", b"text\0hidden"))
+        .unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let pin = store.open_document_snapshot().unwrap();
+    let read = store.read_document_projection(&pin, &id("nul")).unwrap();
+    assert!(read.content.is_none());
+    assert_eq!(read.exclusion, Some(zorid_index::Exclusion::Binary));
+    assert!(matches!(
+        store.read_document_projection(&pin, &id("missing")),
+        Err(DocumentIndexError::Contract(IndexError::MissingSource))
+    ));
+}
+#[test]
+fn discarding_one_stale_stage_preserves_source_published_pins_and_other_stages() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .apply(&create("a", "a.md", b"needle committed"))
+        .unwrap();
+    store.initialize_document_index().unwrap();
+    let published = store.begin_document_index().unwrap();
+    store.pump_document_index(&published).unwrap();
+    store.publish_document_index(&published).unwrap();
+    let pin = store.open_document_snapshot().unwrap();
+    let stale = store.begin_document_index().unwrap();
+    store.pump_document_index(&stale).unwrap();
+    let other = store.begin_document_index().unwrap();
+    store.pump_document_index(&other).unwrap();
+    let mut writer = Store::open(&path).unwrap();
+    write(&mut writer, "edit", "a", b"needle changed");
+    let before_authority = authority(&path);
+    let db = Connection::open(&path).unwrap();
+    let discarded_key = format!(
+        "{}:{}",
+        stale.snapshot().generation_epoch().as_str(),
+        stale.snapshot().generation()
+    );
+    let remaining_cache = || {
+        let control: String = db
+            .query_row(
+                "SELECT record FROM document_index_control WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let headers = db.prepare("SELECT snapshot_key,record FROM document_index_generations WHERE snapshot_key<>?1 ORDER BY snapshot_key").unwrap().query_map([&discarded_key], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        let rows = db.prepare("SELECT snapshot_key,entry_id,record,text FROM document_index_rows WHERE snapshot_key<>?1 ORDER BY snapshot_key,entry_id").unwrap().query_map([&discarded_key], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<Vec<u8>>>(3)?))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        (control, headers, rows)
+    };
+    let before_cache = remaining_cache();
+    store
+        .discard_document_index_stage(stale.snapshot())
+        .unwrap();
+    store
+        .discard_document_index_stage(stale.snapshot())
+        .unwrap();
+    let rows: i64 = db
+        .query_row(
+            "SELECT count(*) FROM document_index_rows WHERE snapshot_key=?1",
+            [&discarded_key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let headers: i64 = db
+        .query_row(
+            "SELECT count(*) FROM document_index_generations WHERE snapshot_key=?1",
+            [&discarded_key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!((rows, headers), (0, 0));
+    assert_eq!(remaining_cache(), before_cache);
+    assert_eq!(authority(&path), before_authority);
+    assert!(matches!(
+        store.resume_document_index(other.snapshot()),
+        Err(DocumentIndexError::Contract(IndexError::StaleSource))
+    ));
+    store
+        .discard_document_index_stage(published.snapshot())
+        .unwrap();
+    assert_eq!(remaining_cache(), before_cache);
+    assert_eq!(
+        store
+            .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), None, 1)
+            .unwrap()
+            .hits[0]
+            .snippet,
+        "needle committed"
+    );
+    let foreign_path = dir.path().join("foreign");
+    let mut foreign = Store::open(&foreign_path).unwrap();
+    foreign.initialize_document_index().unwrap();
+    let foreign_before = authority(&foreign_path);
+    assert!(matches!(
+        foreign.discard_document_index_stage(other.snapshot()),
+        Err(DocumentIndexError::Contract(IndexError::StaleIndex))
+    ));
+    assert_eq!(authority(&foreign_path), foreign_before);
+    build(&mut store);
+    let superseded_cache = remaining_cache();
+    store
+        .discard_document_index_stage(published.snapshot())
+        .unwrap();
+    assert_eq!(remaining_cache(), superseded_cache);
+    assert_eq!(authority(&path), before_authority);
+    assert_eq!(
+        store
+            .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), None, 1)
+            .unwrap()
+            .hits[0]
+            .snippet,
+        "needle committed"
+    );
+    store.rebuild_document_index().unwrap();
+    let current = store.begin_document_index().unwrap();
+    store.pump_document_index(&current).unwrap();
+    let current_key = format!(
+        "{}:{}",
+        current.snapshot().generation_epoch().as_str(),
+        current.snapshot().generation()
+    );
+    let current_header: String = db
+        .query_row(
+            "SELECT record FROM document_index_generations WHERE snapshot_key=?1",
+            [&current_key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    store
+        .discard_document_index_stage(published.snapshot())
+        .unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT record FROM document_index_generations WHERE snapshot_key=?1",
+            [&current_key],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        current_header
+    );
+    assert!(store.resume_document_index(current.snapshot()).is_ok());
+    assert_eq!(authority(&path), before_authority);
+}
+
+#[test]
+fn empty_vault_compound_status_reports_real_source_and_coherent_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let (initial, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(
+        initial.local_store_id(),
+        &store.identity().unwrap().local_store_id
+    );
+    assert_eq!(initial.watermark().as_str(), "1");
+    assert!(matches!(status, DocumentIndexStatus::Uninitialized));
+    assert!(store.list_snapshot().unwrap().entries.is_empty());
+    let authority_before = authority(&path);
+    store.initialize_document_index().unwrap();
+    let (building, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(building, initial);
+    assert!(matches!(status, DocumentIndexStatus::Building));
+    let stage = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&stage).unwrap();
+    assert!(progress.ready);
+    assert_eq!(
+        (progress.prepared_documents, progress.total_documents),
+        (0, 0)
+    );
+    store.publish_document_index(&stage).unwrap();
+    let (ready, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(ready, initial);
+    assert!(
+        matches!(status,DocumentIndexStatus::Ready {snapshot,covered_watermark,observed_source_head,coverage_complete:true} if snapshot==*stage.snapshot() && covered_watermark==ready.watermark().as_str() && observed_source_head==ready.watermark().as_str())
+    );
+    assert!(matches!(
+        store.document_index_status().unwrap(),
+        DocumentIndexStatus::Ready { .. }
+    ));
+    let pin = store.open_document_snapshot().unwrap();
+    let page = store
+        .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), None, 10)
+        .unwrap();
+    assert!(page.complete);
+    assert!(page.hits.is_empty());
+    assert!(page.next.is_none());
+    assert_eq!(authority(&path), authority_before);
+    let mut writer = Store::open(&path).unwrap();
+    writer.apply(&create("new", "new.md", b"needle")).unwrap();
+    let (advanced, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(advanced.local_store_id(), initial.local_store_id());
+    assert_eq!(advanced.watermark().as_str(), "2");
+    assert!(
+        matches!(status,DocumentIndexStatus::Ready {covered_watermark,observed_source_head,..} if covered_watermark==initial.watermark().as_str() && observed_source_head==advanced.watermark().as_str())
+    );
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("DROP TABLE document_index_rows").unwrap();
+    let (partial, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(partial, advanced);
+    assert!(matches!(status, DocumentIndexStatus::RebuildRequired));
+    assert!(matches!(
+        store.document_index_status().unwrap(),
+        DocumentIndexStatus::RebuildRequired
+    ));
+    db.execute("DELETE FROM local_changes", []).unwrap();
+    assert!(matches!(
+        store.document_index_status_with_source(),
+        Err(DocumentIndexError::Authority(
+            zorid_store::StoreError::Corrupt(_)
+        ))
+    ));
+}

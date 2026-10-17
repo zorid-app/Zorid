@@ -1,9 +1,11 @@
 import {createDesktopBinaryStreams} from './desktop.ts';
+import {createDesktopDocumentService} from './desktop-document-semantics.ts';
+import type {DocumentService} from '../core/document-semantics.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
 import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
-export interface PlatformVault { adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; recoverCommands?():Promise<boolean>; legacyExport?():void; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
+export interface PlatformVault { readonly documentSemantics?:DocumentService; adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; recoverCommands?():Promise<boolean>; legacyExport?():void; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
 async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<PlatformVault> {
   let reconciliationStatus=info.reconciliation??null;
   const reconciliation=info.reconciliation&&bridge.retryReconciliation?{
@@ -25,6 +27,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
   let createText: ((path:string,content:string)=>Promise<void>) | undefined;
   let commands:Partial<VaultAdapter>={};
   let binary:ReturnType<typeof createDesktopBinaryStreams>|undefined;
+  let documents:ReturnType<typeof createDesktopDocumentService>|undefined;
   if (binding) {
     if (!bridge.durableInvoke || !bridge.releaseDurableContext || !binding.admissionId || !binding.scope?.vaultId || !binding.scope.clientId) throw new Error('Incomplete durable desktop capability');
     const invoke = bridge.durableInvoke.bind(bridge), releaseContext = bridge.releaseDurableContext.bind(bridge);
@@ -64,18 +67,21 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
         compareAndSwap: change => call('checkpoints.compareAndSwap',change),
         list: options => call('checkpoints.list',options), changes: options => call('checkpoints.changes',options)}),
     });
-    let binaryDrained=false;
+    let binaryDrained=false,documentsDrained=false;
+    if(binding.documentSemantics)documents=createDesktopDocumentService(request=>call('documentCommand',request));
     if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
-    release = async () => { if (!released) { if(binary&&!binaryDrained){await binary.release();binaryDrained=true;} await releaseContext(info.path, admissionId); released = true; } };
+    release = async () => { if (!released) { if(binary&&!binaryDrained){await binary.release();binaryDrained=true;} if(documents&&!documentsDrained){await documents.release();documentsDrained=true;} await releaseContext(info.path, admissionId); released = true; } };
   }
   return {
     ...(release ? {release} : {}),
+    ...(documents?{documentSemantics:documents.service}:{}),
     ...(reconciliation?{reconciliation}:{}),
     ...(binary?{recoverCommands:()=>binary!.recover()}:{}),
     id: durableWrites ? `desktop-core:${durableWrites.checkpoints.scope.vaultId}:${durableWrites.checkpoints.scope.clientId}` : `desktop:${info.path}`,
     label: info.name,
     adapter: {
       ...(durableWrites ? {durableWrites} : {}),
+      ...(documents?{documentSemantics:documents.service}:{}),
       ...(binary ? {binaryStreams:binary.streams} : {}),
       ...(createText ? {createText} : {}),
       list: () => bridge.list(info.path),

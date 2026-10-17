@@ -105,7 +105,7 @@ Heavy builds and integration remain coordinator-serialized on the8GB machine.
 
 Reviewed candidate: `tingkai-c/stage4-integrated-engine`, `39a306e7`, isolated
 worktree `/Users/ctk/orca/workspaces/Zorid/stage4-integrated-engine`. Runtime
-source is not yet integrated into main. Independent final review found no new
+source is now composed on main for final scoped integration checks. Independent final review found no new
 source blocker; it also identified remaining normal search/Base consumers and
 explicit imported/received-update index evidence. Keep the milestone active.
 

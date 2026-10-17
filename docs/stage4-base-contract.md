@@ -226,3 +226,96 @@ An initial expected ordering in `typed-group-keys` was corrected after the runne
 showed numeric key 2 before whole-list [1,2], consistent with the source comparator.
 No broad suite, native app, Rust reuse or WASM check is claimed. This runner is
 preparation evidence and does not add a second production formula engine.
+
+## Generation-bound implementation checkpoint (2026-10-17)
+
+The attributed extraction is now implemented in `crates/zorid-bases`. The
+coordinator's native proof at candidate `0ce5cd40` passed the accepted 30 expression
+and 10 query cases and focused guards. That evidence predates the generation
+factory below; it does not establish current API, WASM or consumer acceptance.
+The original TypeScript fixture observations remain unchanged, including the
+legacy broken UTF-16 reverse string. `project-accepted.mjs --check` validates the
+scalar-safe accepted transport projection using only explicitly approved fixture
+expectations, never Rust results.
+
+`query_generation` and `BaseSnapshot::from_generation` derive rows, type hints,
+tags and relationships from the same immutable `zorid_index::Generation`. Optional
+`FilePresentationFacts` can supply only size/ctime/mtime and must match strong
+entry/revision witnesses. Rows and graph are sealed together. A current-record
+context must exactly match a canonical row; caller metadata cannot override it.
+Actual validated `IndexSnapshotId` is returned, with decimal-string generation
+serde owned by the index. The native facade separately binds the Base document's
+entry/revision and retained raw source. Detached expression contexts may omit a
+file and witness; `1+1` does not invent an entry ID.
+
+Accepted Zorid relationship semantics: `file.links` contains every outgoing parsed
+occurrence including embeds, in parser order; `file.embeds` is its embedded subset.
+`file.backlinks` contains unique incoming source files by stable ID, preserving
+shared namespace order. Link values retain the parser's semantic destination,
+optional resolved target entry/revision, and shared resolver external classification.
+`file.hasLink` recognizes an exact written destination even when unresolved;
+other target comparisons use one prebuilt shared Rust index resolver. Rename and
+content revisions rebuild relationships. No imported suffix/name fallback is an
+authority. Link-to-file coercion remains explicitly unsupported.
+
+Missing or incomplete relationships return `unavailable` diagnostics, never an
+invented empty complete graph. `relationshipsAvailable` reports coverage. Detached
+snapshot transport rejects any non-null supplied relationship report: only the
+Rust-owned generation factory can provide a graph. The canonical
+`accepted-generation-queries.json` hand-authored oracle covers duplicate outgoing
+links, embeds, unique backlinks, missing/external targets, a target move, source
+retargeting and incomplete coverage, for identical native/WASM requests. New
+factory source/tests are uncompiled until the coordinator's serialized proof.
+
+Caller ceilings are checked before generation preparation, with record/property/
+edge work lower bounds; hint/discovery lookup uses hash membership, preserving
+first-seen order without quadratic scans. A shared graph is bounded to 100,000
+edges and 64 MiB; rows to 64 MiB, results to 8 MiB. Cancellation is checked before
+and after the shared index snapshot operation and between preflight records.
+The current index snapshot API has no per-edge cancellation seam; the bounded
+synchronous snapshot call remains a stated cooperative-cancellation gap, not a
+claim of immediate interruption. No file write, IO resolver fallback, plugin
+callback or ambient clock enters this crate.
+
+Factory review follow-up: the 64 MiB ceiling is aggregate serialized snapshot
+input (identity/envelope, ordered rows, current revision metadata issues and graph),
+not 64 MiB per component. A counting writer rejects oversized encodings without
+allocating a full oversized buffer. Exclusions and shared parser diagnostics carry
+entry/revision witnesses in `metadataIssues`; `metadataComplete` requires a real
+generation and available property extraction. Access to unavailable properties is
+an `unavailable` error, so a filter cannot silently reinterpret failed extraction
+as an ordinary missing property. Binary exclusions remain distinct from unreadable
+or resource-excluded source.
+
+The cancellation gap above is closed in the current source by the Index-owned
+`ResolutionView::snapshot_checked` and `ResolutionSnapshot::resolver_checked`
+seams. Generation construction, namespace projection, candidate scans and graph
+occurrences charge one shared operation budget and check local Rust cancellation;
+`file.hasLink` uses `candidates_checked` against its expression budget. Factory
+preparation steps are included in the returned query total. These callbacks are
+private Rust operation guards, never serialized capabilities or JavaScript/plugin
+hooks. The canonical compiled/browser proof still belongs to the coordinator.
+
+Canonical graph corpus correction after the first compiled factory run: ordinary
+external Markdown URLs are intentionally omitted by the frozen document parser.
+The external graph probe therefore uses `https%3A%2F%2Fexample.com`, preserving
+that encoded semantic destination in the Link value while the shared resolver
+classifies it as external after percent decoding (same input pattern as index
+fixture commit `3dee860d`). An additional ordinary external URL remains in source
+and is absent from the exact four-element outgoing list. This changes fixture
+inputs/oracles coherently; it does not change extraction or derive expectations
+from engine outputs. Graph `expected.values` declares selected row/cell observables;
+undeclared columns are not an oracle. Declared typed lists and link fields remain
+exact, errors freeze codes, and JSON numbers compare by numeric value.
+
+The first actual Chrome Base corpus run reported 50/51 cases and all five request
+checks passing; the single failure was the detached missing-relationship fixture
+still expecting the historical TypeScript `unsupported` code. The generation
+backed contract above already distinguishes absent/incomplete relationship input
+(`unavailable`) from an unimplemented operation (`unsupported`). The original
+`queries.json.current` observation is preserved. Its explicit approved `proposed`
+expectation now selects `unavailable` through the accepted projector whitelist;
+no engine output was used to generate an expectation and no evaluator behavior
+changed. The actual failed browser report/results remain acceptance evidence;
+this fixture correction requires the native detached query corpus and actual
+browser Base corpus to rerun before a pass is recorded.

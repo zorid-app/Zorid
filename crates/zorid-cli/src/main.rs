@@ -1,6 +1,10 @@
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod binary;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod documents;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod metadata;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod search;
 mod sync;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -48,6 +52,12 @@ enum Command {
         /// Stable binary read identity for an explicit retry; normally generated per invocation.
         #[arg(long)]
         read_id: Option<String>,
+    },
+    /// Parse committed inline UTF-8 as Markdown by ID, including unknown filenames.
+    /// Binary, NUL and invalid UTF-8 sources are rejected; no scan or source edit.
+    Metadata {
+        #[arg(long)]
+        id: String,
     },
     /// Create a file; enrolled --binary streams up to 64 MiB, other input is bounded to 16 MiB.
     Create {
@@ -143,6 +153,36 @@ enum Command {
         limit: u32,
         #[arg(long, default_value_t=67_108_864, value_parser=clap::value_parser!(u64).range(0..=268_435_456))]
         max_total_bytes: u64,
+    },
+    /// Inspect or explicitly build the disposable committed document index.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    DocumentIndex {
+        #[command(subcommand)]
+        command: documents::IndexCommand,
+    },
+    /// Search a published Rust index; never implicitly build or scan files.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    IndexedSearch {
+        #[arg(value_parser = search_query)]
+        query: String,
+        #[command(flatten)]
+        options: documents::PageOptions,
+    },
+    /// Query incoming resolved links in one published document snapshot.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    Backlinks {
+        #[arg(long)]
+        id: String,
+        #[command(flatten)]
+        options: documents::PageOptions,
+    },
+    /// Evaluate a committed Base definition against one published Rust snapshot.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    BaseQuery {
+        #[arg(long)]
+        id: String,
+        #[command(flatten)]
+        options: documents::BaseOptions,
     },
     /// Foreground rescan and optional existing-scope sync; restart uses durable core queues.
     Watch {
@@ -594,6 +634,10 @@ fn run(args: Args) -> Result<Output> {
             json!({"pending_outbox":status.pending_outbox,"pending_projection":status.pending_projection,"projection_attempts":status.attempts.len(),"external_observations":status.observations.len(),"max_file_bytes":MAX_FILE_BYTES,"max_binary_file_bytes":zorid_store::BINARY_STAGE_MAX_FILE_BYTES,"binary_chunk_bytes":zorid_store::BINARY_STAGE_MAX_CHUNK_BYTES,"sync_available":false,"fixture_family_sync_available":true})
         }
         Command::List => json!({"entries":vault.list()?}),
+        Command::Metadata { id } => {
+            // Direct typed serialization preserves recursively ordered property maps.
+            return Ok(Output::Raw(metadata::run(&vault, EntryId::new(id)?)?));
+        }
         Command::Read { id, raw, read_id } => {
             let id = EntryId::new(id)?;
             let read_id = read_id.map(OperationId::new).transpose()?;
@@ -677,6 +721,26 @@ fn run(args: Args) -> Result<Output> {
             limit,
             max_total_bytes,
         } => search::run(&vault, &query, limit as usize, max_total_bytes)?,
+        Command::DocumentIndex { command } => {
+            return Ok(Output::Raw(documents::index(&mut vault, command)?));
+        }
+        Command::IndexedSearch { query, options } => {
+            return Ok(Output::Raw(documents::search(&vault, query, options)?));
+        }
+        Command::Backlinks { id, options } => {
+            return Ok(Output::Raw(documents::backlinks(
+                &vault,
+                EntryId::new(id)?,
+                options,
+            )?));
+        }
+        Command::BaseQuery { id, options } => {
+            return Ok(Output::Raw(documents::base(
+                &vault,
+                EntryId::new(id)?,
+                options,
+            )?));
+        }
         Command::Watch { .. } => unreachable!(),
     };
     Ok(Output::Json(value))

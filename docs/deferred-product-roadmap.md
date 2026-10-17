@@ -117,6 +117,11 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
+- Reviewed engine39a306e7 composed into main without source conflicts. Normal
+  browser backlink removal also PASS. Main full frontend typecheck7046 exit0,
+  focused document/browser/desktop/backlink/workspace tests24094 PASS48/48.
+  No Rust engine changes since recorded native/WASM proof. Final merge commit
+  records these gates; remaining search/Base migrations keep Stage4 active.
 - Candidate39a306e7 actual production browser/IDB full suite PASS18.235s, then
   page-reload cache PASS, watermark12/rawBytesPreserved:true. Actual WASM
   Markdown49/49 and Base51/51 remain verified with matching binary provenance.

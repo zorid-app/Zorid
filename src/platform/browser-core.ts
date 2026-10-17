@@ -1,3 +1,4 @@
+import type {BrowserDocumentIndex} from '../core/browser-document-index.ts';
 import type { VaultAdapter, VaultEntry } from '../core/types.ts';
 import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '../core/browser-vault.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
@@ -12,6 +13,7 @@ export const BROWSER_CORE_VAULT_ID = 'browser:default';
 export interface BrowserCoreBackend {
   /** Authoritative persistence scope, captured by the runtime that opens it. */
   readonly durableScope?: Readonly<{vaultId:string;clientId:string}>;
+  readonly documentIndex?:Omit<BrowserDocumentIndex,'close'>;
   readonly checkpoints?: DurableCheckpoints;
   readonly binaryStreams?: BinaryStreams;
   inventory(): Promise<BrowserVaultRead[]>;
@@ -43,6 +45,7 @@ export class BrowserCoreAdapter implements VaultAdapter {
   private activeSignature = '';
   private closed = false;
   private readonly backend: BrowserCoreBackend;
+  get documentIndex():Omit<BrowserDocumentIndex,'close'>|undefined{return this.backend.documentIndex;}
   readonly durableWrites?: DurableWrites;
   constructor(backend: BrowserCoreBackend, scope?: {vaultId:string;clientId:string}) {
     this.backend = backend;

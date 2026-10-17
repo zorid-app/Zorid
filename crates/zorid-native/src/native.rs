@@ -64,6 +64,9 @@ mod rescan;
 #[path = "text_sync.rs"]
 mod text_sync;
 
+#[path = "document_index.rs"]
+mod document_index;
+
 pub struct NativeVault {
     paths: Paths,
     store: Store,

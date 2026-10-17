@@ -1,3 +1,4 @@
+import type {BrowserDocumentIndex} from '../core/browser-document-index.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { CheckpointScope, DurableCheckpoints } from '../core/durable-checkpoints.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
@@ -15,6 +16,7 @@ export interface BrowserFlushContext {
   assertActive(): void;
 }
 export interface BrowserClientContext extends BrowserFlushContext {
+  readonly documentIndex?:Omit<BrowserDocumentIndex,'close'>;
   readonly binaryStreams?:BinaryStreams;
   fileCommand?(input:BrowserFileCommandInput):Promise<void>;
   recoverCommands?():Promise<boolean>;
@@ -54,6 +56,18 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
   });
   const backend: BrowserCoreBackend = {
     durableScope: scope, checkpoints,
+    ...(runtime.documentIndex?{documentIndex:Object.freeze({
+      initialize:()=>dispatch(()=>runtime.documentIndex!.initialize()),discard:(id:string)=>dispatch(()=>runtime.documentIndex!.discard(id)),
+      status:()=>dispatch(()=>runtime.documentIndex!.status()),begin:()=>dispatch(()=>runtime.documentIndex!.begin()),
+      pump:(id:string)=>dispatch(()=>runtime.documentIndex!.pump(id)),publish:(id:string)=>dispatch(()=>runtime.documentIndex!.publish(id)),
+      open:()=>dispatch(()=>runtime.documentIndex!.open()),closePin:(id:string)=>dispatch(()=>runtime.documentIndex!.closePin(id)),
+      search:(input:Parameters<NonNullable<typeof runtime.documentIndex>['search']>[0])=>dispatch(()=>runtime.documentIndex!.search(input)),
+      metadata:(input:Parameters<NonNullable<typeof runtime.documentIndex>['metadata']>[0])=>dispatch(()=>runtime.documentIndex!.metadata(input)),
+      base:(input:Parameters<NonNullable<typeof runtime.documentIndex>['base']>[0])=>dispatch(()=>runtime.documentIndex!.base(input)),
+      resolve:(input:Parameters<NonNullable<typeof runtime.documentIndex>['resolve']>[0])=>dispatch(()=>runtime.documentIndex!.resolve(input)),
+      backlinks:(input:Parameters<NonNullable<typeof runtime.documentIndex>['backlinks']>[0])=>dispatch(()=>runtime.documentIndex!.backlinks(input)),
+      rebuild:()=>dispatch(()=>runtime.documentIndex!.rebuild()),
+    })}:{}),
     inventory: () => dispatch(() => runtime.inventory()),
     readEntry: path => dispatch(() => runtime.readEntry(path)),
     readEntryById: id => dispatch(() => runtime.readEntryById(id)),
@@ -118,10 +132,19 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
     commit:ref=>invoke(()=>binary.streams.commit(ref)),abort:ref=>invoke(()=>binary.streams.abort(ref)),
     openRead:input=>invoke(()=>binary.streams.openRead(input)),read:(ref,input)=>invoke(()=>binary.streams.read(ref,input)),closeRead:ref=>invoke(()=>binary.streams.closeRead(ref)),
   }):undefined;
+  const documentIndex=backend.documentIndex?Object.freeze<Omit<BrowserDocumentIndex,'close'>>({
+    initialize:()=>invoke(()=>backend.documentIndex!.initialize()),discard:id=>invoke(()=>backend.documentIndex!.discard(id)),
+    status:()=>invoke(()=>backend.documentIndex!.status()),begin:()=>invoke(()=>backend.documentIndex!.begin()),
+    pump:id=>invoke(()=>backend.documentIndex!.pump(id)),publish:id=>invoke(()=>backend.documentIndex!.publish(id)),
+    open:()=>invoke(()=>backend.documentIndex!.open()),closePin:id=>invoke(()=>backend.documentIndex!.closePin(id)),
+    metadata:input=>invoke(()=>backend.documentIndex!.metadata(input)),base:input=>invoke(()=>backend.documentIndex!.base(input)),
+    search:input=>invoke(()=>backend.documentIndex!.search(input)),resolve:input=>invoke(()=>backend.documentIndex!.resolve(input)),
+    backlinks:input=>invoke(()=>backend.documentIndex!.backlinks(input)),rebuild:()=>invoke(()=>backend.documentIndex!.rebuild()),
+  }):undefined;
   runtime.installAdmissionGuard(() => dispatch(() => undefined));
   admittedRuntimes.add(runtime);
   async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
-  return Object.freeze({ scope, durableWrites, assertActive: () => allowed(),
+  return Object.freeze({ scope, durableWrites, ...(documentIndex?{documentIndex}:{}), assertActive: () => allowed(),
     ...(commands?{fileCommand:(input:BrowserFileCommandInput)=>invoke(()=>commands.execute(input))}:{}),
     ...(binaryStreams?{binaryStreams}:{}),
     ...(commands||binary?{recoverCommands:()=>invoke(async()=>{const files=commands?await commands.recover():false;const stages=binary?await binary.recover():false;return files||stages;})}:{}),

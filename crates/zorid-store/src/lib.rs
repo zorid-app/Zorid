@@ -6,6 +6,7 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 mod binary_commit;
 mod blob_read;
 mod capture_authorization;
+pub mod document_index;
 mod entry_content;
 mod family_metadata_transactions;
 mod immutable_payloads;
@@ -17,6 +18,10 @@ pub use binary_commit::{
 pub use blob_read::{
     BinaryReadChunk, BinaryReadRef, BinaryReadSession, BINARY_READ_MAX_ACTIVE_PINS,
     BINARY_READ_MAX_RANGE_BYTES,
+};
+pub use document_index::{
+    DocumentIndexError, DocumentIndexProgress, DocumentIndexStage, DocumentIndexStatus,
+    DocumentManifest, DocumentQueryPin, DocumentSourceRead,
 };
 pub use entry_content::FAMILY_MAX_INLINE_BYTES;
 pub use family_external_create::ExternalCreateIntent;
@@ -166,10 +171,22 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             return Err(StoreError::Corrupt("wrong application ID".into()));
         }
         let expected = schema_objects();
-        if names.len() != expected.len()
-            || names
+        // SQLite trigger names occupy a separate namespace. A duplicate name
+        // must not hide an extra trigger behind a registered table's SQL.
+        if names
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != names.len()
+            || expected
                 .iter()
-                .any(|name| !expected.iter().any(|(expected, _)| *expected == name))
+                .any(|(name, _)| !names.iter().any(|actual| actual.as_str() == *name))
+            || names.iter().any(|name| {
+                !expected
+                    .iter()
+                    .chain(document_index::SCHEMA)
+                    .any(|(expected, _)| *expected == name)
+            })
         {
             return Err(StoreError::Corrupt("unexpected schema objects".into()));
         }
@@ -179,7 +196,12 @@ fn check_schema(connection: &Connection) -> Result<i64> {
                 .join(" ")
                 .to_ascii_lowercase()
         };
-        for (name, sql) in expected {
+        for (name, sql) in expected.into_iter().chain(
+            document_index::SCHEMA
+                .iter()
+                .copied()
+                .filter(|(name, _)| names.iter().any(|actual| actual.as_str() == *name)),
+        ) {
             let actual: String = connection.query_row(
                 "SELECT sql FROM sqlite_master WHERE name=?1",
                 [name],
@@ -357,6 +379,9 @@ pub struct StoredEntry {
 /// separately; SQLite transactions do not make filesystem writes atomic.
 pub struct Store {
     connection: Connection,
+    // Process-local handles deliberately expire on reopen; persisted generations do not.
+    document_query_owner: zorid_core::OperationId,
+    document_query_pins: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Store {
@@ -434,7 +459,11 @@ impl Store {
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            document_query_owner: zorid_core::OperationId::new(uuid::Uuid::new_v4().to_string())?,
+            document_query_pins: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        })
     }
 
     pub fn list(&self) -> Result<Vec<EntryState>> {
