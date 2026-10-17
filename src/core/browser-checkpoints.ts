@@ -1,4 +1,4 @@
-import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints, CheckpointListOptions, CheckpointChangesOptions } from './durable-checkpoints.ts';
+import type { Checkpoint, CheckpointChange, CheckpointMetadata, CheckpointPage, DurableCheckpoints, CheckpointListOptions, CheckpointChangesOptions } from './durable-checkpoints.ts';
 import { BrowserVaultError } from './browser-vault.ts';
 import { boundedUtf8, checkpointError as fail, checkpointKey, checkpointRevision, checkpointStateLimit, snapshotCheckpointChange } from './checkpoint-input.ts';
 
@@ -132,7 +132,7 @@ export function browserCheckpoints(db:IDBDatabase,vaultId:string,clientId:string
         });
       }));
     },
-    compareAndSwap(input):Promise<Checkpoint> {
+    compareAndSwap(input:CheckpointChange):Promise<Checkpoint> {
       const {change,byteLength}=snapshotCheckpointChange(input);
       return transaction('readwrite',(tx,highWater,done,on)=>{
         const heads=tx.objectStore('checkpoint_heads'), revisions=tx.objectStore('checkpoint_revisions');
