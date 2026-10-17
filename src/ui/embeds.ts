@@ -13,6 +13,8 @@ import { createPdfView } from './pdf-view.ts';
 import type { PdfView } from './pdf-view.ts';
 import { createMediaView, mediaKind } from './media-view.ts';
 import type { MediaView } from './media-view.ts';
+import { createCanvasEmbedPreview } from '../canvas/embed-preview.ts';
+import type { CanvasEmbedPreview } from '../canvas/embed-preview.ts';
 
 interface EmbedOptions {
   vault: Vault;
@@ -43,6 +45,7 @@ interface EmbedState {
   lease?: AttachmentLease;
   pdfView?: PdfView;
   mediaView?: MediaView;
+  canvasPreview?: CanvasEmbedPreview;
   imageSource?: () => Promise<AttachmentLease>;
 }
 
@@ -203,6 +206,7 @@ export class MarkdownEmbeds {
     destroyMarkdown(state.node);
     state.pdfView?.destroy();state.pdfView=undefined;
     state.mediaView?.destroy();state.mediaView=undefined;
+    state.canvasPreview?.destroy();state.canvasPreview=undefined;
     state.lease?.release();state.lease=undefined;
     this.observer?.unobserve(state.node); this.observed.delete(state.node);
     this.clearChildren(state); this.states.delete(state);
@@ -226,6 +230,7 @@ export class MarkdownEmbeds {
     this.pruneReconnectObserver(reconnectDocument);
     state.pdfView?.destroy();state.pdfView=undefined;
     state.mediaView?.destroy();state.mediaView=undefined;
+    state.canvasPreview?.destroy();state.canvasPreview=undefined;
     state.lease?.release();state.lease=undefined;state.imageSource=undefined;
     const current = () => !this.disposed && !state.disposed && state.version === version;
     const { request, source } = state;
@@ -285,6 +290,31 @@ export class MarkdownEmbeds {
         state.mediaView = view;
         void view.ready.catch(() => {});
       } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
+      return;
+    }
+    if (/\.canvas$/i.test(path)) {
+      state.node.className = 'internal-embed canvas-embed';
+      state.node.replaceChildren(el('span', 'embed-loading', 'Loading…'));
+      try {
+        const sourceText = await this.read(path);
+        if (!current()) return;
+        state.node.replaceChildren();
+        const preview = createCanvasEmbedPreview(state.node, {
+          path, source: sourceText,
+          onOpen: event => {
+            event.preventDefault(); event.stopPropagation();
+            if (current()) this.options.open(source, request.target, request.kind);
+          },
+        });
+        // The static preview owns navigation; Live Edit must not reinterpret
+        // its pointer events as a request to reveal the embed source.
+        preview.element.classList.add('interactive-child');
+        if (!current()) { preview.destroy(); return; }
+        state.canvasPreview = preview;
+      } catch (error) {
+        if (current()) state.node.replaceChildren();
+        fail(error instanceof Error ? error.message : String(error));
+      }
       return;
     }
     if (!/\.md$/i.test(path)) { fail('Attachment viewer is not implemented yet'); return; }

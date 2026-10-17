@@ -20,6 +20,7 @@ import './ui/pdf-view.css';
 import './ui/media-view.css';
 import './canvas/view.css';
 import './canvas/attachment-card.css';
+import './canvas/embed-preview.css';
 import './ui/split-layout.css';
 import './ui/tab-docking.css';
 
