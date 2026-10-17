@@ -95,7 +95,21 @@ function compareQuery(outcome, item) {
   }
   return null;
 }
-function requestChecks(bindings, queryRequest, generationRequest) {
+const currentEntryCaseIds = new Set([
+  'current-entry-base-file-facts-with-empty-properties',
+  'current-entry-markdown-properties',
+]);
+function compareCurrentEntryWitness(outcome, item) {
+  if (!currentEntryCaseIds.has(item.id)) return null;
+  if (!outcome.ok) return { path: '$', error: outcome.error, expected: 'successful current-entry query' };
+  const selected = item.request.entries.find(entry => entry.id === item.request.options?.currentEntryId);
+  if (!selected || selected.kind !== 'file') throw new Error(`Current-entry fixture ${item.id} lacks its exact file witness`);
+  const row = outcome.value.rows.find(row => row.entryId === selected.id);
+  if (!row) return { path: '$.rows', expectedEntryId: selected.id, expected: 'selected file row present' };
+  return difference({ entryId: row.entryId, revision: row.revision, path: row.path },
+    { entryId: selected.id, revision: selected.revision, path: selected.path }, '$.selectedWitness');
+}
+function requestChecks(bindings, queryRequest, generationRequest, currentRequest) {
   const checks = [
     { id: 'compile-unpaired-high-surrogate', input: String.fromCharCode(0xd800) },
     { id: 'compile-unpaired-low-surrogate', input: String.fromCharCode(0xdc00) },
@@ -113,6 +127,33 @@ function requestChecks(bindings, queryRequest, generationRequest) {
   text.request.contentRevision = 'stale-browser-revision';
   const staleResult = invoke(bindings.queryBaseFromSources, stale);
   checks.push({ id: 'reject-stale-generation-source-witness', passed: !staleResult.ok && staleResult.error.code === 'index_error' && staleResult.error.error === 'stale_source', actual: staleResult });
+  const selected = currentRequest.entries.find(entry => entry.id === currentRequest.options?.currentEntryId);
+  if (!selected || selected.kind !== 'file') throw new Error('Canonical context query needs a selected file witness');
+  const reject = (id, request, code) => {
+    const actual = invoke(bindings.queryBaseFromSources, request);
+    checks.push({ id, passed: !actual.ok && actual.error.code === code, actual });
+  };
+  const missing = structuredClone(currentRequest);
+  missing.options.currentEntryId = 'browser-missing-current-entry';
+  reject('reject-missing-current-entry-id', missing, 'stale-source');
+  const folder = structuredClone(currentRequest);
+  folder.entries.push({ id: 'browser-current-folder', path: 'BrowserContextFolder', kind: 'folder', revision: 'folder-r1', deleted: false });
+  folder.options.currentEntryId = 'browser-current-folder';
+  reject('reject-folder-current-entry-id', folder, 'stale-source');
+  const conflicting = structuredClone(currentRequest);
+  conflicting.options.evaluation ??= {};
+  conflicting.options.evaluation.currentRecord = {
+    witness: { entryId: selected.id, revision: 'stale-browser-current-revision' },
+    path: selected.path, properties: [],
+  };
+  reject('reject-stale-caller-current-record', conflicting, 'stale-source');
+  // The generic wrapper intentionally clamps above-ceiling limits. Zero/tiny
+  // lowered budgets must still fail in the actual Rust preparation/evaluator.
+  for (const maxSteps of [0, 1]) {
+    const limited = structuredClone(currentRequest);
+    limited.options.maxSteps = maxSteps;
+    reject(`reject-current-entry-max-steps-${maxSteps}`, limited, 'budget');
+  }
   return checks;
 }
 
@@ -124,6 +165,10 @@ self.onmessage = async ({ data: config }) => {
     const queries = await fetchCorpus(config.queriesUrl);
     const documents = await fetchCorpus(config.documentsUrl);
     const generationQueries = await fetchCorpus(config.generationQueriesUrl);
+    const currentCases = generationQueries.value.cases.filter(item => currentEntryCaseIds.has(item.id));
+    if (currentCases.length !== currentEntryCaseIds.size || !generationQueries.value.cases.some(item => item.id === 'omitted-current-entry-retains-no-this')) {
+      throw new Error('Canonical generation corpus lacks the three frozen current-entry cases; stage the contract owner corpus with these fixture assets');
+    }
     const wasmBytes = await fetchBytes(config.wasmUrl);
     const bindings = await import(config.moduleUrl);
     for (const name of ['default', 'evaluateBaseExpression', 'queryBase', 'queryBaseFromSources', 'compileBaseSource']) {
@@ -153,7 +198,7 @@ self.onmessage = async ({ data: config }) => {
       if (!item.request?.snapshotId || !Array.isArray(item.request.sources) || !Object.hasOwn(item, 'expected')) throw new Error(`Accepted generation query ${item.id} lacks canonical source factory request/expected`);
       const outcome = invoke(bindings.queryBaseFromSources, item.request);
       results.push({ id: item.id, operation: 'generationQuery', result: outcome });
-      const failure = compareQuery(outcome, item);
+      const failure = compareQuery(outcome, item) ?? compareCurrentEntryWitness(outcome, item);
       if (failure) failures.push({ id: item.id, operation: 'generationQuery', ...failure });
       self.postMessage({ type: 'progress', completed: ++completed, total });
     }
@@ -165,10 +210,17 @@ self.onmessage = async ({ data: config }) => {
       if (outcome.ok !== item.current.valid || (!outcome.ok && !sharedCompileError)) failures.push({ id: item.id, operation: 'compile', expectedValid: item.current.valid, actual: outcome });
       self.postMessage({ type: 'progress', completed: ++completed, total });
     }
-    const checks = requestChecks(bindings, queries.value.cases[0].request, generationQueries.value.cases[0].request);
+    const currentRequest = currentCases.find(item => item.id === 'current-entry-markdown-properties').request;
+    const checks = requestChecks(bindings, queries.value.cases[0].request, generationQueries.value.cases[0].request, currentRequest);
     for (const check of checks) if (!check.passed) failures.push({ id: check.id, operation: 'request-rejection', ...check });
     self.postMessage({ type: 'complete', report: {
       status: failures.length ? 'failed' : 'passed', runtime: 'actual-browser-worker-generated-rust-wasm',
+      currentEntryCoverage: {
+        cases: currentCases.length,
+        passed: currentCases.length - failures.filter(failure => failure.operation === 'generationQuery' && currentEntryCaseIds.has(failure.id)).length,
+        scope: 'exact entry ID/revision/path from the supplied Rust-owned generation; live host persistence not exercised',
+        genericMaxStepsPolicy: 'above-ceiling values clamp; zero/tiny lowered budgets reject',
+      },
       relationshipCoverage: { detachedQueries: 'graphless', generationQueryCases: generationQueries.value.cases.length, passedGenerationQueries: generationQueries.value.cases.length - failures.filter(failure => failure.operation === 'generationQuery').length, scope: 'canonical Rust-owned source-generation queries; production host persistence not exercised' }, ...config,
       corpusHashes: { expressions: expressions.sha256, queries: queries.sha256, generationQueries: generationQueries.sha256, documents: documents.sha256 },
       wasmSha256: await hash(wasmBytes), actualResultsSha256: await hash(encoder.encode(JSON.stringify(results))),
