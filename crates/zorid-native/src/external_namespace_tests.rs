@@ -1188,7 +1188,7 @@ fn external_namespace_binary_remote_move_away_and_back_blocks_external_edit() {
                 && o.resolution.is_none()
         })
         .collect();
-    assert_eq!(observations.len(), 1);
+    assert_eq!(observations.len(), 1, "{report:?}");
     assert!(vault
         .store
         .import_family_observation(&observations[0].observation_id)
