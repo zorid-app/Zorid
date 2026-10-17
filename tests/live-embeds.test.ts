@@ -3,7 +3,7 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
-import { Compartment, EditorState } from '@codemirror/state';
+import { Compartment, EditorState, StateEffect } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { history, redo, undo } from '@codemirror/commands';
@@ -632,4 +632,82 @@ test('image helpers end before renderer release and do not survive type changes 
   destroy(); assert.equal(secondObserver.disconnected, true); assert.equal(renders[0].destroys, 1);
   assert.equal(root.querySelector('.zorid-image-embed-actions'), null);
   document.body.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+});
+
+async function resizeFixture(t: TestContext, source: string) {
+  const f = setup(t, source, true), root = f.renders[0].node;
+  const { image } = await resolveTestImage(root);
+  Object.defineProperties(image, { offsetHeight: { value: 120 }, clientWidth: { get: () => image.width || 240 } });
+  Object.defineProperty(f.view.contentDOM, 'offsetWidth', { value: 600 });
+  image.getBoundingClientRect = () => ({ x: 10, y: 20, left: 10, top: 20, right: 250, bottom: 140, width: 240, height: 120, toJSON() {} });
+  const corner = root.querySelector('.zorid-image-resize-corner')!;
+  const pointer = (type: string, x = 250, y = 140) => {
+    const event = new f.dom.window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y });
+    Object.defineProperties(event, { pointerId: { value: 1 }, isPrimary: { value: true } });
+    (type === 'pointerdown' ? corner : document).dispatchEvent(event);
+  };
+  const frame = () => new Promise<void>(resolve => f.dom.window.requestAnimationFrame(() => resolve()));
+  const reset = () => corner.dispatchEvent(new f.dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  return { ...f, root, image, pointer, frame, reset };
+}
+
+for (const [syntax, resized, reset] of [
+  ['![[photo.png]]', '![[photo.png|300]]', '![[photo.png]]'],
+  ['![[photo.png|Description|240x120]]', '![[photo.png|Description|300]]', '![[photo.png|Description]]'],
+  ['![Description|240x120](<photo one.png> "caption")', '![Description|300](<photo one.png> "caption")', '![Description](<photo one.png> "caption")'],
+  ['![240](photo.png)', '![300](photo.png)', '![](photo.png)'],
+]) test(`image resize maps source, keeps aliases and titles, and isolates undo for ${syntax}`, async t => {
+  const original = `before\n${syntax}\nafter`;
+  const f = await resizeFixture(t, original);
+  f.pointer('pointerdown'); f.pointer('pointermove', 310, 170); await f.frame();
+  assert.equal(f.image.width, 300); assert.equal(f.view.state.doc.toString(), original);
+  assert.equal(f.renders[0].destroys, 0, 'preview retains original renderer');
+  f.view.dispatch({ changes: { from: 0, insert: 'prefix\n' } });
+  f.pointer('pointerup');
+  assert.equal(f.view.state.doc.toString(), `prefix\nbefore\n${resized}\nafter`);
+  assert.equal(f.renders[0].destroys, 1, 'one committed syntax change releases the superseded renderer');
+  assert.equal(undo(f.view), true); assert.equal(f.view.state.doc.toString(), `prefix\n${original}`);
+  assert.equal(redo(f.view), true); assert.equal(f.view.state.doc.toString(), `prefix\nbefore\n${resized}\nafter`);
+  // A fresh actual image after undo/redo receives a fresh resize owner.
+  const current = f.renders.at(-1)!.node; await resolveTestImage(current);
+  current.querySelector('.zorid-image-resize-corner')!.dispatchEvent(new f.dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  assert.equal(f.view.state.doc.toString(), `prefix\nbefore\n${reset}\nafter`);
+});
+
+for (const mode of ['cancel', 'source edit', 'delete', 'destroy']) test(`image resize ${mode} cannot commit stale source`, async t => {
+  const original = 'before\n![[photo.png|caption]]\nafter';
+  const f = await resizeFixture(t, original);
+  f.pointer('pointerdown'); f.pointer('pointermove', 310, 170); await f.frame();
+  if (mode === 'cancel') f.pointer('pointercancel');
+  else if (mode === 'source edit') f.view.dispatch({ changes: { from: original.indexOf('caption'), to: original.indexOf('caption') + 7, insert: 'edited caption' } });
+  else if (mode === 'delete') f.view.dispatch({ changes: { from: 7, to: original.indexOf('\nafter'), insert: '' } });
+  else f.destroy();
+  const expected = f.view.state.doc.toString(); f.pointer('pointerup'); await f.frame();
+  assert.equal(f.view.state.doc.toString(), expected);
+  assert.equal(f.image.hasAttribute('width'), false);
+});
+
+test('reset without size is a no-op and preserves an empty wiki alias delimiter', async t => {
+  const source = 'before\n![[photo.png|]]\nafter';
+  const f = await resizeFixture(t, source); f.reset();
+  assert.equal(f.view.state.doc.toString(), source); assert.equal(f.renders[0].destroys, 0);
+});
+
+
+for (const timing of ['before', 'during']) test(`read-only ${timing} resizing cannot mutate Markdown`, async t => {
+  const source = 'before\n![[photo.png]]\nafter', f = await resizeFixture(t, source);
+  const readOnly = () => f.view.dispatch({ effects: StateEffect.appendConfig.of(EditorState.readOnly.of(true)) });
+  if (timing === 'before') readOnly();
+  f.pointer('pointerdown'); f.pointer('pointermove', 310, 170); await f.frame();
+  if (timing === 'during') readOnly();
+  f.pointer('pointerup'); f.reset();
+  assert.equal(f.view.state.doc.toString(), source); assert.equal(f.image.hasAttribute('width'), false);
+});
+
+test('Markdown escaped size delimiter resets to valid image syntax', async t => {
+  const f = await resizeFixture(t, String.raw`before
+![caption\|240](photo.png)
+after`);
+  f.reset(); assert.equal(f.view.state.doc.toString(), 'before\n![caption](photo.png)\nafter');
+  assert.equal(f.renders.at(-1)!.request.target, 'photo.png'); assert.equal(f.renders.at(-1)!.request.label, 'caption');
 });
