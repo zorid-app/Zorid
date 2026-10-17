@@ -214,3 +214,24 @@ certificate/profile readiness and CI secret population remain pending. No builds
 simulators, archives or uploads were launched.
 
 Final dual-key recheck: 19:47:35 UTC, unchanged results for both key types.
+
+## Apple Support escalation — 2026-10-17, 19:53 UTC
+
+Under explicit user authorization, submitted one authenticated Apple Developer
+Support email request through the official contact page, category **Membership
+and Account → Agreements and Contracts**. Apple displayed a confirmation page
+with a case ID and stated it would review the message and reply. The confirmation
+arrived after a delay; no duplicate submission was made.
+
+The request describes the accepted Developer agreement versus ASC's outstanding
+agreement error, matching account context, both key types' results, and blocked
+New App/TestFlight setup. It asks Apple to investigate/correct the mismatch or
+identify the exact required action without asserting a proven root cause. No
+private keys, JWTs, passwords, certificates, profiles or attachments were sent.
+The form used the authenticated identity; no extra identifiers were required in
+the message.
+
+The exact message and receipt/case ID are retained privately in the ignored local
+file `mobile/apple/support-private.md` (0600), rather than the public repository.
+Support submission is confirmed; resolution and app/signing/tester readiness
+remain pending. No builds, simulators or uploads were launched.
