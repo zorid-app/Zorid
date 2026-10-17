@@ -1675,8 +1675,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
- "libc",
- "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -1686,7 +1684,9 @@ dependencies = [
  "zorid-client-sync",
  "zorid-core",
  "zorid-crypto",
+ "zorid-file-sync",
  "zorid-native",
+ "zorid-native-sync",
  "zorid-store",
  "zorid-sync-protocol",
  "zorid-sync-server",
@@ -1776,6 +1776,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "zorid-native-sync"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "zeroize",
+ "zorid-client-sync",
+ "zorid-core",
+ "zorid-crypto",
+ "zorid-file-sync",
+ "zorid-native",
+ "zorid-store",
+ "zorid-sync-protocol",
+]
+
+[[package]]
 name = "zorid-store"
 version = "0.1.0"
 dependencies = [
@@ -1787,6 +1806,7 @@ dependencies = [
  "zorid-client-sync",
  "zorid-core",
  "zorid-crypto",
+ "zorid-file-sync",
  "zorid-sync-protocol",
 ]
 
