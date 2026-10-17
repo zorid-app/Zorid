@@ -26,6 +26,11 @@
   seams, platform selection, desktop bridge and root build files require named
   ownership before edits. Reconcile with current main and revalidate affected
   behavior before integration; a clean cherry-pick is not semantic verification.
+- User authorization (2026-10-17): resume Rust save integration in the normal
+  editor, including the required NoteBuffer/workspace durable-save connection.
+  The shared-core coordinator may assign these scoped files to named workers;
+  editor polish remains paused. Do not ask again whether this integration may
+  proceed merely because an older checkpoint says NoteBuffer work was paused.
 
 - Maximize development velocity by using as many available agents in parallel
   as useful independent work allows. Do not leave agents idle when implementation,
@@ -48,8 +53,11 @@
   test suites serialized; use bounded test concurrency. Parallel agents should
   coordinate local resource use rather than launch overlapping full checks.
 - Close the test Electron app opened by the agent after each native verification
-  pass, preserving any unsaved work. Do not leave test windows running between
-  passes or close unrelated user applications.
+  pass. User-designated test vaults and agent-created disposable fixture vaults
+  contain disposable content: agents may create, edit, rename, delete or reset
+  their notes and discard unsaved test edits without asking again. This standing
+  permission applies to verification in those vaults, not real user vaults or
+  unrelated applications. Do not leave test windows running between passes.
 
 ## Incoming user findings
 

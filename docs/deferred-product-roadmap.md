@@ -68,6 +68,12 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17 00:24 local
 
+- User explicitly resumed **Rust save integration only**, leaving editor polish
+  paused, and confirmed test-vault content is disposable. `browser_sync_plan`
+  owns isolated NoteBuffer/helper/workspace durable-save lifecycle; desktop owner
+  owns main/preload/bridge/platform capability plumbing. This supersedes earlier
+  NoteBuffer pause for this scoped integration. No real-vault migration authorized.
+
 - User explicitly APPROVED the prepared native database initialization/visibility
   activation patch in chat. `data_readiness` resumes isolated schema8 activation
   and coherent native aggregation. This is source-only fresh-database development,
