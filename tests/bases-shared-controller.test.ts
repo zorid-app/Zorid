@@ -4,7 +4,7 @@ import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import { Vault } from '../src/core/vault.ts';
 import type { VaultEntry } from '../src/core/types.ts';
 import type { DocumentBaseResult, DocumentPin, DocumentPinId, DocumentService } from '../src/core/document-semantics.ts';
-import { BaseController } from '../src/bases/controller.ts';
+import { BaseController, createBaseMutationHost } from '../src/bases/controller.ts';
 import { BaseDocument } from '../src/bases/document.ts';
 import { baseDate, baseValueToString } from '../src/bases/expression.ts';
 import { projectSharedBaseResult } from '../src/bases/shared-query.ts';
@@ -27,6 +27,7 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 async function until(check: () => boolean) { for (let i = 0; i < 100 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 1)); assert.ok(check()); }
 async function fixture() {
   const adapter = new IdentityAdapter({ 'Work.base': base, 'One.md': '---\nStatus: From TypeScript\n---\nbody\n' });
+  const edits: { path: string; witness?: { entryId: string; revision: string } }[] = [];
   const calls: Parameters<DocumentPin['base']>[0][] = [], pins: { closed: number }[] = [];
   let hold: ReturnType<typeof deferred<DocumentBaseResult>> | undefined, openGate: ReturnType<typeof deferred<void>> | undefined, closeFailures = 0, fail = false;
   const unused = async (): Promise<never> => { throw new Error('Unexpected index operation'); };
@@ -45,17 +46,20 @@ async function fixture() {
   const vault = new Vault(adapter); await vault.initialize();
   const published: string[][] = [];
   const controller = new BaseController({ vault, basePath: 'Work.base', query: { maxSteps: 123, now: () => new Date(42) }, delayMs: 1000,
-    mutations: { async transform(path, transform, validate) { validate(); await vault.modify(path, transform(await vault.read(path))); } },
+    mutations: { async transform(path, transform, validate, _validateWrite, witness) { edits.push({ path, witness }); validate(); await vault.modify(path, transform(await vault.read(path))); } },
     onChange: state => { if (state.result) published.push(state.result.rows.map(row => row.path)); } });
   await controller.refresh(); assert.equal(controller.state.error, null);
-  return { adapter, vault, controller, calls, pins, published, hold() { hold = deferred<DocumentBaseResult>(); return hold; }, holdOpen() { openGate = deferred<void>(); return openGate; }, failCloseOnce() { closeFailures = 1; }, fail() { fail = true; } };
+  return { adapter, vault, controller, calls, pins, edits, published, hold() { hold = deferred<DocumentBaseResult>(); return hold; }, holdOpen() { openGate = deferred<void>(); return openGate; }, failCloseOnce() { closeFailures = 1; }, fail() { fail = true; } };
 }
 test('capable normal Base controller calls shared query with captured identity/options and preserves edits', async () => {
   const f = await fixture(); try {
     assert.deepEqual(f.controller.state.result?.rows[0].values['note.Status'], { type: 'string', value: 'From Rust' });
     assert.deepEqual(f.calls[0].options, { viewIndex: 0, searchTerms: undefined, ignorePaths: undefined, clockMs: 42, timezone: 'UTC', maxRows: 1000, currentEntryId: 'Work.base', maxSteps: 123 });
     assert.ok(f.pins.every(pin => pin.closed === 1));
+    await f.controller.editProperty({ version: f.controller.state.version, path: 'One.md', property: 'Status', value: 'Edited' });
+    assert.deepEqual(f.edits[0], { path: 'One.md', witness: { entryId: 'One.md', revision: 'r1' } });
     await f.controller.updateView(f.controller.state.version, { name: 'Edited' });
+    assert.deepEqual(f.edits[1], { path: 'Work.base', witness: { entryId: 'Work.base', revision: 'r1' } });
     const saved = await f.vault.read('Work.base'); assert.match(saved, /# Keep comment/); assert.match(saved, /pluginRoot/); assert.match(saved, /unknownView: keep/);
     assert.equal(f.controller.state.result?.view.name, 'Edited');
     f.fail(); await f.controller.refresh(); assert.match(f.controller.state.error!.message, /Rust unavailable/); assert.ok(f.pins.every(pin => pin.closed === 1));
@@ -106,4 +110,36 @@ test('a pin opened after dispose remains owned and gets one bounded close retry'
   const gate = f.holdOpen(); f.failCloseOnce(); const pending = f.controller.refresh(); await until(() => f.pins.length === 2);
   f.controller.dispose(); assert.equal(f.pins[1].closed, 0); gate.resolve(); await pending;
   assert.equal(f.pins[1].closed, 2); assert.equal(f.controller.state, before);
+});
+
+test('shared mutation admission rejects replacement/revision/missing identity before changing a draft', async () => {
+  for (const saved of [undefined, { entryId: 'replacement', revision: 'r1', path: 'One.md' }, { entryId: 'original', revision: 'r2', path: 'One.md' }]) {
+    let updates = 0, transforms = 0;
+    const buffer = { path: 'One.md', text: 'original body', dirty: false, error: null, savedDurableWitness: saved, async load() {}, update() { updates++; }, async flush() {} };
+    const host = createBaseMutationHost({ getBuffer: () => buffer as any, validate() {} });
+    await assert.rejects(host.transform('One.md', text => { transforms++; return text + 'changed'; }, () => {}, undefined, { entryId: 'original', revision: 'r1' }), /stale|identity/);
+    assert.equal(updates, 0); assert.equal(transforms, 0);
+  }
+});
+test('admitted dirty drafts keep the stable identity through an acknowledged revision advance', async () => {
+  let validator!: () => void, flushed = false;
+  const buffer = { path: 'One.md', text: 'body plus unsaved typing', dirty: true, error: null, savedDurableWitness: { entryId: 'original', revision: 'r1', path: 'One.md' }, async load() {},
+    update(text: string, options: { validateWrite: () => void }) { validator = options.validateWrite; validator(); this.text = text; },
+    async flush() { validator(); this.savedDurableWitness = { ...this.savedDurableWitness, revision: 'r2' }; validator(); flushed = true; this.dirty = false; } };
+  const host = createBaseMutationHost({ getBuffer: () => buffer as any, validate() {} });
+  await host.transform('One.md', text => text + '\nproperty edit', () => {}, undefined, { entryId: 'original', revision: 'r1' });
+  assert.ok(flushed); assert.match(buffer.text, /unsaved typing/);
+  buffer.savedDurableWitness = { entryId: 'replacement', revision: 'r2', path: 'One.md' };
+  assert.throws(validator, /replaced|moved/);
+});
+test('Vault witnessed rename rejects unseen revision changes and forwards the original pair', async () => {
+  const adapter = new IdentityAdapter({ 'One.md': 'original' }), vault = new Vault(adapter); await vault.initialize();
+  await adapter.write('One.md', 'external');
+  await assert.rejects(vault.rename('One.md', 'Other.md', undefined, { entryId: 'One.md', revision: 'r1' }), { code: 'revision_conflict' });
+  assert.equal(await adapter.read('One.md'), 'external'); assert.equal(await adapter.stat('Other.md'), null);
+  let forwarded: unknown;
+  const original = adapter.rename.bind(adapter);
+  adapter.rename = async (oldPath: string, newPath: string, expected?: { entryId: string; revision: string }) => { forwarded = expected; await original(oldPath, newPath); };
+  await vault.rename('One.md', 'Other.md', undefined, { entryId: 'One.md', revision: 'r2' });
+  assert.deepEqual(forwarded, { entryId: 'One.md', revision: 'r2' }); assert.equal(await adapter.read('Other.md'), 'external');
 });

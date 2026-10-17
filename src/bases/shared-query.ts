@@ -9,7 +9,15 @@ import type { BaseQueryOptions, BaseQueryResult, BaseQueryDiagnostic } from './q
 import type { BaseViewConfig } from './document.ts';
 
 function invalid(message = 'The shared Base response does not match the saved snapshot.'): never { throw new Error(message); }
-export function projectSharedBaseResult(raw: DocumentBaseResult, version: number, entries: readonly VaultEntry[], timezone = 'UTC'): BaseQueryResult {
+export interface BaseSavedWitness { readonly entryId: string; readonly revision: string }
+const witnesses = new WeakMap<BaseQueryResult, ReadonlyMap<string, BaseSavedWitness>>();
+/** Only Rust-produced results have witnesses; absence never creates a shared edit fallback. */
+export function sharedBaseWitness(result: BaseQueryResult, path: string): BaseSavedWitness | undefined {
+  const saved = witnesses.get(result);
+  if (!saved) return undefined;
+  return saved.get(path) ?? invalid('This saved Base result has no edit identity for the file.');
+}
+export function projectSharedBaseResult(raw: DocumentBaseResult, version: number, entries: readonly VaultEntry[], timezone = 'UTC', definition?: { readonly id: string; readonly revision: string; readonly path: string }): BaseQueryResult {
   const result = structuredClone(raw);
   let dataBudget = 400000;
   const freezeData = (item: unknown, depth = 0): void => {
@@ -63,13 +71,16 @@ export function projectSharedBaseResult(raw: DocumentBaseResult, version: number
   }
   const view = result.view as Readonly<Record<string, unknown>>;
   if (!view || typeof view !== 'object' || Array.isArray(view) || typeof view.type !== 'string' || typeof view.name !== 'string') return invalid();
-  return Object.freeze({ version, view: view as BaseViewConfig, rows, groups,
+  const projected = Object.freeze({ version, view: view as BaseViewConfig, rows, groups,
     groupOptions: Object.freeze(result.groupOptions.map(option => Object.freeze({ ...option, key: value(option.key) }))),
     properties: Object.freeze([...result.properties]), availableProperties: Object.freeze([...result.availableProperties]),
     counts: Object.freeze({ ...result.counts }), diagnostics: Object.freeze(diagnostics),
     // Retain shared identity/coverage evidence without changing view contracts.
     shared: result,
   });
+  const saved = new Map<string, BaseSavedWitness>(result.rows.map(row => [row.path, Object.freeze({ entryId: row.entryId, revision: row.revision })]));
+  if (definition) saved.set(definition.path, Object.freeze({ entryId: definition.id, revision: definition.revision }));
+  witnesses.set(projected, saved); return projected;
 }
 interface Run { active: boolean; opening: boolean; finalRetry?: boolean; pin?: DocumentPin; closing?: Promise<void> }
 export interface SharedBaseQueryInput {
@@ -119,7 +130,7 @@ export class SharedBaseQueryRunner {
       const report = await run.pin.base({ id: definition.id, viewName: input.viewName, options }); check();
       if (report.value.definition.id !== definition.id || report.value.definition.revision !== definition.revision || report.value.definition.path !== definition.path
         || JSON.stringify(report.value.result.snapshotId) !== JSON.stringify(run.pin.snapshot)) return invalid();
-      return projectSharedBaseResult(report.value.result, input.version, input.entries, timezone);
+      return projectSharedBaseResult(report.value.result, input.version, input.entries, timezone, definition);
     } finally { run.active = false; await this.retire(run); }
   }
 }
