@@ -5,6 +5,12 @@
 Updated 2026-10-16. Read this section before resuming after a context reset;
 earlier discussion restrictions below are historical where superseded here.
 
+Direct user confirmation on 2026-10-16 sets the product priority to the best
+Zorid UX, with Obsidian as a starting point rather than an exact parity target.
+Older reference/parity ledgers remain evidence and capability inventories, not
+requirements to reproduce every interaction or visual detail. This does not
+relax correctness, data integrity, accessibility or native verification gates.
+
 The user requested durable written decisions, execution tracking and a Codex
 built-in goal. An active goal now targets the first integrated Rust core + web +
 Electron + standalone full-vault CLI + E2EE server-sync milestone. This is not a
@@ -25,6 +31,38 @@ sequence below; completion of the first goal must not close those requirements.
    for evidence; keep implemented, reviewed, integrated and verified separate.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
+
+### Integration checkpoint — 2026-10-16 22:27 local
+
+- Main through `dc51b33` contains the first core/native/standalone CLI batch and
+  the directly confirmed best-UX priority.
+  Combined acceptance on candidate `3ac9e06`: 76 affected Rust tests passed in a
+  fresh target (session 61703 exit 0). See `docs/core-integration-acceptance.md` on
+  main. Apps still use their existing storage; no migration or push by this session.
+- Editor E1/E2 is reconciled in `editor-base-embed-integration` at `9e7ecce`, with
+  the independently reviewed opaque-revision seam committed. The first full
+  run had only a new test fixture error (nonexistent MemoryAdapter.remove), fixed
+  to trash. Second run 62700: 1954/1955 passed; partial-parse table formatting
+  failed after passing in the first run. Type/build did not run. Editor team owns
+  focused format-menu/typecheck slot for a concrete stale-parser-tree fix and
+  deterministic regressions; do not launch competing heavy checks.
+- Isolated core branch through `9ceb564`: native schema3/folder/rescan integrated
+  as `2971706`, CLI `451c84b`/`5c959ac`; owner native/store 56 checks passed, combined
+  newer CLI checks pending. Shared target stale artifact caused one compile failure
+  before successful recompilation; future worktrees use separate target directories.
+- Source-reviewed but runtime-pending on core branch: backup/restore `c7de4e0`,
+  desktop host `ebc0348`, text-sync plans `4d5867b`/`c05595f`, browser schema2/worker
+  adapter `7ab190d`. Independent review fixes are included; these are not actual
+  client integration or verified encrypted convergence. Schema4 coherent reads,
+  presentation metadata and change cursors are integrated as `5e154ea`; the fresh
+  workspace validation session 37546 stopped at unsupported unsigned SQLite type
+  conversions. Independently reviewed checked-conversion fix `e404c8e` is applied;
+  rerun follows the editor's slot release. No runtime pass claimed for this slice.
+- Native owner prepares schema5 durable intents, distinguishing inert preparation
+  from authorized commit replay. Browser/desktop owners coordinate durable
+  host intent tokens and actual fixture-only app selection; ordinary vault migration
+  remains disabled. Physical moves/deletes and distributed binary/namespace/chunk
+  semantics are unfinished, not removed from the goal.
 
 ### Live work ledger
 
@@ -189,7 +227,7 @@ handed-over core candidate `f44b812` at
 `/Users/ctk/orca/workspaces/Zorid/core-batch-one-integration`, including the
 reviewed late-divergence recovery-status correction. Editor candidate `4a29e12`
 at `editor-base-embed-integration` has scoped checks but no full gate yet.
-Neither candidate has been merged by this coordinator. Source work continues
+Core Batch 1 is now integrated; editor candidate remains isolated (latest checkpoint above). Source work continues
 on scanner finalization, browser intents, desktop host, client updates and backup.
 No heavy process remains after relay test session 48628 exited 0.
 

@@ -68,6 +68,12 @@
 
 ## Product priorities
 
+- Latest direct user confirmation (2026-10-16): prioritize the best Zorid UX.
+  Use Obsidian as a starting point and reference, not an exact parity requirement.
+  This supersedes older exact-match requirements in project instructions and
+  reference ledgers. Preserve useful requested capabilities and correctness,
+  accessibility, data integrity and native verification; document deliberate UX
+  choices without treating every reference difference as a defect.
 - Latest execution steering (2026-10-16) supersedes the earlier discussion-only
   restriction for the first shared-core milestone: the user requests persistent
   plans/tracking and a built-in goal for coordinated implementation. Start with
@@ -77,7 +83,7 @@
   mandatory IPC/daemon ownership. See the roadmap execution checkpoint. P2P,
   complete recovery/admin and native mobile remain later required milestones;
   speculative plugin frameworks and calendar work stay deferred. Existing editor
-  parity work continues independently; do not replace its runtime/storage path
+  polish work continues independently; do not replace its runtime/storage path
   before the integration gates pass.
 - Latest architecture discussion (2026-10-16): the user no longer requires
   Obsidian plugin API compatibility and wants to discuss a clean Zorid API,
@@ -95,12 +101,13 @@
   Latest steering prioritizes a tight-knit first-party experience: do not design
   speculative plugin content frameworks, Excalidraw integrations or JSONL formats.
   Present the overall app architecture; those extension details are deferred.
-- Build an original open-source Obsidian recreation, with Electron desktop and
+- Build an original open-source note-taking app informed by Obsidian, with Electron desktop and
   Capacitor mobile apps. Keep recovered proprietary artifacts out of project source.
-- Prioritize the editor foundation, exact interactions, split views, and native
+- Prioritize the editor foundation, intuitive interactions, split views, and native
   verification. Exposed note modes are Reading and Live Edit, both rendering content.
-- Context menus must match Obsidian across applicable elements, including menu
-  ordering, labels, submenus, availability and action behavior. Tables include
+- Use Obsidian context menus as a reference for useful commands, ordering, labels,
+  submenus, availability and action behavior; choose improvements for Zorid UX.
+  Tables include
   deleting rows/columns, selecting whole rows/columns, and multiple-row/column
   selections with selection-dependent commands.
 - Include Obsidian-style launch/onboarding and vault-selection flows: create a
