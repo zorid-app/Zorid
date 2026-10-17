@@ -126,6 +126,14 @@ isolated candidates. No task or calendar source has reached main. Resolve storag
 and stable type/property/option identity, then recurrence/calendar connection
 ownership before resuming. Native UX/import work remains separately owned.
 
+Native build8 slot granted via msg86316aed4280 at23:32 UTC for frozen reviewed
+95df87fa (search/Settings/navigation and caret). Native owner exclusively runs
+serialized Simulator then phone Dev verification; no imports/menu changes in8.
+Root Rust task fixture run53258 already terminal0 (6/6 for superseded isolated
+model, not integrated). Process observation found no competing actual compiler;
+6.3GiB disk available. Root must not start heavy checks or mutate shared dependency
+trees until native owner returns this slot. Build8 outcomes remain pending.
+
 Latest Vite completion — main165cf17a +manager-lock60efe609:
 - Vite is the default application renderer build. Actual dev/prod browser, desktop
   file renderer/save/math/code,307exactvendorassets,347fileASAR/nativearm64 and
