@@ -63,8 +63,8 @@ function decodeDocumentReply(request,marker,bytes){
   const value=reply.value;
   let valid=false;
   if(['initialize','rebuild','close','discard'].includes(op))valid=value===true;
-  else if(op==='status')valid=object(value)&&['uninitialized','rebuild_required','building','ready'].includes(value.state)
-    &&(value.state!=='ready'||snapshot(value.snapshot)&&decimal(value.coveredWatermark)&&decimal(value.observedSourceHead)&&typeof value.coverageComplete==='boolean');
+  else if(op==='status')valid=object(value)&&source(value.source)&&['uninitialized','rebuild_required','building','ready'].includes(value.state)
+    &&(value.state==='ready'?keys(value,['source','state','snapshot','coveredWatermark','observedSourceHead','coverageComplete'])&&snapshot(value.snapshot)&&value.snapshot.localStoreId===value.source.localStoreId&&decimal(value.coveredWatermark)&&value.observedSourceHead===value.source.watermark&&typeof value.coverageComplete==='boolean':keys(value,['source','state']));
   else if(['begin','resume'].includes(op))valid=keys(value,['snapshot'])&&snapshot(value.snapshot)&&(op!=='resume'||same(value.snapshot,command.snapshot));
   else if(op==='pump')valid=keys(value,['snapshot','preparedDocuments','reusedDocuments','totalDocuments','ready'])&&snapshot(value.snapshot)&&same(value.snapshot,command.snapshot)&&['preparedDocuments','reusedDocuments','totalDocuments'].every(key=>integer(value[key]))&&value.preparedDocuments<=value.totalDocuments&&value.reusedDocuments<=value.preparedDocuments&&typeof value.ready==='boolean';
   else if(op==='publish')valid=snapshot(value)&&same(value,command.snapshot);
@@ -93,6 +93,7 @@ function createDesktopDocumentSemantics(host,clientId,localStoreId){
       let value;
       try{value=await host.documentCommand(clientId,request);}
       catch(error){if(error?.code==='snapshot_expired'&&command.pinId)pins.delete(command.pinId);throw error;}
+      if(op==='status'&&value.source.localStoreId!==localStoreId)throw fail('invalid_document_response');
       if(op==='open'){
         const previous=pins.get(command.pinId);
         if(value.snapshot.localStoreId!==localStoreId||value.source.localStoreId!==localStoreId||previous&&(!same(previous.snapshot,value.snapshot)||!sameSource(previous.source,value.source)||previous.coverageComplete!==value.coverageComplete))throw fail('invalid_document_response');

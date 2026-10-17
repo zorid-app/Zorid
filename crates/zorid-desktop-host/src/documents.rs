@@ -225,6 +225,12 @@ struct Opened<'a> {
     coverage_complete: bool,
 }
 #[derive(Serialize)]
+struct StatusReport {
+    source: zorid_native::SourceSnapshotId,
+    #[serde(flatten)]
+    status: zorid_native::DocumentIndexStatus,
+}
+#[derive(Serialize)]
 struct Paged<T> {
     result: T,
     cursor: Option<OperationId>,
@@ -259,7 +265,10 @@ pub(crate) fn execute(
     };
     let result = (|| {
         match request.command {
-            Status => answer("status", vault.document_index_status().map_err(native)?),
+            Status => {
+                let (source, status) = vault.document_index_status_with_source().map_err(native)?;
+                answer("status", StatusReport { source, status })
+            }
             Initialize => {
                 vault.initialize_document_index().map_err(native)?;
                 answer("initialize", true)

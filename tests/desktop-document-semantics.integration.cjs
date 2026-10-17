@@ -51,10 +51,19 @@ test('actual desktop semantic transport retains one snapshot through independent
   const first=await admit('10000000-0000-4000-8000-000000000001');
   const second=await admit('10000000-0000-4000-8000-000000000002');
   const call=(op,fields)=>first.documentCommand(request(op,fields)),other=(op,fields)=>second.documentCommand(request(op,fields));
+  const initialStatus=await call('status');
+  assert.equal(initialStatus.state,'uninitialized');
+  assert.equal(initialStatus.source.localStoreId,(await host.identity()).local_store_id);
+  assert.equal(initialStatus.source.watermark,(await host.listSnapshot()).cursor);
   await call('initialize');
+  const buildingStatus=await call('status');
+  assert.equal(buildingStatus.state,'building');assert.deepEqual(buildingStatus.source,initialStatus.source);
   const snapshot=await build(call);
   const pinId='1',opened=await call('open',{pinId});
   assert.deepEqual(opened.snapshot,snapshot);
+  const readyStatus=await call('status');
+  assert.equal(readyStatus.state,'ready');assert.deepEqual(readyStatus.source,opened.source);
+  assert.equal(readyStatus.observedSourceHead,readyStatus.source.watermark);
   assert.deepEqual(await call('open',{pinId}),opened,'exact open retry must retain its original generation');
   // Independent view lifetimes: keep four pins without implicitly closing or
   // substituting the older view, and respect the shared Store's global quota.
@@ -95,6 +104,10 @@ test('actual desktop semantic transport retains one snapshot through independent
   assert.equal(base.value.result.rows[0].values['config.TITLE'].value,'first');
   const staleStage=await other('begin');
   await cli(root,['write','--id','source','--expected-revision',oldRevision,'--operation-id','independent-write','--input','-'],'# Changed\nNo old links or literal text.\n');
+  const laggedStatus=await call('status');
+  assert.deepEqual(laggedStatus.snapshot,snapshot);
+  assert.notEqual(laggedStatus.source.watermark,laggedStatus.coveredWatermark);
+  assert.equal(laggedStatus.observedSourceHead,laggedStatus.source.watermark);
   await assert.rejects(other('pump',{snapshot:staleStage.snapshot}),{code:'stale_source'});
   assert.equal(await other('discard',{snapshot:staleStage.snapshot}),true,'discard bypasses stale source/index publication fences');
   assert.equal(await other('discard',{snapshot:staleStage.snapshot}),true,'exact discarded-stage retry is idempotent');

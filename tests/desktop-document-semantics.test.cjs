@@ -40,6 +40,13 @@ test('typed semantic body validates marker, operation, Unicode metadata identity
     [{documents:true,schemaVersion:1,bytes:1},Buffer.from([255])],
   ])assert.throws(()=>decodeDocumentReply(input,badMarker,badBytes),{code:'invalid_document_response'});
   assert.equal(decodeDocumentReply(request('discard',{snapshot}),...wire('discard',true)),true);
+  for(const state of ['uninitialized','building','rebuild_required']){
+    assert.deepEqual(decodeDocumentReply(request('status'),...wire('status',{source,state})),{source,state});
+    assert.throws(()=>decodeDocumentReply(request('status'),...wire('status',{state})),{code:'invalid_document_response'});
+  }
+  const ready={source,state:'ready',snapshot,coveredWatermark:'9007199254740992',observedSourceHead:source.watermark,coverageComplete:true};
+  assert.deepEqual(decodeDocumentReply(request('status'),...wire('status',ready)),ready);
+  assert.throws(()=>decodeDocumentReply(request('status'),...wire('status',{...ready,observedSourceHead:'1'})),{code:'invalid_document_response'});
   const page={snapshot,hits:[],next:null,scanComplete:true,coverageComplete:false,complete:false,sourceBytes:0,documents:0};
   const search=request('search',{pinId:'1',query:'x',cursor:null,limit:1});
   assert.equal(decodeDocumentReply(search,...wire('search',{result:{snapshot,source,coverageComplete:false,value:page},cursor:null})).result.value.complete,false);
