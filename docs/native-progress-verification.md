@@ -31,10 +31,43 @@ candidate3a082b0, exact hashes and test profile. CLI SHA256:
 desktop host SHA256:
 `cc5dbbdfcdf67d80ae12d4260fe2d812a570dc7866e445ab47ed7fc075889ccc`.
 
-Remaining: actual Electron-owned RPC2 upload/receive, combined current-v7
-outage/concurrent-edit convergence, and abrupt current Store11 desktop+host
-recovery with a competing CLI write. Graceful reopen and local interop do not
-establish those results. No native-mobile or production-enrollment claim follows.
+Main4d3c12d subsequently passed actual Electron-owned RPC2 upload/receive via
+its explicit verification UI/private IPC/native host, with fresh normalized-v7
+browser and independent CLI. The relay was actually stopped; three independent
+offline appends survived failed sync. Restarting the same DB/server epoch
+converged all three to85 exact bytes, SHA256
+`b3ae03939d06bfa6c8decbc24473d4d90b5ee0aaa614eb9fe53fcca263105496`.
+Electron/CLI pending counts were0 at cursor5; browser completed. This does not
+expose sync controls in the normal editor or establish production enrollment.
+Original /private/tmp fixtures subsequently vanished. The report
+`tmp/shared-core-final-1017/rpc-convergence-observed.json` reconstructs prior
+tool observations, rather than preserving the original databases/reports.
+
+The current normal default Electron then opened ignored-repo fixture
+`tmp/shared-core-final-1017/recovery-vault` with all fixture-selection environment
+variables unset. A watcher observed the exact54-byte unsaved draft durably
+checkpointed while the physical baseline remained24 bytes. SIGKILL terminated
+only verified owned app6746 and host6780. Independent CLI committed53 competing
+bytes; the checkpoint draft remained unchanged. Normal reopen displayed the
+retained54-byte draft. Save recovery copy produced a distinct54-byte note while
+the original retained the CLI's53 bytes; independent physical/checkpoint reads
+confirmed both versions and a clean checkpoint. Draft SHA256:
+`4dda66ab5ffb187ffcf2b1507d7279486ba4403d7edcfb59f650ad472db551a7`;
+CLI original SHA256:
+`4f76ca1aa11ce9b44dd1a34e6cebf8dc0de6305698b031ab98eeac02da3d275a`.
+Current report: `tmp/shared-core-final-1017/crash-observation.json`; profile:
+`tmp/shared-core-final-1017/recovery-profile`. Actual native undo/redo/selection
+also passed in this session. Actual OS Zhuyin composition passed: `s,u,3`
+produced `你`, `c,l` displayed the intermediate `ㄏㄠ`, and `3,Return` committed
+`你好`. Undo removed the composed text and redo restored it. Independent CLI
+and physical reads agree on the final34-byte fixture, SHA256
+`e755f0bc06d50318ce1cba507eace4eef36990c736a4a3c3e364e3342b4f4695`.
+The fixture also contains earlier input probes; this is a bounded composition
+smoke check, not broad language/input-method coverage. Normal main app reopen
+displayed the committed text exactly. Owned sessions50032/64810 exited0 and are
+closed. Nonsecret observations are committed in
+`docs/verification/shared-core-final-2026-10-17.json`.
+No native-mobile or production-enrollment claim follows.
 
 Verified 2026-10-17 by the shared-core coordinator. Source candidate
 `core-default-integration` at `f4e6ec2`; reviewed scanner batch integrated on main

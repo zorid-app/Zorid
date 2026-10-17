@@ -1,0 +1,91 @@
+{
+  "source": "4d3c12d",
+  "date": "2026-10-17",
+  "scope": "First shared-core milestone disposable-fixture observations; no production or mobile claim",
+  "rpc": {
+    "source": "4d3c12d",
+    "kind": "observed prior runtime outputs; original temporary fixtures subsequently disappeared",
+    "entry_id": "93da99c2-2314-4a7d-bb27-f3edc1186e23",
+    "bytes": 85,
+    "sha256": "b3ae03939d06bfa6c8decbc24473d4d90b5ee0aaa614eb9fe53fcca263105496",
+    "text": "Shared RPC baseline\nBrowser offline append\nCLI offline append\nDesktop offline append\n",
+    "actual_electron_rpc_upload_receive": true,
+    "actual_relay_stopped_and_restarted": true,
+    "three_independent_offline_edits": true,
+    "browser_cli_desktop_exact": true,
+    "final_cursor": "5",
+    "final_pending_zero": true,
+    "final_pending_scope": "Electron and CLI",
+    "browser_complete": true,
+    "browser_database": "zorid-core-vault:smoke-4355e038-4473-42ba-80f8-c02bd3f32785",
+    "browser_client": "6db45479-fa0b-42ac-8fa9-f01b80b03d91"
+  },
+  "crash_recovery": {
+    "source": "4d3c12d",
+    "entry_id": "ed1dd623-7d22-468d-94a8-2bd023117126",
+    "client_id": "4d238ec5-3442-4e8b-81c5-83952ec541bb",
+    "durable_draft_before_crash": {
+      "version": 1,
+      "writer": "d41a263a-aa83-4411-95a3-5cfde785e9cb",
+      "generation": 1,
+      "base": {
+        "path": "recovery-note.md",
+        "content": "Crash recovery baseline\n",
+        "entryId": "ed1dd623-7d22-468d-94a8-2bd023117126",
+        "revision": "fe9d8d11-b557-43c8-ab70-0d1c5a42f387",
+        "stat": {
+          "ctime": 1792262831446,
+          "mtime": 1792262831446,
+          "size": 24
+        }
+      },
+      "draft": "Crash recovery baseline\nDesktop crash-retained draft.\n",
+      "conflict": false
+    },
+    "app_pid": 6746,
+    "host_pid": 6780,
+    "baseline_sha256": "a371ac4ccdde03894a11a224bfb673b6a8a6884358fa723f9828673ebd24e403",
+    "draft_sha256": "4dda66ab5ffb187ffcf2b1507d7279486ba4403d7edcfb59f650ad472db551a7",
+    "physical_bytes_after_kill": 24,
+    "owned_app_and_host_killed": true,
+    "cli_after_crash_bytes": 53,
+    "cli_after_crash_sha256": "4f76ca1aa11ce9b44dd1a34e6cebf8dc0de6305698b031ab98eeac02da3d275a",
+    "draft_retained_after_cli_write": true,
+    "reopened_retained_draft_exact": true,
+    "recovery_copy_path": "recovery-note (recovered draft 5a205b56).md",
+    "recovery_copy_exact": true,
+    "original_cli_version_exact": true,
+    "checkpoint_clean_after_recovery": true
+  },
+  "native_input": {
+    "normal_default_main_renderer": true,
+    "undo_redo_selection_observed": true,
+    "os_input_method": "macOS Zhuyin",
+    "physical_keys": [
+      "s",
+      "u",
+      "3",
+      "c",
+      "l",
+      "3",
+      "Return"
+    ],
+    "intermediate_phonetics_observed": "ㄏㄠ",
+    "committed_text": "你好",
+    "composition_undo_redo_observed": true,
+    "final_fixture_text": "Rust input 0123\nㄍ\n\n早安\n你好",
+    "final_fixture_bytes": 34,
+    "final_fixture_sha256": "e755f0bc06d50318ce1cba507eace4eef36990c736a4a3c3e364e3342b4f4695",
+    "independent_cli_and_physical_exact": true,
+    "normal_app_reopen_exact": true,
+    "owned_closed_sessions": [
+      50032,
+      64810
+    ],
+    "closed_exit_codes": [
+      0,
+      0
+    ],
+    "limits": "Single actual native input-method smoke; includes earlier probes, not broad IME coverage"
+  }
+}

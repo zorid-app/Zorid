@@ -21,9 +21,10 @@ Existing full milestone requirements remain intact; this changes sequencing and
 implementation complexity, not the evidence needed to claim completion.
 
 The user requested durable written decisions, execution tracking and a Codex
-built-in goal. An active goal now targets the first integrated Rust core + web +
-Electron + standalone full-vault CLI + E2EE server-sync milestone. This is not a
-claim that implementation or validation is already complete. Subsequent P2P,
+built-in goal. The first integrated Rust core + web + Electron + standalone
+full-vault CLI + E2EE server-sync milestone has passed its implementation and
+runtime gates; see [final acceptance](shared-core-milestone-acceptance.md).
+The built-in goal is being closed against that requirement audit. Subsequent P2P,
 full history/backups/admin and native mobile milestones remain required in the
 sequence below; completion of the first goal must not close those requirements.
 
@@ -127,7 +128,7 @@ Current authoritative update (older bullets below record preceding stages):
   Matching verified CLI/host binaries, rebuilt main renderer and WASM cache are
   published to main's ignored runnable artifacts, retaining existing hashed
   assets. target/debug/zorid-build-provenance.json records exact hashes/source;
-  no heavy build or owned Electron pass remains running.
+  resource state for the subsequent actual-runtime pass is recorded below.
 - Combined acceptance is now terminal and passing: Rust/WASM90716 passed43
   tests (including17 streaming checks); actual WASM69772 release built in31.95s;
   combined browser19973 passed97 Node checks; full TypeScript75293/76061/67743
@@ -153,38 +154,52 @@ Current authoritative update (older bullets below record preceding stages):
   by CLI while host was open, discovered/opened an external file, and retained
   content after graceful quit/reopen. Both owned Electron passes exited0.
   See browser-relay-verification.md and native-progress-verification.md.
-- The first goal remains ACTIVE. Minimal remaining actual-runtime gates are
-  Electron's own RPC2 upload/receive with browser/CLI, current normalized-v7/RPC
-  concurrent editing across a real relay outage/rejoin (the new49-byte receive
-  reused prior history), and abrupt Electron+host termination/recovery with a
-  competing CLI write on Store11. Earlier HTTP/v6 and pre-Store11 crash proofs
-  do not close those changed-path gates. Combine the first two in one disposable
-  fixture, then verify abrupt recovery there; no broad suite rerun is needed.
+- Main4d3c12d closes the preceding three changed-path runtime gates. Actual
+  Electron verification UI/private IPC/native host RPC2, fresh normalized-v7
+  browser and independent CLI first shared one baseline. With the actual relay
+  stopped (its socket refused connections), each appended independently and
+  failed sync without losing its local edit. Restarting the same DB/server epoch
+  converged all three to exact85 bytes, SHA256
+  b3ae03939d06bfa6c8decbc24473d4d90b5ee0aaa614eb9fe53fcca263105496.
+  Electron/CLI ended at cursor5 with all pending counts0; browser completed.
+  This proves Electron-owned RPC transport, not a normal-editor sync UI or
+  production enrollment. Original /private/tmp fixtures subsequently vanished;
+  tmp/shared-core-final-1017/rpc-convergence-observed.json reconstructs observed
+  tool outputs, rather than preserving those original databases or reports.
+- Actual normal default Electron on main4d3c12d, with all fixture-selection
+  environment variables unset, persisted an exact54-byte unsaved draft while
+  the physical baseline remained24 bytes. Only verified owned app6746/host6780
+  were SIGKILLed. Independent CLI then committed53 competing bytes without
+  changing the draft checkpoint. Normal reopen displayed the retained54-byte
+  draft; Save recovery copy preserved it as a distinct note and adopted the
+  exact53-byte CLI original. Independent physical/checkpoint reads confirm both
+  versions and a clean final checkpoint. Current report:
+  tmp/shared-core-final-1017/crash-observation.json. Native normal-editor
+  undo/redo/selection also passed in the current session.
+- Actual normal-editor OS composition also passes: physical Zhuyin keystrokes
+  produced marked phonetics and committed `你好`; undo removed the composed text
+  and redo restored it. Independent CLI/physical reads and normal app restart
+  preserve the exact34-byte fixture (hash in native-progress-verification.md).
+  Owned sessions50032/64810 exited0; no owned native test app remains running.
+  First-milestone runtime gates are closed; final requirement audit is recorded
+  in shared-core-milestone-acceptance.md. Preserve the distinction between locally
+  retained draft, durable commit, server acceptance and encrypted backup.
   CLI's permanent legacy capability flags still mention larger_file_streaming;
-  source-only reporting suggestion is ready at
-  `/private/tmp/zorid-native-sync-reporting-suggestion.patch`, not applied.
-  Preserve the documented synced:false no-global-barrier contract and desktop
-  validator; the suggestion adds an explicitly bounded snapshot completion hint
-  and removes only the obsolete larger-file capability. Review/adopt separately.
-  Do not interpret that stale flag as
-  failure of the exact large-file transfer just verified, or claim production
-  enrollment is implemented. Mobile, join UX and full history/admin stay later;
-  P2P remains explicitly deferred from this pass.
-- Continuation resources: current RPC fixture relay49406 serves original
-  disposable DB `/private/tmp/zorid-rpc-crossclient-1017-browser2/relay.sqlite`
-  at127.0.0.1:50489, allowed origin8794. Static fixture60936 serves the current
-  candidate prototype on8794. Retained actual Chrome RPC tab1268038265 uses the
-  normalized database/client recorded in browser-relay-verification.md; marked
-  for handoff, configured and complete through149. Independent CLI vault is
-  `/private/tmp/zorid-rpc-browser-cli-1017`, Store11, same scope and cursor149;
-  private synthetic web/CLI/desktop credential files remain beside the relay DB
-  and outside served content. Never print them. Normal browser tabs1268038281/
-  1268038284 completed their proof and were closed; normal build static84039 on
-  8797 was stopped with exit0. Own Electron49442/6394 exited0. Poll each handle/revalidate
-  actual processes after interruption rather than assuming a marker is live.
-  Use a new isolated desktop profile with explicit fixture sync configuration
-  for the remaining RPC interop/outage pass, preserving the current local-default
-  proof and fixture authority. Do not silently rebind the populated local realm.
+  a source-only reporting suggestion was prepared, not applied. Preserve the
+  documented synced:false no-global-barrier contract and desktop validator;
+  removing the obsolete larger-file capability and exposing bounded snapshot
+  completion are separate reporting follow-ups. The flag does not invalidate
+  verified exact large-file transfer. Mobile, join UX and full history/admin
+  stay later; P2P remains explicitly deferred from this pass.
+- Continuation resources: earlier /private/tmp RPC fixtures and original reports
+  vanished; do not assume those paths, credentials, relay/static handles or
+  browser-tab markers remain usable. The reconstructed convergence observation
+  is explicitly identified above. Current crash fixture/report live under ignored
+  repo tmp/shared-core-final-1017: recovery-profile, recovery-vault and
+  crash-observation.json. Nonsecret final observations are also retained under
+  docs/verification/shared-core-final-2026-10-17.json. Native verification is
+  complete and owned apps are closed. Revalidate processes before any later
+  launch; no source change, new enrollment or real-vault migration ran.
 - Latest combined checkpoint (2026-10-17): isolated
   `core-default-integration`, branch `tingkai-c/streaming-core-integration`, is
   now c2c9b91 after composing the independently reviewed browser source batch
@@ -659,7 +674,8 @@ Current authoritative update (older bullets below record preceding stages):
   matches incomplete adapter connection; desktop_integration full-file command
   slice owns fix and subsequent rebuilt UI proof.
 
-First-milestone acceptance snapshot (2026-10-17; not a completion claim):
+Historical first-milestone acceptance snapshot (2026-10-17; superseded by
+the current checkpoint and [final acceptance](shared-core-milestone-acceptance.md)):
 
 | Requirement | Current evidence / next necessary step |
 | --- | --- |

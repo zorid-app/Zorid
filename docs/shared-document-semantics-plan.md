@@ -98,5 +98,8 @@ contracts in parallel; later implementation work uses isolated worktrees and
 nonoverlapping ownership. Editor session retains live parsing/rendering ownership.
 Heavy builds and integration remain coordinator-serialized on the8GB machine.
 
-Current status: accepted and scheduled; preparation permitted, implementation
-waiting on wave3. Track current gate state in `deferred-product-roadmap.md`.
+Current status (2026-10-17): wave3 acceptance is recorded in
+`shared-core-milestone-acceptance.md`; this is the next implementation stage.
+Contracts/fixtures precede parser/index/Base implementation and incremental
+consumer replacement. No semantic implementation is claimed by closing wave3.
+Track ownership and current execution state in `deferred-product-roadmap.md`.

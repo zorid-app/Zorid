@@ -46,8 +46,27 @@ Combined source gates:43 Rust/WASM tests,97 browser checks, engine27 then31
 focused regressions after the observed fixes, full TypeScript, actual WASM
 release69772 and browser bundles pass. Current generated WASM SHA256 is
 `5330ded754c628a9e3762d6f2174c0e2c2c44e3426d2f79890541231f53a1b72`.
-Remaining first-goal proof: current Electron's own RPC interop, actual current
-v7 outage/concurrent edits and abrupt Store11 desktop+host recovery. Enrollment,
+The following main4d3c12d pass closes the preceding Electron RPC and fresh-v7
+outage gaps. Actual Electron's explicit verification UI used private IPC and its
+native host's RPC2 client; fresh normalized-v7 browser and independent CLI used
+separate local state. After sharing one baseline, the actual relay was stopped
+(socket refused connections), all three appended independently, and attempted
+sync failed without losing local edits. Restarting the same DB/server epoch
+converged all three to exact85 bytes:
+`Shared RPC baseline\nBrowser offline append\nCLI offline append\nDesktop offline append\n`.
+SHA256: `b3ae03939d06bfa6c8decbc24473d4d90b5ee0aaa614eb9fe53fcca263105496`.
+Electron/CLI ended at cursor5 with all pending counts0; browser completed.
+This proves actual Electron-owned RPC upload/receive, not normal-editor sync
+controls or production enrollment. Original /private/tmp fixtures and reports
+subsequently vanished. `tmp/shared-core-final-1017/rpc-convergence-observed.json`
+reconstructs the observed tool outputs; original databases cannot be inspected.
+
+The actual normal default Store11 Electron crash/CLI-conflict/recovery-copy
+pass also now passes, with independent physical/checkpoint verification recorded
+in `tmp/shared-core-final-1017/crash-observation.json`; see
+native-progress-verification.md. Native undo/redo/selection and actual OS Zhuyin
+composition/commit/restart also pass; owned native apps are closed. Durable
+nonsecret observations: verification/shared-core-final-2026-10-17.json. Enrollment,
 mobile and production security are not established by these checks.
 
 ## Production RPC adapter cross-client proof — 2026-10-17
