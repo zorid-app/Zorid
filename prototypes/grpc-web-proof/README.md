@@ -3,8 +3,9 @@
 Owner `/root/default_lifecycle_review_sol`; isolated Orca grpc-web-proof,
 branch tingkai-c/grpc-web-proof, base main2ad1712. This is a disposable prototype,
 not a production transport selection or a change to the authenticated v2 sync
-wire. Current status: source prepared; compilation and actual browser/native
-checks await root's serialized resource and CUA grants.
+wire. Current status: independently reviewed source compiled successfully and
+actual Chrome/native compatibility checks passed on2026-10-17. Production
+activation, durable-ledger integration and other-browser acceptance remain open.
 
 Tonic0.14.6 + tonic-web0.14.6 serve native HTTP/2 gRPC and binary gRPC-Web in the
 same Rust process on127.0.0.1:8792. A small static page on127.0.0.1:8793 uses
@@ -14,7 +15,7 @@ TLS deployment or existing CLI/local IPC change is involved.
 
 The schema and generated TS belong only to this directory. Pins/conventions
 match the protobuf foundation: Prost0.14.4, Protobuf-ES/protoc-gen-es2.16.0,
-protoc-bin-vendored3.3.0 (protoc32.0), TS uint64 bigint, raw bytes Uint8Array.
+protoc-bin-vendored3.3.0 (protoc36.2), TS uint64 bigint, raw bytes Uint8Array.
 Rust service/client code is generated into Cargo OUT_DIR by tonic-prost-build;
 no generated foundation tree or root dependency manifest is edited. Standalone
 Cargo.lock and package-lock.json capture dependencies.
@@ -22,7 +23,7 @@ Cargo.lock and package-lock.json capture dependencies.
 ## Run when the shared heavy slot is granted
 
 Use Node>=22. The system Homebrew protoc is currently broken; use the vendored
-compiler path below or another verified protoc32.0. There is no tool install in
+compiler path below or another verified protoc36.2. There is no tool install in
 these commands. All npm/Cargo commands are run in this directory.
 
 ```sh
@@ -85,6 +86,57 @@ browser client-streaming/bidi are outside its scope.
 
 ## Verification record
 
-Pending serialized compile/native/browser pass. Do not report the proposed checks
-above as observed results until this section is updated with actual handles,
-browser tab IDs, hash and outcomes.
+Source83d47e6 plus review followup69c9fa2. Independent source review found no
+bounds/retry/cancellation/isolation blockers. Schema-owner compiler correction
+was verified directly: vendored protoc-bin-vendored3.3.0 is libprotoc36.2.
+
+Root granted one exclusive heavy/browser slot. Build exec16543 exited0:
+TypeScript strict noEmit passed, esbuild251.2KB in153ms, and standalone locked
+Rust1.95 two-binary dev build with CARGO_BUILD_JOBS=1 completed in1m43s. No root
+or native build ran in parallel. npm install used pinned standalone package-lock;
+no pnpm bootstrap or root dependency manifest was changed.
+
+Native endpoint exec85548 on127.0.0.1:8792 and static page exec74725 on8793.
+Generated native client exited0, reporting native HTTP/2 gRPC exact128KiB
+upload/download and identical receipt retry sequence1.
+
+Actual Chrome tab1268037631 at http://127.0.0.1:8793/ was driven solely through
+CUA: opened the page, clicked Run compatibility checks, and observed
+`PASS — all compatibility checks` with these result lines:
+
+```text
+PASS binary protobuf 131072 bytes upload/download exact SHA256 a11fe18f963518803fbebdaebf4d408609e3a323c70194b3b507d47a392a2496
+PASS identical operation retry retains sequence 2 and applied_count=1
+PASS wrong ciphertext hash → InvalidArgument
+PASS malformed digest → InvalidArgument
+PASS same operation with changed bytes → AlreadyExists
+PASS 128KiB+1 size rejection → ResourceExhausted
+PASS oversized operation remains absent → NotFound
+PASS missing operation → NotFound
+PASS intentionally suppressed first receipt → Unavailable
+PASS suppressed receipt query + exact retry same sequence 3
+PASS AbortSignal cancellation → Canceled
+PASS cancel after observed acceptance → Canceled, exact retry sequence 4
+```
+
+The browser independently SHA256-hashed the returned bytes, compared every byte
+with its131072-byte input, and compared full operation ID/sequence/length/hash/
+applied-count receipts on retries. The hash also matched an independent Node
+crypto calculation. Browser error-log read returned no errors. No browser state
+injection or alternate HTTP/JSON client substituted for the generated client.
+The injected Unavailable is an application-level suppressed receipt, not a real
+socket-drop experiment; the cancellation result does not assert server rollback
+or that a handler was dropped.
+
+Built artifact SHA256 values (ignored build outputs, not checked-in binaries):
+
+- dist/main.js:6f8788d1b2367fcb535eeedd9126112efadb25c857b890a632ba0e0636e66b3f
+- target/debug/zorid-grpc-web-proof:76f72ae0c0e2db5eb783c98725ae59c5869b5124979764239d34cb7bd2690423
+- target/debug/native-check:2f02f5a7659f36e1a00eb9b3d6b916463b69b2e0924bf3b47e452e67be6b99fa
+
+Closed the agent-created Chrome tab. Endpoint85548 gracefully exited0 on Ctrl+C;
+static server74725 exited130 on Ctrl+C. No proof servers remain running. The
+in-memory ledger was discarded by normal shutdown. This demonstrates one Chrome
+binary-gRPC-Web/Tonic/native-gRPC combination, without establishing Safari/Firefox,
+TLS/reverse-proxy deployment, production sync wire negotiation, authentication,
+E2EE, durable operation replay, process-crash recovery or streamed large files.
