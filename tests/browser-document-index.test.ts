@@ -41,7 +41,7 @@ function fixture(){
   }};
   let textExtractions=0,reuses=0;const baseCalls:{id:string;text:string;facts:any[];options:any;viewName?:string|null}[]=[];
   class MockBuilder {
-    header:BrowserIndexHeader;rows=new Map<string,any>();constructor(input:string){this.header=JSON.parse(input);}
+    header:BrowserIndexHeader;rows=new Map<string,any>();constructor(input:string){this.header=JSON.parse(input);this.header.entries=this.header.entries.map(({id,path,kind,revision,deleted})=>({id,path,kind,revision,deleted}));}
     free(){}headerJson(){return JSON.stringify(this.header);}beginPump(){}
     pendingJson(){return JSON.stringify(this.header.entries.filter(e=>e.kind==='file'&&!this.rows.has(e.id)).slice(0,32));}
     addText(id:string,bytes:Uint8Array){textExtractions++;this.rows.set(id,{metadata:null,digest:sha(bytes),textBytes:bytes.length,exclusion:null});}
@@ -91,6 +91,13 @@ test('old pinned generation reads retained projection across edit, move and dele
   assert.deepEqual((await index.search({pinId:old.pinId,query:'opaque'}) as any).result.value.observed,['old']);assert.deepEqual((await index.search({pinId:fresh.pinId,query:'opaque'}) as any).result.value.observed,['new']);
   assert.equal((await index.status()).current,true);await index.close();
 });
+test('source and canonical Rust entry DTO key order does not change the retained witness',async()=>{
+  const f=fixture();f.file('a','text');const prior=f.records.get('metadata')!.get('a'),entry={id:prior.id,path:prior.path,kind:prior.kind,deleted:prior.deleted,revision:prior.revision};
+  f.seed('metadata','a',entry);f.seed('sync_materialization_refs','a',{...f.records.get('sync_materialization_refs')!.get('a'),entry});
+  const index=f.open(),source=f.source();const snapshot=await f.build(index);assert.equal((await index.status()).current,true);const pin=await index.open();
+  assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);assert.deepEqual(pin.snapshot,snapshot);assert.deepEqual(f.source(),source);await index.close();
+});
+
 test('presentation-only change with unchanged local watermark rejects publication',async()=>{
   const f=fixture();f.file('a','text');const index=f.open();const stage=await index.begin();await index.pump(stage.stageId);
   f.file('a','text',{mtime:7});await assert.rejects(index.publish(stage.stageId),{code:'index_source_changed'});assert.equal((await index.status()).snapshot,null);await index.close();

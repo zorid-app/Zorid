@@ -10,7 +10,13 @@ const LIMITS=Object.freeze({header:16*1024*1024,row:16*1024*1024,text:16*1024*10
   metadata:64*1024*1024,baseRecords:50000,baseFacts:8*1024*1024,projection:256*1024*1024,cache:512*1024*1024,pins:4,stages:4,generations:3});
 const fail=(code:string,details?:unknown)=>new BrowserVaultError(code,'Disposable document index is unavailable; source files remain authoritative',details);
 const size=(text:string)=>new TextEncoder().encode(text).byteLength;
-const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
+function equal(a:unknown,b:unknown):boolean {
+  if(a===b)return true;
+  if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
+  if(Array.isArray(a)&&Array.isArray(b)&&a.length!==b.length)return false;
+  const left=Object.keys(a).sort(),right=Object.keys(b).sort(),leftRow=a as Record<string,unknown>,rightRow=b as Record<string,unknown>;
+  return left.length===right.length&&left.every((key,index)=>key===right[index]&&equal(leftRow[key],rightRow[key]));
+}
 interface Free {free():void}
 export interface BrowserIndexSource {localStoreId:string;watermark:string}
 export interface BrowserIndexSnapshot {localStoreId:string;generationEpoch:string;generation:string;versions:unknown}
