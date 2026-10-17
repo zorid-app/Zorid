@@ -3,7 +3,7 @@
 An original, AGPLv3-licensed Markdown workspace pursuing full feature, UI, UX, vault,
 and plugin compatibility with a fresh Obsidian 1.14.4 installation. Desktop uses
 Electron; the mobile target uses Capacitor; the editor uses CodeMirror 6. The
-renderer is TypeScript and DOM/CSS, built with Webpack following REA's bundle
+renderer is TypeScript and DOM/CSS, built with Vite following REA's bundle
 format finding. Electron is pinned to 44.8.0; desktop releases require macOS 13 or newer.
 Other exact upstream dependency versions and the authoring framework remain
 partially unverified.
@@ -55,7 +55,7 @@ and device operation are not yet verified.
 
 ## Current validation limits
 
-Dependencies are installed and the TypeScript/Webpack production build passes.
+Dependencies are installed and the TypeScript/Vite production build passes.
 The automated suite includes real CodeMirror transactions under jsdom, properties,
 embeds, vault/adapters, recovery, and workspace integration. It does not establish
 native input behavior, layout, or reference parity. The Electron executable was

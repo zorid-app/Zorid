@@ -76,8 +76,8 @@ if [[ "$MODE" == device ]]; then
   [[ ! -e "$OUTPUT/App.xcarchive" ]] || fail 'Archive exists; choose a fresh IOS_OUTPUT_DIR.'
 fi
 # No WASM build or Electron runtime is needed by the mobile web bundle.
-pnpm exec webpack --mode production --env target=desktop
-[[ -f dist/index.html ]] || fail 'Webpack did not produce dist/index.html.'
+pnpm run build:desktop
+[[ -f dist/index.html ]] || fail 'Vite did not produce dist/index.html.'
 # Copy runtime assets/config only. Never cap sync/update/add: they mutate native source/SPM.
 pnpm exec cap copy ios
 [[ -f ios/App/App/public/index.html ]] || fail 'Capacitor did not copy the web bundle.'
