@@ -72,12 +72,13 @@ struct BinaryStageStatus { state: StagePhase, accepted_length: u64,
                            next_sequence: u32, finalized: Option<StagedBinaryRef> }
 enum StagePhase { Receiving, Sealed, CommitRequested, Committed, Rejected, Aborted }
 // Store-issued reference. Private proof fields; no public Deserialize capability.
-struct StagedBinaryRef { /* stage identity, immutable manifest/length/digest,
-                           verified source set, fixed allocation lineage */ }
+struct StagedBinaryRef { stage: BinaryStageRef, manifest: Manifest,
+                         source_commitment: Sha256Digest }
 // Causal identity is essential even when another head has identical bytes.
 struct BinaryContentRef { scope: Scope, entry: EntryIdentity,
                           selected_event: UpdateId, manifest: Manifest }
-struct BinaryReadRef { /* pinned BinaryContentRef + exact entry revision */ }
+struct BinaryReadRef { read_id: OperationId, content: BinaryContentRef,
+                       entry_revision: Revision }
 ```
 
 A bare hash, path, caller-declared digest or metadata-only graph is not a verified
@@ -85,6 +86,15 @@ content capability. Reference serialization is diagnostic/persistence data; a
 renderer must not reconstruct a trusted StagedBinaryRef or verification proof by
 submitting JSON. Local references are resolved and revalidated by their owning
 store. Scope, client, target and operation identity are checked on every call.
+
+The StagedBinaryRef fields are private. Its source commitment binds canonical
+ordered chunk/page keys, their exact payload commitments, staged allocation and
+manifest. The owning store resolves the stage record and rejects forged/stale
+references. Read IDs pin those exact content sources until close. CLI constructs
+its own core-side stage owner, without requiring desktop IPC or an Electron
+client lease; the CLI owner must freeze its stable resume identity before adapter
+implementation. Electron/browser enforce their existing client admission in
+addition to the shared local stage checks.
 
 Length is optional at begin for stdin. The stage enforces the 64 MiB cap before
 persisting bytes beyond it. Zero-length files are valid. Stable chunk/page/update
@@ -201,21 +211,26 @@ Add a portable incremental manifest builder and verifier in `binary_stream.rs`:
   chunk payloads into legacy blob_state or re-encodes all retained payload bytes.
 - **Preserve ingress validation:** today view rebuild verifies every retained
   complete manifest's whole-file hash. Per-chunk hashes do not prove that final
-  hash. A newly complete manifest, including hidden/history alternatives, must
-  be streamed/verified before committing the enabling receive receipt/cursor.
-  `missing.is_empty()` alone must never become a verified-content result.
-- Cached verification proofs are private typed capabilities bound to exact graph
-  metadata and immutable sources; no persisted boolean substitutes for verification. Browser async reads may occur outside a final
-  IndexedDB write transaction, but final commit rechecks the planned metadata
-  revision/root and source existence/immutability/pins. Stale proof/input yields
-  retry without advancing cursor or visibility. A metadata chunk record with missing
-  backing bytes is storage corruption/I/O failure, not another missing download. Native may resolve synchronously
+  hash. Initially stream-verify **all complete retained manifests**, including
+  hidden/history alternatives, before committing the enabling receive receipt/
+  cursor. Optimize to newly complete manifests only after a trustworthy prior
+  verification capability is introduced. The first implementation reverifies
+  rather than adding a durable verification-cache format. `missing.is_empty()`
+  alone must never become a verified-content result.
+- Verification proofs are private typed capabilities bound to exact graph
+  metadata and immutable sources; no persisted boolean substitutes for verification.
+  Browser async reads may occur outside a final IndexedDB write transaction, but
+  final commit rechecks exact planned metadata State and source existence/
+  immutability/pins. Stale proof/input yields retry without advancing cursor or
+  visibility. A metadata chunk record with missing backing bytes is corruption/
+  I/O failure, not another missing download. Native may resolve synchronously
   within its bounded transaction or use the same checked plan.
-- Existing expected-graph/entry preconditions remain explicit. Metadata includes
-  immutable payload digests for all records; checking only file bytes or a
-  selected hash cannot authorize a different causal head or namespace revision.
-  Every output read also verifies actual chunk bytes; a corrupted stored chunk
-  must never be streamed as valid merely because an old proof exists.
+- Existing expected-graph/entry preconditions remain explicit. Exact MetadataState
+  equality initially replaces exact State equality, preserving revision, record
+  commitments/events/pages and activities. This is not a weaker version-only
+  check. Checking only file bytes or a selected hash cannot authorize another
+  causal head or namespace revision. Every output read also verifies actual
+  chunk bytes; a corrupted chunk cannot become valid because an old proof exists.
 
 Chunk storage/quota and wire-byte limits remain distinct from causal metadata
 limits. Keeping a 4,096-record limit that counts all retained chunk bodies can
