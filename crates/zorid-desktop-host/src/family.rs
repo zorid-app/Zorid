@@ -90,7 +90,7 @@ pub(super) fn execute(
             sync.check_binding(vault).map_err(|error| sync_fault(error, false))?;
             apply_reply(vault.family_apply(&command.request, command.create_mode).map_err(native_fault)?)
         }
-        Command::FixtureFamilyApply { family } => {
+        Command::FixtureFamilyApply { family } | Command::FileCommand { family, .. } => {
             let command = family.decode(body)?;
             // Validate the already-enrolled authority against this startup-only
             // configuration through the common runner before touching the vault.

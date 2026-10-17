@@ -197,3 +197,14 @@ test('explicit createText capability is used for creation while modify keeps the
   assert.equal(creates,1);assert.equal(writes,0);await assert.rejects(vault.create('New.md','lost'),/already exists/);
   await vault.modify('New.md','edited');assert.equal(creates,1);assert.equal(writes,1);
 });
+
+test('durable namespace rename retains committed move and earlier backlinks when later CAS fails',async()=>{
+  const storage=new MemoryAdapter({'Old.md':'# old','A.md':'[[Old]]','B.md':'[[Old]]'});const moves:string[]=[];
+  const adapter={durableNamespace:true,durableWrites:{readText:async(path:string)=>({entryId:path,content:await storage.read(path)}),readTextById:async(path:string)=>({entryId:path,path,revision:'revision',content:await storage.read(path)})} as any,list:()=>storage.list(),read:(path:string)=>storage.read(path),mkdir:(path:string)=>storage.mkdir(path),trash:(path:string)=>storage.trash(path),
+    write:async()=>{throw new Error('blind write forbidden');},rename:async(from:string,to:string)=>{moves.push(`${from}->${to}`);await storage.rename(from,to);},
+    compareAndWrite:async(path:string,expected:string,text:string)=>{if(path==='B.md')throw new Error('concurrent edit');assert.equal(await storage.read(path),expected);await storage.write(path,text);}};
+  const vault=new Vault(adapter);await vault.initialize();const events:string[]=[];vault.on('rename',e=>events.push(e.path));
+  await assert.rejects(vault.rename('Old.md','New.md'),/Rename committed/);
+  assert.deepEqual(moves,['Old.md->New.md']);assert.deepEqual(events,['New.md']);
+  assert.equal(await storage.read('A.md'),'[[New]]');assert.equal(await storage.read('B.md'),'[[Old]]');assert.equal(vault.entries.has('New.md'),true);
+});

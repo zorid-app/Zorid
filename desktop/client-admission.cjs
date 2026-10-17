@@ -33,7 +33,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     if (capability.checkpoints.scope.vaultId !== reference.local_store_id || capability.checkpoints.scope.clientId !== reference.client_id) throw fail('client_scope_mismatch');
     let creates;
     if(service.familyMode){
-      if(!host.capabilities?.includes('create_text'))throw fail('unsupported_host_capability');
+      if(!host.capabilities?.includes('file_command'))throw fail('unsupported_host_capability');
       creates=desktopTextCreates(shadow,capability.checkpoints);
       await creates.recover();
     }
@@ -65,7 +65,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
-      ...(creates?{createText:input=>invoke(()=>creates.create(input),null)}:{}),
+      ...(creates?{createText:input=>invoke(()=>creates.create(input),null),fileCommand:input=>invoke(()=>creates.execute(input),null)}:{}),
       release(flushGate) {
         if (phase === 'released') return Promise.resolve();
         if (closing) return closing;

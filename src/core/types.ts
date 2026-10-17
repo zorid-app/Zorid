@@ -15,6 +15,8 @@ export interface VaultEntry {
 export interface VaultAdapter {
   /** Optional durable text-save protocol; commit/publication run through Vault. */
   readonly durableWrites?: DurableWrites;
+  /** Namespace commits are durable independently of optional backlink rewrites. */
+  readonly durableNamespace?: boolean;
   list(): Promise<VaultEntry[]>;
   /** Read one entry's current metadata without listing the entire vault. Missing paths return null. */
   stat?(path: string): Promise<VaultEntry | null>;
@@ -23,7 +25,7 @@ export interface VaultAdapter {
   /** Explicit create, never overwrite; optional durable native creation consumer. */
   createText?(path: string, content: string): Promise<void>;
   /** Compare and write in one shared host queue; reject mismatches without writing. */
-  compareAndWrite?(path: string, expectedContent: string, content: string): Promise<void>;
+  compareAndWrite?(path: string, expectedContent: string, content: string, expectedIdentity?: {entryId:string;revision:string}): Promise<void>;
   /** Binary APIs preserve every byte; implementations must not retain mutable caller buffers. */
   readBinary?(path: string): Promise<Uint8Array>;
   writeBinary?(path: string, data: Uint8Array): Promise<void>;

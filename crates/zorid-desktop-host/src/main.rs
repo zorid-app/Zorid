@@ -38,6 +38,7 @@ enum Command {
     FixtureFamilyApply {
         family: WireFamilyCommand,
     },
+    FileCommand { client_id: OperationId, family: WireFamilyCommand },
     CreateText {
         client_id: OperationId,
         operation_id: OperationId,
@@ -303,7 +304,7 @@ impl ClientLeases {
         reference: Option<&ClientLeaseRef>,
     ) -> Result<(), Value> {
         let client = match command {
-            Command::PrepareIntent { client_id, .. } | Command::ListIntents { client_id, .. } | Command::CreateText { client_id, .. } => {
+            Command::PrepareIntent { client_id, .. } | Command::ListIntents { client_id, .. } | Command::CreateText { client_id, .. } | Command::FileCommand { client_id, .. } => {
                 Some(client_id)
             }
             Command::CommitIntent { reference }
@@ -434,7 +435,8 @@ fn execute(
         | Command::FixtureFamilyStatus
         | Command::FixtureFamilyOnce { .. }
         | Command::FixtureFamilyApply { .. }
-        | Command::CreateText { .. }) => {
+        | Command::CreateText { .. }
+        | Command::FileCommand { .. }) => {
             return family::execute(vault, sync, command, body);
         }
         Command::ClaimClient { client_id } => {
@@ -727,7 +729,7 @@ fn run() -> io::Result<()> {
     };
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"capabilities":["create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"capabilities":["file_command","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
@@ -755,6 +757,7 @@ fn run() -> io::Result<()> {
                 | Command::FixtureFamilyOnce { .. }
                 | Command::FixtureFamilyApply { .. }
                 | Command::CreateText { .. }
+                | Command::FileCommand { .. }
                 | Command::ClaimClient { .. }
                 | Command::ReleaseClient { .. }
                 | Command::CheckpointCas { .. }

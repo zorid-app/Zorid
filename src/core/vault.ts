@@ -508,9 +508,38 @@ export class Vault {
         }
         if (after !== before) changes.push({ old: source, path: newSource, before, after });
       }
+      const stableBacklinks = new Map<string,string>();
+      if (this.adapter.durableNamespace && changes.length) {
+        if (!this.adapter.durableWrites || !this.adapter.compareAndWrite) throw new Error('Durable backlink updates require coherent reads and compare-and-write');
+        for (const change of changes) {
+          const observed = await this.adapter.durableWrites.readText(change.old);
+          if (observed.content !== change.before) throw new Error(`File changed before rename: ${change.old}`);
+          stableBacklinks.set(change.old, observed.entryId);
+        }
+      }
       validate?.();
       await this.adapter.rename(oldPath, newPath);
       const written: typeof changes = [];
+      if (this.adapter.durableNamespace) {
+        let rewriteError: unknown;
+        try {
+          if (changes.length && !this.adapter.compareAndWrite) throw new Error('Durable backlink updates require compare-and-write');
+          for (const change of changes) {
+            const entryId = stableBacklinks.get(change.old)!;
+            const observed = await this.adapter.durableWrites!.readTextById(entryId);
+            if (!observed || observed.path !== change.path || observed.content !== change.before) throw new Error(`Backlink target changed during rename: ${change.path}`);
+            await this.adapter.compareAndWrite!(change.path, change.before, change.after, {entryId,revision:observed.revision});
+            written.push(change);
+          }
+        } catch (error) { rewriteError = error; }
+        // The namespace receipt is already committed. Never issue compensating
+        // writes/moves that could overwrite a concurrent edit or retry history.
+        await this.refresh();
+        this.emit('rename', { path: newPath, oldPath, entry: this.entries.get(newPath) });
+        for (const change of written) this.emit('modify', { path: change.path, entry: this.entries.get(change.path) });
+        if (rewriteError) throw new AggregateError([rewriteError], 'Rename committed, but some links could not be updated; existing contents were retained');
+        return;
+      }
       try {
         for (const change of changes) {
           if (await this.adapter.read(change.path) !== change.before) throw new Error(`File changed during rename: ${change.path}`);
