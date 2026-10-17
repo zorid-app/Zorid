@@ -2094,9 +2094,11 @@ dependencies = [
  "sha2",
  "tempfile",
  "uuid",
+ "zorid-bases",
  "zorid-client-sync",
  "zorid-core",
  "zorid-crypto",
+ "zorid-index",
  "zorid-store",
  "zorid-sync-protocol",
 ]

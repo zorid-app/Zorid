@@ -4,6 +4,7 @@
 mod bases;
 mod crypto;
 mod document;
+mod document_index;
 mod rpc;
 mod sync;
 
