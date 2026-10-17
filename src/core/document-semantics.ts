@@ -75,7 +75,7 @@ export interface DocumentPin {
  * Every read stays on its retained generation. Expiry requires explicit reopen;
  * callers must never silently retry against a different generation. */
 export interface DocumentService {
-  status():Promise<DocumentStatus>;open():Promise<DocumentPin>;rebuild():Promise<void>;
+  status():Promise<DocumentStatus>;initialize():Promise<void>;open():Promise<DocumentPin>;rebuild():Promise<void>;
   begin():Promise<DocumentStage>;pump(stageId:DocumentStageId):Promise<DocumentStage>;publish(stageId:DocumentStageId):Promise<DocumentSnapshotId>;
 }
 export interface DocumentSemanticsCapability {readonly documentSemantics?:DocumentService}

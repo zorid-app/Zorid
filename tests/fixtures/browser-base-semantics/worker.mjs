@@ -62,12 +62,15 @@ function compareQuery(outcome, item) {
   const result = outcome.value;
   const snapshotFailure = difference(result.snapshotId, item.request.snapshot?.snapshotId ?? item.request.snapshotId, '$.snapshotId');
   if (snapshotFailure) return snapshotFailure;
-  const paths = new Map(result.rows.map(row => [row.entryId, row.path]));
   const projected = {
     paths: result.rows.map(row => row.path),
+    snapshotId: result.snapshotId,
+    relationshipsAvailable: result.relationshipsAvailable,
+    metadataComplete: result.metadataComplete,
+    metadataIssues: result.metadataIssues,
     properties: result.properties,
     counts: result.counts,
-    groups: result.groups.map(group => ({ key: compact(group.key), paths: group.entryIds.map(id => paths.get(id)) })),
+    groups: result.groups.map(group => ({ key: compact(group.key), entryIds: group.entryIds })),
     groupOptions: compact(result.groupOptions),
   };
   for (const [key, expected] of Object.entries(item.expected)) {
@@ -76,7 +79,7 @@ function compareQuery(outcome, item) {
         const row = result.rows.find(row => row.path === path);
         if (!row) return { path: `$.rows[${path}]`, expected: 'row present' };
         for (const [property, value] of Object.entries(values)) {
-          const failure = difference(compact(row.values[property]), value, `$.rows[${path}].values.${property}`);
+          const failure = difference(compact(row.values[property]), compact(value), `$.rows[${path}].values.${property}`);
           if (failure) return failure;
         }
       }
@@ -85,7 +88,7 @@ function compareQuery(outcome, item) {
         if (!result.diagnostics.some(actual => Object.entries(required).every(([key, value]) => difference(actual[key], value) === null))) return { path: '$.diagnostics', missing: required };
       }
     } else {
-      const failure = difference(projected[key], expected, `$.${key}`);
+      const failure = difference(compact(projected[key]), compact(expected), `$.${key}`);
       if (failure) return failure;
     }
   }
