@@ -116,6 +116,23 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Latest execution steering — Vite then Stage5 (2026-10-17 22:41 UTC):
+- User authorizes Vite renderer migration now; Stage5 follows it. New built-in
+  goal tracks both in this order. Mobile owner continues UX improvements in
+  parallel; P2P remains deferred. Root owns manifests/locks/root config/assets/
+  packaging, isolated tingkai-c/vite-renderer-migration from4cdafd33. Independent
+  asset slice vite-asset-pipeline and source/packaging reviews proceed separately.
+- Preserve build dist/index.html and relative native assets, native marker
+  routing, automatic validated browser Rust/WASM and independent native core.
+  Keep Electron main/preload/Rust build authority separate from renderer bundler.
+  Required acceptance: dev/production browser +worker/WASM, nativefile renderer/
+  packaging and coordinated iOS asset loading. No default change before checks.
+- Native phone6 built52508/installed+launched24342 exit0 on frozen829cd2c9.
+  Detailed UI checks ongoing, no compiler live at last report. Root requested
+  slot release before heavy Vite proof. Native owns title→body keyboard-bounce
+  finding msg5dc07b64e4ef and mobile-specific source; root avoids focus edits.
+
+
 Latest checkpoint — 2026-10-17 22:25 UTC (supersedes older pending statuses):
 - Stage4 accepted and committed main2604057b; built-in Stage4 goal complete.
   Root test apps/servers/compilers are stopped. Native owner received canonical
