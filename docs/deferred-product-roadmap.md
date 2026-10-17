@@ -117,6 +117,41 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- Stage4 is now explicitly authorized and active. First-goal acceptance is
+  committed as f69dc90; new built-in goal covers all shared document semantics
+  and actual native/WASM/CLI/web/desktop consumer parity. Main integration stays
+  root-only. Independent native-mobile implementation runs alongside Stage4;
+  it need not wait for document-query APIs to build its shell/storage/editor slice.
+  Durable coordination inbox: `run:run_3e72b2c9ab72`; root terminal
+  `term_2fbd0185-6f86-4649-824c-92faf46852f7`.
+- Stage4 preparation owners (all based on f69dc90, no heavy build granted):
+  Markdown contracts/corpus: stage4_markdown_contracts, Orca worktree
+  `/Users/ctk/orca/workspaces/Zorid/stage4-markdown-contracts`, branch
+  `tingkai-c/stage4-markdown-contracts`, owned docs/stage4-markdown-contract.md
+  and tests/fixtures/document-semantics/markdown/**. Base reuse/contracts:
+  stage4_base_reuse, worktree stage4-base-contract, matching branch, owned
+  docs/stage4-base-contract.md and tests/fixtures/document-semantics/bases/**.
+  Index/query contract: streaming_acceptance_sol, worktree stage4-index-contract,
+  matching branch, owned docs/stage4-index-contract.md. Root freezes shared
+  types/API boundaries and dependency locks before implementation assignments.
+  Contracts/fixtures are preparation, not implementation or native/WASM parity.
+- Native-mobile owner handshake acknowledged via msg_92b8e24a3e93 and
+  msg_1c0e22320c5d: terminal term_bbf1787b-d2e5-402a-b366-24d40a2385c3,
+  worktree `/Users/ctk/orca/workspaces/Zorid/native-mobile-ios`, branch
+  `tingkai-c/native-mobile-ios`. Owns ios/**, mobile/** (independent mobile/rust
+  staticlib workspace), src/platform/mobile-native.ts and mobile integration doc.
+  Scoped shared ownership: desktop-host Cargo.toml/main.rs/new lib.rs to extract
+  an in-process EmbeddedHost while preserving subprocess contracts; native
+  Cargo.toml/lib.rs/client_admission.rs target guards and audited mobile syscall
+  compatibility. Broader store/fs authority edits require exact-file agreement.
+  Root retains platform/index.ts selection seam and root lockfiles; worker sends
+  source-only seam proposal. Stage4 host semantic methods wait for extraction
+  freeze; no duplicated mobile Markdown/Base/index engine.
+- Heavy slot reserved to native-mobile for one bounded iOS feasibility pass,
+  acknowledged start msg_065f67df919b: target installation then one-job cross
+  compile, no simulator yet. Actual process handle/result remains to be reported;
+  slot reservation is not proof of a live build or compilation success. Stage4
+  workers remain source/lightweight only until explicit release/next grant.
 - Integrated on main293df57: root merged independently reviewed combined
   candidate3a082b0 with a normal no-ff merge after source/lock closure review.
   Main-only divergence was documentation; the merge had no conflicts and no
