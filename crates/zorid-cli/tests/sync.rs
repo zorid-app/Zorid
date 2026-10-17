@@ -126,7 +126,10 @@ fn cli(vault: &Path, args: &[&str]) -> Output {
             .unwrap();
         bytes
     });
-    let deadline = Instant::now() + Duration::from_secs(25);
+    // The 2 MiB binary fixture's debug build repeatedly loads/validates the
+    // legacy whole JSON graph during family_seal/ACK (profiled CPU work, not an
+    // RPC wait). Keep child execution bounded without changing RPC deadlines.
+    let deadline = Instant::now() + Duration::from_secs(90);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;

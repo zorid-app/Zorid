@@ -51,3 +51,20 @@ codes and runtime lifecycle. Independent CLI process fixtures retain offline,
 lost-ACK/restart, exact-wire, isolation, revocation and protocol-feature checks
 against the actual relay adapter. Source implementation alone does not establish
 those integrated checks, desktop/browser parity, TLS deployment or enrollment UI.
+
+The 2026-10-17 focused binary fixture investigation used the compiled
+`sync-6744fc778313f4ff` test, exact
+`binary_larger_than_one_envelope_moves_and_deletes_with_exact_bytes`, with one
+test thread. The 25-second child deadline stopped the first upload sweep;
+the direct repro exited101 after37.06seconds. Child29911 used85.7% CPU and
+28,528KiB RSS (about28MiB). The three-second sample at
+`/private/tmp/zorid-native-sync-29911.sample.txt` places1515 of2160 main-thread
+samples in `family_seal` and643 in `family_ack`, predominantly
+`require_scope -> file_state::load -> check_file -> v2::Payload::decode` and JSON
+byte-array validation. The RPC worker was waiting for commands in2159 of2160
+samples. This identifies a legacy local whole-graph CPU bottleneck in this debug
+fixture, not evidence of a stalled RPC. Its test-only per-child deadline is now
+90seconds; the 2MiB payload, exact-byte/move/delete assertions and production
+RPC deadlines are unchanged. A successful bounded rerun remains required; this
+sample makes no throughput or completed-convergence claim. Normalized streaming
+activation must avoid this legacy full-graph seal/ACK path.
