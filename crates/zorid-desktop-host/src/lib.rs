@@ -2,6 +2,11 @@
 //! to NativeVault. No listener, daemon, filesystem writes or alternate store here.
 mod binary;
 mod documents;
+mod embedded_fixture_sync;
+pub use embedded_fixture_sync::{
+    EmbeddedFixtureSyncLimits, MobileFixtureReport, MobileFixtureStatus, TrustedFixtureSyncOptions,
+    MAX_EMBEDDED_FIXTURE_RESULT_BYTES,
+};
 mod family;
 use family::WireFamilyCommand;
 use serde::{Deserialize, Serialize};
@@ -832,6 +837,7 @@ fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<ReconciliationSta
 /// Trusted in-process native host. The shell supplies a selected filesystem root;
 /// web content only submits the existing bounded command frames. No daemon.
 pub struct EmbeddedHost {
+    fixture_sync: Option<embedded_fixture_sync::EmbeddedFixtureSync>,
     vault: NativeVault,
     leases: ClientLeases,
     reconciliation: ReconciliationStatus,
@@ -840,7 +846,7 @@ impl EmbeddedHost {
     pub fn open_local(root: &std::path::Path) -> Result<Self, Value> {
         let mut vault = NativeVault::open(root).map_err(native_fault)?;
         let reconciliation = initialize_desktop_vault(&mut vault)?;
-        Ok(Self { vault, leases: ClientLeases::default(), reconciliation })
+        Ok(Self { vault, leases: ClientLeases::default(), reconciliation, fixture_sync: None })
     }
     pub fn reconciliation(&self) -> Value {
         serde_json::to_value(&self.reconciliation).expect("serializable status")
