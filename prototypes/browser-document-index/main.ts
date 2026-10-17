@@ -76,7 +76,7 @@ async function run(){
     stage('concurrent index publication');const sa=await a.index.begin(),sb=await b.index.begin();await a.index.pump(sa.stageId);await b.index.pump(sb.stageId);await a.index.publish(sa.stageId);await expectedError(()=>b.index.publish(sb.stageId),'index_head_changed');await b.index.discard(sb.stageId);checks.concurrentPublication=true;
     stage('invalid Base source remains durable');await a.adapter.write('Links.base','views: [');await build(a.index);const malformed=await a.index.open();await expectedError(()=>a.index.base({pinId:malformed.pinId,id:base.entry.id}),'index_base_compile');await exact(a,'Links.base','views: [');await a.index.closePin(malformed.pinId);
     currentSnapshot=(await a.index.status()).snapshot!;checks.invalidBasePreserved=true;
-  }finally{stage('release fixture workers');await releaseAll();}
+  }finally{await releaseAll();}
   stage('fresh worker cache restore');checks.restart=await persisted();const manifest=await fetch(new URL('lib/core/manifest.json',document.baseURI)).then(r=>r.json());
   return {status:'passed',fixtureSource:__DOCUMENT_INDEX_SOURCE__,wasm:manifest,browser:navigator.userAgent,database,elapsedMs:Math.round(performance.now()-started),snapshot:currentSnapshot,checks};
 }
