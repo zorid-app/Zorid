@@ -6,6 +6,8 @@ const { pathToFileURL } = require('node:url');
 const { VaultService } = require('./vault-service.cjs');
 const { WindowBroker } = require('./window-broker.cjs');
 const { createContextMenuController } = require('./context-menu.cjs');
+const { validateMenuHotkeys, workspaceFileMenu } = require('./menu-hotkeys.cjs');
+const menuHotkeys = new WeakMap();
 const contextMenus = createContextMenuController(Menu);
 app.setName('Zorid');
 const devUrl = process.env.ZORID_DEV_URL;
@@ -23,6 +25,7 @@ function registerIPC() {
   handle('showContextMenu', (record, _event, request) => contextMenus.popup(record.window, request));
   handle('dismissContextMenu', record => contextMenus.close(record.window));
   handle('getWindowInfo', record => broker.info(record));
+  handle('setMenuHotkeys', (record, _event, bindings) => { menuHotkeys.set(record.window, validateMenuHotkeys(bindings)); if (BrowserWindow.getFocusedWindow() === record.window) refreshApplicationMenu(); });
   handle('newWindow', async record => ({ id: (await createWindow({ source: record })).id }));
   handle('getVault', record => broker.describe(record));
   handle('openVault', async (record, event) => {
@@ -44,6 +47,7 @@ async function createWindow({ source, primary = false, initialState = 'empty' } 
   if (source) broker.assertLive(source);
   const window = new BrowserWindow({ width: 1280, height: 860, minWidth: 640, minHeight: 480, title: 'Zorid', backgroundColor: '#1e1e1e', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 15 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   const record = broker.register(window, { primary, initialState });
+  window.on('focus', refreshApplicationMenu);
   window.on('closed', () => { contextMenus.close(window); broker.remove(record); });
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -64,15 +68,25 @@ function openEmptyWindow() {
   const source = focused ? broker.windows.get(focused.webContents.id) : undefined;
   createWindow({ source }).catch(error => dialog.showErrorBox('Could not open window', error.message));
 }
+function refreshApplicationMenu() {
+  const focused = BrowserWindow.getFocusedWindow();
+  const trusted = focused && broker.windows.has(focused.webContents.id) ? focused : null;
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    ...(process.platform === 'darwin' ? [{ role:'appMenu' }] : []),
+    workspaceFileMenu(trusted ? menuHotkeys.get(trusted) : null, {
+      newWindow: openEmptyWindow,
+      closeTab: () => { const owner = BrowserWindow.getFocusedWindow(); if (owner && broker.windows.has(owner.webContents.id)) owner.webContents.send('zorid:command', 'close-tab'); },
+      closeWindow: () => { const owner = BrowserWindow.getFocusedWindow(); if (owner && broker.windows.has(owner.webContents.id)) owner.close(); },
+    }),
+    { role:'editMenu' }, { role:'viewMenu' },
+    { role:'windowMenu', submenu:[{role:'minimize'},{role:'zoom'},...(process.platform==='darwin'?[{type:'separator'},{role:'front'}]:[{label:'Close window',click:()=>{const owner=BrowserWindow.getFocusedWindow();if(owner&&broker.windows.has(owner.webContents.id))owner.close();}}])] },
+  ]));
+}
 app.whenReady().then(async () => {
   try { lastVaultPath = JSON.parse(await fs.readFile(path.join(app.getPath('userData'), 'vault.json'), 'utf8')).path; }
   catch { /* A missing previous vault returns to the vault picker. */ }
   registerIPC();
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
-    { label: 'File', submenu: [{ label: 'New window', accelerator: 'CmdOrCtrl+Shift+N', click: openEmptyWindow }, { type: 'separator' }, { role: 'close' }] },
-    { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
-  ]));
+  refreshApplicationMenu();
   await createWindow({ primary: true, initialState: 'restore' });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow({ primary: true, initialState: 'restore' }).catch(error => dialog.showErrorBox('Could not open window', error.message)); });
 });

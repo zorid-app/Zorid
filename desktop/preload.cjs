@@ -7,6 +7,12 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
   getPathForFile: file => webUtils.getPathForFile(file),
   getWindowInfo: () => invoke('getWindowInfo'),
   newWindow: () => invoke('newWindow'),
+  setMenuHotkeys: bindings => invoke('setMenuHotkeys', bindings),
+  onCommand: callback => {
+    const listener = (_event, id) => { if (id === 'close-tab') callback(id); };
+    ipcRenderer.on('zorid:command', listener);
+    return () => ipcRenderer.removeListener('zorid:command', listener);
+  },
   compareAndWrite: (vault, path, expectedContent, contents) => invoke('compareAndWrite', vault, path, expectedContent, contents),
   getVault: () => invoke('getVault'),
   openVault: () => invoke('openVault'),

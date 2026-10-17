@@ -7,6 +7,8 @@ export interface VaultChange { vault?: string; type: string; path?: string; mess
 export interface DesktopBridge {
   getWindowInfo?(): Promise<DesktopWindowInfo>;
   newWindow?(): Promise<{ id: string }>;
+  setMenuHotkeys?(bindings: { id: 'new-window' | 'close-tab'; shortcut: string }[]): Promise<void>;
+  onCommand?(callback: (id: 'close-tab') => void): () => void;
   compareAndWrite?(vault: string, path: string, expectedContent: string, contents: string): Promise<void>;
   showContextMenu?(request: ContextMenuRequest): Promise<string | null>;
   dismissContextMenu?(): Promise<void>;

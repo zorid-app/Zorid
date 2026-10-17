@@ -7,6 +7,8 @@ import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import type { EmbedRequest } from '../ui/markdown.ts';
 import { bodyStart } from './live-properties.ts';
+import { isolateHistory } from '@codemirror/commands';
+import { imageWidthLabel } from './image-width.ts';
 import { icon } from '../ui/icons.ts';
 import { createImageEmbedControls } from './image-embed-controls.ts';
 import type { ImageEmbedControls } from './image-embed-controls.ts';
@@ -16,6 +18,9 @@ interface EmbedSpan {
   to: number;
   targetFrom: number;
   targetTo: number;
+  labelFrom: number;
+  labelTo: number;
+  hasWikiAlias: boolean;
   blockFrom: number;
   blockTo: number;
   block: boolean;
@@ -51,7 +56,7 @@ function unescape(value: string): string {
 function findEmbeds(state: EditorState): Omit<EmbedSpan, 'identity'>[] {
   const tree = syntaxTree(state), prefix = bodyStart(state);
   const blocked: { from: number; to: number }[] = [];
-  const found: { from: number; to: number; targetFrom: number; targetTo: number; request: EmbedRequest }[] = [];
+  const found: { from: number; to: number; targetFrom: number; targetTo: number; labelFrom: number; labelTo: number; hasWikiAlias: boolean; request: EmbedRequest }[] = [];
   tree.iterate({ enter(node) {
     if (excludedNodes.has(node.name)) { blocked.push({ from: node.from, to: node.to }); return false; }
     if (node.name !== 'Image') return;
@@ -64,6 +69,7 @@ function findEmbeds(state: EditorState): Omit<EmbedSpan, 'identity'>[] {
       if (target) found.push({ from: node.from, to: node.to,
         targetFrom: url.from + (state.doc.sliceString(url.from, url.from + 1) === '<' ? 1 : 0),
         targetTo: url.to - (state.doc.sliceString(url.to - 1, url.to) === '>' ? 1 : 0),
+        labelFrom: node.from + 2, labelTo: close.from, hasWikiAlias: false,
         request: { kind: 'markdown', target, label: unescape(state.doc.sliceString(node.from + 2, close.from)) } });
     } else blocked.push({ from: node.from, to: node.to });
     return false;
@@ -80,7 +86,8 @@ function findEmbeds(state: EditorState): Omit<EmbedSpan, 'identity'>[] {
     const target = (separator < 0 ? match[1] : match[1].slice(0, separator)).trim();
     const rawTarget = separator < 0 ? match[1] : match[1].slice(0, separator);
     if (target) found.push({ from, to, targetFrom: from + 3 + rawTarget.length - rawTarget.trimStart().length,
-      targetTo: from + 3 + rawTarget.trimEnd().length, request: { kind: 'wiki', target,
+      targetTo: from + 3 + rawTarget.trimEnd().length,
+      labelFrom: separator < 0 ? to - 2 : from + 4 + separator, labelTo: to - 2, hasWikiAlias: separator >= 0, request: { kind: 'wiki', target,
       ...(separator < 0 ? {} : { label: match[1].slice(separator + 1).trim() }) } });
   }
   found.sort((left, right) => left.from - right.from || right.to - left.to);
@@ -164,6 +171,27 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
                 view.dispatch({ effects: selectImage.of(span.identity), selection: { anchor: span.from }, userEvent: 'select.pointer' });
               },
               onEditSource: () => { if (!disposed) editSource(view, this.span.identity, true); },
+              resizeMaxWidth: () => view.contentDOM.offsetWidth,
+              onResizeStart: () => {
+                const initial = view.state.field(field, false)?.spans.find(item => item.identity === this.span.identity);
+                if (!initial || disposed || view.state.readOnly) return;
+                const original = view.state.sliceDoc(initial.from, initial.to);
+                return { commit: width => {
+                  const current = view.state.field(field, false)?.spans.find(item => item.identity === this.span.identity);
+                  if (disposed || view.state.readOnly || !current || view.state.sliceDoc(current.from, current.to) !== original) return;
+                  const label = view.state.sliceDoc(current.labelFrom, current.labelTo);
+                  const resized = imageWidthLabel(label, width, current.request.kind);
+                  if (resized === undefined || resized === label) return;
+                  let from = current.labelFrom, insert = resized;
+                  if (current.request.kind === 'wiki') {
+                    if (!current.hasWikiAlias && resized) insert = `|${resized}`;
+                    else if (current.hasWikiAlias && !resized) from--;
+                  }
+                  if (view.state.sliceDoc(from, current.labelTo) === insert) return;
+                  view.dispatch({ changes: { from, to: current.labelTo, insert },
+                    annotations: isolateHistory.of('full'), userEvent: 'input.resize' });
+                } };
+              },
               onZoom: (image, event) => {
                 const open = image.onclick as ((event: MouseEvent) => unknown) | null;
                 if (!disposed) open?.call(image, event);

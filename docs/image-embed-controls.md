@@ -10,7 +10,7 @@ The original implementation follows the image-specific observations in [embed-co
 
 Six focused tests cover selection/action dispatch, width gating and CSS applicability, mobile controls, image replacement, detached/disposed ownership, queued callbacks, and independent destination documents. Strict scoped TypeScript and whitespace checks pass. These checks do not measure browser layout or establish image/lightbox native parity.
 
-Resize-corner dragging/reset, its source width writes, the reference's separate image reveal tooltip, image context-menu parity and complete image keyboard behavior remain explicitly deferred. No resize affordance is shown until its operation and ownership are implemented; the current host's retained source-plus-renderer architecture is not advertised as the reference tooltip implementation.
+Desktop resize-corner dragging/reset and source width writes are implemented separately in [image-resize.md](image-resize.md). The reference's separate image reveal tooltip, image context-menu parity and complete image keyboard behavior remain gaps; the retained source-plus-renderer architecture is not advertised as the reference tooltip implementation.
 
 ## Desktop Live host integration
 
@@ -44,4 +44,4 @@ At this checkpoint 52 focused tests pass (46 editor cases and 6 helper cases), w
 scoped TypeScript and whitespace checks. Tests cover real CodeMirror selection,
 source mapping after insertion, multiple image identities, source/render ownership,
 async type changes and observer teardown. Native visual/interaction verification,
-mobile plumbing, resize writes, reveal tooltip and full keyboard parity remain gaps.
+mobile plumbing, resize native verification, reveal tooltip and full keyboard parity remain gaps.

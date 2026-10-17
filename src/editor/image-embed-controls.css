@@ -11,3 +11,14 @@
 .zorid-image-selected > .zorid-image-embed-actions { opacity: 1; pointer-events: auto; }
 .zorid-image-no-hover-actions:not(.zorid-image-selected) > .zorid-image-embed-actions { opacity: 0; pointer-events: none; }
 .zorid-image-selected::after { position: absolute; inset: 0; border-radius: var(--image-radius, 4px); box-shadow: inset 0 0 0 2px var(--text-muted), inset 0 0 0 4px var(--background-primary); content: ''; pointer-events: none; }
+
+.zorid-image-resize-corner { position: absolute; width: 30px; height: 30px; bottom: 0; inset-inline-end: 0; cursor: nwse-resize; touch-action: none; opacity: 0; z-index: 1; }
+.zorid-image-resize-corner::after { content: ''; position: absolute; width: 10px; height: 10px; bottom: 6px; inset-inline-end: 6px; border-bottom: 2px solid var(--text-muted); border-inline-end: 2px solid var(--text-muted); border-end-end-radius: 4px; }
+.zorid-image-resize-corner:dir(rtl) { cursor: nesw-resize; }
+.zorid-image-resize-corner[hidden] { display: none; }
+.zorid-image-embed-controls-owner:hover > .zorid-image-resize-corner,
+.zorid-image-selected > .zorid-image-resize-corner,
+.zorid-image-resizing > .zorid-image-resize-corner { opacity: 1; }
+.zorid-image-resizing > .zorid-image-embed-actions { opacity: 1; pointer-events: auto; }
+
+.zorid-image-resizing > .zorid-image-resize-corner::after { border-color: var(--interactive-accent); }

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { createImageEmbedControls } from '../src/editor/image-embed-controls.ts';
 
-function setup(mobile = false) {
+function setup(mobile = false, resizable = false) {
   const dom = new JSDOM('<main class="image-embed"><img src="data:image/png,original"></main>');
   const doc = dom.window.document, container = doc.querySelector('main')!, image = doc.querySelector('img')!;
   const style = doc.createElement('style'); style.textContent = readFileSync(new URL('../src/editor/image-embed-controls.css', import.meta.url), 'utf8'); doc.head.append(style);
@@ -20,7 +20,7 @@ function setup(mobile = false) {
   } });
   image.onclick = () => { oldClicks++; };
   const controls = createImageEmbedControls(container, {
-    isMobile: mobile, onSelect: () => { selected++; controls.setSelected(true); },
+    isMobile: mobile, ...(resizable ? { onResizeStart: () => ({ commit() {} }) } : {}), onSelect: () => { selected++; controls.setSelected(true); },
     onEditSource: () => { edited++; }, onZoom: (current, event) => { zoomed++; current.onclick?.call(current, event); },
   });
   const button = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
@@ -115,4 +115,19 @@ test('controls use the destination document without globals and preserve other e
     assert.equal(first.counts().selected, 0);
     first.click(first.image); assert.equal(first.counts().selected, 1); assert.equal(second.counts().selected, 0);
   } finally { first.close(); second.close(); }
+});
+
+
+test('resize capability is desktop-only and small-image corner remains reachable independently of toolbar gating', () => {
+  const desktop = setup(false, true), mobile = setup(true, true);
+  try {
+    assert.equal(mobile.container.querySelector('.zorid-image-resize-corner'), null);
+    const corner = desktop.container.querySelector<HTMLElement>('.zorid-image-resize-corner')!;
+    assert.ok(corner); assert.equal(desktop.dom.window.getComputedStyle(corner).width, '30px');
+    assert.equal(desktop.dom.window.getComputedStyle(corner).height, '30px');
+    desktop.width(40); assert.notEqual(desktop.dom.window.getComputedStyle(corner).pointerEvents, 'none');
+    assert.equal(desktop.dom.window.getComputedStyle(desktop.container.querySelector('.zorid-image-embed-actions')!).pointerEvents, 'none');
+    desktop.controls.setSelected(true); assert.notEqual(desktop.dom.window.getComputedStyle(corner).pointerEvents, 'none');
+    assert.equal(desktop.dom.window.getComputedStyle(corner).opacity, '1');
+  } finally { desktop.close(); mobile.close(); }
 });

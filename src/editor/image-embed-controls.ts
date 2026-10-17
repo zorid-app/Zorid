@@ -1,4 +1,5 @@
 import { icon } from '../ui/icons.ts';
+import { createImageResizeControl } from './image-resize-control.ts';
 
 export interface ImageEmbedControlOptions {
   /** The host owns the selected image identity and maps it through edits. */
@@ -7,6 +8,9 @@ export interface ImageEmbedControlOptions {
   onEditSource(): void;
   /** Invoke the current image viewer capability directly, not image.click(). */
   onZoom(image: HTMLImageElement, event: MouseEvent): void;
+  /** A gesture captures its current source owner; commit may reject stale source. */
+  onResizeStart?(): { commit(width: number | null): void } | undefined;
+  resizeMaxWidth?(): number;
   isMobile?: boolean;
 }
 export interface ImageEmbedControls {
@@ -43,6 +47,9 @@ export function createImageEmbedControls(container: HTMLElement, options: ImageE
     for (const button of [source, zoom]) if (button) button.tabIndex = narrow && !selected ? -1 : 0;
   };
   const observer = typeof win.ResizeObserver === 'function' ? new win.ResizeObserver(updateWidth) : undefined;
+  const resize = !options.isMobile && options.onResizeStart ? createImageResizeControl(container, {
+    image: () => image, begin: options.onResizeStart, maxWidth: () => options.resizeMaxWidth?.() ?? container.parentElement?.clientWidth ?? 0,
+  }) : undefined;
   const refresh = () => {
     if (closed) return;
     const next = [...container.children].find(child => child instanceof win.HTMLImageElement) as HTMLImageElement | undefined;
@@ -55,7 +62,7 @@ export function createImageEmbedControls(container: HTMLElement, options: ImageE
     // Renderer refreshes may replace the root's children. The same handle keeps
     // its toolbar beside the new direct image, never inside nested embeds.
     if (toolbar.parentElement !== container) container.append(toolbar);
-    updateWidth();
+    resize?.refresh(); updateWidth();
   };
   const mutation = typeof win.MutationObserver === 'function' ? new win.MutationObserver(refresh) : undefined;
   mutation?.observe(container, { childList: true });
@@ -87,7 +94,7 @@ export function createImageEmbedControls(container: HTMLElement, options: ImageE
     refresh,
     destroy() {
       if (closed) return; closed = true;
-      observer?.disconnect(); mutation?.disconnect(); image?.removeEventListener('load', updateWidth);
+      resize?.destroy(); observer?.disconnect(); mutation?.disconnect(); image?.removeEventListener('load', updateWidth);
       container.removeEventListener('mousedown', down, true); container.removeEventListener('click', click, true);
       source.removeEventListener('click', edit); zoom?.removeEventListener('click', show);
       toolbar.remove(); container.classList.remove(ownerClass, selectedClass, narrowClass); image = undefined;
