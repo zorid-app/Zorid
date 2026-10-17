@@ -11,8 +11,8 @@ pub use checkpoints::{
 };
 mod namespace;
 pub use namespace::{
-    NamespaceAttempt, NamespaceEvidence, NamespaceMember, MAX_NAMESPACE_EVIDENCE_BYTES,
-    MAX_NAMESPACE_MEMBERS,
+    NamespaceAttempt, NamespaceAttemptMetadata, NamespaceEvidence, NamespaceMember,
+    NamespaceMemberMetadata, MAX_NAMESPACE_EVIDENCE_BYTES, MAX_NAMESPACE_MEMBERS,
 };
 mod host_intents;
 pub use host_intents::{

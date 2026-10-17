@@ -66,7 +66,8 @@ adopted because its bytes happen to match.
 Deleted file inodes, old directory inodes and immutable evidence have no automatic
 GC. Recovery inspects retained completed captures for late writes through open
 file/directory handles. File divergence creates a durable external observation;
-late directory children remain at the retained location and are reported.
+late directory children remain at the retained location and are reported. Missing
+retained captures are reported explicitly; absence is not interpreted as GC.
 `status.namespace_attempts` exposes member source/target paths and deterministic
 vault-relative recovery/stage locations without including file contents. A
 reserved location may be empty after successful file publication. This is a
@@ -75,9 +76,19 @@ headless recovery surface, not a finished recovery UI.
 Bounds: at most 10,000 explicit members, the configured native per-file limit,
 and 64 MiB of retained evidence bytes counting source and copied file-baseline
 bytes. Store APIs reject bound violations atomically. Multi-batch large-subtree
-operations and recovery conflict resolution are not implemented here. The current
-journal rewrites the full attempt on each member progress change, so large-folder
-performance is not established; per-member persistence is a follow-up gate.
+operations and recovery conflict resolution are not implemented here.
+
+The unshipped schema7 layout separates `namespace_attempts` (exact immutable job
+header and completion), `namespace_members` (immutable indexed change/evidence
+with source-identity metadata) and `namespace_member_progress` (small mutable
+phase fields). Member indexes remain stable because retained filenames depend on
+them. Progress updates compare one member and write only its progress row;
+immutable evidence is never rewritten by progress. Full creation/load/completion
+checks still validate the exact ordered member set, aggregate bound and job.
+Metadata queries do not select the evidence column. Native status and completed
+retries use metadata, pending recovery loads one attempt, and completed deletion
+audit loads one retained file's evidence at a time. This removes repeated
+whole-attempt byte writes; no large-vault throughput benchmark is claimed.
 
 ## Verification scope
 

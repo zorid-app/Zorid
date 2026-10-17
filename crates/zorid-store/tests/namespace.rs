@@ -90,7 +90,7 @@ fn complete_members(store: &mut Store, mut a: NamespaceAttempt) -> NamespaceAtte
         if next.published && next.change.after.kind == EntryKind::Folder {
             next.directory_stage_identity = Some(format!("new-{}", next.change.after.id.as_str()));
         }
-        a = store
+        a.members[index] = store
             .update_namespace_member(&a.job.job_id, &old, &next)
             .unwrap();
     }
@@ -286,7 +286,7 @@ fn schema_six_legacy_namespace_job_migrates_without_fabricated_attempt() {
     s.apply(&req).unwrap();
     drop(s);
     let c = rusqlite::Connection::open(&db).unwrap();
-    c.execute_batch("DROP TABLE namespace_attempts; PRAGMA user_version=6;")
+    c.execute_batch("DROP TABLE namespace_member_progress; DROP TABLE namespace_members; DROP TABLE namespace_attempts; PRAGMA user_version=6;")
         .unwrap();
     drop(c);
     let mut s = Store::open(&db).unwrap();
@@ -319,10 +319,10 @@ fn same_path_move_finishes_without_displacing_inode() {
 #[test]
 fn namespace_record_corruption_fails_before_progress_or_retirement() {
     for change in [
-        "json_set(record,'$.members[0].evidence.source_identity','')",
-        "json_set(record,'$.job.job_id','other')",
-        "json_set(record,'$.members[0].change.after.path','unrelated')",
-        "json_set(record,'$.members[0].finished',json('true'))",
+        "UPDATE namespace_members SET evidence=json_set(evidence,'$.source_identity','')",
+        "UPDATE namespace_attempts SET record=json_set(record,'$.job_id','other')",
+        "UPDATE namespace_members SET change=json_set(change,'$.after.path','unrelated')",
+        "UPDATE namespace_member_progress SET finished=1",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("db");
@@ -336,11 +336,7 @@ fn namespace_record_corruption_fails_before_progress_or_retirement() {
             .unwrap()
             .unwrap();
         let c = rusqlite::Connection::open(&db).unwrap();
-        c.execute(
-            &format!("UPDATE namespace_attempts SET record={change}"),
-            [],
-        )
-        .unwrap();
+        c.execute(change, []).unwrap();
         assert!(s.namespace_attempts(true).is_err());
         assert!(s.finish_namespace(&a.job.job_id).is_err());
         assert!(!s.projection_job(&a.job.job_id).unwrap().completed);
@@ -414,4 +410,167 @@ fn prior_publication_jobs_require_settlement_even_without_active_attempts() {
         assert!(s.namespace_attempts(true).unwrap().is_empty());
         assert_eq!(s.pending_projection_jobs(100).unwrap().len(), 1);
     }
+}
+
+#[test]
+fn metadata_does_not_decode_evidence_and_progress_reads_only_selected_member() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db");
+    let mut s = Store::open(&db).unwrap();
+    seed(&mut s, "folder", "old", EntryKind::Folder);
+    seed(&mut s, "a", "old/a", EntryKind::File);
+    seed(&mut s, "b", "old/b", EntryKind::File);
+    let req = moving(&s, "folder", "new", "move-many");
+    let mut proofs = vec![
+        evidence(&s, "folder", true),
+        evidence(&s, "a", true),
+        evidence(&s, "b", true),
+    ];
+    for p in &mut proofs {
+        if p.before.kind == EntryKind::File {
+            p.destination_parent_identity = None;
+        }
+    }
+    s.apply_namespace(&req, &proofs).unwrap();
+    let original = s
+        .namespace_for_operation(&req.operation_id)
+        .unwrap()
+        .unwrap();
+    let a_index = original
+        .members
+        .iter()
+        .position(|m| m.change.after.id == id("a"))
+        .unwrap();
+    let b_index = original
+        .members
+        .iter()
+        .position(|m| m.change.after.id == id("b"))
+        .unwrap();
+    let c = rusqlite::Connection::open(&db).unwrap();
+    let unchanged: String = c
+        .query_row(
+            "SELECT evidence FROM namespace_members WHERE entry_id='a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    c.execute(
+        "UPDATE namespace_members SET evidence='not JSON' WHERE entry_id='b'",
+        [],
+    )
+    .unwrap();
+    // Equality alone would permit rewriting identical evidence. Forbid every
+    // immutable-member UPDATE while exercising the small progress journal.
+    c.execute_batch(
+        "CREATE TRIGGER forbid_namespace_member_rewrite BEFORE UPDATE ON namespace_members BEGIN SELECT RAISE(ABORT,'immutable evidence rewrite'); END;",
+    )
+    .unwrap();
+    let metadata = s.namespace_attempt_metadata(true).unwrap();
+    assert_eq!(metadata[0].members.len(), 3);
+    assert_eq!(metadata[0].members[a_index].index, a_index);
+    assert_eq!(metadata[0].members[a_index].source_identity, "inode-a");
+    assert_eq!(metadata[0].job, original.job);
+    assert!(s.namespace_attempt(&original.job.job_id).is_err());
+    assert!(s.namespace_member(&original.job.job_id, b_index).is_err());
+    let old = &original.members[a_index];
+    let mut next = old.clone();
+    next.captured = true;
+    let updated = s
+        .update_namespace_member(&original.job.job_id, old, &next)
+        .unwrap();
+    assert_eq!(updated, next);
+    assert_eq!(
+        s.namespace_member(&original.job.job_id, a_index).unwrap(),
+        next
+    );
+    let after: String = c
+        .query_row(
+            "SELECT evidence FROM namespace_members WHERE entry_id='a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(unchanged, after);
+    assert!(!s.namespace_attempt_metadata(true).unwrap()[0].members[b_index].captured);
+    assert!(s.finish_namespace(&original.job.job_id).is_err());
+}
+
+#[test]
+fn exact_operation_lookup_does_not_load_another_attempts_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db");
+    let mut s = Store::open(&db).unwrap();
+    for name in ["a", "b"] {
+        seed(&mut s, name, name, EntryKind::File);
+        let req = deleting(&s, name, &format!("delete-{name}"));
+        let proof = evidence(&s, name, false);
+        s.apply_namespace(&req, &[proof]).unwrap();
+    }
+    let b = s.namespace_for_operation(&op("delete-b")).unwrap().unwrap();
+    let c = rusqlite::Connection::open(&db).unwrap();
+    c.execute(
+        "UPDATE namespace_members SET evidence='not JSON' WHERE entry_id='a'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(s.namespace_for_operation(&op("delete-b")).unwrap(), Some(b));
+    assert!(s.namespace_for_operation(&op("delete-a")).is_err());
+}
+
+#[test]
+fn metadata_rejects_missing_progress_reordered_members_and_budget_mismatch() {
+    for sql in [
+        "DELETE FROM namespace_member_progress",
+        "UPDATE namespace_members SET member_index=99",
+        "UPDATE namespace_attempts SET evidence_bytes=evidence_bytes+1",
+        "UPDATE namespace_members SET change=json_set(change,'$.after.path','wrong'),target_path='wrong'",
+        "UPDATE namespace_members SET source_identity=''",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db");
+        let mut s = Store::open(&db).unwrap();
+        seed(&mut s, "file", "old", EntryKind::File);
+        let req = moving(&s, "file", "new", "move");
+        let proof = evidence(&s, "file", true);
+        s.apply_namespace(&req, &[proof]).unwrap();
+        let c = rusqlite::Connection::open(&db).unwrap();
+        c.execute(sql, []).unwrap();
+        assert!(s.namespace_attempt_metadata(true).is_err(), "{sql}");
+    }
+}
+
+#[test]
+fn pending_job_guard_does_not_decode_completed_publication_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db");
+    let mut s = Store::open(&db).unwrap();
+    seed(&mut s, "file", "old", EntryKind::File);
+    let req = moving(&s, "file", "new", "move");
+    let proof = evidence(&s, "file", true);
+    s.apply_namespace(&req, &[proof]).unwrap();
+    let expected = s.pending_namespace_jobs().unwrap();
+    assert_eq!(expected.len(), 1);
+    let c = rusqlite::Connection::open(&db).unwrap();
+    c.execute(
+        "UPDATE projection_jobs SET record='not JSON' WHERE completed=1",
+        [],
+    )
+    .unwrap();
+    assert_eq!(s.pending_namespace_jobs().unwrap(), expected);
+    assert!(s.namespace_jobs().is_err());
+}
+
+#[test]
+fn schema_six_migration_creates_exact_normalized_namespace_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db");
+    drop(Store::open(&db).unwrap());
+    let c = rusqlite::Connection::open(&db).unwrap();
+    c.execute_batch("DROP TABLE namespace_member_progress; DROP TABLE namespace_members; DROP TABLE namespace_attempts; PRAGMA user_version=6;").unwrap();
+    drop(c);
+    drop(Store::open(&db).unwrap());
+    let c = rusqlite::Connection::open(&db).unwrap();
+    assert_eq!(c.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('namespace_attempts','namespace_members','namespace_member_progress','namespace_member_targets')",[],|r|r.get::<_,i64>(0)).unwrap(),4);
+    c.execute_batch("DROP INDEX namespace_member_targets; CREATE INDEX namespace_member_targets ON namespace_members(job_id);").unwrap();
+    assert!(Store::open(&db).is_err());
 }

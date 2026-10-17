@@ -711,3 +711,60 @@ fn non_utf8_retained_child_is_reported_without_aborting_recovery() {
     let report = v.recover().unwrap();
     assert!(!report.blocked.is_empty());
 }
+
+#[test]
+fn completed_retention_disappearance_is_reported_without_guessing_gc() {
+    for folder in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = NativeVault::open(dir.path()).unwrap();
+        add(
+            &mut v,
+            "subject",
+            if folder { "Old" } else { "Old.blob" },
+            if folder { None } else { Some(b"base") },
+        );
+        let request = command(&v, "subject", None);
+        assert!(matches!(
+            v.apply(&request).unwrap().projection,
+            ProjectionStatus::Projected
+        ));
+        let status = v.status().unwrap();
+        let retained = &status.namespace_attempts[0].members[0].recovery_path;
+        fs::rename(
+            dir.path().join(retained),
+            dir.path().join("externally-relocated-capture"),
+        )
+        .unwrap();
+        let report = v.recover().unwrap();
+        assert!(report
+            .blocked
+            .iter()
+            .any(|(_, reason)| reason.contains("missing") && reason.contains(retained)));
+        assert!(dir.path().join("externally-relocated-capture").exists());
+        assert!(v.status().unwrap().namespace_attempts[0].completed);
+    }
+}
+#[test]
+fn child_arriving_after_empty_check_is_restored_not_swept() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut v = NativeVault::open(dir.path()).unwrap();
+    add(&mut v, "subject", "Old", None);
+    drop(v);
+    assert!(child(dir.path(), true, true)
+        .env("ZORID_NAMESPACE_PHASE", "namespace_before_capture")
+        .env("ZORID_NAMESPACE_ACTION", "late-child")
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(
+        fs::read(dir.path().join("Old/late.blob")).unwrap(),
+        b"unique child"
+    );
+    let mut v = NativeVault::open(dir.path()).unwrap();
+    assert!(!v.recover().unwrap().blocked.is_empty());
+    assert!(!v.status().unwrap().namespace_attempts[0].completed);
+    assert_eq!(
+        fs::read(dir.path().join("Old/late.blob")).unwrap(),
+        b"unique child"
+    );
+}

@@ -20,47 +20,49 @@ fn intersects(path: &VaultPath, state: &EntryState) -> bool {
 }
 impl NativeVault {
     pub(super) fn namespace_attempt_statuses(&self) -> Result<Vec<NamespaceAttemptStatus>> {
-        Ok(self
-            .store
-            .namespace_attempts(true)?
-            .into_iter()
-            .map(|a| NamespaceAttemptStatus {
-                job_id: a.job.job_id.clone(),
+        let mut result = Vec::new();
+        for a in self.store.namespace_attempt_metadata(true)? {
+            let mut members = Vec::with_capacity(a.members.len());
+            for m in &a.members {
+                let before = m
+                    .change
+                    .before
+                    .as_ref()
+                    .ok_or(Error::Busy("namespace metadata before state missing"))?;
+                let unchanged =
+                    a.job.work == ProjectionWork::Move && before.path == m.change.after.path;
+                members.push(NamespaceMemberStatus {
+                    entry_id: m.change.after.id.clone(),
+                    source: before.path.clone(),
+                    target: m.change.after.path.clone(),
+                    recovery_path: format!(
+                        ".zorid/{}.{}.namespace",
+                        a.job.job_id.as_str(),
+                        m.index
+                    ),
+                    directory_stage_path: (m.change.after.kind == EntryKind::Folder
+                        && a.job.work == ProjectionWork::Move
+                        && !unchanged)
+                        .then(|| format!(".zorid/{}.{}.directory", a.job.job_id.as_str(), m.index)),
+                    captured: m.captured,
+                    published: m.published,
+                    finished: m.finished,
+                });
+            }
+            result.push(NamespaceAttemptStatus {
+                job_id: a.job.job_id,
                 completed: a.completed,
-                members: a
-                    .members
-                    .iter()
-                    .enumerate()
-                    .map(|(index, m)| NamespaceMemberStatus {
-                        entry_id: m.change.after.id.clone(),
-                        source: m.evidence.before.path.clone(),
-                        target: m.change.after.path.clone(),
-                        recovery_path: format!(".zorid/{}", retained(&a, index)),
-                        directory_stage_path: (m.change.after.kind == EntryKind::Folder
-                            && a.job.work == ProjectionWork::Move
-                            && !noop(&a, index))
-                        .then(|| format!(".zorid/{}", stage(&a, index))),
-                        captured: m.captured,
-                        published: m.published,
-                        finished: m.finished,
-                    })
-                    .collect(),
-            })
-            .collect())
+                members,
+            });
+        }
+        Ok(result)
     }
-
     pub(super) fn namespace_obscures(&self, path: &VaultPath) -> Result<bool> {
-        Ok(self
-            .store
-            .namespace_jobs()?
-            .iter()
-            .filter(|j| !j.completed)
-            .any(|job| {
-                job.affected.iter().any(|c| {
-                    intersects(path, &c.after)
-                        || c.before.as_ref().is_some_and(|s| intersects(path, s))
-                })
-            }))
+        Ok(self.store.pending_namespace_jobs()?.iter().any(|job| {
+            job.affected.iter().any(|c| {
+                intersects(path, &c.after) || c.before.as_ref().is_some_and(|s| intersects(path, s))
+            })
+        }))
     }
     pub(super) fn namespace_clear(&self, path: &VaultPath) -> Result<()> {
         if self.namespace_obscures(path)? {
@@ -70,21 +72,15 @@ impl NativeVault {
     }
     pub(super) fn namespace_status(&mut self, operation: &OperationId) -> ProjectionStatus {
         let result = (|| {
-            let job = self.store.namespace_jobs()?.into_iter().find(|j| {
-                matches!(&j.origin, ProjectionOrigin::LocalCommand { operation_id } if operation_id == operation)
-            }).ok_or(Error::Busy("namespace command has no projection job"))?;
-            if job.completed {
+            // Replay is keyed by its original job, even after deletion or a later
+            // move. Completed retries need only metadata, never retained bytes.
+            let metadata = self.store.namespace_attempt_metadata(true)?.into_iter().find(|a| {
+                matches!(&a.job.origin, ProjectionOrigin::LocalCommand { operation_id } if operation_id == operation)
+            }).ok_or(Error::Busy("legacy namespace job lacks pre-commit physical provenance"))?;
+            if metadata.completed {
                 return Ok(());
             }
-            let attempt = self
-                .store
-                .namespace_attempts(false)?
-                .into_iter()
-                .find(|a| a.job.job_id == job.job_id)
-                .ok_or(Error::Busy(
-                    "legacy namespace job lacks pre-commit physical provenance",
-                ))?;
-            self.resume_namespace(attempt)
+            self.resume_namespace(self.store.namespace_attempt(&metadata.job.job_id)?)
         })();
         match result {
             Ok(()) => ProjectionStatus::Projected,
@@ -225,9 +221,10 @@ impl NativeVault {
         index: usize,
         next: NamespaceMember,
     ) -> Result<()> {
-        *a = self
+        let next = self
             .store
             .update_namespace_member(&a.job.job_id, &a.members[index], &next)?;
+        a.members[index] = next;
         Ok(())
     }
     fn namespace_source(&self, m: &NamespaceMember) -> Result<(File, String)> {
@@ -571,13 +568,10 @@ impl NativeVault {
         Ok(())
     }
     pub(super) fn recover_namespaces(&mut self, report: &mut ReconcileReport) -> Result<()> {
-        let attempts = self.store.namespace_attempts(true)?;
-        for job in self
-            .store
-            .namespace_jobs()?
-            .into_iter()
-            .filter(|j| !j.completed)
-        {
+        // Listing and status never load retained byte evidence. A pending job is
+        // loaded once; completed deletion audit loads one member at a time.
+        let attempts = self.store.namespace_attempt_metadata(true)?;
+        for job in self.store.pending_namespace_jobs()? {
             if !attempts.iter().any(|a| a.job.job_id == job.job_id) {
                 report.blocked.push((
                     job.target.path,
@@ -588,45 +582,75 @@ impl NativeVault {
         for a in attempts {
             if !a.completed {
                 let target = a.job.target.clone();
-                match self.resume_namespace(a) {
+                let attempt = self.store.namespace_attempt(&a.job.job_id)?;
+                match self.resume_namespace(attempt) {
                     Ok(()) => report.projected.push(target.id),
                     Err(error) => report.blocked.push((target.path, error.to_string())),
                 }
             } else {
-                // Retention has no automatic GC. Open handles can still write a
-                // deleted file or add a child to a captured directory after ACK.
-                for (index, m) in a.members.iter().enumerate() {
-                    if noop(&a, index) {
+                for m in &a.members {
+                    let before = m
+                        .change
+                        .before
+                        .as_ref()
+                        .ok_or(Error::Busy("namespace metadata before state missing"))?;
+                    if a.job.work == ProjectionWork::Move && before.path == m.change.after.path {
                         continue;
                     }
-                    let private = retained(&a, index);
-                    if m.change.after.kind == EntryKind::Folder {
-                        if let Some(dir) = fs::optional_directory(&self.paths.private, &private)? {
-                            if fs::identity(&dir)? != m.evidence.source_identity
-                                || !fs::directory_empty(&dir)?
-                            {
-                                report.blocked.push((
-                                    m.evidence.before.path.clone(),
-                                    format!("retained directory needs recovery: .zorid/{private}"),
-                                ));
+                    let private = format!("{}.{}.namespace", a.job.job_id.as_str(), m.index);
+                    // Missing captures are not successful GC: this slice never
+                    // purges them. Report the exact expected recovery location.
+                    let audit: Result<Option<String>> = (|| {
+                        if m.change.after.kind == EntryKind::Folder {
+                            match fs::optional_directory(&self.paths.private, &private)? {
+                                Some(dir)
+                                    if fs::identity(&dir)? == m.source_identity
+                                        && fs::directory_empty(&dir)? =>
+                                {
+                                    Ok(None)
+                                }
+                                Some(_) => Ok(Some(format!(
+                                    "retained directory needs recovery: .zorid/{private}"
+                                ))),
+                                None => Ok(Some(format!(
+                                    "retained directory is missing: .zorid/{private}"
+                                ))),
                             }
-                        }
-                    } else if a.job.work == ProjectionWork::Delete {
-                        if let Some(file) = fs::snapshot(
-                            &self.paths.private,
-                            &private,
-                            self.options.max_file_bytes,
-                        )? {
-                            if file.identity != m.evidence.source_identity
-                                || m.evidence.content.as_ref() != Some(&file.bytes)
-                            {
-                                self.namespace_divergence(m, file.bytes)?;
-                                report.blocked.push((
-                                    m.evidence.before.path.clone(),
-                                    format!("retained deleted file changed: .zorid/{private}"),
-                                ));
+                        } else if a.job.work == ProjectionWork::Delete {
+                            match fs::snapshot(
+                                &self.paths.private,
+                                &private,
+                                self.options.max_file_bytes,
+                            )? {
+                                Some(file) => {
+                                    let member =
+                                        self.store.namespace_member(&a.job.job_id, m.index)?;
+                                    if file.identity != m.source_identity
+                                        || member.evidence.content.as_ref() != Some(&file.bytes)
+                                    {
+                                        self.namespace_divergence(&member, file.bytes)?;
+                                        Ok(Some(format!(
+                                            "retained deleted file changed: .zorid/{private}"
+                                        )))
+                                    } else {
+                                        Ok(None)
+                                    }
+                                }
+                                None => Ok(Some(format!(
+                                    "retained deleted file is missing: .zorid/{private}"
+                                ))),
                             }
+                        } else {
+                            Ok(None)
                         }
+                    })();
+                    match audit {
+                        Ok(Some(reason)) => report.blocked.push((before.path.clone(), reason)),
+                        Err(error) => report.blocked.push((
+                            before.path.clone(),
+                            format!("retained namespace recovery at .zorid/{private}: {error}"),
+                        )),
+                        Ok(None) => {}
                     }
                 }
             }
