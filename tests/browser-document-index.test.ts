@@ -141,4 +141,14 @@ test('continuations are bound to the exact random pin nonce',async()=>{
   await assert.rejects(index.search({pinId:b.pinId,query:'fixture-page',cursor:page.cursor}),{code:'index_snapshot_expired'});await index.close();
 });
 
+test('discard is idempotent and removes only the owning unpublished stage',async()=>{
+  const f=fixture();f.file('a','text');const a=f.open(),b=f.open('client-b');await a.initialize();await a.initialize();const snapshot=await f.build(a),pin=await a.open(),stage=await a.begin();await a.pump(stage.stageId);
+  await assert.rejects(b.discard(stage.stageId),{code:'index_stage_expired'});await assert.rejects(a.discard(snapshot.generationEpoch),{code:'index_stage_expired'});
+  await a.discard(stage.stageId);await a.discard(stage.stageId);assert.deepEqual((await a.status()).snapshot,snapshot);assert.deepEqual((await a.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);
+  const next=await a.begin();assert.ok(next.stageId);await a.discard(next.stageId);await a.close();await b.close();
+});
+test('empty namespace stage is ready to publish without an extra pump',async()=>{
+  const f=fixture(),index=f.open();await index.initialize();const stage=await index.begin();assert.equal(stage.ready,true);assert.equal(stage.progress.total,0);await index.publish(stage.stageId);assert.equal((await index.status()).current,true);await index.close();
+});
+
 test.after(()=>{(globalThis as any).IDBKeyRange=range;});

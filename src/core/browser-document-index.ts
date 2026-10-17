@@ -26,6 +26,7 @@ export interface BrowserDocumentIndexHost {
 export interface BrowserIndexStage {stageId:string;snapshot:BrowserIndexSnapshot;progress:{prepared:number;total:number;reused:number;ready:boolean};prepared:number;total:number;ready:boolean}
 export interface BrowserIndexPin {pinId:string;snapshot:BrowserIndexSnapshot;source:BrowserIndexSource;coverageComplete:boolean}
 export interface BrowserDocumentIndex {
+  initialize():Promise<void>;discard(stageId:string):Promise<void>;
   status():Promise<{sourceWatermark:string;snapshot:BrowserIndexSnapshot|null;coveredWatermark:string|null;rebuildRequired:boolean;current:boolean;source:BrowserIndexSource;coveredSource:BrowserIndexSource|null;coverageComplete:boolean|null}>;
   begin():Promise<BrowserIndexStage>;pump(stageId:string):Promise<BrowserIndexStage>;publish(stageId:string):Promise<BrowserIndexSnapshot>;
   open():Promise<BrowserIndexPin>;closePin(pinId:string):Promise<void>;
@@ -159,6 +160,13 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
   function envelope(pinId:string,value:unknown):unknown{const pin=pins.get(pinId);if(!pin)throw fail('index_snapshot_expired');return {snapshot:pin.header.nextIndex,source:pin.header.source,coverageComplete:rust(()=>pin.value.coverageComplete()),value};}
   function pinPage(pinId:string,raw:string):unknown {const page=json<Record<string,unknown>>(raw);let cursor:string|null=null;if(page.next!==null&&page.next!==undefined){if(typeof page.next!=='string')throw fail('index_rebuild_required');cursor=pinId+'/'+page.next;}page.next=null;return {result:envelope(pinId,page),cursor};}
   const api:BrowserDocumentIndex={
+    initialize(){active();return recover();},
+    async discard(stageId){active();if(!validId(stageId))throw fail('index_stage_expired');
+      await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{const stage=c.generations.find(g=>g.id===stageId);
+        if(stage){if(stage.clientId!==host.clientId||stage.state==='published'||c.head===stageId)throw fail('index_stage_expired');stage.state='deleting';putCatalog(tx,c);}done();
+      },abort));
+      const stage=stages.get(stageId);stage?.builder?.free();stage?.generation?.free();stages.delete(stageId);await purge(stageId);
+    },
     async status(){
       const captured=await run<{source:SourceCapture;catalog?:Catalog;raw?:string;digest?:string}>('readonly',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>{
         captureSource(tx,source=>on(tx.objectStore('control').get(CATALOG),row=>{let c:Catalog;try{c=catalog(row);}catch{done({source});return;}

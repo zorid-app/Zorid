@@ -107,6 +107,8 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
   if(operation.startsWith('document-index-')){
     const index=streaming()?.documentIndex;if(!index)throw new BrowserVaultError('index_unavailable','Shared document index WASM is unavailable');
     switch(operation){
+      case 'document-index-initialize':return index.initialize();
+      case 'document-index-discard':return index.discard(payload);
       case 'document-index-status':return index.status();
       case 'document-index-begin':return index.begin();
       case 'document-index-pump':return index.pump(payload);

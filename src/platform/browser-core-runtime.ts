@@ -114,6 +114,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
         },
       } satisfies DurableCheckpoints);
       if(opened.documentIndexAvailable)runtime.indexProvider=Object.freeze<Omit<BrowserDocumentIndex,'close'>>({
+        initialize:()=>runtime.call('document-index-initialize'),discard:id=>runtime.call('document-index-discard',id),
         status:()=>runtime.call('document-index-status'),begin:()=>runtime.call('document-index-begin'),
         pump:id=>runtime.call('document-index-pump',id),publish:id=>runtime.call('document-index-publish',id),
         open:()=>runtime.call('document-index-open'),closePin:id=>runtime.call('document-index-close-pin',id),

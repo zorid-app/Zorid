@@ -57,6 +57,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
   const backend: BrowserCoreBackend = {
     durableScope: scope, checkpoints,
     ...(runtime.documentIndex?{documentIndex:Object.freeze({
+      initialize:()=>dispatch(()=>runtime.documentIndex!.initialize()),discard:(id:string)=>dispatch(()=>runtime.documentIndex!.discard(id)),
       status:()=>dispatch(()=>runtime.documentIndex!.status()),begin:()=>dispatch(()=>runtime.documentIndex!.begin()),
       pump:(id:string)=>dispatch(()=>runtime.documentIndex!.pump(id)),publish:(id:string)=>dispatch(()=>runtime.documentIndex!.publish(id)),
       open:()=>dispatch(()=>runtime.documentIndex!.open()),closePin:(id:string)=>dispatch(()=>runtime.documentIndex!.closePin(id)),
@@ -132,6 +133,7 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
     openRead:input=>invoke(()=>binary.streams.openRead(input)),read:(ref,input)=>invoke(()=>binary.streams.read(ref,input)),closeRead:ref=>invoke(()=>binary.streams.closeRead(ref)),
   }):undefined;
   const documentIndex=backend.documentIndex?Object.freeze<Omit<BrowserDocumentIndex,'close'>>({
+    initialize:()=>invoke(()=>backend.documentIndex!.initialize()),discard:id=>invoke(()=>backend.documentIndex!.discard(id)),
     status:()=>invoke(()=>backend.documentIndex!.status()),begin:()=>invoke(()=>backend.documentIndex!.begin()),
     pump:id=>invoke(()=>backend.documentIndex!.pump(id)),publish:id=>invoke(()=>backend.documentIndex!.publish(id)),
     open:()=>invoke(()=>backend.documentIndex!.open()),closePin:id=>invoke(()=>backend.documentIndex!.closePin(id)),
