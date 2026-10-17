@@ -210,11 +210,12 @@ export class Workspace {
     await this.flush();
     const releasing=!!this.platform?.release;
     if(releasing)await this.releasePlatform();
-    let next:PlatformVault|null=null;
-    try{next=await pickDesktopVault();}
-    finally{if(releasing&&!next)next=await createPlatformAdapter();}
+    let next:PlatformVault|null=null,pickerError:unknown;
+    try{next=await pickDesktopVault();}catch(error){pickerError=error;}
+    if(releasing&&!next)next=await createPlatformAdapter();
     if(next)await this.openVault(next);
     else if(!window.zorid)notice('This vault is stored on this device. Folder selection requires the desktop app.');
+    if(pickerError)throw pickerError;
   }
 
   private async recoverDurableBuffers(vault:Vault):Promise<Map<string,NoteBuffer>>{

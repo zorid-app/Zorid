@@ -46,7 +46,7 @@ export class NoteBuffer {
     this.vault = vault;
     this.path = normalizePath(path);
     this.options = options;
-    if(vault.adapter.durableWrites)this.durable=new DurableNoteState(vault,vault.adapter.durableWrites,()=>this.syncDurable());
+    if(vault.adapter?.durableWrites)this.durable=new DurableNoteState(vault,vault.adapter.durableWrites,()=>this.syncDurable());
   }
 
   private syncDurable():void {
