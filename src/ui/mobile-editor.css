@@ -40,3 +40,35 @@ html[data-theme="dark"] .workspace.native-editor-only {
   --background-primary: #000;
   --background-secondary: #1c1c1e;
 }
+
+/* Loading markers belong to the resource owner and disappear on errors too.
+   Paint only the outermost pending surface, including the body-mounted lightbox. */
+.workspace.native-editor-only [data-native-loading="true"]:not([data-native-loading="true"] [data-native-loading="true"]),
+body:has(.workspace.native-editor-only) > .image-lightbox [data-native-loading="true"] {
+  position: relative;
+}
+.workspace.native-editor-only :is(.internal-embed,.image-container,.zorid-media-view)[data-native-loading="true"] {
+  min-block-size: 96px;
+}
+.workspace.native-editor-only .audio-embed[data-native-loading="true"] { min-block-size: 44px; }
+.workspace.native-editor-only [data-native-loading="true"]:not([data-native-loading="true"] [data-native-loading="true"])::after,
+body:has(.workspace.native-editor-only) > .image-lightbox [data-native-loading="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 10px;
+  pointer-events: none;
+  background:
+    linear-gradient(105deg,transparent 35%,color-mix(in srgb,var(--background-primary,#fff) 75%,transparent) 50%,transparent 65%) -150% 0 / 250% 100% no-repeat,
+    linear-gradient(var(--background-secondary,#eee),var(--background-secondary,#eee)) 18px 18px / 65% 14px no-repeat,
+    linear-gradient(var(--background-secondary,#eee),var(--background-secondary,#eee)) 18px 44px / 85% 12px no-repeat,
+    linear-gradient(var(--background-secondary,#eee),var(--background-secondary,#eee)) 18px 68px / 50% 12px no-repeat,
+    var(--background-primary,#fff);
+  animation: native-resource-loading 1.5s ease-in-out infinite;
+}
+@keyframes native-resource-loading { to { background-position: 150% 0,18px 18px,18px 44px,18px 68px,0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .workspace.native-editor-only [data-native-loading="true"]::after,
+  body:has(.workspace.native-editor-only) > .image-lightbox [data-native-loading="true"]::after { animation: none; }
+}
