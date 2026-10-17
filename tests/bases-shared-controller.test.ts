@@ -78,7 +78,7 @@ test('shared projection retains Rust row/group order, typed values and exact sha
 test('view changes cancel stale shared results and retire pins before publishing the next selection', async () => {
   const f = await fixture(); try {
     const gate = f.hold(), pending = f.controller.refresh(); await until(() => f.calls.length === 2);
-    const changed = f.controller.setView(1); await until(() => f.pins[1].closed === 1);
+    const changed = f.controller.setView(1); assert.equal(f.pins[1].closed, 0);
     gate.resolve({ ...result(), rows: [{ entryId: 'bad', revision: 'r1', path: 'Poison.md', values: {} }], groups: [{ key: null, entryIds: ['bad'] }] });
     await pending; await changed; assert.equal(f.controller.state.result?.view.name, 'Second'); assert.ok(f.published.every(paths => !paths.includes('Poison.md'))); assert.ok(f.pins.every(pin => pin.closed === 1));
   } finally { f.controller.dispose(); }
@@ -86,7 +86,7 @@ test('view changes cancel stale shared results and retire pins before publishing
 test('dispose during a shared query closes its pin and ignores completion', async () => {
   const f = await fixture(), before = f.controller.state;
   const gate = f.hold(), pending = f.controller.refresh(); await until(() => f.calls.length === 2);
-  f.controller.dispose(); await until(() => f.pins[1].closed === 1); gate.resolve(result()); await pending; assert.equal(f.controller.state, before);
+  f.controller.dispose(); assert.equal(f.pins[1].closed, 0); gate.resolve(result()); await pending; assert.equal(f.pins[1].closed, 1); assert.equal(f.controller.state, before);
 });
 
 test('shared date-only display uses invocation timezone without shifting timestamps or legacy local dates', () => {

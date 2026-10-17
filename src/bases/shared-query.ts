@@ -82,7 +82,7 @@ export function projectSharedBaseResult(raw: DocumentBaseResult, version: number
   if (definition) saved.set(definition.path, Object.freeze({ entryId: definition.id, revision: definition.revision }));
   witnesses.set(projected, saved); return projected;
 }
-interface Run { active: boolean; opening: boolean; finalRetry?: boolean; pin?: DocumentPin; closing?: Promise<void> }
+interface Run { active: boolean; opening: boolean; reading: boolean; finalRetry?: boolean; pin?: DocumentPin; closing?: Promise<void> }
 export interface SharedBaseQueryInput {
   service: DocumentService; definition: VaultEntry; current: VaultEntry; entries: readonly VaultEntry[];
   query: BaseQueryOptions; viewIndex: number; viewName?: string; version: number; isCurrent(): boolean;
@@ -92,6 +92,9 @@ export class SharedBaseQueryRunner {
   private disposed = false;
   private close(run: Run): Promise<void> {
     if (run.closing) return run.closing;
+    // DocumentPin does not promise that closing may overlap an in-flight read.
+    // Fence its result now, but retain the handle until that read settles.
+    if (run.opening || run.reading) return Promise.resolve();
     if (!run.pin) { if (!run.active && !run.opening) this.runs.delete(run); return Promise.resolve(); }
     run.closing = run.pin.close().then(() => { run.pin = undefined; if (!run.active) this.runs.delete(run); }).finally(() => { run.closing = undefined; });
     return run.closing;
@@ -106,7 +109,7 @@ export class SharedBaseQueryRunner {
   cancel(): void { for (const run of this.runs) { run.active = false; void this.retire(run).catch(() => { /* Keep failed closes owned; next refresh retries before opening. */ }); } }
   dispose(): void { this.disposed = true; this.cancel(); }
   async query(input: SharedBaseQueryInput): Promise<BaseQueryResult> {
-    const run: Run = { active: true, opening: false }; this.runs.add(run);
+    const run: Run = { active: true, opening: false, reading: false }; this.runs.add(run);
     const live = () => run.active && input.isCurrent();
     const check = () => { if (!live()) throw new DocumentSemanticsError('document_request_cancelled'); };
     try {
@@ -121,15 +124,17 @@ export class SharedBaseQueryRunner {
       run.opening = true;
       try { run.pin = await input.service.open(); } finally { run.opening = false; }
       check();
-      const metadata = await run.pin.metadata(input.definition.entryId); check();
+      const pin = run.pin;
+      const read = async <T>(action: () => Promise<T>): Promise<T> => { run.reading = true; try { return await action(); } finally { run.reading = false; } };
+      const metadata = await read(() => pin.metadata(input.definition.entryId!)); check();
       const definition = metadata.value.entry;
       if (definition.id !== input.definition.entryId || definition.revision !== input.definition.revision || definition.path !== input.definition.path) return invalid('The Base definition changed. Refresh before editing.');
       const timezone = 'UTC';
       const options = { viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone, maxRows: 1000,
         currentEntryId: input.current.entryId, maxSteps: input.query.maxSteps };
-      const report = await run.pin.base({ id: definition.id, viewName: input.viewName, options }); check();
+      const report = await read(() => pin.base({ id: definition.id, viewName: input.viewName, options })); check();
       if (report.value.definition.id !== definition.id || report.value.definition.revision !== definition.revision || report.value.definition.path !== definition.path
-        || JSON.stringify(report.value.result.snapshotId) !== JSON.stringify(run.pin.snapshot)) return invalid();
+        || JSON.stringify(report.value.result.snapshotId) !== JSON.stringify(pin.snapshot)) return invalid();
       return projectSharedBaseResult(report.value.result, input.version, input.entries, timezone, definition);
     } finally { run.active = false; await this.retire(run); }
   }
