@@ -55,7 +55,8 @@ fn yaml_value_depth_is_bounded_before_stack_growth() {
         if !valid {
             assert_eq!(
                 result.diagnostics[0].code,
-                DiagnosticCode::FrontmatterResource
+                DiagnosticCode::FrontmatterResource,
+                "array depth {array_depth}"
             );
         }
     }

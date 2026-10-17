@@ -91,7 +91,9 @@ struct Tree {
 
 fn syntax(error: &saphyr_parser::ScanError) -> DiagnosticCode {
     // Stable public codes, pinned dependency-specific recognition kept here.
-    if error.info() == "while parsing node, found unknown anchor" {
+    if error.info() == "recursion limit exceeded" {
+        DiagnosticCode::FrontmatterResource
+    } else if error.info() == "while parsing node, found unknown anchor" {
         DiagnosticCode::FrontmatterAlias
     } else {
         DiagnosticCode::FrontmatterSyntax
