@@ -437,7 +437,7 @@ fn incompatible_payload_preserves_cursor_and_file(version: u32) {
         let header = envelope.header();
         let opened = zorid_crypto::OpenedEnvelope::open(
             &wire,
-            &zorid_crypto::ExpectedContext {
+            &zorid_sync_protocol::ExpectedContext {
                 realm_id: header.realm_id().clone(),
                 vault_id: header.vault_id().clone(),
                 update_id: header.update_id().clone(),
@@ -477,7 +477,7 @@ fn incompatible_payload_preserves_cursor_and_file(version: u32) {
         // Prove this is a valid authenticated legacy text update, not merely malformed v2.
         zorid_client_sync::AuthenticatedText::open(
             &wire,
-            &zorid_crypto::ExpectedContext {
+            &zorid_sync_protocol::ExpectedContext {
                 realm_id: RealmId::new("realm").unwrap(),
                 vault_id: VaultId::new("vault").unwrap(),
                 update_id: update.clone(),
