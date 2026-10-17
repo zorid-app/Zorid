@@ -51,6 +51,23 @@ fn decode_or_literal(value: &str) -> String {
         .decode_utf8()
         .map_or_else(|_| value.into(), |s| s.into_owned())
 }
+fn destination_path(destination: &str) -> Result<String, IndexError> {
+    if destination.len() > MAX_TARGET_BYTES {
+        return Err(IndexError::InvalidTarget);
+    }
+    let raw = destination
+        .split('#')
+        .next()
+        .unwrap_or("")
+        .trim_matches(js_whitespace);
+    Ok(decode_or_literal(raw))
+}
+/// Classify the parser's semantic full destination using exactly the resolver's
+/// fragment/trim/strict-percent pipeline and target resource limit. Markdown
+/// escapes/entities must already be normalized upstream, just as candidates().
+pub fn is_external_destination(destination: &str) -> Result<bool, IndexError> {
+    Ok(external(&destination_path(destination)?))
+}
 fn order(a: &EntryState, b: &EntryState) -> Ordering {
     a.path
         .as_str()
@@ -99,20 +116,12 @@ impl<'a> Resolver<'a> {
         source_id: &EntryId,
         destination: &str,
     ) -> Result<Vec<&'a EntryState>, IndexError> {
-        if destination.len() > MAX_TARGET_BYTES {
-            return Err(IndexError::InvalidTarget);
-        }
+        let decoded = destination_path(destination)?;
         let source = self
             .manifest
             .entry(source_id)
             .filter(|e| e.kind == EntryKind::File)
             .ok_or(IndexError::MissingSource)?;
-        let raw = destination
-            .split('#')
-            .next()
-            .unwrap_or("")
-            .trim_matches(js_whitespace);
-        let decoded = decode_or_literal(raw);
         if decoded.is_empty() {
             return Ok(vec![source]);
         }

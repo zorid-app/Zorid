@@ -9,7 +9,7 @@ mod relationships;
 mod resolver;
 mod restore;
 mod snapshot;
-pub use resolver::{normalize_link_key, Resolver, RESOLVER_VERSION};
+pub use resolver::{is_external_destination, normalize_link_key, Resolver, RESOLVER_VERSION};
 pub use snapshot::{
     EntryWitness, IndexError, IndexSnapshotId, Manifest, PublicationFence, SemanticVersions,
     SourceSnapshotId, SourceWatermark, MAX_PUMP_BYTES, MAX_PUMP_DOCUMENTS,

@@ -219,3 +219,36 @@ fn snapshot_json_is_canonical_and_revalidates_private_identities() {
     )
     .is_err());
 }
+
+#[test]
+fn external_destination_fact_uses_the_same_semantic_resolver_pipeline() {
+    for destination in [
+        "https://example.org",
+        "https%3A%2F%2Fexample.org",
+        "//example.org",
+        "\u{feff} mailto:user@example.org #fragment",
+    ] {
+        assert_eq!(
+            is_external_destination(destination),
+            Ok(true),
+            "{destination}"
+        );
+    }
+    for destination in [
+        "A%23B.md",
+        "#https%3A%2F%2Fexample.org",
+        "https%3A%ZZ",
+        "%FF",
+        "Folder/Note.md",
+    ] {
+        assert_eq!(
+            is_external_destination(destination),
+            Ok(false),
+            "{destination}"
+        );
+    }
+    assert_eq!(
+        is_external_destination(&"x".repeat(4097)),
+        Err(IndexError::InvalidTarget)
+    );
+}
