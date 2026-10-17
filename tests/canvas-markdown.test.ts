@@ -44,7 +44,7 @@ function workerHarness(t: Parameters<Parameters<typeof test>[1]>[0]) {
   return workers;
 }
 
-test('actual Canvas Live editor keeps its media owner through native-control pointer blur', async t => {
+for (const pointer of [true, false]) test(`actual Canvas Live editor keeps its media owner through native-control blur ${pointer ? 'with' : 'without'} pointer events`, async t => {
   const owners: { element: HTMLElement; destroyed: number }[] = [];
   const ui = setup('![[tone.wav]]', { renderMarkdownEmbed() {
     const element = document.createElement('div'); element.className = 'internal-embed audio-embed';
@@ -55,10 +55,10 @@ test('actual Canvas Live editor keeps its media owner through native-control poi
   t.after(ui.close);
   const editor = await ui.edit(), player = editor.dom.querySelector('audio')!, owner = owners.at(-1)!;
   assert.ok(player); const count = owners.length;
-  player.dispatchEvent(new ui.dom.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }));
+  if (pointer) player.dispatchEvent(new ui.dom.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }));
   editor.contentDOM.blur(); await tick();
   const click = new ui.dom.window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }); player.dispatchEvent(click);
-  player.dispatchEvent(new ui.dom.window.MouseEvent('pointerup', { bubbles: true, button: 0 })); await tick();
+  if (pointer) player.dispatchEvent(new ui.dom.window.MouseEvent('pointerup', { bubbles: true, button: 0 })); await tick();
   assert.equal(click.defaultPrevented, false); assert.equal(ui.card().classList.contains('is-editing'), true);
   assert.equal(ui.card().querySelector('.zorid-canvas-note-editor')?.hasAttribute('hidden'), false);
   assert.equal(editor.dom.querySelector('audio'), player); assert.equal(owners.length, count); assert.equal(owner.destroyed, 0);

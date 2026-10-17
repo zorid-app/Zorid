@@ -116,3 +116,45 @@ test('returning to the card during a pending automatic save keeps the Live edito
     await f.card.deactivate(); assert.equal(f.card.isEditing(), false);
   } finally { release(); f.close(); }
 });
+
+
+test('accessibility media activation without pointer events survives body-only blur until an actual outside activation', async () => {
+  const f = await fixture();
+  try {
+    f.input.blur(); await tick();
+    assert.equal(f.doc.activeElement, f.doc.body);
+    assert.equal(f.card.isEditing(), true, 'ambiguous native-control focus must not replace the player');
+    const click = new f.dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+    f.audio.dispatchEvent(click); await tick();
+    assert.equal(click.defaultPrevented, false); assert.equal(f.card.isEditing(), true);
+    assert.equal(f.card.element.querySelector('audio'), f.audio);
+    // AX activation of an unfocusable external region can also omit pointerdown.
+    f.doc.body.click(); await tick(); assert.equal(f.card.isEditing(), false);
+  } finally { f.close(); }
+});
+
+test('body-only accessibility blur still exits on Tab, window blur, or explicit deactivation', async () => {
+  const f = await fixture();
+  try {
+    f.input.blur(); await tick();
+    f.doc.body.dispatchEvent(new f.dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    await tick(); assert.equal(f.card.isEditing(), false);
+    await f.card.activate(); f.input.blur(); await tick();
+    f.dom.window.dispatchEvent(new f.dom.window.Event('blur')); await tick(); assert.equal(f.card.isEditing(), false);
+    await f.card.activate(); f.input.blur(); await tick();
+    await f.card.deactivate(); assert.equal(f.card.isEditing(), false);
+  } finally { f.close(); }
+});
+
+test('composed shadow control events stay inside the card without suppressing their native default', async () => {
+  const f = await fixture();
+  try {
+    const host = f.doc.createElement('div'); f.input.append(host);
+    const shadow = host.attachShadow({ mode: 'open' }), control = f.doc.createElement('button'); shadow.append(control);
+    f.input.blur(); await tick();
+    const click = new f.dom.window.MouseEvent('click', { bubbles: true, composed: true, cancelable: true });
+    control.dispatchEvent(click); await tick();
+    assert.equal(click.defaultPrevented, false); assert.equal(f.card.isEditing(), true);
+    f.outside.focus(); await tick(); assert.equal(f.card.isEditing(), false);
+  } finally { f.close(); }
+});

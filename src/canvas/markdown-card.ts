@@ -72,20 +72,23 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
   let previewOwners: { destroy(): void }[] = [];
   let listConfiguration = '', configurationQueued = false;
   // Native media controls may blur the editor while exposing only the document
-  // body as activeElement. Keep card-local pointer interaction separate from
-  // keyboard focus; release/cancel must not leave a permanent focus exemption.
+  // body as activeElement, including accessibility activation with no exposed
+  // pointer event. Only an observed exit intent can disambiguate that focus.
+  // Pointer cancellation/release must not leave a permanent focus exemption.
   const insidePointers = new Set<number>();
   let watchingFocus = false, focusIntent = 0;
-  const containsFocusTarget = (target: EventTarget | null) => !!target && (element.contains(target as Node) || toolbar.contains(target as Node));
+  const containsFocusTarget = (target: EventTarget | null) => !!target && 'nodeType' in target && (element.contains(target as Node) || toolbar.contains(target as Node));
+  const insideEvent = (event: Event) => event.composedPath().some(containsFocusTarget) || containsFocusTarget(event.target);
+  const bodyFocused = () => !document.activeElement || document.activeElement === document.body || document.activeElement === document.documentElement;
   const exitForFocus = () => { if (!closed && editing) void leaveEditing(focusIntent).catch(() => {}); };
-  const checkFocus = () => {
+  const checkFocus = (explicitExit = false) => {
     const intent = focusIntent;
     queueMicrotask(() => {
-      if (intent === focusIntent && !insidePointers.size && !containsFocusTarget(document.activeElement)) exitForFocus();
+      if (intent === focusIntent && !insidePointers.size && !containsFocusTarget(document.activeElement) && (explicitExit || !bodyFocused())) exitForFocus();
     });
   };
   const focusIn = (event: FocusEvent) => {
-    if (containsFocusTarget(event.target)) { focusIntent++; return; }
+    if (insideEvent(event)) { focusIntent++; return; }
     // A native media control can expose body as its focused owner. An actual
     // external control gaining focus is an exit even during a held pointer.
     if (event.target === document.body || event.target === document.documentElement) return;
@@ -93,16 +96,22 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
   };
   const pointerDown = (event: PointerEvent) => {
     focusIntent++;
-    if (containsFocusTarget(event.target)) insidePointers.add(event.pointerId);
+    if (insideEvent(event)) insidePointers.add(event.pointerId);
     else { insidePointers.clear(); exitForFocus(); }
   };
+  const click = (event: MouseEvent) => {
+    focusIntent++;
+    if (!insideEvent(event)) { insidePointers.clear(); exitForFocus(); }
+  };
+  const focusOut = () => checkFocus();
   const pointerUp = (event: PointerEvent) => { insidePointers.delete(event.pointerId); };
-  const pointerCancel = (event: PointerEvent) => { pointerUp(event); checkFocus(); };
-  const keyFocus = (event: KeyboardEvent) => { if (event.key === 'Tab') { insidePointers.clear(); checkFocus(); } };
-  const windowBlur = () => { insidePointers.clear(); checkFocus(); };
+  const pointerCancel = (event: PointerEvent) => { pointerUp(event); checkFocus(true); };
+  const keyFocus = (event: KeyboardEvent) => { if (event.key === 'Tab') { insidePointers.clear(); checkFocus(true); } };
+  const windowBlur = () => { insidePointers.clear(); checkFocus(true); };
   function watchFocus(): void {
     if (watchingFocus) return; watchingFocus = true;
     document.addEventListener('focusin', focusIn, true);
+    document.addEventListener('click', click, true);
     document.addEventListener('pointerdown', pointerDown, true);
     document.addEventListener('pointerup', pointerUp, true);
     document.addEventListener('pointercancel', pointerCancel, true);
@@ -113,6 +122,7 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
   function unwatchFocus(): void {
     if (!watchingFocus) return; watchingFocus = false; insidePointers.clear();
     document.removeEventListener('focusin', focusIn, true);
+    document.removeEventListener('click', click, true);
     document.removeEventListener('pointerdown', pointerDown, true);
     document.removeEventListener('pointerup', pointerUp, true);
     document.removeEventListener('pointercancel', pointerCancel, true);
@@ -253,8 +263,8 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
   element.addEventListener('click', event => {
     if (!current() || !canEdit() && (event.target as Element).closest('input[type="checkbox"]')) { event.preventDefault(); event.stopImmediatePropagation(); }
   }, true);
-  element.addEventListener('focusout', checkFocus);
-  toolbar.addEventListener('focusout', checkFocus);
+  element.addEventListener('focusout', focusOut);
+  toolbar.addEventListener('focusout', focusOut);
   editorHost.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); void deactivate().catch(() => {}); }
     else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); void flush().catch(() => {}); }
@@ -268,7 +278,7 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
     refreshPreview() { if (!closed && !editing) showPreview(); },
     destroy() {
       if (closed) return; closed = true; activation++;
-      unwatchFocus(); element.removeEventListener('focusout', checkFocus); toolbar.removeEventListener('focusout', checkFocus);
+      unwatchFocus(); element.removeEventListener('focusout', focusOut); toolbar.removeEventListener('focusout', focusOut);
       for (const release of [unsubscribe, () => clearPreview(), () => editor?.destroy(), () => session?.destroy()]) {
         try { release?.(); } catch (error) { try { options.onError?.(error); } catch { /* Release the remaining owners. */ } }
       }
