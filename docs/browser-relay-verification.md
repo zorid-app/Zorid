@@ -1,5 +1,55 @@
 # Actual browser relay verification
 
+## Normalized browser streaming and main integration — 2026-10-17
+
+Integrated main293df57 from reviewed candidate3a082b0. Fresh actual Chrome used
+the normal BrowserCoreRuntime worker, real Rust/WASM, strict IndexedDB format7
+and the production RPC2 adapter. Browser database
+`zorid-core-vault:smoke-4ba2a8bb-fc53-43ca-984b-491f81a6f170`, client
+`813a1117-f50f-4ac9-afff-a51c5be019be`; no direct storage seeding.
+
+The first receive exposed `sync_revision_collision` when retained Text became
+visible after its namespace dependency arrived. Reviewed66bbc8c reserves that
+unchanged durable witness only once, preserving fresh allocation fences. The
+same failed database reopened without repair/clearing, received its remaining
+eight records, and read exact49-byte merged text plus262,163-byte Binary with
+the hashes recorded below. This receive reused existing concurrent history;
+it is not a fresh v7 outage/concurrent-authoring proof.
+
+The actual file chooser selected a17,825,809-byte generated input. Sliced Blob
+staging committed `normalized-large.unknown`, entry
+`481976f3-cb50-484f-b7bf-4b3d47d23fa2`, revision
+`df5142bb-f5eb-469e-a0ca-7fb4812e845e`. Browser RPC uploaded64+64+12 records.
+Independent CLI received140 records through cursor149; final authored,
+dependency and projection pending counts were zero. Its raw streamed output and
+physical file match the original length and SHA256:
+`0a5b261f0251db22a67635b1e614ff085870d3c06ae34a57c7f28567d8a2628b`.
+Nonsecret result: `/private/tmp/zorid-normalized-browser-large-result-1017.json`.
+
+Own echoed updates initially repeated full Binary verification/publication.
+Reviewed3a082b0 authenticates an existing exact receipt and rechecks state,
+ledger, source bytes, cursor and ownership in a strict transaction that writes
+only the cursor. New updates retain full verification. After a real reload of
+the same large-file database, catch-up received64 then52 records and completed
+with stable entry/revision. No broad throughput or memory benchmark is claimed.
+
+Actual normal production browser build58710 (nonfixture asset routing) opened
+at fresh loopback origin8797 without sync credentials. New note,72-character
+save, Reading mode and full reload passed. Two actual independent tabs then
+edited the same baseline concurrently. Tab B committed; Tab A displayed
+`Save failed — draft retained`. Reloading A restored its exact competing text
+with the retained-draft panel. Save recovery copy created
+`Untitled (recovered draft e7676f10).md` with A's text while the original retained
+B's text. This is safe recovery, not the deferred automatic draft merge.
+
+Combined source gates:43 Rust/WASM tests,97 browser checks, engine27 then31
+focused regressions after the observed fixes, full TypeScript, actual WASM
+release69772 and browser bundles pass. Current generated WASM SHA256 is
+`5330ded754c628a9e3762d6f2174c0e2c2c44e3426d2f79890541231f53a1b72`.
+Remaining first-goal proof: current Electron's own RPC interop, actual current
+v7 outage/concurrent edits and abrupt Store11 desktop+host recovery. Enrollment,
+mobile and production security are not established by these checks.
+
 ## Production RPC adapter cross-client proof — 2026-10-17
 
 Root served the actual BrowserCoreRuntime worker/Rust-WASM bundle from isolated

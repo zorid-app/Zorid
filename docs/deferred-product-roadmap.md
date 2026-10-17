@@ -2,7 +2,7 @@
 
 ## Execution checkpoint — shared-core coordinator
 
-Updated 2026-10-16. Read this section before resuming after a context reset;
+Updated 2026-10-17. Read this section before resuming after a context reset;
 earlier discussion restrictions below are historical where superseded here.
 
 Direct user confirmation on 2026-10-16 sets the product priority to the best
@@ -116,6 +116,75 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- Integrated on main293df57: root merged independently reviewed combined
+  candidate3a082b0 with a normal no-ff merge after source/lock closure review.
+  Main-only divergence was documentation; the merge had no conflicts and no
+  main-only source was displaced. Store schema11, normalized browser format7,
+  bounded binary stages/pins, desktop protobuf frames, standalone CLI streams
+  and explicit remote RPC2 are now source defaults. Existing development
+  formats are rejected and retained; no real-vault migration or deployment ran.
+  Main frozen offline pnpm install and main typecheck/desktop build7075 passed.
+  Matching verified CLI/host binaries, rebuilt main renderer and WASM cache are
+  published to main's ignored runnable artifacts, retaining existing hashed
+  assets. target/debug/zorid-build-provenance.json records exact hashes/source;
+  no heavy build or owned Electron pass remains running.
+- Combined acceptance is now terminal and passing: Rust/WASM90716 passed43
+  tests (including17 streaming checks); actual WASM69772 release built in31.95s;
+  combined browser19973 passed97 Node checks; full TypeScript75293/76061/67743
+  passed. Desktop host86481 passed its real >16MiB protobuf subprocess check
+  in34.66s. CLI61291 passed the independent16MiB+17 stdin/file/raw/base64/retry
+  process check in71.10s and current RPC encrypted backup/restore in2.43s.
+  Test builds used one job, bounded test threads and command-only opt-level1.
+- Actual normalized-v7 Chrome runtime caught two concrete issues before merge:
+  first visible Text publication re-reserved an already durable witness revision;
+  reviewed66bbc8c fixes it (27 focused checks and exact retained-DB rerun pass).
+  Already committed exact wire echoes also repeated whole-file verification and
+  publication; reviewed3a082b0 uses authenticated, strictly CAS-fenced cursor-only
+  replay (31 checks). New updates retain full verification. On actual retained
+  data, catch-up received64 then52 records and reported complete=true, without
+  changing file identity/revision. Normal browser create/save/reload without any
+  sync credentials passed; competing-tab edits retain the losing draft through
+  reload, and Save recovery copy preserves it separately from the winning note.
+- Actual17MiB+17 Chrome Blob import committed through bounded stages; browser
+  uploaded140 encrypted records across bounded sweeps. Independent CLI received
+  all140, with zero final pending authored/dependency/projection work; raw streamed
+  output and physical disk exactly match the original17,825,809-byte hash. Normal
+  rebuilt Electron saved79 exact bytes through default Rust, read independently
+  by CLI while host was open, discovered/opened an external file, and retained
+  content after graceful quit/reopen. Both owned Electron passes exited0.
+  See browser-relay-verification.md and native-progress-verification.md.
+- The first goal remains ACTIVE. Minimal remaining actual-runtime gates are
+  Electron's own RPC2 upload/receive with browser/CLI, current normalized-v7/RPC
+  concurrent editing across a real relay outage/rejoin (the new49-byte receive
+  reused prior history), and abrupt Electron+host termination/recovery with a
+  competing CLI write on Store11. Earlier HTTP/v6 and pre-Store11 crash proofs
+  do not close those changed-path gates. Combine the first two in one disposable
+  fixture, then verify abrupt recovery there; no broad suite rerun is needed.
+  CLI's permanent legacy capability flags still mention larger_file_streaming;
+  source-only reporting suggestion is ready at
+  `/private/tmp/zorid-native-sync-reporting-suggestion.patch`, not applied.
+  Preserve the documented synced:false no-global-barrier contract and desktop
+  validator; the suggestion adds an explicitly bounded snapshot completion hint
+  and removes only the obsolete larger-file capability. Review/adopt separately.
+  Do not interpret that stale flag as
+  failure of the exact large-file transfer just verified, or claim production
+  enrollment is implemented. Mobile, join UX and full history/admin stay later;
+  P2P remains explicitly deferred from this pass.
+- Continuation resources: current RPC fixture relay49406 serves original
+  disposable DB `/private/tmp/zorid-rpc-crossclient-1017-browser2/relay.sqlite`
+  at127.0.0.1:50489, allowed origin8794. Static fixture60936 serves the current
+  candidate prototype on8794. Retained actual Chrome RPC tab1268038265 uses the
+  normalized database/client recorded in browser-relay-verification.md; marked
+  for handoff, configured and complete through149. Independent CLI vault is
+  `/private/tmp/zorid-rpc-browser-cli-1017`, Store11, same scope and cursor149;
+  private synthetic web/CLI/desktop credential files remain beside the relay DB
+  and outside served content. Never print them. Normal browser tabs1268038281/
+  1268038284 completed their proof and were closed; normal build static84039 on
+  8797 was stopped with exit0. Own Electron49442/6394 exited0. Poll each handle/revalidate
+  actual processes after interruption rather than assuming a marker is live.
+  Use a new isolated desktop profile with explicit fixture sync configuration
+  for the remaining RPC interop/outage pass, preserving the current local-default
+  proof and fixture authority. Do not silently rebind the populated local realm.
 - Latest combined checkpoint (2026-10-17): isolated
   `core-default-integration`, branch `tingkai-c/streaming-core-integration`, is
   now c2c9b91 after composing the independently reviewed browser source batch

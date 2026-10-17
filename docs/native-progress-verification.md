@@ -1,5 +1,41 @@
 # Native bounded import and larger Text verification
 
+## Store11 streaming/default desktop follow-up — 2026-10-17
+
+Combined candidate3a082b0 is integrated on main293df57. Single-job tests used
+command-only test opt-level1. Desktop host86481 passed the real subprocess
+17MiB protobuf publication/pin/read test in34.66s. Standalone CLI61291 passed
+its16MiB+17 stdin/file/raw/base64/original-retry process test in71.10s, then the
+basic current-RPC encrypted backup/restore check in2.43s. Native17MiB staged
+restart/lost-open-ACK and compound external reconciliation checks also pass;
+the compound fixture resumes its existing soft budget rather than extending it.
+
+Actual normal Electron renderer at source66bbc8c (same native source as the
+merged candidate) loaded the isolated candidate's exact `dist/index.html` with
+all fixture-selection environment variables removed. Its default Rust host
+opened a fresh disposable profile/vault without backend credentials. The normal
+editor saved79 physical bytes, SHA256
+`30e5bde5d550835f8218a2a2507a36cf30b0b6d605c1f73337749b2a1b9e23c5`.
+Independent CLI read identical bytes while the host stayed open. A separately
+created external Markdown file appeared in the normal file tree and opened with
+its exact expected text. Graceful quit/reopen retained both files and the edited
+note. Both owned Electron sessions49442/6394 exited0 and are closed.
+Nonsecret result: `/private/tmp/zorid-streaming-desktop-result-1017.json`.
+
+Main's frozen offline dependency install and typecheck/renderer build7075 pass.
+Verified matching native binaries and that rebuilt renderer are published to
+main's ignored runnable artifacts; previous hashed assets were retained for any
+existing window. `target/debug/zorid-build-provenance.json` records source293df57,
+candidate3a082b0, exact hashes and test profile. CLI SHA256:
+`fb82383afe584a1c544ef5f0d0cf1246b55d3531ed8fb6c76f05ba8ef7646e79`;
+desktop host SHA256:
+`cc5dbbdfcdf67d80ae12d4260fe2d812a570dc7866e445ab47ed7fc075889ccc`.
+
+Remaining: actual Electron-owned RPC2 upload/receive, combined current-v7
+outage/concurrent-edit convergence, and abrupt current Store11 desktop+host
+recovery with a competing CLI write. Graceful reopen and local interop do not
+establish those results. No native-mobile or production-enrollment claim follows.
+
 Verified 2026-10-17 by the shared-core coordinator. Source candidate
 `core-default-integration` at `f4e6ec2`; reviewed scanner batch integrated on main
 through `77bb43f`. The candidate also includes the bounded Text diff fix now on
