@@ -105,7 +105,9 @@ Heavy builds and integration remain coordinator-serialized on the8GB machine.
 
 Reviewed candidate: `tingkai-c/stage4-integrated-engine`, `39a306e7`, isolated
 worktree `/Users/ctk/orca/workspaces/Zorid/stage4-integrated-engine`. Runtime
-source is now composed on main for final scoped integration checks. Independent final review found no new
+source is integrated on main at `426d3a6c`. Main frontend typecheck and48 focused
+tests pass; independent merge audit found no functional source delta beyond
+whitespace. Independent final review found no new
 source blocker; it also identified remaining normal search/Base consumers and
 explicit imported/received-update index evidence. Keep the milestone active.
 
@@ -137,3 +139,23 @@ represented as a passing full suite. No speed/memory improvement is claimed.
 Native mobile hotfix and simulator-only fixture sync are separate work; none of
 this establishes mobile parity or production security. See the roadmap for live
 ownership, handles and exact commands.
+
+### Remaining assignments after engine integration
+
+- `stage4_native_consumer`: isolated `tingkai-c/stage4-workspace-search`, normal
+  sidebar literal search through the optional shared capability; retained-query
+  cleanup and honest case-sensitive query UI, legacy fallback only without it.
+- `stage4_base_reuse`: isolated `stage4-base-controller`, shared Base result
+  projection/controller lifecycle while keeping source-preserving editing and
+  presentation; no hidden fallback for unsupported callbacks.
+- `stage4_contract_review`: isolated `stage4-base-context-options`, bounded
+  currentEntryId/maxSteps transport and snapshot-derived current-record context,
+  coordinated with the controller owner; no arbitrary supplied records.
+- `stage4_native_index`: test-only29bdb786, independently reviewed and composed
+  as80e2416e in the isolated root candidate. Explicit external reconciliation and
+  authenticated receive must advance metadata/search/backlinks, preserve raw
+  bytes/old pins, rebuild equivalently and avoid authored receive echoes. Actual
+  Rust execution awaits the native hotfix terminal resource boundary.
+
+Root remains sole main integrator. Mobile's separately owned host fixture-sync
+slice is not a Stage4 completion condition or proof of production remote sync.

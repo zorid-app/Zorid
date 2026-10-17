@@ -43,14 +43,19 @@ Adaptations:
   have scoped compatibility adaptations. Unicode string helpers retain upstream
   scalar semantics and regex matching remains stateless.
 
-Status: source-only extraction and query continuation, no native/WASM build or
-runtime parity claim until the coordinator's serialized proof. The reducer owns
-Zorid's filter/group-order/search/sort/limit policy around row-scoped sessions of
-the reused evaluator. Base YAML uses the document crate's same Saphyr mapping
-decoder. Complete builtin equivalence, fine-grained work accounting and the final
-public API remain under review. Do not enable consumers from this source milestone alone.
+Status (2026-10-17): extraction and query engine integrated on main426d3a6c.
+Scoped native expression/query/generation checks pass. Actual Chrome WASM runs
+pass51 accepted Base cases (30 expressions,10 queries,4 generation cases and7
+compile checks) plus5 malformed-request checks, using the shared corpus. See
+`docs/shared-document-semantics-plan.md` and its evidence ledger for exact source,
+binary hashes and limits. These results establish the accepted scoped behavior,
+not complete upstream builtin equivalence or measured performance improvement.
+Normal Base controller migration remains in progress; source-preserving editor
+transformations remain TypeScript-owned. The reducer owns Zorid's filter/group-
+order/search/sort/limit policy around row-scoped sessions of the reused evaluator.
+Base YAML uses the document crate's Saphyr mapping decoder.
 
 The small corpus test uses the shared accepted expectations from
 `tests/fixtures/document-semantics/bases/expressions.json`, plus a few explicit
-resource/host guards. It selects `proposed` values for accepted corrections. It
+resource/host guards. Accepted corrections are frozen in the accepted fixture projections. It
 is not a wholesale copy of upstream's oracle or a production-parity claim.

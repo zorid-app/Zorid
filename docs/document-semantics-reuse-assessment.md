@@ -8,6 +8,17 @@ No upstream code executed, dependencies installed, builds/tests run or adoption
 verified. This records preparation for the [semantics milestone](shared-document-semantics-plan.md),
 not completion of the current storage/sync/recovery gate.
 
+## Implementation follow-up (2026-10-17)
+
+The source assessment below remains historical preparation evidence. Main426d3a6c
+now uses pulldown-cmark0.13.4 plus saphyr-parser0.2.2 for portable metadata and a
+narrow attributed MDBASE evaluator extraction pinned to the revision below.
+Whole MDBASE storage/CEL/native dependencies were not adopted. Native and actual
+browser-WASM accepted corpora pass; see `shared-document-semantics-plan.md` for
+runtime provenance and remaining consumer work. Literal search currently uses
+bounded retained-source scans; FTS acceleration and parallel indexing remain
+future improvements, with no performance gain claimed here.
+
 ## Recommendation and scope
 
 Reuse an established Markdown parser, evaluate SQLite FTS5 for candidate search,
