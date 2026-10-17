@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- Direct user approval (2026-10-17): after automatic approval review rejected
+  selecting the new browser storage host as default before combined verification,
+  the user quoted that rejection and replied "Approve". This authorizes the
+  concrete default-host SOURCE wiring in the isolated browser implementation
+  branch so its actual path can be compiled/tested. It supersedes the temporary
+  source-gating workaround proposed solely to resolve that rejection. Do not ask
+  again for this same source action. Main integration still follows scoped review
+  and combined validation; this does not authorize deployment, real-vault schema
+  migration or claims of browser runtime verification. Browser owner must retain
+  rejected old-schema data and avoid automatic legacy fallback.
 - Latest coupled gate update: Store source2921096/abf0bb4/7bd54e9 passes86
   library checks in19472 (one optional64MiB fixture ignored). Root isolated
   `streaming-core-integration` HEAD4dbd3f1 includes those fixes, native2700822,
