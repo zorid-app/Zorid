@@ -42,6 +42,9 @@ pub(super) struct EnvelopeMetadata {
     pub format_version: u32,
     pub payload_digest: Sha256Digest,
     pub payload_bytes: u32,
+    /// Commitment to the typed descriptor derived from the exact accepted file
+    /// plaintext. Text envelopes have no file descriptor.
+    pub file_summary_digest: Option<Sha256Digest>,
     // File batches/chunks/pages need not name a single entry. A text binding is
     // logical identity only; no entries FK may prevent pre-bootstrap staging.
     pub text_binding: Option<TextBinding>,
@@ -100,6 +103,7 @@ impl EnvelopeMetadata {
             || self.payload_bytes == 0
             || self.payload_bytes as usize > zorid_sync_protocol::MAX_PLAINTEXT_BYTES
             || (self.family == Family::Text) != self.text_binding.is_some()
+            || (self.family == Family::Files) != self.file_summary_digest.is_some()
         {
             return Err(corrupt("invalid envelope family metadata"));
         }
@@ -124,6 +128,20 @@ impl EnvelopeMetadata {
         {
             return Err(corrupt("envelope payload/provenance mismatch"));
         }
+        if self.family == Family::Files {
+            let (scope, id, record) =
+                zorid_file_sync::metadata::GraphRecord::from_authored_exact(payload)
+                    .map_err(|_| corrupt("invalid file descriptor source plaintext"))?;
+            if scope.realm_id != self.key.realm_id
+                || scope.vault_id != self.key.vault_id
+                || id != self.key.update_id
+                || Some(record.summary_digest()?) != self.file_summary_digest
+            {
+                return Err(corrupt(
+                    "file summary differs from exact envelope plaintext",
+                ));
+            }
+        }
         Ok(())
     }
     fn check_key(&self, key: &EnvelopeKey) -> Result<()> {
@@ -144,6 +162,92 @@ impl EnvelopeMetadata {
             return Err(corrupt("envelope wire/metadata identity mismatch"));
         }
         Ok(())
+    }
+}
+
+/// Descriptor/status reads must not select retained payload/wire BLOBs. This
+/// head validates identities, bounded lengths and ownership; a body is checked
+/// again by the separate one-record accessor when it is actually consumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MetadataRecord {
+    pub metadata: EnvelopeMetadata,
+    pub direction: Direction,
+    pub sealed: bool,
+    pub accepted: bool,
+}
+pub(super) fn metadata_only(tx: &Connection, key: &EnvelopeKey) -> Result<Option<MetadataRecord>> {
+    let oversized: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM authored_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3 AND length(CAST(metadata AS BLOB)) NOT BETWEEN 1 AND 1048576 UNION ALL SELECT 1 FROM sync_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3 AND length(CAST(metadata AS BLOB)) NOT BETWEEN 1 AND 1048576)",
+        params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()], |r| r.get(0))?;
+    if oversized {
+        return Err(corrupt("envelope metadata head bound exceeded"));
+    }
+    let authored:Option<(String,i64,i64,i64,Option<i64>)>=tx.query_row(
+        "SELECT metadata,sealed IS NOT NULL,accepted,length(payload),length(sealed) FROM authored_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
+        params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+    let wire:Option<(String,String,i64)>=tx.query_row(
+        "SELECT metadata,direction,length(wire) FROM sync_envelopes WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",
+        params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    let authored = authored
+        .map(|(raw, sealed, accepted, len, sealed_len)| -> Result<_> {
+            let metadata: EnvelopeMetadata = serde_json::from_str(&raw)?;
+            metadata.check_key(key)?;
+            if len != i64::from(metadata.payload_bytes)
+                || !matches!(sealed, 0 | 1)
+                || !matches!(accepted, 0 | 1)
+                || accepted == 1 && sealed == 0
+                || sealed_len
+                    .is_some_and(|len| len <= 0 || len > zorid_sync_protocol::MAX_WIRE_BYTES as i64)
+            {
+                return Err(corrupt("invalid authored metadata head"));
+            }
+            Ok((metadata, sealed == 1, accepted == 1))
+        })
+        .transpose()?;
+    let wire = wire
+        .map(|(raw, direction, len)| -> Result<_> {
+            let metadata: EnvelopeMetadata = serde_json::from_str(&raw)?;
+            metadata.check_key(key)?;
+            if len <= 0 || len > zorid_sync_protocol::MAX_WIRE_BYTES as i64 {
+                return Err(corrupt("invalid wire metadata head"));
+            }
+            Ok((metadata, Direction::decode(&direction)?))
+        })
+        .transpose()?;
+    match (authored, wire) {
+        (None, None) => Ok(None),
+        (Some((metadata, false, false)), None) => Ok(Some(MetadataRecord {
+            metadata,
+            direction: Direction::Authored,
+            sealed: false,
+            accepted: false,
+        })),
+        (Some(_), None) => Err(corrupt("sealed authored head lacks wire ledger")),
+        (None, Some((metadata, Direction::Received))) => Ok(Some(MetadataRecord {
+            metadata,
+            direction: Direction::Received,
+            sealed: true,
+            accepted: false,
+        })),
+        (None, Some((_, Direction::Authored))) => {
+            Err(corrupt("authored wire head lacks authored intent"))
+        }
+        (Some((metadata, sealed, accepted)), Some((wire, direction))) => {
+            // SQLite compares one bounded pair; neither body enters a Rust
+            // metadata collection or a whole-history payload allocation.
+            let same:bool=tx.query_row("SELECT coalesce(a.sealed=w.wire,0) FROM authored_envelopes a JOIN sync_envelopes w USING(realm_id,vault_id,update_id) WHERE a.realm_id=?1 AND a.vault_id=?2 AND a.update_id=?3",params![key.realm_id.as_str(),key.vault_id.as_str(),key.update_id.as_str()],|r|r.get(0))?;
+            if !sealed || direction != Direction::Authored || metadata != wire || !same {
+                return Err(corrupt("authored head differs from immutable wire ledger"));
+            }
+            Ok(Some(MetadataRecord {
+                metadata,
+                direction,
+                sealed,
+                accepted,
+            }))
+        }
     }
 }
 
@@ -202,8 +306,7 @@ pub(super) fn authored(tx: &Connection, key: &EnvelopeKey) -> Result<Option<Auth
 pub(super) fn unused(tx: &Connection, key: &EnvelopeKey) -> Result<bool> {
     // Validate retained ownership before returning a boolean; a deleted authored
     // head must not make its already sealed operation identity reusable.
-    let a = authored(tx, key)?;
-    Ok(a.is_none() && wire(tx, key)?.is_none())
+    Ok(metadata_only(tx, key)?.is_none() && !super::blob_stage::update_reserved(tx, key)?)
 }
 
 pub(super) fn insert_authored(
@@ -231,6 +334,9 @@ pub(super) fn insert_received(
     exact_wire: &[u8],
 ) -> Result<bool> {
     metadata.check_wire(exact_wire)?;
+    if super::blob_stage::update_reserved(tx, &metadata.key)? {
+        return Err(mismatch());
+    }
     if let Some(existing) = wire(tx, &metadata.key)? {
         if existing.metadata != *metadata || existing.exact_wire != exact_wire {
             return Err(mismatch());
@@ -395,7 +501,7 @@ mod tests {
     fn db() -> Connection {
         let db = Connection::open_in_memory().unwrap();
         db.pragma_update(None, "foreign_keys", true).unwrap();
-        for (_, sql) in SCHEMA {
+        for (_, sql) in SCHEMA.iter().chain(super::super::blob_stage::SCHEMA) {
             db.execute_batch(sql).unwrap();
         }
         db.execute_batch("CREATE TABLE receive_cursors (realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,record TEXT NOT NULL,PRIMARY KEY(realm_id,vault_id))").unwrap();
@@ -412,6 +518,7 @@ mod tests {
             format_version: 2,
             payload_digest: Sha256Digest::of(b"{}"),
             payload_bytes: 2,
+            file_summary_digest: None,
             text_binding: Some(TextBinding {
                 entry_id: EntryId::new("entry").unwrap(),
                 text_bootstrap_id: UpdateId::new("text_bootstrap").unwrap(),

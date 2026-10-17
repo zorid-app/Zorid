@@ -3,7 +3,14 @@
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
+mod blob_index;
+mod blob_stage;
 mod checkpoints;
+pub use blob_stage::{
+    BinaryStageRef, BinaryStageRequest, BinaryStageStatus, BinaryTarget, StageChunkReceipt,
+    StagePhase, StagedBinaryRef, StreamingLimits, BINARY_STAGE_MAX_CHUNK_BYTES,
+    BINARY_STAGE_MAX_FILE_BYTES, BINARY_STAGE_MAX_PAYLOAD_BYTES,
+};
 mod external_scan_progress;
 mod family_commands;
 mod family_external_create;
@@ -64,7 +71,7 @@ use zorid_core::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 const APPLICATION_ID: i64 = 0x5a4f5244; // ZORD
 const SCHEMA: &[(&str, &str)] = &[
     ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB, visible INTEGER NOT NULL DEFAULT 1 CHECK(visible IN (0,1)))"),
@@ -91,6 +98,8 @@ fn schema_objects() -> Vec<(&'static str, &'static str)> {
         .chain(family_external_namespace::SCHEMA)
         .chain(family_ledger::SCHEMA)
         .chain(file_state::SCHEMA)
+        .chain(blob_index::SCHEMA)
+        .chain(blob_stage::SCHEMA)
         .chain(family_materialization::SCHEMA)
         .copied()
         .collect()
@@ -373,6 +382,8 @@ impl Store {
                 .chain(family_external_namespace::SCHEMA)
                 .chain(family_ledger::SCHEMA)
                 .chain(file_state::SCHEMA)
+                .chain(blob_index::SCHEMA)
+                .chain(blob_stage::SCHEMA)
                 .chain(family_materialization::SCHEMA)
             {
                 tx.execute_batch(sql)?;

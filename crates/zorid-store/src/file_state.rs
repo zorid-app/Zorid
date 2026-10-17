@@ -26,12 +26,8 @@ fn key(scope: &Scope, id: &UpdateId) -> EnvelopeKey {
 /// Every graph record has an authenticated received ledger row or an immutable
 /// validated authored intent. The head must never introduce a second authority.
 fn metadata(tx: &Connection, key: &EnvelopeKey) -> Result<EnvelopeMetadata> {
-    let authored = family_ledger::authored(tx, key)?;
-    if let Some(wire) = family_ledger::wire(tx, key)? {
-        return Ok(wire.metadata);
-    }
-    authored
-        .map(|a| a.metadata)
+    family_ledger::metadata_only(tx, key)?
+        .map(|record| record.metadata)
         .ok_or_else(|| corrupt("graph record has no envelope authority"))
 }
 fn check_file(tx: &Connection, scope: &Scope, id: &UpdateId, raw: &[u8]) -> Result<Payload> {
@@ -46,7 +42,7 @@ fn check_file(tx: &Connection, scope: &Scope, id: &UpdateId, raw: &[u8]) -> Resu
     meta.check_payload(raw)?;
     Ok(payload)
 }
-fn check_activity(
+pub(super) fn check_activity(
     tx: &Connection,
     scope: &Scope,
     id: &UpdateId,
@@ -77,7 +73,7 @@ fn check_activity(
     Ok(())
 }
 
-fn check_body_bounds(tx: &Connection, scope: &Scope) -> Result<()> {
+pub(super) fn check_body_bounds(tx: &Connection, scope: &Scope) -> Result<()> {
     let (total, largest):(i64,i64)=tx.query_row("SELECT coalesce(sum(size),0),coalesce(max(size),0) FROM (SELECT length(payload) AS size FROM family_file_records WHERE realm_id=?1 AND vault_id=?2 UNION ALL SELECT length(CAST(record AS BLOB)) AS size FROM family_text_activities WHERE realm_id=?1 AND vault_id=?2)",params![scope.realm_id.as_str(),scope.vault_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?)))?;
     if total < 0
         || total > MAX_STATE_BYTES as i64
@@ -222,6 +218,7 @@ pub(super) fn persist_many(
                 raw
             ],
         )?;
+        super::blob_index::insert_exact(tx, next.scope(), id, raw)?;
     }
     for (id, activity) in next
         .activities()
@@ -254,7 +251,12 @@ mod tests {
     fn db() -> Connection {
         let db = Connection::open_in_memory().unwrap();
         db.pragma_update(None, "foreign_keys", true).unwrap();
-        for (_, sql) in family_ledger::SCHEMA.iter().chain(SCHEMA) {
+        for (_, sql) in family_ledger::SCHEMA
+            .iter()
+            .chain(SCHEMA)
+            .chain(super::super::blob_index::SCHEMA)
+            .chain(super::super::blob_stage::SCHEMA)
+        {
             db.execute_batch(sql).unwrap();
         }
         db
@@ -275,6 +277,7 @@ mod tests {
             format_version: 2,
             payload_digest: Sha256Digest::of(b"{}"),
             payload_bytes: 2,
+            file_summary_digest: None,
             text_binding: Some(TextBinding {
                 entry_id: EntryId::new("entry").unwrap(),
                 text_bootstrap_id: UpdateId::new("text_bootstrap").unwrap(),

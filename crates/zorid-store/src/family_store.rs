@@ -122,6 +122,13 @@ pub(super) fn decode(opened: &OpenedEnvelope) -> Result<(EnvelopeMetadata, Authe
         payload_digest: zorid_file_sync::Sha256Digest::of(opened.plaintext()),
         payload_bytes: u32::try_from(opened.plaintext().len())
             .map_err(|_| zorid_client_sync::SyncError::TooLarge)?,
+        file_summary_digest: match &capability {
+            AuthenticatedFamily::Files(value) => Some(
+                zorid_file_sync::metadata::GraphRecord::from_authenticated(value)?
+                    .summary_digest()?,
+            ),
+            AuthenticatedFamily::Text(_) => None,
+        },
         text_binding,
     };
     metadata.check_payload(opened.plaintext())?;
@@ -179,7 +186,7 @@ impl Store {
                 vault_id: vault.clone(),
                 update_id: UpdateId::new(id)?,
             };
-            let record = family_ledger::authored(&tx, &key)?.ok_or_else(|| {
+            let record = family_ledger::metadata_only(&tx, &key)?.ok_or_else(|| {
                 StoreError::Corrupt("listed authored family envelope disappeared".into())
             })?;
             output.push(FamilyAuthoredStatus {
@@ -189,7 +196,7 @@ impl Store {
                 },
                 update_id: key.update_id,
                 family: public_kind(record.metadata.family),
-                sealed: record.sealed.is_some(),
+                sealed: record.sealed,
                 accepted: record.accepted,
             });
         }

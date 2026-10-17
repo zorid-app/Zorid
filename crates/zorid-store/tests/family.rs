@@ -233,7 +233,7 @@ fn receive_failure_rolls_back_exact_wire_graph_visibility_and_cursor() {
 #[test]
 fn obsolete_fixture_schema_rejection_does_not_change_database_bytes() {
     let dir = tempfile::tempdir().unwrap();
-    for version in [1, 6, 7, 8] {
+    for version in [1, 6, 7, 8, 9] {
         let path = dir.path().join(format!("old{version}"));
         let db = rusqlite::Connection::open(&path).unwrap();
         db.execute_batch(

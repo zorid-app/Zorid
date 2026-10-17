@@ -865,6 +865,11 @@ impl Store {
                 payload_digest: zorid_file_sync::Sha256Digest::of(&a.payload_bytes),
                 payload_bytes: u32::try_from(a.payload_bytes.len())
                     .map_err(|_| zorid_client_sync::SyncError::TooLarge)?,
+                file_summary_digest: Some(
+                    zorid_file_sync::metadata::GraphRecord::from_authored_exact(&a.payload_bytes)?
+                        .2
+                        .summary_digest()?,
+                ),
                 text_binding: None,
             };
             family_ledger::insert_authored(&tx, &metadata, &a.payload_bytes)?;

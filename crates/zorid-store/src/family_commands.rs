@@ -210,6 +210,13 @@ pub(super) fn commit_plan(
             payload_digest: zorid_file_sync::Sha256Digest::of(&authored.payload_bytes),
             payload_bytes: u32::try_from(authored.payload_bytes.len())
                 .map_err(|_| zorid_client_sync::SyncError::TooLarge)?,
+            file_summary_digest: Some(
+                zorid_file_sync::metadata::GraphRecord::from_authored_exact(
+                    &authored.payload_bytes,
+                )?
+                .2
+                .summary_digest()?,
+            ),
             text_binding: None,
         };
         family_ledger::insert_authored(tx, &metadata, &authored.payload_bytes)?;
@@ -229,6 +236,7 @@ pub(super) fn commit_plan(
             payload_digest: zorid_file_sync::Sha256Digest::of(&text.authored.payload_bytes),
             payload_bytes: u32::try_from(text.authored.payload_bytes.len())
                 .map_err(|_| zorid_client_sync::SyncError::TooLarge)?,
+            file_summary_digest: None,
             text_binding: Some(TextBinding {
                 entry_id: text.next_state.identity.entry_id.clone(),
                 text_bootstrap_id: text.next_state.identity.bootstrap_id.clone(),

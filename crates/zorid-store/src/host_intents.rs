@@ -209,6 +209,12 @@ fn prior(tx: &Connection, request: &MutationRequest) -> Result<Option<CommitResu
 }
 /// Called under the same write transaction before ordinary mutation planning.
 pub(crate) fn check_execution(tx: &Connection, command: &MutationRequest) -> Result<()> {
+    if super::blob_stage::operation_reserved(tx, &command.operation_id)? {
+        return Err(ContractError::IdempotencyConflict {
+            operation_id: command.operation_id.clone(),
+        }
+        .into());
+    }
     let owner = tx
         .query_row(
             "SELECT client_id,token FROM host_intents WHERE operation_id=?1",
@@ -286,6 +292,12 @@ impl Store {
             }
             reference
         } else {
+            if super::blob_stage::operation_reserved(&tx, &command.operation_id)? {
+                return Err(ContractError::IdempotencyConflict {
+                    operation_id: command.operation_id.clone(),
+                }
+                .into());
+            }
             prior(&tx, command)?;
             let reference = HostIntentRef {
                 client_id: client.clone(),
