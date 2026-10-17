@@ -116,7 +116,36 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
-Current authoritative update (older bullets below record preceding stages):
+Current authoritative update — 2026-10-17 20:30 UTC. The bullets below
+this update are historical checkpoints where their status differs:
+- Native owner reports successful physical iPhone build39896, install80894 and
+  launch63110; simulator flow independently read the exact43 saved body bytes
+  after create/rename/back/reopen. This verifies that bounded flow, not complete
+  mobile UX. User now requests editor-content-only embedding, native bottom tabs
+  and a glass keyboard accessory. Native owns those isolated changes plus the
+  exact dedicated CSS import in src/main.ts (ACK msg_a71de90a3ac7).
+- Native released the heavy slot in msg_5233e992aee5; root acquired it in
+  msg_f81617bee619. Root facade check73261 has exited101: Store document index
+  types lack root re-exports required by the native facade. Store owner is fixing
+  only that wiring. No heavy process is live at this checkpoint; root retains
+  the short slot for the focused retry pending native readiness notification.
+- Actual Store run98013 passed19/19 (tmp/stage4-store-index-run3.log).
+  Later published-stage discard no-op correction61b5d6e1 is composed and needs
+  only its changed focused case rerun. Actual engine run39411 stopped at three
+  Base graph fixture mismatches; input/oracle correctionf2893726 and explicit
+  selected-cell runner06e2dc5b are composed, awaiting runtime retry. Earlier
+  passing index proof does not cover the later controlled callback changes.
+- Root isolated candidate f21facb4 includes desktop RPC/shared service and normal
+  platform capability wiring, browser durable-index harness, plus new workspace
+  backlink testsced0ec23. Root workspace hook remains uncommitted in that isolated
+  worktree pending focused execution. Stage4 runtime source is not on main.
+  Actual WASM parity, production browser harness, real host/CJS transport and
+  normal app backlink integration remain required; source review is not proof.
+- Disk recovery removed only old generated root target/debug deps/build/
+  .fingerprint (~148MiB). Current Stage4 cache, shared Rust toolchain, binaries
+  and logs were preserved. Native separately removed its own761MiB cache.
+
+Historical preceding updates:
 - Root candidate checkpoint54d2123d in stage4-integrated-engine is clean and
   includes the browser index module wiring. Next after native release: actual
   Store17 retry for906956ec; recheck changed controlled-index/Base APIs; native
