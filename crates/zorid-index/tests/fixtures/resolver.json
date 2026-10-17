@@ -167,5 +167,27 @@
       "NOTE.md",
       "note.md"
     ]
+  },
+  {
+    "name": "upstream CommonMark parentheses destination",
+    "source": "Source.md",
+    "files": [
+      "A(B).md"
+    ],
+    "target": "A(B).md",
+    "expected": [
+      "A(B).md"
+    ]
+  },
+  {
+    "name": "upstream CommonMark entity destination",
+    "source": "Source.md",
+    "files": [
+      "A&B.md"
+    ],
+    "target": "A&B.md",
+    "expected": [
+      "A&B.md"
+    ]
   }
 ]

@@ -14,6 +14,15 @@ pub enum IndexError {
     StaleSource,
     StaleIndex,
     InvalidTarget,
+    InvalidRecord,
+    GenerationLimit,
+    PumpLimit,
+    InvalidQuery,
+    InvalidBudget,
+    SnapshotExpired,
+    QueryMismatch,
+    ContentMismatch,
+    NoProgress,
 }
 impl std::fmt::Display for IndexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -107,12 +116,14 @@ impl SemanticVersions {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexSnapshotId {
     local_store_id: OperationId,
+    generation_epoch: OperationId,
     generation: u64,
     versions: SemanticVersions,
 }
 impl IndexSnapshotId {
     pub fn new(
         local_store_id: OperationId,
+        generation_epoch: OperationId,
         generation: u64,
         versions: SemanticVersions,
     ) -> Result<Self, IndexError> {
@@ -121,12 +132,17 @@ impl IndexSnapshotId {
         }
         Ok(Self {
             local_store_id,
+            generation_epoch,
             generation,
             versions,
         })
     }
     pub fn local_store_id(&self) -> &OperationId {
         &self.local_store_id
+    }
+    /// Fresh host-CSPRNG token after cache discard/rebuild; never reuse an epoch.
+    pub fn generation_epoch(&self) -> &OperationId {
+        &self.generation_epoch
     }
     pub fn generation(&self) -> u64 {
         self.generation
@@ -210,7 +226,8 @@ impl PublicationFence {
         if source.local_store_id != next_index.local_store_id
             || expected_index.as_ref().is_some_and(|old| {
                 old.local_store_id != source.local_store_id
-                    || old.generation >= next_index.generation
+                    || (old.generation_epoch == next_index.generation_epoch
+                        && old.generation >= next_index.generation)
             })
         {
             return Err(IndexError::InvalidGeneration);

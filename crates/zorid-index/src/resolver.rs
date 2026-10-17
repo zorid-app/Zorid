@@ -89,13 +89,17 @@ impl<'a> Resolver<'a> {
                 .collect(),
         }
     }
-    /// Markdown/wiki targets share this policy. Fragments/spans are parser-owned.
+    /// Semantic destination from the document parser: Markdown escapes/entities
+    /// have already been normalized by that established parser; percent encoding
+    /// remains. Wiki destination is its raw target plus raw fragment. Split the
+    /// literal fragment before percent decoding, preserving encoded hash filenames.
+    /// Never pass raw CommonMark source here or decode its escapes/entities again.
     pub fn candidates(
         &self,
         source_id: &EntryId,
-        raw_target: &str,
+        destination: &str,
     ) -> Result<Vec<&'a EntryState>, IndexError> {
-        if raw_target.len() > MAX_TARGET_BYTES {
+        if destination.len() > MAX_TARGET_BYTES {
             return Err(IndexError::InvalidTarget);
         }
         let source = self
@@ -103,7 +107,7 @@ impl<'a> Resolver<'a> {
             .entry(source_id)
             .filter(|e| e.kind == EntryKind::File)
             .ok_or(IndexError::MissingSource)?;
-        let raw = raw_target
+        let raw = destination
             .split('#')
             .next()
             .unwrap_or("")

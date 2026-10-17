@@ -13,6 +13,7 @@ fn versions(extraction: &str) -> SemanticVersions {
 fn index(generation: u64, extraction: &str) -> IndexSnapshotId {
     IndexSnapshotId::new(
         OperationId::new("store-a").unwrap(),
+        OperationId::new("epoch-a").unwrap(),
         generation,
         versions(extraction),
     )
@@ -153,5 +154,25 @@ fn malformed_manifest_and_watermark_never_become_valid_snapshots() {
     assert_eq!(
         PublicationFence::new(source("store-b", "10"), None, index(1, "parser-v1")),
         Err(IndexError::InvalidGeneration)
+    );
+}
+
+#[test]
+fn reset_generation_counter_uses_fresh_epoch_and_cannot_match_old_identity() {
+    let old = index(1, "parser-v1");
+    let fresh = IndexSnapshotId::new(
+        OperationId::new("store-a").unwrap(),
+        OperationId::new("fresh-csprng-epoch").unwrap(),
+        1,
+        versions("parser-v1"),
+    )
+    .unwrap();
+    assert_ne!(old, fresh);
+    let rebuild =
+        PublicationFence::new(source("store-a", "10"), Some(old.clone()), fresh.clone()).unwrap();
+    assert_eq!(rebuild.check(&source("store-a", "10"), Some(&old)), Ok(()));
+    assert_eq!(
+        rebuild.check(&source("store-a", "10"), Some(&fresh)),
+        Err(IndexError::StaleIndex)
     );
 }
