@@ -3,7 +3,7 @@
 User authorized migration on2026-10-17. Root owns isolated
 `tingkai-c/vite-renderer-migration`; frozen candidate103428be. Native owner is
 reconciling reviewed focus/silent-refresh source for one combined iOS proof.
-Main remains canonical only after affected client gates pass. Latest product
+All affected client gates now pass; root is integrating the confirmed batch into main. Latest product
 sequence: Vite → Bases/tasks/calendar → Stage5; mobile UX continues in parallel.
 
 ## Build boundary
@@ -38,7 +38,7 @@ sequence: Vite → Bases/tasks/calendar → Stage5; mobile UX continues in paral
 | Actual production browser | Default Rust/WASM startup, create, rename, save, reload; persisted89-character note; rendered math1 and actual Prism keyword/number/operator tokens; no observed warn/error logs |
 | Actual dev browser | Default Rust/WASM startup, create/save/reload; persisted64-character note; math1 and Prismkeyword1; no observed warn/error logs |
 | Real desktop staging/archive | PASS347files, actual arm64Rusthost; ASAR verified against exact input manifest. Pinned official RPC notices independently source-reviewed; strict notice guard retained |
-| iOS renderer | Pending composed Vite/focus/refresh build, owner slot granted; compile and actual native open/save/localassets must be reported separately |
+| iOS renderer | PASS build7/sourcece1e0ace: create/save99physicalbytes/reopen stableID; actual mathglyphs/PrismPython; validPDF2pages; existing-list silentrefresh. Owner reportedmsg67c02132f86d; appclosed, slotreturned |
 
 Root test browser tabs are closed, servers10517/18756 stopped130, Electronclosed0.
 No Rust semantic changes were needed by the migration. Unchanged final Stage4WASM
@@ -56,3 +56,11 @@ in the older explicit inventory; it is now included and an independent full loca
 require-closure audit found no remaining omissions. No release/signing/publication
 claim follows from local source or staging checks. No mobile focus/search or
 production sync/security completion is implied by the bundler migration.
+
+Final iOS evidence: Simulator86404 build0, install/launch67696 exit0; actual save
+proof59873, reopen70052, PDF29423 and refresh33719 pass. Screenshots were viewed by
+native owner at /private/tmp/mobile-v7-vite-math-code.png and mobile-v7-vite-pdf.png.
+Keyboard focus matrix and new native search/Settings remain separate pending work.
+The existing disposable vault also reports incomplete reconciliation of newly copied
+fixtures; Vite source does not conceal it or establish data-loss causality. Existing
+listed notes and PDF supply this bundler gate. No phone7 runtime claim yet.
