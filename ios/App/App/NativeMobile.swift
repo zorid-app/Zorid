@@ -32,6 +32,8 @@ private final class LocalVaultCatalog {
     }
 
     func root(for vault: LocalVault) throws -> URL {
+        guard let client = UUID(uuidString: vault.clientId),
+              client.uuidString.lowercased() == vault.clientId else { throw MobileFailure.metadata }
         let root = directory.appendingPathComponent(vault.id.uuidString, isDirectory: true)
         let values = try root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard values.isDirectory == true, values.isSymbolicLink != true,
@@ -42,20 +44,18 @@ private final class LocalVaultCatalog {
 
     func reload() throws {
         // Corrupt metadata must never silently replace a durable client slot.
-        let saved = manager.fileExists(atPath: metadata.path)
-            ? try JSONDecoder().decode([LocalVault].self, from: Data(contentsOf: metadata)) : []
-        guard Set(saved.map(\.id)).count == saved.count,
-              saved.allSatisfy({ !$0.clientId.isEmpty && !$0.name.isEmpty }) else { throw MobileFailure.metadata }
+        vaults = []
+        let (saved, normalized) = try readCanonicalRecords()
         var discovered = saved
         for url in try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
             guard let id = UUID(uuidString: url.lastPathComponent),
                   url.lastPathComponent == id.uuidString,
                   !discovered.contains(where: { $0.id == id }) else { continue }
-            let vault = LocalVault(id: id, name: "Local vault \(id.uuidString.prefix(8))", clientId: UUID().uuidString)
+            let vault = LocalVault(id: id, name: "Local vault \(id.uuidString.prefix(8))", clientId: UUID().uuidString.lowercased())
             _ = try root(for: vault)
             discovered.append(vault)
         }
-        if discovered.count != saved.count { try persist(discovered) }
+        if normalized || discovered.count != saved.count { try persist(discovered) }
         vaults = discovered.filter { (try? root(for: $0)) != nil }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -65,15 +65,33 @@ private final class LocalVaultCatalog {
         guard !cleaned.isEmpty, cleaned.count <= 80,
               cleaned.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
         else { throw MobileFailure.metadata }
-        let vault = LocalVault(id: UUID(), name: cleaned, clientId: UUID().uuidString)
+        // Validate every stored identity before creating any new client slot.
+        var (saved, _) = try readCanonicalRecords()
+        let vault = LocalVault(id: UUID(), name: cleaned, clientId: UUID().uuidString.lowercased())
         try manager.createDirectory(at: directory.appendingPathComponent(vault.id.uuidString), withIntermediateDirectories: false)
         // Write the identity atomically before permitting the first core open.
-        var saved = manager.fileExists(atPath: metadata.path)
-            ? try JSONDecoder().decode([LocalVault].self, from: Data(contentsOf: metadata)) : []
         saved.append(vault)
         try persist(saved)
         try reload()
         return vault
+    }
+
+    private func readCanonicalRecords() throws -> ([LocalVault], Bool) {
+        let saved = manager.fileExists(atPath: metadata.path)
+            ? try JSONDecoder().decode([LocalVault].self, from: Data(contentsOf: metadata)) : []
+        guard Set(saved.map(\.id)).count == saved.count else { throw MobileFailure.metadata }
+        var normalized = false
+        let records = try saved.map { record -> LocalVault in
+            guard !record.name.isEmpty, let uuid = UUID(uuidString: record.clientId) else {
+                throw MobileFailure.metadata
+            }
+            let canonical = uuid.uuidString.lowercased()
+            // Only case normalization is allowed; never replace an invalid identity.
+            guard record.clientId.lowercased() == canonical else { throw MobileFailure.metadata }
+            normalized = normalized || record.clientId != canonical
+            return LocalVault(id: record.id, name: record.name, clientId: canonical)
+        }
+        return (records, normalized)
     }
 
     private func persist(_ records: [LocalVault]) throws {
@@ -94,12 +112,14 @@ private final class NativeMobileSession {
     private static let worker = DispatchQueue(label: "app.zorid.mobile.core", qos: .userInitiated)
     private var handle: OpaquePointer?
     let vault: LocalVault
+    let reconciliation: [String: Any]
     private static let headerLimit = 1_048_576
     private static let bodyLimit = 33_554_432
 
-    private init(vault: LocalVault, handle: OpaquePointer) {
+    private init(vault: LocalVault, handle: OpaquePointer, reconciliation: [String: Any]) {
         self.vault = vault
         self.handle = handle
+        self.reconciliation = reconciliation
     }
 
     static func open(vault: LocalVault, root: URL, completion: @escaping (Result<NativeMobileSession, Error>) -> Void) {
@@ -107,9 +127,28 @@ private final class NativeMobileSession {
             var error = ZoridBuffer(data: nil, len: 0)
             let pointer = root.path.withCString { zorid_mobile_open($0, &error) }
             zorid_mobile_buffer_free(error)
-            let result: Result<NativeMobileSession, Error> = pointer.map {
-                .success(NativeMobileSession(vault: vault, handle: $0))
-            } ?? .failure(MobileFailure.unavailable)
+            let result: Result<NativeMobileSession, Error>
+            if let pointer = pointer {
+                do {
+                    let startup = zorid_mobile_startup(pointer)
+                    defer { zorid_mobile_buffer_free(startup) }
+                    guard startup.len > 0, startup.len <= headerLimit, let data = startup.data else {
+                        throw MobileFailure.unavailable
+                    }
+                    let bytes = Data(bytes: data, count: startup.len)
+                    guard String(data: bytes, encoding: .utf8) != nil,
+                          let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                          let reconciliation = object["reconciliation"] as? [String: Any],
+                          reconciliation["complete"] is Bool else { throw MobileFailure.unavailable }
+                    // Incomplete startup is usable recovery state, never an empty-ready fallback.
+                    result = .success(NativeMobileSession(vault: vault, handle: pointer, reconciliation: reconciliation))
+                } catch {
+                    zorid_mobile_close(pointer)
+                    result = .failure(MobileFailure.unavailable)
+                }
+            } else {
+                result = .failure(MobileFailure.unavailable)
+            }
             DispatchQueue.main.async { completion(result) }
         }
     }
@@ -218,7 +257,8 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func context(_ call: CAPPluginCall) {
-        call.resolve(["name": session.vault.name, "clientId": session.vault.clientId])
+        call.resolve(["name": session.vault.name, "clientId": session.vault.clientId,
+                      "reconciliation": session.reconciliation])
     }
 
     @objc func request(_ call: CAPPluginCall) {
@@ -244,12 +284,20 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    // Web must quiesce edits + flush/checkpoint before switchVault ok=true, and
-    // remain quiescent until native teardown. Background never closes the core.
+    // Web quiesces + flushes/checkpoints, then awaits this ACK. It must not
+    // destroy/release before ACK; stale ACK resumes editing. Successful switch
+    // ACK transfers close/lease teardown/pop to native. Background never closes.
     @objc func lifecycleAck(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             guard let id = call.getString("id"), let ok = call.getBool("ok"),
                   let pending = self.pending, pending.id == id else {
+                call.reject("This lifecycle request is no longer active.", "stale_lifecycle")
+                return
+            }
+            // Reject a suspended switch before acknowledging it: a successful ACK
+            // transfers teardown ownership to native and must always close/pop.
+            if ok && pending.reason == "switchVault" && UIApplication.shared.applicationState != .active {
+                self.cancelLifecycle()
                 call.reject("This lifecycle request is no longer active.", "stale_lifecycle")
                 return
             }
@@ -358,7 +406,7 @@ final class NativeEditorContainer: UIViewController {
         navigationItem.leftBarButtonItem?.isEnabled = false
         editor.vaultPlugin.requestLifecycle("switchVault") { [weak self] ok in
             guard let self = self else { return }
-            guard ok, UIApplication.shared.applicationState == .active else {
+            guard ok else {
                 self.leaving = false
                 self.navigationItem.leftBarButtonItem?.isEnabled = true
                 if UIApplication.shared.applicationState == .active {
@@ -426,6 +474,8 @@ final class NativeVaultPicker: UITableViewController {
             if catalog == nil { catalog = try LocalVaultCatalog() } else { try catalog?.reload() }
             tableView.reloadData()
         } catch {
+            // A failed identity validation clears the model; clear stale rows too.
+            tableView.reloadData()
             showMessage("Local vaults unavailable", "Vault information could not be read safely. Your files have not been removed. Try refreshing local vaults.")
         }
     }
