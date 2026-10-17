@@ -122,7 +122,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     ]}),
   });
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
-  const disposeEmptyFocus = installEmptyNoteFocus(view, parent);
+  const disposeEmptyFocus = installEmptyNoteFocus(view, parent, options.onNativeEditorState ? options.isCurrent ?? (() => true) : undefined);
   let destroyed = false;
   if (options.onNativeEditorState) native = nativeEditorCommands(view, {onNativeEditorState:options.onNativeEditorState,isCurrent:options.isCurrent});
   return {

@@ -741,3 +741,99 @@ exact shared-file ownership required before edits; no additional build yet.
 Root now owns Vite migration/root manifests, locks and asset/build pipeline.
 Mobile requires dist/index.html + relative assets + desktop/native adapter
 selection, then cap copy ios only; no unpublished Vite source consumed.
+
+
+## Keyboard focus and native search — 2026-10-17 22:47 UTC
+
+Previous goal turn made concrete progress: build6 compiled for Simulator and
+iPhone, physical install/launch succeeded, bounded native page checks produced
+actual AX evidence and ledger9c35d6d7 was sent merge_ready to sole integrator.
+Full goal remains active; Apple API and multiple native/runtime gates remain.
+
+Coordinator grants d809 the exact shared focus seam in msg22:43:18. Reviewed
+worker004b9986 imported as1b9f6351: native-only blank-wrapper completed-touch
+focus transfers to the owning editable CodeMirror inside the original gesture,
+suppresses compatibility mouse blur, preserves scrolling/multitouch/cancellation/
+selection/composition/current-owner fences and desktop mouse/content behavior.
+Worker serial editor-empty-focus + workspace-note-focus31/31 and scoped strict
+TypeScript pass, independent source review clean. Owner composed full tsc38124
+exits0. Phone6 does not contain this candidate. Actual title-to-blank, title-to-
+text, body-to-title, changed-title rename, keyboard frame/toolbar continuity and
+save/reopen remain required; do not close the whole focus finding from source.
+
+New user search request relayed through coordinator: top-center native Liquid
+Glass field with leading magnifying glass. Later refinement toggles search versus
+command mode using that leading icon; command semantics clarification is pending
+in coordinator session. No shell execution implementation is authorized.
+Swift371 owns NativePages.swift UI plus narrow NativeMobile.swift native-only
+admission/derived-stage orchestration under explicit coordinator grant22:45:28;
+adapter117 independently reviews contracts/lifecycle. Both work source-only while
+root owns Vite build slot. Fresh isolated branch tingkai-c/mobile-ios-native-search
+starts9c35d6d7. No shared Rust/index/Markdown/Base logic is duplicated in Swift.
+
+Search uses existing documents commands and actual startup capability. Same
+persisted vault client, page-active serialized admission, bounded derived-index
+preparation on intent, coherent generation pin and bounded literal-search paging.
+Own only newly created stage/pin; never discard preexisting stages or rebuild/
+recover/reset implicitly. Cleanup closes owned pin, discards owned unpublished
+stage if needed, validates exact release acknowledgement before actionable
+results/editor transfer; uncertain cleanup blocks handoff for exact retry.
+Cancellation and stale generations suppress display without skipping cleanup.
+Zero visible hits plus continuation is partial work, never a complete no-match
+result. Rust owns matching/extraction/query semantics. Result activation uses
+fresh stable-ID resolution and the existing durable navigation fence.
+
+Prepared outside the app only: Orca-native-query.md with known literal matches/
+frontmatter/backlink, Orca-native-query.base using accepted table source, and
+Orca-focus-long.md with final-content sentinel. These await disposable-vault
+import and real runtime checks; preparation is not Base/search/viewport proof.
+
+Root now owns Vite manifests/locks/config and mobile script command reconciliation.
+Owner supplied ios-build.sh blob405eedc1387224579c9a1e833d90a81cb871f5c4 and
+last-change0b7bbc10; the webpack command is line79, cap copy ios line82 (corrects
+an earlier coordination message's incidental line116). No unpublished Vite
+source was consumed and mobile script remains frozen.
+
+
+## Silent refresh and actual PDF observations — 2026-10-17 22:56 UTC
+
+Direct user screenshot requests removing the Files-page spinner and Updating
+vault text during refresh. Ported only the small silent-refresh hunks from Swift
+worker ce14e9f9 into the owner branch independently of unreviewed search: existing
+listing and empty-state remain visible, initial skeleton requires no listing,
+explicit refresh progress row/text removed. Failure/incomplete warnings and
+refresh/navigation safety guards remain. Owner inspected the ten-line diff;
+Swift frontend parse and diff check pass. Phone6 does not contain this change;
+actual refresh visual/build/install verification remains pending.
+
+Runtime-only Simulator6 slot granted22:48:29, returned22:55:30. Actual encrypted
+PDF prompt and software keyboard became accessible without editorTimeout. Entered
+only disposable fixture-pass; both fixture page texts render. Return to native
+Recents: unlocked PDF appears, invalid PDF does not, exec52792 PASS. Evidence:
+/private/tmp/mobile-v6-password-{settled,unlocked,rendered-confirm}.json and
+mobile-v6-recents-after-pdf.json. Password ready log occurs after user unlock
+(editorReady29921ms includes password waiting); native presentation completion
+intentionally emits no editorReady phase, so absence of that phase alone is not
+a failed prompt signal.
+
+Initial invalid-PDF open showed native editorTimeout8011ms, then actual error
+Invalid PDF structure. Warm reopen displays same visible error without timeout,
+exec48208 PASS; /private/tmp/mobile-v6-warm-error-visible.json and
+mobile-v6-pdf-warm-phase.log. Initial AX hides editor beneath native skeleton,
+so it cannot date first PDF DOM error. Cold engine latency versus early callback
+rejection remains unproven. Earlier callback-failure diagnosis was explicitly
+corrected; no speculative retry patch was made. d809 source review found no
+deterministic normal initial-error drop and preserves its clean investigation
+branch. Further cold-load timing/typed presentation instrumentation is a gap.
+
+Three prepared query/Base/long-focus fixtures were copied into only the existing
+disposable Simulator vault while stopped. App stopped/helper closed; Simulator
+remains booted. No new compiler or iPhone install ran in this pass.
+
+Command mode is confirmed Zorid app actions. Coordinator22:53:27 approves the
+currently supported native New note/Recents/Files/Settings/Choose vault actions
+through existing coordinator, actual availability, no hidden Workspace or
+speculative shared catalog. Swift371 implements a separate follow-up. Search
+5f81f749 and worker silent-refreshce14e9f9 are source-ready; independent117
+Rust DTO/admission review was actually started22:54 after mailbox delivery alone
+left that worker idle. Do not claim search review/typecheck/runtime complete.
