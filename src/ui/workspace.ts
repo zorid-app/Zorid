@@ -207,6 +207,32 @@ export class Workspace {
     row.append(description, textButton('Open', () => this.run(() => this.chooseVault()), 'mod-cta')); panel.append(row); screen.append(panel); this.root.append(screen);
   }
 
+  private mobileLifecycleCleanup?:()=>void;
+  private bindMobileLifecycle():void {
+    this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
+    const platform=this.platform,generation=this.vaultGeneration;
+    if(!platform.mobileLifecycle)return;
+    let pending=false;
+    this.mobileLifecycleCleanup=platform.mobileLifecycle.subscribe(async(reason,ack)=>{
+      if(pending||this.closing||this.startupFailed||this.platform!==platform||this.vaultGeneration!==generation||this.platformReleased)throw new Error('Mobile lifecycle is not ready');
+      pending=true;
+      const wasClosing=this.closing,wasInert=this.root.inert;
+      this.closing=true;this.root.inert=true;
+      let accepted=false;
+      try {
+        // Use the same note/Base/canvas flush and recovery paths as navigation.
+        // Native deadlines are authoritative; failed/stale ACK restores editing.
+        await this.flush();this.saveSession();
+        if(this.platform!==platform||this.vaultGeneration!==generation||this.platformReleased)throw new Error('Mobile vault changed during save');
+        await ack();accepted=true;
+        // Successful switch ACK transfers host/lease teardown to native. Never
+        // destroy/release before ACK or after a timeout which retained this view.
+      } finally {
+        if(reason==='background'||!accepted){this.closing=wasClosing;this.root.inert=wasInert;}
+        pending=false;
+      }
+    });
+  }
   private closeCleanup?:()=>void;
   private closing=false;
   private platformReleased=false;
@@ -275,6 +301,7 @@ export class Workspace {
     this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;
     this.treeDrag?.destroy(); this.treeDrag=undefined; this.treeRename?.session.dispose(); this.treeRename=undefined; this.folderCreationIntent++;
     this.treeRows=[]; this.treeSelection.clear(); this.treeSelectionAnchor=undefined; this.entryTokens.clear();
+    this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
     this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.buffers=recovered; this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
@@ -397,6 +424,7 @@ export class Workspace {
     });
     if (unsubscribe) this.disposers.push(unsubscribe);
     this.renderSidebar(); this.renderRight(); this.saveSession();
+    this.bindMobileLifecycle();
   }
 
   private disposeShell(): void {
@@ -1161,6 +1189,7 @@ export class Workspace {
   /** A failed admission can offer another folder only before any vault/buffer
    * was installed, and after its platform lease has been released successfully. */
   async cleanupFailedStartup(platform:PlatformVault|null):Promise<boolean>{
+    this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
     if(this.platform||this.buffers.size||this.panes.length){this.startupFailed=true;return false;}
     await platform?.release?.();await this.destroy();return true;
   }
@@ -1523,5 +1552,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased)await this.platform?.release?.();this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}
+  async destroy():Promise<void>{this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased)await this.platform?.release?.();this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}
 }

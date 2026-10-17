@@ -3,7 +3,7 @@ import type { DurableWrites } from '../core/durable-writes.ts';
 import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
-export interface PlatformVault { adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; recoverCommands?():Promise<boolean>; legacyExport?():void; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
+export interface PlatformVault { mobileLifecycle?:import('./mobile-native.ts').MobileLifecycle; adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; recoverCommands?():Promise<boolean>; legacyExport?():void; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
 async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<PlatformVault> {
   let reconciliationStatus=info.reconciliation??null;
   const reconciliation=info.reconciliation&&bridge.retryReconciliation?{
