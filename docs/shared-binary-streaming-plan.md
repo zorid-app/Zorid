@@ -374,3 +374,90 @@ Next: root review of sections1–3, assignment of the store/desktop/browser API
 owners, and explicit agreement on local state-version replacement and quotas.
 Only then implement the narrow portable types/builder/verifier and adapt one
 native/store path. No broad file edits or native builds have started.
+
+## Implementation checkpoint — portable foundation
+
+Root approved the narrow contract; committed `7edbb72` in this worktree. Named
+STORE owner is `/root/package_sol`; browser/WASM owner
+`/root/default_lifecycle_review_sol`; desktop consumer owner
+`/root/recovery_ui_sol`; native ownership remains `/root/external_reconcile_sol`.
+Exact GraphRecord/builder/restoration signatures were sent to those owners before
+their coupled changes. No store/native/desktop/browser files were edited here.
+
+Implemented additive modules `metadata.rs` and `binary_stream.rs`:
+
+- Checked exact-plaintext GraphRecord descriptors and immutable ledger-bound
+  restoration; explicit local metadata format1. Descriptor JSON has a separately
+  checked1 MiB+4 KiB wrapper bound; payload/wire bounds stay1 MiB. No public
+  Deserialize for MetadataState, GraphRecord or verification/content capabilities.
+- MetadataState role/causality validation, unverified MetadataView and retained
+  BinaryContentRef. Shared validation extracted from v2 without changing its
+  public APIs; legacy v2 retains original encoded-state limits and byte/hash path.
+- Incremental manifest builder emits one exact current-v2 payload at a time.
+  Its BuiltManifest is explicitly not proof of durable stored bytes.
+- ManifestVerificationSession and AllBinaryVerificationSession support async
+  IndexedDB hosts through exact per-chunk requests/provide/finish. Synchronous
+  helpers drive the same code. Private VerifiedManifest/VerifiedBinarySet bind
+  exact metadata and whole hashes, including all complete hidden/history heads.
+- Stream output pre-verifies then rechecks actual source chunks while writing
+  only a private sink; corruption prevents sink.finish. No large-file consumer
+  or filesystem publication is implied by these portable helpers.
+
+Independent `chunk_metadata_contract` source review approved the foundation and
+its descriptor-wrapper boundary fix. Root granted one exclusive heavy slot.
+Verification at exact `7edbb72` (base890a9d4), process handle47442, exit0:
+
+```sh
+CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/Users/ctk/orca/workspaces/Zorid/core-default-integration/target cargo test -p zorid-file-sync --lib -- --test-threads=1
+```
+
+73/73 tests pass:9 new integrity cases plus64 existing file-sync tests. The new
+cases cover exact raw commitments and near-limit descriptor restoration, bounded
+builder retry, synchronous/resumable agreement, changed metadata, wrong whole
+hash, incomplete dependencies versus damaged backing storage, corrupt dominated
+history, changed source during output, and empty content. Compilation20.89s,
+tests3.18s. Heavy slot released to root. No >16 MiB actual client/RSS/native/CLI/
+WASM or relay streaming proof is claimed. Existing chunk/record/work quotas remain
+conservative and activation still requires root quota review.
+
+Next joint API proposal (sent STORE/browser/root, not implemented): private
+MetadataCandidate from authored/received/Text-activity metadata planners;
+verification_state() feeds the shared all-history driver; finalize requires its
+private VerifiedBinarySet, yielding a MetadataPlan with exact metadata and prior
+wire preconditions. Add manifest-backed binary final-event mapping and reference
+classification before any active store switches from legacy State. No hidden
+all-blob rehydration fallback is acceptable.
+
+Separate root-approved Text work is source commit`25f6745` in
+`text-bounded-diff`: only bounded prefix/suffix/window diff and coarse fallback
+under current256 KiB/4 MiB limits. Independent source review approved its edit-
+count fallback. Its runtime gate is root-owned and is not included in73/73 above.
+No larger Text cap or new Text wire framing is implemented by this checkpoint.
+
+
+### Metadata candidate phase — source freeze
+
+Root approved the additive metadata planner/ref-classifier/final-event phase.
+`metadata_plan.rs` now implements a bounded exact-emission descriptor collector,
+combined authored namespace/Text-activity batches, authenticated received overlays,
+and opaque candidate→all-history proof→finalized plan. Authored new causal or
+binary-content dependencies must resolve; received dependencies may stay Pending.
+Exact duplicate collector pushes are idempotent; IDs already in the expected
+state are rejected for new authorship. Received replay compares exact prior wire
+and exact accepted-plaintext descriptor, including changed-nonce rejection.
+Finalized plans retain full expected metadata and prior-wire preconditions; hosts
+still own immutable source-row pins, separate Text state, receipts/cursors and the
+atomic transaction. No payload byte collection is retained by the batch.
+
+Independent `chunk_metadata_contract` source review approved the module and the
+narrow authored missing-content correction. Six new focused tests are written;
+they have NOT run. The legacy APIs are unchanged. Reference classification is
+separately owned in two new files and remains unexported until its Text temporary
+buffer handling is finalized. Root explicitly accepts one existing bounded
+256 KiB Text materialization temporary for this phase, followed by retained-output
+budget checks; this is not allocation-free preflight or permission to enlarge Text.
+
+User adopted protobuf discussion direction after this phase began. A separate
+schema owner owns new versioned codec work. This planner remains codec-independent
+at its public boundary; current files-v2 wire encoding is unchanged, and no
+protobuf payload may be substituted under that existing format version.

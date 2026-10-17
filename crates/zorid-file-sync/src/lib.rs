@@ -14,6 +14,7 @@ pub mod binary_stream;
 pub mod external_namespace;
 pub mod materialization;
 pub mod metadata;
+pub mod metadata_plan;
 pub mod mutation;
 pub mod v2;
 
@@ -1219,3 +1220,6 @@ mod tests;
 
 #[cfg(test)]
 mod binary_stream_tests;
+
+#[cfg(test)]
+mod metadata_plan_tests;

@@ -280,7 +280,7 @@ impl StoredActivity {
     pub fn payload_bytes(&self) -> u32 {
         self.payload_bytes
     }
-    fn from_activity(a: &TextActivity) -> Result<Self> {
+    pub(super) fn from_activity(a: &TextActivity) -> Result<Self> {
         let size = a.payload_bytes().len();
         if size == 0 || size > MAX_PLAINTEXT_BYTES {
             return Err(Error::TooLarge);
