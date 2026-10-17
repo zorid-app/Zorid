@@ -136,3 +136,37 @@ insufficient. Production selection stays disabled until real browser worker/tab
 and desktop/CLI restart tests prove the protocol. Binary/create/move/delete
 consumers and all-file sync remain required separate work, not covered by this
 text-save capability.
+
+
+## Editor key, typing mirror and publication decisions — 2026-10-16
+
+The entry-keyed consumer checkpoint uses `note/v1/<entryId>` (within the shared
+1024-byte key bound). The private editor checkpoint records a writer-incarnation
+UUID and monotonic draft generation alongside its versioned draft/operation
+state. These identify typing order within one admitted consumer; wall-clock
+ordering is not evidence of authority.
+
+The synchronous editor update may keep a separately labelled best-effort local
+mirror for typing that has not yet reached an awaited strict checkpoint. The
+mirror is scoped to local authority, client and entry, contains the checkpoint
+revision it was based on, and never authorizes prepare/commit/ACK. Automatic text
+recovery requires a provable exact current checkpoint anchor, matching identity
+and baseline, and a newer generation in the same writer incarnation. Equal text
+may deduplicate; ambiguous or divergent records preserve both alternatives.
+Legacy path-only drafts must not retarget a recreated entry. Pending operation
+state always comes exclusively from the durable journal. This does not promise
+that an immediate process death before any persistence preserves every keystroke.
+
+Vault's optional facade names are `readDurableText(path, validate?)`,
+`readDurableTextById(entryId)`, `commitDurableWrite(ref, {validate?})`, and
+`reconcileDurableWrite(ref, receipt)`. Reconciliation discriminates `current`,
+`advanced` and `missing`, returning the coherent current observation when present.
+The initial slice publishes only the witnessed current revision. Advanced/missing
+observations preserve drafts and block new writes; they do not constitute complete
+namespace cache recovery. Stable-ID coherent namespace refresh remains required;
+watcher delivery alone is not acceptance evidence.
+
+Consumer admission is platform-owned. The editor can implement against an injected
+admitted context from `checkpoints.scope`; ordinary selection stays disabled until
+stable restart identity and exclusive concurrent-client ownership are proved.
+Explicit fixture UUIDs still require exclusive ownership when a consumer is active.
