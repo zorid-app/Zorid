@@ -182,6 +182,55 @@ fn read_commands_never_initialize_and_usage_does_not_echo_values() {
 }
 
 #[test]
+fn reads_reject_missing_or_zero_byte_database_without_initializing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let private = dir.path().join(".zorid");
+    fs::create_dir(&private).unwrap();
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+    for args in [&["list"][..], &["status"], &["read", "--id", "missing"]] {
+        failure(invoke(dir.path(), args, None), "vault_not_initialized", 4);
+        assert!(!private.join("vault.sqlite").exists());
+    }
+    fs::write(private.join("vault.sqlite"), []).unwrap();
+    for args in [&["list"][..], &["status"], &["read", "--id", "missing"]] {
+        failure(invoke(dir.path(), args, None), "corrupt_storage", 1);
+        assert_eq!(fs::metadata(private.join("vault.sqlite")).unwrap().len(), 0);
+        assert!(!private.join("vault.sqlite-wal").exists());
+        assert!(!private.join("vault.sqlite-shm").exists());
+    }
+}
+
+#[test]
+fn missing_write_target_is_not_found_without_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    failure(
+        invoke(
+            dir.path(),
+            &[
+                "write",
+                "--id",
+                "missing",
+                "--expected-revision",
+                "old",
+                "--operation-id",
+                "write-missing",
+                "--input",
+                "-",
+            ],
+            Some(b"new"),
+        ),
+        "not_found",
+        4,
+    );
+    assert_eq!(
+        success(invoke(dir.path(), &["status"], None))["pending_outbox"],
+        "0"
+    );
+}
+
+#[test]
 fn external_nested_files_reconcile_and_no_clobber_existing_content() {
     let dir = tempfile::tempdir().unwrap();
     init(dir.path());
@@ -290,6 +339,8 @@ fn committed_but_projection_pending_is_success_with_receipt() {
     assert_eq!(result["commit"], serde_json::to_value(receipt).unwrap());
     assert_eq!(result["durable_local_commit"], true);
     assert_eq!(result["projection"]["state"], "pending");
+    assert_eq!(result["projection"]["code"], "projection_pending");
+    assert!(result["projection"].get("reason").is_none());
     assert_eq!(
         fs::read(dir.path().join(".unknown.bin")).unwrap(),
         b"external divergence"

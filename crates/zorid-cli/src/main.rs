@@ -104,6 +104,22 @@ enum Output {
     Raw(Vec<u8>),
 }
 
+fn projection_json(status: zorid_native::ProjectionStatus) -> Value {
+    match status {
+        zorid_native::ProjectionStatus::Projected => json!({"state":"projected"}),
+        zorid_native::ProjectionStatus::Pending(_) => {
+            json!({"state":"pending","code":"projection_pending","message":"Local commit succeeded; filesystem publication remains pending"})
+        }
+    }
+}
+
+fn report_json(report: zorid_native::ReconcileReport) -> Value {
+    let blocked: Vec<_> = report.blocked.into_iter().map(|(path, _)| {
+        json!({"path":path,"code":"reconciliation_blocked","message":"Filesystem reconciliation remains blocked; preserved data needs recovery"})
+    }).collect();
+    json!({"complete":blocked.is_empty(),"report":{"imported":report.imported,"projected":report.projected,"blocked":blocked},"synced":false})
+}
+
 fn write_json(writer: &mut impl Write, value: &Value) -> io::Result<()> {
     serde_json::to_writer(&mut *writer, value).map_err(io::Error::other)?;
     writer.write_all(b"\n")?;
@@ -312,14 +328,20 @@ fn run(args: Args) -> Result<Output> {
         }),
         _ => None,
     };
-    let mut vault = NativeVault::open(&args.vault)?;
+    // The metadata preflight above provides a useful missing-vault error only.
+    // The adapter enforces existing-only under its own lock and SQLite open flags.
+    let mut vault = if matches!(args.command, Command::Init) {
+        NativeVault::open(&args.vault)?
+    } else {
+        NativeVault::open_existing(&args.vault)?
+    };
     let value = match args.command {
         Command::Init => {
             json!({"initialized":true,"imported_existing_files":false,"max_file_bytes":MAX_FILE_BYTES,"sync_available":false})
         }
         Command::Status => {
             let status = vault.status()?;
-            // Native status contains recovery bytes. Status must not disclose them.
+            // Keep status limited to operational counts, without recovery bodies.
             json!({"pending_outbox":status.pending_outbox,"pending_projection":status.pending_projection,"projection_attempts":status.attempts.len(),"external_observations":status.observations.len(),"max_file_bytes":MAX_FILE_BYTES,"sync_available":false})
         }
         Command::List => json!({"entries":vault.list()?}),
@@ -337,21 +359,44 @@ fn run(args: Args) -> Result<Output> {
         }
         Command::Create { .. } | Command::Write { .. } => {
             let outcome = vault.apply(request.as_ref().expect("mutation request prepared"))?;
-            json!({"durable_local_commit":true,"synced":false,"commit":outcome.commit,"projection":outcome.projection})
+            json!({"durable_local_commit":true,"synced":false,"commit":outcome.commit,"projection":projection_json(outcome.projection)})
         }
         Command::Reconcile { paths } => {
             let paths = paths
                 .into_iter()
                 .map(VaultPath::new)
                 .collect::<std::result::Result<Vec<_>, _>>()?;
-            let report = vault.reconcile(&paths)?;
-            json!({"complete":report.blocked.is_empty(),"report":report,"synced":false})
+            report_json(vault.reconcile(&paths)?)
         }
-        Command::Recover => {
-            let report = vault.recover()?;
-            json!({"complete":report.blocked.is_empty(),"report":report,"synced":false})
-        }
+        Command::Recover => report_json(vault.recover()?),
         Command::Move | Command::Delete | Command::Search | Command::Sync => unreachable!(),
     };
     Ok(Output::Json(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_success_never_prints_native_diagnostics() {
+        let projection = projection_json(zorid_native::ProjectionStatus::Pending(
+            "secret SQL diagnostic".into(),
+        ));
+        assert_eq!(projection["code"], "projection_pending");
+        assert!(!projection.to_string().contains("secret"));
+        let report = report_json(zorid_native::ReconcileReport {
+            blocked: vec![(
+                zorid_core::VaultPath::new("note.md").unwrap(),
+                "secret database diagnostic".into(),
+            )],
+            ..Default::default()
+        });
+        assert_eq!(report["complete"], false);
+        assert_eq!(
+            report["report"]["blocked"][0]["code"],
+            "reconciliation_blocked"
+        );
+        assert!(!report.to_string().contains("secret"));
+    }
 }

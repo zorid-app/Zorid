@@ -30,6 +30,8 @@ zorid --vault /path/to/existing-vault recover
 Only `init` initializes private storage. It requires an existing directory and
 does not import its existing files. Other commands require an existing regular
 `.zorid/vault.sqlite`; a mistyped path does not silently initialize a new vault.
+The adapter's existing-only open runs under its vault lock with SQLite creation
+disabled; an empty or uninitialized database is rejected rather than initialized.
 Opening initialized storage can perform native schema migrations and locking;
 `list` and `read` query the committed core snapshot, not a live directory scan.
 Run explicit `reconcile` with changed paths to import external edits. Supported
@@ -72,6 +74,10 @@ Reconcile/recover can have partial outcomes. Inspect `complete` and
 `report.blocked` even when exit status is zero: successful imports are already
 durable and must not be treated as rolled back. Current external deletions and
 unresolved filesystem divergence are reported as blocked, preserving the data.
+Pending projection uses code `projection_pending`; blocked report entries expose
+`path`, code `reconciliation_blocked`, and a generic message. Raw native diagnostic
+strings are not emitted. These generic codes do not identify the underlying cause;
+typed native recovery diagnostics remain future work.
 
 | Exit | Meaning |
 | --- | --- |
