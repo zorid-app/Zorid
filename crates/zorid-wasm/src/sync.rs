@@ -752,3 +752,32 @@ fn encode_file_payload(input: &str) -> Result<Vec<u8>> {
 pub fn encode_file_payload_binding(input: &str) -> std::result::Result<Vec<u8>, JsValue> {
     encode_file_payload(input).map_err(error)
 }
+
+fn retained_file(state_json: &str, identity_json: &str, event_id: &str) -> Result<String> {
+    let state: files::State = parse(state_json)?;
+    reusable_state(&state)?;
+    let identity: zorid_file_sync::EntryIdentity = control(identity_json)?;
+    if event_id.len() > zorid_sync_protocol::MAX_CONTROL_BYTES {
+        return Err("event identity too large".into());
+    }
+    let event_id = domain(zorid_sync_protocol::UpdateId::new(event_id))?;
+    // Numeric JSON bytes require at most four bytes each plus outer brackets.
+    // Enforce before portable materialization allocates the expanded file.
+    let bytes = domain(state.materialize_retained_binary_bounded(
+        &identity,
+        &event_id,
+        ((MAX_OUTPUT_BYTES - 2) / 4) as u64,
+    ))?;
+    json(&bytes)
+}
+/// Validate the immutable historical content witness and materialize in Rust.
+/// null means missing dependencies; [] is a verified empty file. Historical
+/// bytes do not authorize publication at the current live path.
+#[wasm_bindgen(js_name = materializeRetainedFile)]
+pub fn materialize_retained_file(
+    state_json: &str,
+    identity_json: &str,
+    event_id: &str,
+) -> std::result::Result<String, JsValue> {
+    retained_file(state_json, identity_json, event_id).map_err(error)
+}

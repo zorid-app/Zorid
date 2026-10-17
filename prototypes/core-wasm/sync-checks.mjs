@@ -3,7 +3,7 @@ import {
   generateKey, createEmptyFileState, inspectFileState, planFileMutation,
   createEmptyTextState, materializeTextState, planTextReplace,
   encodeSyncCursor, decodeSyncAccepted, decodeSyncPage,
-  validateAuthoredSyncPayload, validateSyncWire, encodeFilePayload,
+  validateAuthoredSyncPayload, validateSyncWire, encodeFilePayload, materializeRetainedFile,
 } from './pkg/zorid_wasm.js';
 import { headerFor, contextFor } from './crypto-cases.mjs';
 
@@ -97,6 +97,28 @@ export function runSyncChecks(checks) {
     rejects(() => key.openSyncUpdate(contextFor('text-edit'), badWire), 'tampered tag');
     rejects(() => key.openSyncUpdate(contextFor('text-edit', { key_epoch: 2 }), textWire), 'independent key epoch');
     checks.push('WASM combined text/namespace plans reject stale states, authenticate peer text, preserve no-echo and reject tampering');
+
+    // Historical empty bytes must remain distinguishable from an unavailable
+    // current binary body, without exposing raw arbitrary-manifest reads.
+    const emptyDigest = Array.from('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'.match(/../g), hex => parseInt(hex, 16));
+    const binaryIdentity = { entry_id: 'binary', bootstrap_id: 'binary-create' };
+    const binaryCreate = { family: 'files', format_version: 2, scope, id: 'binary-create',
+      body: { kind: 'events', events: [{ id: 'binary-create', identity: binaryIdentity, parents: [],
+        effect: { kind: 'create', entry_kind: 'file', location: { parent: null, name: 'binary.dat' },
+          content: { kind: 'binary', manifest: { bytes: 0, digest: emptyDigest, pages: [] } } } }] } };
+    const binaryPlan = own(planFileMutation(j({ state: graph, payload: binaryCreate, next_version: 'binary-created' })));
+    const binaryGraph = JSON.parse(binaryPlan.resultJson()).namespace.next_state;
+    const missingWrite = { family: 'files', format_version: 2, scope, id: 'binary-missing',
+      body: { kind: 'events', events: [{ id: 'binary-missing', identity: binaryIdentity, parents: ['binary-create'],
+        effect: { kind: 'set_content', content: { bytes: 1, digest: Array(32).fill(0),
+          pages: [{ id: 'missing-page', bytes: 1, digest: Array(32).fill(0) }] } } }] } };
+    const missingPlan = own(planFileMutation(j({ state: binaryGraph, payload: missingWrite, next_version: 'binary-missing' })));
+    const retainedGraph = JSON.parse(missingPlan.resultJson()).namespace.next_state;
+    assert(materializeRetainedFile(j(retainedGraph), j(binaryIdentity), 'binary-create') === '[]', 'historical empty body remains valid');
+    assert(materializeRetainedFile(j(retainedGraph), j(binaryIdentity), 'binary-missing') === 'null', 'missing current chunks are not empty bytes');
+    rejects(() => materializeRetainedFile(j(retainedGraph), j({ ...binaryIdentity, bootstrap_id: 'other' }), 'binary-create'), 'retained binary wrong bootstrap');
+    rejects(() => materializeRetainedFile(j(retainedGraph), j(binaryIdentity), 'namespace-create'), 'retained binary wrong entry');
+    checks.push('WASM historical binary witness distinguishes retained empty bytes from missing current dependencies and checks identity');
 
     const maximum = '18446744073709551615';
     const cursor = JSON.parse(encodeSyncCursor(j({ server_epoch: 'epoch', after: maximum })));

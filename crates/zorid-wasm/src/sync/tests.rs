@@ -453,3 +453,146 @@ fn stored_namespace_witness_must_equal_strict_payload_context() {
         .remove("namespace");
     assert!(validate_payload(&wrong.to_string(), &value.payload_bytes).is_err());
 }
+
+fn retained_fixture() -> files::State {
+    use std::collections::BTreeMap;
+    use zorid_file_sync::{ChunkPage, ChunkRef, Manifest, Sha256Digest};
+    let (_, text_graph, _) = fixture();
+    let scope = text_graph.scope().clone();
+    let bytes = vec![0, 255, 128, 42];
+    let page = ChunkPage {
+        chunks: vec![ChunkRef {
+            id: id("chunk"),
+            bytes: bytes.len() as u32,
+            digest: Sha256Digest::of(&bytes),
+        }],
+    };
+    let manifest = Manifest {
+        bytes: bytes.len() as u64,
+        digest: Sha256Digest::of(&bytes),
+        pages: vec![page.reference(id("page")).unwrap()],
+    };
+    let mut create = text_graph.records().get(&id("create")).unwrap().clone();
+    let files::Body::Events { events } = &mut create.body else {
+        panic!("fixture create");
+    };
+    let files::Effect::Create { content, .. } = &mut events[0].effect else {
+        panic!("fixture create");
+    };
+    *content = Some(files::ContentSeed::Binary { manifest });
+    let empty = files::Payload {
+        family: Family::Files,
+        format_version: 2,
+        scope: scope.clone(),
+        id: id("empty-write"),
+        body: files::Body::Events {
+            events: vec![files::EntryEvent {
+                id: id("empty-write"),
+                identity: EntryIdentity {
+                    entry_id: EntryId::new("note").unwrap(),
+                    bootstrap_id: id("create"),
+                },
+                parents: vec![id("create")],
+                effect: files::Effect::SetContent {
+                    content: Manifest {
+                        bytes: 0,
+                        digest: Sha256Digest::of(&[]),
+                        pages: vec![],
+                    },
+                },
+            }],
+        },
+    };
+    let mut records = BTreeMap::new();
+    for payload in [
+        create,
+        empty,
+        files::Payload {
+            family: Family::Files,
+            format_version: 2,
+            scope: scope.clone(),
+            id: id("chunk"),
+            body: files::Body::Chunk { bytes },
+        },
+        files::Payload {
+            family: Family::Files,
+            format_version: 2,
+            scope: scope.clone(),
+            id: id("page"),
+            body: files::Body::Page { page },
+        },
+    ] {
+        records.insert(payload.id.clone(), payload);
+    }
+    files::State::from_records(scope, rev("retained"), records, BTreeMap::new()).unwrap()
+}
+#[test]
+fn retained_wrapper_preserves_historical_bytes_missing_and_empty_distinctions() {
+    let state = retained_fixture();
+    let identity = r#"{"entry_id":"note","bootstrap_id":"create"}"#;
+    let state_json = serde_json::to_string(&state).unwrap();
+    assert_eq!(
+        retained_file(&state_json, identity, "create").unwrap(),
+        "[0,255,128,42]"
+    );
+    assert_eq!(
+        retained_file(&state_json, identity, "empty-write").unwrap(),
+        "[]"
+    );
+    let mut records = state.records().clone();
+    records.remove(&id("chunk"));
+    let missing = files::State::from_records(
+        state.scope().clone(),
+        rev("missing"),
+        records,
+        state.activities().clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        retained_file(
+            &serde_json::to_string(&missing).unwrap(),
+            identity,
+            "create"
+        )
+        .unwrap(),
+        "null"
+    );
+    assert!(retained_file(
+        &state_json,
+        r#"{"entry_id":"other","bootstrap_id":"create"}"#,
+        "create"
+    )
+    .is_err());
+    assert!(retained_file(
+        &state_json,
+        r#"{"entry_id":"note","bootstrap_id":"other"}"#,
+        "create"
+    )
+    .is_err());
+    assert!(retained_file(&state_json, identity, "chunk").is_err());
+}
+#[test]
+fn retained_wrapper_rejects_noncanonical_identity_and_bounded_inputs() {
+    let state = serde_json::to_string(&retained_fixture()).unwrap();
+    let identity = r#"{"entry_id":"note","bootstrap_id":"create"}"#;
+    assert!(retained_file(
+        &state,
+        r#"{"entry_id":"note","entry_id":"other","bootstrap_id":"create"}"#,
+        "create"
+    )
+    .is_err());
+    assert!(retained_file(
+        &state,
+        r#"{"entry_id":"note","bootstrap_id":"create","extra":true}"#,
+        "create"
+    )
+    .is_err());
+    assert!(retained_file(&state, identity, "../create").is_err());
+    assert!(retained_file(
+        &state,
+        &" ".repeat(zorid_sync_protocol::MAX_CONTROL_BYTES + 1),
+        "create"
+    )
+    .is_err());
+    assert!(retained_file(&" ".repeat(MAX_INPUT_BYTES + 1), identity, "create").is_err());
+}

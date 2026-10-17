@@ -331,3 +331,14 @@ Unknown fields, duplicate fields and old format versions fail. It does not creat
 a plan, activity or authentication capability. Text ledger metadata includes the
 strictly derived namespace context; retained activity parents/bootstrap must match
 that witness as well as entry identity, payload digest and byte length.
+
+`materializeRetainedFile(stateJson, entryIdentityJson, contentEventId)` validates
+historical binary content with the shared Rust file-v2 helper. Identity JSON must
+contain exactly `{entry_id,bootstrap_id}`; the event ID is a plain string. Rust
+derives the manifest from the resolved retained Create/SetContent event, validates
+immutable binary mode and exact identity, and checks page/chunk/content digests.
+The returned JSON is bytes or null: null means unavailable dependencies, while
+`[]` is a verified empty file. Retained bytes do not authorize current-path
+publication. State/control input caps apply, and the shared bounded helper rejects
+oversized expanded output before allocating it. This source addition requires a
+new native/build/browser verification gate; previous fixture evidence excludes it.
