@@ -4,6 +4,7 @@
 mod generation;
 mod literal;
 mod resolver;
+mod restore;
 mod snapshot;
 pub use resolver::{normalize_link_key, Resolver, RESOLVER_VERSION};
 pub use snapshot::{
@@ -21,3 +22,6 @@ pub use generation::{
 pub use literal::{
     LiteralPage, LiteralPageBuilder, LiteralQuery, LiteralToken, SearchHit, TextReadRequest,
 };
+
+/// Shared extraction input for native adapters without a second document dependency.
+pub use zorid_document::MetadataRequest;

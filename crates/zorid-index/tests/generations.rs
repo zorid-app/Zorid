@@ -206,3 +206,117 @@ fn complete_generation_requires_every_file_and_same_source_fence() {
         Err(IndexError::StaleSource)
     );
 }
+
+#[test]
+fn nul_content_is_nontext_like_existing_cli_search() {
+    let generation = build("epoch-a", &[("A.custom", "visible\0needle", false)]);
+    assert_eq!(
+        generation.records().next().unwrap().exclusion(),
+        Some(&Exclusion::Binary)
+    );
+    let mut page =
+        LiteralPageBuilder::new(&generation, LiteralQuery::new("needle").unwrap(), None, 10)
+            .unwrap();
+    assert!(page.next_read().is_none());
+    let result = page.finish().unwrap();
+    assert!(result.complete);
+    assert!(result.hits.is_empty());
+}
+#[test]
+fn escaped_control_query_and_near_full_hits_fit_page_output_guard() {
+    let query = "\u{0001}".repeat(4096);
+    let body = format!("{query}\n").repeat(1050);
+    let generation = build("epoch-a", &[("A.custom", &body, false)]);
+    let mut page = LiteralPageBuilder::new(
+        &generation,
+        LiteralQuery::new(query.clone()).unwrap(),
+        None,
+        1000,
+    )
+    .unwrap();
+    let request = page.next_read().unwrap();
+    page.accept(&request, body.as_bytes()).unwrap();
+    let result = page.finish().unwrap();
+    assert!(result.next.is_some());
+    assert!(result.hits.len() > 200);
+    // Representative transport encoding includes the escaped query again in
+    // its continuation identity; hashes never depend on this JSON ordering.
+    let hits: Vec<_> = result
+        .hits
+        .iter()
+        .map(|hit| {
+            serde_json::json!({"entry":hit.entry,"line":hit.line,
+        "range":hit.range,"snippet":hit.snippet,"snippet_truncated":hit.snippet_truncated})
+        })
+        .collect();
+    let versions = generation.id().versions();
+    let encoded=serde_json::to_vec(&serde_json::json!({"snapshot":{
+        "store":generation.id().local_store_id(),"epoch":generation.id().generation_epoch(),
+        "generation":generation.id().generation().to_string(),"versions":{
+            "schema":versions.schema(),"extraction":versions.extraction(),"resolver":versions.resolver(),"query":versions.query()}},
+        "hits":hits,"next":{"query":query,"row":"0","line_start":body.len().to_string()}})).unwrap();
+    assert!(encoded.len() <= MAX_PUMP_BYTES, "{}", encoded.len());
+}
+#[test]
+fn cache_restore_validates_metadata_without_reparsing_source() {
+    let generation = build("epoch-a", &[("A.md", "# Heading\n[[Target]]", true)]);
+    let record = generation.records().next().unwrap();
+    let restore = |metadata: Option<MetadataProjection>,
+                   digest: Option<[u8; 32]>,
+                   bytes,
+                   exclusion| {
+        IndexRecord::from_persisted(record.witness().clone(), metadata, digest, bytes, exclusion)
+    };
+    assert_eq!(
+        restore(
+            record.metadata().cloned(),
+            record.text_digest().copied(),
+            record.text_bytes(),
+            None
+        )
+        .unwrap(),
+        *record
+    );
+    let mut wrong = record.metadata().unwrap().clone();
+    wrong.schema_version += 1;
+    assert_eq!(
+        restore(
+            Some(wrong),
+            record.text_digest().copied(),
+            record.text_bytes(),
+            None
+        ),
+        Err(IndexError::InvalidVersion)
+    );
+    let mut wrong = record.metadata().unwrap().clone();
+    wrong.entry_id = EntryId::new("another-entry").unwrap();
+    assert_eq!(
+        restore(
+            Some(wrong),
+            record.text_digest().copied(),
+            record.text_bytes(),
+            None
+        ),
+        Err(IndexError::StaleSource)
+    );
+    let mut wrong = record.metadata().unwrap().clone();
+    wrong.links[0].target_range.bytes = [0, wrong.source_length.bytes + 1];
+    assert_eq!(
+        restore(
+            Some(wrong),
+            record.text_digest().copied(),
+            record.text_bytes(),
+            None
+        ),
+        Err(IndexError::InvalidRecord)
+    );
+    assert_eq!(
+        restore(
+            None,
+            record.text_digest().copied(),
+            record.text_bytes(),
+            Some(Exclusion::Binary)
+        ),
+        Err(IndexError::InvalidRecord)
+    );
+}

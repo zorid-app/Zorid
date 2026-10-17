@@ -56,6 +56,9 @@ impl IndexRecord {
         if request.source.len() > MAX_SOURCE_BYTES {
             return Ok(Self::excluded(witness, Exclusion::SourceLimit));
         }
+        if request.source.contains('\0') {
+            return Ok(Self::excluded(witness, Exclusion::Binary));
+        }
         let metadata = if markdown {
             match parse_markdown(request) {
                 Ok(value) => Some(value),
@@ -89,6 +92,42 @@ impl IndexRecord {
             text_bytes: request.source.len(),
             exclusion: None,
         })
+    }
+    /// Restore a disposable cached row without parsing source or doing IO.
+    /// The caller bounds encoded input before decoding, obtains witness from
+    /// the exact persisted manifest, and validates its publication envelope.
+    /// SHA/source content is checked only when that immutable projection is read;
+    /// these structural checks are not an authenticated content capability.
+    pub fn from_persisted(
+        witness: EntryWitness,
+        metadata: Option<DocumentMetadata>,
+        text_digest: Option<[u8; 32]>,
+        text_bytes: usize,
+        exclusion: Option<Exclusion>,
+    ) -> Result<Self, IndexError> {
+        if exclusion.is_some() {
+            if metadata.is_some() || text_digest.is_some() || text_bytes != 0 {
+                return Err(IndexError::InvalidRecord);
+            }
+        } else {
+            if text_digest.is_none() || text_bytes > MAX_SOURCE_BYTES {
+                return Err(IndexError::InvalidRecord);
+            }
+            if let Some(metadata) = &metadata {
+                crate::restore::validate_metadata(metadata, &witness, text_bytes)?;
+            }
+        }
+        let record = Self {
+            witness,
+            metadata,
+            text_digest,
+            text_bytes,
+            exclusion,
+        };
+        if record.encoded_size()? > MAX_GENERATION_METADATA_BYTES {
+            return Err(IndexError::GenerationLimit);
+        }
+        Ok(record)
     }
     pub fn excluded(witness: EntryWitness, reason: Exclusion) -> Self {
         Self {

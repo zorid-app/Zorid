@@ -52,3 +52,17 @@ literal fixtures for page identity, tampered bodies, stale heads, invalid YAML,
 UTF8/UTF16 ranges, fresh-epoch expiry,2MiB soft-budget progress and terminal source
 limits. rustfmt/diff checks pass. No crate compilation/tests have run yet; root
 owns the sole serialized verification slot and root Cargo.lock resolution.
+
+Validated persistence seam: IndexRecord::from_persisted accepts a manifest-bound
+EntryWitness, optional typed metadata, SHA256/length and explicit exclusion. It
+checks exclusive text/exclusion states, source IDs/revision, schema/dialect,
+lengths/ranges, typed property safety and resource bounds WITHOUT parsing source
+or doing IO. The adapter bounds serialized input before decode, validates its
+own persisted manifest/fence envelope, and reconstructs GenerationBuilder outside
+transactions. Restoring is not authentication of source bytes; query reads still
+verify the retained projection digest. MetadataRequest is reexported for adapters.
+
+NUL-bearing files remain excluded as Binary, matching existing CLI semantics.
+The page reserve covers worst-case six-byte JSON escaping of a4096-byte query
+plus bounded snapshot/version identity. A control-query near-full page regression
+and NUL/validated-cache restoration fixtures cover the reviewed edge cases.

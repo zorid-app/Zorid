@@ -123,7 +123,10 @@ impl<'a> LiteralPageBuilder<'a> {
             limit,
             source_bytes: 0,
             documents: 0,
-            output_bytes: 8192,
+            // Each of 4096 UTF8 query bytes can expand to six JSON bytes.
+            // Remaining fixed identity/version/token fields have bounded ASCII
+            // tags; reserve another8KiB for them and the page envelope.
+            output_bytes: 8192 + 6 * 4096,
             blocked: false,
         })
     }
@@ -179,6 +182,9 @@ impl<'a> LiteralPageBuilder<'a> {
             .ok_or(IndexError::InvalidRecord)?;
         record.check_text(bytes)?;
         let text = std::str::from_utf8(bytes).map_err(|_| IndexError::ContentMismatch)?;
+        if text.contains('\0') {
+            return Err(IndexError::ContentMismatch);
+        }
         if self.start > text.len()
             || !text.is_char_boundary(self.start)
             || (self.start > 0 && text.as_bytes()[self.start - 1] != b'\n')
