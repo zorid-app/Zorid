@@ -289,6 +289,13 @@ confirmed for Zorid app actions, not shell commands; owner notified.
 
 ### 2026-10-17 — Native follow-up ownership and phone7
 
+Follow-up23:37UTC: opening a vault or file should navigate immediately to its
+destination and show the loading skeleton there. Returning home currently makes
+all rows briefly look active/opened. Native owner assigned destination loading to
+d809 (picker section and NativePages openEditor/transfer/owned loader), with371
+retaining row/menu/session-lending and return-highlight repair. Isolated source
+work only, outside frozen build8; actual UX verification remains pending.
+
 Native owner reports phone7 exact ce1e0ace signed, installed and launched on the
 physical iPhone (build91966 and install/launch12016 exit0). This supersedes phone6;
 full keyboard interaction acceptance remains pending. The heavy slot returned to
