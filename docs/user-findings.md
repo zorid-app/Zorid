@@ -176,3 +176,18 @@ reset/overwrite for builds without repeat confirmation; unrelated/production
 apps are excluded. Keep the owned simulator booted between passes; test app or
 automation streams may be terminated to reduce load. Recorded in AGENTS.md.
 This is verification policy, not a product feature or completed mobile gate.
+
+### 2026-10-17 — native mobile keyboard, loading and header follow-ups
+
+Native owner relays actual phone findings: hide the extra WebKit previous/next/
+Done bar; restore the native formatting toolbar after defocus/foreground; prevent
+content jumps on keyboard focus; use loading skeletons throughout native and
+embedded attachment loading; investigate slow vault opening. Latest screenshot
+clarification is **shadow clipping at the hard header boundary**, not a request
+to change spacing or shadow intensity. Do not close this by tuning the wrong
+visual property. Owner: native mobile session, isolated branches; root granted
+scoped foreground callbacks and attachment loading attributes, preserving source,
+resource leases and shared Stage4 backlinks. Native reports 25 foreground/
+lifecycle checks and type checks passing, but new runtime fixes remain unbuilt.
+Current Simulator save/Back independently preserved exact53 bytes; that does not
+verify these newer keyboard/loading/header changes. See msg_0fd7213f1e90.
