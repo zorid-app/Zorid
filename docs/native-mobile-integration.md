@@ -293,3 +293,26 @@ and tapping that row reopened the same content. This proves this fixture save/
 reopen, not final presentation, lifecycle or keyboard parity. The full workspace
 chrome was rejected by the user. Simulator terminated and exact owned device
 shutdown before yielding the heavy slot to the coordinator for bounded core proof.
+
+Editor-only followups: autosave errors remain visible in a document-level notice
+with shared Retry save. Retained conflicts outside the current document expose
+Review draft and Save recovery copy using the existing shared NoteBuffer APIs;
+removing sidebars must never hide recovery while Back waits for a safe flush.
+Focused navigation/lifecycle suite now23/23 PASS, including actual failed save
+retry and offscreen durable recovered-draft copy preservation. Full TypeScript
+check31524 exit0 before these notice additions; final combined check pending.
+Native keyboard callbacks are opt-in; native actions revalidate current runtime,
+selection, composition and history, and optional presentation failures cannot fail
+saving. Foreground visibility/focus republish actual state; teardown disables.
+
+Attachment source correction: AttachmentResources already builds owned Blob URLs
+from Vault.readBinary, which the mobile adapter supplies through Rust. Therefore
+no additional resource-URL service is prerequisite for files within the current
+16MiB whole-file limit. Image touch/lightbox, audio/video playback, packaged PDF.js
+assets and Safari link routing remain actual iOS verification gates. Capacitor's
+existing navigation delegate sends external top-level/new-window URLs to the
+system. No verified media/PDF runtime claim yet.
+
+Latest user screenshot removes Reload/Open editor action row. Native pages must
+refresh automatically and open a tapped file directly; New note is a native
+compose action, not an entry into a separate web workspace.

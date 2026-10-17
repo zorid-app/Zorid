@@ -17,7 +17,7 @@ import type { PlatformVault } from '../platform/index.ts';
 import { el, icon, button, textButton, modal, notice, promptName } from './dom.ts';
 import { renderMarkdown } from './markdown.ts';
 import { destroyMarkdown } from './markdown-lifecycle.ts';
-import type { EditorHandle, EditorOptions, EditorViewState } from './editor.ts';
+import type { EditorHandle, EditorOptions, EditorViewState, NativeEditorState } from './editor.ts';
 import { NoteBuffer } from './note-buffer.ts';
 import { createCanvasMarkdownBufferSession, NoteBufferSubscriptions } from './canvas-markdown-session.ts';
 import type { CanvasMarkdownBufferSession } from './canvas-markdown-session.ts';
@@ -101,6 +101,8 @@ export class Workspace {
   private right = el('aside', 'right-sidebar');
   private rightContent = el('div', 'right-content');
   private status = el('footer', 'status-bar');
+  private nativeDocumentStatus?:HTMLElement;
+  private nativeRecoveryBusy=new WeakSet<NoteBuffer>();
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
   private rightTab: 'backlinks' | 'outline' | 'tags' = 'backlinks';
   private collapsed = new Set<string>();
@@ -207,6 +209,34 @@ export class Workspace {
     row.append(description, textButton('Open', () => this.run(() => this.chooseVault()), 'mod-cta')); panel.append(row); screen.append(panel); this.root.append(screen);
   }
 
+  private nativeEditorCleanup?:()=>void;
+  private sendNativeEditorState(state:NativeEditorState,platform=this.platform):void{
+    // Keyboard presentation is best effort and must never interrupt durable saves.
+    try{void platform?.nativeEditor?.setState(state).catch(()=>{});}catch{/* Optional native UI unavailable. */}
+  }
+  private hideNativeEditorToolbar():void{
+    this.sendNativeEditorState({focused:false,editable:false,canUndo:false,canRedo:false});
+  }
+  private bindNativeEditor():void{
+    this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
+    const platform=this.platform,generation=this.vaultGeneration;
+    if(!platform.nativeEditor)return;
+    this.hideNativeEditorToolbar();
+    const unsubscribe=platform.nativeEditor.subscribe(action=>{
+      if(this.platform!==platform||this.vaultGeneration!==generation||this.closing||this.root.inert||this.startupFailed||this.platformReleased)return;
+      const pane=this.activePane,editor=pane?.editor;
+      if(!editor||!pane.viewReady||pane.viewMode==='reading'||pane.runtime?.phase==='disposed'||!pane.content?.isConnected||this.current(pane)?.id!==pane.viewTabId)return;
+      editor.nativeAction?.(action);
+    });
+    const resume=()=>{
+      if(document.visibilityState==='hidden'||this.platform!==platform||this.vaultGeneration!==generation||this.closing||this.platformReleased)return;
+      const state=this.activePane?.editor?.nativeState?.();
+      if(state)this.sendNativeEditorState(state,platform);
+    };
+    document.addEventListener('visibilitychange',resume);window.addEventListener('focus',resume);
+    this.nativeEditorCleanup=()=>{unsubscribe();document.removeEventListener('visibilitychange',resume);window.removeEventListener('focus',resume);};
+  }
+
   private mobileLifecycleCleanup?:()=>void;
   private bindMobileLifecycle():void {
     this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
@@ -218,6 +248,7 @@ export class Workspace {
       pending=true;
       const wasClosing=this.closing,wasInert=this.root.inert;
       this.closing=true;this.root.inert=true;
+      this.hideNativeEditorToolbar();
       let accepted=false;
       try {
         // Use the same note/Base/canvas flush and recovery paths as navigation.
@@ -230,6 +261,7 @@ export class Workspace {
       } finally {
         if(reason==='background'||!accepted){this.closing=wasClosing;this.root.inert=wasInert;}
         pending=false;
+        if(reason==='background'||!accepted){const state=this.activePane?.editor?.nativeState?.();if(state)this.sendNativeEditorState(state);}
       }
     });
   }
@@ -370,6 +402,7 @@ export class Workspace {
     this.treeDrag?.destroy(); this.treeDrag=undefined; this.treeRename?.session.dispose(); this.treeRename=undefined; this.folderCreationIntent++;
     this.treeRows=[]; this.treeSelection.clear(); this.treeSelectionAnchor=undefined; this.entryTokens.clear();
     this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
+    this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
     this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.buffers=recovered; this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
@@ -492,10 +525,11 @@ export class Workspace {
     });
     if (unsubscribe) this.disposers.push(unsubscribe);
     this.renderSidebar(); this.renderRight(); this.saveSession();
-    this.bindMobileLifecycle();
+    this.bindMobileLifecycle();this.bindNativeEditor();
   }
 
   private disposeShell(): void {
+    this.nativeDocumentStatus=undefined;
     this.importStatusCleanup?.();this.importStatusCleanup=undefined;
     this.disposeFileListMenu?.(); this.disposeFileListMenu=undefined;
     this.sidebarControls?.destroy(); this.sidebarControls=undefined;
@@ -543,7 +577,10 @@ export class Workspace {
     for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.rightTab=type;this.renderRight();}));
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
     this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
-    if(this.platform.editorOnly){this.root.append(center);return;}
+    if(this.platform.editorOnly){
+      const status=el('section','native-document-status');status.setAttribute('aria-label','Save and recovery notices');status.setAttribute('aria-live','polite');
+      center.prepend(status);this.nativeDocumentStatus=status;this.root.append(center);return;
+    }
     this.root.append(ribbon,this.sidebar,center,this.right,this.status);
     this.addResizeHandle(this.sidebar,'left'); this.addResizeHandle(this.right,'right');
     this.sidebarControls=createSidebarControls(this.root,{onToggleLeft:()=>this.toggleLeft(),onToggleRight:()=>this.toggleRight()});
@@ -674,6 +711,7 @@ export class Workspace {
     if(!options.refresh&&pane.viewReady&&pane.viewTabId===wanted?.id&&pane.viewPath===wanted.path&&pane.viewMode===wanted.mode&&pane.viewKind===wanted.kind ){
       this.applyViewSettings(pane);this.renderTabBar(pane);pane.refreshPreview?.();return;
     }
+    if(this.platform.nativeEditor&&pane===this.activePane)this.hideNativeEditorToolbar();
     if(pane.viewTabId&&pane.viewTabId!==pane.active&&pane.tabs.some(tab=>tab.id===pane.viewTabId))this.parkPaneView(pane);else await this.disposePaneViews(pane);
     if(!current())return;
     const tab=this.current(pane);if(!tab)return;
@@ -804,7 +842,8 @@ export class Workspace {
         const factory=this.editorFactory||(await import('./editor.ts')).createEditor;if(version!==pane.renderVersion)return;
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
         const ownsEditor=()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path;
-        pane.editor=factory(host,{hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
+        const nativeCurrent=()=>ownsEditor()&&this.activePane===pane&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.current(pane)?.id===tab.id&&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased;
+        pane.editor=factory(host,{...(this.platform.nativeEditor?{isCurrent:nativeCurrent,onNativeEditorState:(state:NativeEditorState)=>{if(nativeCurrent())this.sendNativeEditorState(state);}}:{}),hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
           wiki:{sourcePath:()=>ownsEditor()?path:null,
             metadata:target=>{if(!ownsEditor())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):this.vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:this.vault.entries.get(target)?.mtime};},
             resolvePath:(target,source)=>ownsEditor()?this.vault.metadata.resolveLink(source,target):null,
@@ -1272,7 +1311,37 @@ export class Workspace {
     await platform?.release?.();await this.destroy();return true;
   }
 
+  private renderNativeDocumentStatus():void{
+    const status=this.nativeDocumentStatus;if(!status)return;
+    status.replaceChildren();
+    const generation=this.vaultGeneration;
+    for(const [path,buffer] of this.buffers){
+      const conflict=buffer.hasRecoveryConflict;
+      // Current-note conflicts already have the full shared recovery banner.
+      if(!buffer.error&&(!conflict||this.activePane?.viewPath===path))continue;
+      const row=el('div','native-document-notice');
+      row.append(el('p','',conflict?`Retained draft for “${nameOf(path)}” needs attention.`:`Could not save “${nameOf(path)}”. Your draft is retained. ${buffer.error?.message??''}`));
+      const current=()=>generation===this.vaultGeneration&&this.buffers.get(path)===buffer&&!this.platformReleased;
+      const actions=el('div','note-recovery-actions');
+      if(conflict&&this.vault.entries.get(path)?.type==='file')actions.append(textButton('Review draft',()=>{if(current())this.run(()=>this.openNote(path));}));
+      const save=textButton(conflict?'Save recovery copy':'Retry save',()=>this.run(async()=>{
+        if(!current()||this.nativeRecoveryBusy.has(buffer))return;
+        this.nativeRecoveryBusy.add(buffer);this.renderStatus();
+        try{
+          if(conflict){
+            const result=await buffer.saveRecoveryCopy();
+            if(current()&&result.resolved)for(const view of this.loadedViews())if(view.viewPath===path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
+            notice(`Draft saved to “${result.path}”.`);
+          }else await buffer.flush();
+        }finally{this.nativeRecoveryBusy.delete(buffer);if(current())this.renderStatus();}
+      }));
+      save.disabled=this.nativeRecoveryBusy.has(buffer);actions.append(save);row.append(actions);status.append(row);
+    }
+    status.hidden=!status.childElementCount;
+  }
+
   private renderStatus():void{
+    this.renderNativeDocumentStatus();
     if(!this.activePane)return;const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
     this.status.replaceChildren();
     if(tab?.path&&!isMarkdown(tab.path)){this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
@@ -1631,5 +1700,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased)await this.platform?.release?.();this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}
+  async destroy():Promise<void>{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased)await this.platform?.release?.();this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}
 }

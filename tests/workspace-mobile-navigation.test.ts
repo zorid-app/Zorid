@@ -7,6 +7,7 @@ import type {WorkspaceViewFactories} from '../src/ui/workspace.ts';
 import {MemoryAdapter} from '../src/core/memory-adapter.ts';
 import type {EditorHandle,EditorOptions} from '../src/ui/editor.ts';
 import type {PlatformVault} from '../src/platform/index.ts';
+import {durableRecoveryFixture,recoveredDraft} from './helpers/durable-recovery-fixture.ts';
 
 function editor(parent:HTMLElement,options:EditorOptions):EditorHandle {
   const input=document.createElement('textarea');input.value=options.value;parent.append(input);
@@ -16,7 +17,7 @@ function editor(parent:HTMLElement,options:EditorOptions):EditorHandle {
 class IdentityAdapter extends MemoryAdapter {
   async list(){return(await super.list()).map(entry=>({...entry,entryId:'id_'+entry.path.replaceAll('.','_')}));}
 }
-async function setup(t:TestContext,selection:Partial<PlatformVault>={},rejectHistory=false,views:WorkspaceViewFactories={},savedSession?:unknown){
+async function setup(t:TestContext,selection:Partial<PlatformVault>={},rejectHistory=false,views:WorkspaceViewFactories={},savedSession?:unknown,adapterOverride?:MemoryAdapter){
   const dom=new JSDOM('<!doctype html><body><div id="app"></div>',{url:'https://zorid.test/',pretendToBeVisual:true});
   const saved=new Map<string,PropertyDescriptor|undefined>();
   const matchMedia=(media:string)=>({matches:false,media,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
@@ -25,7 +26,7 @@ async function setup(t:TestContext,selection:Partial<PlatformVault>={},rejectHis
   }
   dom.window.matchMedia=matchMedia as typeof window.matchMedia;
   const opened:[string,string][]=[];
-  const adapter=new IdentityAdapter({'A.md':'Alpha','B.md':'Beta','Bad.canvas':'{','Document.pdf':'%PDF-test','Clip.mp3':'test','Broken.base':'views: []'});
+  const adapter=adapterOverride??new IdentityAdapter({'A.md':'Alpha','B.md':'Beta','Bad.canvas':'{','Document.pdf':'%PDF-test','Clip.mp3':'test','Broken.base':'views: []'});
   const platform:PlatformVault={adapter,id:'native-test',label:'Disposable',...selection,noteOpened:async(path,id)=>{opened.push([path,id]);if(rejectHistory)throw new Error('stale history');}};
   const workspace=new Workspace(document.querySelector<HTMLElement>('#app')!,editor,views);
   t.after(async()=>{try{await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
@@ -133,4 +134,31 @@ test('native selected document does not restore unrelated workspace panes',async
   const f=await setup(t,{editorOnly:true,initialPath:'B.md',initialEntryId:'id_B_md'},false,{},saved);
   assert.equal(f.workspace.panes.length,1);assert.equal(f.workspace.activePane.tabs.length,1);
   assert.equal(f.workspace.activePane.editor?.getValue(),'Beta');
+});
+
+
+test('native editor-only autosave errors stay visible and retry the shared save',async t=>{
+  const f=await setup(t,{editorOnly:true,initialPath:'A.md',initialEntryId:'id_A_md'});
+  const write=f.adapter.write.bind(f.adapter);f.adapter.write=async()=>{throw new Error('Disk unavailable');};
+  const input=document.querySelector('textarea')!;input.value='Retained after failure';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+  await assert.rejects(f.workspace.flush(),/Disk unavailable/);
+  const status=document.querySelector<HTMLElement>('.native-document-status')!;
+  assert.equal(status.hidden,false);assert.match(status.textContent??'',/Could not save.*A.*draft is retained.*Disk unavailable/);
+  f.adapter.write=write;status.querySelector<HTMLButtonElement>('button')!.click();
+  await new Promise(done=>setTimeout(done,0));await f.workspace.flush();
+  assert.equal(await f.adapter.read('A.md'),'Retained after failure');assert.equal(status.hidden,true);
+});
+
+test('retained conflict outside the selected native document has a visible recovery action',async t=>{
+  const recovered=await durableRecoveryFixture();
+  const f=await setup(t,{editorOnly:true},false,{},undefined,recovered.adapter);
+  await f.workspace.openNote('Other.md');
+  const status=document.querySelector<HTMLElement>('.native-document-status')!;
+  assert.equal(status.hidden,false);assert.match(status.textContent??'',/Retained draft for “One” needs attention/);
+  await assert.rejects(f.workspace.flush(),/draft preserved/);
+  const save=[...status.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Save recovery copy')!;
+  assert.ok(save);save.click();await new Promise(done=>setTimeout(done,0));
+  await f.workspace.flush();assert.equal(recovered.copies.length,1);
+  assert.equal(await recovered.adapter.read(recovered.copies[0]),recoveredDraft);
+  assert.equal(f.workspace.activePane.viewPath,'Other.md');assert.equal(status.hidden,true);
 });

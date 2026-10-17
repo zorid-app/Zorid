@@ -8,6 +8,7 @@ function fixture() {
   const host:any={root:{inert:false},closing:false,startupFailed:false,platformReleased:false,vaultGeneration:1,
     platform:{mobileLifecycle:{subscribe(callback:any){handler=callback;return()=>{removed++;};}}},
     flush:async()=>{events.push('flush');},saveSession:()=>events.push('session')};
+  Object.setPrototypeOf(host,Workspace.prototype);
   (Workspace.prototype as any).bindMobileLifecycle.call(host);
   return {host,events,run:(reason:string,ack=async()=>{events.push('ack');})=>handler(reason,ack),removed:()=>removed};
 }

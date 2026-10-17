@@ -4,6 +4,11 @@ import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
 export interface PlatformVault {
+  /** Presentation bridge only; native controls execute shared editor commands. */
+  nativeEditor?: {
+    setState(state:import('../ui/editor.ts').NativeEditorState):Promise<void>;
+    subscribe(handler:(action:import('../ui/editor.ts').NativeEditorAction)=>void|Promise<void>):()=>void;
+  };
   /** Native navigation owns the surrounding chrome; embed document content only. */
   editorOnly?: boolean;
   /** Native New note intent, applied once after durable admission/recovery. */
