@@ -34,3 +34,11 @@ Run `node --test --test-concurrency=1 tests/desktop-package.test.mjs` for focuse
 The configuration follows the pinned tool's [macOS documentation](https://www.electron.build/v26/docs/mac/), [DMG layout options](https://www.electron.build/v26/docs/dmg/), and [file selection rules](https://www.electron.build/v26/docs/configuration/). Electron describes signing and notarization as distinct steps in its [code-signing documentation](https://www.electronjs.org/docs/latest/tutorial/code-signing). These links describe tool behavior; successful signed CI release verification is still required.
 
 The isolated implementation pass installed the frozen dependencies with lifecycle scripts disabled, passed all eight focused tests and five additional independent reviewer probes, and passed the pinned electron-builder configuration schema check. An unsigned bundle attempt stopped while copying the existing Electron distribution because local disk space ran out, before electron-builder ran. The incomplete copies were removed. No `.app` or DMG packaging, native packaged runtime, Developer ID signing, notarization, or Gatekeeper result is claimed by those tests.
+# Dependency installation
+
+Run `pnpm install --frozen-lockfile` explicitly before building. The workspace
+uses `verifyDepsBeforeRun: error` so running a build or test cannot unexpectedly
+reinstall dependencies shared by active development worktrees. Electron's
+install script is allowed; the transitive `electron-winstaller` script is
+explicitly skipped because the current release pipeline packages macOS only.
+Windows packaging needs its own reviewed install/build configuration.

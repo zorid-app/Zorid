@@ -1,2 +1,8 @@
 allowBuilds:
   electron: true
+  # Windows installer tooling is transitive; macOS releases do not run it.
+  electron-winstaller: false
+
+# A build/test command must not rewrite dependencies shared by active worktrees.
+# Run pnpm install explicitly when package.json or the lockfile changes.
+verifyDepsBeforeRun: error
