@@ -118,6 +118,14 @@ storage errors do not expose SQL or request content.
 
 ## Evidence and remaining gates
 
+Latest coordinator evidence supersedes the historical pending statements below:
+main-based candidate `91694d3` passed all 14 server checks, 5 protocol checks and
+8 crypto checks plus a compile-fail doc test, including the managed backup/restore
+suite. The no-default-features crypto configuration separately passed 7 checks
+and its doc test. See [backend-integration-acceptance.md](backend-integration-acceptance.md)
+for exact commands, scope and limitations. Actual client restoration, scheduling,
+off-host storage and production enrollment remain unfinished.
+
 ### Managed backup and restore source (verification pending)
 
 Privileged local APIs now include `backup_to(new_path)`,

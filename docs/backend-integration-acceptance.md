@@ -30,9 +30,9 @@ connections retain foreign-key enforcement. It also includes
 
 No app, client-sync, WASM binding, or migration changes are in this batch.
 The existing `members = ["crates/*"]` workspace glob discovers the three crates.
-`Cargo.toml` and `Cargo.lock` are unchanged from the main base. Lock resolution
-belongs to the coordinator and remains pending; the source snapshot does not
-claim that a locked build is ready.
+`Cargo.toml` is unchanged from the main base. Coordinator commit `d79705b`
+resolved Cargo.lock offline with additions only; existing package pins were
+preserved. The final candidate includes main through `e967d4f`.
 
 ## Source checks performed
 
@@ -68,3 +68,32 @@ Remaining product gates include production enrollment and key recovery,
 complete client synchronization, scheduled/off-host backups, retained-history
 policy, production TLS/auth/operations hardening, and native/browser integrated
 acceptance. The relay remains an opaque-ciphertext local fixture service.
+
+## Coordinator acceptance — 2026-10-16 22:57 local
+
+Tested candidate: `91694d3`, clean before verification. Source remains identical
+to the recorded reviewed backend snapshot. Homebrew Rust 1.99.0, macOS arm64;
+fresh candidate target, bounded compilation and serial tests. The editor released
+the heavy slot after its owned Electron process exited; no overlapping build.
+
+```
+cargo test --offline -p zorid-sync-protocol -p zorid-crypto -p zorid-sync-server -j1 -- --test-threads=1
+cargo test --offline -p zorid-crypto --no-default-features -j1 -- --test-threads=1
+```
+
+First command: session65524 exit0, 31.89s compilation, 28 passes: 5 protocol,
+8 crypto, 14 server and 1 compile-fail crypto doc test. One ignored crash-child
+entry is explicitly launched by its parent process-crash test. Actual loopback
+HTTP exchange/retry/revocation, account/vault permission isolation, bounded
+snapshot paging, managed backup/restore of all tables, concurrent WAL snapshot,
+revoked restored credentials/changed epoch and publication/crash boundaries pass.
+Log: `/private/tmp/zorid-backend-integration.log`.
+
+Second command: session5557 exit0, 7 crypto passes plus the compile-fail doc test;
+7.60s compilation. Log: `/private/tmp/zorid-backend-crypto-portable.log`.
+This configuration check is not a browser runtime check.
+
+This supersedes the pending candidate-execution statements above. Integration is
+approved for this bounded backend foundation. No service deployment, real-vault
+migration, production security or actual web/Electron/CLI convergence is claimed.
+Client recovery/key enrollment and the remaining product gates above stay open.
