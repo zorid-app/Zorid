@@ -61,6 +61,8 @@ export interface BaseControllerOptions {
   basePath: string;
   mutations: BaseMutationHost;
   query?: BaseQueryOptions;
+  /** Internal embedded-view binding, resolved against each fresh configuration. */
+  viewName?: string;
   /** A fixed coalescing window; sustained events cannot postpone refresh forever. */
   delayMs?: number;
   onChange?(state: BaseControllerState): void;
@@ -76,6 +78,7 @@ export class BaseController {
   private options: BaseControllerOptions;
   private path: string;
   private query: BaseQueryOptions;
+  private viewName?: string;
   private epoch = 0;
   private version = 0;
   private disposed = false;
@@ -91,7 +94,7 @@ export class BaseController {
 
   constructor(options: BaseControllerOptions) {
     this.options = options; this.path = normalizePath(options.basePath);
-    this.query = { ...options.query };
+    this.query = { ...options.query }; this.viewName = options.viewName;
     for (const path of options.vault.entries.keys()) this.identities.set(path, ++this.nextIdentity);
     this.subscriptions = (['create', 'modify', 'rename', 'delete', 'ready'] as const).map(event => options.vault.on(event, change => {
       if (event === 'delete' || event === 'rename') {
@@ -107,6 +110,7 @@ export class BaseController {
 
   get state(): BaseControllerState { return this.current; }
   get basePath(): string { return this.path; }
+  get selectedViewIndex(): number { return this.query.viewIndex ?? 0; }
 
   private schedule(): void {
     if (this.disposed || this.timer !== undefined) return;
@@ -128,7 +132,14 @@ export class BaseController {
             properties: metadata?.frontmatter, tags: metadata?.tags };
         });
         const version = this.version + 1;
-        const result = executeBaseQuery(BaseDocument.parse(source), { version, files }, { currentFilePath: this.path, ...this.query });
+        const document = BaseDocument.parse(source);
+        let viewIndex = this.query.viewIndex ?? 0;
+        if (this.viewName !== undefined) {
+          viewIndex = document.views.findIndex(view => view.name === this.viewName);
+          if (viewIndex < 0) throw new Error(`Base view not found: ${this.viewName}`);
+        }
+        const result = executeBaseQuery(document, { version, files }, { currentFilePath: this.path, ...this.query, viewIndex });
+        this.query = { ...this.query, viewIndex };
         const signature = JSON.stringify([source, this.identities.get(this.path), result.rows.map(row => this.identities.get(row.path)), { ...result, version: 0 }]);
         if (signature === this.signature && !this.current.error) return;
         this.version = version; this.signature = signature;
@@ -152,6 +163,15 @@ export class BaseController {
   }
 
   setView(viewIndex: number): Promise<void> {
+    if (this.viewName !== undefined) {
+      if (this.current.error) return Promise.reject(this.current.error);
+      if (!this.current.result) return Promise.reject(new Error('The Base configuration is not ready'));
+      const view = BaseDocument.parse(this.current.source).views[viewIndex];
+      if (!Number.isInteger(viewIndex) || !view) return Promise.reject(new Error('The selected base view does not exist'));
+      // An explicit local selection binds its name too, so later reordering
+      // cannot retarget an embedded view to an unrelated configuration.
+      this.viewName = view.name;
+    }
     this.query = { ...this.query, viewIndex }; this.epoch++;
     return this.refresh();
   }

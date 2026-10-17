@@ -18,6 +18,7 @@ export interface BaseSessionOptions {
   readonly buffers?: BaseBufferHost;
   readonly readOnly?: boolean;
   readonly query?: BaseQueryOptions;
+  readonly viewName?: string;
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
   readonly validate: () => void;
   readonly loadThumbnail?: BaseCardsViewOptions['loadThumbnail'];
@@ -88,7 +89,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       options.buffers!.onBufferChange?.(path, buffer, previousText);
     },
   }) : { async transform() { throw new Error('This base is read-only'); } };
-  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query: options.query,
+  const controller = new BaseController({ vault: options.vault, basePath: options.basePath, mutations, query: options.query, viewName: options.viewName,
     onChange(state) { render(state); options.onState?.(state); },
   });
   const actions = createBaseViewActions(controller, { validate: action, canRename: !!options.buffers?.rename,
@@ -101,6 +102,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (pending.size || activeDraft()) { deferred = state; return; }
     deferred = undefined;
     const result = state.result;
+    selectedIndex = controller.selectedViewIndex;
     if (mountedResult === result) return;
     const document = BaseDocument.parse(state.source);
     const choices = document.views;
@@ -148,7 +150,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (pending.size || activeDraft()) throw new Error('Finish or cancel the property edit before switching views');
     const views = BaseDocument.parse(controller.state.source).views;
     if (!Number.isInteger(index) || index < 0 || index >= views.length) throw new Error('The selected base view does not exist');
-    selectedIndex = index; await controller.setView(index);
+    await controller.setView(index);
+    if (!controller.state.error) selectedIndex = controller.selectedViewIndex;
   }
   selector.addEventListener('change', () => { void selectView(Number(selector.value)).catch(error => { selector.value = String(selectedIndex); report(error); }); });
   async function settle(): Promise<void> {
