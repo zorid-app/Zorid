@@ -116,6 +116,22 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- User explicitly chooses protobuf (2026-10-17), superseding the earlier codec
+  hold. Apply it to serialized Rust/client command/result boundaries and sync
+  messages/chunks, with generated Rust/TypeScript types and bytes fields. Human
+  Markdown/YAML/settings and CLI JSON remain unchanged. New protobuf_schema_sol
+  owns isolated protobuf-schema-foundation (base454e955), common/v1+stream/v1
+  IDL, pure portable zorid-proto messages and reproducible checked-in Rust/TS
+  generation. No runtime codec switched yet. Sync mapping/version transition must
+  be reviewed explicitly; never change v2 JSON bytes under the same version or
+  assume protobuf encoding is canonical for hashes/AAD. Existing stored exact
+  bytes remain authoritative. gRPC is a separate open discussion, not adopted.
+- Native host gate38267 passes2/2 adapted incomplete-discovery fixtures on the
+  reviewed scanner candidate. Matching CLI/host build56614 currently running;
+  root owns heavy slot. Next actual independent-process large-directory/large-
+  Text check, then normal app check and coherent scanner integration. Store
+  owner277adb0 queued next for bounded tests; portable candidate/classifier
+  c319e8d+67493c4 queued after that. No protobuf codegen build slot granted yet.
 - User opened protobuf discussion for streaming/raw-byte messages and asks whether
   generated schemas/codecs would speed development. No codec adoption or rewrite
   authorized yet. Root recommends evaluating protobuf for versioned cross-language
