@@ -94,6 +94,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
   recovery-key bundle and clean-client restore fixture; `recovery_review` owns
   independent contract review before crypto edits. These are active tasks, not
   completed implementation or runtime evidence.
+- Follow-on update: desktop admission is integrated as `d12a27e`/`fda18cd`:
+  56 native/host, 46 CJS and 6 actual CLI/host checks passed; duplicate-client
+  exclusion and crash/reacquisition are covered at process level. Production
+  window selection and editor lifecycle remain separate. The heavy slot has
+  transferred to optimized namespace `0b0cf86`; root has no live build.
+  WASM source candidate `4ea8838` is prepared with exact provenance but awaits
+  lock resolution and tests. Browser encrypted-sync integration is undergoing
+  a source-level API/transaction audit before implementation ownership is split.
 
 - Main `227f084` contains both native/CLI batches and editor E1/E2. Native batch2
   candidate `3df1de8` passed 109 tests in a fresh target (session30255 exit0),
