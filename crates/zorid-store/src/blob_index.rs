@@ -593,6 +593,7 @@ pub(crate) mod test_support {
             .chain(family_ledger::SCHEMA)
             .chain(file_state::SCHEMA)
             .chain(blob_stage::SCHEMA)
+            .chain(binary_commit::SCHEMA)
         {
             db.execute_batch(sql).unwrap();
         }

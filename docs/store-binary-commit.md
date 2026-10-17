@@ -42,12 +42,12 @@ final writer. Physical resolution and baseline changes share that transaction.
 The capture remains readable afterwards. Replaying an already committed Capture
 receipt grants no new import and does not require a fresh physical guard.
 
-Eight focused source fixtures cover explicit authorization and normalized source
+Nine focused fixtures cover explicit authorization and normalized source
 promotion, restart/new revision/corrupt-source receipt replay, stale Write
 atomicity, inline partial restart identity, final-writer rollback/retry, unrelated
 graph reprepare and equal empty writes, oversized receipt rejection, and guarded
-Capture import with retained readability. These fixtures require the coordinated
-integration build gate; their presence is not a passing test claim.
+Capture import with retained readability, and SQL NULL nonterminal handling.
+All nine passed in Store library gate19472; native/client acceptance is separate.
 
 `binary_stage_content_manifest` returns the original sealed manifest metadata,
 including length and whole SHA256, without constructing a private read proof.

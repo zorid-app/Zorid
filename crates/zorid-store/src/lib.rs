@@ -97,7 +97,7 @@ use std::{fmt, path::Path, time::Duration};
 pub use text_sync::{AuthoredTextStatus, AuthorityIdentity, TextReceiveOutcome};
 use zorid_core::{
     check_idempotency, plan_mutation, CommitResult, ContractError, EntryId, EntryKind, EntryState,
-    IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
+    Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
 const SCHEMA_VERSION: i64 = 11;

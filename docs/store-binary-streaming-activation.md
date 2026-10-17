@@ -3,8 +3,10 @@
 Owner: `/root/package_sol`, isolated worktree `store-binary-streaming`, branch
 `tingkai-c/store-binary-streaming`. Root remains the sole main integrator.
 
-Status (2026-10-17): implementation source is frozen and independently reviewed. No schema11 activation Cargo gate has run. The tested schema10
-foundation (277adb0 + ada6e8b, 29 Store library +3 family/schema cases) does not
+Status (2026-10-17): implementation source is independently reviewed. The bounded
+schema11 Store library gate19472 passed86 tests,0 failures, with one explicit
+ignored64MiB fixture. Native/host/client composition and performance remain
+unverified. The tested schema10 foundation (277adb0 + ada6e8b, 29 Store library +3 family/schema cases) does not
 establish this activation or native/browser/desktop streaming acceptance.
 
 ## Dependencies and ownership
@@ -17,15 +19,15 @@ encoding or protobuf/gRPC dependency changes are included here.
 
 | Scope | Worker | Source review |
 | --- | --- | --- |
-| Shared immutable source, metadata index, stages | cli_tests | Reviewed; revised fixtures unrun |
-| Stage commit, original operation plan and receipt | cli_tests | Independent central review accepted, including TooLarge rollback; eight fixtures unrun |
-| Read pins and bounded ranges | binary_reads | Independent review accepted; seven fixtures unrun |
-| Entry metadata and bounded compatibility reads | entry_metadata | Independent review accepted; active small and ignored 64 MiB fixtures unrun |
-| Metadata command and authenticated receive transactions | metadata_transactions | Independent review accepted; final host policy CAS fixture unrun |
-| Typed publication and retained history | ref_materialization | Independent review accepted, including bounded digest preflight; fixtures unrun |
-| Typed observations, namespace evidence, request decoder | operation_receipts | Independent review accepted; focused lookup fixtures unrun |
-| External namespace/Text/capture import authorization | external_metadata_store | Independent review accepted; focused restart/ownership fixtures unrun |
-| Parent schema, ledger, admission and terminal query hooks | package_sol | Independent review accepted; central integration gate pending |
+| Shared immutable source, metadata index, stages | cli_tests | Library gate19472 passed |
+| Stage commit, original operation plan and receipt | cli_tests | Independent central review accepted; nine central fixtures passed |
+| Read pins and bounded ranges | binary_reads | Independent review accepted; seven fixtures passed |
+| Entry metadata and bounded compatibility reads | entry_metadata | Active 256KiB fixture passed;64MiB fixture remains explicitly ignored |
+| Metadata command and authenticated receive transactions | metadata_transactions | Independent review accepted; final host policy CAS fixture passed |
+| Typed publication and retained history | ref_materialization | Independent review accepted; typed materialization fixtures passed |
+| Typed observations, namespace evidence, request decoder | operation_receipts | Independent review accepted; focused lookup fixtures passed |
+| External namespace/Text/capture import authorization | external_metadata_store | Independent review accepted; focused restart/ownership fixtures passed |
+| Parent schema, ledger, admission and terminal query hooks | package_sol | Independent review accepted; bounded Store library gate passed |
 
 Workers share this one isolated Store checkout under disjoint file ownership.
 Native physical publication is owned separately by external_reconcile_sol;
@@ -89,12 +91,32 @@ and records only a typed TooLarge terminal, retaining the source. This reserves
 space for the escaped-once renderer checkpoint under64 KiB. These are initial
 explicit development policies, not arbitrary-size streaming claims.
 
-## Next evidence
+## Verification and remaining evidence
 
-The frozen central module SHA256 is
-`5209b11c84b5f55468a4f0c448a7a8be0ef4479a7d72105a91e9280c480710de`;
-review covered final transaction/replay and the TooLarge rollback delta. Rustfmt
-parsing and `git diff --check` pass. Obtain the serialized heavy slot for bounded Store compilation and focused library/family
-cases. Run the ignored64 MiB range/metadata fixture only in an explicit later
-slot. Compose native/host/client counterparts and verify actual restart,
-publication, transport and editor behavior before any main/runtime activation.
+The final command ran under the root-granted exclusive slot:
+
+```sh
+CARGO_BUILD_JOBS=1 \
+RUSTC=/private/tmp/zorid-proto-rustup/toolchains/1.95.0-aarch64-apple-darwin/bin/rustc \
+CARGO_TARGET_DIR=/Users/ctk/orca/workspaces/Zorid/core-default-integration/target \
+/private/tmp/zorid-proto-rustup/toolchains/1.95.0-aarch64-apple-darwin/bin/cargo \
+  test --locked --offline -p zorid-store --lib -- --test-threads=1
+```
+
+| Handle | Observed result |
+| --- | --- |
+|30487|Compile failed: inferred integer byte fixture and legacy Text typed-content extraction. Both corrected and independently reviewed.|
+|30383|Compiled8.74s;61 passed,24 failed,1 ignored. Shared defect was SQL NULL rejection becoming empty JSON; fixed with nonterminal draft/authorized regression. Fixture schemas/policy/path setup also corrected.|
+|74019|Compiled8.85s;84 passed,2 failed,1 ignored. Remaining failures were fixture-only: missing restored trigger after intentional corruption and macOS tempfile alias before no-follow reopen.|
+|19472|Exit0; compiled11.38s;86 passed,0 failed,1 ignored in14.25s.|
+
+Production followups and fixture corrections passed independent source review.
+Rustfmt parsing and `git diff --check` pass. Four dead-code warnings remain
+(one unused preparation getter and three existing directory/projection schema
+migration helpers); they do not change the fresh-only schema policy.
+
+This is Store library evidence only. The explicit ignored64MiB fixture and the
+separate family/integration test targets were not run by this activation gate.
+The existing256KiB Graph-backed restart/range test passed. Root owns composing
+native/host/client counterparts and actual publication, transport performance,
+restart and editor checks before any main/runtime activation.

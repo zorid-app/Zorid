@@ -1,5 +1,10 @@
 # External metadata and captured-content imports
 
+Current verification update (2026-10-17): Store library gate19472 passed86 tests,
+0 failures,1 explicit ignored64MiB fixture. Earlier source-only/unrun wording
+below records preparation state; the authoritative gate history and remaining
+native/client gaps are in `docs/store-binary-streaming-activation.md`.
+
 Owner: `external_metadata_store` under `package_sol`, isolated shared Orca
 worktree `store-binary-streaming`. Main integration belongs to the coordinator.
 This is source work pending joint Store compilation, independent review and

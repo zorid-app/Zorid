@@ -9,7 +9,7 @@ use zorid_sync_protocol::{DeviceId, UpdateId};
 
 // Shared with proven external operations; preparation precedes the writer.
 pub(super) use super::family_metadata_transactions::{
-    commit_prepared, prepare_command, prepare_parts, replay, PreparedFamilyCommand,
+    commit_prepared, prepare_command, prepare_parts, replay,
 };
 
 pub(super) const SCHEMA:&[(&str,&str)]=&[

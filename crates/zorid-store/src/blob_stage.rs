@@ -1689,9 +1689,9 @@ mod tests {
             operation_id: op("existing"),
             mutation: Mutation::Create {
                 id: EntryId::new("small").unwrap(),
-                path: VaultPath::new("small.bin").unwrap(),
-                kind: EntryKind::File,
-                content: Some(vec![1]),
+                path: VaultPath::new("small-folder").unwrap(),
+                kind: EntryKind::Folder,
+                content: None,
             },
         };
         store.prepare_host_intent(&op("client"), &command).unwrap();

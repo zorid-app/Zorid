@@ -1,5 +1,10 @@
 # Durable binary stage foundation
 
+Current verification update (2026-10-17): Store library gate19472 passed86 tests,
+0 failures,1 explicit ignored64MiB fixture. Earlier source-only/unrun wording
+below records preparation state; the authoritative gate history and remaining
+native/client gaps are in `docs/store-binary-streaming-activation.md`.
+
 Status: the original additive foundation passed its scoped store tests. The
 subsequent normalized-source and Capture changes are prepared and unrun; no
 application streaming activation or native-client acceptance is established. Owner

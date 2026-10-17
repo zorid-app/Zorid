@@ -1,5 +1,10 @@
 # Immutable exact plaintext foundation
 
+Current verification update (2026-10-17): Store library gate19472 passed86 tests,
+0 failures,1 explicit ignored64MiB fixture. Earlier source-only/unrun wording
+below records preparation state; the authoritative gate history and remaining
+native/client gaps are in `docs/store-binary-streaming-activation.md`.
+
 Status: additive source prepared; no builds or tests run. Owner
 `/root/package_sol/cli_tests`, parent `/root/package_sol`; worktree
 `store-binary-streaming`. Parent owns module/schema-11 registration and adapter

@@ -1326,10 +1326,13 @@ pub(super) fn terminal_status(
     if let Some((receipt, _)) = committed(tx, stage)? {
         return Ok(Some(BinaryStageTerminal::Committed(receipt)));
     }
-    let rejection:Option<Option<String>>=tx.query_row("SELECT CASE WHEN length(CAST(rejection AS BLOB))<=1024 THEN rejection ELSE '' END FROM binary_commit_plans WHERE stage_id=?1 AND operation_id=?2",params![stage.stage_id().as_str(),stage.operation_id().as_str()],|r|r.get(0)).optional()?;
+    let rejection:Option<Option<String>>=tx.query_row("SELECT CASE WHEN rejection IS NULL THEN NULL WHEN length(CAST(rejection AS BLOB)) BETWEEN 1 AND 1024 THEN rejection ELSE '' END FROM binary_commit_plans WHERE stage_id=?1 AND operation_id=?2",params![stage.stage_id().as_str(),stage.operation_id().as_str()],|r|r.get(0)).optional()?;
     let Some(Some(raw)) = rejection else {
         return Ok(None);
     };
+    if raw.is_empty() {
+        return Err(corrupt("binary terminal rejection is empty or oversized"));
+    }
     if record(tx, stage)?.is_none() {
         return Err(corrupt("binary rejection has no original request"));
     }
@@ -1546,6 +1549,53 @@ mod tests {
     }
 
     #[test]
+    fn draft_and_authorized_null_rejections_are_nonterminal() {
+        let (_dir, mut store) = fixture();
+        let call = inline("null-rejection", "file", "empty.bin", vec![]);
+        let original =
+            InlineCallCommitment::from_request(&call, Some(FamilyCreateMode::Binary)).unwrap();
+        let target = inline_target(&store.connection, &call, 0).unwrap();
+        let client = text_sync::identity(&store.connection)
+            .unwrap()
+            .local_store_id;
+        let stage = store
+            .begin_binary_stage(
+                &client,
+                &call.operation_id,
+                &target,
+                DEFAULT_STREAMING_LIMITS,
+            )
+            .unwrap();
+        bind_inline(&mut store, &stage, &target, &original).unwrap();
+        assert!(terminal_status(&store.connection, &stage)
+            .unwrap()
+            .is_none());
+        let draft = store.query_binary_stage(&stage).unwrap();
+        assert_eq!(draft.state, StagePhase::Receiving);
+        assert!(draft.terminal.is_none());
+        store
+            .seal_binary_stage(&stage, 0, Some(original.digest))
+            .unwrap();
+        authorize(
+            &mut store,
+            &stage,
+            &target,
+            PlanKind::Command,
+            Some(original),
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(terminal_status(&store.connection, &stage)
+            .unwrap()
+            .is_none());
+        let authorized = store.query_binary_stage(&stage).unwrap();
+        assert_eq!(authorized.state, StagePhase::CommitRequested);
+        assert!(authorized.terminal.is_none());
+        assert_eq!(effects(&store), (0, 0, 0, 0, 0));
+    }
+
+    #[test]
     fn unknown_result_replays_after_restart_new_revision_and_source_corruption() {
         let (dir, mut store) = fixture();
         let stage = sealed(
@@ -1574,6 +1624,13 @@ mod tests {
             .execute_batch("DROP TRIGGER immutable_payloads_no_update")
             .unwrap();
         store.connection.execute("UPDATE immutable_payloads SET payload=zeroblob(payload_bytes) WHERE realm_id=?1 AND vault_id=?2 AND update_id=?3",params![source.key.realm_id.as_str(),source.key.vault_id.as_str(),source.key.update_id.as_str()]).unwrap();
+        // Restore the required schema guard after injecting body corruption;
+        // reopening must still validate the unchanged schema itself.
+        let (_, guard) = immutable_payloads::SCHEMA
+            .iter()
+            .find(|(name, _)| *name == "immutable_payloads_no_update")
+            .unwrap();
+        store.connection.execute_batch(guard).unwrap();
         drop(store);
         let mut store = Store::open(dir.path().join("store.sqlite")).unwrap();
         assert_eq!(
@@ -1733,11 +1790,11 @@ mod tests {
     fn oversized_receipt_rolls_back_publication_and_replays_typed_rejection() {
         let (_dir, mut store) = fixture();
         let mut path = String::new();
-        for index in 0..8 {
+        for index in 0..16 {
             if !path.is_empty() {
                 path.push('/');
             }
-            path.push_str(&"d".repeat(400));
+            path.push_str(&"d".repeat(200));
             store
                 .family_apply(
                     &MutationRequest {

@@ -975,7 +975,10 @@ impl Store {
         let plan = zorid_client_sync::plan_external_text_with_baseline(
             &current,
             &baseline,
-            &observation.content,
+            observation
+                .content
+                .inline_bytes()
+                .ok_or(zorid_client_sync::SyncError::InvalidState)?,
             &request,
             &observed_version,
         )?;

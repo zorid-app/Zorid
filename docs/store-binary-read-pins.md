@@ -1,5 +1,10 @@
 # Durable binary read pins
 
+Current verification update (2026-10-17): Store library gate19472 passed86 tests,
+0 failures,1 explicit ignored64MiB fixture. Earlier source-only/unrun wording
+below records preparation state; the authoritative gate history and remaining
+native/client gaps are in `docs/store-binary-streaming-activation.md`.
+
 Owner: `package_sol/binary_reads`. Source-only implementation in isolated
 `store-binary-streaming`; parent owns shared registration, schema 11 and helper
 integration. No builds or tests have run for this module yet.

@@ -358,7 +358,7 @@ mod tests {
         let mut oversized = second.clone();
         oversized.payload_bytes = MAX_PAYLOAD_BYTES as u32 + 1;
         assert!(read_exact(&tx, &oversized).is_err());
-        assert!(put_exact(&tx, &oversized, &vec![0; MAX_PAYLOAD_BYTES + 1], QUOTA).is_err());
+        assert!(put_exact(&tx, &oversized, &vec![0u8; MAX_PAYLOAD_BYTES + 1], QUOTA).is_err());
         // A corrupt persisted descriptor must fail preflight before allocation.
         tx.execute_batch("DROP TRIGGER immutable_payloads_no_update")
             .unwrap();
@@ -377,7 +377,7 @@ mod tests {
         tx.execute(
             "UPDATE immutable_payloads SET descriptor='{}',payload=?1,payload_bytes=?2",
             params![
-                vec![0; MAX_PAYLOAD_BYTES + 1],
+                vec![0u8; MAX_PAYLOAD_BYTES + 1],
                 (MAX_PAYLOAD_BYTES + 1) as i64
             ],
         )

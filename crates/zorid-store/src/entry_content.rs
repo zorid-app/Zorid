@@ -477,7 +477,10 @@ mod tests {
         assert!(!inline);
         assert!((1..=MAX_REFERENCE_BYTES).contains(&reference_len));
         drop(store);
-        let mut store = Store::open_existing_no_follow(dir.path().join("store.sqlite")).unwrap();
+        // macOS tempfile paths may use /var's system alias. Resolve only our
+        // already-created fixture before testing the no-follow reopen path.
+        let database = std::fs::canonicalize(dir.path().join("store.sqlite")).unwrap();
+        let mut store = Store::open_existing_no_follow(database).unwrap();
         let metadata = store.read_metadata(&id()).unwrap().unwrap();
         assert_eq!(metadata.content.as_ref().unwrap().len(), length);
         assert_eq!(metadata.content.as_ref().unwrap().digest(), &digest);
