@@ -1,0 +1,24 @@
+/* Native owns safe areas, navigation and keyboard sizing. This class is set
+   only by the native platform capability, never viewport detection. */
+.workspace.native-editor-only {
+  display: flex;
+  height: 100%;
+  padding: 0;
+  background: var(--background-primary);
+}
+.workspace.native-editor-only > .workspace-center {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+.workspace.native-editor-only .panes { width: 100%; overflow: hidden; }
+.workspace.native-editor-only .pane { flex: 1 1 100%; border: 0; }
+.workspace.native-editor-only .note-scroll,
+.workspace.native-editor-only .note-scroll:not(.readable-width) {
+  padding: 20px 22px 44px;
+  -webkit-overflow-scrolling: touch;
+}
+.workspace.native-editor-only .note-title { font-size: 28px; }

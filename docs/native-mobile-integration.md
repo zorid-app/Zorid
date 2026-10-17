@@ -267,3 +267,29 @@ or differing feature set is introduced. Dev/prod must remain independent of
 Debug/Release optimization and preserve existing App/legacy-config compatibility.
 Native/delivery workers coordinate exact config, output path, metadata and flags.
 Owner will import project/script changes only after live phone build terminates.
+
+## User presentation correction — 2026-10-17
+
+The phone trial exposed full web workspace frames. User explicitly requests only
+the actual document editor embedded in the native shell: retain title, properties,
+body and recovery notices; remove web tabs, ribbon, sidebars, pane toolbar and
+status frames. Native Back returns to the originating native page. Native New note
+uses the shared Workspace.newNote path after admission, with no Swift file writer.
+Native document presentation starts one pane without restoring desktop layouts;
+retained durable recovery buffers still load before selection.
+
+Latest references: Downloads IMG_1741.PNG requests a rounded keyboard toolbar
+that appears on typing-area focus; 3CF4F72C-40CB-4DE1-B9C7-42AED0A69E1E.png
+replaces the earlier top page pills with a system native bottom tab bar. Recents
+and Files remain the implemented pages; customization/settings remain native.
+Keyboard toolbar actions must call existing editor commands and preserve selection,
+undo, IME and durable saves. Native source and runtime validation pending.
+
+Actual pre-correction runtime: signed development app installed and launched on
+the paired iPhone (CoreDevice install80894/launch63110 exit0). Simulator fixture
+created through native vault selection; shared editor saved exact43-byte body
+`Rust-backed mobile body saved and reopened.`; native Back returned to Recents
+and tapping that row reopened the same content. This proves this fixture save/
+reopen, not final presentation, lifecycle or keyboard parity. The full workspace
+chrome was rejected by the user. Simulator terminated and exact owned device
+shutdown before yielding the heavy slot to the coordinator for bounded core proof.

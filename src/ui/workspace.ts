@@ -326,6 +326,7 @@ export class Workspace {
   }
 
   private async openNativeInitialNote(platform:PlatformVault):Promise<void>{
+    if(platform.createNoteOnOpen){await this.newNote();return;}
     if(platform.initialPath===undefined)return;
     const entry=this.vault.entries.get(platform.initialPath);
     if(!platform.initialEntryId||entry?.type!=='file'||entry.entryId!==platform.initialEntryId){notice('The selected note changed or is no longer available. Return to Files and select it again.');return;}
@@ -375,11 +376,11 @@ export class Workspace {
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
     this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};
     this.buildShell();
-    this.mountFileTreeDrag();
+    if(!platform.editorOnly)this.mountFileTreeDrag();
     let restored = false;
     try {
       const saved = JSON.parse(localStorage.getItem(this.sessionKey()) || 'null');
-      if (saved) {
+      if (saved && !platform.editorOnly) {
         this.sessionState = saved;this.autoRevealFiles=saved.autoRevealFiles===true;
         this.root.classList.toggle('right-hidden', saved.rightHidden !== false);
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
@@ -396,7 +397,7 @@ export class Workspace {
     this.activate(this.panes.find(pane=>pane.id===this.sessionState.activePaneId)??this.panes[0]);
     this.restoringLayout=false;
     for (const pane of this.panes) await this.renderPane(pane,{flush:false});
-    this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
+    if(!platform.editorOnly)this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
     this.disposers.push(this.vault.on('create', change => { this.invalidateTreeTokens(change.path); this.renderSidebar(); }), this.vault.on('delete', change => {
       this.invalidateTreeTokens(change.path);
       const removed=(path:string)=>path===change.path||path.startsWith(change.path+'/');
@@ -503,6 +504,7 @@ export class Workspace {
   private buildShell(): void {
     this.disposeShell();
     this.root.replaceChildren(); this.root.className = 'workspace right-hidden';
+    this.root.classList.toggle('native-editor-only',this.platform.editorOnly===true);
     this.root.classList.toggle('is-macos-desktop',!!window.zorid&&/Mac/i.test(window.navigator.platform));
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
     const top = el('div', 'ribbon-top');
@@ -541,6 +543,7 @@ export class Workspace {
     for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.rightTab=type;this.renderRight();}));
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
     this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
+    if(this.platform.editorOnly){this.root.append(center);return;}
     this.root.append(ribbon,this.sidebar,center,this.right,this.status);
     this.addResizeHandle(this.sidebar,'left'); this.addResizeHandle(this.right,'right');
     this.sidebarControls=createSidebarControls(this.root,{onToggleLeft:()=>this.toggleLeft(),onToggleRight:()=>this.toggleRight()});
@@ -581,6 +584,7 @@ export class Workspace {
   private focusPane(pane:Pane):void{if(pane.editor)pane.editor.focus();else pane.element.focus({preventScroll:true});}
   private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); if(changed)this.notifyNativeNoteOpened(pane); }
   async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath='',expectedActivation?:number): Promise<void> {
+    if(this.platform.editorOnly)newTab=false;
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
     await this.flushPane(pane);
@@ -628,6 +632,7 @@ export class Workspace {
   }
 
   private renderTabBar(pane:Pane):void{
+    if(this.platform.editorOnly){pane.element.querySelector(':scope > .tab-bar')?.remove();return;}
     const tab=this.current(pane);if(!tab)return;
     const bar=el('div','tab-bar'); bar.setAttribute('role','tablist');
     bar.append(button('sidebar','Toggle left sidebar',()=>this.toggleLeft(),'pane-sidebar-toggle'));
@@ -689,7 +694,7 @@ export class Workspace {
     toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.md$/,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
     if(!tab.path||isMarkdown(tab.path))actions.append(this.hotkeyButton(tab.mode==='reading'?'edit':'book','toggle-reading',tab.mode==='reading'?'Switch to Live Edit':'Switch to reading view',()=>this.run(()=>this.toggleReading(pane))));
-    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);content.append(toolbar);
+    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);if(!this.platform.editorOnly)content.append(toolbar);
     if(tab.kind==='graph'){this.renderGraph(content);pane.viewReady=true;return;}
     if(!tab.path){this.renderEmpty(pane,content);pane.viewReady=true;return;}
     const path=tab.path;
@@ -1446,6 +1451,7 @@ export class Workspace {
   }
   private executeHotkey(id:string):void{
     if(this.closing)return;
+    if(this.platform?.editorOnly&&(id.startsWith('tab-')||['new-window','new-tab','close-tab','split-right','split-down','toggle-left','toggle-right','search-all','graph','open-vault'].includes(id)))return;
     if(id==='new-window'){if(workspaceWindowBridge(window.zorid))this.run(()=>this.newWindow());return;}
     if(!this.vault)return;
     if(id.startsWith('tab-')){

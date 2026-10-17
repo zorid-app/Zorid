@@ -4,6 +4,10 @@ import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
 export interface PlatformVault {
+  /** Native navigation owns the surrounding chrome; embed document content only. */
+  editorOnly?: boolean;
+  /** Native New note intent, applied once after durable admission/recovery. */
+  createNoteOnOpen?: boolean;
   /** Native page selection, admitted together; paths alone do not identify a note. */
   initialPath?: string;
   initialEntryId?: string;

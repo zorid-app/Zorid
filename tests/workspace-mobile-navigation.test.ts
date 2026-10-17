@@ -16,7 +16,7 @@ function editor(parent:HTMLElement,options:EditorOptions):EditorHandle {
 class IdentityAdapter extends MemoryAdapter {
   async list(){return(await super.list()).map(entry=>({...entry,entryId:'id_'+entry.path.replaceAll('.','_')}));}
 }
-async function setup(t:TestContext,selection:Partial<PlatformVault>={},rejectHistory=false,views:WorkspaceViewFactories={}){
+async function setup(t:TestContext,selection:Partial<PlatformVault>={},rejectHistory=false,views:WorkspaceViewFactories={},savedSession?:unknown){
   const dom=new JSDOM('<!doctype html><body><div id="app"></div>',{url:'https://zorid.test/',pretendToBeVisual:true});
   const saved=new Map<string,PropertyDescriptor|undefined>();
   const matchMedia=(media:string)=>({matches:false,media,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
@@ -29,6 +29,7 @@ async function setup(t:TestContext,selection:Partial<PlatformVault>={},rejectHis
   const platform:PlatformVault={adapter,id:'native-test',label:'Disposable',...selection,noteOpened:async(path,id)=>{opened.push([path,id]);if(rejectHistory)throw new Error('stale history');}};
   const workspace=new Workspace(document.querySelector<HTMLElement>('#app')!,editor,views);
   t.after(async()=>{try{await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
+  if(savedSession)localStorage.setItem('zorid:workspace:native-test',JSON.stringify(savedSession));
   await workspace.start(platform);
   return{workspace,opened,adapter,platform,dom};
 }
@@ -104,4 +105,32 @@ test('settled media error promise alone is not metadata/read success',async t=>{
 test('resolved Base ready with a retained parse/query error is not successful history',async t=>{
   const f=await setup(t,{},false,{base:((host:HTMLElement)=>{host.textContent='Invalid Base';return{ready:Promise.resolve(),state:{result:null,error:new Error('Invalid query')},flush:async()=>{},close:async()=>{},hasPendingChanges:()=>false};}) as any});
   await f.workspace.openNote('Broken.base');await new Promise(done=>setTimeout(done,0));assert.deepEqual(f.opened,[]);
+});
+
+
+test('native editor-only selection renders document without workspace frames and saves normally',async t=>{
+  const f=await setup(t,{editorOnly:true,initialPath:'A.md',initialEntryId:'id_A_md'});
+  assert.equal(f.workspace.activePane.editor?.getValue(),'Alpha');
+  assert.equal(document.querySelector('.ribbon,.sidebar,.right-sidebar,.status-bar,.tab-bar,.pane-toolbar'),null);
+  assert.ok(document.querySelector('.note-title'));
+  const input=document.querySelector('textarea')!;input.value='Saved without workspace frames';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+  await f.workspace.flush();assert.equal(await f.adapter.read('A.md'),'Saved without workspace frames');
+  await f.workspace.openNote('B.md',true);assert.equal(f.workspace.panes.length,1);assert.equal(f.workspace.activePane.tabs.length,1);
+  await f.workspace.openNote('A.md');assert.equal(f.workspace.activePane.editor?.getValue(),'Saved without workspace frames');
+});
+
+test('native New note intent uses normal shared creation once after admission',async t=>{
+  const f=await setup(t,{editorOnly:true,createNoteOnOpen:true});
+  assert.equal(f.workspace.activePane.viewPath,'Untitled.md');
+  assert.equal(await f.adapter.read('Untitled.md'),'');
+  await f.workspace.renderPane(f.workspace.activePane);
+  assert.equal([...f.workspace.vault.entries.keys()].filter(path=>path.startsWith('Untitled')).length,1);
+});
+
+
+test('native selected document does not restore unrelated workspace panes',async t=>{
+  const saved={panes:[{tabs:[{path:'A.md',kind:'note',mode:'live'}],active:0},{tabs:[{path:'B.md',kind:'note',mode:'live'}],active:0}]};
+  const f=await setup(t,{editorOnly:true,initialPath:'B.md',initialEntryId:'id_B_md'},false,{},saved);
+  assert.equal(f.workspace.panes.length,1);assert.equal(f.workspace.activePane.tabs.length,1);
+  assert.equal(f.workspace.activePane.editor?.getValue(),'Beta');
 });
