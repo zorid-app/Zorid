@@ -7,6 +7,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
   const binding = await bridge.getDurableContext?.(info.path);
   let durableWrites: DurableWrites | undefined;
   let release: (() => Promise<void>) | undefined;
+  let createText: ((path:string,content:string)=>Promise<void>) | undefined;
   if (binding) {
     if (!bridge.durableInvoke || !bridge.releaseDurableContext || !binding.admissionId || !binding.scope?.vaultId || !binding.scope.clientId) throw new Error('Incomplete durable desktop capability');
     const invoke = bridge.durableInvoke.bind(bridge), releaseContext = bridge.releaseDurableContext.bind(bridge);
@@ -15,6 +16,13 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     const call = <T>(method: string, ...args: unknown[]): Promise<T> => {
       if (released) return Promise.reject(Object.assign(new Error('Durable desktop context released'), {code:'client_not_admitted',source:'host'}));
       return invoke(info.path, admissionId, method, args) as Promise<T>;
+    };
+    const pendingCreates=new Map<string,{operationId:string;entryId:string;path:string;content:string}>();
+    createText=async(path,content)=>{
+      let request=pendingCreates.get(path);
+      if(request&&request.content!==content)throw new Error('A different create is still pending for this path');
+      if(!request){request={operationId:crypto.randomUUID(),entryId:crypto.randomUUID(),path,content};pendingCreates.set(path,request);}
+      await call<void>('createText',request);pendingCreates.delete(path);
     };
     durableWrites = Object.freeze<DurableWrites>({
       readText: path => call('readText',path), readTextById: id => call('readTextById',id),
@@ -33,6 +41,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     label: info.name,
     adapter: {
       ...(durableWrites ? {durableWrites} : {}),
+      ...(createText ? {createText} : {}),
       list: () => bridge.list(info.path),
       stat: path => bridge.stat(info.path, path),
       read: path => bridge.read(info.path, path),

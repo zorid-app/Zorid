@@ -112,3 +112,27 @@ listed cursor12/two visible entries, and read cli-note.md (34bytes), with the
 transport still alive. The child was closed normally. The existing Electron
 window and its retained draft were not closed, replaced or retried; a fresh
 actual-editor recovery/save smoke remains coordinator-owned.
+
+### Explicit new-note creation
+
+The New note runtime failure (`durable_consumer_required` from legacy write)
+is addressed by optional `VaultAdapter.createText`, used only by `Vault.create`.
+Existing modification still follows its prior path; the guarded Rust editor
+uses DurableWrites for existing-note saves. Legacy native writes remain disabled.
+
+A new main-owned creation consumer persists the exact operation ID, entry ID,
+path and text in `create-text/v1/` scoped checkpoints before invoking the narrow
+leased native `create_text` command. Rust requires a matching client lease,
+valid UTF-8, an already-bound fixture configuration and explicit text create
+mode. The common family apply owns transaction/receipt/outbox idempotency. A lost
+reply preserves the command; startup recovery replays it with identical IDs and
+bytes before enabling the editor. Durable receipt confirmation permits checkpoint
+tombstoning. Definitive rejection is retained and never converted to overwrite.
+
+Host source commit `9fe9571`; native owner combines/builds it with the current
+namespace candidate. Focused create-consumer checks pass3/3; the explicit Vault
+create-versus-modify dispatch regression passes1/1. The first Vault attempt was
+blocked by missing yaml resolution after the prior dependency symlink cleanup;
+restoring the existing-dependency symlink made the focused test pass. No install
+ran. Renderer build and actual New note interaction are still pending, and the
+user's live editor/draft have not been closed or changed by this work.

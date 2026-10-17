@@ -1,5 +1,6 @@
 'use strict';
 const { desktopDurableWrites } = require('./durable-writes.cjs');
+const { desktopTextCreates } = require('./text-create.cjs');
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 function fail(code, uncertain = false) { return Object.assign(new Error('Desktop fixture consumer is not admitted.'), { code, commitUncertain: uncertain }); }
 
@@ -30,6 +31,12 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     Object.defineProperty(shadow, 'host', { value: guarded });
     const capability = await desktopDurableWrites(shadow, { clientId });
     if (capability.checkpoints.scope.vaultId !== reference.local_store_id || capability.checkpoints.scope.clientId !== reference.client_id) throw fail('client_scope_mismatch');
+    let creates;
+    if(service.familyMode){
+      if(!host.capabilities?.includes('create_text'))throw fail('unsupported_host_capability');
+      creates=desktopTextCreates(shadow,capability.checkpoints);
+      await creates.recover();
+    }
     live(); phase = 'active';
     const scope = capability.checkpoints.scope;
     function allowed(flushToken = null) {
@@ -58,6 +65,7 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
+      ...(creates?{createText:input=>invoke(()=>creates.create(input),null)}:{}),
       release(flushGate) {
         if (phase === 'released') return Promise.resolve();
         if (closing) return closing;

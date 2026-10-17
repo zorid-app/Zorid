@@ -404,7 +404,8 @@ export class Vault {
       const path = normalizePath(rawPath);
       await this.refresh();
       this.requireDestination(path);
-      await this.adapter.write(path, text);
+      if (this.adapter.createText) await this.adapter.createText(path, text);
+      else await this.adapter.write(path, text);
       await this.refresh();
       const entry = this.entries.get(path)!;
       this.emit('create', { path, entry });

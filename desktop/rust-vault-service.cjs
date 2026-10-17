@@ -116,6 +116,7 @@ function successful(command, result, bytes, expectedBytes) {
   if (!command) return bytes.length === 0; // Full startup validation follows.
   if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas'].includes(command.method) && bytes.length) return false;
   switch (command.method) {
+    case 'create_text': return successful({method:'apply',operation_id:command.operation_id,mutation:{type:'create',id:command.id,path:command.path,kind:'file'}}, result, bytes, expectedBytes);
     case 'fixture_family_enroll': return familyStatus(result.family);
     case 'fixture_family_status': return syncStatus(result.sync);
     case 'fixture_family_once': return syncReport(result.sync, command);
@@ -354,12 +355,13 @@ class RustVaultService {
     // create_mode. Retry the exact command+bytes after an uncertain acknowledgement.
     return this.request({ method: 'fixture_family_apply', family: command }, bytes).then(reply => reply.result);
   }
+  createText(clientId, request, bytes) { return this.request({method:'create_text',client_id:clientId,operation_id:request.operationId,id:request.entryId,path:request.path}, bytes).then(reply=>reply.result); }
   claimClient(clientId) { return this.request({ method: 'claim_client', client_id: clientId }).then(reply => Object.freeze({ ...reply.result.lease })); }
   releaseClient(reference) { return this.request({ method: 'release_client', reference }).then(reply => reply.result); }
   withClientLease(reference, beforeRequest = () => {}) {
     const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
     const context = { request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
-    const methods = ['identity', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
+    const methods = ['createText', 'identity', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
       'checkpointLoad', 'checkpointCompareAndSwap', 'checkpointList', 'checkpointChanges'];
     return Object.freeze(Object.fromEntries(methods.map(name => [name, (...args) => RustVaultService.prototype[name].apply(context, args)])));
   }

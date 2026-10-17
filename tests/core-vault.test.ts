@@ -187,3 +187,13 @@ test('legacy adapters without revisions retain metadata-based binary reload beha
   await vault.reload();
   assert.deepEqual(modified, ['image.bin']);
 });
+
+test('explicit createText capability is used for creation while modify keeps the write path',async()=>{
+  const storage=new MemoryAdapter();let creates=0,writes=0;
+  const adapter={list:()=>storage.list(),read:(path:string)=>storage.read(path),mkdir:(path:string)=>storage.mkdir(path),rename:(a:string,b:string)=>storage.rename(a,b),trash:(path:string)=>storage.trash(path),
+    write:async(path:string,content:string)=>{writes++;await storage.write(path,content);},
+    createText:async(path:string,content:string)=>{creates++;await storage.write(path,content);}};
+  const vault=new Vault(adapter);await vault.initialize();await vault.create('New.md','new');
+  assert.equal(creates,1);assert.equal(writes,0);await assert.rejects(vault.create('New.md','lost'),/already exists/);
+  await vault.modify('New.md','edited');assert.equal(creates,1);assert.equal(writes,1);
+});

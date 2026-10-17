@@ -83,6 +83,10 @@ function createEditorCoreManager(environment=process.env){
       const saved=checked(broker,record,expectedRoot,admissionId);
       if(typeof method!=='string'||!Array.isArray(args)||args.length>2)throw fail('invalid_durable_request');
       const captured=structuredClone(args);
+      if(method==='createText'){
+        if(captured.length!==1||!saved.admission.createText)throw fail('invalid_durable_request');
+        return saved.admission.createText(captured[0]);
+      }
       const prefix='checkpoints.';
       if(method.startsWith(prefix)){
         const name=method.slice(prefix.length);if(!checkpointMethods.has(name))throw fail('invalid_durable_request');
