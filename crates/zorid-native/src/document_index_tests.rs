@@ -241,7 +241,32 @@ fn staged_work_fences_concurrent_source_changes_and_can_resume_after_restart() {
 fn queries_never_implicitly_reconcile_external_files_and_reject_foreign_pins() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = NativeVault::open(dir.path()).unwrap();
-    create(&mut vault, "note", "Note.md", "committed\n");
+    // External family reconciliation requires explicit enrollment while empty
+    // and an authored text-mode binding; derived queries do neither implicitly.
+    vault
+        .family_enroll(&crate::FamilyScope {
+            realm_id: zorid_sync_protocol::RealmId::new("document-fixture-realm").unwrap(),
+            vault_id: zorid_sync_protocol::VaultId::new("document-fixture-vault").unwrap(),
+        })
+        .unwrap();
+    let created = vault
+        .family_apply(
+            &MutationRequest {
+                operation_id: OperationId::new("create-note").unwrap(),
+                mutation: Mutation::Create {
+                    id: id("note"),
+                    path: VaultPath::new("Note.md").unwrap(),
+                    kind: EntryKind::File,
+                    content: Some(b"committed\n".to_vec()),
+                },
+            },
+            Some(crate::FamilyCreateMode::Text),
+        )
+        .unwrap();
+    assert!(matches!(
+        created.projection,
+        crate::ProjectionStatus::Projected
+    ));
     vault.initialize_document_index().unwrap();
     build(&mut vault);
     let pin = vault.open_document_snapshot().unwrap();
@@ -269,9 +294,11 @@ fn queries_never_implicitly_reconcile_external_files_and_reject_foreign_pins() {
         "snapshot_expired",
     );
     // Explicit source reconciliation is the only import gate.
-    vault
+    let imported_source = vault
         .reconcile_external(crate::ScanOptions::default(), crate::ExternalFileMode::Auto)
         .unwrap();
+    assert!(imported_source.complete, "{imported_source:?}");
+    assert_eq!(imported_source.imported.len(), 1, "{imported_source:?}");
     build(&mut vault);
     let imported = vault.open_document_snapshot().unwrap();
     let page = vault
