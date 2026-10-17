@@ -283,6 +283,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "context", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "refresh", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "noteOpened", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "presentationSettled", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "editorState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "close", returnType: CAPPluginReturnPromise),
@@ -296,6 +297,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     private var currentEditorState = NativeEditorState.inactive
     fileprivate var onEditorState: ((NativeEditorState, Bool) -> Void)?
     fileprivate var onNoteOpened: ((String) -> Void)?
+    fileprivate var onPresentationSettled: (() -> Bool)?
 
     fileprivate init(session: NativeMobileSession, launch: NativeEditorLaunch) {
         self.session = session
@@ -396,6 +398,30 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             case .success: call.resolve()
             case .failure: call.reject("The opened note could not be recorded.", "native_history_failed")
             }
+        }
+    }
+
+    @objc func presentationSettled(_ call: CAPPluginCall) {
+        // UI context only: no file lookup or successful activation is required to
+        // uncover an error/password prompt for a missing or unreadable selection.
+        // Workspace owns the current-document/generation fence; internal links
+        // can legitimately present an identity different from the launch intent.
+        guard Set(call.jsObjectRepresentation.keys) == Set(["path", "entryId", "state"]),
+              let path = call.getString("path"), NativeFileEntry.isVisiblePath(path),
+              let entryId = call.getString("entryId"), NativeFileEntry.isValidEntryId(entryId),
+              let state = call.getString("state"), state.utf8.count <= 8,
+              ["ready", "password", "error"].contains(state) else {
+            call.reject("Invalid editor presentation.", "invalid_request")
+            return
+        }
+        DispatchQueue.main.async {
+            guard UIApplication.shared.applicationState == .active,
+                  !self.closeAuthorized, self.pending == nil,
+                  self.onPresentationSettled?() == true else {
+                call.reject("This editor presentation is no longer active.", "stale_presentation")
+                return
+            }
+            call.resolve()
         }
     }
 
@@ -541,6 +567,7 @@ final class NativeEditorContainer: UIViewController {
     private var loadingTimeout: DispatchWorkItem?
     private var loadingTimer: NativePhaseTimer?
     private var loadingFinished = false
+    private enum EditorLoadingFinish: Equatable { case noteOpened, presentationSettled, timeout }
     private let toolbarModel = NativeKeyboardToolbarModel()
     private var toolbarHost: UIHostingController<NativeKeyboardToolbarView>?
     private var toolbarHeight: NSLayoutConstraint?
@@ -570,8 +597,18 @@ final class NativeEditorContainer: UIViewController {
         done.accessibilityLabel = "Return to " + originTitle
         navigationItem.rightBarButtonItem = done
         editor.vaultPlugin.onNoteOpened = { [weak self] id in
-            self?.finishEditorLoading(ready: true)
+            self?.finishEditorLoading(reason: .noteOpened)
             self?.onNoteOpened?(id)
+        }
+        editor.vaultPlugin.onPresentationSettled = { [weak self] in
+            guard let self = self, !self.leaving,
+                  self.navigationController?.topViewController === self,
+                  let scene = self.viewIfLoaded?.window?.windowScene,
+                  scene.activationState == .foregroundActive else { return false }
+            // This callback belongs to this container's immutable bridge/session.
+            // It changes presentation only, never Recents or the route cursor.
+            self.finishEditorLoading(reason: .presentationSettled)
+            return true
         }
         updateRouteControls()
         editor.vaultPlugin.onEditorState = { [weak self] state, available in
@@ -777,17 +814,18 @@ final class NativeEditorContainer: UIViewController {
         ])
         host.didMove(toParent: self)
         editor.view.accessibilityElementsHidden = true
-        let timeout = DispatchWorkItem { [weak self] in self?.finishEditorLoading(ready: false) }
+        let timeout = DispatchWorkItem { [weak self] in self?.finishEditorLoading(reason: .timeout) }
         loadingTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: timeout)
     }
 
-    private func finishEditorLoading(ready: Bool) {
-        if ready {
+    private func finishEditorLoading(reason: EditorLoadingFinish) {
+        if reason == .noteOpened {
             loadingTimer?.finish(.editorReady)
             loadingTimer = nil
-        } else { loadingTimer?.finish(.editorTimeout) }
+        }
         guard !loadingFinished else { return }
+        if reason == .timeout { loadingTimer?.finish(.editorTimeout) }
         loadingFinished = true
         loadingTimeout?.cancel()
         loadingTimeout = nil
@@ -801,10 +839,10 @@ final class NativeEditorContainer: UIViewController {
             host.removeFromParent()
             self?.loadingHost = nil
         }
-        if ready && !UIAccessibility.isReduceMotionEnabled {
+        if reason == .noteOpened && !UIAccessibility.isReduceMotionEnabled {
             UIView.animate(withDuration: 0.18, animations: { host.view.alpha = 0 }) { _ in remove() }
         } else { remove() }
-        if !ready && view.window != nil && UIApplication.shared.applicationState == .active {
+        if reason == .timeout && view.window != nil && UIApplication.shared.applicationState == .active {
             UIAccessibility.post(notification: .announcement, argument: "Editor is taking longer to load. Showing its current content.")
         }
     }
