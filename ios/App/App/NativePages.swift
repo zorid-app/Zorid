@@ -67,7 +67,7 @@ private enum NativePageError: Error { case invalidResponse, unavailable }
 struct NativeVaultListing {
     let localStoreId: String
     let entries: [NativeFileEntry]
-    let scanComplete: Bool
+    let reconciliationComplete: Bool
 }
 
 extension NativeMobileSession {
@@ -136,7 +136,7 @@ extension NativeMobileSession {
                             self.context { context in
                                 let reconciliation = context["reconciliation"] as? [String: Any]
                                 finished(.success(NativeVaultListing(localStoreId: storeId, entries: entries.filter { NativeFileEntry.isVisiblePath($0.path) },
-                                                                      scanComplete: reconciliation?["complete"] as? Bool == true)))
+                                                                      reconciliationComplete: reconciliation?["complete"] as? Bool == true)))
                             }
                         } catch { finished(.failure(NativePageError.invalidResponse)) }
                     }
@@ -196,6 +196,317 @@ private enum NativeRecentStore {
     }
 }
 
+// Native presentation binding for the existing admitted Rust document API.
+// Each operation owns its lease/stage/pin until cleanup ACK; nothing is lent to web.
+private enum NativeSearchFailure: Error, Equatable {
+    case invalid, invalidQuery, unsupported, cancelled, preparationLimit, rebuildRequired, queryFailed, cleanup
+}
+
+private struct NativeSearchHit: Decodable {
+    private let witness: Witness
+    var entry: NativeFileEntry {
+        NativeFileEntry(id: witness.id, path: witness.path, kind: witness.kind, deleted: witness.deleted, presentation: nil)
+    }
+    var revision: String { witness.revision }
+    private struct Witness: Decodable {
+        let id: String
+        let revision: String
+        let path: String
+        let kind: NativeFileEntry.Kind
+        let deleted: Bool
+    }
+    private enum CodingKeys: String, CodingKey { case witness = "entry", line, range, snippet, snippetTruncated }
+    let line: UInt32
+    let range: Range
+    let snippet: String
+    let snippetTruncated: Bool
+    var rowId: String { "\(entry.id):\(line)" }
+    struct Range: Decodable { let bytes: [UInt32]; let utf16: [UInt32] }
+}
+private struct NativeSearchResult {
+    let hits: [NativeSearchHit]
+    let partial: Bool
+}
+
+@MainActor
+private final class NativePageSearch {
+    private struct Lease: Codable, Equatable {
+        let local_store_id: String
+        let client_id: String
+        let token: String
+    }
+    private struct Versions: Codable, Equatable {
+        let schema: UInt32
+        let extraction: String
+        let resolver: String
+        let query: String
+    }
+    private struct Snapshot: Codable, Equatable {
+        let localStoreId: String
+        let generationEpoch: String
+        let generation: String
+        let versions: Versions
+        func validate(store: String) throws {
+            guard localStoreId == store, NativeFileEntry.isValidEntryId(generationEpoch),
+                  Self.decimal(generation, positive: true), versions.schema > 0,
+                  [versions.extraction, versions.resolver, versions.query].allSatisfy({ value in
+                      !value.isEmpty && value.utf8.count <= 128 && value.utf8.allSatisfy {
+                          (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || [45, 46, 58, 95].contains($0)
+                      }
+                  }) else {
+                throw NativeSearchFailure.invalid
+            }
+        }
+        static func decimal(_ value: String, positive: Bool = false) -> Bool {
+            guard let number = UInt64(value), String(number) == value else { return false }
+            return !positive || number > 0
+        }
+    }
+    private struct Source: Decodable, Equatable {
+        let localStoreId: String
+        let watermark: String
+        func validate(store: String) throws {
+            guard localStoreId == store, Snapshot.decimal(watermark) else { throw NativeSearchFailure.invalid }
+        }
+    }
+    private struct Status: Decodable {
+        let source: Source
+        let state: String
+        let snapshot: Snapshot?
+        let coveredWatermark: String?
+        let observedSourceHead: String?
+        let coverageComplete: Bool?
+    }
+    private struct Stage: Decodable { let snapshot: Snapshot }
+    private struct Progress: Decodable {
+        let snapshot: Snapshot
+        let preparedDocuments: UInt64
+        let reusedDocuments: UInt64
+        let totalDocuments: UInt64
+        let ready: Bool
+    }
+    private struct Opened: Decodable {
+        let pinId: String
+        let snapshot: Snapshot
+        let source: Source
+        let coverageComplete: Bool
+    }
+    private struct Page: Decodable {
+        struct Query: Decodable {
+            struct Value: Decodable {
+                let snapshot: Snapshot
+                let hits: [NativeSearchHit]
+                let next: String? // Rust removes the internal continuation; only null is accepted.
+                let scanComplete: Bool
+                let coverageComplete: Bool
+                let complete: Bool
+                let sourceBytes: UInt64
+                let documents: UInt64
+            }
+            let snapshot: Snapshot
+            let source: Source
+            let coverageComplete: Bool
+            let value: Value
+        }
+        let result: Query
+        let cursor: String?
+    }
+    private struct WireError: Decodable {
+        let code: String
+        let message: String
+        let commit_uncertain: Bool
+    }
+    private struct Envelope<T: Decodable>: Decodable {
+        let version: UInt32
+        let request_id: String
+        let ok: Bool
+        let result: T?
+        let error: WireError?
+    }
+    private struct Marker: Decodable { let documents: Bool; let schemaVersion: UInt32; let bytes: Int }
+    private struct DocumentReply<T: Decodable>: Decodable { let schemaVersion: UInt32; let op: String; let value: T }
+    private struct Claimed: Decodable { let lease: Lease }
+    private struct Released: Decodable { let released: Bool; let reference: Lease }
+    private let session: NativeMobileSession
+    private let store: String
+    private let active: () -> Bool
+    private var lease: Lease?
+    private var stage: Snapshot?
+    private var pin: String?
+    private var sequence: UInt64 = 0
+    // Bound work even when a large vault or zero-visible-hit pages need continuation.
+    private let deadline = Date().addingTimeInterval(8)
+
+    init(session: NativeMobileSession, store: String, active: @escaping () -> Bool) {
+        self.session = session; self.store = store; self.active = active
+    }
+    private func check() throws {
+        guard active() else { throw NativeSearchFailure.cancelled }
+        guard Date() < deadline else { throw NativeSearchFailure.preparationLimit }
+    }
+    private func object<T: Encodable>(_ value: T) throws -> Any {
+        try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
+    }
+    private func wire<T: Decodable>(_ command: [String: Any], admitted: Bool, as: T.Type) async throws -> (T, Data) {
+        sequence += 1
+        let requestId = String(sequence)
+        var outer: [String: Any] = ["version": 1, "request_id": requestId, "command": command]
+        if admitted {
+            guard let lease = lease else { throw NativeSearchFailure.invalid }
+            outer["lease"] = try object(lease)
+        }
+        let bytes = try JSONSerialization.data(withJSONObject: outer)
+        guard bytes.count <= 65_536, let header = String(data: bytes, encoding: .utf8) else { throw NativeSearchFailure.invalid }
+        let response: (String, String) = try await withCheckedThrowingContinuation { continuation in
+            session.request(header: header, body: "") { continuation.resume(with: $0) }
+        }
+        guard let headerBytes = response.0.data(using: .utf8),
+              let body = Data(base64Encoded: response.1), body.count <= 16_777_216 else { throw NativeSearchFailure.invalid }
+        let envelope = try JSONDecoder().decode(Envelope<T>.self, from: headerBytes)
+        guard envelope.version == 1, envelope.request_id == requestId else { throw NativeSearchFailure.invalid }
+        guard envelope.ok else {
+            guard body.isEmpty, envelope.result == nil, let error = envelope.error,
+                  !error.code.isEmpty, error.code.utf8.count <= 64,
+                  error.code.utf8.allSatisfy({ (97...122).contains($0) || $0 == 95 }),
+                  error.message.utf8.count <= 4096 else { throw NativeSearchFailure.invalid }
+            if error.commit_uncertain { throw NativeSearchFailure.cleanup }
+            throw NativeSearchFailure.queryFailed
+        }
+        guard envelope.error == nil, let value = envelope.result else { throw NativeSearchFailure.invalid }
+        return (value, body)
+    }
+    private func document<T: Decodable>(_ op: String, _ fields: [String: Any] = [:], as: T.Type) async throws -> T {
+        var command = fields; command["op"] = op
+        let request: [String: Any] = ["schemaVersion": 1, "command": command]
+        let (marker, body) = try await wire(["method": "documents", "client_id": session.vault.clientId, "request": request], admitted: true, as: Marker.self)
+        guard marker.documents, marker.schemaVersion == 1, marker.bytes == body.count,
+              String(data: body, encoding: .utf8) != nil else { throw NativeSearchFailure.invalid }
+        let reply = try JSONDecoder().decode(DocumentReply<T>.self, from: body)
+        guard reply.schemaVersion == 1, reply.op == op else { throw NativeSearchFailure.invalid }
+        return reply.value
+    }
+    private func prepare() async throws -> (Snapshot, Source) {
+        var status = try await document("status", as: Status.self)
+        try status.source.validate(store: store)
+        guard status.state != "rebuild_required" else { throw NativeSearchFailure.rebuildRequired }
+        if status.state == "uninitialized" {
+            guard try await document("initialize", as: Bool.self) else { throw NativeSearchFailure.invalid }
+        } else if status.state == "ready" {
+            guard let snapshot = status.snapshot, let covered = status.coveredWatermark,
+                  let observed = status.observedSourceHead, status.coverageComplete != nil,
+                  Snapshot.decimal(covered), observed == status.source.watermark else { throw NativeSearchFailure.invalid }
+            try snapshot.validate(store: store)
+            if covered == status.source.watermark { return (snapshot, status.source) }
+        } else if status.state != "building" { throw NativeSearchFailure.invalid }
+        try check()
+        // Begin allocates OUR stage; never enumerate/resume/discard another owner’s stage.
+        stage = try await document("begin", as: Stage.self).snapshot
+        guard let stage = stage else { throw NativeSearchFailure.invalid }
+        try stage.validate(store: store)
+        var ready = false
+        for _ in 0..<64 {
+            try check()
+            let progress = try await document("pump", ["snapshot": try object(stage)], as: Progress.self)
+            guard progress.snapshot == stage, progress.preparedDocuments <= progress.totalDocuments,
+                  progress.reusedDocuments <= progress.totalDocuments else { throw NativeSearchFailure.invalid }
+            if progress.ready { ready = true; break }
+            await Task.yield()
+        }
+        guard ready else { throw NativeSearchFailure.preparationLimit }
+        try check()
+        let published = try await document("publish", ["snapshot": try object(stage)], as: Snapshot.self)
+        guard published == stage else { throw NativeSearchFailure.invalid }
+        self.stage = nil
+        status = try await document("status", as: Status.self)
+        try status.source.validate(store: store)
+        guard status.state == "ready", status.snapshot == published,
+              status.coveredWatermark == status.source.watermark,
+              status.observedSourceHead == status.source.watermark, status.coverageComplete != nil else { throw NativeSearchFailure.invalid }
+        return (published, status.source)
+    }
+    func run(query: String) async throws -> NativeSearchResult {
+        guard !query.isEmpty, query.utf8.count <= 4096, !query.contains("\n"), !query.contains("\r") else { throw NativeSearchFailure.invalidQuery }
+        let context: [String: Any] = await withCheckedContinuation { continuation in session.context { continuation.resume(returning: $0) } }
+        guard context["documentSemantics"] as? Bool == true else { throw NativeSearchFailure.unsupported }
+        try check()
+        // A malformed/lost claim may have admitted a lease. Treat it as terminal;
+        // the coordinator must close the host, never hand it to the editor.
+        do {
+            let (claimed, body) = try await wire(["method": "claim_client", "client_id": session.vault.clientId], admitted: false, as: Claimed.self)
+            lease = claimed.lease
+            guard body.isEmpty, claimed.lease.local_store_id == store,
+                  claimed.lease.client_id == session.vault.clientId,
+                  UUID(uuidString: claimed.lease.token)?.uuidString.lowercased() == claimed.lease.token else { throw NativeSearchFailure.invalid }
+        } catch { throw NativeSearchFailure.cleanup }
+        let outcome: Result<NativeSearchResult, Error>
+        do {
+            try check()
+            let expected = try await prepare()
+            try check()
+            // Each query releases its client lease. Rust release removes the
+            // entire per-client pin replay floor; a new lease starts at pin 1.
+            pin = "1"
+            let opened = try await document("open", ["pinId": "1"], as: Opened.self)
+            try opened.snapshot.validate(store: store); try opened.source.validate(store: store)
+            guard opened.pinId == pin, opened.snapshot == expected.0, opened.source == expected.1 else { throw NativeSearchFailure.invalid }
+            var hits: [NativeSearchHit] = []
+            var hitIds = Set<String>()
+            var cursor: String?
+            var complete = false
+            for _ in 0..<4 {
+                try check()
+                let page = try await document("search", ["pinId": "1", "query": query, "cursor": cursor.map { $0 as Any } ?? NSNull(), "limit": 50], as: Page.self)
+                let result = page.result, value = result.value
+                guard result.snapshot == opened.snapshot, value.snapshot == opened.snapshot, result.source == opened.source,
+                      result.coverageComplete == opened.coverageComplete, value.coverageComplete == opened.coverageComplete,
+                      value.next == nil, value.hits.count <= 50, value.documents <= 32, value.sourceBytes <= 16_777_216,
+                      value.scanComplete == (page.cursor == nil), value.complete == (value.scanComplete && value.coverageComplete),
+                      page.cursor == nil || (NativeFileEntry.isValidEntryId(page.cursor!) && page.cursor != cursor) else { throw NativeSearchFailure.invalid }
+                for hit in value.hits {
+                    guard NativeFileEntry.isValidEntryId(hit.entry.id), NativeFileEntry.isValidEntryId(hit.revision), NativeFileEntry.isValidPath(hit.entry.path),
+                          hit.entry.kind == .file, !hit.entry.deleted,
+                          hit.range.bytes.count == 2, hit.range.utf16.count == 2,
+                          hit.range.bytes[0] <= hit.range.bytes[1], hit.range.utf16[0] <= hit.range.utf16[1],
+                          hit.snippet.utf8.count <= 1_048_576 else { throw NativeSearchFailure.invalid }
+                    guard hitIds.insert(hit.rowId).inserted else { throw NativeSearchFailure.invalid }
+                    if NativeFileEntry.isVisiblePath(hit.entry.path) { hits.append(hit) }
+                }
+                cursor = page.cursor; complete = value.complete
+                if cursor == nil || hits.count >= 50 { break }
+                await Task.yield()
+            }
+            outcome = .success(NativeSearchResult(hits: Array(hits.prefix(50)), partial: !complete || hits.count > 50))
+        } catch { outcome = .failure(error) }
+        // Cleanup is deliberately not cancelled with UI intent, and finishes
+        // before results become actionable or coordinator busy is cleared.
+        var cleaned = false
+        for _ in 0..<2 {
+            do {
+                if let pin = pin {
+                    guard try await document("close", ["pinId": pin], as: Bool.self) else { throw NativeSearchFailure.invalid }
+                    self.pin = nil
+                }
+                if let stage = stage {
+                    guard try await document("discard", ["snapshot": try object(stage)], as: Bool.self) else { throw NativeSearchFailure.invalid }
+                    self.stage = nil
+                }
+                guard let lease = lease else { throw NativeSearchFailure.invalid }
+                let (released, body) = try await wire(["method": "release_client", "reference": try object(lease)], admitted: false, as: Released.self)
+                guard body.isEmpty, released.released, released.reference == lease else { throw NativeSearchFailure.invalid }
+                self.lease = nil
+                cleaned = true
+                break
+            } catch {
+                // Retry the SAME remaining pin/stage/lease references. In
+                // particular release_client is idempotent after a lost ACK.
+                await Task.yield()
+            }
+        }
+        guard cleaned else { throw NativeSearchFailure.cleanup }
+        return try outcome.get()
+    }
+}
+
 private enum NativePage: String, CaseIterable {
     case recents, files
     var title: String { self == .recents ? "Recents" : "Files" }
@@ -235,13 +546,17 @@ private struct NativePagePreferences {
 }
 
 // One coordinator owns the session. A hidden native page never opens another
-// host while its editor is active, and never claims the editor's client lease.
+// host while its editor is active. Temporary search admission is fully released
+// before the web editor can claim the same persisted consumer.
 @MainActor
 private final class NativePagesCoordinator {
     private let vault: LocalVault
     private let root: URL
     private var session: NativeMobileSession?
     private var generation = 0
+    private var searchGeneration = 0
+    private var searchWork: DispatchWorkItem?
+    private var pendingSearch: String?
     private var editorOpenGeneration = 0
     private var busy = false
     private var editorActive = false
@@ -278,6 +593,7 @@ private final class NativePagesCoordinator {
 
     func recordPageNavigation(_ route: NativeRoute) {
         guard !editorActive else { return }
+        cancelSearch()
         // Cancel admission, not the in-flight Rust read/host ownership. Its reply
         // must still clear loading (or close a failed host), without pushing.
         editorOpenGeneration += 1
@@ -358,10 +674,12 @@ private final class NativePagesCoordinator {
 
     func setVisible(_ visible: Bool) {
         self.visible = visible
+        if !visible { cancelSearch() }
         if visible { scheduleAutomaticRefresh() } else { cancelQueuedRefresh() }
     }
 
     func cancelQueuedRefresh() {
+        if UIApplication.shared.applicationState != .active { cancelSearch() }
         refreshGeneration += 1
         refreshWork?.cancel()
         refreshWork = nil
@@ -390,13 +708,74 @@ private final class NativePagesCoordinator {
 
     func foregroundRefresh() {
         guard pageActive else { return }
+        cancelSearch()
         initialListingPending = false
         scheduleAutomaticRefresh()
     }
 
     private func drainAutomaticRefresh() {
         if chooseVaultRequested { finishChooseVault(); return }
-        if refreshRequested { scheduleAutomaticRefresh() }
+        if refreshRequested { scheduleAutomaticRefresh(); return }
+        startPendingSearch()
+    }
+
+    private func cancelSearch() {
+        searchGeneration += 1
+        searchWork?.cancel()
+        searchWork = nil
+        pendingSearch = nil
+        owner?.cancelSearchDisplay()
+    }
+
+    func search(_ query: String) {
+        cancelSearch()
+        guard !query.isEmpty else { return }
+        pendingSearch = query
+        owner?.beginSearchDisplay()
+        let work = DispatchWorkItem { [weak self] in
+            self?.searchWork = nil
+            self?.startPendingSearch()
+        }
+        searchWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func startPendingSearch() {
+        guard searchWork == nil, let query = pendingSearch, pageActive, !busy,
+              !editorActive, !refreshRequested, let session = session,
+              let store = historyStoreId else { return }
+        pendingSearch = nil
+        let ticket = searchGeneration
+        busy = true
+        owner?.setSearchAdmissionBusy(true)
+        updateRouteControls()
+        let operation = NativePageSearch(session: session, store: store) { [weak self] in
+            guard let self = self else { return false }
+            return self.searchGeneration == ticket && self.pageActive && !self.refreshRequested && !self.chooseVaultRequested
+        }
+        Task { @MainActor [weak self] in
+            let result: Result<NativeSearchResult, Error>
+            do { result = .success(try await operation.run(query: query)) }
+            catch { result = .failure(error) }
+            guard let self = self else { return }
+            // Invalid admission/DTO/cleanup cannot be handed to web. Closing
+            // the host drops any uncertain lease before retry is made available.
+            if case .failure(let error) = result,
+               (error as? NativeSearchFailure == .cleanup || error as? NativeSearchFailure == .invalid || !(error is NativeSearchFailure)) {
+                self.fail(session, ticket: self.generation) { [weak self] in
+                    self?.owner?.setSearchAdmissionBusy(false)
+                    self?.cancelSearch()
+                }
+                return
+            }
+            self.busy = false
+            self.owner?.setSearchAdmissionBusy(false)
+            if self.searchGeneration == ticket && self.pageActive {
+                self.owner?.finishSearchDisplay(result)
+            }
+            self.updateRouteControls()
+            self.drainAutomaticRefresh()
+        }
     }
 
     func load(refresh: Bool = false, completion: @escaping () -> Void = {}) {
@@ -466,6 +845,7 @@ private final class NativePagesCoordinator {
                     }
                     self.historyStoreId = listing.localStoreId
                     self.owner?.showListing(listing)
+                    if let query = self.owner?.searchQuery, !query.isEmpty { self.search(query) }
                     if self.pendingHistoryIndex != nil { self.completeTraversal(listing, session: session) }
                     else if let route = self.owner?.currentRoute { self.record(route) }
                     if self.routeFailureOnReturn {
@@ -498,6 +878,7 @@ private final class NativePagesCoordinator {
 
     func reload() async {
         guard pageActive else { return }
+        cancelSearch()
         if busy { scheduleAutomaticRefresh(); return }
         cancelQueuedRefresh()
         await withCheckedContinuation { continuation in load(refresh: true) { continuation.resume() } }
@@ -540,6 +921,7 @@ private final class NativePagesCoordinator {
     private func transfer(_ session: NativeMobileSession, initialEntry: NativeFileEntry?, origin: String) {
         guard let navigation = owner?.navigationController else { busy = false; return }
         busy = false
+        owner?.view.endEditing(true)
         cancelQueuedRefresh()
         self.session = nil
         editorActive = true
@@ -581,6 +963,7 @@ private final class NativePagesCoordinator {
         // A full-screen Settings sheet may finish dismissal before UIKit sends
         // viewDidAppear. Retain intent until the page is active and reads drain.
         chooseVaultRequested = true
+        cancelSearch()
         finishChooseVault()
     }
 
@@ -605,6 +988,41 @@ private final class NativePagesCoordinator {
 @MainActor
 private final class NativePagesModel: ObservableObject {
     let vault: LocalVault
+    @Published private(set) var searchQuery = ""
+    @Published private(set) var searchAdmissionBusy = false
+    @Published private(set) var searchLoading = false
+    @Published private(set) var searchHits: [NativeSearchHit] = []
+    @Published private(set) var searchStatus = ""
+    var onSearch: ((String) -> Void)?
+    func setSearch(_ query: String) {
+        searchQuery = query
+        searchHits = []
+        searchStatus = ""
+        onSearch?(query)
+    }
+    func setSearchAdmissionBusy(_ busy: Bool) { searchAdmissionBusy = busy }
+    func beginSearchDisplay() { searchLoading = true; searchHits = []; searchStatus = "" }
+    func cancelSearchDisplay() { searchLoading = false }
+    func finishSearchDisplay(_ result: Result<NativeSearchResult, Error>) {
+        searchLoading = false
+        switch result {
+        case .success(let value):
+            searchHits = value.hits
+            searchStatus = value.partial
+                ? "Results are partial. Refine your search to find more matches."
+                : (value.hits.isEmpty ? "No matching note content." : "")
+        case .failure(let error):
+            searchHits = []
+            switch error as? NativeSearchFailure {
+            case .invalidQuery: searchStatus = "Use a single-line search of at most 4 KB."
+            case .unsupported: searchStatus = "Search is unavailable in this version."
+            case .preparationLimit: searchStatus = "Search preparation reached its limit. Submit the search again to retry."
+            case .rebuildRequired: searchStatus = "The search index needs repair. Your notes have not been changed."
+            case .cancelled: searchStatus = "Search paused. Submit again to retry."
+            default: searchStatus = "Search could not finish safely. Submit again to retry."
+            }
+        }
+    }
     @Published private(set) var preferences = NativePagePreferences()
     @Published private(set) var rows: [NativeFileEntry] = []
     @Published private(set) var folder = ""
@@ -623,6 +1041,7 @@ private final class NativePagesModel: ObservableObject {
     func setRouteAvailability(back: Bool, forward: Bool) { canGoBack = back; canGoForward = forward }
     func supports(_ page: NativePage) -> Bool { NativePage.allCases.contains(page) }
     func applyRoute(page: NativePage, folder: NativeFileEntry?) {
+        if !searchQuery.isEmpty { setSearch("") }
         preferences.selected = page
         preferences.persist()
         self.folder = folder?.path ?? ""
@@ -665,7 +1084,7 @@ private final class NativePagesModel: ObservableObject {
     func showListing(_ listing: NativeVaultListing) {
         loading = false
         self.listing = listing
-        status = listing.scanComplete ? "" : "The vault scan is incomplete. Some files may be unavailable. Pull down to retry."
+        status = listing.reconciliationComplete ? "" : "Vault reconciliation is incomplete. Some files or changes may not yet be available. Pull down to retry."
         if let id = folderId, let current = listing.entries.first(where: { $0.id == id && $0.kind == .folder }) { folder = current.path }
         else { folder = ""; folderId = nil }
         render()
@@ -677,6 +1096,7 @@ private final class NativePagesModel: ObservableObject {
     }
     func select(_ page: NativePage) {
         guard supports(page), preferences.selected != page else { return }
+        if !searchQuery.isEmpty { setSearch("") }
         preferences.selected = page
         preferences.persist()
         focusedEntryId = nil
@@ -684,12 +1104,14 @@ private final class NativePagesModel: ObservableObject {
         onRouteChanged?(currentRoute)
     }
     func beginSettingsPresentation() {
+        if !searchQuery.isEmpty { setSearch("") }
         // Opening a sheet is newer UI intent too. Cancel any staged route/file
         // admission without changing the current Notes mode or route history.
         onRouteChanged?(currentRoute)
     }
     func enter(_ folder: NativeFileEntry) {
         guard !loading, folder.kind == .folder else { return }
+        if !searchQuery.isEmpty { setSearch("") }
         self.folder = folder.path
         folderId = folder.id
         render()
@@ -697,6 +1119,7 @@ private final class NativePagesModel: ObservableObject {
     }
     func parentFolder() {
         guard !loading else { return }
+        if !searchQuery.isEmpty { setSearch("") }
         folder = NativeFileEntry.pathComponents(folder).dropLast().joined(separator: "/")
         folderId = listing?.entries.first(where: { $0.kind == .folder && NativeFileEntry.samePath($0.path, folder) })?.id
         if folderId == nil { folder = "" }
@@ -765,12 +1188,12 @@ private final class NativePagesModel: ObservableObject {
         }
         if historyFailed { status = "Recent history could not be read. Your files are available in Files." }
         else if let listing = listing {
-            status = listing.scanComplete ? "" : "The vault scan is incomplete. Some files may be unavailable. Pull down to retry."
+            status = listing.reconciliationComplete ? "" : "Vault reconciliation is incomplete. Some files or changes may not yet be available. Pull down to retry."
         }
         canCreateNote = !loading && listing != nil
         if loading { emptyMessage = "" }
         else if listing == nil || historyFailed { emptyMessage = "" }
-        else if listing?.scanComplete != true { emptyMessage = "No entries are available from the incomplete scan." }
+        else if listing?.reconciliationComplete != true { emptyMessage = "No entries are available while vault reconciliation is incomplete." }
         else if preferences.selected == .recents { emptyMessage = "Notes you open appear here. Browse Files or create a new note to get started." }
         else { emptyMessage = "This folder is empty. Create a new note to get started." }
     }
@@ -792,6 +1215,7 @@ final class NativePagesController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        model.onSearch = { [weak self] query in self?.coordinator.search(query) }
         model.onRouteChanged = { [weak self] route in self?.coordinator.recordPageNavigation(route) }
         coordinator.record(model.currentRoute)
         let pages = NativePagesView(model: model, navigate: { [weak self] direction in self?.coordinator.traverse(direction) }, open: { [weak self] entry in
@@ -855,6 +1279,11 @@ final class NativePagesController: UIViewController {
     deinit {
         for observer in activityObservers { NotificationCenter.default.removeObserver(observer) }
     }
+    fileprivate var searchQuery: String { model.searchQuery }
+    fileprivate func setSearchAdmissionBusy(_ busy: Bool) { model.setSearchAdmissionBusy(busy) }
+    fileprivate func beginSearchDisplay() { model.beginSearchDisplay() }
+    fileprivate func cancelSearchDisplay() { model.cancelSearchDisplay() }
+    fileprivate func finishSearchDisplay(_ result: Result<NativeSearchResult, Error>) { model.finishSearchDisplay(result) }
     fileprivate var currentRoute: NativeRoute { model.currentRoute }
     fileprivate var originTitle: String { model.preferences.selected.title }
     fileprivate func supports(_ page: NativePage) -> Bool { model.supports(page) }
@@ -976,7 +1405,7 @@ private struct NativePagesView: View {
             if model.loading && !model.rows.isEmpty {
                 ProgressView("Updating vault").font(.footnote).padding(.horizontal, 20)
             }
-            entryList
+            if model.searchQuery.isEmpty { entryList } else { searchList }
         }
     }
 
@@ -1005,7 +1434,27 @@ private struct NativePagesView: View {
                 .accessibilityIdentifier("native.pages.settings")
                 .accessibilityFocused($focus, equals: .settings)
             }
-            Spacer(minLength: 0)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").accessibilityHidden(true)
+                TextField("Search notes", text: Binding(get: { model.searchQuery }, set: { model.setSearch($0) }))
+                    .font(.body)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .submitLabel(.search)
+                    .onSubmit { model.setSearch(model.searchQuery) }
+                    .accessibilityIdentifier("native.search.field")
+                if !model.searchQuery.isEmpty {
+                    Button { model.setSearch("") } label: {
+                        Image(systemName: "xmark.circle.fill").frame(minWidth: 44, minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                    .accessibilityIdentifier("native.search.clear")
+                }
+            }
+            .padding(.leading, 14).padding(.trailing, model.searchQuery.isEmpty ? 14 : 0)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .modifier(PageControlSurface(id: "search", namespace: glassNamespace))
             Button { open(nil) } label: {
                 Image(systemName: "square.and.pencil").padding(12).frame(minWidth: 44, minHeight: 44)
             }
@@ -1013,11 +1462,44 @@ private struct NativePagesView: View {
             .modifier(PageControlSurface(id: "compose", namespace: glassNamespace))
             .accessibilityLabel("New note")
             .accessibilityIdentifier("native.pages.new-note")
-            .disabled(!model.canCreateNote)
+            .disabled(!model.canCreateNote || model.searchLoading || model.searchAdmissionBusy)
             .accessibilityFocused($focus, equals: .compose)
         }
         .font(.system(size: 17))
         .foregroundColor(.primary)
+    }
+
+    private var searchList: some View {
+        List {
+            if model.searchLoading {
+                NativeLoadingSkeleton(editor: false).padding(.vertical, 12).listRowSeparator(.hidden)
+            }
+            if !model.searchStatus.isEmpty {
+                Text(model.searchStatus).font(.footnote).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("native.search.status")
+            }
+            ForEach(model.searchHits, id: \.rowId) { hit in
+                Button { open(hit.entry) } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(hit.entry.name).font(.body).foregroundColor(.primary)
+                        Text(hit.entry.path).font(.caption).foregroundColor(.secondary)
+                        Text(hit.snippet).font(.subheadline).foregroundColor(.secondary).lineLimit(3)
+                        Text("Line \(UInt64(hit.line) + 1)").font(.caption2).foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(.vertical, 6).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(model.searchLoading || model.searchAdmissionBusy || model.loading)
+                .accessibilityIdentifier("native.search.result.\(hit.entry.id).\(hit.line)")
+                .accessibilityHint("Opens the current note in the editor")
+            }
+        }
+        .listStyle(.plain)
+        .environment(\.defaultMinListRowHeight, 44)
+        .accessibilityIdentifier("native.search.results")
+        .refreshable { await refresh() }
     }
 
     private var entryList: some View {
@@ -1086,7 +1568,7 @@ private struct NativePagesView: View {
                         .accessibilityHint(entry.kind == .folder ? "Opens folder contents" : "Opens in the editor. Return here when finished.")
                         .accessibilityAddTraits(.isButton)
                         .accessibilityIdentifier("native.entry.\(entry.id)")
-                        .disabled(model.loading)
+                        .disabled(model.loading || model.searchAdmissionBusy)
                         .accessibilityFocused($focus, equals: .entry(entry.id))
                     }
                     .padding(.leading, CGFloat(min(model.depth(for: entry), 8)) * 12)
