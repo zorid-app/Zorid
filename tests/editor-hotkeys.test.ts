@@ -208,3 +208,18 @@ test('removing a composing table child releases deferred parent binding updates'
   assert.equal(press(view, dom, 'F8').defaultPrevented, true);
   assert.equal(editor.getValue(), '**replacement**');
 });
+
+test('macOS Option-produced characters use CodeMirror virtual-letter matching and suppress repeats', t => {
+  const source = new HotkeyPreferences({ getItem: () => null, setItem: () => {} }, 'mac');
+  source.set('editor-bold', [{ key: 't', modifiers: ['Mod', 'Alt'] }]);
+  const { view, dom } = setup(t, 'word', 'source', { hotkeys: source });
+  view.dispatch({ selection: { anchor: 0, head: 4 } });
+  const event = { metaKey: true, altKey: true, keyCode: 84, which: 84 };
+  assert.equal(press(view, dom, '†', event).defaultPrevented, true);
+  assert.equal(view.state.doc.toString(), '**word**');
+  assert.ok(undo(view));
+  assert.equal(press(view, dom, '†', { ...event, repeat: true }).defaultPrevented, true);
+  assert.equal(view.state.doc.toString(), 'word');
+  assert.equal(press(view, dom, '†', { metaKey: true, altKey: true }).defaultPrevented, false);
+  assert.equal(view.state.doc.toString(), 'word');
+});

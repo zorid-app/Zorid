@@ -101,8 +101,9 @@ export function editorCommandHotkeys(source?: EditorHotkeySource, owner?: Editor
       // including layout-based keymap matching, without cancelling that input.
       if (event.isComposing || event.getModifierState('AltGraph')) { event.stopPropagation(); return; }
       if (!event.repeat) return;
-      const chord = eventHotkey({ key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey,
-        shiftKey: event.shiftKey, isComposing: false, repeat: false }, preferences.platform);
+      const keyEvent = { key: event.key, keyCode: event.keyCode, which: event.which, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey,
+        shiftKey: event.shiftKey, isComposing: false, repeat: false };
+      const chord = eventHotkey(keyEvent, preferences.platform);
       if (chord && current.some(({ binding }) => hotkeyIdentity(binding, preferences.platform) === hotkeyIdentity(chord, preferences.platform))) {
         event.preventDefault(); event.stopPropagation();
       }
