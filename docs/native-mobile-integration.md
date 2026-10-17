@@ -1031,3 +1031,30 @@ field. Host10/ABI4 test bodies UNRUN. FFI exact-error envelope followup3e9b6574
 adds source case, review pending. Root isolated b21d18d9 composes productionsha2
 and mobilelock edge, not compiled. Native staging/admission source2ab4e411 and
 subsequent typed wrapper work unregistered/unbuilt; no completed import claim.
+
+
+### Signed Dev9 install checkpoint — 2026-10-17 23:55 UTC
+
+Frozen3288c1bb Simulator9 build89358 terminal0 BUILD SUCCEEDED. Fresh output
+/private/tmp/zorid-ios-v9-sim-20261017; actual Notes final Remove disabled PASS
+80842 after explicitly opening disposable vault. Drop-last rule has actual
+Foundation helper proof34/34; physical drag-out UI not separately demonstrated.
+AppPID48653 terminated0 and Orcahelper48803 killed0, Simulator retained booted.
+
+Signed device build63961 terminal0 BUILD SUCCEEDED using generic iOS destination
+while phone temporarily unavailable: exact existing development script flags,
+App-Dev/Debug-Dev, version9, official cached device Rust --locked -j1 (0.40s),
+existing Apple Development identity/profile, no provisioning/account/source/tool
+changes. Private log/private/tmp/mobile-v9-phone-build.log0600; fresh output
+/private/tmp/zorid-ios-v9-phone-20261017. Bundle app.zorid.notes.dev/version9/
+ZoridAppEnvironment development and strict/deep codesign verification PASS.
+Initial assertion mistakenly used nonexistent ZoridEnvironment key; corrected
+to actual script/project key before installing, no source defect/change.
+
+Device reconnected after user confirmation: tunnel connected/DDI true. Install
+75081 EXIT0: Dev9 IS INSTALLED on physical iPhone. Launch EXIT1: CoreDevice10002/
+FBSOpenApplicationErrorDomain7 explicitly Locked (device relocked). No launch/
+phone editing/keyboard/tab runtime proof yet. Requested unlock again; retry is
+authorized without rebuild. Private install/launch logs0600 in/private/tmp.
+Phone8 skipped; Dev9 replaces Dev7 installation. Heavy compiler slot can return
+now while waiting for unlocked launch; no simulator test app/helper remains.

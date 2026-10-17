@@ -294,3 +294,12 @@ document tabs. Root grants NEW NativeDocumentTabs.swift/NativeTabOverview.swift
 source-first only. Existing editor/host lifecycle wiring requires concrete API
 review; one active Rust host/editor lease and save/quiesce/close ACK are mandatory.
 No implementation/runtime parity claimed.
+
+
+Native9 follow-up: reviewed minimum-one implementation passed actual Simulator
+final-Remove-disabled smoke and34/34 actual Foundation preference/drop tests.
+Signed Dev9 built and installed on phone (install0); automatic launch refused
+Locked, pending unlock/retry. No document-tabs/new-menu/destination-loader code
+in9; those remain separate source/review/runtime work. Caret no-typing pixel
+criterion still unverified after contaminated8 observation; source85 checks
+alone do not close it.
