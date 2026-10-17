@@ -46,3 +46,12 @@ transport/registry checks, not real IndexedDB/WASM/normal-editor acceptance.
 Heavy WASM/webpack builds and actual normal-browser create/save/reload,
 independent-tab/conflict/recovery and no-backend checks await the root resource
 slot. Keep source, integration and runtime results separate.
+
+Follow-up source gates: combined TypeScript check passed after desktop status seam
+caa4e7e and import-status module744083c were included. Two focused workspace
+checks pass for note-before-command recovery/final namespace and persistent import
+warning subscription cleanup. Additional desktop/fixture/status/startup tests20/20
+pass. One additional ordinary-selection check confirms missing browser WASM fails
+explicitly instead of falling back to localStorage. Desktop diagnostics backend
+activation remains root-owned and blocked on its separate native fatal-error gate;
+these UI seams do not establish that gate passed.

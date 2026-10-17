@@ -867,3 +867,29 @@ test('startup recovery with a failed lease release cannot offer another vault',a
   await assert.rejects(failing.cleanupFailedStartup(platform),/release failed/);
   await failing.destroy();
 });
+
+test('browser command recovery runs after note recovery and installs its final namespace',async t=>{
+  const {workspace}=await setup(t);
+  const f=await durableRecoveryFixture();let noteRead=false,recovered=false;
+  const read=f.adapter.durableWrites.checkpoints.load;
+  f.adapter.durableWrites.checkpoints.load=async key=>{if(key==='note/v1/retained-note')noteRead=true;return read(key);};
+  await workspace.openVault({adapter:f.adapter,label:'Core',id:'test:commands-after-notes',recoverCommands:async()=>{
+    assert.equal(noteRead,true,'retained note state is loaded before namespace recovery');
+    await f.adapter.write('RecoveredCommand.md','Recovered command bytes');recovered=true;return true;
+  }});
+  assert.equal(recovered,true);assert.equal(workspace.vault.entries.has('RecoveredCommand.md'),true);
+  await workspace.openNote('One.md');assert.equal(currentEditor().value,recoveredDraft);
+  // Resolve retained conflict so fixture teardown remains the ordinary strict flush.
+  await (workspace as any).buffers.get('One.md').saveRecoveryCopy();
+});
+
+test('desktop reconciliation warning persists over usable notes and cleans its subscription',async t=>{
+  const {workspace,root}=await setup(t);const adapter=new MemoryAdapter({'Visible.md':'usable'});
+  let listener:(()=>void)|undefined,stops=0;
+  const status={complete:false,scanComplete:false,observed:1,imported:1,namespaceApplied:0,issueCount:1,issues:[],issuesTruncated:false};
+  await workspace.openVault({adapter,label:'Importing',id:'test:importing',reconciliation:{getStatus:()=>status,subscribe:fn=>{listener=()=>fn(status);return()=>{stops++;};},retry:async()=>{status.complete=true;status.scanComplete=true;listener?.();}}});
+  assert.equal(root.querySelector<HTMLElement>('.import-status')?.hidden,false);
+  assert.match(root.querySelector('.import-status-message')!.textContent!,/imported notes are available/);
+  await workspace.openVault({adapter:new MemoryAdapter(),label:'Next',id:'test:no-status'});
+  assert.equal(stops,1);assert.equal(root.querySelector('.import-status'),null);
+});

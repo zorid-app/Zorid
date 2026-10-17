@@ -1,3 +1,4 @@
+import { mountImportStatus } from './import-status.ts';
 import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS, EDITOR_HOTKEY_COMMANDS } from './hotkeys.ts';
 import { mountHotkeySettings } from './hotkey-settings.ts';
 import {pdfMarkdownLink} from './pdf-link.ts';
@@ -155,6 +156,7 @@ export class Workspace {
   private tabDocking?: ReturnType<typeof createTabDocking>;
   private sidebarControls?: ReturnType<typeof createSidebarControls>;
   private disposeFileListMenu?: () => void;
+  private importStatusCleanup?:()=>void;
 
   constructor(root: HTMLElement, editorFactory?: EditorFactory, viewFactories: WorkspaceViewFactories = {}) { this.root = root; this.editorFactory = editorFactory; this.viewFactories = viewFactories; }
   private run(operation: () => unknown | Promise<unknown>): void { Promise.resolve().then(operation).catch(error => notice(error instanceof Error ? error.message : String(error))); }
@@ -398,6 +400,7 @@ export class Workspace {
   }
 
   private disposeShell(): void {
+    this.importStatusCleanup?.();this.importStatusCleanup=undefined;
     this.disposeFileListMenu?.(); this.disposeFileListMenu=undefined;
     this.sidebarControls?.destroy(); this.sidebarControls=undefined;
   }
@@ -423,7 +426,20 @@ export class Workspace {
     this.sidebarContent = el('div','sidebar-content');
     const switcher = textButton(this.platform.label, () => this.run(() => this.chooseVault()), 'vault-switcher'); switcher.prepend(icon('folder')); switcher.append(icon('down',14));
     this.sidebar.append(title,tabs,tools,this.sidebarContent,switcher);
-    const center = el('section','workspace-center'); this.paneContainer = el('main','panes'); center.append(this.paneContainer);
+    const center = el('section','workspace-center');
+    const reconciliation=this.platform.reconciliation;
+    if(reconciliation){
+      const vault=this.vault,generation=this.vaultGeneration;
+      const count=()=>[...vault.entries.values()].filter(entry=>entry.type==='file').length;
+      const view=mountImportStatus(center,{status:reconciliation.getStatus(),entryCount:count(),retry:async()=>{
+        await reconciliation.retry();if(this.vault!==vault||this.vaultGeneration!==generation)return;
+        await vault.reload();update();
+      }});
+      const update=()=>{if(this.vault===vault&&this.vaultGeneration===generation)view.update(reconciliation.getStatus(),count());};
+      const stop=reconciliation.subscribe(update),created=vault.on('create',update),deleted=vault.on('delete',update);
+      this.importStatusCleanup=()=>{stop();created();deleted();view.destroy();};
+    }
+    this.paneContainer = el('main','panes'); center.append(this.paneContainer);
     this.splitLayout=new SplitLayout(this.paneContainer,{onChange:()=>this.saveSession()});
     this.right = el('aside','right-sidebar'); this.right.setAttribute('aria-label','Right sidebar');
     const rightTabs = el('div','right-tabs');

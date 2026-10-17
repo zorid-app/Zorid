@@ -3,6 +3,7 @@ import type { PlatformVault } from './platform/index.ts';
 import { Workspace } from './ui/workspace.ts';
 import { renderStartupError } from './ui/startup-error.ts';
 import './ui/recovery.css';
+import './ui/import-status.css';
 import './ui/styles.css';
 import './ui/hotkey-settings.css';
 import './ui/reference-defaults.css';
