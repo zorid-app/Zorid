@@ -117,6 +117,46 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- Root candidate checkpoint54d2123d in stage4-integrated-engine is clean and
+  includes the browser index module wiring. Next after native release: actual
+  Store17 retry for906956ec; recheck changed controlled-index/Base APIs; native
+  facade five cases and CLI metadata/documents subprocess cases; then build and
+  execute actual WASM corpora and durable browser harness. Do not repeat unchanged
+  component suites unless new changes/failures justify them. Desktop RPC/shared
+  frontend source is still being authored; main runtime integration remains
+  pending, not implied by source approval or candidate composition.
+- Current resource priority: user plugged in a physical iPhone and explicitly
+  wants to try the app now. Root released all heavy work in msg_486119a46d6d /
+  msg_6b654f918bbd. Native owns TypeScript/webpack/Xcode/device-install slot;
+  confirmed live8510 in tmp/mobile-simulator-app-build.log. Full tsc54737 and
+  webpack/capcopy passed; no app/device UX proof yet. Root must not launch new
+  builds until explicit release. Existing offline development signing is ready
+  per native owner; separate app.zorid.notes.dev preserves other app data.
+- New actual Stage4 proof: index64419 exited0 at e8615ecb, contracts7/7,
+  generations14/14 and metadata restore2/2 including all49 canonical cases and
+  relationship coverage pagination (tmp/stage4-index-run2.log). First run66659
+  failed only test compilation; typed JSON assignment fixeda9936a34. Store
+  first run63038 also failed only test compilation, corrected14755018. Actual
+  run81126 then passed16/17 checks (tmp/stage4-store-index-run2.log); remaining
+  draft-preservation test failed before index setup because its checkpoint
+  revision was not a canonical UUID. Fixture-only906956ec preserves the opaque
+  draft payload and fixes that ID; actual retry remains pending phone priority.
+- Isolated composition now includes reviewed native facade242e1a74/8b0afefc,
+  CLI indexed commands ab8bbf0e/2fd6ae71, Base graph factory throughafc5c7fb,
+  index controlled graph/resolver4c6c405e/89529d21 and browser durable index
+  b48dab11/ad686a3d/2d9aceb1. New controlled APIs/Base factory/browser source
+  require actual compilation and native/WASM parity; earlier engine passes do
+  not verify these later deltas. Root owns WASM module/manifest/lock wiring.
+- Desktop transport ownership granted to stage4_markdown_contracts: new host
+  documents.rs and minimal extracted lib.rs dispatch, new CJS protocol and
+  narrow admitted service routing. Mobile ACK msg_de4f40608f1f preserves host
+  main/FFI/cfg/admission boundaries. Typed semantic JSON uses bounded raw body,
+  avoiding serde_json::Value sorting recursive YAML maps. Host extraction
+  edcbc8b/3fae504/7932b4b/736cc823 is separately queued mobile batch, not yet
+  integrated into root/main. Shared frontend capability/adapters assigned to
+  stage4_contract_review; normal browser/desktop UI semantic consumers remain
+  incomplete. Workspace/platform activation seams frozen aff0665c by mobile;
+  new edits still require named coordination.
 - Latest composition is fa4d4aaf in stage4-integrated-engine: portable index
   through6867ab9b/7c5876b6, CLI metadata dcdcff38, native Store through40109019
   plus reviewed corrupt-key/provenance/decode-bound fixes a0faa65f/7e4efc93/

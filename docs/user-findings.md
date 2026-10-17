@@ -148,6 +148,14 @@ The native session owns implementation and isolated evidence; source work does
 not establish actual device/simulator UX. Shared-core coordinator granted only
 the bounded initialPath/noteOpened workspace/platform seams in msg_77abcb590bc5.
 
+User now physically connected an iPhone and explicitly wants to try the app.
+Prioritize the native session's signed development build/install at the next
+terminal boundary; root granted the exclusive slot in msg_6b654f918bbd after
+all root checks stopped. Existing development signing/profile covers the device
+per native owner, using separate app.zorid.notes.dev. Installation and actual
+phone behavior remain to verify; source/TypeScript/library passes do not prove
+them. Stage4 core source work continues independently without overlapping builds.
+
 ## Canvas and Bases UX scope — 2026-10-17
 
 User replaced the active task with Canvas edit-button hit ownership, consistent
