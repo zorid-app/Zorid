@@ -115,10 +115,12 @@ impl NativeVault {
         // physical job remains pending. Do not turn that retry into a false ACK.
         match self.store.family_status() {
             Ok(status)
-                if status.pending_projection != "0" || status.pending_dependencies != "0" =>
+                if status.pending_projection != "0"
+                    || status.pending_dependencies != "0"
+                    || status.recovery_entries != "0" =>
             {
                 projection = ProjectionStatus::Pending(
-                    "durable family dependencies or physical work remain pending".into(),
+                    "durable family dependencies, recovery entries, or physical work remain pending".into(),
                 );
             }
             Err(error) => projection = ProjectionStatus::Pending(error.to_string()),
