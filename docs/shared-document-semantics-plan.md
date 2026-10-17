@@ -108,7 +108,7 @@ Heavy builds and integration remain coordinator-serialized on the8GB machine.
 Root composed and independently reviewed the final consumer candidate
 `701e107f` in `tingkai-c/stage4-integrated-engine`. Initial engine integration was
 `426d3a6c`; the remaining search/Base/controller/witness/group/transport batch is
-now merged into the coordinator-owned main checkout. Main typecheck exits0 and
+now integrated on main at `2604057b`. Main typecheck exits0 and
 92 focused consumer tests pass. Functional source matches the verified candidate;
 main retains its newer tracking, instructions and upstream evidence. Independent final audit approves acceptance with the limits below. Main actual
 CJS→Rust→CLI regression also passes1/1 (stage4-main-final-actual.log).

@@ -117,6 +117,11 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Latest checkpoint — 2026-10-17 22:25 UTC (supersedes older pending statuses):
+- Stage4 accepted and committed main2604057b; built-in Stage4 goal complete.
+  Root test apps/servers/compilers are stopped. Native owner received canonical
+  commit and next exclusive native validation slot in msg657bb7e41ced; it must
+  announce exact handles and return the slot after terminal. No mobile parity
+  claim; next work is the separately owned mobile reconciliation/build.
 - Root final Stage4 consumer candidate701e107f now cleanly merged into main
   with final independent acceptance approved. Actual final native Base20/facade7/host13,
   strict CJS/native/CLI fixture1 and actual browser WASM Markdown49+4 checks,
