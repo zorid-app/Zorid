@@ -1,0 +1,5 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>gRPC-Web compatibility proof</title>
+<style>body{font:16px system-ui;max-width:850px;margin:40px auto;padding:0 20px;line-height:1.5}button{font:inherit;padding:10px 16px}pre{white-space:pre-wrap;background:#f3f4f5;padding:16px}.warning{border-left:4px solid #b76a00;padding-left:16px}</style>
+<h1>Browser ↔ Rust gRPC-Web proof</h1><p class="warning">Disposable synthetic ciphertext only. Localhost, no authentication or real encryption. The 32-operation ledger exists only in memory. Cancellation and lost replies do not imply rollback or durable recovery.</p>
+<p>Connect-ES binary gRPC-Web → Tonic + tonic-web in one Rust process. No Envoy.</p>
+<button id="run">Run compatibility checks</button><p id="status" role="status">Ready</p><pre id="results" aria-label="Verification results"></pre><script type="module" src="/main.js"></script></html>

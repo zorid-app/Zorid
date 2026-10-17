@@ -1,0 +1,21 @@
+[package]
+name = "zorid-grpc-web-proof"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace]
+
+[dependencies]
+prost = "=0.14.4"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tonic = "=0.14.6"
+tonic-prost = "=0.14.6"
+tonic-web = "=0.14.6"
+tower-http = { version = "0.6", features = ["cors"] }
+
+[build-dependencies]
+protoc-bin-vendored = "=3.3.0"
+tonic-prost-build = "=0.14.6"

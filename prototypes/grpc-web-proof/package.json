@@ -1,0 +1,22 @@
+{
+  "name": "zorid-grpc-web-proof",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node generate.mjs",
+    "check": "tsc --noEmit",
+    "build": "npm run generate && npm run check && esbuild web/main.ts --bundle --format=esm --outfile=dist/main.js && node prepare-dist.mjs",
+    "serve": "node serve.mjs"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.16.0",
+    "@connectrpc/connect": "2.2.0",
+    "@connectrpc/connect-web": "2.2.0"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "2.16.0",
+    "esbuild": "0.25.12",
+    "typescript": "5.9.2"
+  }
+}

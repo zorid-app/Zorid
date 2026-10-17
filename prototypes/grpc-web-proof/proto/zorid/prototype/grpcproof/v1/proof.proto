@@ -1,0 +1,30 @@
+syntax = "proto3";
+package zorid.prototype.grpcproof.v1;
+
+// Disposable transport proof. No authentication, durable storage or vault authority.
+service ProofService {
+  rpc Put(PutRequest) returns (Receipt);
+  rpc Get(OperationRequest) returns (Chunk);
+  rpc Query(OperationRequest) returns (Receipt);
+  rpc Wait(WaitRequest) returns (WaitResponse);
+}
+message PutRequest {
+  string operation_id = 1;
+  bytes ciphertext = 2;
+  bytes sha256 = 3;
+  // Test-only: commit once, return UNAVAILABLE instead of the first receipt.
+  bool suppress_first_receipt = 4;
+  // Test-only: delay first receipt after committing; cancellation is not rollback.
+  uint32 first_response_delay_ms = 5;
+}
+message OperationRequest { string operation_id = 1; }
+message Receipt {
+  string operation_id = 1;
+  uint64 sequence = 2;
+  uint64 length = 3;
+  bytes sha256 = 4;
+  uint32 applied_count = 5;
+}
+message Chunk { Receipt receipt = 1; bytes ciphertext = 2; }
+message WaitRequest { uint32 delay_ms = 1; }
+message WaitResponse { bool finished = 1; }
