@@ -413,32 +413,62 @@ impl NativeVault {
                 if scan.entries.contains_key(&binding.state.path) {
                     continue;
                 }
-                let Some(parent) = scan.directories.get(&binding.state.path.parent()) else {
+                let (scope, parent, observed_path, relocated) = if let Some(parent) = scan
+                    .directories
+                    .get(&binding.state.path.parent())
+                    .filter(|p| p.identity == binding.physical.parent_inode)
+                {
+                    (
+                        binding.state.path.parent(),
+                        parent,
+                        binding.state.path.clone(),
+                        false,
+                    )
+                } else if let Some((Some(scope), parent)) = scan
+                    .directories
+                    .iter()
+                    .find(|(_, parent)| parent.identity == binding.physical.parent_inode)
+                {
+                    let observed = VaultPath::new(format!(
+                        "{}/{}",
+                        scope.as_str(),
+                        binding.state.path.file_name()
+                    ))?;
+                    if scan.entries.contains_key(&observed) {
+                        continue;
+                    }
+                    (Some(scope.clone()), parent, observed, true)
+                } else {
                     continue;
                 };
                 if proof_count >= options.max_entries as usize
                     || started.elapsed() >= options.max_duration
                 {
                     scan.issues.push(ScanIssue {
-                        path: Some(binding.state.path),
+                        path: Some(observed_path),
                         reason: "external absence proof budget exhausted".into(),
                     });
                     break;
                 }
-                parent.verify(self, binding.state.path.parent().as_ref())?;
+                parent.verify(self, scope.as_ref())?;
                 if parent.identity != binding.physical.parent_inode
-                    || fs::node_type(&parent.file, binding.state.path.file_name())?.is_some()
+                    || fs::node_type(&parent.file, observed_path.file_name())?.is_some()
                 {
                     scan.issues.push(ScanIssue {
-                        path: Some(binding.state.path),
+                        path: Some(observed_path),
                         reason: "external absence parent changed".into(),
                     });
                     continue;
                 }
-                self.store.record_external_scan_proof(
-                    &id,
-                    &ExternalScanProof::Absent { before: binding },
-                )?;
+                let proof = if relocated {
+                    ExternalScanProof::RelocatedAbsent {
+                        before: binding,
+                        path: observed_path,
+                    }
+                } else {
+                    ExternalScanProof::Absent { before: binding }
+                };
+                self.store.record_external_scan_proof(&id, &proof)?;
                 proof_count += 1;
             }
             if let Err(error) = scan.verify_directories(self) {

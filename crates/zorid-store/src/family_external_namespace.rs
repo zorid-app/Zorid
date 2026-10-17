@@ -27,6 +27,11 @@ pub enum ExternalScanProof {
     Absent {
         before: PhysicalBinding,
     },
+    /// Original child binding absent beneath its relocated, same-inode parent.
+    RelocatedAbsent {
+        before: PhysicalBinding,
+        path: VaultPath,
+    },
 }
 impl ExternalScanProof {
     pub fn present(
@@ -45,7 +50,7 @@ impl ExternalScanProof {
     }
     fn path(&self) -> &VaultPath {
         match self {
-            Self::Present { path, .. } => path,
+            Self::Present { path, .. } | Self::RelocatedAbsent { path, .. } => path,
             Self::Absent { before } => &before.state.path,
         }
     }
@@ -93,13 +98,25 @@ fn scan_coverage(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ExternalNamespaceAction {
-    Move { root: EntryId, path: VaultPath },
-    Delete { root: EntryId },
+    Move {
+        root: EntryId,
+        path: VaultPath,
+    },
+    MoveWithDeletions {
+        root: EntryId,
+        path: VaultPath,
+        deleted_roots: Vec<EntryId>,
+    },
+    Delete {
+        root: EntryId,
+    },
 }
 impl ExternalNamespaceAction {
     fn root(&self) -> &EntryId {
         match self {
-            Self::Move { root, .. } | Self::Delete { root } => root,
+            Self::Move { root, .. }
+            | Self::MoveWithDeletions { root, .. }
+            | Self::Delete { root } => root,
         }
     }
 }
@@ -216,6 +233,80 @@ fn baseline(tx: &Connection, b: &PhysicalBinding) -> Result<external::PhysicalNa
         location_event,
     })
 }
+fn relocated_path(
+    root: &PhysicalBinding,
+    target: &VaultPath,
+    member: &PhysicalBinding,
+) -> Result<VaultPath> {
+    if member.state.id == root.state.id {
+        return Ok(target.clone());
+    }
+    let suffix = member
+        .state
+        .path
+        .as_str()
+        .strip_prefix(&format!("{}/", root.state.path.as_str()))
+        .ok_or_else(|| invalid("external move member outside root"))?;
+    Ok(VaultPath::new(format!("{}/{}", target.as_str(), suffix))?)
+}
+/// Return canonical minimal missing subtree roots. Membership comes exclusively
+/// from the captured physical subtree, never from today's logical descendants.
+fn deleted_roots(o: &ExternalNamespaceObservation) -> Result<Vec<&ExternalNamespaceMember>> {
+    let ExternalNamespaceAction::MoveWithDeletions {
+        root,
+        deleted_roots,
+        ..
+    } = &o.action
+    else {
+        return Ok(Vec::new());
+    };
+    let overall = o
+        .members
+        .iter()
+        .find(|m| m.before.state.id == *root)
+        .ok_or_else(|| invalid("compound observation root missing"))?;
+    if overall.before.state.kind != EntryKind::Folder
+        || deleted_roots.is_empty()
+        || deleted_roots.windows(2).any(|p| p[0] >= p[1])
+        || deleted_roots.contains(root)
+    {
+        return Err(invalid("compound deletion roots are not canonical"));
+    }
+    let roots = deleted_roots
+        .iter()
+        .map(|id| {
+            o.members
+                .iter()
+                .find(|m| m.before.state.id == *id)
+                .ok_or_else(|| invalid("compound deleted root missing"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if roots.iter().any(|r| {
+        r.after.is_some()
+            || roots.iter().any(|other| {
+                r.before.state.id != other.before.state.id
+                    && r.before
+                        .state
+                        .path
+                        .is_descendant_of(&other.before.state.path)
+            })
+    }) {
+        return Err(invalid("compound deletion roots are not minimal"));
+    }
+    for m in &o.members {
+        let deleted = roots.iter().any(|r| {
+            r.before.state.id == m.before.state.id
+                || r.before.state.kind == EntryKind::Folder
+                    && m.before.state.path.is_descendant_of(&r.before.state.path)
+        });
+        if m.after.is_none() != deleted {
+            return Err(invalid(
+                "compound deletion membership differs from captured subtree",
+            ));
+        }
+    }
+    Ok(roots)
+}
 fn check_scan(tx: &Connection, o: &ExternalNamespaceObservation) -> Result<()> {
     let run = scan::run(tx, &o.scan_id)?;
     if !run.finished || !run.complete || run.issue.is_some() {
@@ -241,7 +332,29 @@ fn check_scan(tx: &Connection, o: &ExternalNamespaceObservation) -> Result<()> {
         return Err(conflict());
     }
     check_absent_snapshot(tx, &o.scan_id, &root.before.state.path)?;
-    if matches!(o.action, ExternalNamespaceAction::Delete { .. }) {
+    let deleted = deleted_roots(o)?;
+    if let ExternalNamespaceAction::MoveWithDeletions { path, .. } = &o.action {
+        for member in &deleted {
+            let target = relocated_path(&root.before, path, &member.before)?;
+            let coverage = scan_coverage(tx, &o.scan_id, target.parent().as_ref())?;
+            if !coverage.complete
+                || coverage.issue.is_some()
+                || coverage.identity.as_ref() != Some(&member.before.physical.parent_inode)
+            {
+                return Err(conflict());
+            }
+            if scan_proof(tx, &o.scan_id, &target)?
+                != (ExternalScanProof::RelocatedAbsent {
+                    before: member.before.clone(),
+                    path: target.clone(),
+                })
+            {
+                return Err(conflict());
+            }
+            check_absent_snapshot(tx, &o.scan_id, &target)?;
+        }
+    }
+    if o.members.iter().any(|m| m.after.is_none()) {
         let rows = tx
             .prepare("SELECT path,record FROM scan_observations WHERE scan_id=?1")?
             .query_map([o.scan_id.as_str()], |r| {
@@ -250,11 +363,11 @@ fn check_scan(tx: &Connection, o: &ExternalNamespaceObservation) -> Result<()> {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         for (path, raw) in rows {
             let seen = scan::observation(&path, &raw)?;
-            if seen
-                .identity
-                .as_ref()
-                .is_some_and(|i| o.members.iter().any(|m| &m.before.physical.inode == i))
-            {
+            if seen.identity.as_ref().is_some_and(|i| {
+                o.members
+                    .iter()
+                    .any(|m| m.after.is_none() && &m.before.physical.inode == i)
+            }) {
                 return Err(conflict());
             }
         }
@@ -339,6 +452,7 @@ fn check_members(
     if total > MAX_NAMESPACE_EVIDENCE_BYTES {
         return Err(zorid_client_sync::SyncError::TooLarge.into());
     }
+    deleted_roots(o)?;
     let mut result = Vec::new();
     for m in &o.members {
         let historical = baseline(tx, &m.before)?;
@@ -386,8 +500,13 @@ fn check_members(
             return Err(conflict());
         }
         match (&o.action, &m.after) {
-            (ExternalNamespaceAction::Delete { .. }, None) => {}
-            (ExternalNamespaceAction::Move { path, .. }, Some((target, physical))) => {
+            (ExternalNamespaceAction::Delete { .. }, None)
+            | (ExternalNamespaceAction::MoveWithDeletions { .. }, None) => {}
+            (
+                ExternalNamespaceAction::Move { path, .. }
+                | ExternalNamespaceAction::MoveWithDeletions { path, .. },
+                Some((target, physical)),
+            ) => {
                 let expected = if m.before.state.id == root.before.state.id {
                     path.clone()
                 } else {
@@ -474,11 +593,19 @@ impl Store {
                 physical_bindings::check_binding(&tx, &before.state.id, Some(before))?;
                 check_absent_snapshot(&tx, id, &before.state.path)?;
             }
+            ExternalScanProof::RelocatedAbsent { before, path } => {
+                physical_bindings::check_binding(&tx, &before.state.id, Some(before))?;
+                if path == &before.state.path || path.file_name() != before.state.path.file_name() {
+                    return Err(invalid("relocated absence must retain the original leaf"));
+                }
+                check_absent_snapshot(&tx, id, path)?;
+            }
         }
         let coverage = scan_coverage(&tx, id, proof.path().parent().as_ref())?;
         let parent = match proof {
             ExternalScanProof::Present { physical, .. } => &physical.parent_inode,
-            ExternalScanProof::Absent { before } => &before.physical.parent_inode,
+            ExternalScanProof::Absent { before }
+            | ExternalScanProof::RelocatedAbsent { before, .. } => &before.physical.parent_inode,
         };
         if coverage.identity.as_ref() != Some(parent) {
             return Err(conflict());
@@ -587,7 +714,8 @@ impl Store {
             ExternalNamespaceAction::Delete { root } => {
                 external::ExternalNamespaceAction::Delete { root: root.clone() }
             }
-            ExternalNamespaceAction::Move { root, path } => {
+            ExternalNamespaceAction::Move { root, path }
+            | ExternalNamespaceAction::MoveWithDeletions { root, path, .. } => {
                 let parent = match path.parent() {
                     None => None,
                     Some(parent) => Some(
@@ -609,7 +737,11 @@ impl Store {
                 }
             }
         };
-        let count = if matches!(o.action, ExternalNamespaceAction::Move { .. }) {
+        let count = if matches!(
+            o.action,
+            ExternalNamespaceAction::Move { .. }
+                | ExternalNamespaceAction::MoveWithDeletions { .. }
+        ) {
             1
         } else {
             baselines.len()
@@ -620,7 +752,48 @@ impl Store {
                 .map(|_| family_commands::fresh_update())
                 .collect::<Result<Vec<_>>>()?,
         };
-        let plan = external::plan_external_namespace(&graph, &baselines, &action, &allocation)?;
+        let mut plan = external::plan_external_namespace(&graph, &baselines, &action, &allocation)?;
+        text_sync::reserve_revision(&tx, &allocation.next_revision)?;
+        // Compose on transient graphs only. Intermediate Move state must never
+        // create publication history or jobs for bytes known to be absent.
+        for deleted in deleted_roots(&o)? {
+            let subset = baselines
+                .iter()
+                .filter(|b| {
+                    b.identity.entry_id == deleted.before.state.id
+                        || deleted.before.state.kind == EntryKind::Folder
+                            && b.path.is_descendant_of(&deleted.before.state.path)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let allocation = external::Allocation {
+                next_revision: family_commands::fresh_revision()?,
+                update_ids: (0..subset.len())
+                    .map(|_| family_commands::fresh_update())
+                    .collect::<Result<Vec<_>>>()?,
+            };
+            let deletion = external::plan_external_namespace(
+                &plan.next_graph,
+                &subset,
+                &external::ExternalNamespaceAction::Delete {
+                    root: deleted.before.state.id.clone(),
+                },
+                &allocation,
+            )?;
+            let unused = deletion
+                .allocated_update_ids
+                .iter()
+                .map(|id| family_ledger::unused(&tx, &family_commands::key(&scope, id)))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .all(|v| v);
+            deletion.check_preconditions(&plan.next_graph, &subset, unused)?;
+            text_sync::reserve_revision(&tx, &allocation.next_revision)?;
+            plan.next_graph = deletion.next_graph;
+            plan.authored.extend(deletion.authored);
+            plan.allocated_update_ids
+                .extend(deletion.allocated_update_ids);
+        }
         let unused = plan
             .allocated_update_ids
             .iter()
@@ -629,7 +802,6 @@ impl Store {
             .into_iter()
             .all(|v| v);
         plan.check_preconditions(&graph, &baselines, unused)?;
-        text_sync::reserve_revision(&tx, &allocation.next_revision)?;
         for a in &plan.authored {
             let metadata = family_ledger::EnvelopeMetadata {
                 key: family_commands::key(&scope, &a.update_id),

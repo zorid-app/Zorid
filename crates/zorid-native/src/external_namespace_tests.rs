@@ -1205,6 +1205,71 @@ fn external_namespace_binary_remote_move_away_and_back_blocks_external_edit() {
 }
 
 #[test]
+fn external_namespace_folder_move_child_edit_and_delete_commit_as_one_observation() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    std::fs::create_dir(root.path().join("ExternalTools")).unwrap();
+    std::fs::write(
+        root.path().join("ExternalTools/note.custom"),
+        b"original note",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("ExternalTools/outside.bin"), [0, 255, 1]).unwrap();
+    complete(&mut vault);
+    let folder = binding(&vault, &state_at(&vault, "ExternalTools").id);
+    let note = binding(&vault, &state_at(&vault, "ExternalTools/note.custom").id);
+    let deleted = binding(&vault, &state_at(&vault, "ExternalTools/outside.bin").id);
+    std::fs::rename(
+        root.path().join("ExternalTools"),
+        root.path().join("ExternalRenamed"),
+    )
+    .unwrap();
+    let bytes = b"\xef\xbb\xbfexternally edited note\r\n";
+    std::fs::write(root.path().join("ExternalRenamed/note.custom"), bytes).unwrap();
+    std::fs::remove_file(root.path().join("ExternalRenamed/outside.bin")).unwrap();
+    let report = complete(&mut vault);
+    assert_eq!(report.namespace.len(), 1, "{report:?}");
+    assert_eq!(report.namespace[0].authored.len(), 2);
+    assert_eq!(report.namespace[0].pending_content.len(), 1);
+    assert_eq!(vault.list().unwrap().len(), 2);
+    assert_eq!(state_at(&vault, "ExternalRenamed").id, folder.state.id);
+    assert_eq!(
+        binding(&vault, &folder.state.id).physical.inode,
+        folder.physical.inode
+    );
+    assert_eq!(
+        binding(&vault, &note.state.id).physical.inode,
+        note.physical.inode
+    );
+    assert_file(&vault, &note.state.id, "ExternalRenamed/note.custom", bytes);
+    assert!(vault
+        .store
+        .physical_binding(&deleted.state.id)
+        .unwrap()
+        .is_none());
+    assert!(vault
+        .store
+        .projection_baseline(&deleted.state.id)
+        .unwrap()
+        .is_none());
+    assert!(!vault
+        .list()
+        .unwrap()
+        .iter()
+        .any(|e| e.id == deleted.state.id));
+    assert!(!root.path().join("ExternalTools").exists());
+    assert!(!root.path().join("ExternalRenamed/outside.bin").exists());
+    assert_eq!(
+        std::fs::read(root.path().join("ExternalRenamed/note.custom")).unwrap(),
+        bytes
+    );
+    assert_eq!(
+        namespace_rows(root.path()),
+        vec![(report.namespace[0].observation_id.clone(), true)]
+    );
+}
+
+#[test]
 fn external_namespace_prepared_invalid_json_is_fatal_and_never_authors() {
     let root = tempfile::tempdir().unwrap();
     let mut vault = enrolled(root.path());
@@ -1309,4 +1374,326 @@ fn external_namespace_prepared_private_permission_change_is_fatal_and_retryable(
     assert_eq!(retry.namespace.len(), 1);
     assert_eq!(retry.namespace[0].observation_id, rows[0].0);
     assert_file(&vault, &before.state.id, "after.md", b"retained");
+}
+
+#[test]
+fn external_namespace_compound_deleted_subtree_preserves_unseen_remote_text_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let peer = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    let mut remote = enrolled(peer.path());
+    std::fs::create_dir_all(root.path().join("ExternalTools/removed/nested")).unwrap();
+    std::fs::write(
+        root.path().join("ExternalTools/note.custom"),
+        b"original note",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("ExternalTools/removed/nested/gone.custom"),
+        b"base",
+    )
+    .unwrap();
+    complete(&mut vault);
+    let folder = binding(&vault, &state_at(&vault, "ExternalTools").id);
+    let note = binding(&vault, &state_at(&vault, "ExternalTools/note.custom").id);
+    let deleted: Vec<_> = vault
+        .store
+        .physical_bindings()
+        .unwrap()
+        .into_iter()
+        .filter(|b| {
+            b.state.path == path("ExternalTools/removed")
+                || b.state
+                    .path
+                    .is_descendant_of(&path("ExternalTools/removed"))
+        })
+        .collect();
+    assert_eq!(deleted.len(), 3);
+    let gone = state_at(&vault, "ExternalTools/removed/nested/gone.custom");
+    send(&mut vault, &mut remote, false);
+    let revision = remote.read(&gone.id).unwrap().unwrap().state.revision;
+    remote
+        .family_apply(
+            &MutationRequest {
+                operation_id: OperationId::new("unseen-deleted-subtree-edit").unwrap(),
+                mutation: Mutation::Write {
+                    id: gone.id.clone(),
+                    expected: revision,
+                    content: b"REMOTE base".to_vec(),
+                },
+            },
+            None,
+        )
+        .unwrap();
+    std::fs::rename(
+        root.path().join("ExternalTools"),
+        root.path().join("ExternalRenamed"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("ExternalRenamed/note.custom"),
+        b"surviving note edit",
+    )
+    .unwrap();
+    std::fs::remove_dir_all(root.path().join("ExternalRenamed/removed")).unwrap();
+    send(&mut remote, &mut vault, true);
+    let remote_text = vault.store.family_text_state(&gone.id).unwrap().unwrap();
+    assert_eq!(
+        remote_text.complete_materialized_utf8().unwrap().unwrap(),
+        b"REMOTE base"
+    );
+    let report = complete(&mut vault);
+    assert_eq!(report.namespace.len(), 1, "{report:?}");
+    assert_eq!(report.namespace[0].authored.len(), deleted.len() + 1);
+    assert_eq!(report.namespace[0].pending_content.len(), 1);
+    assert_eq!(
+        binding(&vault, &folder.state.id).physical.inode,
+        folder.physical.inode
+    );
+    assert_eq!(
+        binding(&vault, &folder.state.id).state.path,
+        path("ExternalRenamed")
+    );
+    assert_eq!(
+        binding(&vault, &note.state.id).physical.inode,
+        note.physical.inode
+    );
+    assert_file(
+        &vault,
+        &note.state.id,
+        "ExternalRenamed/note.custom",
+        b"surviving note edit",
+    );
+    for member in deleted {
+        assert!(vault
+            .store
+            .physical_binding(&member.state.id)
+            .unwrap()
+            .is_none());
+        assert!(vault
+            .store
+            .projection_baseline(&member.state.id)
+            .unwrap()
+            .is_none());
+        assert!(!vault
+            .list()
+            .unwrap()
+            .iter()
+            .any(|e| e.id == member.state.id));
+    }
+    assert!(matches!(
+        vault
+            .store
+            .family_materialization(&gone.id)
+            .unwrap()
+            .unwrap()
+            .publication,
+        FamilyPublication::Recovery { .. }
+    ));
+    assert_eq!(
+        vault.store.family_text_state(&gone.id).unwrap().unwrap(),
+        remote_text
+    );
+    assert!(!root.path().join("ExternalRenamed/removed").exists());
+    assert_eq!(vault.list().unwrap().len(), 2);
+}
+
+#[test]
+fn external_namespace_compound_prepared_restart_reuses_one_receipt_and_captured_ids() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    std::fs::create_dir(root.path().join("ExternalTools")).unwrap();
+    std::fs::write(
+        root.path().join("ExternalTools/note.custom"),
+        b"original note",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("ExternalTools/outside.bin"), [0, 255, 1]).unwrap();
+    complete(&mut vault);
+    let folder = state_at(&vault, "ExternalTools");
+    let note = state_at(&vault, "ExternalTools/note.custom");
+    let deleted = state_at(&vault, "ExternalTools/outside.bin");
+    let bindings = vault.store.physical_bindings().unwrap();
+    let status = vault.family_status().unwrap();
+    std::fs::rename(
+        root.path().join("ExternalTools"),
+        root.path().join("ExternalRenamed"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("ExternalRenamed/note.custom"),
+        b"prepared note edit\r\n",
+    )
+    .unwrap();
+    std::fs::remove_file(root.path().join("ExternalRenamed/outside.bin")).unwrap();
+    vault.fault = Some(|point| {
+        if point == "external_namespace_prepared" {
+            panic!("prepared compound interruption");
+        }
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reconcile(&mut vault))).is_err()
+    );
+    assert_eq!(vault.store.physical_bindings().unwrap(), bindings);
+    assert_eq!(vault.family_status().unwrap(), status);
+    assert_eq!(state_at(&vault, "ExternalTools"), folder);
+    assert_eq!(state_at(&vault, "ExternalTools/note.custom"), note);
+    assert_eq!(state_at(&vault, "ExternalTools/outside.bin"), deleted);
+    let rows = namespace_rows(root.path());
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].1);
+    let observation = rows[0].0.clone();
+    drop(vault);
+    let mut vault = NativeVault::open_existing(root.path()).unwrap();
+    let report = complete(&mut vault);
+    assert_eq!(report.namespace.len(), 1, "{report:?}");
+    let receipt = &report.namespace[0];
+    assert_eq!(receipt.observation_id, observation);
+    assert_eq!(receipt.authored.len(), 2);
+    assert_eq!(state_at(&vault, "ExternalRenamed").id, folder.id);
+    assert_file(
+        &vault,
+        &note.id,
+        "ExternalRenamed/note.custom",
+        b"prepared note edit\r\n",
+    );
+    assert!(vault.store.physical_binding(&deleted.id).unwrap().is_none());
+    assert!(vault
+        .store
+        .projection_baseline(&deleted.id)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        namespace_rows(root.path()),
+        vec![(observation.clone(), true)]
+    );
+    let authored = vault.family_pending_authored(None, 1000).unwrap().len();
+    assert_eq!(
+        vault
+            .store
+            .import_family_namespace_observation(&observation)
+            .unwrap(),
+        *receipt
+    );
+    assert_eq!(
+        vault.family_pending_authored(None, 1000).unwrap().len(),
+        authored
+    );
+    let repeat = complete(&mut vault);
+    assert!(repeat.namespace.is_empty());
+    assert!(repeat.imported.is_empty());
+    assert_eq!(namespace_rows(root.path()), vec![(observation, true)]);
+}
+
+fn assert_compound_ambiguous_member_rejected(case: u8) {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    std::fs::create_dir_all(root.path().join("ExternalTools/parent")).unwrap();
+    std::fs::write(
+        root.path().join("ExternalTools/parent/child.custom"),
+        b"tracked child",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("ExternalTools/note.custom"),
+        b"tracked survivor",
+    )
+    .unwrap();
+    complete(&mut vault);
+    let before = vault.store.physical_bindings().unwrap();
+    let logical = vault.list().unwrap();
+    let status = vault.family_status().unwrap();
+    // Retain descriptors so a freshly created replacement cannot accidentally
+    // reuse an unlinked fixture inode and turn this into a different test.
+    let held_parent = std::fs::File::open(root.path().join("ExternalTools/parent")).unwrap();
+    let held_child =
+        std::fs::File::open(root.path().join("ExternalTools/parent/child.custom")).unwrap();
+    std::fs::rename(
+        root.path().join("ExternalTools"),
+        root.path().join("ExternalRenamed"),
+    )
+    .unwrap();
+    match case {
+        0 => {
+            std::fs::remove_file(root.path().join("ExternalRenamed/parent/child.custom")).unwrap();
+            std::fs::write(
+                root.path().join("ExternalRenamed/parent/child.custom"),
+                b"replacement",
+            )
+            .unwrap();
+            let replacement =
+                std::fs::File::open(root.path().join("ExternalRenamed/parent/child.custom"))
+                    .unwrap();
+            assert_ne!(
+                fs::identity(&replacement).unwrap(),
+                fs::identity(&held_child).unwrap()
+            );
+        }
+        1 => {
+            std::fs::remove_dir_all(root.path().join("ExternalRenamed/parent")).unwrap();
+            std::fs::create_dir(root.path().join("ExternalRenamed/parent")).unwrap();
+            let replacement =
+                std::fs::File::open(root.path().join("ExternalRenamed/parent")).unwrap();
+            assert_ne!(
+                fs::identity(&replacement).unwrap(),
+                fs::identity(&held_parent).unwrap()
+            );
+        }
+        2 => {
+            std::fs::rename(
+                root.path().join("ExternalRenamed/parent/child.custom"),
+                root.path().join("escaped.custom"),
+            )
+            .unwrap();
+            let escaped = std::fs::File::open(root.path().join("escaped.custom")).unwrap();
+            assert_eq!(
+                fs::identity(&escaped).unwrap(),
+                fs::identity(&held_child).unwrap()
+            );
+        }
+        _ => unreachable!(),
+    }
+    let report = reconcile(&mut vault);
+    assert!(!report.complete, "{report:?}");
+    assert!(report.run.complete);
+    assert!(!report.issues.is_empty());
+    assert!(report.namespace.is_empty());
+    assert!(report.imported.is_empty());
+    assert_eq!(vault.family_status().unwrap(), status);
+    assert_eq!(vault.store.physical_bindings().unwrap(), before);
+    assert_eq!(vault.list().unwrap(), logical);
+    assert!(namespace_rows(root.path()).is_empty());
+    for member in before {
+        if member.state.kind == EntryKind::File {
+            let baseline = vault
+                .store
+                .projection_baseline(&member.state.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(baseline.state, member.state);
+            assert_eq!(
+                baseline.content,
+                if member.state.path.file_name() == "child.custom" {
+                    b"tracked child".to_vec()
+                } else {
+                    b"tracked survivor".to_vec()
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn external_namespace_compound_rejects_replacement_at_relocated_child_path() {
+    assert_compound_ambiguous_member_rejected(0);
+}
+
+#[test]
+fn external_namespace_compound_rejects_replaced_missing_child_parent_inode() {
+    assert_compound_ambiguous_member_rejected(1);
+}
+
+#[test]
+fn external_namespace_compound_rejects_deleted_inode_observed_elsewhere() {
+    assert_compound_ambiguous_member_rejected(2);
 }

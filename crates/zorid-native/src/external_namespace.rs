@@ -181,6 +181,10 @@ impl NativeVault {
                     return Err(Error::Busy("original external path absence is unproven"));
                 }
                 let mut evidence = Vec::new();
+                // Capture all missing members first. Only minimal missing roots
+                // require immediate-parent absence proof; their descendants are
+                // covered by the exact original tracked subtree.
+                let mut missing = Vec::new();
                 for member in &members {
                     let (after, observed_content) = if let Some(target) = &target {
                         let path = if member.state.id == before.state.id {
@@ -197,26 +201,41 @@ impl NativeVault {
                                     .ok_or(Error::Busy("external move member escaped root"))?
                             ))?
                         };
-                        let found = scan
-                            .entries
-                            .get(&path)
-                            .ok_or(Error::Busy("external move has missing tracked member"))?;
-                        if found.identity != member.physical.inode
-                            || found.kind != member.state.kind
-                            || !scan.confirm_snapshot(self, &path)?
-                        {
-                            return Err(Error::Busy("external move member changed"));
-                        }
-                        (
-                            Some((
+                        if let Some(found) = scan.entries.get(&path) {
+                            if found.identity != member.physical.inode
+                                || found.kind != member.state.kind
+                                || !scan.confirm_snapshot(self, &path)?
+                            {
+                                return Err(Error::Busy("external move member changed"));
+                            }
+                            (
+                                Some((
+                                    path,
+                                    PhysicalIdentity {
+                                        inode: found.identity.clone(),
+                                        parent_inode: found.parent_identity.clone(),
+                                    },
+                                )),
+                                found.bytes.clone(),
+                            )
+                        } else {
+                            if member.state.id == before.state.id
+                                || scan
+                                    .entries
+                                    .values()
+                                    .any(|s| s.identity == member.physical.inode)
+                            {
+                                return Err(Error::Busy(
+                                    "external move has relocated tracked member",
+                                ));
+                            }
+                            missing.push((
+                                member.state.id.clone(),
+                                member.state.path.clone(),
                                 path,
-                                PhysicalIdentity {
-                                    inode: found.identity.clone(),
-                                    parent_inode: found.parent_identity.clone(),
-                                },
-                            )),
-                            found.bytes.clone(),
-                        )
+                            ));
+                            (None, None)
+                        }
                     } else {
                         if scan
                             .entries
@@ -235,7 +254,44 @@ impl NativeVault {
                         observed_content,
                     });
                 }
+                let minimal_missing: Vec<_> = missing
+                    .iter()
+                    .filter(|(_, old, _)| {
+                        !missing
+                            .iter()
+                            .any(|(_, ancestor, _)| old.is_descendant_of(ancestor))
+                    })
+                    .collect();
+                let mut deleted_roots = BTreeSet::new();
+                let mut deleted_paths = Vec::new();
+                if target.is_some() {
+                    for member in &evidence {
+                        let covered = minimal_missing.iter().any(|(id, old, _)| {
+                            member.before.state.id == *id
+                                || member.before.state.path.is_descendant_of(old)
+                        });
+                        if member.after.is_none() != covered {
+                            return Err(Error::Busy("external move deletion subtree is not exact"));
+                        }
+                    }
+                    for (id, _, path) in minimal_missing {
+                        if !scan.confirm_absent(self, path)? {
+                            return Err(Error::Busy(
+                                "relocated external member absence is unproven",
+                            ));
+                        }
+                        deleted_roots.insert(id.clone());
+                        deleted_paths.push(path.clone());
+                    }
+                }
                 let action = match &target {
+                    Some(path) if !deleted_roots.is_empty() => {
+                        ExternalNamespaceAction::MoveWithDeletions {
+                            root: before.state.id.clone(),
+                            path: path.clone(),
+                            deleted_roots: deleted_roots.into_iter().collect(),
+                        }
+                    }
                     Some(path) => ExternalNamespaceAction::Move {
                         root: before.state.id.clone(),
                         path: path.clone(),
@@ -253,6 +309,13 @@ impl NativeVault {
                 scan.revalidate(self)?;
                 if !scan.confirm_absent(self, &before.state.path)? {
                     return Err(Error::Busy("external source reappeared before commit"));
+                }
+                for path in &deleted_paths {
+                    if !scan.confirm_absent(self, path)? {
+                        return Err(Error::Busy(
+                            "relocated external member reappeared before commit",
+                        ));
+                    }
                 }
                 for member in &observation.members {
                     if let Some((path, _)) = &member.after {
