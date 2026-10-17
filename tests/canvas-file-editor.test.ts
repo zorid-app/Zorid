@@ -194,3 +194,17 @@ test('preview task writes follow alternating list/quote containers and retain ot
   ui.card.element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1].click(); await ui.card.flush();
   assert.equal(ui.fixture.saved, source.replace('- [ ] Nested', '- [x] Nested').replace('- [/] Other', '- [ ] Other'));
 });
+
+test('late Live task input after blur refreshes Reading source before the next preview toggle', async t => {
+  const ui = card(t, sessionFixture('# Note\n\n- [ ] Task\n')); await ui.card.activate();
+  const cm = editor(ui.card.element); cm.dispatch({ selection: { anchor: 2 } });
+  const retained = cm.dom.querySelector<HTMLInputElement>('input[type="checkbox"]')!; assert.ok(retained);
+  await ui.card.deactivate(); assert.equal(ui.card.isEditing(), false);
+  const stale = ui.card.element.querySelector<HTMLInputElement>('.zorid-canvas-note-preview input')!; assert.equal(stale.checked, false);
+  retained.click(); await tick();
+  assert.equal(ui.fixture.text, '# Note\n\n- [x] Task\n');
+  const preview = ui.card.element.querySelector<HTMLInputElement>('.zorid-canvas-note-preview input')!; assert.equal(preview.checked, true);
+  stale.click(); assert.equal(ui.fixture.text, '# Note\n\n- [x] Task\n');
+  preview.click(); await ui.card.flush();
+  assert.equal(ui.fixture.saved, '# Note\n\n- [ ] Task\n'); assert.deepEqual(ui.errors, []); assert.equal(ui.card.hasPendingChanges(), false);
+});

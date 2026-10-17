@@ -29,12 +29,16 @@ export interface CanvasMarkdownCard {
   isEditing(): boolean;
   isEditable(): boolean;
   hasPendingChanges(): boolean;
+  hasUnacceptedChanges(): boolean;
+  refreshPreview(): void;
   destroy(): void;
 }
 export interface CanvasMarkdownCardOptions {
-  load(): Promise<CanvasMarkdownSession>;
+  load(): CanvasMarkdownSession | Promise<CanvasMarkdownSession>;
+  editLabel?: string;
   subpath?: string;
   isCurrent?(): boolean;
+  isPreviewCurrent?(): boolean;
   onEditingChange?(editing: boolean): void;
   onError?(error: unknown): void;
   editorFactory?: typeof createEditor;
@@ -62,12 +66,13 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
   const status = document.createElement('div'); status.className = 'zorid-canvas-note-status'; status.setAttribute('role', 'status');
   element.append(preview, editorHost, status); preview.textContent = 'Loading note…';
   const toolbar = document.createElement('div'); toolbar.className = 'zorid-canvas-note-toolbar'; toolbar.setAttribute('aria-label', 'Card editing');
-  const edit = document.createElement('button'); edit.type = 'button'; edit.disabled = true; edit.setAttribute('aria-label', 'Edit note'); edit.title = 'Edit note'; edit.append(icon('edit', 16, document)); toolbar.append(edit);
+  const edit = document.createElement('button'); edit.type = 'button'; edit.disabled = true; edit.setAttribute('aria-label', options.editLabel ?? 'Edit note'); edit.title = options.editLabel ?? 'Edit note'; edit.append(icon('edit', 16, document)); toolbar.append(edit);
   let closed = false, editing = false, source = '', editor: EditorHandle | undefined, session: CanvasMarkdownSession | undefined;
   let unsubscribe: (() => void) | undefined, activation = 0, previewVersion = 0, loadError: unknown, draftError: unknown;
   let previewOwners: { destroy(): void }[] = [];
   let listConfiguration = '', configurationQueued = false;
   const current = () => !closed && (options.isCurrent?.() ?? true);
+  const previewCurrent = () => current() && (options.isPreviewCurrent?.() ?? true);
   const report = (error: unknown) => { if (closed) return; status.textContent = error instanceof Error ? error.message : String(error); try { options.onError?.(error); } catch { /* Observers do not own the card lifetime. */ } };
   function clearPreview(): void {
     previewVersion++;
@@ -84,11 +89,11 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
     const configuration = session.editorOptions;
     const version = previewVersion, renderedText = source;
     try {
-      renderMarkdown(preview, selected.content, (target, kind) => { if (current() && version === previewVersion) configuration?.open(target, kind); }, canEdit() ? (line, checked) => {
-        if (!current() || version !== previewVersion) return;
+      renderMarkdown(preview, selected.content, (target, kind) => { if (previewCurrent() && version === previewVersion) configuration?.open(target, kind); }, canEdit() ? (line, checked) => {
+        if (!previewCurrent() || version !== previewVersion) return;
         try {
           session!.update(canvasTaskSource(renderedText, line, checked), renderedText);
-          source = session!.getText(); editor?.setValue(source); showPreview();
+          source = session!.getText(); editor?.setValue(source.replace(/\r\n?/g, '\n')); showPreview();
           void flush().catch(() => {});
         } catch (error) {
           // A rejected control edit has no accepted draft. Restore its source
@@ -99,8 +104,10 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
         properties: false,
         embed: configuration?.renderEmbed ? request => { const owner = configuration.renderEmbed!(request); previewOwners.push(owner); return owner.dom; } : undefined,
       });
-      for (const anchor of preview.querySelectorAll('a')) anchor.addEventListener('click', event => {
-        if (!current() || version !== previewVersion) { event.preventDefault(); event.stopImmediatePropagation(); }
+      // Guard each retained subtree, not only its current parent: external
+      // embed controls can remain callable after removal from the preview.
+      for (const root of preview.children) root.addEventListener('click', event => {
+        if (!previewCurrent() || version !== previewVersion) { event.preventDefault(); event.stopImmediatePropagation(); }
       }, true);
       if (!canEdit()) for (const input of preview.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) input.disabled = true;
     } catch (error) { clearPreview(); preview.textContent = selected.content; report(error); }
@@ -110,9 +117,12 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
     try {
       session.update(value, source);
       source = session.getText(); draftError = undefined; status.textContent = '';
+      // Native input can arrive after focus has already returned to Reading.
+      // Keep its visible controls bound to the newly accepted source snapshot.
+      if (!editing) showPreview();
     } catch (error) { draftError = error; report(error); }
   }
-  const ready = Promise.resolve().then(options.load).then(loaded => {
+  function initialize(loaded: CanvasMarkdownSession): void {
     if (closed) { loaded.destroy(); return; }
     session = loaded; source = loaded.getText();
     unsubscribe = loaded.subscribe(next => {
@@ -127,14 +137,21 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
       }
       if (next === source || draftError) return;
       source = next;
-      editor?.setValue(next);
+      editor?.setValue(next.replace(/\r\n?/g, '\n'));
       if (!editing) showPreview();
     });
     edit.disabled = !canEdit();
     if (options.subpath) edit.title = 'Open the full note to edit a heading or block card';
     else if (loaded.readOnly) edit.title = 'This note is read-only';
     showPreview();
-  }).catch(error => { if (!closed) { loadError = error; preview.textContent = 'Unable to load note.'; report(error); } });
+  }
+  const failedLoad = (error: unknown) => { if (!closed) { loadError = error; preview.textContent = 'Unable to load note.'; report(error); } };
+  let ready: Promise<void>;
+  try {
+    const loaded = options.load();
+    if ('then' in loaded) ready = Promise.resolve(loaded).then(initialize).catch(failedLoad);
+    else { initialize(loaded); ready = Promise.resolve(); }
+  } catch (error) { failedLoad(error); ready = Promise.resolve(); }
   async function flush(): Promise<void> {
     await ready;
     if (closed) return;
@@ -161,6 +178,10 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
       editor = (options.editorFactory ?? createEditor)(editorHost, {
         paths: () => [], ...configuration,
         value: source, mode: 'live', onChange: accept,
+        renderEmbed: configuration?.renderEmbed ? request => {
+          try { return configuration.renderEmbed!(request); }
+          catch (error) { report(error); const dom = document.createElement('span'); dom.className = 'markdown-embed-error'; dom.textContent = `Unable to display ${request.target}`; return { dom, destroy() {} }; }
+        } : undefined,
         open: (target, kind, event) => { if (current()) configuration?.open(target, kind, event); },
       });
     }
@@ -193,6 +214,8 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
     isEditing: () => editing,
     isEditable: canEdit,
     hasPendingChanges: () => !!draftError || !!session?.hasPendingChanges(),
+    hasUnacceptedChanges: () => !!draftError,
+    refreshPreview() { if (!closed && !editing) showPreview(); },
     destroy() {
       if (closed) return; closed = true; activation++;
       for (const release of [unsubscribe, () => clearPreview(), () => editor?.destroy(), () => session?.destroy()]) {
