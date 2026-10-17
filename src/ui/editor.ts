@@ -14,6 +14,7 @@ import { liveCallouts, renderedCalloutRanges } from '../editor/live-callouts.ts'
 import { liveMath, liveMathMarkdown } from '../editor/live-math.ts';
 import { liveFences } from '../editor/live-fences.ts';
 import { liveEmbeds } from '../editor/live-embeds.ts';
+import type { EmbedRenderContext } from '../editor/live-embeds.ts';
 import { editorTransfers } from '../editor/transfers.ts';
 import type { TransferOptions } from '../editor/transfers.ts';
 import type { EmbedRequest } from './markdown.ts';
@@ -63,7 +64,7 @@ export interface EditorOptions {
   transfers?: TransferOptions;
   listOptions?: MarkdownListOptions;
   hotkeys?: EditorHotkeySource;
-  renderEmbed?: (request: EmbedRequest) => { dom: HTMLElement; destroy(): void };
+  renderEmbed?: (request: EmbedRequest, context?: EmbedRenderContext) => { dom: HTMLElement; destroy(): void };
 }
 
 const externalChange = Annotation.define<boolean>();

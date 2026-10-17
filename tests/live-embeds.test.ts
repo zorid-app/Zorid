@@ -8,6 +8,7 @@ import { EditorView } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { history, redo, undo } from '@codemirror/commands';
 import { liveEmbeds } from '../src/editor/live-embeds.ts';
+import type { EmbedRenderContext } from '../src/editor/live-embeds.ts';
 import { createEditor } from '../src/ui/editor.ts';
 import type { EmbedRequest } from '../src/ui/markdown.ts';
 
@@ -48,9 +49,9 @@ function setup(t: TestContext, source: string, integrated = false) {
   }
   dom.window.Range.prototype.getBoundingClientRect = () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON() {} });
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
-  const renders: { request: EmbedRequest; node: HTMLElement; destroys: number }[] = [];
+  const renders: { request: EmbedRequest; context?: EmbedRenderContext; node: HTMLElement; destroys: number }[] = [];
   const compartment = new Compartment();
-  const renderer = (request: EmbedRequest) => {
+  const renderer = (request: EmbedRequest, context?: EmbedRenderContext) => {
     const node = document.createElement('span'); node.textContent = `Rendered ${request.target}`;
     if (request.target.endsWith('.wav')) {
       node.className = 'internal-embed media-embed audio-embed';
@@ -58,7 +59,7 @@ function setup(t: TestContext, source: string, integrated = false) {
       const audio = document.createElement('audio'); audio.controls = true; media.append(audio); node.append(media);
     }
     const link = document.createElement('a'); link.href = '#'; link.textContent = 'Open'; node.append(link);
-    const record = { request, node, destroys: 0 }; renders.push(record);
+    const record = { request, context, node, destroys: 0 }; renders.push(record);
     return { dom: node, destroy() { record.destroys++; } };
   };
   const extension = liveEmbeds(renderer);
@@ -710,4 +711,32 @@ test('Markdown escaped size delimiter resets to valid image syntax', async t => 
 after`);
   f.reset(); assert.equal(f.view.state.doc.toString(), 'before\n![caption](photo.png)\nafter');
   assert.equal(f.renders.at(-1)!.request.target, 'photo.png'); assert.equal(f.renders.at(-1)!.request.label, 'caption');
+});
+
+
+test('renderer occurrence context distinguishes duplicates and follows mapped source through target changes', t => {
+  const { view, renders, destroy } = setup(t, 'before\n![[same.base]]\n![[same.base]]\nafter', true);
+  const first = renders[0].context!.occurrence, second = renders[1].context!.occurrence;
+  assert.ok(first); assert.ok(second); assert.notEqual(first, second);
+  view.dispatch({ changes: { from: 0, insert: 'prefix\n' } });
+  assert.equal(renders.length, 2);
+  const from = view.state.doc.toString().indexOf('same.base');
+  view.dispatch({ changes: { from, to: from + 4, insert: 'other' } });
+  assert.equal(renders[0].destroys, 1);
+  assert.equal(renders.at(-1)!.request.target, 'other.base');
+  assert.equal(renders.at(-1)!.context!.occurrence, first, 'target is separate from occurrence identity');
+  assert.equal(renders[1].context!.occurrence, second); assert.equal(renders[1].destroys, 0);
+  destroy(); assert.ok(renders.every(record => record.destroys === 1));
+});
+
+test('renderer occurrence survives DOM remount for the same state but is new after extension recreation', t => {
+  const { view, renders, compartment, extension, destroy } = setup(t, '![[same.base]]');
+  const occurrence = renders[0].context!.occurrence;
+  view.setState(view.state);
+  assert.equal(renders[0].destroys, 1); assert.equal(renders[1].context!.occurrence, occurrence);
+  view.dispatch({ effects: compartment.reconfigure([]) });
+  assert.equal(renders[1].destroys, 1);
+  view.dispatch({ effects: compartment.reconfigure(extension) });
+  assert.notEqual(renders[2].context!.occurrence, occurrence, 'context is view-state local, not durable session identity');
+  destroy(); assert.ok(renders.every(record => record.destroys === 1));
 });

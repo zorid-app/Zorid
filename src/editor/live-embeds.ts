@@ -28,7 +28,11 @@ interface EmbedSpan {
   identity: object;
 }
 interface EmbedState { exclusions: ReturnType<typeof renderExclusions>; spans: readonly EmbedSpan[]; revealed: object | null; selectedImage: object | null; decorations: DecorationSet }
-type Renderer = (request: EmbedRequest) => { dom: HTMLElement; destroy: () => void };
+/** EditorState-local occurrence identity, not a durable file/session key.
+ * Scope caches to the owning editor/session and validate target/lifetime: shared
+ * states share identities, and mapped occurrences can change target or label. */
+export interface EmbedRenderContext { readonly occurrence: object }
+type Renderer = (request: EmbedRequest, context?: EmbedRenderContext) => { dom: HTMLElement; destroy: () => void };
 
 const excludedNodes = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock', 'LiveInlineComment', 'Table', 'LinkReference', 'URL', 'LinkTitle', 'ZoridFrontmatter', 'ZoridMathInline', 'ZoridMathDisplay', 'ZoridMathBlock']);
 const interactive = 'a, button, input, select, textarea, audio, video, iframe, object, embed, summary, .cm-editor, .interactive-child, [contenteditable]:not([contenteditable="false"]), [role="button"]';
@@ -138,7 +142,7 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
       const wrapper: HTMLElement = view.dom.ownerDocument.createElement(this.span.block ? 'div' : 'span');
       wrapper.className = `cm-live-embed ${this.span.block ? 'cm-live-embed-block' : 'cm-live-embed-inline'}`;
       wrapper.contentEditable = 'false';
-      const instance = render(this.span.request);
+      const instance = render(this.span.request, { occurrence: this.span.identity });
       wrapper.append(instance.dom);
       let imageControls: ImageEmbedControls | undefined;
       let pendingSelectionClear = false;
