@@ -1,0 +1,25 @@
+[package]
+name = "zorid-mobile-ffi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+publish = false
+
+# Independent lock/build workspace; canonical root lock remains coordinator-owned.
+[workspace]
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+zorid-desktop-host = { path = "../../crates/zorid-desktop-host" }
+serde_json = "1"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.release]
+opt-level = "s"
+lto = "thin"

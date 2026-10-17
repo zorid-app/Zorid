@@ -43,7 +43,7 @@ impl ClientLease {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 fn checked(file: &File) -> crate::Result<()> {
     use std::os::unix::fs::MetadataExt;
     let metadata = file.metadata()?;
@@ -56,7 +56,7 @@ fn checked(file: &File) -> crate::Result<()> {
     }
     Ok(())
 }
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub(crate) fn claim(
     paths: &crate::fs::Paths,
     authority: OperationId,
@@ -100,7 +100,7 @@ pub(crate) fn claim(
     verify(paths, &authority, &lease)?;
     Ok(lease)
 }
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub(crate) fn verify(
     paths: &crate::fs::Paths,
     authority: &OperationId,
