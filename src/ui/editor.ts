@@ -1,3 +1,4 @@
+import { nativeCaretVisibility } from '../editor/native-caret-visibility.ts';
 import { nativeEditorCommands } from './native-editor-commands.ts';
 import type { NativeEditorAction, NativeEditorState } from './native-editor-commands.ts';
 export type { NativeEditorAction, NativeEditorState } from './native-editor-commands.ts';
@@ -89,6 +90,7 @@ const markdownHighlightStyle = HighlightStyle.define(defaultHighlightStyle.specs
 
 export function createEditor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   let native: ReturnType<typeof nativeEditorCommands> | undefined;
+  const nativeCaret=options.onNativeEditorState?nativeCaretVisibility(options.isCurrent):[];
   const nativeUpdates = options.onNativeEditorState ? EditorView.updateListener.of(() => native?.update()) : [];
   const listConfiguration = new Compartment();
   const wiki = wikiCompletion({ ...options.wiki, paths: options.paths });
@@ -96,7 +98,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     parent,
     state: EditorState.create({ doc: options.value, extensions: [
       EditorState.allowMultipleSelections.of(true),
-      nativeUpdates, history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
+      nativeUpdates, nativeCaret, history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap.filter(binding => binding.run !== selectParentSyntax), ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, wiki, editorCommandHotkeys(options.hotkeys),
       markdownFolding(),
@@ -115,7 +117,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       ...(options.transfers ? [editorTransfers(options.transfers)] : []),
       editorContextMenu(),
       ...(options.mode === 'live' ? [liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed}),
-        liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner), nativeUpdates], renderedCalloutRanges), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
+        liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner), nativeUpdates, nativeCaret], renderedCalloutRanges), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
         liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges}),
         ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed, {excludes: renderedCalloutRanges})] : []),
         liveInline({open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover,excludes: renderedCalloutRanges})] : []),
