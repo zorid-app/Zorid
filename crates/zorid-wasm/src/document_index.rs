@@ -299,6 +299,17 @@ struct BaseReadOptions {
     clock_ms: Option<i64>,
     timezone: Option<String>,
     max_rows: Option<usize>,
+    #[serde(default, deserialize_with = "present_option")]
+    current_entry_id: Option<EntryId>,
+    #[serde(default, deserialize_with = "present_option")]
+    max_steps: Option<usize>,
+}
+fn present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 fn base_error(code: &str, diagnostic: &impl Serialize) -> JsValue {
     JsValue::from_str(
@@ -422,6 +433,10 @@ impl WasmDocumentIndexGeneration {
             options.view_index = program
                 .view_index_by_name(&name)
                 .ok_or_else(|| error("index_view_not_found"))?;
+        }
+        options.current_entry_id = input.current_entry_id;
+        if let Some(steps) = input.max_steps {
+            options.max_steps = steps;
         }
         options.search_terms = input.search_terms;
         options.ignore_paths = input.ignore_paths;
@@ -698,5 +713,22 @@ mod tests {
             contract_code(&IndexError::InvalidQuery),
             "index_invalid_query"
         );
+    }
+    #[test]
+    fn base_read_selector_and_steps_reject_present_null_and_duplicate_fields() {
+        let defaults: BaseReadOptions = serde_json::from_str("{}").unwrap();
+        assert!(defaults.current_entry_id.is_none());
+        assert!(defaults.max_steps.is_none());
+        for raw in [
+            r#"{"currentEntryId":null}"#,
+            r#"{"maxSteps":null}"#,
+            r#"{"currentEntryId":"one","currentEntryId":"two"}"#,
+            r#"{"maxSteps":1,"maxSteps":2}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<BaseReadOptions>(raw).is_err(),
+                "{raw}"
+            );
+        }
     }
 }

@@ -116,3 +116,37 @@ this worker both compare declared row/cell observables with exact typed shapes,
 list order and link fields; error prose alone is removed. Numeric JSON values
 compare numerically, including `1.0 == 1` and `-0 == 0`. Downloaded actual WASM
 results remain untouched. This source reconciliation is not a browser run.
+
+
+Current-entry/options extension (source prepared; runtime evidence is separate):
+The original 51 expression/query/compile cases remain unchanged. Stage the Base
+contract owner's seven-case generation corpus (the original four plus three
+current-entry cases) with these fixture assets. The worker fails visibly if the
+three new canonical cases are missing; no copied case or JavaScript evaluator
+stands in for the shared corpus. With that corpus the normal total is 54 cases
+and ten request checks.
+
+The two selected-context cases check `.base` file facts with empty properties and
+Markdown `this.title`, using shared expected values. In addition to those semantic
+checks, returned selected rows must carry the exact supplied entry ID, revision
+and path. The third case retains the existing no-`this` behavior when no current
+entry is supplied. Additional actual-WASM calls reject a missing current ID, a
+folder current ID, and a caller current record with a stale revision as
+`stale-source`. The existing changed source-revision check remains separately
+`index_error` / `stale_source`; these are distinct contract layers.
+
+The same valid context request with `options.maxSteps` zero or one must return
+`budget`. The generic `queryBaseFromSources` wrapper historically clamps values
+above the engine ceiling before calling Rust; this fixture preserves that policy
+and does not claim above-ceiling rejection. Production document hosts reject
+unsupported raised limits through their own admitted option contract. All these
+checks run the generated WASM; JavaScript only supplies bounded requests and
+compares exact typed outcomes. They establish bounded source-generation query
+behavior, not durable IDB/native snapshot retention across concurrent writes.
+
+The report retains every existing corpus/binary/result hash and untouched actual
+outcome. It adds `currentEntryCoverage` independently from overall case totals and
+request checks. Stage these three fixture files, the canonical owner corpus and a
+matching freshly generated module/binary pair together; an older WASM or corpus
+must fail rather than silently skip the new capability. Historical downloaded
+51-case reports remain evidence for their exact earlier source and binary.

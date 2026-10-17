@@ -15,6 +15,8 @@ export interface VaultEntry {
   size: number;
 }
 
+export type RenameExpectedIdentity = Readonly<{entryId:string;revision:string}>;
+
 /** Paths are relative to the vault. Implementations must enforce the vault boundary. */
 export interface VaultAdapter {
   /** Optional admitted Rust-owned metadata/index/Base read capability. */
@@ -40,7 +42,8 @@ export interface VaultAdapter {
   /** Explicit atomic create; reject an existing destination without overwriting it. */
   createBinary?(path: string, data: Uint8Array): Promise<void>;
   mkdir(path: string): Promise<void>;
-  rename(oldPath: string, newPath: string): Promise<void>;
+  /** Bind witnessed renames to the selected committed entry and revision. */
+  rename(oldPath: string, newPath: string, expectedIdentity?: RenameExpectedIdentity): Promise<void>;
   trash(path: string): Promise<void>;
   /** Permanently remove an entry. Forward force to the host deletion policy; never substitute trash. */
   remove?(path: string, force: boolean): Promise<void>;

@@ -129,3 +129,33 @@ test('large-file namespace and destination planning uses metadata without readin
   await consumer.execute(input('trash','moved.bin'));
   assert.equal(f.entries.has('large.bin'),false);assert.equal(f.entries.has('moved.bin'),false);
 });
+
+
+test('witnessed rename rejects partial and noncanonical pairs and stale/replaced/missing sources before planning',async()=>{
+  for(const expected of [{expectedEntryId:'original'},{expectedRevision:'1'},{expectedEntryId:undefined,expectedRevision:undefined},{expectedEntryId:'bad/id',expectedRevision:'1'}]){
+    const f=fixture();f.put('original','Note.md','file',Buffer.from('keep'));
+    await assert.rejects(desktopTextCreates(f.service,f.checkpoints).execute(input('move','Note.md',{destination:'Renamed.md',...expected})),{code:'invalid_file_request'});
+    assert.equal(f.heads.size,0);assert.equal(f.calls.length,0);assert.equal(f.entries.has('Renamed.md'),false);
+  }
+  for(const [expectedEntryId,expectedRevision,missing] of [['replacement','1',false],['original','stale',false],['original','1',true]]){
+    const f=fixture();if(!missing)f.put('original','Note.md','file',Buffer.from('keep'));
+    await assert.rejects(desktopTextCreates(f.service,f.checkpoints).execute(input('move','Note.md',{destination:'Renamed.md',expectedEntryId,expectedRevision})),{code:'revision_conflict'});
+    assert.equal(f.heads.size,0);assert.equal(f.calls.length,0);assert.equal(f.entries.has('Renamed.md'),false);
+  }
+});
+
+test('witnessed rename retries the exact committed move after lost ACK without moving a replacement',async()=>{
+  const f=fixture(),old=f.put('original','Note.md','file',Buffer.from('original bytes'));
+  const request=input('move','Note.md',{destination:'Renamed.md',expectedEntryId:old.entry.id,expectedRevision:old.entry.revision});
+  f.loseAt(1);await assert.rejects(desktopTextCreates(f.service,f.checkpoints).execute(request),{code:'host_timeout'});
+  f.put('replacement','Note.md','file',Buffer.from('replacement bytes'));
+  f.service.host.readMetadata=async()=>{throw new Error('retained move must never resolve a replacement path');};
+  const reopened=desktopTextCreates(f.service,f.checkpoints);
+  await assert.rejects(reopened.execute({...request,expectedRevision:'different'}),{code:'idempotency_conflict'});
+  await reopened.recover();await reopened.execute(request);
+  assert.equal(f.calls.length,2);assert.equal(f.calls[0].serialized,f.calls[1].serialized);assert.equal(f.receipts.size,1);
+  const mutation=JSON.parse(f.calls[0].serialized).family.request.mutation;
+  assert.deepEqual(mutation,{type:'move',id:'original',expected:old.entry.revision,path:'Renamed.md'});
+  assert.equal(f.entries.get('Note.md').entry.id,'replacement');assert.equal(f.entries.get('Note.md').bytes.toString(),'replacement bytes');
+  assert.equal(f.entries.get('Renamed.md').entry.id,'original');assert.equal(f.entries.get('Renamed.md').bytes.toString(),'original bytes');
+});

@@ -2,6 +2,7 @@
 // Transport validation only. Markdown, URL resolution and Base evaluation stay
 // in Rust; native pins/cursors are represented only by owner-bound locators.
 const MAX_DOCUMENT_REQUEST=64*1024,MAX_DOCUMENT_RESPONSE=16*1024*1024;
+const utf8=new TextEncoder(),byteLength=value=>utf8.encode(value).byteLength;
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const id=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(value);
 const decimal=value=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;
@@ -17,7 +18,7 @@ function snapshot(value){
 }
 function source(value){return keys(value,['localStoreId','watermark'])&&id(value.localStoreId)&&decimal(value.watermark);}
 function entry(value){return keys(value,['id','revision','path','kind','deleted'])&&id(value.id)&&id(value.revision)&&typeof value.path==='string'&&value.path.length>0&&['file','folder'].includes(value.kind)&&value.deleted===false;}
-function strings(value){return Array.isArray(value)&&value.length<=256&&value.every(item=>typeof item==='string'&&Buffer.byteLength(item)<=4096);}
+function strings(value){return Array.isArray(value)&&value.length<=256&&value.every(item=>typeof item==='string'&&byteLength(item)<=4096);}
 function captureDocumentRequest(input){
   if(!keys(input,['schemaVersion','command'])||input.schemaVersion!==1||!object(input.command)||typeof input.command.op!=='string')throw fail('invalid_document_request');
   const command=input.command,op=command.op;
@@ -30,22 +31,22 @@ function captureDocumentRequest(input){
     else if(key==='pinId'){if(!decimal(value)||value==='0')throw fail('invalid_pin_id');captured[key]=value;}
     else if(key==='id'){if(!id(value))throw fail('invalid_document_request');captured[key]=value;}
     else if(key==='cursor'){if(value!==undefined&&value!==null&&!id(value))throw fail('invalid_document_request');captured[key]=value??null;}
-    else if(key==='query'){if(typeof value!=='string'||!value||Buffer.byteLength(value)>4096||/[\r\n]/.test(value))throw fail('invalid_query');captured[key]=value;}
+    else if(key==='query'){if(typeof value!=='string'||!value||byteLength(value)>4096||/[\r\n]/.test(value))throw fail('invalid_query');captured[key]=value;}
     else if(key==='limit'){if(!integer(value,1000)||value===0)throw fail('invalid_budget');captured[key]=value;}
-    else if(key==='viewName'){if(value!==undefined&&value!==null&&(typeof value!=='string'||Buffer.byteLength(value)>1024))throw fail('invalid_document_request');captured[key]=value??null;}
+    else if(key==='viewName'){if(value!==undefined&&value!==null&&(typeof value!=='string'||byteLength(value)>1024))throw fail('invalid_document_request');captured[key]=value??null;}
     else if(key==='options'){
-      const options=value??{},allowed=['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows'];
+      const options=value??{},allowed=['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps'];
       if(!keys(options,allowed,[]))throw fail('invalid_document_request');
       captured.options={};
       for(const key of Object.keys(options)){
         const value=options[key];
-        if(key==='viewIndex'&&!integer(value,1000)||key==='maxRows'&&(!integer(value,10000)||value===0)||key==='clockMs'&&!Number.isSafeInteger(value)||['searchTerms','ignorePaths'].includes(key)&&!strings(value)||key==='timezone'&&(typeof value!=='string'||Buffer.byteLength(value)>128))throw fail('invalid_document_request');
+        if(key==='currentEntryId'&&!id(value)||key==='maxSteps'&&(!integer(value,2000000)||value===0)||key==='viewIndex'&&!integer(value,1000)||key==='maxRows'&&(!integer(value,10000)||value===0)||key==='clockMs'&&!Number.isSafeInteger(value)||['searchTerms','ignorePaths'].includes(key)&&!strings(value)||key==='timezone'&&(typeof value!=='string'||byteLength(value)>128))throw fail('invalid_document_request');
         captured.options[key]=Array.isArray(value)?[...value]:value;
       }
     }
   }
   const result={schemaVersion:1,command:captured};
-  if(Buffer.byteLength(JSON.stringify(result))>MAX_DOCUMENT_REQUEST)throw fail('request_limit');
+  if(byteLength(JSON.stringify(result))>MAX_DOCUMENT_REQUEST)throw fail('request_limit');
   return result;
 }
 function envelope(value){return keys(value,['snapshot','source','coverageComplete','value'])&&snapshot(value.snapshot)&&source(value.source)&&value.snapshot.localStoreId===value.source.localStoreId&&typeof value.coverageComplete==='boolean';}

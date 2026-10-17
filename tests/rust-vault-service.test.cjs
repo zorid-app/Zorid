@@ -30,6 +30,7 @@ process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(b
  if(mode==='stall')continue;
  if(mode==='oversized'){process.stdout.write(Buffer.alloc(8,255));continue;}
  if(mode==='reject'){send({version:1,request_id:req.request_id,ok:false,error:{code:'revision_conflict',commit_uncertain:false}});continue;}
+ if((mode==='document_rejection'||mode==='document_bad_rejection')&&req.command.method==='documents'){send({version:1,request_id:req.request_id,ok:false,error:{code:mode==='document_rejection'?'stale_source':'stale-source',commit_uncertain:false}});continue;}
  let responseBody = Buffer.alloc(0);
  let result = req.command.method==='apply' ? {commit:{operation_id:req.command.operation_id,sequence:'1',changes:[{before:null,after:{id:req.command.mutation.id,path:req.command.mutation.path,kind:'file',revision:'new',deleted:false}}]},projection:{state:'pending'},captured:[...body]} : {pending_outbox:'0',pending_projection:'0',attempts:[],observations:[],command:req.command};
  if(mode.startsWith('family_journal_') && req.command.method==='changes_after') {
@@ -292,4 +293,15 @@ test('binary protobuf frames preserve bytes/lease and reject oversized requests 
 test('oversized binary response is rejected before frame allocation and retains uncertain outcome',async t=>{
   const host=await fixture(t,'binary_oversized');
   await assert.rejects(host.binaryCommand('client',new Uint8Array([8,1])),{code:'invalid_response',commitUncertain:true});
+});
+
+
+test('document query rejection preserves strict frames and does not poison the next request',async t=>{
+  const host=await fixture(t,'document_rejection');
+  await assert.rejects(host.documentCommand('client',{schemaVersion:1,command:{op:'base',pinId:'1',id:'base',options:{currentEntryId:'missing-current',clockMs:0}}}),{code:'stale_source',commitUncertain:false});
+  assert.equal(host.fatal,null);await host.status();assert.equal(host.fatal,null);
+});
+test('hyphenated document frame errors still fail strict transport validation',async t=>{
+  const host=await fixture(t,'document_bad_rejection');
+  await assert.rejects(host.documentCommand('client',{schemaVersion:1,command:{op:'base',pinId:'1',id:'base',options:{currentEntryId:'missing-current',clockMs:0}}}),{code:'invalid_response',commitUncertain:true});
 });

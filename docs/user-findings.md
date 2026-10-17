@@ -210,3 +210,22 @@ CoreDevice reports its tunnel unavailable; native awaits reconnect/unlock.
 Keep the earlier glass-controls change paired with the containment fix during
 integration. Native checkpoint `d7605a3e` records these separate outcomes; this
 does not verify software-keyboard/foreground or PDF presentation follow-ups.
+
+### 2026-10-17 — final Stage4 consumer and native coordination checkpoint
+
+Root final consumer candidate701e107f passes normal browser Base Table/Board/List/
+Cards/property save/reload/search, and rebuilt desktop Table/Board/property save
+with exact63 physical bytes/search2/navigation. Desktop smoke exposed undefined
+optional Base scalars crossing IPC; central omission fix independently reviewed,
+strict admission retained, regression +actual rebuilt app pass. Main merge checks
+TypeScript0 and92 focused tests. Final native/WASM evidence and limits are in
+`shared-document-semantics-plan.md`; no mobile/runtime/security claim follows.
+
+Native owner separately reports signed Dev build5 (51d8b84f) installed on physical
+phone80513 exit0 and launched0. Simulator keyboard toolbar and PDF2pages/navigation/
+save pass; focus-jump video remains inconclusive. New combined sourcef7d78f6d is
+source-reviewed with240 focused checks/typecheck0; FFI752 actual10/10 source blobs
+unchanged. This source is not yet main-integrated or verified on phone. Owner
+relays new user steering: combine Recents/Files into one Notes page with heading
+mode menu; Settings gear top-left on home root only. NativePages.swift assignment
+remains isolated; root main/Stage4 seams unchanged.

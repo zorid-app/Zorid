@@ -23,7 +23,10 @@ function desktopTextCreates(service,checkpoints){
       if(input.expectedContent!==undefined)request.expected_base64=text(input.expectedContent);
       if(input.expectedEntryId!==undefined||input.expectedRevision!==undefined){if(!identity(input.expectedEntryId)||!identity(input.expectedRevision))throw failure('invalid_file_request');request.expectedEntryId=input.expectedEntryId;request.expectedRevision=input.expectedRevision;}
     }else if(request.kind==='createBinary'||request.kind==='writeBinary')request.body_base64=binary(input.data);
-    else if(request.kind==='move')request.destination=normalizePath(input.destination);
+    else if(request.kind==='move'){
+      request.destination=normalizePath(input.destination);
+      if('expectedEntryId'in input||'expectedRevision'in input){if(!identity(input.expectedEntryId)||!identity(input.expectedRevision))throw failure('invalid_file_request');request.expectedEntryId=input.expectedEntryId;request.expectedRevision=input.expectedRevision;}
+    }
     else if(request.kind==='delete'){if(typeof input.force!=='boolean')throw failure('invalid_file_request');request.force=input.force;}
     else if(!['mkdir','trash'].includes(request.kind))throw failure('invalid_file_request');
     return Object.freeze(request);
@@ -47,6 +50,7 @@ function desktopTextCreates(service,checkpoints){
       }
       return [command(request.operationId,{type:'write',id:current.entry.id,expected:current.entry.revision},null,request.body_base64)];
     }
+    if(request.kind==='move'&&request.expectedEntryId!==undefined&&(!current||current.entry.id!==request.expectedEntryId||current.entry.revision!==request.expectedRevision))throw failure('revision_conflict');
     if(!current)throw failure('not_found');
     let destination=request.destination;
     if(request.kind==='trash'){

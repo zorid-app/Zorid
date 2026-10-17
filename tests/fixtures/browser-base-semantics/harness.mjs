@@ -26,7 +26,7 @@ function showFacts(entries) {
 function finish(value) {
   report = value;
   window.__zoridBaseSemantics = value;
-  status.textContent = value.status === 'passed' ? `PASS ${value.passed}/${value.total} cases and ${value.requestChecks?.length ?? 0} request checks` : `FAIL: ${value.failures?.length ?? 1} failures`;
+  status.textContent = value.status === 'passed' ? `PASS ${value.passed}/${value.total} cases, ${value.requestChecks?.length ?? 0} request checks, and ${value.currentEntryCoverage?.passed ?? 0}/${value.currentEntryCoverage?.cases ?? 0} current-entry witnesses` : `FAIL: ${value.failures?.length ?? 1} failures`;
   showFacts(Object.fromEntries(Object.entries(value).filter(([key]) => !['results', 'failures'].includes(key))));
   failures.textContent = value.failures?.length ? JSON.stringify(value.failures, null, 2) : 'No failures.';
   resultsButton.disabled = !Array.isArray(value.results);

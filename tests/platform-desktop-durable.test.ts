@@ -87,3 +87,37 @@ test('drained binary capability stays retired while exact context release is pen
     await platform.release!();assert.equal(releases,2);assert.equal(invocations,before);
   } finally {if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
 });
+
+
+test('desktop rename forwards the captured witness and preserves its exact uncertain retry',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window'),calls:any[]=[];let fail=true;
+  Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{
+    getVault:async()=>({path:'/fixture',name:'Fixture'}),
+    getDurableContext:async()=>({admissionId:'admitted',scope:{vaultId:'authority',clientId:'client'}}),
+    releaseDurableContext:async()=>{},
+    durableInvoke:async(_path:string,_admission:string,method:string,args:unknown[])=>{assert.equal(method,'fileCommand');calls.push(structuredClone(args[0]));if(fail)throw Object.assign(new Error('lost ACK'),{code:'host_timeout',commitUncertain:true});},
+  }}});
+  try{
+    const {adapter}=(await createPlatformAdapter())!,expected={entryId:'selected',revision:'selected-revision'};
+    const pending=adapter.rename('Note.md','Renamed.md',expected);expected.revision='replacement-revision';
+    await assert.rejects(pending,{code:'host_timeout'});
+    assert.equal(calls[0].expectedEntryId,'selected');assert.equal(calls[0].expectedRevision,'selected-revision');
+    await assert.rejects(adapter.rename('Note.md','Renamed.md',expected),/different file operation/);
+    await assert.rejects(adapter.rename('Note.md','Renamed.md'),/different file operation/);
+    assert.equal(calls.length,1);fail=false;
+    await adapter.rename('Note.md','Renamed.md',{entryId:'selected',revision:'selected-revision'});
+    assert.deepEqual(calls[1],calls[0]);
+  }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});
+
+test('legacy desktop rename cannot silently drop an expected identity',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window');let calls=0;
+  Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{
+    getVault:async()=>({path:'/fixture',name:'Fixture'}),rename:async()=>{calls++;},
+  }}});
+  try{
+    const {adapter}=(await createPlatformAdapter())!;
+    await assert.rejects(adapter.rename('Note.md','Renamed.md',{entryId:'selected',revision:'selected-revision'}),{code:'revision_conflict'});
+    assert.equal(calls,0);await adapter.rename('Note.md','Renamed.md');assert.equal(calls,1);
+  }finally{if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});

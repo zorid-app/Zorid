@@ -116,6 +116,31 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Latest checkpoint — 2026-10-17 22:25 UTC (supersedes older pending statuses):
+- Root final Stage4 consumer candidate701e107f now cleanly merged into main
+  with final independent acceptance approved. Actual final native Base20/facade7/host13,
+  strict CJS/native/CLI fixture1 and actual browser WASM Markdown49+4 checks,
+  Base54+10 checks+2 context witnesses pass. No Rust delta after99464a78.
+- Normal browser Table/Board/List/Cards, typed groups/date/link/current context,
+  property save/reload and shared search/navigation pass. Rebuilt desktop Table/
+  Board/property save exact63 physical bytes/sharedsearch2/navigation pass. Desktop
+  initially caught undefined optional scalar IPC mismatch; reviewed701e fixes
+  request construction, retains strict decoder. Test Electron59332 closed exit0.
+- Main full TypeScript exits0;92 focused consumer tests pass. Functional source
+  matches verified candidate (only main's newer docs and trailing whitespace
+  differ). Details/evidence: docs/shared-document-semantics-plan.md. No full-repo,
+  mobile parity, measured performance or production security claim.
+- Mobile source f7d78f6d combines reviewed FFI/Swift/adapter/perf/presentation;
+  owner reports240 focused tests +typecheck0. Actual FFI75210/10 accepted, source
+  blobs unchanged in combined branch. Separate signed Dev phone build5/51 source
+  installed80513 exit0 and launched0; simulator keyboard toolbar/PDF2pages and
+  navigation/save observed. Final Stage4 mobile linkage/phone UI remain unproved.
+- Native owner retains ordinary durable identitybbf despite runtime rebind;
+  root replied msg09f79ae8d517 and acknowledged deliveryaa3e8e53a9b5. No duplicate
+  worker. Native source-only work may continue; root must announce canonical
+  consumer commit before granting next native build. Main remains sole root-owned.
+
+
 Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
 - Subsequent21:43 checkpoint: native-only fixturehost bbe26f1d passed actual
   nine-case check54202 (compile1m48s/test0.71s), source integrated maind94c3ae3.

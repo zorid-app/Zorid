@@ -46,8 +46,8 @@ export type DocumentBaseValue=
 export interface DocumentBaseResult {
   readonly snapshotId:DocumentSnapshotId;readonly view:DocumentValue;
   readonly rows:readonly{readonly entryId:string;readonly revision:string;readonly path:string;readonly values:Readonly<Record<string,DocumentBaseValue>>}[];
-  readonly groups:readonly{readonly key:DocumentBaseValue|null;readonly entryIds:readonly string[]}[];
-  readonly groupOptions:readonly{readonly key:DocumentBaseValue;readonly count:number;readonly listed:boolean}[];
+  readonly groups:readonly{readonly keyId:string|null;readonly key:DocumentBaseValue|null;readonly entryIds:readonly string[]}[];
+  readonly groupOptions:readonly{readonly keyId:string;readonly key:DocumentBaseValue;readonly count:number;readonly listed:boolean}[];
   readonly properties:readonly string[];readonly availableProperties:readonly string[];
   readonly counts:{readonly scanned:number;readonly matched:number;readonly afterGroupOrder:number;readonly afterSearch:number;readonly returned:number};
   readonly diagnostics:readonly{readonly phase:string;readonly entryId:string;readonly path:string;readonly property:string|null;readonly code:string;readonly message:string}[];
@@ -56,7 +56,7 @@ export interface DocumentBaseResult {
   readonly stepsUsed:number;
 }
 /** Shared normal-vault calls capture clockMs once per invocation and default maxRows to 1000. */
-export interface DocumentBaseOptions {readonly viewIndex?:number;readonly searchTerms?:readonly string[];readonly ignorePaths?:readonly string[];readonly clockMs?:number;readonly timezone?:string;readonly maxRows?:number}
+export interface DocumentBaseOptions {readonly viewIndex?:number;readonly searchTerms?:readonly string[];readonly ignorePaths?:readonly string[];readonly clockMs?:number;readonly timezone?:string;readonly maxRows?:number;readonly currentEntryId?:string;readonly maxSteps?:number}
 export interface DocumentBaseRead {readonly definition:DocumentEntry;readonly result:DocumentBaseResult}
 export interface DocumentStatus {
   readonly source:DocumentSourceId;readonly snapshot:DocumentSnapshotId|null;readonly coveredSource:DocumentSourceId|null;
@@ -96,7 +96,7 @@ export interface DocumentTransport {
   metadata(input:{pinId:string;id:string}):Promise<unknown>;
   search(input:{pinId:string;query:string;cursor?:string;limit?:number}):Promise<unknown>;
   backlinks(input:{pinId:string;targetId:string;cursor?:string;limit?:number}):Promise<unknown>;
-  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number}}):Promise<unknown>;
+  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number;currentEntryId?:string;maxSteps?:number}}):Promise<unknown>;
 }
 const invalid=():never=>{throw new DocumentSemanticsError('invalid_document_response');};
 function object(value:unknown):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))return invalid();return value as Record<string,unknown>;}
@@ -138,7 +138,7 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
         async metadata(id:string){live();return report<DocumentMetadataRow>(await call({pinId,id},()=>transport.metadata({pinId,id})));},
         async search(input:{query:string;cursor?:DocumentCursor|null;limit?:number}){live();limit(input.limit);const request={pinId,query:input.query,...(input.cursor==null?{}:{cursor:input.cursor}),limit:input.limit};return page<DocumentLiteralPage>(await call(request,()=>transport.search(request)));},
         async backlinks(input:{targetId:string;cursor?:DocumentCursor|null;limit?:number}){live();limit(input.limit);const request={pinId,targetId:input.targetId,...(input.cursor==null?{}:{cursor:input.cursor}),limit:input.limit};return page<DocumentRelationshipPage>(await call(request,()=>transport.backlinks(request)));},
-        async base(input:{id:string;viewName?:string|null;options?:DocumentBaseOptions}){live();const {searchTerms,ignorePaths,...scalars}=input.options??{};const options:NonNullable<Parameters<DocumentTransport['base']>[0]['options']>={...scalars,clockMs:scalars.clockMs===undefined?Date.now():scalars.clockMs,maxRows:scalars.maxRows===undefined?1000:scalars.maxRows};if(searchTerms)options.searchTerms=[...searchTerms];if(ignorePaths)options.ignorePaths=[...ignorePaths];const request={pinId,id:input.id,viewName:input.viewName,options};return report<DocumentBaseRead>(await call(request,()=>transport.base(request)));},
+        async base(input:{id:string;viewName?:string|null;options?:DocumentBaseOptions}){live();if(input.options?.currentEntryId!==undefined&&(typeof input.options.currentEntryId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(input.options.currentEntryId)))throw new DocumentSemanticsError('invalid_request');if(input.options?.maxSteps!==undefined&&(!Number.isInteger(input.options.maxSteps)||input.options.maxSteps<1||input.options.maxSteps>2000000))throw new DocumentSemanticsError('invalid_request');const {searchTerms,ignorePaths,...scalars}=input.options??{};const definedScalars=Object.fromEntries(Object.entries(scalars).filter(([,value])=>value!==undefined));const options:NonNullable<Parameters<DocumentTransport['base']>[0]['options']>={...definedScalars,clockMs:scalars.clockMs===undefined?Date.now():scalars.clockMs,maxRows:scalars.maxRows===undefined?1000:scalars.maxRows};if(searchTerms)options.searchTerms=[...searchTerms];if(ignorePaths)options.ignorePaths=[...ignorePaths];const request={pinId,id:input.id,viewName:input.viewName,options};return report<DocumentBaseRead>(await call(request,()=>transport.base(request)));},
       });
     },
   };

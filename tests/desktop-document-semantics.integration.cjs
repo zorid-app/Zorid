@@ -43,6 +43,7 @@ test('actual desktop semantic transport retains one snapshot through independent
     ['source','Source.md',original],['target','Target.md','# Target\n'],
     ['base','All.base','formulas:\n  caseInsensitiveTitle: config.TITLE\nviews:\n  - type: table\n    name: Linked\n    filters: \'file.hasLink("Target")\'\n    order: [file.path, formula.caseInsensitiveTitle]\n'],
   ])await cli(root,['create',file,'--id',id,'--operation-id',`create-${id}`,'--input','-'],body);
+  await cli(root,['mkdir','ContextFolder','--id','context-folder','--operation-id','create-context-folder']);
   host=await RustVaultService.open(root,{executable});
   assert.ok(host.capabilities.includes('documents'));
   await assert.rejects(host.documentCommand('10000000-0000-4000-8000-000000000001',request('status')),{code:'client_not_admitted'});
@@ -75,6 +76,15 @@ test('actual desktop semantic transport retains one snapshot through independent
   await assert.rejects(call('open',{pinId:'2'}),{code:'snapshot_expired'});
   assert.deepEqual((await call('metadata',{pinId:'3',id:'source'})).snapshot,snapshot,'closing another view cannot evict this pin');
   await call('open',{pinId:'5'}); // Failed quota attempts did not consume its sequence.
+  // Shared diagnostic spelling is translated at the host frame boundary. A
+  // legitimate missing/folder context rejection must never kill other pins.
+  for(const currentEntryId of ['missing-current','context-folder']){
+    await assert.rejects(call('base',{pinId,id:'base',viewName:'Linked',options:{clockMs:0,currentEntryId,maxSteps:2000000}}),{code:'stale_source',commitUncertain:false});
+    assert.deepEqual((await call('metadata',{pinId:'3',id:'source'})).snapshot,snapshot);
+    const healthy=await call('base',{pinId,id:'base',viewName:'Linked',options:{clockMs:0,currentEntryId:'source',maxSteps:2000000}});
+    assert.deepEqual(healthy.value.result.rows.map(row=>row.entryId),['source']);
+    assert.equal(host.fatal,null);
+  }
   for(const pinId of ['3','4','5'])await call('close',{pinId});
 
   const metadata=await call('metadata',{pinId,id:'source'});

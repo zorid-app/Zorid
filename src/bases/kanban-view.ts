@@ -1,8 +1,9 @@
+import { displaySharedBaseValue, sameBasePresentationGroup, sharedBaseGroupKeyId } from './presentation-common.ts';
 import { createBaseKanbanColumns, matchesBaseGroupKey } from './kanban-columns.ts';
 import type { BaseKanbanGroupOrderRequest } from './kanban-columns.ts';
 import { icon } from '../ui/icons.ts';
 import { showContextMenu } from '../platform/context-menu.ts';
-import { baseValuesEqual, baseValueToString } from './expression.ts';
+import { baseValueToString } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import { normalizeBaseProperty } from './query.ts';
 import type { BaseQueryGroup, BaseQueryResult, BaseQueryRow } from './query.ts';
@@ -13,6 +14,9 @@ export interface BaseKanbanMoveRequest {
   readonly property: string;
   readonly source: BaseExpressionValue;
   readonly destination: BaseExpressionValue;
+  /** Required for shared results; opaque authoritative group identities. */
+  readonly sourceKeyId?: string;
+  readonly destinationKeyId?: string;
 }
 export interface BaseKanbanViewOptions {
   readonly result: BaseQueryResult;
@@ -36,12 +40,10 @@ function propertyOf(result: BaseQueryResult): string | undefined {
   const property = (group as Readonly<Record<string, unknown>>).property;
   return typeof property === 'string' && property ? normalizeBaseProperty(property) : undefined;
 }
-function equal(a: BaseExpressionValue | null, b: BaseExpressionValue | null): boolean {
-  return a === null || b === null ? a === b : baseValuesEqual(a, b, true);
-}
-function label(value: BaseExpressionValue | null): string {
+
+function label(value: BaseExpressionValue | null, shared = false): string {
   if (!value || value.type === 'null') return 'No value';
-  try { return baseValueToString(value); } catch { return value.type; }
+  try { return shared ? displaySharedBaseValue(value) : baseValueToString(value); } catch { return value.type; }
 }
 
 /** Original snapshot-driven Kanban renderer. It never writes data or treats DOM movement as persistence. */
@@ -52,6 +54,9 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   board.className = 'bases-kanban-board'; status.className = 'bases-kanban-status'; status.setAttribute('role', 'status');
   root.append(board, status); container.append(root);
   let result = options.result, destroyed = false, selected: string | undefined;
+  const equal = (a: BaseExpressionValue | null, b: BaseExpressionValue | null) => sameBasePresentationGroup(result, a, b);
+  const requestGroupIs = (group: BaseQueryGroup | undefined, request: BaseKanbanMoveRequest, side: 'source' | 'destination'): boolean =>
+    !!group && (result.shared !== undefined ? typeof request[`${side}KeyId`] === 'string' && group.sharedKeyId === request[`${side}KeyId`] : equal(group.key, request[side]));
   const columns = !options.readOnly && options.requestGroupOrder ? createBaseKanbanColumns(root, { result, requestGroupOrder: options.requestGroupOrder, onError(error) { if (!destroyed) status.textContent = error instanceof Error ? error.message : String(error); } }) : undefined;
   let editColumns: HTMLButtonElement | undefined;
   if (columns) {
@@ -64,15 +69,21 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   }
   let drag: { path: string; version: BaseQueryResult['version'] } | undefined;
   const pending = new Map<string, Pending>();
-  const scrolls = new Map<BaseQueryGroup['key'], number>();
+  const scrolls = new Map<BaseQueryGroup['key'] | string, number>();
   let rowOrder = new Map<string, number>();
   let groups: readonly BaseQueryGroup[] = [], properties: readonly string[] = [], width = 280, rowHeight = 72;
   const columnScroll = (key: BaseQueryGroup['key']) => {
-    for (const [stored, top] of scrolls) if (equal(stored, key)) return top;
+    if (result.shared !== undefined) return scrolls.get(sharedBaseGroupKeyId(result, key) ?? key) ?? 0;
+    for (const [stored, top] of scrolls) if (typeof stored !== 'string' && equal(stored, key)) return top;
     return 0;
   };
   const saveScroll = (key: BaseQueryGroup['key'], top: number) => {
-    for (const stored of scrolls.keys()) if (equal(stored, key)) scrolls.delete(stored);
+    if (result.shared !== undefined) {
+      const id = sharedBaseGroupKeyId(result, key);
+      if (typeof id !== 'string') return;
+      scrolls.delete(id); if (top > 0) scrolls.set(id, top); return;
+    }
+    for (const stored of scrolls.keys()) if (typeof stored !== 'string' && equal(stored, key)) scrolls.delete(stored);
     if (top > 0) scrolls.set(key, top);
   };
   const canMove = (path: string) => {
@@ -84,8 +95,8 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   function displayedRows(group: BaseQueryGroup): readonly BaseQueryRow[] {
     let rows = group.rows;
     for (const { request } of pending.values()) {
-      if (equal(group.key, request.source)) rows = rows.filter(row => row.path !== request.path);
-      else if (equal(group.key, request.destination) && !rows.some(row => row.path === request.path)) {
+      if (requestGroupIs(group, request, 'source')) rows = rows.filter(row => row.path !== request.path);
+      else if (requestGroupIs(group, request, 'destination') && !rows.some(row => row.path === request.path)) {
         const row = locate(request.path)?.rows.find(row => row.path === request.path);
         if (!row) continue;
         const index = rows.filter(other => (rowOrder.get(other.path) ?? 0) < (rowOrder.get(row.path) ?? 0)).length;
@@ -106,13 +117,15 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     const source = locate(path), target = groups.find(group => equal(group.key, destination));
     if (!source?.key || !target?.key || equal(source.key, target.key)) return false;
     if (propertyOf(result) === 'file.folder' && target.key.type !== 'string') return false;
-    const request: BaseKanbanMoveRequest = Object.freeze({ path, version: result.version, property: propertyOf(result)!, source: source.key, destination: target.key });
+    if (result.shared !== undefined && (typeof source.sharedKeyId !== 'string' || typeof target.sharedKeyId !== 'string')) return false;
+    const request: BaseKanbanMoveRequest = Object.freeze({ path, version: result.version, property: propertyOf(result)!, source: source.key, destination: target.key,
+      ...(result.shared !== undefined ? { sourceKeyId: source.sharedKeyId!, destinationKeyId: target.sharedKeyId! } : {}) });
     const operation = { request }; pending.set(path, operation); status.textContent = ''; render();
     try {
       await options.requestMove!(request);
       // The preview remains pending until the host publishes an authoritative move.
       return !destroyed && propertyOf(result) === request.property &&
-        (pending.get(path) === operation || equal(locate(path)?.key ?? null, request.destination));
+        (pending.get(path) === operation || requestGroupIs(locate(path), request, 'destination'));
     } catch (error) {
       if (!destroyed && pending.get(path) === operation) {
         pending.delete(path); status.textContent = `Could not move ${path}: ${error instanceof Error ? error.message : String(error)}`;
@@ -132,7 +145,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     title.textContent = row.path.split('/').pop()?.replace(/\.md$/, '') ?? row.path; item.append(title);
     for (const property of properties) {
       const value = doc.createElement('div'); value.className = 'bases-kanban-card-property';
-      value.dataset.property = property; value.textContent = label(row.values[property] ?? null); value.title = `${property}: ${value.textContent}`; item.append(value);
+      value.dataset.property = property; value.textContent = label(row.values[property] ?? null, result.shared !== undefined); value.title = `${property}: ${value.textContent}`; item.append(value);
     }
     item.addEventListener('click', event => { if (destroyed || !root.contains(item)) return; select(row.path); options.openFile(row.path, event); });
     item.addEventListener('auxclick', event => { if (!destroyed && root.contains(item) && event.button === 1) { event.preventDefault(); select(row.path); options.openFile(row.path, event); } });
@@ -166,9 +179,9 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     for (let index = start; index < end; index++) {
       const group = groups[index], column = doc.createElement('section'); column.className = 'bases-kanban-column';
       column.style.left = `${index * stride}px`; column.style.width = `${width}px`;
-      const heading = doc.createElement('div'); heading.className = 'bases-kanban-column-header'; heading.textContent = label(group.key);
+      const heading = doc.createElement('div'); heading.className = 'bases-kanban-column-header'; heading.textContent = label(group.key, result.shared !== undefined);
       const count = doc.createElement('span'); count.className = 'bases-kanban-column-count'; count.textContent = String(group.rows.length); heading.append(count);
-      const body = doc.createElement('div'); body.className = 'bases-kanban-column-body'; body.setAttribute('role', 'listbox'); body.setAttribute('aria-label', label(group.key));
+      const body = doc.createElement('div'); body.className = 'bases-kanban-column-body'; body.setAttribute('role', 'listbox'); body.setAttribute('aria-label', label(group.key, result.shared !== undefined));
       column.append(heading, body); nodes.push(column);
       if (columns && group.key && (propertyOf(result)?.startsWith('note.') || propertyOf(result) === 'file.folder')) heading.addEventListener('contextmenu', event => {
         if (destroyed || !root.contains(heading)) return;
@@ -207,17 +220,37 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     const queryGroups = result.groups.filter(group => group.key !== null);
     if (!propertyOf(result)) groups = [];
     else if (Array.isArray(result.view.groupOrder)) {
-      groups = result.groupOptions.filter(option => option.listed).map(option =>
+      if (result.shared !== undefined) {
+        const listed = result.groupOptions.filter(option => option.listed), last = new Map<string, number>();
+        listed.forEach((option, index) => {
+          if (typeof option.sharedKeyId !== 'string') throw new Error('Shared group identity is unavailable.');
+          last.set(option.sharedKeyId, index);
+        });
+        const known = new Set(queryGroups.map(group => group.sharedKeyId));
+        const displayed: BaseQueryGroup[] = []; let actual = 0;
+        listed.forEach((option, index) => {
+          if (last.get(option.sharedKeyId!) !== index) return;
+          if (known.has(option.sharedKeyId)) {
+            // Rust groups already own row membership and order. Only insert
+            // missing listed empty columns around that exact sequence.
+            const group = queryGroups[actual++];
+            if (group?.sharedKeyId !== option.sharedKeyId) throw new Error('Shared group order does not match its saved configuration.');
+            displayed.push(group);
+          } else displayed.push({ key: option.key, sharedKeyId: option.sharedKeyId, rows: [] });
+        });
+        if (actual !== queryGroups.length) throw new Error('Shared group order is incomplete.');
+        groups = displayed;
+      } else groups = result.groupOptions.filter(option => option.listed).map(option =>
         queryGroups.find(group => group.key && matchesBaseGroupKey(option.key, group.key)) ?? { key: option.key, rows: [] });
-    } else groups = [...queryGroups.filter(group => group.key?.type === 'null'), ...queryGroups.filter(group => group.key?.type !== 'null')];
+    } else groups = result.shared !== undefined ? queryGroups : [...queryGroups.filter(group => group.key?.type === 'null'), ...queryGroups.filter(group => group.key?.type !== 'null')];
     properties = result.properties.filter(property => property !== 'file.name');
     width = typeof result.view.columnWidth === 'number' && Number.isFinite(result.view.columnWidth) ? Math.max(200, Math.min(500, result.view.columnWidth)) : 280;
     rowHeight = 48 + properties.length * 24 + gap;
     for (const [path, operation] of pending) {
-      if (propertyOf(result) !== operation.request.property || !equal(locate(path)?.key ?? null, operation.request.source) || !groups.some(group => equal(group.key, operation.request.destination))) pending.delete(path);
+      if (propertyOf(result) !== operation.request.property || !requestGroupIs(locate(path), operation.request, 'source') || !groups.some(group => requestGroupIs(group, operation.request, 'destination'))) pending.delete(path);
     }
     if (selected && !locate(selected)) selected = undefined;
-    const retainedScrolls = [...scrolls].filter(([key]) => groups.some(group => equal(group.key, key)));
+    const retainedScrolls = [...scrolls].filter(([key]) => groups.some(group => result.shared !== undefined ? typeof key === 'string' && group.sharedKeyId === key : typeof key !== 'string' && equal(group.key, key)));
     scrolls.clear(); for (const [key, top] of retainedScrolls) scrolls.set(key, top);
     render();
   }

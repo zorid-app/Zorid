@@ -45,12 +45,12 @@ Adaptations:
 
 Status (2026-10-17): extraction and query engine integrated on main426d3a6c.
 Scoped native expression/query/generation checks pass. Actual Chrome WASM runs
-pass51 accepted Base cases (30 expressions,10 queries,4 generation cases and7
-compile checks) plus5 malformed-request checks, using the shared corpus. See
+pass54 accepted Base cases (30 expressions,10 queries,7 generation cases and7
+compile checks) plus10 malformed/options checks and2 current-entry witnesses, using the shared corpus. See
 `docs/shared-document-semantics-plan.md` and its evidence ledger for exact source,
 binary hashes and limits. These results establish the accepted scoped behavior,
 not complete upstream builtin equivalence or measured performance improvement.
-Normal Base controller migration remains in progress; source-preserving editor
+Normal Base controller migration passes actual browser/desktop checks; source-preserving editor
 transformations remain TypeScript-owned. The reducer owns Zorid's filter/group-
 order/search/sort/limit policy around row-scoped sessions of the reused evaluator.
 Base YAML uses the document crate's Saphyr mapping decoder.
