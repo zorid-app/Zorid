@@ -17,6 +17,20 @@ function setup(t: TestContext, source: string, integrated = false) {
   const dom = new JSDOM('<!doctype html><body><div id="host"></div>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   const observers: { target?: Element; disconnected: boolean; callback: () => void }[] = [];
+  const mutations: { target?: Node; options?: MutationObserverInit; disconnected: boolean; calls: number }[] = [];
+  const NativeMutationObserver = dom.window.MutationObserver;
+  class TrackingMutationObserver extends NativeMutationObserver {
+    item: typeof mutations[number];
+    constructor(callback: MutationCallback) {
+      const item = { disconnected: false, calls: 0 };
+      super((records, observer) => { item.calls++; callback(records, observer); });
+      this.item = item; mutations.push(item);
+    }
+    observe(target: Node, options?: MutationObserverInit) { this.item.target = target; this.item.options = options; super.observe(target, options); }
+    disconnect() { this.item.disconnected = true; super.disconnect(); }
+  }
+  dom.window.MutationObserver = TrackingMutationObserver;
+
   class TestResizeObserver {
     item: typeof observers[number];
     constructor(callback: () => void) { this.item = { callback, disconnected: false }; observers.push(this.item); }
@@ -59,7 +73,7 @@ function setup(t: TestContext, source: string, integrated = false) {
     for (const [key, value] of saved) { if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key); }
   });
   const click = (node: Element) => node.dispatchEvent(new dom.window.MouseEvent('click', { button: 0, bubbles: true, cancelable: true }));
-  return { view, host, renders, destroy, compartment, extension, click, observers, dom };
+  return { view, host, renders, destroy, compartment, extension, click, observers, mutations, dom };
 }
 
 test('whole-line and inline embeds render without altering the Markdown document', t => {
@@ -368,8 +382,8 @@ for (const inline of [false, true]) test(`actual editor ${inline ? 'inline' : 'b
   style.textContent = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8') + readFileSync(new URL('../src/ui/media-view.css', import.meta.url), 'utf8');
   document.head.append(style);
   const wrapper = host.querySelector<HTMLElement>('.cm-live-embed')!;
-  const owner = renders[0], audio = wrapper.querySelector('audio')!, action = wrapper.querySelector('button')!;
-  assert.equal(getComputedStyle(action).display, 'none', 'source overlay cannot cover native playback controls');
+  const owner = renders[0], audio = wrapper.querySelector('audio')!;
+  assert.equal(wrapper.querySelector('.cm-live-embed-edit'), null, 'audio does not construct a source overlay');
   assert.equal(getComputedStyle(owner.node).display, 'block');
   if (inline) assert.equal(getComputedStyle(wrapper).width, '100%');
   else { assert.equal(getComputedStyle(wrapper).paddingTop, '0px'); assert.equal(getComputedStyle(wrapper).paddingBottom, '0px'); }
@@ -396,4 +410,226 @@ test('audio overlay rules preserve image, PDF and enclosing note actions', t => 
     assert.notEqual(getComputedStyle(wrapper.querySelector('button')!).display, 'none');
     assert.equal(getComputedStyle(wrapper).paddingTop, '12px'); assert.equal(getComputedStyle(wrapper).paddingBottom, '12px');
   }
+});
+
+
+const settleControls = async () => { await Promise.resolve(); await Promise.resolve(); };
+function installEmbedCSS() {
+  const style = document.createElement('style');
+  style.textContent = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8');
+  document.head.append(style);
+}
+
+test('resolved video removes generic source action without intercepting native controls or replacing renderer', async t => {
+  const source = 'before\n![[movie.mp4]]\nafter';
+  const { host, renders, click, view } = setup(t, source, true);
+  const root = renders[0].node, wrapper = root.parentElement!;
+  root.className = 'internal-embed media-embed video-embed';
+  const video = document.createElement('video'); video.controls = true; root.replaceChildren(video);
+  await settleControls();
+  assert.equal(wrapper.dataset.embedType, 'video');
+  assert.equal(wrapper.querySelector('.cm-live-embed-edit'), null);
+  assert.equal(click(video), true, 'native default remains available');
+  assert.equal(view.state.selection.main.from, 0);
+  click(root);
+  assert.equal(view.state.selection.main.from, source.indexOf('![['));
+  assert.equal(root.parentElement, wrapper); assert.equal(renders[0].destroys, 0);
+  assert.equal(view.state.doc.toString(), source);
+});
+
+test('note Open link reuses navigation capability and invalidates retained links after replacement and teardown', async t => {
+  const { host, renders, view, click, destroy } = setup(t, 'before\n![[Note]]\nafter', true);
+  const root = renders[0].node, wrapper = root.parentElement!;
+  let opened = 0;
+  const makeLink = () => {
+    const link = document.createElement('a'); link.className = 'embed-open'; link.href = '#note';
+    link.onclick = event => { event.preventDefault(); opened++; }; return link;
+  };
+  const first = makeLink(); root.className = 'internal-embed markdown-embed'; root.replaceChildren(first);
+  await settleControls();
+  assert.equal(wrapper.querySelector('.cm-live-embed-edit'), null);
+  assert.equal(first.getAttribute('aria-label'), 'Open link'); assert.ok(first.querySelector('svg'));
+  click(first); assert.equal(opened, 1); assert.equal(view.state.selection.main.from, 0);
+  const second = makeLink(); root.replaceChildren(second);
+  click(first); assert.equal(opened, 1, 'detached link cannot navigate before observer delivery');
+  await settleControls(); click(second); assert.equal(opened, 2);
+  click(root); assert.equal(view.state.selection.main.from, 7); assert.equal(renders[0].destroys, 0);
+  destroy(); assert.equal(click(second), false, 'retained anchor default navigation is suppressed'); assert.equal(opened, 2); assert.equal(renders[0].destroys, 1);
+  assert.equal(host.querySelector('.cm-live-embed'), null);
+});
+
+test('PDF source action reserves toolbar space and reveals syntax without replacing the viewer', async t => {
+  const { renders, click, view } = setup(t, 'before\n![[file.pdf]]\nafter', true);
+  installEmbedCSS();
+  const root = renders[0].node, wrapper = root.parentElement!;
+  root.className = 'internal-embed pdf-embed';
+  const viewer = document.createElement('div'); viewer.className = 'zorid-pdf-view';
+  const toolbar = document.createElement('div'); toolbar.className = 'zorid-pdf-toolbar';
+  const open = document.createElement('button'); open.textContent = 'Open PDF';
+  let opens = 0; open.onclick = () => { opens++; }; toolbar.append(open); viewer.append(toolbar); root.replaceChildren(viewer);
+  await settleControls();
+  const action = wrapper.querySelector<HTMLElement>('.cm-live-embed-edit')!;
+  assert.equal(getComputedStyle(action).opacity, '1'); assert.equal(getComputedStyle(action).top, '6px');
+  assert.equal(getComputedStyle(action).insetInlineEnd, '4px'); assert.equal(getComputedStyle(toolbar).paddingInlineEnd, '36px');
+  assert.equal(getComputedStyle(wrapper).paddingTop, '0px');
+  click(open); assert.equal(opens, 1); assert.equal(view.state.selection.main.from, 0);
+  click(action); assert.equal(view.state.selection.main.from, 7);
+  assert.equal(root.firstElementChild, viewer); assert.equal(renders[0].destroys, 0);
+});
+
+test('actual Bases and Canvas capabilities differ from unsupported extension fallbacks', async t => {
+  const { renders, click, view } = setup(t, 'before\n![[data.base]]\n![[board.canvas]]\nafter', true);
+  const base = renders[0].node, canvas = renders[1].node;
+  for (const root of [base, canvas]) {
+    root.className = 'internal-embed markdown-embed';
+    const error = document.createElement('div'); error.className = 'embed-error'; root.replaceChildren(error);
+  }
+  await settleControls();
+  for (const root of [base, canvas]) {
+    assert.equal(root.parentElement!.dataset.embedType, 'unavailable');
+    assert.ok(root.parentElement!.querySelector('.cm-live-embed-edit'));
+  }
+  base.className = 'internal-embed bases-embed'; base.replaceChildren(document.createElement('div'));
+  canvas.className = 'internal-embed canvas-embed'; canvas.replaceChildren(document.createElement('div'));
+  await settleControls();
+  assert.equal(base.parentElement!.dataset.embedType, 'base');
+  assert.ok(base.parentElement!.querySelector('.cm-live-embed-edit'));
+  assert.equal(canvas.parentElement!.dataset.embedType, 'canvas');
+  assert.equal(canvas.parentElement!.querySelector('.cm-live-embed-edit'), null);
+  click(base.parentElement!.querySelector('.cm-live-embed-edit')!);
+  assert.equal(view.state.selection.main.from, 7); assert.ok(renders.every(item => item.destroys === 0));
+});
+
+test('async control observer is shallow, does not observe its own actions, and disconnects before renderer release', async t => {
+  const { renders, mutations, destroy, click, view } = setup(t, 'before\n![[late]]\nafter', true);
+  const root = renders[0].node, wrapper = root.parentElement!;
+  const observer = mutations.find(item => item.target === root)!;
+  assert.deepEqual(observer.options, { attributes: true, attributeFilter: ['class'], childList: true });
+  const loading = document.createElement('span'); loading.className = 'embed-loading'; root.replaceChildren(loading);
+  await settleControls(); assert.equal(wrapper.dataset.embedType, 'loading'); assert.equal(wrapper.querySelector('button'), null);
+  root.className = 'internal-embed pdf-embed'; const body = document.createElement('div'); root.replaceChildren(body);
+  await settleControls(); const count = observer.calls;
+  body.append(document.createElement('div')); body.className = 'nested-content';
+  await settleControls(); assert.equal(observer.calls, count, 'nested render churn is not observed');
+  const action = wrapper.querySelector('.cm-live-embed-edit')!;
+  assert.ok(action); await settleControls(); assert.equal(observer.calls, count, 'own controls do not create observer feedback');
+  destroy(); assert.equal(observer.disconnected, true); assert.equal(renders[0].destroys, 1);
+  const selection = view.state.selection.main.from; click(action); assert.equal(view.state.selection.main.from, selection);
+  root.className = 'audio-embed'; root.replaceChildren(document.createElement('audio'));
+  await settleControls(); assert.equal(observer.calls, count); assert.equal(wrapper.dataset.embedType, 'pdf');
+});
+
+
+test('same note anchor recovers after loading and preserves fallback navigation after asynchronous failure', async t => {
+  const { renders, click, destroy } = setup(t, 'before\n![[Note]]\nafter', true);
+  const root = renders[0].node;
+  const link = document.createElement('a'); link.className = 'embed-open'; link.href = '#Note'; link.textContent = 'Note';
+  link.title = 'Original title'; link.setAttribute('aria-label', 'Open Note');
+  let opened = 0; link.onclick = event => { event.preventDefault(); opened++; };
+  root.className = 'markdown-embed'; root.replaceChildren(link); await settleControls();
+  click(link); assert.equal(opened, 1);
+  const loading = document.createElement('span'); loading.className = 'embed-loading'; root.append(loading); await settleControls();
+  assert.equal(click(link), false); assert.equal(opened, 1);
+  loading.remove(); await settleControls(); click(link); assert.equal(opened, 2);
+  const error = document.createElement('span'); error.className = 'embed-error'; root.append(error); await settleControls();
+  assert.equal(root.parentElement!.dataset.embedType, 'unavailable');
+  assert.equal(link.textContent, 'Note'); assert.equal(link.title, 'Original title'); assert.equal(link.getAttribute('aria-label'), 'Open Note');
+  assert.equal(link.classList.contains('cm-live-embed-open'), false);
+  click(link); assert.equal(opened, 3);
+  error.remove(); await settleControls(); assert.equal(link.getAttribute('aria-label'), 'Open link'); click(link); assert.equal(opened, 4);
+  destroy(); assert.equal(click(link), false); assert.equal(opened, 4);
+});
+
+
+test('typed renderer failure exposes fallback source action but nested viewer errors keep viewer policy', async t => {
+  const { renders, click, view } = setup(t, 'before\n![[sound.wav]]\nafter', true);
+  const root = renders[0].node, wrapper = root.parentElement!;
+  const error = document.createElement('span'); error.className = 'embed-error';
+  root.querySelector('div')!.append(error); await settleControls();
+  assert.equal(wrapper.dataset.embedType, 'audio'); assert.equal(wrapper.querySelector('.cm-live-embed-edit'), null);
+  root.append(error); await settleControls();
+  assert.equal(wrapper.dataset.embedType, 'unavailable');
+  click(wrapper.querySelector('.cm-live-embed-edit')!); assert.equal(view.state.selection.main.from, 7);
+  assert.equal(renders[0].destroys, 0);
+});
+
+async function resolveTestImage(root: HTMLElement) {
+  root.className = 'internal-embed image-embed';
+  const image = document.createElement('img'); image.alt = 'Owned image';
+  Object.defineProperty(image, 'offsetWidth', { value: 240 });
+  let zooms = 0; image.onclick = () => { zooms++; };
+  root.replaceChildren(image); await settleControls();
+  return { image, zooms: () => zooms };
+}
+
+test('actual image first click selects source-start without reveal; selected click zooms and editor movement clears selection', async t => {
+  const source = 'before\n![[photo.png|240]]\nafter';
+  const { renders, click, view, host } = setup(t, source, true);
+  const root = renders[0].node, { image, zooms } = await resolveTestImage(root);
+  assert.equal(root.parentElement!.querySelector('.cm-live-embed-edit'), null);
+  click(image);
+  assert.equal(zooms(), 0); assert.equal(view.state.selection.main.from, 7); assert.equal(view.state.selection.main.empty, true);
+  assert.equal(root.classList.contains('zorid-image-selected'), true);
+  assert.doesNotMatch(view.contentDOM.textContent!, /!\[\[/);
+  click(image); assert.equal(zooms(), 1);
+  view.dispatch({ selection: { anchor: 7 + '![[photo.png|240]]'.length } });
+  assert.equal(root.classList.contains('zorid-image-selected'), true, 'image end retains selected identity');
+  view.dispatch({ selection: { anchor: source.length } });
+  assert.equal(root.classList.contains('zorid-image-selected'), false);
+  click(image); assert.equal(zooms(), 1); assert.equal(root.classList.contains('zorid-image-selected'), true);
+  host.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+  assert.equal(root.classList.contains('zorid-image-selected'), false);
+  assert.equal(renders[0].destroys, 0);
+});
+
+for (const [syntax, target] of [
+  ['![[  photo.png#part |240]]', 'photo.png#part'],
+  ['![label](<images/photo one.png> "caption")', 'images/photo one.png'],
+  ['![label](images/photo.png)', 'images/photo.png'],
+]) test(`image source action selects only mapped target in ${syntax}`, async t => {
+  const { renders, click, view } = setup(t, `before\n${syntax}\nafter`, true);
+  const root = renders[0].node; await resolveTestImage(root);
+  view.dispatch({ changes: { from: 0, insert: 'prefix\n' } });
+  const wrapper = root.parentElement!;
+  click(root.querySelector('[aria-label="Edit image source"]')!);
+  assert.equal(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to), target);
+  assert.equal(view.state.selection.main.from, view.state.doc.toString().indexOf(target));
+  assert.equal(root.classList.contains('zorid-image-selected'), true);
+  assert.equal(root.parentElement, wrapper); assert.equal(renders.length, 1); assert.equal(renders[0].destroys, 0);
+  assert.ok(view.contentDOM.textContent!.includes(syntax));
+  view.dispatch({ selection: { anchor: 0 } });
+  assert.equal(root.classList.contains('zorid-image-selected'), false);
+  assert.equal(root.parentElement, wrapper); assert.equal(renders[0].destroys, 0);
+});
+
+test('image selection is exclusive per editor and follows identity through inserted source', async t => {
+  const { renders, click, view } = setup(t, 'before\n![[one.png]]\n![[two.png]]\nafter', true);
+  const first = await resolveTestImage(renders[0].node), second = await resolveTestImage(renders[1].node);
+  click(first.image); assert.equal(renders[0].node.classList.contains('zorid-image-selected'), true);
+  view.dispatch({ changes: { from: 0, insert: 'prefix\n' } });
+  assert.equal(renders[0].node.classList.contains('zorid-image-selected'), true);
+  click(second.image);
+  assert.equal(renders[0].node.classList.contains('zorid-image-selected'), false);
+  assert.equal(renders[1].node.classList.contains('zorid-image-selected'), true);
+  assert.equal(view.state.selection.main.from, view.state.doc.toString().indexOf('![[two'));
+  assert.ok(renders.every(record => record.destroys === 0));
+});
+
+test('image helpers end before renderer release and do not survive type changes or editor destruction', async t => {
+  const { renders, click, view, destroy, mutations } = setup(t, 'before\n![[photo.png]]\nafter', true);
+  const root = renders[0].node; const { image } = await resolveTestImage(root);
+  click(image);
+  const source = root.querySelector('[aria-label="Edit image source"]')!;
+  const imageObserver = mutations.find(item => item.target === root && !item.options?.attributes)!;
+  assert.ok(imageObserver);
+  root.className = 'internal-embed media-embed audio-embed'; root.replaceChildren(document.createElement('audio'));
+  await settleControls();
+  assert.equal(imageObserver.disconnected, true); assert.equal(root.querySelector('.zorid-image-embed-actions'), null);
+  const selected = view.state.selection.main.from; click(source); assert.equal(view.state.selection.main.from, selected);
+  await resolveTestImage(root); assert.equal(root.querySelectorAll('.zorid-image-embed-actions').length, 1);
+  assert.equal(root.classList.contains('zorid-image-selected'), false, 'definitive type change does not resurrect selected-image state');
+  const secondObserver = mutations.filter(item => item.target === root && !item.options?.attributes).at(-1)!;
+  destroy(); assert.equal(secondObserver.disconnected, true); assert.equal(renders[0].destroys, 1);
+  assert.equal(root.querySelector('.zorid-image-embed-actions'), null);
+  document.body.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
 });

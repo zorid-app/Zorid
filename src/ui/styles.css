@@ -222,6 +222,17 @@ button.search-snippet { white-space: normal; overflow-wrap: anywhere; }
 .cm-live-embed > .markdown-embed { margin: 0; }
 .cm-live-embed-edit { position: absolute; top: 4px; right: 4px; opacity: 0; border: 0; border-radius: 4px; padding: 4px 6px; background: var(--background-secondary); color: var(--text-muted); cursor: pointer; }
 .cm-live-embed:hover > .cm-live-embed-edit, .cm-live-embed:focus-within > .cm-live-embed-edit { opacity: 1; }
+/* Live file embed controls are conditional; Reading/viewer controls stay owned
+   by their renderer. PDF reserves room beside its separate Open menu. */
+.cm-live-embed[data-embed-type="video"] > .video-embed { display: block; }
+.cm-live-embed-block:is([data-embed-type="video"], [data-embed-type="pdf"], [data-embed-type="base"]) { padding: 0; }
+.cm-live-embed[data-embed-type="note"] > .markdown-embed > .cm-live-embed-open { position: absolute; top: 4px; inset-inline-end: 4px; display: flex; padding: 4px; border-radius: 4px; color: var(--icon-color, var(--text-muted)); opacity: var(--icon-opacity, .85); }
+.cm-live-embed[data-embed-type="note"] > .markdown-embed > .cm-live-embed-open:hover { color: var(--icon-color-hover, var(--text-normal)); background: var(--background-modifier-hover); }
+.cm-live-embed[data-embed-type="pdf"] > .cm-live-embed-edit { top: 6px; right: auto; inset-inline-end: 4px; z-index: 1; opacity: 1; background: var(--background-primary); }
+.cm-live-embed[data-embed-type="pdf"] > .pdf-embed > .zorid-pdf-view > .zorid-pdf-toolbar { padding-inline-end: 36px; }
+.cm-content > .cm-live-embed[data-embed-type="base"] > .cm-live-embed-edit { top: calc((var(--bases-header-height, 40px) - var(--icon-size, 16px)) / 2 - 4px); right: auto; inset-inline-end: 4px; opacity: 1; }
+.cm-content > .cm-live-embed[data-embed-type="base"] > .bases-embed .bases-header { padding-inline-end: calc(var(--icon-size, 16px) + 16px); }
+
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 36px; color: var(--text-muted); text-align: center; }
 .empty-state h1, .empty-state h2 { color: var(--text-normal); font-size: 24px; font-weight: 600; margin: 0 0 18px; }
 .empty-state p { max-width: 430px; font-size: 14px; line-height: 1.7; }

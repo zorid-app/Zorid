@@ -10,6 +10,7 @@ import './ui/file-tree-drag.css';
 import './editor/table-controls.css';
 import './editor/live-lists.css';
 import './editor/live-inline.css';
+import './editor/image-embed-controls.css';
 import './editor/wiki-completion.css';
 import './editor/folding.css';
 import './editor/live-math.css';

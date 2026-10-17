@@ -21,6 +21,7 @@ export interface CanvasAttachmentCardOptions {
   mobile?: boolean;
   imageFactory?: typeof createImageView;
   pdfFactory?: typeof createPdfView;
+  generateMarkdownLink?:(subpath:string,alias:string)=>string|null;
   mediaFactory?: typeof createMediaView;
 }
 export interface CanvasAttachmentCard {
@@ -93,6 +94,7 @@ export function createCanvasAttachmentCard(parent: HTMLElement, options: CanvasA
     if (kind === 'image') child = (options.imageFactory ?? createImageView)(content, options.path, resources, { onError: report });
     else if (kind === 'pdf') {
       const view = (options.pdfFactory ?? createPdfView)(content, options.path, resources, {
+        generateMarkdownLink:options.generateMarkdownLink?(subpath:string,alias:string)=>closed?null:options.generateMarkdownLink!(subpath,alias):undefined,
         embed: true, height: 'auto', subpath: options.subpath, mobile: options.mobile, onError: report,
       });
       child = view; void view.ready.then(settle, report);
