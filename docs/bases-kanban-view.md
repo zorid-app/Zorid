@@ -1,6 +1,6 @@
 # Bases Kanban renderer
 
-Original implementation in `src/bases/kanban-view.ts` and `.css`. This is an isolated renderer, not an integrated `.base` view or proof of native parity.
+Original implementation in `src/bases/kanban-view.ts` and `.css`. The renderer is integrated through the Bases session and workspace. Basic native Table/Cards/List/Board navigation and property persistence have been observed; that does not establish full Kanban or native interaction parity.
 
 ## Evidence
 
@@ -26,8 +26,24 @@ The renderer uses scroll-driven horizontal column and vertical card windows, not
 
 ## Remaining parity
 
-- Workspace registration, live queries, actual frontmatter/folder persistence and undo.
+- Full mutation/undo parity: shared-buffer property writes and guarded folder moves are integrated, but metadata-registry scalar conversion and broader native race coverage remain incomplete.
 - Shared property rendering, image covers and image options, measured theme-dependent sizes.
-- Drag-hover previews, manual column ordering/hiding, create/edit groups and new-note controls.
+- Drag-hover previews and direct board-header column dragging; typed new-group and new-note controls. The Edit columns popover now supports manual ordering/visibility, pending integration/native verification.
 - Matching context menus, hover links, text/link interactions, drag autoscroll/ghosts, keyboard and touch interactions, read-only visual affordances.
 - Native Electron/mobile validation and large-vault profiling; bounded DOM is not proof of acceptable rendering latency.
+
+## Edit columns controls
+
+The original `kanban-columns.ts` helper adds an **Edit columns** entry to the board and **Hide column / Edit columns** to editable column-header context menus. The helper only requests a versioned configuration patch; it never writes note frontmatter. A session adapter routes requests through the existing shared-buffer controller, retaining unknown `.base` keys and configuration comments as supported by the document model. The companion adapter is tracked separately; this implementation must not be described as live until its session wiring is integrated.
+
+Static reference evidence from the same artifact:
+
+- `zJ` at 2490030 filters rows against configured `groupOrder`, and the runtime query notification at 2543550 invokes it before search. Thus `groupOrder: [Todo, Done]` deliberately hides an `In progress` note from that view; automatically inventing a new visible column would contradict the reference.
+- `WJ` at 2490466 returns listed groups separately from unlisted rows. The Kanban manual branch at 3159690 uses those listed groups including empty columns.
+- Group menu implementation `ZJ/JJ` starts at 2501697. Manual mode displays visible rows first, then sorted hidden rows, each with a checkbox/count and drag grip. Clicking a row toggles visibility. Alt+Up/Down moves the selected checked row; Hide all/Show all changes checked states. Saving serializes checked rows in current order and appends unmatched stored order entries.
+- Returning to automatic sorting removes `groupOrder`; returning to Manual during the same open menu restores the previous manual order, or initializes an empty order if none was remembered. Closing the menu clears that temporary remembered order.
+- Header context-menu wiring near 3167670 exposes Hide column followed by Edit columns. These two implemented actions are only a subset: the reference also has new-note actions which still need a host capability.
+
+The helper keeps existing empty menu rows through its own hide/show save acknowledgements, so Hide all followed by Show all in the same menu does not lose empty configured columns. New snapshot versions invalidate stale failures/drag gestures. Pending saves disable duplicate controls; failed saves restore authoritative checked states and display an error. If the shared buffer retains a failed disk write, the session still owns the recovery draft; retry/close behavior follows the controller's recovery contract rather than discarding the draft.
+
+Focused tests cover the exact missing-group fixture, retained unknown configuration, checkbox/hide-all/show-all, Alt-arrow and drag reorder, automatic/manual toggling, rejected/pending/stale operations, teardown and read-only visibility. Scoped TypeScript passes. Native placement, menu styling, real pointer dragging, accessibility and mobile verification remain pending. Property chooser changes, typed Add group widgets and complete native header menu contents remain explicit gaps; no custom data-type registry was invented.

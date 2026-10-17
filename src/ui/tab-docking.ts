@@ -88,6 +88,79 @@ export function tabInsertion(clientX: number, tabs: readonly DockRect[], header:
   return { index, rect: { x: x - 5, y, width: 10, height } };
 }
 
+let previewSequence = 0;
+/** A visual snapshot only: no listeners, live editor ownership, or saved layout. */
+function remainingPanePreview(source: HTMLElement, root: HTMLElement): {
+  shell: HTMLElement; frame: HTMLElement; restoreScroll(): void;
+} {
+  const doc = source.ownerDocument, frame = doc.createElement('div');
+  frame.className = 'tab-docking-remaining';
+  frame.setAttribute('aria-hidden', 'true'); frame.inert = true;
+  // Import into a document without a custom-element registry before sanitizing;
+  // cloning a plugin custom element in the live document can run its constructor.
+  const inertDoc = doc.implementation.createHTMLDocument('');
+  let copy = inertDoc.importNode(source, true) as HTMLElement;
+  const originals = [source, ...source.querySelectorAll<HTMLElement>('*')];
+  const copies = [copy, ...copy.querySelectorAll<HTMLElement>('*')];
+  const scroll: { element: HTMLElement; left: number; top: number }[] = [];
+  const ids = new Map<string, string>(), prefix = `tab-docking-copy-${++previewSequence}-`;
+  for (let index = 0; index < copies.length; index++) {
+    const imported = copies[index];
+    const original = originals[index];
+    // Recreate every element: customized built-ins can retain internal `is`
+    // identity after removing that attribute, and would upgrade upon adoption.
+    const custom = imported.namespaceURI === 'http://www.w3.org/1999/xhtml' && imported.localName.includes('-');
+    const element = inertDoc.createElementNS(imported.namespaceURI, custom ? 'div' : imported.localName) as HTMLElement;
+    for (const attribute of [...imported.attributes]) {
+      if (attribute.name.startsWith('on') || ['autofocus', 'is'].includes(attribute.name)) continue;
+      element.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
+    }
+    element.append(...imported.childNodes); imported.replaceWith(element); copies[index] = element;
+    if (index === 0) copy = element;
+    if (element.tagName === 'INPUT') {
+      const input = element as HTMLInputElement, from = original as HTMLInputElement;
+      if (input.type !== 'file') input.value = from.value;
+      input.checked = from.checked; input.indeterminate = from.indeterminate;
+    } else if (element.tagName === 'TEXTAREA') (element as HTMLTextAreaElement).value = (original as HTMLTextAreaElement).value;
+    else if (element.tagName === 'OPTION') (element as HTMLOptionElement).selected = (original as HTMLOptionElement).selected;
+    if (element.id) { const id = prefix + element.id; ids.set(element.id, id); element.id = id; }
+    // Clones must not load a second embedded document or start media playback.
+    if (['script', 'iframe', 'object', 'embed', 'link', 'style', 'base', 'meta'].includes(element.localName.toLowerCase())) { element.remove(); continue; }
+    if (element.tagName === 'AUDIO' || element.tagName === 'VIDEO') {
+      element.removeAttribute('src'); element.removeAttribute('autoplay'); element.setAttribute('preload', 'none');
+      element.querySelectorAll('source,track').forEach(child => child.remove());
+    }
+    if (element.tagName === 'CANVAS') {
+      try { (element as HTMLCanvasElement).getContext('2d')?.drawImage(original as HTMLCanvasElement, 0, 0); }
+      catch { /* Some view canvases cannot be copied; never alter the live canvas. */ }
+    }
+    if (original.scrollLeft || original.scrollTop) scroll.push({ element, left: original.scrollLeft, top: original.scrollTop });
+  }
+  // Preserve local SVG/MathJax references without duplicating live document IDs.
+  for (const element of copies) for (const attribute of [...element.attributes]) {
+    let value = attribute.value;
+    if (['href', 'xlink:href', 'for'].includes(attribute.name)) {
+      const id = value.startsWith('#') ? value.slice(1) : value;
+      if (ids.has(id)) value = (value.startsWith('#') ? '#' : '') + ids.get(id);
+    }
+    value = value.replace(/url\(#([^)]*)\)/g, (match, id: string) => ids.has(id) ? `url(#${ids.get(id)})` : match);
+    if (value !== attribute.value) element.setAttribute(attribute.name, value);
+  }
+  frame.append(copy);
+  // Keep ancestor classes for contextual theme/chrome rules; these empty shells
+  // never contain a second live application or participate in its split layout.
+  let shell = frame;
+  for (let ancestor = source.parentElement; ancestor && ancestor !== doc.body; ancestor = ancestor.parentElement) {
+    const wrapper = doc.createElement('div'); wrapper.className = ancestor.className;
+    wrapper.append(shell); shell = wrapper;
+    if (ancestor === root) break;
+  }
+  const container = doc.createElement('div');
+  container.className = 'tab-docking-preview-shell'; container.setAttribute('aria-hidden', 'true'); container.inert = true;
+  container.append(shell);
+  return { shell: container, frame, restoreScroll() { for (const position of scroll) { position.element.scrollLeft = position.left; position.element.scrollTop = position.top; } } };
+}
+
 export function createTabDocking(options: TabDockingOptions): { destroy(): void; cancel(): void } {
   const { root } = options, doc = root.ownerDocument, win = doc.defaultView;
   if (!win) throw new Error('Tab docking requires a window');
@@ -97,8 +170,18 @@ export function createTabDocking(options: TabDockingOptions): { destroy(): void;
   let destroyed = false, pending = false;
   let session: { sourcePaneId: string; tabId: string; start: DockPoint; size: DockRect; active: boolean; outside: boolean } | null = null;
   let leaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let remaining: { source: HTMLElement; opacity: string; priority: string; visual: ReturnType<typeof remainingPanePreview> } | null = null;
   const clearLeave = () => { if (leaveTimer !== undefined) clearTimeout(leaveTimer); leaveTimer = undefined; };
-  const hide = () => { preview.hidden = true; };
+  const restoreTarget = () => {
+    if (!remaining) return;
+    const { source, opacity, priority, visual } = remaining;
+    // Do not overwrite a newer host-owned opacity update made during the drag.
+    if (source.style.getPropertyValue('opacity') === '0' && source.style.getPropertyPriority('opacity') === 'important') {
+      if (opacity) source.style.setProperty('opacity', opacity, priority); else source.style.removeProperty('opacity');
+    }
+    visual.shell.remove(); remaining = null;
+  };
+  const hide = () => { preview.hidden = true; restoreTarget(); };
   const cancel = () => { clearLeave(); session = null; hide(); root.classList.remove('is-tab-dragging'); };
   const apply = (action: () => void | Promise<void>) => {
     pending = true;
@@ -119,17 +202,19 @@ export function createTabDocking(options: TabDockingOptions): { destroy(): void;
     if (session.active) root.classList.add('is-tab-dragging');
     return session.active;
   };
-  const targetAt = (event: DragEvent): { intent: DockIntent; rect: DockRect } | null => {
-    if (!session || !activate(event)) return null;
+  const targetAt = (event: DragEvent): { intent: DockIntent; rect: DockRect; pane: DockPane; bounds: DockRect } | null => {
+    if (!session || options.enabled?.() === false || !root.isConnected || !activate(event)) return null;
     const panes = options.getPanes();
     const source = panes.find(p => p.id === session!.sourcePaneId);
     const sourceIndex = source?.tabs.findIndex(t => t.id === session!.tabId) ?? -1;
-    if (!source || sourceIndex < 0) return null;
+    if (!source || sourceIndex < 0 || !source.element.isConnected || !root.contains(source.element)
+      || !source.tabs[sourceIndex].element.isConnected || !source.element.contains(source.tabs[sourceIndex].element)) return null;
     const point = { x: event.clientX, y: event.clientY };
     // Hosts expose leaf panes only. Reverse order agrees with painting for overlaps.
     for (const pane of [...panes].reverse()) {
-      if (!pane.element.isConnected) continue;
-      const zone = dockZone(point, pane.element.getBoundingClientRect(), {
+      if (!pane.element.isConnected || !root.contains(pane.element) || pane.element.ownerDocument !== doc) continue;
+      const bounds = pane.element.getBoundingClientRect();
+      const zone = dockZone(point, bounds, {
         headerRect: pane.tabBar.getBoundingClientRect(), stacked: pane.stacked, disabledEdges: pane.disabledEdges,
       });
       if (!zone) continue;
@@ -142,7 +227,7 @@ export function createTabDocking(options: TabDockingOptions): { destroy(): void;
           if (index === sourceIndex) return null;
         }
       } else if (pane.id === source.id && source.tabs.length === 1) return null;
-      return { intent: { sourcePaneId: source.id, tabId: session.tabId, targetPaneId: pane.id, edge: zone.edge, index }, rect };
+      return { intent: { sourcePaneId: source.id, tabId: session.tabId, targetPaneId: pane.id, edge: zone.edge, index }, rect, pane, bounds };
     }
     return null;
   };
@@ -162,6 +247,8 @@ export function createTabDocking(options: TabDockingOptions): { destroy(): void;
   };
   const over = (event: DragEvent) => {
     if (!session) return;
+    clearLeave(); session.outside = false;
+    event.preventDefault();
     event.stopPropagation();
     const target = targetAt(event);
     if (!target) { hide(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'; return; }
@@ -173,6 +260,27 @@ export function createTabDocking(options: TabDockingOptions): { destroy(): void;
     preview.style.transform = `translate(${r.x}px, ${r.y}px)`;
     preview.style.width = `${r.width}px`; preview.style.height = `${r.height}px`;
     preview.dataset.edge = target.intent.edge;
+    if (target.intent.edge === 'center') { restoreTarget(); return; }
+    if (remaining?.source !== target.pane.element) {
+      restoreTarget();
+      const source = target.pane.element;
+      const visual = remainingPanePreview(source, root);
+      remaining = { source, opacity: source.style.getPropertyValue('opacity'), priority: source.style.getPropertyPriority('opacity'), visual };
+      doc.body.append(visual.shell);
+      source.style.setProperty('opacity', '0', 'important');
+    }
+    const rest = { x: target.bounds.x, y: target.bounds.y, width: target.bounds.width, height: target.bounds.height };
+    if (target.intent.edge === 'left' || target.intent.edge === 'right') {
+      rest.width = Math.max(0, rest.width - r.width);
+      if (target.intent.edge === 'left') rest.x += r.width;
+    } else {
+      rest.height = Math.max(0, rest.height - r.height);
+      if (target.intent.edge === 'top') rest.y += r.height;
+    }
+    const frame = remaining!.visual.frame;
+    frame.style.transform = `translate(${rest.x}px, ${rest.y}px)`;
+    frame.style.width = `${rest.width}px`; frame.style.height = `${rest.height}px`;
+    remaining!.visual.restoreScroll();
   };
   const enter = (event: DragEvent) => {
     if (!session) return;

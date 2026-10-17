@@ -60,7 +60,8 @@ function setup(dock?: (intent: DockIntent) => void | Promise<void>) {
 test('five-pixel movement enables move-only preview; center index is adjusted after source removal', () => {
   const s = setup();
   s.drag('dragstart'); assert.equal(s.transfer.effectAllowed, 'move');
-  assert.equal(s.drag('dragover', s.panes[0].tabBar, 53, 22).defaultPrevented, false);
+  assert.equal(s.drag('dragover', s.panes[0].tabBar, 53, 22).defaultPrevented, true);
+  assert.equal(s.doc.querySelector('.tab-docking-preview'), null);
   const moved = s.drag('dragover', s.panes[0].tabBar, 290, 20, { ctrlKey: true, altKey: true });
   assert.equal(moved.defaultPrevented, true); assert.equal(s.transfer.dropEffect, 'move');
   assert.equal(s.doc.querySelector<HTMLElement>('.tab-docking-preview')?.dataset.edge, 'center');
@@ -142,4 +143,116 @@ test('retired or disconnected source ownership cannot request an outside handoff
     assert.deepEqual(s.actions, [], retired);
     s.cleanup();
   }
+});
+
+
+test('edge preview shows target snapshot in the remaining space without changing live topology', () => {
+  for (const [edge, x, y, geometry] of [
+    ['left', 601, 300, ['translate(800px, 0px)', '400px', '600px']],
+    ['right', 1199, 300, ['translate(600px, 0px)', '400px', '600px']],
+    ['top', 900, 5, ['translate(600px, 200px)', '600px', '400px']],
+    ['bottom', 900, 599, ['translate(600px, 0px)', '600px', '400px']],
+  ] as const) {
+    const s = setup();
+    const target = s.panes[1].element, live = s.doc.createElement('textarea'); live.value = 'unsaved target'; target.append(live);
+    target.style.setProperty('opacity', '.8', 'important');
+    live.focus(); live.setSelectionRange(2, 5);
+    const parent = target.parentElement;
+    s.drag('dragstart'); s.drag('dragover', target, x, y);
+    const frame = s.doc.querySelector<HTMLElement>('.tab-docking-remaining')!;
+    assert.ok(frame, edge); assert.deepEqual([frame.style.transform, frame.style.width, frame.style.height], geometry);
+    assert.equal(s.doc.querySelector<HTMLElement>('.tab-docking-preview')!.dataset.edge, edge);
+    assert.equal(target.style.opacity, '0'); assert.equal(target.parentElement, parent);
+    assert.equal(frame.querySelector('textarea')!.value, live.value);
+    assert.equal(s.doc.activeElement, live); assert.equal(live.selectionStart, 2); assert.equal(live.selectionEnd, 5);
+    assert.equal(s.actions.length, 0);
+    s.drag('drop', target, x, y);
+    assert.equal(s.actions[0].edge, edge); assert.equal(target.style.opacity, '0.8');
+    assert.equal(target.style.getPropertyPriority('opacity'), 'important'); assert.equal(s.doc.querySelector('.tab-docking-preview-shell'), null);
+    s.cleanup();
+  }
+});
+
+test('edge-to-center and target switching restore old targets and reuse one snapshot per target', () => {
+  const s = setup(), target = s.panes[1].element;
+  s.drag('dragstart'); s.drag('dragover', target, 1190, 300);
+  const frame = s.doc.querySelector('.tab-docking-remaining');
+  s.drag('dragover', target, 900, 590); assert.equal(s.doc.querySelector('.tab-docking-remaining'), frame);
+  s.drag('dragover', s.panes[0].element, 1, 300);
+  assert.equal(target.style.opacity, ''); assert.equal(s.panes[0].element.style.opacity, '0');
+  assert.notEqual(s.doc.querySelector('.tab-docking-remaining'), frame);
+  s.drag('dragover', target, 900, 300);
+  assert.equal(s.panes[0].element.style.opacity, ''); assert.equal(target.style.opacity, '');
+  assert.equal(s.doc.querySelector('.tab-docking-remaining'), null);
+  assert.equal(s.doc.querySelector<HTMLElement>('.tab-docking-preview')!.dataset.edge, 'center');
+  s.cleanup();
+});
+
+test('snapshot preserves scrolling and local SVG references without live IDs or plugin constructors', () => {
+  const s = setup(), target = s.panes[1].element;
+  let constructed = 0;
+  s.dom.window.customElements.define('test-plugin-view', class extends s.dom.window.HTMLElement { constructor() { super(); constructed++; } });
+  const plugin = s.doc.createElement('test-plugin-view'); plugin.textContent = 'plugin content'; target.append(plugin);
+  const scroller = s.doc.createElement('div'); scroller.className = 'preview-scroll-test'; scroller.scrollTop = 45; scroller.scrollLeft = 7;
+  scroller.innerHTML = '<svg><script>window.previewExecuted=true</script><defs><path id="preview-glyph"></path></defs><use href="#preview-glyph"></use></svg><iframe src="about:blank"></iframe><video autoplay src="movie.mp4"></video><button onclick="window.previewExecuted=true">Test</button>';
+  target.append(scroller);
+  s.drag('dragstart'); s.drag('dragover', target, 1190, 300);
+  const shell = s.doc.querySelector<HTMLElement>('.tab-docking-preview-shell')!, frame = shell.querySelector('.tab-docking-remaining')!;
+  assert.equal(shell.inert, true); assert.equal(shell.getAttribute('aria-hidden'), 'true');
+  assert.equal(constructed, 1); assert.equal(frame.querySelector('test-plugin-view'), null); assert.match(frame.textContent!, /plugin content/);
+  assert.equal(s.doc.querySelectorAll('#preview-glyph').length, 1);
+  const path = frame.querySelector('path')!; assert.equal(frame.querySelector('use')!.getAttribute('href'), `#${path.id}`);
+  assert.equal(frame.querySelector<HTMLElement>('.preview-scroll-test')!.scrollTop, 45);
+  assert.equal(frame.querySelector<HTMLElement>('.preview-scroll-test')!.scrollLeft, 7);
+  assert.equal(frame.querySelector('script'), null); assert.equal(frame.querySelector('iframe'), null); assert.equal(frame.querySelector('video')!.hasAttribute('src'), false);
+  assert.equal(frame.querySelector('video')!.hasAttribute('autoplay'), false); assert.equal(frame.querySelector('button[onclick]'), null);
+  s.cleanup();
+});
+
+test('cancel, invalid targets, outside exit and teardown always remove the snapshot and restore opacity', () => {
+  for (const action of ['cancel', 'invalid', 'outside', 'escape', 'destroy']) {
+    const s = setup(), target = s.panes[1].element;
+    s.drag('dragstart'); s.drag('dragover', target, 1190, 300);
+    if (action === 'cancel') s.controller.cancel();
+    if (action === 'invalid') s.drag('dragover', s.root, 1400, 300);
+    if (action === 'outside') s.drag('dragleave', s.root, 1400, 300);
+    if (action === 'escape') s.root.dispatchEvent(new s.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    if (action === 'destroy') s.controller.destroy();
+    assert.equal(target.style.opacity, '', action); assert.equal(s.doc.querySelector('.tab-docking-preview-shell'), null, action); s.cleanup();
+  }
+});
+
+test('disconnected source and detached or foreign-root destination cannot produce a preview or action', () => {
+  for (const change of ['source', 'source-tab', 'target', 'target-outside-root']) {
+    const s = setup(); s.drag('dragstart');
+    if (change === 'source') s.panes[0].element.remove();
+    if (change === 'source-tab') s.panes[0].tabs[0].element.remove();
+    if (change === 'target') s.panes[1].element.remove();
+    if (change === 'target-outside-root') s.doc.body.append(s.panes[1].element);
+    s.drag('dragover', s.root, 1190, 300); s.drag('drop', s.root, 1190, 300);
+    assert.equal(s.actions.length, 0, change); assert.equal(s.doc.querySelector('.tab-docking-preview-shell'), null); s.cleanup();
+  }
+});
+
+test('preview uses client CSS coordinates for offset panes, independent of screen position or pixel ratio', () => {
+  const s = setup(), target = s.panes[1];
+  const box = (r: DockRect) => ({ ...r, left: r.x, top: r.y, right: r.x + r.width, bottom: r.y + r.height, toJSON() { return {}; } });
+  target.element.getBoundingClientRect = () => box(rect(320.5, 75.25, 450, 600));
+  target.tabBar.getBoundingClientRect = () => box(rect(320.5, 75.25, 450, 30));
+  Object.defineProperty(s.dom.window, 'devicePixelRatio', { value: 2 });
+  s.drag('dragstart'); s.drag('dragover', target.element, 769.5, 375.25, { screenX: 9000, screenY: -400 });
+  const preview = s.doc.querySelector<HTMLElement>('.tab-docking-preview')!;
+  assert.equal(preview.style.transform, 'translate(620.5px, 75.25px)'); assert.equal(preview.style.width, '150px');
+  const remaining = s.doc.querySelector<HTMLElement>('.tab-docking-remaining')!;
+  assert.equal(remaining.style.transform, 'translate(320.5px, 75.25px)'); assert.equal(remaining.style.width, '300px');
+  s.cleanup();
+});
+
+test('customized built-in plugin elements cannot execute constructors when the preview is adopted', () => {
+  const s = setup(); let constructed = 0;
+  s.dom.window.customElements.define('plugin-button', class extends s.dom.window.HTMLButtonElement { constructor() { super(); constructed++; } }, { extends: 'button' });
+  const button = s.doc.createElement('button', { is: 'plugin-button' }); button.textContent = 'Plugin action'; s.panes[1].element.append(button);
+  s.drag('dragstart'); s.drag('dragover', s.panes[1].element, 1190, 300);
+  assert.equal(constructed, 1); assert.equal(s.doc.querySelector('.tab-docking-remaining button[is]'), null);
+  assert.match(s.doc.querySelector('.tab-docking-remaining')!.textContent!, /Plugin action/); s.cleanup();
 });

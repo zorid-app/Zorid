@@ -1,3 +1,7 @@
+import { createBaseKanbanColumns, matchesBaseGroupKey } from './kanban-columns.ts';
+import type { BaseKanbanGroupOrderRequest } from './kanban-columns.ts';
+import { icon } from '../ui/icons.ts';
+import { showContextMenu } from '../platform/context-menu.ts';
 import { baseValuesEqual, baseValueToString } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import { normalizeBaseProperty } from './query.ts';
@@ -17,6 +21,7 @@ export interface BaseKanbanViewOptions {
   readonly requestMove?: (request: BaseKanbanMoveRequest) => Promise<void>;
   readonly onError?: (error: unknown, request: BaseKanbanMoveRequest) => void;
   readonly readOnly?: boolean;
+  readonly requestGroupOrder?: (request: BaseKanbanGroupOrderRequest) => Promise<void>;
 }
 export interface BaseKanbanView {
   update(result: BaseQueryResult): void;
@@ -47,6 +52,16 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   board.className = 'bases-kanban-board'; status.className = 'bases-kanban-status'; status.setAttribute('role', 'status');
   root.append(board, status); container.append(root);
   let result = options.result, destroyed = false, selected: string | undefined;
+  const columns = !options.readOnly && options.requestGroupOrder ? createBaseKanbanColumns(root, { result, requestGroupOrder: options.requestGroupOrder, onError(error) { if (!destroyed) status.textContent = error instanceof Error ? error.message : String(error); } }) : undefined;
+  let editColumns: HTMLButtonElement | undefined;
+  if (columns) {
+    const controls = doc.createElement('div'); controls.className = 'bases-kanban-controls';
+    editColumns = doc.createElement('button'); editColumns.type = 'button'; editColumns.className = 'bases-kanban-edit-columns';
+    editColumns.append(icon('stretch-horizontal', 16, doc), doc.createTextNode('Edit columns'));
+    editColumns.setAttribute('aria-haspopup', 'dialog'); editColumns.setAttribute('aria-expanded', 'false');
+    editColumns.addEventListener('click', () => { if (!destroyed && editColumns && root.contains(editColumns)) columns.open(editColumns); });
+    controls.append(editColumns); root.prepend(controls); root.classList.add('has-column-controls');
+  }
   let drag: { path: string; version: BaseQueryResult['version'] } | undefined;
   const pending = new Map<string, Pending>();
   const scrolls = new Map<BaseQueryGroup['key'], number>();
@@ -155,6 +170,15 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
       const count = doc.createElement('span'); count.className = 'bases-kanban-column-count'; count.textContent = String(group.rows.length); heading.append(count);
       const body = doc.createElement('div'); body.className = 'bases-kanban-column-body'; body.setAttribute('role', 'listbox'); body.setAttribute('aria-label', label(group.key));
       column.append(heading, body); nodes.push(column);
+      if (columns && group.key && (propertyOf(result)?.startsWith('note.') || propertyOf(result) === 'file.folder')) heading.addEventListener('contextmenu', event => {
+        if (destroyed || !root.contains(heading)) return;
+        event.preventDefault(); const version = result.version;
+        void showContextMenu(event, [{ id: 'hide', label: 'Hide column' }, { id: 'edit', label: 'Edit columns' }], { document: doc }).then(action => {
+          if (destroyed || result.version !== version || !root.contains(heading)) return;
+          if (action === 'hide') return columns.hide(group.key!);
+          if (action === 'edit' && editColumns) columns.open(editColumns);
+        }).catch(error => { if (!destroyed) status.textContent = error instanceof Error ? error.message : String(error); });
+      });
       body.addEventListener('scroll', () => { if (destroyed || !root.contains(body)) return; saveScroll(group.key, body.scrollTop); renderRows(body, group); });
       column.addEventListener('dragover', event => {
         if (!destroyed && root.contains(column) && drag && drag.version === result.version && canMove(drag.path) && group.key) { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; }
@@ -178,13 +202,13 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   }
   function update(next: BaseQueryResult) {
     if (destroyed) return;
-    result = next; drag = undefined; root.setAttribute('aria-label', result.view.name);
+    result = next; drag = undefined; columns?.update(next); if (editColumns) editColumns.disabled = !propertyOf(next); root.setAttribute('aria-label', result.view.name);
     rowOrder = new Map(result.rows.map((row, index) => [row.path, index]));
     const queryGroups = result.groups.filter(group => group.key !== null);
     if (!propertyOf(result)) groups = [];
     else if (Array.isArray(result.view.groupOrder)) {
       groups = result.groupOptions.filter(option => option.listed).map(option =>
-        queryGroups.find(group => equal(group.key, option.key) || (option.key.type === 'string' && option.key.value === label(group.key))) ?? { key: option.key, rows: [] });
+        queryGroups.find(group => group.key && matchesBaseGroupKey(option.key, group.key)) ?? { key: option.key, rows: [] });
     } else groups = [...queryGroups.filter(group => group.key?.type === 'null'), ...queryGroups.filter(group => group.key?.type !== 'null')];
     properties = result.properties.filter(property => property !== 'file.name');
     width = typeof result.view.columnWidth === 'number' && Number.isFinite(result.view.columnWidth) ? Math.max(200, Math.min(500, result.view.columnWidth)) : 280;
@@ -213,5 +237,5 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
   const Observer = doc.defaultView?.ResizeObserver;
   const observer = Observer ? new Observer(() => render()) : undefined; observer?.observe(root);
   update(result);
-  return { update, move, destroy() { if (destroyed) return; destroyed = true; pending.clear(); drag = undefined; observer?.disconnect(); root.removeEventListener('scroll', onScroll); root.removeEventListener('keydown', onKey); root.remove(); } };
+  return { update, move, destroy() { if (destroyed) return; destroyed = true; columns?.destroy(); pending.clear(); drag = undefined; observer?.disconnect(); root.removeEventListener('scroll', onScroll); root.removeEventListener('keydown', onKey); root.remove(); } };
 }

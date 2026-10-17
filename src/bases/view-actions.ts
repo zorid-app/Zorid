@@ -1,8 +1,9 @@
-import type { BaseValue } from './document.ts';
+import type { BaseValue, BaseViewPatch } from './document.ts';
 import { BaseController } from './controller.ts';
 import { baseValuesEqual } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseKanbanMoveRequest } from './kanban-view.ts';
+import type { BaseKanbanGroupOrderRequest } from './kanban-columns.ts';
 import { normalizeBaseProperty } from './query.ts';
 import type { BaseQueryResult } from './query.ts';
 import type { BaseTableEdit } from './table-view.ts';
@@ -56,6 +57,17 @@ export function createBaseViewActions(controller: BaseController, options: {
     async editProperty(edit: BaseTableEdit): Promise<void> {
       current(edit.version);
       await controller.editProperty({ ...edit, version: edit.version as number, value: baseEditValue(edit.value) });
+    },
+    async requestGroupOrder(request: BaseKanbanGroupOrderRequest): Promise<void> {
+      const result = current(request.version), group = result.view.groupBy;
+      if (result.view.type !== 'kanban') throw new Error('This view is not a Kanban board');
+      if (!group || typeof group !== 'object' || Array.isArray(group) || !('property' in group) || typeof group.property !== 'string') throw new Error('This view has no grouping property');
+      if (normalizeBaseProperty(request.property) !== normalizeBaseProperty(group.property)) throw new Error('The grouping property changed');
+      if (request.order !== undefined && !Array.isArray(request.order)) throw new Error('Manual group order must be a list');
+      if (request.direction !== undefined && request.direction !== 'ASC' && request.direction !== 'DESC') throw new Error('Invalid group direction');
+      const patch: BaseViewPatch = { groupOrder: request.order };
+      if (request.direction !== undefined) patch.groupBy = { ...group, direction: request.direction };
+      await controller.updateView(request.version as number, patch);
     },
     canMove(result: BaseQueryResult): boolean {
       const group = result.view.groupBy;

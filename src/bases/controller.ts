@@ -214,11 +214,15 @@ export class BaseController {
 
   async updateView(version: number, patch: BaseViewPatch): Promise<void> {
     const { validate, validateWrite } = this.guard(version, this.path), index = this.query.viewIndex ?? 0;
-    const detached = structuredClone(patch);
+    const detached = structuredClone(patch), expected = this.current.source;
     await this.options.mutations.transform(this.path, source => {
       validate();
-      if (source !== this.current.source) throw new Error('The base configuration has an unsaved or external edit');
-      const document = BaseDocument.parse(source); document.updateView(index, detached); return document.toString();
+      const document = BaseDocument.parse(expected); document.updateView(index, detached);
+      const desired = document.toString();
+      // A failed flush may already retain exactly this absolute patch. Retry its
+      // guarded persistence, but never merge unrelated unsaved configuration.
+      if (source !== expected && source !== desired) throw new Error('The base configuration has an unsaved or external edit');
+      return desired;
     }, validate, validateWrite);
     await this.refresh();
   }
