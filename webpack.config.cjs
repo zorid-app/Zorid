@@ -37,8 +37,10 @@ module.exports = (env = {}) => {
         { test: /\.ts$/, exclude: /node_modules/, use: {
           loader: 'ts-loader',
           options: { transpileOnly: true, compilerOptions: {
-            noEmit: false, allowImportingTsExtensions: true,
-            rewriteRelativeImportExtensions: true,
+            noEmit: false, allowImportingTsExtensions: false,
+            // Webpack resolves source .ts imports. TS's runtime rewrite helper
+            // can be minified into invalid variable dynamic-import syntax.
+            rewriteRelativeImportExtensions: false,
           } },
         } },
         { test: /\.css$/, use: ['style-loader', 'css-loader'] },

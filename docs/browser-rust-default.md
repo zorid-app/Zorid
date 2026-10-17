@@ -64,3 +64,14 @@ regressions pass. Legacy raw export is also offered on browser startup failure,
 independent of Rust assets/storage availability, while alternate-vault permission
 remains unchanged. Six affected checks and full source TypeScript pass;
 package_sol source-approved the narrow followup. No actual browser claim yet.
+
+First actual normal browser launch (Chrome tab1268037558, fresh origin8791)
+failed before WASM fetch. Production webpack87504 had exited0, but TS relative
+import rewriting plus Terser emitted an invalid comma expression inside worker
+dynamic import. vm.Script confirmed Unexpected string. The webpack loader now
+leaves source .ts resolution to webpack and disables TS runtime rewriting; the
+noEmit TypeScript configuration stays unchanged. A tiny production webpack
+regression emits and parses both entry and worker, including static .ts and
+variable WASM imports (1/1 pass); full tsc passes. Both package_sol and the
+assetworker source-approved this fix. Actual UI acceptance remains pending its
+rebuild; a successful bundler exit alone did not establish usable startup.
