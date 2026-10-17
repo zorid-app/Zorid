@@ -78,6 +78,15 @@ impl NativeVault {
         mode: Option<FamilyCreateMode>,
     ) -> Result<ApplyOutcome> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.family_apply_locked(request, mode)
+    }
+    /// Caller holds the native vault lock. Shared by direct family commands and
+    /// durable editor Write intents; never reacquire the lock during dispatch.
+    pub(super) fn family_apply_locked(
+        &mut self,
+        request: &MutationRequest,
+        mode: Option<FamilyCreateMode>,
+    ) -> Result<ApplyOutcome> {
         self.paths.verify()?;
         let commit = self.store.family_apply(request, mode)?;
         self.point("family_committed");

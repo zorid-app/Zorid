@@ -59,6 +59,7 @@ impl NativeVault {
     /// intent commit_requested; query/replay this token instead of rebasing.
     pub fn commit_host_intent(&mut self, reference: &HostIntentRef) -> Result<HostIntentView> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.paths.verify()?;
         let current = self.store.query_host_intent(reference)?.ok_or_else(|| {
             Error::Contract(zorid_core::ContractError::InvalidMutation {
                 reason: "host intent not found".into(),
@@ -69,7 +70,22 @@ impl NativeVault {
         }
         let request = self.store.request_host_commit(reference)?;
         self.point("host_intent_commit_requested");
-        match self.apply_locked(&request) {
+        let applied = if self.store.family_is_enrolled()? {
+            if matches!(request.mutation, Mutation::Write { .. }) {
+                self.family_apply_locked(&request, None)
+            } else {
+                // Generic host intents do not contain explicit family create
+                // mode or namespace publication provenance. Never guess them.
+                Err(Error::Contract(
+                    zorid_core::ContractError::InvalidMutation {
+                        reason: "enrolled generic host intents support only Write".into(),
+                    },
+                ))
+            }
+        } else {
+            self.apply_locked(&request)
+        };
+        match applied {
             Ok(outcome) => {
                 self.point("host_intent_core_committed");
                 let mut view = self.store.query_host_intent(reference)?.ok_or_else(|| {
