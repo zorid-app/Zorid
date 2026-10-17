@@ -86,3 +86,17 @@ pub async fn patch_control(response: Response, site: u8, mode: u8) -> Response {
     let body = Full::new(Bytes::from(framed)).with_trailers(async move { trailers.map(Ok) });
     Response::from_parts(parts, Body::new(body))
 }
+
+/// A five-byte declared oversize frame with no body proves the client checks
+/// the length before waiting for or allocating/decoding the advertised message.
+pub async fn oversized_prefix(response: Response) -> Response {
+    let (mut parts, body) = response.into_parts();
+    let _ = Limited::new(body, rpc::MAX_PULL_MESSAGE + 5)
+        .collect()
+        .await
+        .unwrap();
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    let mut prefix = vec![0];
+    prefix.extend_from_slice(&u32::MAX.to_be_bytes());
+    Response::from_parts(parts, Body::from(prefix))
+}

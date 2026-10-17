@@ -902,3 +902,33 @@ fn incomplete_binary_dependencies_are_durable_without_partial_publication_or_ech
     assert_eq!(fs::read(f.b.join("remote.dat")).unwrap(), bytes);
     assert_eq!(f.wires().len(), 3);
 }
+
+#[test]
+fn another_accounts_device_cannot_receive_vault_updates_or_advance_cursor() {
+    let mut f = Fixture::new(false);
+    success(sync(&f.b, &f.cb, &["once"]));
+    let before = success(sync(&f.b, &f.cb, &["status"]));
+    write(&f.a, &f.input, "private-seed", "account-private content");
+    success(sync(&f.a, &f.ca, &["once"]));
+    let wires = f.wires();
+    f.admin.create_account("outsider").unwrap();
+    let outsider = f
+        .admin
+        .issue_device("outsider", &DeviceId::new("outsider-device").unwrap())
+        .unwrap();
+    let mut config: Value = serde_json::from_slice(&fs::read(&f.cb).unwrap()).unwrap();
+    config["bearer_token"] = json!(outsider.expose_secret());
+    fs::write(&f.cb, serde_json::to_vec(&config).unwrap()).unwrap();
+    for _ in 0..2 {
+        let failed = sync(&f.b, &f.cb, &["once"]);
+        assert!(!failed.status.success());
+        let diagnostic = String::from_utf8_lossy(&failed.stderr);
+        assert!(!diagnostic.contains(outsider.expose_secret()));
+        let failure: Value = serde_json::from_slice(&failed.stderr).unwrap();
+        assert_eq!(failure["error"]["code"], "sync_authorization_failed");
+        let after = success(sync(&f.b, &f.cb, &["status"]));
+        assert_eq!(after["family"]["cursor"], before["family"]["cursor"]);
+        assert!(!f.b.join("note.md").exists());
+        assert_eq!(f.wires(), wires);
+    }
+}

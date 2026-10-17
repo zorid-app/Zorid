@@ -53,6 +53,9 @@ impl Server {
                                 let site = grpc_fixture::site(request.uri().path());
                                 let response = next.run(request).await;
                                 let mode = fault.load(Ordering::SeqCst);
+                                if mode == 5 && site == 2 {
+                                    return grpc_fixture::oversized_prefix(response).await;
+                                }
                                 if response.status() != StatusCode::OK
                                     || (mode != 1 && mode != site)
                                 {
@@ -331,6 +334,26 @@ fn optional_hello_page_and_ack_extensions_allow_real_cli_convergence() {
     // A second process consumes the same optional controls without generating echo.
     success(sync(&f.b, &f.cb, &["once"]));
     assert_eq!(f.wires(), wires);
+}
+
+#[test]
+fn declared_oversized_hello_rejects_before_decode_upload_or_cursor_change() {
+    let mut f = Fixture::new();
+    write(&f.a, &f.input, "seed", "retained unsent content");
+    let before = status(&f.a, &f.ca);
+    f.server.fault.store(5, Ordering::SeqCst);
+    for _ in 0..2 {
+        rejected(&f.a, &f.ca, &f.token, "sync_response_limit");
+        let after = status(&f.a, &f.ca);
+        assert_eq!(after["pending_envelopes"], before["pending_envelopes"]);
+        assert_eq!(after["family"]["cursor"], before["family"]["cursor"]);
+        assert!(f.wires().is_empty());
+        assert_eq!(read(&f.a), b"retained unsent content");
+    }
+    f.server.fault.store(0, Ordering::SeqCst);
+    success(sync(&f.a, &f.ca, &["once"]));
+    success(sync(&f.b, &f.cb, &["once"]));
+    assert_eq!(read(&f.b), b"retained unsent content");
 }
 
 #[test]
