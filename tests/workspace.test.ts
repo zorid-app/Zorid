@@ -2,13 +2,16 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
+import { EditorView } from '@codemirror/view';
+import { Transaction } from '@codemirror/state';
 import { Workspace } from '../src/ui/workspace.ts';
 import type { WorkspaceViewFactories } from '../src/ui/workspace.ts';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
 import type { EditorHandle, EditorOptions } from '../src/ui/editor.ts';
 
 // These integration tests exercise workspace wiring and storage using an injected
-// DOM editor. They do not test CodeMirror, layout/pixels, or Obsidian parity.
+// DOM editor for note panes. Canvas text cards use the real CodeMirror editor;
+// neither path establishes layout/pixels or reference parity.
 const editorOptions = new WeakMap<HTMLElement, EditorOptions>();
 function editor(parent: HTMLElement, options: EditorOptions): EditorHandle {
   const input = document.createElement('textarea');
@@ -39,14 +42,16 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
 }
 
 async function setup(t: TestContext, adapter = new MemoryAdapter(), id = 'test:vault', stored: Record<string, unknown> = {}, views: WorkspaceViewFactories = {}) {
-  const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', { url: 'https://zorid.test/' });
+  const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', { url: 'https://zorid.test/', pretendToBeVisual:true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   const matchMedia = (query: string) => ({ matches: false, media: query, onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } });
-  for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage, HTMLElement: dom.window.HTMLElement, Node: dom.window.Node, MutationObserver: dom.window.MutationObserver, matchMedia })) {
+  for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage, HTMLElement: dom.window.HTMLElement, Node: dom.window.Node, MutationObserver: dom.window.MutationObserver, Window:dom.window.Window, Text:dom.window.Text, navigator:dom.window.navigator, getComputedStyle:dom.window.getComputedStyle.bind(dom.window), requestAnimationFrame:dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame:dom.window.cancelAnimationFrame.bind(dom.window), matchMedia })) {
     saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
   dom.window.matchMedia = matchMedia;
+  dom.window.Range.prototype.getBoundingClientRect=()=>({top:0,left:0,right:800,bottom:600,width:800,height:600,x:0,y:0,toJSON(){return{};}});
+  dom.window.Range.prototype.getClientRects=()=>Object.assign([],{item:()=>null});
   dom.window.HTMLElement.prototype.scrollIntoView = () => {};
   for (const [key, value] of Object.entries(stored)) localStorage.setItem(key, JSON.stringify(value));
   const root = document.querySelector<HTMLElement>('#app')!;
@@ -487,18 +492,20 @@ test('HTML conversion preference updates the existing editor transfer callback',
 
 
 const canvasSource = JSON.stringify({ nodes: [{ id: 'a', type: 'text', x: 0, y: 0, width: 200, height: 100, text: 'Original', custom: 42 }], edges: [], unknown: { keep: true } });
-function editCanvas(dom: JSDOM, value: string): HTMLTextAreaElement {
+async function editCanvas(dom: JSDOM, value?: string): Promise<EditorView> {
   document.querySelector<HTMLElement>('[data-node-id="a"]')!.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const input = document.querySelector<HTMLTextAreaElement>('.zorid-canvas-text-editor')!;
-  input.value = value;
-  return input;
+  await until(()=>!!document.querySelector('[data-node-id="a"] .cm-editor'),'Canvas Live editor');
+  const view=EditorView.findFromDOM(document.querySelector('[data-node-id="a"] .cm-editor')!)!;
+  assert.ok(view,'Canvas card owns a real CodeMirror editor');
+  if(value!==undefined)view.dispatch({changes:{from:0,to:view.state.doc.length,insert:value},annotations:Transaction.userEvent.of('input.type')});
+  return view;
 }
 
 test('Canvas tabs persist active text before note navigation and retain unknown document data', async t => {
   const { workspace, adapter, dom, root } = await setup(t, new MemoryAdapter({ 'Board.canvas': canvasSource, 'Note.md': 'note' }));
   await workspace.openNote('Board.canvas');
   assert.ok(root.querySelector('.zorid-canvas'));
-  editCanvas(dom, 'Edited before blur');
+  await editCanvas(dom, 'Edited before blur');
   await workspace.openNote('Note.md');
   const saved = JSON.parse(await adapter.read('Board.canvas'));
   assert.equal(saved.nodes[0].text, 'Edited before blur');
@@ -513,10 +520,12 @@ test('failed Canvas save blocks navigation and keeps the editable view and recov
   const adapter = new FailingAdapter({ 'Board.canvas': canvasSource, 'Note.md': 'note' });
   const { workspace, dom, root } = await setup(t, adapter);
   await workspace.openNote('Board.canvas');
-  const surface = root.querySelector('.zorid-canvas'); editCanvas(dom, 'Keep this edit');
+  const surface = root.querySelector('.zorid-canvas');
   adapter.fail = true;
+  const cm=await editCanvas(dom, 'Keep this edit');
   await assert.rejects(workspace.openNote('Note.md'), /disk unavailable/);
   assert.equal(root.querySelector('.zorid-canvas'), surface);
+  assert.equal(EditorView.findFromDOM(root.querySelector('.cm-editor')!),cm);assert.equal(cm.state.doc.toString(),'Keep this edit');
   assert.equal(workspace.activePane.tabs.find(tab => tab.id === workspace.activePane.active)?.path, 'Board.canvas');
   assert.match(localStorage.getItem('zorid:draft:test:vault:Board.canvas')!, /Keep this edit/);
   adapter.fail = false; await workspace.openNote('Note.md');
@@ -529,7 +538,8 @@ test('Canvas external changes refresh a clean view and conflict with uncommitted
   const changed = JSON.parse(canvasSource); changed.nodes[0].text = 'External';
   await adapter.write('Board.canvas', JSON.stringify(changed)); await workspace.vault.reload(['Board.canvas']);
   await until(() => root.querySelector('[data-node-id="a"]')?.textContent === 'External', 'external Canvas refresh');
-  editCanvas(dom, 'Local pending');
+  const cm=await editCanvas(dom);
+  cm.dispatch({changes:{from:0,to:cm.state.doc.length,insert:'Local pending'},annotations:Transaction.userEvent.of('input.type')});
   changed.nodes[0].text = 'Concurrent'; await adapter.write('Board.canvas', JSON.stringify(changed)); await workspace.vault.reload(['Board.canvas']);
   await until(() => Boolean(workspace.buffers.get('Board.canvas')?.dirty), 'conflicting Canvas buffer');
   assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text, 'Concurrent');
@@ -557,22 +567,31 @@ test('PDF tabs receive link subpaths, route Find and release their view without 
 
 
 test('Canvas text typed during an external reload remains visible after the read completes', async t => {
-  const { workspace, adapter, dom, root, key } = await setup(t, new MemoryAdapter({ 'Board.canvas': canvasSource }));
+  const { workspace, adapter, dom, root } = await setup(t, new MemoryAdapter({ 'Board.canvas': canvasSource }));
   await workspace.openNote('Board.canvas');
-  let release!: () => void, started!: () => void;
-  const entered = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  let release!: () => void, started=false, completed=false;
+  const gate = new Promise<void>(resolve => { release = resolve; });
   const original = workspace.vault.read.bind(workspace.vault);
-  workspace.vault.read = async path => { const result = await original(path); started(); await gate; return result; };
+  workspace.vault.read = async path => { const result = await original(path); started=true; await gate; completed=true; return result; };
   const changed = JSON.parse(canvasSource); changed.nodes[0].text = 'External';
-  await adapter.write('Board.canvas', JSON.stringify(changed)); await workspace.vault.reload(['Board.canvas']);
-  await entered;
-  const input = editCanvas(dom, 'Local typed during read');
-  release();
-  await until(() => workspace.buffers.get('Board.canvas')?.text === JSON.stringify(changed), 'external read completed');
-  assert.equal(root.querySelector<HTMLTextAreaElement>('.zorid-canvas-text-editor'), input);
-  assert.equal(input.value, 'Local typed during read');
-  assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text, 'External');
-  key(input, 'Escape'); // Deliberately cancel this draft so teardown can complete.
+  try {
+    await adapter.write('Board.canvas', JSON.stringify(changed)); await workspace.vault.reload(['Board.canvas']);
+    await until(()=>started,'held external Canvas read');
+    const cm=await editCanvas(dom,'Local typed during read');
+    release();await until(()=>completed,'external Canvas read completed');
+    await assert.rejects(workspace.flush(),/changed outside/);
+    assert.equal(EditorView.findFromDOM(root.querySelector('.cm-editor')!),cm);
+    assert.equal(cm.state.doc.toString(),'Local typed during read');
+    assert.equal(JSON.parse(workspace.buffers.get('Board.canvas')!.text).nodes[0].text,'Local typed during read');
+    assert.match(localStorage.getItem('zorid:draft:test:vault:Board.canvas')!,/Local typed during read/);
+    assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text, 'External');
+  } finally {
+    // Live edits already belong to the shared draft; Escape no longer discards
+    // them. Restore the saved disk base solely to resolve this deliberate conflict.
+    release();workspace.vault.read=original;
+    await adapter.write('Board.canvas',workspace.buffers.get('Board.canvas')!.savedText);
+    await workspace.flush();
+  }
 });
 
 

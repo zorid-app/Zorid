@@ -1,6 +1,8 @@
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
+import { EditorView } from '@codemirror/view';
+import { Transaction } from '@codemirror/state';
 import { CanvasDocument } from '../src/canvas/document.ts';
 import { createCanvasView, projectCanvas } from '../src/canvas/view.ts';
 
@@ -12,8 +14,19 @@ const fixture = JSON.stringify({ plugin: { keep: true }, nodes: [
   node('hidden', 'unknown', { config: { retain: true } }),
 ], edges: [{ id: 'ab', fromNode: 'a', toNode: 'b', label: 'Relationship' }, { id: 'orphan', fromNode: 'a', toNode: 'missing', plugin: true }] }, null, '\t');
 
+const cleanups: (() => void)[] = [];
+afterEach(() => { for (const close of cleanups.splice(0).reverse()) close(); });
+
 function setup(source = fixture, onChange?: (source: string) => Promise<void> | void, menuHooks = false) {
   const dom = new JSDOM('<!doctype html><main></main>', { pretendToBeVisual: true });
+  const previous = new Map<string, PropertyDescriptor | undefined>();
+  for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement, Node: dom.window.Node, Text: dom.window.Text, Window: dom.window.Window, MutationObserver: dom.window.MutationObserver,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window), requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window) })) {
+    previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  }
+  dom.window.Range.prototype.getBoundingClientRect = () => ({ top: 0, left: 0, right: 300, bottom: 200, width: 300, height: 200, x: 0, y: 0, toJSON() { return {}; } });
+  dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const container = dom.window.document.querySelector('main')!, saves: string[] = [], files: string[] = [], links: string[] = [], errors: unknown[] = [], copies: string[] = [], newTabs: string[] = [];
   const document = CanvasDocument.parse(source);
   const view = createCanvasView(container, { document, onChange: async source => { saves.push(source); await onChange?.(source); }, openFile: (path, subpath) => { files.push(path + (subpath ?? '')); }, openLink: url => { links.push(url); }, onError: error => { errors.push(error); }, openFileInNewTab: menuHooks ? path => { newTabs.push(path); } : undefined, copyText: menuHooks ? text => { copies.push(text); } : undefined });
@@ -25,9 +38,21 @@ function setup(source = fixture, onChange?: (source: string) => Promise<void> | 
     target.dispatchEvent(event);
   };
   const key = (key: string, extra = {}, target: Element = viewport) => target.dispatchEvent(new dom.window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, ...extra }));
-  const close = () => { view.destroy(); dom.window.close(); };
+  let closed = false;
+  const close = () => { if (closed) return; closed = true; view.destroy(); dom.window.close(); for (const [key, descriptor] of previous) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } };
+  cleanups.push(close);
   return { dom, container, document, view, viewport, item, pointer, key, saves, files, links, errors, copies, newTabs, close };
 }
+
+const tick = async () => { for (let index = 0; index < 20; index++) await Promise.resolve(); };
+async function liveInput(ui: ReturnType<typeof setup>) {
+  await tick();
+  const content = ui.container.querySelector<HTMLElement>('.cm-content')!;
+  assert.ok(content, 'the card opens the actual shared Live editor'); return content;
+}
+const cm = (input: HTMLElement) => EditorView.findFromDOM(input)!;
+const setText = (input: HTMLElement, text: string) => cm(input).dispatch({ changes: { from: 0, to: cm(input).state.doc.length, insert: text }, annotations: Transaction.userEvent.of('input.type') });
+const textOf = (input: HTMLElement) => cm(input).state.doc.toString();
 
 test('actual DOM projects four node types and connected edges without modifying hidden records', () => {
   const ui = setup();
@@ -79,8 +104,8 @@ test('pan and zoom are view-only and zoom-scaled drag writes document coordinate
 
 test('text editing handles literal HTML, protects delete/undo from canvas shortcuts and saves on commit', async () => {
   const ui = setup(); ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; assert.ok(input);
-  input.value = '<img src=x onerror=alert(1)>\nnew'; ui.key('Delete', {}, input); assert.ok(ui.document.getNode('a'));
+  const input = await liveInput(ui); assert.ok(input);
+  setText(input, '<img src=x onerror=alert(1)>\nnew'); cm(input).dispatch({ selection: { anchor: cm(input).state.doc.length } }); ui.key('Delete', {}, input); assert.ok(ui.document.getNode('a'));
   ui.key('Enter', { ctrlKey: true }, input); await ui.view.flush();
   assert.equal(ui.document.getNode('a')!.text, '<img src=x onerror=alert(1)>\nnew'); assert.equal(ui.item('a').querySelector('img'), null);
   ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), fixture); ui.close();
@@ -124,27 +149,27 @@ test('background box selection and empty Delete use real event handlers without 
   assert.equal(ui.saves.length, 0); ui.key('Escape'); assert.equal(ui.item('a').getAttribute('aria-selected'), 'false'); ui.close();
 });
 
-test('add card and blur commit preserve empty canvas and support undo; Escape cancels text edits', async () => {
+test('add card and blur preserve empty canvas history; Escape leaves Live editing after saving', async () => {
   const ui = setup('');
   ui.container.querySelector<HTMLButtonElement>('[aria-label="Add card"]')!.click();
-  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'New card'; input.blur(); await ui.view.flush();
+  const input = await liveInput(ui); setText(input, 'New card'); input.blur(); await ui.view.flush();
   assert.equal(ui.document.nodes.length, 1); assert.equal(ui.document.nodes[0].text, 'New card');
   ui.item(ui.document.nodes[0].id).dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const second = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; second.value = 'Discarded'; ui.key('Escape', {}, second); await ui.view.flush();
-  assert.equal(ui.document.nodes[0].text, 'New card');
-  ui.view.undo(); ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), ''); ui.close();
+  const second = await liveInput(ui); setText(second, 'Saved on Escape'); ui.key('Escape', {}, second); await ui.view.flush();
+  assert.equal(ui.document.nodes[0].text, 'Saved on Escape');
+  ui.view.undo(); ui.view.undo(); ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), ''); ui.close();
 });
 
 test('flush commits active text and waits for its write before teardown without a late blur write', async () => {
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
   const ui = setup(fixture, () => gate);
   ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Valuable pending text';
+  const input = await liveInput(ui); setText(input, 'Valuable pending text');
   let settled = false; const flushing = ui.view.flush().then(() => { settled = true; });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(ui.document.getNode('a')!.text, 'Valuable pending text'); assert.equal(ui.saves.length, 1); assert.equal(settled, false);
   assert.equal(JSON.parse(ui.saves[0]).nodes[0].text, 'Valuable pending text');
-  release(); await flushing; ui.view.destroy(); input.dispatchEvent(new ui.dom.window.FocusEvent('blur'));
+  release(); await flushing; ui.view.destroy(); input.dispatchEvent(new ui.dom.window.FocusEvent('focusout', { bubbles: true }));
   await new Promise(resolve => setImmediate(resolve)); assert.equal(ui.saves.length, 1); ui.close();
 });
 
@@ -152,7 +177,7 @@ test('flush rejects failed persistence, retains current source and retries once 
   let failing = true;
   const ui = setup(fixture, async () => { if (failing) throw new Error('disk unavailable'); });
   ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'Retain unsaved content';
+  setText(await liveInput(ui), 'Retain unsaved content');
   await assert.rejects(ui.view.flush(), /disk unavailable/);
   const unsaved = ui.document.toString(); assert.equal(ui.document.getNode('a')!.text, 'Retain unsaved content');
   assert.equal(ui.container.querySelectorAll('[data-node-id]').length, 4); assert.match(ui.container.textContent!, /disk unavailable/);
@@ -174,8 +199,8 @@ test('later edits recover a failed save queue without a duplicate retry of older
 test('retained controls and editor handlers cannot mutate, open or save after destroy', async () => {
   const ui = setup(), add = ui.container.querySelector<HTMLButtonElement>('[aria-label="Add card"]')!, open = ui.item('b').querySelector<HTMLButtonElement>('button')!, card = ui.item('a');
   card.dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Unflushed teardown draft';
-  ui.view.destroy(); add.click(); open.click(); input.dispatchEvent(new ui.dom.window.FocusEvent('blur'));
+  const input = await liveInput(ui);
+  ui.view.destroy(); add.click(); open.click(); input.dispatchEvent(new ui.dom.window.FocusEvent('focusout', { bubbles: true }));
   ui.key('Enter', { ctrlKey: true }, input); ui.pointer(card, 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 10, 0); ui.pointer(ui.viewport, 'pointerup', 10, 0);
   await ui.view.flush(); assert.equal(ui.document.toString(), fixture); assert.equal(ui.saves.length, 0); assert.equal(ui.files.length, 0); ui.close();
 });
@@ -185,17 +210,17 @@ test('pending changes tracks edited drafts, queued writes and failures until suc
   const ui = setup(fixture, async () => { await gate; if (failing) throw new Error('pending save failed'); });
   assert.equal(ui.view.hasPendingChanges(), false);
   ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!;
-  assert.equal(ui.view.hasPendingChanges(), false); input.value = 'draft'; assert.equal(ui.view.hasPendingChanges(), true);
-  input.value = 'a'; assert.equal(ui.view.hasPendingChanges(), false); input.value = 'draft';
+  const input = await liveInput(ui);
+  assert.equal(ui.view.hasPendingChanges(), false); setText(input, 'draft'); assert.equal(ui.view.hasPendingChanges(), true);
+  setText(input, 'a'); assert.equal(ui.view.hasPendingChanges(), true, 'accepted input is queued even when it returns to saved text'); setText(input, 'draft');
   const flushing = ui.view.flush(); assert.equal(ui.container.querySelector('textarea'), null); assert.equal(ui.view.hasPendingChanges(), true);
   const rejected = assert.rejects(flushing, /pending save failed/); release(); await rejected;
   assert.equal(ui.view.hasPendingChanges(), true);
   failing = false; const retry = ui.view.flush(); assert.equal(ui.view.hasPendingChanges(), true); await retry;
   assert.equal(ui.view.hasPendingChanges(), false); assert.equal(ui.document.getNode('a')!.text, 'draft');
   ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const next = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; next.value = 'cancel'; assert.equal(ui.view.hasPendingChanges(), true);
-  ui.key('Escape', {}, next); assert.equal(ui.view.hasPendingChanges(), false); ui.close();
+  const next = await liveInput(ui); setText(next, 'cancel'); assert.equal(ui.view.hasPendingChanges(), true);
+  ui.key('Escape', {}, next); await ui.view.flush(); await tick(); assert.equal(ui.view.hasPendingChanges(), false); assert.equal(ui.document.getNode('a')!.text, 'cancel'); ui.close();
 });
 
 function menuDriver(ui: ReturnType<typeof setup>) {
@@ -221,7 +246,7 @@ test('browser background menu preserves creation order and creates a card at the
   assert.deepEqual([...menu.querySelectorAll('button')].map(button => button.textContent), ['Add card', 'Add web page', 'Create group']);
   menu.querySelector<HTMLButtonElement>('button')!.click(); await new Promise(resolve => setImmediate(resolve));
   const added = ui.document.nodes.at(-1)!; assert.equal(added.x, 100); assert.equal(added.y, 150); assert.equal(added.type, 'text');
-  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Menu card'; await ui.view.flush();
+  const input = await liveInput(ui); setText(input, 'Menu card'); await ui.view.flush();
   assert.equal(ui.document.nodes.at(-1)!.text, 'Menu card'); ui.view.undo(); ui.view.undo(); await ui.view.flush();
   assert.equal(ui.document.toString(), fixture); ui.close();
 });
@@ -290,11 +315,11 @@ test('pending menu actions reject changed source, changed selection, replacement
   }
 });
 
-test('editor context menu stays native and pending text is saved before opening a different Canvas menu', async () => {
+test('shared Live editor owns its context menu and saves text before opening a different Canvas menu', async () => {
   const ui = setup(), menu = menuDriver(ui);
   ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Pending menu text';
-  const native = await menu.open(input); assert.equal(native.defaultPrevented, false); assert.equal(menu.requests.length, 0); assert.equal(ui.saves.length, 0);
+  const input = await liveInput(ui); setText(input, 'Pending menu text');
+  const native = await menu.open(input); assert.equal(native.defaultPrevented, true); assert.equal(menu.requests.length, 1); assert.ok(menu.requests[0].items.some(item => item.id === 'select-all')); assert.ok(!menu.requests[0].items.some(item => item.id === 'remove')); await menu.choose(null); assert.equal(ui.document.getNode('a')!.text, 'Pending menu text');
   await menu.open(ui.item('b')); assert.equal(ui.document.getNode('a')!.text, 'Pending menu text'); assert.equal(ui.saves.length, 1); await menu.choose('remove'); await ui.view.flush();
   assert.equal(ui.document.getNode('a')!.text, 'Pending menu text'); assert.equal(ui.document.getNode('b'), undefined); ui.close();
 });
@@ -302,11 +327,11 @@ test('editor context menu stays native and pending text is saved before opening 
 test('save failure blocks the menu without discarding pending text; editor opened while menu waits invalidates action', async () => {
   const failing = setup(fixture, () => { throw new Error('menu save failure'); }), blocked = menuDriver(failing);
   failing.item('a').dispatchEvent(new failing.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  failing.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'Retain me';
+  setText(await liveInput(failing), 'Retain me');
   await blocked.open(failing.item('b')); assert.equal(blocked.requests.length, 0); assert.equal(failing.document.getNode('a')!.text, 'Retain me'); assert.equal(failing.view.hasPendingChanges(), true); failing.close();
   const ui = setup(), menu = menuDriver(ui); await menu.open(ui.item('a'));
-  ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true })); const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'New draft';
-  await menu.choose('remove'); assert.ok(ui.document.getNode('a')); assert.equal(input.value, 'New draft'); await ui.view.flush(); assert.equal(ui.document.getNode('a')!.text, 'New draft'); ui.close();
+  ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true })); const input = await liveInput(ui); setText(input, 'New draft');
+  await menu.choose('remove'); assert.ok(ui.document.getNode('a')); assert.equal(textOf(input), 'New draft'); await ui.view.flush(); assert.equal(ui.document.getNode('a')!.text, 'New draft'); ui.close();
 });
 
 test('source changes while awaiting an earlier save cancel menu presentation', async () => {
@@ -357,7 +382,7 @@ test('icon controls preserve ordered groups and create a centered default card i
   }
   ui.container.querySelector<HTMLButtonElement>('[aria-label="Add card"]')!.click();
   const card = ui.document.nodes.at(-1)!; assert.deepEqual([card.x, card.y, card.width, card.height], [335, 280, 250, 60]);
-  assert.equal(ui.item(card.id).getAttribute('aria-selected'), 'true'); assert.equal(ui.dom.window.document.activeElement?.tagName, 'TEXTAREA');
+  assert.equal(ui.item(card.id).getAttribute('aria-selected'), 'true'); const input = await liveInput(ui); assert.ok(ui.dom.window.document.activeElement === input, 'new card focuses the shared Live editor');
   await ui.view.flush(); ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), fixture); ui.close();
 });
 
@@ -404,7 +429,7 @@ test('source reordering before opening a projected card cannot redirect its text
   const ui = setup();
   ui.document.setRoot('nodes', [node('fresh', 'text', { text: 'Keep', x: 1000 }), ...ui.document.nodes]);
   ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'Edit a'; await ui.view.flush();
+  setText(await liveInput(ui), 'Edit a'); await ui.view.flush();
   assert.equal(ui.document.getNode('a')!.text, 'Edit a'); assert.equal(ui.document.getNode('fresh')!.text, 'Keep');
   ui.document.setRoot('nodes', [node('another', 'text', { x: 2000 }), ...ui.document.nodes]);
   ui.pointer(ui.item('a'), 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 20, 30); ui.pointer(ui.viewport, 'pointerup', 20, 30); await ui.view.flush();
@@ -414,29 +439,29 @@ test('source reordering before opening a projected card cannot redirect its text
 test('changed projected card rejects edits and drag without overwriting current source', async () => {
   const ui = setup(); ui.document.updateNode('a', { text: 'Current source' });
   ui.item('a').dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Old view draft';
+  const input = await liveInput(ui); setText(input, 'Old view draft');
   await assert.rejects(ui.view.flush(), /changed while editing/); assert.equal(input.isConnected, true); assert.equal(ui.document.getNode('a')!.text, 'Current source');
   ui.key('Escape', {}, input);
   ui.pointer(ui.item('a'), 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 20, 30); ui.pointer(ui.viewport, 'pointerup', 20, 30);
   assert.equal(ui.document.getNode('a')!.x, 0); assert.equal(ui.item('a').style.left, '0px'); assert.equal(ui.saves.length, 0); ui.close();
 });
 
-test('identical source acknowledgements preserve draft and drag ownership; genuinely changed source still resets', async () => {
+test('identical source acknowledgements preserve the Live editor and drag ownership; genuinely changed source resets history', async () => {
   const ui = setup(), originalCard = ui.item('a');
   originalCard.dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true }));
-  const input = ui.container.querySelector<HTMLTextAreaElement>('textarea')!; input.value = 'Uncommitted draft';
-  const originalDocument = ui.view.document;
-  ui.view.setDocument(CanvasDocument.parse(fixture));
-  assert.equal(ui.view.document, originalDocument); assert.equal(ui.item('a'), originalCard); assert.equal(ui.container.querySelector('textarea'), input);
-  assert.equal(input.value, 'Uncommitted draft'); assert.equal(ui.view.hasPendingChanges(), true); assert.equal(ui.saves.length, 0);
-  ui.key('Escape', {}, input);
+  const input = await liveInput(ui); setText(input, 'Accepted live edit'); await ui.view.flush();
+  const originalDocument = ui.view.document, accepted = ui.document.toString();
+  ui.view.setDocument(CanvasDocument.parse(accepted));
+  assert.equal(ui.view.document, originalDocument); assert.equal(ui.item('a'), originalCard); assert.equal(ui.container.querySelector('.cm-content'), input);
+  assert.equal(textOf(input), 'Accepted live edit'); assert.equal(ui.view.hasPendingChanges(), false); assert.equal(ui.saves.length, 1);
+  ui.key('Escape', {}, input); await tick();
   ui.pointer(originalCard, 'pointerdown', 0, 0); ui.pointer(ui.viewport, 'pointermove', 25, 10);
-  ui.view.setDocument(CanvasDocument.parse(fixture)); assert.equal(ui.item('a'), originalCard); assert.equal(originalCard.style.left, '25px');
-  ui.pointer(ui.viewport, 'pointerup', 25, 10); await ui.view.flush(); assert.equal(ui.document.getNode('a')?.x, 25); assert.equal(ui.saves.length, 1);
+  ui.view.setDocument(CanvasDocument.parse(accepted)); assert.equal(ui.item('a'), originalCard); assert.equal(originalCard.style.left, '25px');
+  ui.pointer(ui.viewport, 'pointerup', 25, 10); await ui.view.flush(); assert.equal(ui.document.getNode('a')?.x, 25); assert.equal(ui.saves.length, 2);
   const changed = CanvasDocument.parse(ui.document.toString()); changed.setRoot('plugin', { externallyChanged: true });
   ui.view.setDocument(changed); assert.equal(ui.view.document, changed); assert.notEqual(ui.item('a'), originalCard);
   assert.equal(ui.container.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.disabled, true);
-  ui.view.undo(); await ui.view.flush(); assert.deepEqual(ui.view.document.getRoot('plugin'), { externallyChanged: true }); assert.equal(ui.saves.length, 1); ui.close();
+  ui.view.undo(); await ui.view.flush(); assert.deepEqual(ui.view.document.getRoot('plugin'), { externallyChanged: true }); assert.equal(ui.saves.length, 2); ui.close();
 });
 
 test('reload of an externally mutated model refreshes its stale projection even when model strings match', async () => {

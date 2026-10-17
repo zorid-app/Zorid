@@ -1,3 +1,5 @@
+import {createCanvasAttachmentCard} from '../canvas/attachment-card.ts';
+import {createCanvasDocumentInput} from './canvas-document-input.ts';
 import { fileTreeLabel } from './file-tree-label.ts';
 import { createFolderInline, FileTreeRenameSession } from './file-tree-create.ts';
 import { createFileTreeDrag, executeFileTreeMove } from './file-tree-drag.ts';
@@ -100,6 +102,7 @@ export class Workspace {
   private treeSelectionAnchor?: string;
   private entryTokens = new Map<string, symbol>();
   private treeDrag?: ReturnType<typeof createFileTreeDrag>;
+  private canvasDocumentInput?:ReturnType<typeof createCanvasDocumentInput>;
   private treeRename?: { path: string; session: FileTreeRenameSession };
   private folderCreationIntent = 0;
   private query = '';
@@ -210,6 +213,7 @@ export class Workspace {
     this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();
     for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose(); this.buffers.clear();
     this.attachments?.destroy();
+    this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;
     this.treeDrag?.destroy(); this.treeDrag=undefined; this.treeRename?.session.dispose(); this.treeRename=undefined; this.folderCreationIntent++;
     this.treeRows=[]; this.treeSelection.clear(); this.treeSelectionAnchor=undefined; this.entryTokens.clear();
     this.platform = platform; this.vault = next; this.vaultGeneration++;
@@ -506,8 +510,18 @@ export class Workspace {
         host.classList.add('canvas-attachment-view');
         try{
           const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
-          const generation=this.vaultGeneration;pane.canvasSource=buffer.text;
-          pane.canvasView=(this.viewFactories.canvas??createCanvasView)(host,{...{openMarkdownFile:(target:string)=>this.openCanvasMarkdownSession(target,()=>pane,runtime)},document:CanvasDocument.parse(buffer.text),onChange:async source=>{
+          const generation=this.vaultGeneration,settings=this.settings;pane.canvasSource=buffer.text;
+          pane.canvasView=(this.viewFactories.canvas??createCanvasView)(host,{...{openMarkdownFile:(target:string)=>this.openCanvasMarkdownSession(target,()=>pane,runtime),
+            chooseFile:(kind?:'note'|'media')=>this.canvasDocumentInput?.chooseFile(()=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase==='active'&&pane.content?.isConnected===true,kind)??Promise.resolve(null),
+            textEditorOptions:{open:(target:string,kind:'wiki'|'markdown'='wiki')=>{if(generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed')this.run(()=>this.followLink(path,target,pane,kind));},paths:()=>generation===this.vaultGeneration?[...this.vault.entries.keys()]:[],get listOptions(){return{useTab:settings.useTab,tabSize:settings.tabSize,smartIndentList:settings.smartIndentList};}},
+            renderFile:(target:string,subpath?:string)=>{
+              const parent=el('div'),token=this.treeEntryToken(target),available=()=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'&&token!==undefined&&this.treeEntryToken(target)===token&&this.vault.entries.get(target)?.type==='file';
+              if(!available()){const element=el('p','error-message',`File not found: ${target}`);return{element,destroy(){element.remove();}};}
+              const view=createCanvasAttachmentCard(parent,{path:target,subpath,resources:this.attachments!,pdfFactory:this.viewFactories.pdf,mediaFactory:this.viewFactories.media,mobile:matchMedia('(max-width: 700px)').matches,
+                openFile:(file,fragment)=>available()?this.openNote(file,false,pane,true,fragment??''):Promise.resolve(),onError:error=>{if(available())notice(error instanceof Error?error.message:String(error));}});
+              return{element:view.element,destroy:()=>view.destroy()};
+            },
+            filePathsFromDrop:(transfer:DataTransfer)=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase==='active'?this.canvasDocumentInput?.filePathsFromDrop(transfer)??[]:[]},document:CanvasDocument.parse(buffer.text),onChange:async source=>{
             if(generation!==this.vaultGeneration||version!==pane.renderVersion)throw new Error('The Canvas is no longer open.');
             if(buffer.text!==pane.canvasSource)throw new Error('The Canvas changed in another pane. Save or reload before editing it again.');
             buffer.update(source);runtime.touch();pane.canvasSource=source;await buffer.flush();
@@ -1039,6 +1053,7 @@ export class Workspace {
   }
 
   private mountFileTreeDrag():void{
+    this.canvasDocumentInput?.destroy();
     this.treeDrag?.destroy();
     this.treeDrag=createFileTreeDrag({root:this.sidebarContent,getEntries:()=>[...this.vault.entries.values()],getRows:()=>this.treeRows,
       getSelectedPaths:()=>[...this.treeSelection],getVaultToken:()=>this.vault,
@@ -1051,6 +1066,7 @@ export class Workspace {
           this.requireAvailableTreePath(vault,destination,source);
         });}});},
       rootLabel:this.platform.label,onError:error=>notice(error instanceof Error?error.message:String(error))});
+    this.canvasDocumentInput=createCanvasDocumentInput({root:this.sidebarContent,getRows:()=>this.treeRows,getEntries:()=>[...this.vault.entries.values()],getSelectedPaths:()=>[...this.treeSelection],getVaultToken:()=>this.vault,getEntryToken:path=>this.treeEntryToken(path),enabled:()=>this.treeTab==='files'&&!this.treeRename});
   }
   private async renameDialog(path:string):Promise<void>{const name=await promptName('Rename',path.split('/').at(-1),'Rename');if(name)await this.renamePath(path,name);}
   private async renamePath(path:string,name:string):Promise<string>{
@@ -1234,5 +1250,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
   async flush():Promise<void>{for(const pane of [...this.panes,...this.cachedViews.values()])await pane.canvasView?.flush();for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
+  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
 }

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
+import { EditorView } from '@codemirror/view';
+import { Transaction } from '@codemirror/state';
 import { CanvasDocument } from '../src/canvas/document.ts';
 import { createCanvasView } from '../src/canvas/view.ts';
 import type { CanvasViewOptions } from '../src/canvas/view.ts';
@@ -8,13 +10,21 @@ import type { CanvasViewOptions } from '../src/canvas/view.ts';
 const tick = async () => { for (let index = 0; index < 20; index++) await Promise.resolve(); };
 function setup(text: string, options: Partial<CanvasViewOptions> = {}) {
   const dom = new JSDOM('<!doctype html><main></main>', { url: 'https://zorid.test/', pretendToBeVisual: true });
+  const previous = new Map<string, PropertyDescriptor | undefined>();
+  for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement, Node: dom.window.Node, Text: dom.window.Text, Window: dom.window.Window, MutationObserver: dom.window.MutationObserver,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window), requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window) })) {
+    previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  }
+  dom.window.Range.prototype.getBoundingClientRect = () => ({ top: 0, left: 0, right: 300, bottom: 200, width: 300, height: 200, x: 0, y: 0, toJSON() { return {}; } });
+  dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const host = dom.window.document.querySelector('main')!;
   const source = JSON.stringify({ nodes: [{ id: 'text', type: 'text', x: 0, y: 0, width: 320, height: 240, text, plugin: { keep: true } }], edges: [], custom: 1 }, null, '\t') + '\n';
   const document = CanvasDocument.parse(source), saves: string[] = [], errors: unknown[] = [];
   const view = createCanvasView(host, { document, onChange: value => { saves.push(value); }, onError: error => { errors.push(error); }, ...options });
   const card = () => host.querySelector<HTMLElement>('[data-node-id="text"]')!;
-  const edit = () => { card().dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true })); return card().querySelector<HTMLTextAreaElement>('textarea')!; };
-  return { dom, host, document, source, view, saves, errors, card, edit, close() { view.destroy(); dom.window.dispatchEvent(new dom.window.Event('pagehide')); dom.window.close(); } };
+  const edit = async () => { card().dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true })); await tick(); const editor = EditorView.findFromDOM(card().querySelector('.cm-editor')!)!; assert.ok(editor); return editor; };
+  return { dom, host, document, source, view, saves, errors, card, edit, close() { view.destroy(); dom.window.dispatchEvent(new dom.window.Event('pagehide')); dom.window.close(); for (const [key, descriptor] of previous) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } } };
 }
 function workerHarness(t: Parameters<Parameters<typeof test>[1]>[0]) {
   const prior = Object.getOwnPropertyDescriptor(globalThis, 'Worker');
@@ -88,15 +98,19 @@ test('rich card source edits, save failures, retry and undo retain the original 
   let fail = true, calls = 0;
   const text = '**original**\r\n\r\n- item';
   const ui = setup(text, { onChange() { calls++; if (fail) throw new Error('write refused'); } }); t.after(ui.close);
-  const input = ui.edit(); assert.equal(input.value, text.replace(/\r\n/g, '\n'));
-  // textarea normalizes line endings; entering and leaving must still be a no-op.
+  const input = await ui.edit(); assert.equal(input.state.doc.toString(), text.replace(/\r\n/g, '\n'));
+  // The shared editor normalizes its document; entering and leaving must preserve untouched source bytes.
   await ui.view.flush(); assert.equal(ui.document.toString(), ui.source); assert.equal(calls, 0);
-  const next = ui.edit(); next.value = '# Changed\n\n`literal`';
+  const next = await ui.edit(); next.dispatch({ changes: { from: 0, to: next.state.doc.length, insert: '# Changed\n\n`literal`' }, annotations: Transaction.userEvent.of('input.type') });
   await assert.rejects(ui.view.flush(), /write refused/);
-  assert.equal(ui.card().querySelector('h1')?.textContent, 'Changed'); assert.equal(ui.view.hasPendingChanges(), true);
+  assert.equal(next.state.doc.toString(), '# Changed\n\n`literal`'); assert.equal(ui.view.hasPendingChanges(), true);
   assert.equal(ui.document.getNode('text')?.text, '# Changed\n\n`literal`'); assert.deepEqual(ui.document.getNode('text')?.plugin, { keep: true });
-  fail = false; await ui.view.flush(); assert.equal(calls, 2); assert.equal(ui.view.hasPendingChanges(), false);
-  ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), ui.source); assert.equal(ui.card().querySelector('strong')?.textContent, 'original');
+  // Live input publishes immediately; flush may have retried an already failed synchronous write.
+  const failedAttempts = calls; assert.ok(failedAttempts >= 1);
+  fail = false; await ui.view.flush(); assert.equal(calls, failedAttempts + 1); assert.equal(ui.view.hasPendingChanges(), false);
+  await ui.view.flush(); assert.equal(calls, failedAttempts + 1, 'a successful retry must not publish twice');
+  ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), ui.source); assert.equal(next.state.doc.toString(), text.replace(/\r\n/g, '\n'));
+  next.contentDOM.dispatchEvent(new ui.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await tick(); assert.equal(ui.card().querySelector('strong')?.textContent, 'original');
 });
 
 test('Markdown links preserve target kinds, use external hook and refuse stale or destroyed owners', async t => {
@@ -105,7 +119,7 @@ test('Markdown links preserve target kinds, use external hook and refuse stale o
   const anchors = [...ui.card().querySelectorAll<HTMLAnchorElement>('a')];
   anchors.forEach(anchor => anchor.click());
   assert.deepEqual(opened, ['wiki:Note#Section', 'markdown:other.md']); assert.deepEqual(external, ['https://example.test/']);
-  anchors[0].dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true })); assert.equal(ui.card().querySelector('textarea'), null);
+  anchors[0].dispatchEvent(new ui.dom.window.MouseEvent('dblclick', { bubbles: true })); assert.equal(ui.card().querySelector('.cm-editor'), null);
   ui.document.setRoot('nodes', [{ ...ui.document.nodes[0], text: 'external replacement' }]); anchors.forEach(anchor => anchor.click());
   assert.equal(opened.length, 2); assert.equal(external.length, 1);
   ui.view.setDocument(CanvasDocument.parse(ui.source)); anchors.forEach(anchor => anchor.click()); assert.equal(opened.length, 2);
@@ -121,13 +135,13 @@ test('unhandled external links retain browser defaults; internal links fall back
 });
 
 test('failed embed construction disposes partial owners and preserves editable literal source', async t => {
-  let disposed = 0;
+  let disposed = 0, constructed = 0;
   const other = new JSDOM('<main></main>');
-  const text = '![[first]] ![[broken]]', ui = setup(text, { renderMarkdownEmbed(request) { if (request.target === 'broken') throw new Error('embed failed'); return { element: other.window.document.createElement('span'), destroy() { disposed++; } }; } });
+  const text = '![[first]] ![[broken]]', ui = setup(text, { renderMarkdownEmbed(request) { if (request.target === 'broken') throw new Error('embed failed'); constructed++; return { element: other.window.document.createElement('span'), destroy() { disposed++; } }; } });
   t.after(() => { ui.close(); other.window.close(); });
-  assert.equal(disposed, 1); assert.equal(ui.card().querySelector('.has-render-error')?.textContent, text); assert.equal(ui.errors.length, 1);
-  assert.equal(ui.edit().value, text); await ui.view.flush(); assert.equal(ui.document.toString(), ui.source);
-  ui.view.destroy(); assert.equal(disposed, 1);
+  assert.equal(disposed, 1); assert.equal(ui.card().querySelector('.zorid-canvas-note-preview')?.textContent, text); assert.equal(ui.errors.length, 1);
+  assert.equal((await ui.edit()).state.doc.toString(), text); await ui.view.flush(); assert.equal(ui.document.toString(), ui.source);
+  ui.view.destroy(); assert.equal(disposed, constructed, 'every successful preview and Live embed owner is released exactly once');
 });
 
 test('nested controls keep pointer, keyboard, double-click and wheel ownership while ordinary card content still drags', async t => {
@@ -145,7 +159,7 @@ test('nested controls keep pointer, keyboard, double-click and wheel ownership w
     for (const event of [new ui.dom.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }), new ui.dom.window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'z', ctrlKey: true }), new ui.dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }), new ui.dom.window.WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 30 })]) {
       target.dispatchEvent(event); assert.equal(event.defaultPrevented, false);
     }
-    assert.notEqual(ui.dom.window.document.activeElement, viewport, target.outerHTML); assert.equal(ui.card().querySelector('textarea'), null);
+    assert.notEqual(ui.dom.window.document.activeElement, viewport, target.outerHTML); assert.equal(ui.card().querySelector('.cm-editor'), null);
     if (target.tagName !== 'VIDEO') {
       const context = new ui.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true });
       target.dispatchEvent(context); assert.equal(context.defaultPrevented, false);
@@ -169,5 +183,5 @@ test('Canvas respects embed-prevented input even outside native controls', t => 
   const before = ui.host.querySelector<HTMLElement>('.zorid-canvas-world')!.style.transform;
   paragraph.dispatchEvent(new ui.dom.window.WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 20 }));
   assert.equal(ui.host.querySelector<HTMLElement>('.zorid-canvas-world')!.style.transform, before);
-  assert.equal(ui.card().getAttribute('aria-selected'), 'false'); assert.equal(ui.card().querySelector('textarea'), null); assert.deepEqual(ui.saves, []);
+  assert.equal(ui.card().getAttribute('aria-selected'), 'false'); assert.equal(ui.card().querySelector('.cm-editor'), null); assert.deepEqual(ui.saves, []);
 });

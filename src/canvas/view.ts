@@ -3,10 +3,9 @@ import type { CanvasEdge, CanvasNode, CanvasValue } from './document.ts';
 import { showContextMenu } from '../platform/context-menu.ts';
 import type { ContextMenuItem } from '../platform/context-menu.ts';
 import { icon } from '../ui/dom.ts';
-import { renderMarkdown } from '../ui/markdown.ts';
+import type { EditorOptions } from '../ui/editor.ts';
 import type { EmbedRequest } from '../ui/markdown.ts';
-import { destroyMarkdown } from '../ui/markdown-lifecycle.ts';
-import { canvasTaskSource, createCanvasMarkdownCard } from './markdown-card.ts';
+import { createCanvasMarkdownCard } from './markdown-card.ts';
 import type { CanvasMarkdownCard, CanvasMarkdownSession } from './markdown-card.ts';
 
 export interface CanvasViewOptions {
@@ -20,6 +19,10 @@ export interface CanvasViewOptions {
   renderMarkdownEmbed?(request: EmbedRequest, nodeId: string): { element: HTMLElement; destroy(): void };
   /** Shared NoteBuffer lease for an existing Markdown file, never Canvas JSON. */
   openMarkdownFile?(path: string): Promise<CanvasMarkdownSession>;
+  textEditorOptions?: Omit<EditorOptions, 'value' | 'mode' | 'onChange'>;
+  chooseFile?(kind?: 'note' | 'media'): Promise<string | null>;
+  filePathsFromDrop?(transfer: DataTransfer): readonly string[];
+  renderFile?(path: string, subpath?: string): { element: HTMLElement; destroy(): void };
   openFileInNewTab?(path: string): void | Promise<void>;
   copyText?(text: string): void | Promise<void>;
   onError?(error: unknown): void;
@@ -81,7 +84,8 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   let tx = 40, ty = 40, scale = 1, space = false, saveQueue = Promise.resolve();
   const undoStack: string[] = [], redoStack: string[] = [], selectedNodes = new Set<string>(), selectedEdges = new Set<string>();
   const nodeEls = new Map<string, HTMLElement>(), edgeEls = new Map<string, { group: SVGGElement; path: SVGPathElement; hit: SVGPathElement; label: HTMLDivElement; arrows: SVGGElement[] }>();
-  const markdownOwners = new Set<() => void>();
+  const textCards = new Map<string, { original: CanvasNode; text: string; card: CanvasMarkdownCard; listeners: Set<(text: string) => void> }>();
+  const attachments = new Map<string, { file: string; subpath: string; owner: { element: HTMLElement; destroy(): void } }>();
   const fileCards = new Map<string, { file: string; subpath: string; card: CanvasMarkdownCard }>();
   let drag: { id: number; mode: 'move' | 'pan' | 'select'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
   let editor: HTMLTextAreaElement | undefined;
@@ -90,6 +94,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   let finishEditing: ((save: boolean) => void) | undefined;
   let saveVersion = 0, completedSaveVersion = 0;
   let failedSave: { error: unknown; version: number } | undefined;
+  let pendingTextSave: { source: string; version: number } | undefined;
   let menuVersion = 0;
   const box = dom.createElement('div'); box.className = 'zorid-canvas-selection-box';
   const report = (error: unknown) => {
@@ -114,6 +119,10 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     commit(draft => draft.addNode({ id, type: 'text', x: Math.round(((viewport.clientWidth || 800) / 2 - tx) / scale - 125), y: Math.round(((viewport.clientHeight || 600) / 2 - ty) / scale - 30), width: 250, height: 60, text: '' }));
     selectedNodes.clear(); selectedNodes.add(id); paintSelection(); startEditing(id);
   }, 32);
+  if (options.chooseFile) {
+    button(cardMenu, 'Add note', 'file', () => { void chooseFile(undefined, 'note').catch(report); }, 32);
+    button(cardMenu, 'Add media', 'file', () => { void chooseFile(undefined, 'media').catch(report); }, 32);
+  }
   const position = (node: CanvasNode) => {
     const preview = drag?.positions.get(node.id);
     return preview ? { ...node, x: preview.x + drag!.dx, y: preview.y + drag!.dy } : node;
@@ -178,11 +187,15 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   function paintSelection(): void {
     for (const [id, item] of nodeEls) { item.classList.toggle('is-selected', selectedNodes.has(id)); item.setAttribute('aria-selected', String(selectedNodes.has(id))); }
     for (const [id, item] of edgeEls) item.group.classList.toggle('is-selected', selectedEdges.has(id));
-    for (const [id, entry] of fileCards) if (!selectedNodes.has(id)) void entry.card.deactivate().catch(report);
+    for (const [id, entry] of [...fileCards, ...textCards]) if (!selectedNodes.has(id)) void entry.card.deactivate().catch(report);
   }
   function markdownFile(node: CanvasNode): boolean { return node.type === 'file' && /\.md$/i.test(String(node.file)) && !!options.openMarkdownFile; }
-  function assertCanReplaceCards(next: CanvasDocument): void {
+  function assertCanReplaceCards(next: CanvasDocument, allowQueuedText = false): void {
     const projected = projectCanvas(next);
+    for (const [id, entry] of textCards) {
+      const node = projected.nodes.get(id)?.data;
+      if ((!node || node.type !== 'text' || String(node.text ?? '') !== entry.text) && (entry.card.hasUnacceptedChanges() || !!failedSave || !allowQueuedText && saveVersion > completedSaveVersion)) throw new Error('The text card has unsaved changes. Save it before removing or replacing the card.');
+    }
     for (const [id, entry] of fileCards) {
       const node = projected.nodes.get(id)?.data;
       if ((!node || !markdownFile(node) || node.file !== entry.file || String(node.subpath ?? '') !== entry.subpath) && entry.card.hasPendingChanges()) {
@@ -209,7 +222,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     fileCards.set(node.id, entry); return entry.card;
   }
   function ownsInput(target: Element): boolean {
-    return !!target.closest('button,input,textarea,select,a,video,audio,.zorid-canvas-note-editor') || hasEditableOwner(target);
+    return !!target.closest('button,input,textarea,select,a,video,audio,.interactive-child,.zorid-canvas-note-editor') || hasEditableOwner(target);
   }
   function hasEditableOwner(target: Element): boolean {
     // Resolve inherited editable state, including plaintext-only and explicit
@@ -221,59 +234,75 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     }
     return false;
   }
-  function clearMarkdown(): void {
-    for (const dispose of markdownOwners) dispose();
-    markdownOwners.clear();
-  }
-  function renderText(content: HTMLElement, item: HTMLElement, node: CanvasNode): void {
-    const owner = document, original = projection.nodes.get(node.id)!.original;
-    let active = true;
-    const embeds: { destroy(): void }[] = [];
-    const current = () => active && !closed && owner === document && nodeEls.get(node.id) === item && document.nodes.includes(original);
-    const open = (target: string, kind: 'wiki' | 'markdown' = 'markdown') => {
-      if (!current()) return;
-      if (options.openMarkdownLink) invoke(() => options.openMarkdownLink!(target, kind));
-      else if (options.openFile) {
-        const separator = target.indexOf('#');
-        invoke(() => options.openFile!(separator < 0 ? target : target.slice(0, separator), separator < 0 ? undefined : target.slice(separator)));
-      }
+  function textCard(node: CanvasNode): CanvasMarkdownCard {
+    const previous = textCards.get(node.id);
+    if (previous) return previous.card;
+    const entry = { original: projection.nodes.get(node.id)!.original, text: String(node.text ?? ''), card: undefined as unknown as CanvasMarkdownCard, listeners: new Set<(text: string) => void>() };
+    let released = false;
+    const current = () => !closed && !released && textCards.get(node.id) === entry;
+    const sourceCurrent = () => { try { recordIndex(document.nodes, entry.original); return current(); } catch { return false; } };
+    const session: CanvasMarkdownSession = {
+      getText: () => entry.text,
+      update(next, expected) {
+        if (!current() || expected !== entry.text) throw new Error('Canvas text changed while editing. Keep this draft and reopen the item.');
+        const index = recordIndex(document.nodes, entry.original);
+        if (next === entry.text) return;
+        const before = document.toString();
+        document.transaction(draft => draft.setRoot('nodes', draft.nodes.map((raw, i) => i === index ? { ...raw, text: next } : raw)));
+        entry.original = document.nodes[index]; entry.text = next;
+        // CodeMirror owns this DOM update. Do not reparent or dispatch into its
+        // editor synchronously from the onChange listener.
+        projection = projectCanvas(document); renderedSource = document.toString(); menuVersion++;
+        undoStack.push(before); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0;
+        undoButton.disabled = false; redoButton.disabled = true; publish(true);
+      },
+      subscribe(listener) { entry.listeners.add(listener); return () => { entry.listeners.delete(listener); }; },
+      flush: flushPersistence,
+      hasPendingChanges: () => saveVersion > completedSaveVersion || !!failedSave,
+      editorOptions: {
+        paths: () => [], ...options.textEditorOptions,
+        open(target, kind = 'markdown', event) {
+          if (!sourceCurrent()) return;
+          if (options.textEditorOptions) options.textEditorOptions.open(target, kind, event);
+          else if (options.openMarkdownLink) invoke(() => options.openMarkdownLink!(target, kind));
+          else if (options.openFile) { const at = target.indexOf('#'); invoke(() => options.openFile!(at < 0 ? target : target.slice(0, at), at < 0 ? undefined : target.slice(at))); }
+        },
+        renderEmbed: options.renderMarkdownEmbed ? request => { const owner = options.renderMarkdownEmbed!(request, node.id); return { dom: owner.element, destroy: () => owner.destroy() }; } : options.textEditorOptions?.renderEmbed,
+      },
+      destroy() { released = true; entry.listeners.clear(); },
     };
-    const dispose = () => {
-      if (!active) return; active = false;
-      destroyMarkdown(content);
-      for (const embed of embeds) try { embed.destroy(); } catch (error) { report(error); }
-      embeds.length = 0;
-    };
-    markdownOwners.add(dispose);
-    content.classList.add('markdown-preview');
-    // Capture also protects retained external anchors and embed controls after
-    // refresh. Current external links keep normal navigation without a hook.
-    content.addEventListener('click', event => {
-      if (!current()) { event.preventDefault(); event.stopImmediatePropagation(); return; }
-      const anchor = (event.target as Element).closest<HTMLAnchorElement>('a.external-link');
-      if (anchor && options.openLink) { event.preventDefault(); event.stopPropagation(); invoke(() => options.openLink!(anchor.href)); }
-    }, true);
-    try {
-      renderMarkdown(content, String(node.text ?? ''), open, (line, checked) => {
+    entry.card = createCanvasMarkdownCard(dom, {
+      load: () => session, editLabel: 'Edit card text', isCurrent: current, isPreviewCurrent: sourceCurrent, onError: report,
+      onEditingChange(editing) {
         if (!current()) return;
-        const text = canvasTaskSource(String(node.text ?? ''), line, checked);
-        commit(draft => {
-          const index = recordIndex(draft.nodes, original);
-          draft.setRoot('nodes', draft.nodes.map((raw, i) => i === index ? { ...raw, text } : raw));
-        });
-      }, {
-        properties: false,
-        embed: options.renderMarkdownEmbed ? request => {
-          const embed = options.renderMarkdownEmbed!(request, node.id); embeds.push(embed); return embed.element;
-        } : undefined,
-      });
-    } catch (error) {
-      dispose(); content.textContent = String(node.text ?? ''); content.classList.add('has-render-error'); report(error);
-    }
+        menuVersion++; nodeEls.get(node.id)?.classList.toggle('is-editing', editing);
+        if (editing) { selectedNodes.clear(); selectedEdges.clear(); selectedNodes.add(node.id); paintSelection(); }
+      },
+    });
+    entry.card.element.addEventListener('click', event => {
+      const anchor = (event.target as Element).closest<HTMLAnchorElement>('a.external-link');
+      if (anchor && sourceCurrent() && options.openLink) { event.preventDefault(); event.stopPropagation(); invoke(() => options.openLink!(anchor.href)); }
+    });
+    textCards.set(node.id, entry); return entry.card;
   }
-  function render(): void {
+  function render(refreshTextPreviews = false): void {
     menuVersion++;
-    finishEditing?.(false); clearMarkdown(); projection = projectCanvas(document); renderedSource = document.toString();
+    const focused = dom.activeElement instanceof win.HTMLElement && world.contains(dom.activeElement) ? dom.activeElement : undefined;
+    finishEditing?.(false); projection = projectCanvas(document); renderedSource = document.toString();
+    for (const [id, entry] of textCards) {
+      const projected = projection.nodes.get(id);
+      if (!projected || projected.data.type !== 'text') { entry.card.destroy(); textCards.delete(id); }
+      else {
+        entry.original = projected.original;
+        const text = String(projected.data.text ?? '');
+        if (text !== entry.text) { entry.text = text; for (const listener of entry.listeners) listener(text); }
+        else if (refreshTextPreviews) entry.card.refreshPreview();
+      }
+    }
+    for (const [id, entry] of attachments) {
+      const node = projection.nodes.get(id)?.data;
+      if (!node || node.type !== 'file' || node.file !== entry.file || String(node.subpath ?? '') !== entry.subpath) { try { entry.owner.destroy(); } catch (error) { report(error); } attachments.delete(id); }
+    }
     for (const [id, entry] of fileCards) {
       const node = projection.nodes.get(id)?.data;
       if (!node || !markdownFile(node) || node.file !== entry.file || String(node.subpath ?? '') !== entry.subpath) { entry.card.destroy(); fileCards.delete(id); }
@@ -286,7 +315,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       item.style.setProperty('--canvas-node-color', color(node.color) || 'var(--zc-border)'); item.classList.toggle('is-themed', !!color(node.color));
       const frame = dom.createElement('div'); frame.className = 'zorid-canvas-node-frame';
       const content = dom.createElement('div'); content.className = 'zorid-canvas-node-content';
-      if (node.type === 'text') { renderText(content, item, node); item.setAttribute('aria-label', 'Text card'); }
+      if (node.type === 'text') { const card = textCard(node); content.append(card.element); item.append(card.toolbar); item.classList.toggle('is-editing', card.isEditing()); item.setAttribute('aria-label', 'Text card'); }
       else if (node.type === 'group') {
         const label = dom.createElement('div'); label.className = 'zorid-canvas-group-label'; label.textContent = String(node.label ?? ''); label.hidden = !label.textContent;
         label.style.setProperty('--zc-label-foreground', groupForeground(node.color));
@@ -299,6 +328,17 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         label.textContent = String(node.file).split('/').at(-1)!.replace(/\.md$/i, '') + (node.subpath ? ` › ${String(node.subpath).replace(/^#/, '')}` : '');
         label.ondblclick = event => { event.preventDefault(); event.stopPropagation(); invoke(options.openFile ? () => options.openFile!(String(node.file), typeof node.subpath === 'string' ? node.subpath : undefined) : undefined); };
         item.append(label);
+      } else if (node.type === 'file' && options.renderFile) {
+        const file = String(node.file), subpath = String(node.subpath ?? '');
+        let entry = attachments.get(id);
+        if (!entry) {
+          try { entry = { file, subpath, owner: options.renderFile(file, subpath || undefined) }; attachments.set(id, entry); }
+          catch (error) { content.textContent = `Unable to display ${file}`; report(error); }
+        }
+        content.classList.add('zorid-canvas-attachment'); if (entry) content.append(entry.owner.element);
+        item.setAttribute('aria-label', `File: ${file}`);
+        const label = dom.createElement('div'); label.className = 'zorid-canvas-node-label'; label.textContent = file.split('/').at(-1)!; item.append(label);
+        label.ondblclick = event => { event.preventDefault(); event.stopPropagation(); invoke(options.openFile ? () => options.openFile!(file, subpath || undefined) : undefined); };
       } else {
         const open = dom.createElement('button'); open.type = 'button'; open.className = 'zorid-canvas-open';
         open.textContent = String(node.type === 'file' ? node.file ?? '' : node.url ?? ''); open.title = open.textContent;
@@ -312,7 +352,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       item.ondblclick = event => {
         if (event.defaultPrevented || nodeEls.get(id) !== item || ownsInput(event.target as Element)) return;
         if (markdownFile(node)) { event.preventDefault(); selectedNodes.clear(); selectedEdges.clear(); selectedNodes.add(id); paintSelection(); invoke(() => fileCards.get(id)!.card.activate({ x: event.clientX, y: event.clientY })); }
-        else if (node.type === 'text') { event.preventDefault(); startEditing(id); }
+        else if (node.type === 'text') { event.preventDefault(); startEditing(id, 'text', { x: event.clientX, y: event.clientY }); }
       };
     }
     for (const [id, edge] of projection.edges) {
@@ -328,27 +368,38 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     }
     status.textContent = projection.hidden ? `${projection.hidden} unrendered or duplicate records retained in the file` : '';
     undoButton.disabled = !undoStack.length; redoButton.disabled = !redoStack.length; transform(); paintSelection();
+    if (focused?.isConnected) focused.focus({ preventScroll: true });
   }
-  function publish(): void {
+  function publish(coalesceText = false): void {
     if (closed) return;
-    const source = document.toString(), snapshot = CanvasDocument.parse(source), version = ++saveVersion;
-    // The internal tail recovers so a failed write cannot strand later edits. flush
-    // separately observes the final outcome and never treats failure as persistence.
+    const source = document.toString(), version = ++saveVersion;
+    if (coalesceText && pendingTextSave) { pendingTextSave.source = source; pendingTextSave.version = version; return; }
+    const save = { source, version };
+    // Text changes replace only a not-yet-started text snapshot. Geometry/scalar
+    // writes remain ordering barriers. A held adapter cannot build a per-key
+    // queue of full Canvas writes; at most one following text write is pending.
+    pendingTextSave = coalesceText ? save : undefined;
     saveQueue = saveQueue.then(async () => {
+      if (pendingTextSave === save) pendingTextSave = undefined;
       try {
-        await options.onChange(source, snapshot);
+        await options.onChange(save.source, CanvasDocument.parse(save.source));
         failedSave = undefined;
       } catch (error) {
-        failedSave = { error, version };
+        failedSave = { error, version: save.version };
         report(error);
-      } finally { completedSaveVersion = version; }
+      } finally { completedSaveVersion = save.version; }
     });
   }
   async function flush(): Promise<void> {
     if (!closed) {
       finishEditing?.(true);
       if (editorFailure) throw editorFailure;
-      for (const entry of fileCards.values()) await entry.card.flush();
+      for (const entry of [...fileCards.values(), ...textCards.values()]) await entry.card.flush();
+    }
+    await flushPersistence();
+  }
+  async function flushPersistence(): Promise<void> {
+    if (!closed) {
       // Retry only a failure already known on entry, not a first failure that
       // occurs while this flush waits. Concurrent flushes share that retry.
       if (failedSave && completedSaveVersion === saveVersion) publish();
@@ -360,18 +411,18 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   function commit(operation: (draft: CanvasDocument) => void): void {
     if (closed) return;
     const before = document.toString();
-    try { document.transaction(draft => { operation(draft); assertCanReplaceCards(draft); }); } catch (error) { report(error); return; }
+    try { document.transaction(draft => { operation(draft); assertCanReplaceCards(draft, true); }); } catch (error) { report(error); return; }
     if (before === document.toString()) return;
     undoStack.push(before); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; render(); publish();
   }
   function undo(): void {
     if (closed || editor || drag || !undoStack.length) return;
-    try { assertCanReplaceCards(CanvasDocument.parse(undoStack.at(-1)!)); } catch (error) { report(error); return; }
+    try { assertCanReplaceCards(CanvasDocument.parse(undoStack.at(-1)!), true); } catch (error) { report(error); return; }
     redoStack.push(document.toString()); document.replaceSource(undoStack.pop()!); render(); publish();
   }
   function redo(): void {
     if (closed || editor || drag || !redoStack.length) return;
-    try { assertCanReplaceCards(CanvasDocument.parse(redoStack.at(-1)!)); } catch (error) { report(error); return; }
+    try { assertCanReplaceCards(CanvasDocument.parse(redoStack.at(-1)!), true); } catch (error) { report(error); return; }
     undoStack.push(document.toString()); document.replaceSource(redoStack.pop()!); render(); publish();
   }
   function openValueEditor(host: HTMLElement, label: string, value: string, change: (draft: CanvasDocument, value: string) => void, cleanup?: () => void, afterSave?: () => void): void {
@@ -398,10 +449,11 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     input.onblur = () => finish(true);
     input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); finish(false); } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); finish(true); } };
   }
-  function startEditing(id: string, field: 'text' | 'label' | 'url' = 'text'): void {
+  function startEditing(id: string, field: 'text' | 'label' | 'url' = 'text', point?: { x: number; y: number }): void {
     const node = projection.nodes.get(id), host = nodeEls.get(id);
     if (!node || !host || field === 'text' && node.data.type !== 'text') return;
-    const label = field === 'text' ? 'Edit card text' : field === 'label' ? 'Edit group label' : 'Change URL';
+    if (field === 'text') { invoke(() => textCards.get(id)!.card.activate(point)); return; }
+    const label = field === 'label' ? 'Edit group label' : 'Change URL';
     const original = node.original;
     openValueEditor(host, label, String(node.data[field] ?? ''), (draft, value) => {
       const index = recordIndex(draft.nodes, original);
@@ -481,7 +533,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   viewport.addEventListener('pointerup', event => finishDrag(event)); viewport.addEventListener('pointercancel', event => finishDrag(event, true)); viewport.addEventListener('lostpointercapture', event => finishDrag(event, true));
   viewport.addEventListener('wheel', event => {
     if (closed || editor || drag || event.defaultPrevented || ownsInput(event.target as Element)) return;
-    if ((event.target as Element).closest('.zorid-canvas-markdown-card') && !event.ctrlKey && !event.metaKey && !space) return;
+    if ((event.target as Element).closest('.zorid-canvas-markdown-card,.zorid-canvas-attachment') && !event.ctrlKey && !event.metaKey && !space) return;
     event.preventDefault();
     const factor = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 800 : 1;
     if (event.ctrlKey || event.metaKey || space) { const rect = viewport.getBoundingClientRect(); zoom(scale * Math.pow(2, -event.deltaY * factor / 300), event.clientX - rect.left, event.clientY - rect.top); }
@@ -516,6 +568,39 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     while (document.getNode(id)) id = `node-${Date.now().toString(36)}-${++suffix}`;
     return id;
   }
+  let fileRequest = 0;
+  function insertFiles(paths: readonly string[], point?: { x: number; y: number }): void {
+    if (closed || !paths.length) return;
+    const origin = point ?? { x: Math.round(((viewport.clientWidth || 800) / 2 - tx) / scale - 200), y: Math.round(((viewport.clientHeight || 600) / 2 - ty) / scale - 200) };
+    const ids: string[] = [];
+    commit(draft => {
+      for (const [index, file] of paths.entries()) {
+        if (typeof file !== 'string' || !file) continue;
+        let id = uniqueNodeId(); while (draft.getNode(id)) id += '-copy';
+        draft.addNode({ id, type: 'file', file, x: origin.x + index * 24, y: origin.y + index * 24, width: 400, height: 400 }); ids.push(id);
+      }
+    });
+    selectedNodes.clear(); selectedEdges.clear(); for (const id of ids) if (projection.nodes.has(id)) selectedNodes.add(id); paintSelection();
+  }
+  async function chooseFile(point?: { x: number; y: number }, kind?: 'note' | 'media'): Promise<void> {
+    if (closed || !options.chooseFile) return;
+    const request = ++fileRequest, owner = document, source = document.toString();
+    const file = await options.chooseFile(kind);
+    if (closed || request !== fileRequest || owner !== document || source !== document.toString()) return;
+    if (file) insertFiles([file], point);
+  }
+  viewport.addEventListener('dragover', event => {
+    if (closed || event.defaultPrevented || !event.dataTransfer || ownsInput(event.target as Element)) return;
+    try { if (options.filePathsFromDrop?.(event.dataTransfer).length) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } } catch (error) { report(error); }
+  });
+  viewport.addEventListener('drop', event => {
+    if (closed || event.defaultPrevented || !event.dataTransfer || ownsInput(event.target as Element)) return;
+    try {
+      const paths = options.filePathsFromDrop?.(event.dataTransfer); if (!paths?.length) return;
+      event.preventDefault(); event.stopPropagation(); const rect = viewport.getBoundingClientRect();
+      insertFiles(paths, { x: Math.round((event.clientX - rect.left - tx) / scale), y: Math.round((event.clientY - rect.top - ty) / scale) });
+    } catch (error) { report(error); }
+  });
   function removeSelection(): void {
     if (!selectedNodes.size && !selectedEdges.size) return;
     commit(draft => {
@@ -546,6 +631,9 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         selectedNodes.clear(); selectedEdges.clear();
         if (nodeId) selectedNodes.add(nodeId); else if (edgeId) selectedEdges.add(edgeId);
       }
+      const contextSelection = selectionKey();
+      for (const [id, entry] of [...fileCards, ...textCards]) if (!selectedNodes.has(id)) await entry.card.deactivate();
+      if (closed || owner !== document || openingSource !== document.toString() || contextSelection !== selectionKey()) return;
       paintSelection(); viewport.focus();
       const source = document.toString(), selected = selectionKey(), version = ++menuVersion;
       const items: ContextMenuItem[] = [], actions = new Map<string, () => void | Promise<void>>();
@@ -598,6 +686,10 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         separator(); add('remove', 'Remove', removeSelection);
       } else {
         add('add-card', 'Add card', () => create('text'));
+        if (options.chooseFile) {
+          add('add-note', 'Add note from vault', () => chooseFile(point, 'note'));
+          add('add-media', 'Add media from vault', () => chooseFile(point, 'media'));
+        }
         add('add-web-page', 'Add web page', () => {
           let id: string | undefined;
           popupEditor('Web page URL', '', (draft, url) => {
@@ -620,7 +712,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   render();
   return {
     element, get document() { return document; }, undo, redo, flush,
-    hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave || [...fileCards.values()].some(entry => entry.card.hasPendingChanges()),
+    hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave || [...fileCards.values(), ...textCards.values()].some(entry => entry.card.hasPendingChanges()),
     setDocument(next) {
       // File watchers also report our own completed writes. Replacing identical
       // source would discard undo/redo, active drafts and rich renderer owners.
@@ -631,8 +723,8 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       const source = next.toString();
       if (source === renderedSource && source === document.toString()) return;
       assertCanReplaceCards(next);
-      finishEditing?.(false); clearDrag(); document = next; undoStack.length = redoStack.length = 0; selectedNodes.clear(); selectedEdges.clear(); render();
+      finishEditing?.(false); clearDrag(); document = next; undoStack.length = redoStack.length = 0; selectedNodes.clear(); selectedEdges.clear(); render(true);
     },
-    destroy() { if (closed) return; closed = true; finishEditing?.(false); clearDrag(); clearMarkdown(); for (const entry of fileCards.values()) entry.card.destroy(); fileCards.clear(); win.removeEventListener('blur', windowBlur); element.remove(); },
+    destroy() { if (closed) return; closed = true; finishEditing?.(false); clearDrag(); for (const entry of [...fileCards.values(), ...textCards.values()]) entry.card.destroy(); fileCards.clear(); textCards.clear(); for (const entry of attachments.values()) try { entry.owner.destroy(); } catch (error) { report(error); } attachments.clear(); win.removeEventListener('blur', windowBlur); element.remove(); },
   };
 }
