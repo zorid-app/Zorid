@@ -23,9 +23,9 @@ Proposed performance improvement; not implemented yet.
 - Remove redundant whole-file verification before adding concurrency. Measure
   actual latency, memory use, cancellation and foreground editor responsiveness.
 
-Shared Markdown extraction, indexes and Base semantics are scheduled separately
-in the [semantics plan](shared-document-semantics-plan.md). Parallel execution is
-an improvement to that work, not permission to replace active editor parsers now.
+Shared Markdown extraction, indexes and Base semantics are implemented and
+accepted in the [semantics plan](shared-document-semantics-plan.md). Parallel
+execution remains future work; live editor parsing stays separately owned.
 
 ## P2P live sync
 
@@ -70,5 +70,16 @@ Native mobile shells, new-device joining, hosted/self-hosted onboarding, full
 version history, coordinated automatic backups and administration remain in the
 delivery roadmap. They have not been dropped or declared complete by this list.
 Backups must include accounts, permissions and recovery-critical configuration,
-as well as encrypted vault data. Calendar/task features remain deferred in that
-roadmap too.
+as well as encrypted vault data. Latest user steering moves Bases/tasks/calendar
+implementation immediately after Vite and before Stage5; see
+[built-in workflow plan](bases-tasks-calendar-plan.md). They are no longer deferred
+behind Stage5.
+
+## Renderer startup and lazy loading
+
+The Vite migration changes the build pipeline; it is not proof of faster runtime.
+The production build reports that editor.ts is both dynamically imported by the
+workspace and statically imported by Canvas Markdown cards, so that dynamic edge
+does not create a separate editor chunk. A later measured optimization can isolate
+this dependency and compare cold startup, first editor open and Canvas card loading.
+Preserve native/WebKit assets and avoid claiming success solely from smaller output.
