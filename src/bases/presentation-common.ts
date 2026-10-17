@@ -60,7 +60,11 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
   element.dataset.property = property;
   if (options.renderProperty) {
     try { return options.renderProperty(element, { row, property, value, version: result.version }) || (() => {}); }
-    catch (error) { reportPresentationError(options, error); element.textContent = 'Error'; return () => {}; }
+    catch (error) {
+      // A failed custom mount owns no live editor; clear its marker along with partial content.
+      element.removeAttribute('data-base-editing'); element.textContent = 'Error';
+      reportPresentationError(options, error); return () => {};
+    }
   }
   let disposed = false;
   let pending = false;

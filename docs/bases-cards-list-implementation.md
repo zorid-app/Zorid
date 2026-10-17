@@ -132,10 +132,14 @@ compare-and-set validation. Group collapse/layout requests queue without retirin
 the editor, and a pending checkbox stays marked through callback completion and
 DOM restoration. Escape during an in-flight write cannot remove its owner.
 
-Validation: 41 focused serial tests (16 original, 13 independent prior review,
-12 new preservation cases) and focused strict TypeScript pass. New cases cover
+Validation: 43 focused serial tests (16 original, 13 independent prior review,
+14 new preservation cases) and focused strict TypeScript pass. New cases cover
 latest-result queuing with the original version, failed/unfocused draft pinning
 through resize/collapse/scroll, final IME text after blur, pending checkboxes, and
 custom marker lifecycle. Two older tests now explicitly cancel a draft before
 asserting retirement rather than expecting destructive query replacement. Native
 IME, mobile keyboard, and integrated controller behavior remain separate gates.
+
+Independent review additionally found that a custom widget throwing after marking a
+draft could strand that marker. Failed custom mounts now clear partial content and
+the marker, allowing a later result to render; both views have regressions.

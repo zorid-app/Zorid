@@ -86,6 +86,16 @@ for (const [name, create] of [['Cards', createBaseCardsView], ['List', createBas
     host.querySelector('[data-property]')!.removeAttribute('data-base-editing'); await tick();
     assert.equal(view.hasActiveEdits(), true); assert.deepEqual(states, [true]);
   });
+  test(`${name} failed custom widget mount cannot leave a permanent draft marker`, async t => {
+    const { dom, host } = setup(); t.after(() => dom.window.close()); let failures = 0;
+    const view = create(host, { result: result(), openFile() {}, onError() { failures++; },
+      renderProperty(element, context) {
+        if (context.version === 1) { element.dataset.baseEditing = 'draft'; throw new Error('widget mount failed'); }
+        element.textContent = 'Recovered';
+      } }); t.after(() => view.destroy());
+    assert.equal(view.hasActiveEdits(), false); assert.equal(failures, 1);
+    view.update(result(2)); await tick(); assert.match(host.textContent!, /Recovered/); assert.equal(view.hasActiveEdits(), false);
+  });
   test(`${name} custom property widgets can mark drafts and release deferred changes`, async t => {
     const { dom, host } = setup(); t.after(() => dom.window.close());
     const view = create(host, { result: result(), openFile() {}, renderProperty(element, context) {
