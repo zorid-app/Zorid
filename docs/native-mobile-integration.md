@@ -231,3 +231,39 @@ and Account / Agreements and Contracts. Private case number/message/receipt kept
 outside tracked source; Apple will review/reply. No claimed root cause or access
 resolution, no duplicate case or secret material sent. TestFlight provisioning and
 upload remain pending Apple access; app implementation continues independently.
+
+
+## Direct device trial and variants — 20:08 UTC
+
+User plugged in iPhone16Pro and requested direct app trial plus simulator testing.
+Actual CoreDevice query confirms paired wired connection, Developer Mode enabled,
+DDI services available, iOS27.0.1. Apple owner verified an existing local Apple
+Development identity/private key and unexpired wildcard development profile cover
+this device; no ASC app record, new certificate or provisioning request is needed.
+Private signing contract/profile live under ~/certificates/apple/apps/zorid/development;
+no private values enter tracked source. Current direct app is separately identified
+app.zorid.notes.dev / Zorid Dev to protect any existing production app/data.
+Development sourceee5f7236->be3620fd plus manual-signingfa8ac4bc->bb159639,
+display-name expansion4c299d86 and Apple evidencefcd035b8->54b0a621.
+
+Full TypeScript54737 PASS exit0. Simulator app8510 production desktop-target
+webpack, cap copy ios, current Rust staticlib and Xcode26.3 App Debug arm64 build
+PASS exit0, including real Swift typecheck/link. Artifact retained outside repo:
+/private/tmp/zorid-ios-sim-20261017/DerivedData/Build/Products/Debug-iphonesimulator/App.app.
+No simulator interaction/visual acceptance follows from this compilation yet.
+Physical attempt65292 exited101 at cap-copy ENOSPC before Rust/signing. Deleted
+only this worktree's marked generated host/ABI target cache (761MiB); retained
+source, prior logs, simulator app and mobile Rust target. df then2.7GiB available.
+Retry87781 is live on the same frozen source with fresh output
+/private/tmp/zorid-ios-device-20261017-r2. Actual signing/install remain pending.
+Coordinator explicitly granted exclusive device/simulator slot; no concurrent
+root heavy job. Native package resolution generated an iOS SwiftPM lock to review.
+
+User additionally requires formal dev/prod variants with different names, bundle
+IDs and future strings/UI. Native worker owns iOS-only xcconfigs/shared schemes,
+project settings and optional AppVariant metadata accessor in its isolated
+mobile-ios-shell branch; no root build-tool dependency, editor/platform redesign
+or differing feature set is introduced. Dev/prod must remain independent of
+Debug/Release optimization and preserve existing App/legacy-config compatibility.
+Native/delivery workers coordinate exact config, output path, metadata and flags.
+Owner will import project/script changes only after live phone build terminates.
