@@ -14,7 +14,8 @@ async function fetchCorpus(url) {
   return { value, sha256: await hash(bytes) };
 }
 function difference(actual, expected, path = '$') {
-  if (Object.is(actual, expected)) return null;
+  // JSON numbers use numeric equality, matching the native oracle (including -0).
+  if (actual === expected) return null;
   if (actual === null || expected === null || typeof actual !== 'object' || typeof expected !== 'object') return { path, actual, expected };
   if (Array.isArray(actual) !== Array.isArray(expected)) return { path, actual, expected };
   if (Array.isArray(actual)) {

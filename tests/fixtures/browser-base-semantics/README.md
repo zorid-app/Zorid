@@ -101,3 +101,18 @@ shared index `stale_source` error before any result can be accepted.
 Use immutable generated asset URLs or keep the module/binary pair frozen during a
 proof. Source syntax checks or a successful WASM build alone do not establish
 actual-browser parity, native parity or production consumer migration.
+
+
+Source reconciliation checkpoint (2026-10-17): the harness defaults directly to
+its sibling canonical `accepted-generation-queries.json`; it has no copied graph
+fixture or fallback oracle. The corrected four-case corpus at Base fixture commit
+`f2893726` has SHA-256
+`94ef253e6dea08bf353906a9a1174dee5db6485f58a9509c12a42086ff60fba5`.
+It retains encoded external destinations in the exact Link value and checks that
+ordinary external Markdown URLs are omitted. The source check matched that hash
+in the coordinator candidate. Runtime reports hash the bytes actually fetched,
+so asset staging must preserve this canonical file. Native runner `06e2dc5b` and
+this worker both compare declared row/cell observables with exact typed shapes,
+list order and link fields; error prose alone is removed. Numeric JSON values
+compare numerically, including `1.0 == 1` and `-0 == 0`. Downloaded actual WASM
+results remain untouched. This source reconciliation is not a browser run.
