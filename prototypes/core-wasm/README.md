@@ -354,6 +354,7 @@ must not be silently treated as verified by these fixtures.
 | Boundary | Limit / behavior |
 | --- | --- |
 | General planner JSON input | 32 MiB before parsing |
+| Composite durable command | 4 MiB canonical/raw JSON; retained beside graph/text/entries |
 | Reusable persisted text or namespace state | 8 MiB serialized per state |
 | Classifier namespace input | 8 MiB raw JSON |
 | Classifier text-state input | 8 MiB aggregate raw JSON; at most 4096 states; aliases rejected in Rust |
@@ -380,3 +381,46 @@ historical-witness read or publication authorization; oversize recovery is an
 error. Entry ID is a validated plain string. Both bindings use the shared Rust
 classifier with the limits above. New wrapper source requires independent review
 and native/build/browser validation beyond earlier source evidence.
+
+## Composite durable family commands
+
+`validateFamilyCommand(rawJson)` strictly parses the shared versioned command,
+including its required explicit `create_mode`, and returns canonical JSON.
+`checkFamilyCommandReplay(originalJson,candidateJson)` compares the full typed
+command before any new allocation/planning. Neither call authorizes a prepared
+intent or validates its receipt; those remain transaction-owned host checks.
+
+`familyMutationRequirements(inputJson)` takes
+`{command,entries,graph,text}` and returns the shared allocation requirements.
+`planFamilyMutation(inputJson)` takes the same fields plus `allocation` and returns
+an opaque `WasmFamilyMutationPlan`. Its `resultJson()` is the shared `MutationPlan`
+without translated JavaScript semantics; `metadataJson()` is the ordered envelope
+metadata array for authored files followed by optional authored text. Its
+`checkPreconditions({entries,graph,text,allocated_ids_unused})` argument is JSON;
+all values must come from the actual committing transaction and the unused check
+must cover the common family identity ledger and allocated bootstrap IDs.
+
+Command JSON is capped at 4 MiB in this fixture to reserve space beside entries,
+text and graph in the general 32 MiB composite input. Each retained state/entry
+snapshot also obeys the reusable-state bound. Large streaming file commands are
+still a required later integration, not established by these JSON interfaces.
+
+`syncEnvelopeUpdateId(wireBytes)` performs bounded Rust framing validation and
+returns the header update ID as **untrusted routing metadata**. It does not verify
+the tag or encrypted content. The caller must authenticate that same wire using
+independently pinned realm/vault/key epoch before state changes. A corrupted tag
+can still return an update ID and must fail the subsequent authenticated open.
+
+`verifyRetainedFileContent(stateJson,identityJson,eventId,verifiedContentJson)`
+checks a saved binary `VerifiedContent` against the exact event-derived manifest,
+identity, bytes and digest through the shared Rust verifier. Missing dependencies
+cannot validate a previously complete saved witness. This is stored-state
+consistency, not authentication or permission to publish. The content JSON is
+bounded to the result limit and the shared verifier applies the classifier's
+8 MiB expanded-content cap before materialization.
+
+`rebindTextState(stateJson,expectedRevision,nextRevision)` uses the shared validated
+local-revision helper. It preserves identity, causal snapshot and actors, including
+pending dependencies, and emits no authored update. The host still enforces its
+transaction's exact snapshot and global revision-history fence. This supports
+namespace changes that alter metadata revisions without inventing text edits.

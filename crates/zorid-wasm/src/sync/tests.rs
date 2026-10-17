@@ -646,3 +646,163 @@ fn classifier_bindings_enforce_aggregate_text_input_and_identity_bounds() {
     assert!(classification::classify_json(&graph_json, &too_many).is_err());
     assert!(classification::recovery_json(&graph_json, "[]", "../escape").is_err());
 }
+
+#[test]
+fn family_command_boundary_preserves_mode_replay_and_combined_plan_authority() {
+    let (_, graph, _) = fixture();
+    let empty = files::State::empty(graph.scope().clone(), rev("empty"));
+    let command = json!({"version":1,"request":{"operation_id":"create-op","mutation":{"type":"create","id":"note","path":"note.md","kind":"file","content":[104,105]}},"create_mode":"text"});
+    family::command(&command.to_string()).unwrap();
+    family::replay(
+        &serde_json::to_string_pretty(&command).unwrap(),
+        &command.to_string(),
+    )
+    .unwrap();
+    let mut changed = command.clone();
+    changed["create_mode"] = json!("binary");
+    assert!(family::replay(&command.to_string(), &changed.to_string()).is_err());
+    changed = command.clone();
+    changed.as_object_mut().unwrap().remove("create_mode");
+    assert!(family::command(&changed.to_string()).is_err());
+    assert!(family::command(&command["request"].to_string()).is_err());
+    let duplicate = format!(
+        "{},\"create_mode\":\"binary\"}}",
+        &command.to_string()[..command.to_string().len() - 1]
+    );
+    assert!(family::command(&duplicate).is_err());
+    let mut input = json!({"command":command,"entries":[],"graph":empty,"text":null});
+    let need: serde_json::Value =
+        serde_json::from_str(&family::requirements(&input.to_string()).unwrap()).unwrap();
+    assert_eq!(need, json!({"update_count":2,"text":"create"}));
+    input["allocation"] = json!({"metadata_revision":"meta-created","graph_revision":"graph-created","update_ids":["create-event","text-event"],"text":{"actor":{"actor":7,"owner":{"replica_id":"replica","incarnation_id":"incarnation"}},"new_text":{"bootstrap_id":"bootstrap","empty_revision":"empty-text"}}});
+    let plan = family::plan(&input.to_string()).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&plan.result_json().unwrap()).unwrap();
+    let metas: Vec<serde_json::Value> = serde_json::from_str(&plan.metadata().unwrap()).unwrap();
+    assert_eq!(metas.len(), 2);
+    assert_eq!(metas[0]["family"], "files");
+    assert_eq!(metas[1]["family"], "text");
+    assert_eq!(metas[1]["key"]["update_id"], "text-event");
+    assert_eq!(
+        result["text"]["plan"]["materialized_utf8"],
+        json!([104, 105])
+    );
+    let mut actual = json!({"entries":[],"graph":empty,"text":null,"allocated_ids_unused":true});
+    plan.check(&actual.to_string()).unwrap();
+    actual["allocated_ids_unused"] = json!(false);
+    assert!(plan.check(&actual.to_string()).is_err());
+    actual["allocated_ids_unused"] = json!(true);
+    actual["graph"]["version"] = json!("changed");
+    assert!(plan.check(&actual.to_string()).is_err());
+}
+#[test]
+fn envelope_route_is_bounded_and_does_not_imply_authentication() {
+    let (_, _, input) = fixture();
+    let plan = replace(&input.to_string(), b"hello").unwrap();
+    let key = VaultKey::from_bytes([4; 32]);
+    let header = Header::new(
+        RealmId::new("realm").unwrap(),
+        VaultId::new("vault").unwrap(),
+        id("edit"),
+        DeviceId::new("replica").unwrap(),
+        1,
+    )
+    .unwrap();
+    let mut wire = zorid_crypto::seal(
+        &header,
+        &plan.text.authored.payload_bytes,
+        &key,
+        &mut Entropy,
+    )
+    .unwrap()
+    .encode();
+    assert_eq!(envelope_update_id(&wire).unwrap(), "edit");
+    *wire.last_mut().unwrap() ^= 1;
+    assert_eq!(envelope_update_id(&wire).unwrap(), "edit");
+    assert!(open_update(
+        &key,
+        r#"{"realm_id":"realm","vault_id":"vault","update_id":"edit","key_epoch":1}"#,
+        &wire
+    )
+    .is_err());
+    assert!(envelope_update_id(&[0, 1, 2]).is_err());
+    assert!(envelope_update_id(&vec![0; MAX_WIRE_BYTES + 1]).is_err());
+}
+
+#[test]
+fn retained_verified_content_checks_exact_event_manifest_and_bytes() {
+    use zorid_file_sync::materialization::{ContentWitness, VerifiedContent};
+    let state = retained_fixture();
+    let files::Body::Events { events } = &state.records().get(&id("create")).unwrap().body else {
+        panic!("fixture");
+    };
+    let files::Effect::Create {
+        content: Some(files::ContentSeed::Binary { manifest }),
+        ..
+    } = &events[0].effect
+    else {
+        panic!("fixture");
+    };
+    let content = VerifiedContent {
+        bytes: vec![0, 255, 128, 42],
+        digest: manifest.digest,
+        witness: ContentWitness::Binary {
+            selected_event: id("create"),
+            manifest: manifest.clone(),
+        },
+    };
+    let state_json = serde_json::to_string(&state).unwrap();
+    let identity = r#"{"entry_id":"note","bootstrap_id":"create"}"#;
+    verify_retained_content(
+        &state_json,
+        identity,
+        "create",
+        &serde_json::to_string(&content).unwrap(),
+    )
+    .unwrap();
+    let mut wrong = content.clone();
+    wrong.bytes[0] = 1;
+    assert!(verify_retained_content(
+        &state_json,
+        identity,
+        "create",
+        &serde_json::to_string(&wrong).unwrap()
+    )
+    .is_err());
+    wrong = content.clone();
+    let ContentWitness::Binary { selected_event, .. } = &mut wrong.witness else {
+        panic!("fixture");
+    };
+    *selected_event = id("empty-write");
+    assert!(verify_retained_content(
+        &state_json,
+        identity,
+        "create",
+        &serde_json::to_string(&wrong).unwrap()
+    )
+    .is_err());
+    wrong = content;
+    let ContentWitness::Binary { manifest, .. } = &mut wrong.witness else {
+        panic!("fixture");
+    };
+    manifest.pages[0].id = id("unrelated-page");
+    assert!(verify_retained_content(
+        &state_json,
+        identity,
+        "create",
+        &serde_json::to_string(&wrong).unwrap()
+    )
+    .is_err());
+}
+#[test]
+fn revision_rebind_keeps_causal_identity_and_enforces_exact_marker() {
+    let (state, _, _) = fixture();
+    let original = serde_json::to_string(&state).unwrap();
+    let rebound: TextState =
+        serde_json::from_str(&rebind_text(&original, "text-0", "text-next").unwrap()).unwrap();
+    assert_eq!(rebound.identity, state.identity);
+    assert_eq!(rebound.snapshot, state.snapshot);
+    assert_eq!(rebound.actors, state.actors);
+    assert_eq!(rebound.version, rev("text-next"));
+    assert!(rebind_text(&original, "stale", "text-next").is_err());
+    assert!(rebind_text(&original, "text-0", "text-0").is_err());
+}

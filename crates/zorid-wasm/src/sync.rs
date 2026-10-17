@@ -2,6 +2,7 @@
 //! plaintext constructor. The host must commit BOTH plans and its common wire
 //! ledger/cursor atomically; a text plan alone never authorizes visibility.
 mod classification;
+mod family;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -782,4 +783,73 @@ pub fn materialize_retained_file(
     event_id: &str,
 ) -> std::result::Result<String, JsValue> {
     retained_file(state_json, identity_json, event_id).map_err(error)
+}
+
+fn envelope_update_id(wire: &[u8]) -> Result<String> {
+    if wire.len() > MAX_WIRE_BYTES {
+        return Err("envelope too large".into());
+    }
+    let envelope = domain(zorid_sync_protocol::Envelope::decode(wire))?;
+    Ok(envelope.header().update_id().as_str().to_owned())
+}
+/// Untrusted routing metadata ONLY. The selected key must subsequently
+/// authenticate this exact wire with independently pinned realm/vault/key epoch.
+#[wasm_bindgen(js_name = syncEnvelopeUpdateId)]
+pub fn sync_envelope_update_id(wire: &[u8]) -> std::result::Result<String, JsValue> {
+    envelope_update_id(wire).map_err(error)
+}
+
+fn verify_retained_content(
+    state_json: &str,
+    identity_json: &str,
+    event_id: &str,
+    content_json: &str,
+) -> Result<()> {
+    let state: files::State = parse(state_json)?;
+    reusable_state(&state)?;
+    let identity: zorid_file_sync::EntryIdentity = control(identity_json)?;
+    if event_id.len() > zorid_sync_protocol::MAX_CONTROL_BYTES
+        || content_json.len() > MAX_OUTPUT_BYTES
+    {
+        return Err("retained content input exceeds fixture budget".into());
+    }
+    let event_id = domain(zorid_sync_protocol::UpdateId::new(event_id))?;
+    let content: zorid_file_sync::materialization::VerifiedContent =
+        serde_json::from_str(content_json).map_err(|_| "invalid retained content")?;
+    domain(state.validate_retained_binary_content(&identity, &event_id, &content, 8 * 1024 * 1024))
+}
+/// Validate a saved historical binary publication witness against its exact
+/// retained event, including manifest, digest and bytes. Not authentication.
+#[wasm_bindgen(js_name = verifyRetainedFileContent)]
+pub fn verify_retained_file_content(
+    state_json: &str,
+    identity_json: &str,
+    event_id: &str,
+    content_json: &str,
+) -> std::result::Result<(), JsValue> {
+    verify_retained_content(state_json, identity_json, event_id, content_json).map_err(error)
+}
+fn rebind_text(state_json: &str, expected: &str, next: &str) -> Result<String> {
+    let state: TextState = parse(state_json)?;
+    reusable_state(&state)?;
+    if expected.len() > zorid_sync_protocol::MAX_CONTROL_BYTES
+        || next.len() > zorid_sync_protocol::MAX_CONTROL_BYTES
+    {
+        return Err("text revision exceeds fixture budget".into());
+    }
+    let expected = domain(Revision::new(expected))?;
+    let next = domain(Revision::new(next))?;
+    let rebound = domain(state.rebind_revision(&expected, &next))?;
+    reusable_state(&rebound)?;
+    json(&rebound)
+}
+/// Rebind only the validated local revision marker. Preserves retained causal
+/// state and emits no sync update. Host fences global revision reuse separately.
+#[wasm_bindgen(js_name = rebindTextState)]
+pub fn rebind_text_state(
+    state_json: &str,
+    expected: &str,
+    next: &str,
+) -> std::result::Result<String, JsValue> {
+    rebind_text(state_json, expected, next).map_err(error)
 }
