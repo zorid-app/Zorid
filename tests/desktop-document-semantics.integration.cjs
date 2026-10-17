@@ -41,7 +41,7 @@ test('actual desktop semantic transport retains one snapshot through independent
   const original='\ufeff---\r\nconfig: {Title: first, title: second}\r\n---\r\n# 😀 Heading\r\n[[Target]] ![[Target]] [[Target]]\r\nneedle 😀\r\nneedle second\r\n';
   for(const [id,file,body] of [
     ['source','Source.md',original],['target','Target.md','# Target\n'],
-    ['base','All.base','views:\n  - type: table\n    name: Linked\n    filters: \'file.hasLink("Target")\'\n    order: [file.path, config.TITLE]\n'],
+    ['base','All.base','formulas:\n  caseInsensitiveTitle: config.TITLE\nviews:\n  - type: table\n    name: Linked\n    filters: \'file.hasLink("Target")\'\n    order: [file.path, formula.caseInsensitiveTitle]\n'],
   ])await cli(root,['create',file,'--id',id,'--operation-id',`create-${id}`,'--input','-'],body);
   host=await RustVaultService.open(root,{executable});
   assert.ok(host.capabilities.includes('documents'));
@@ -101,7 +101,11 @@ test('actual desktop semantic transport retains one snapshot through independent
   const base=await call('base',{pinId,id:'base',viewName:'Linked',options:{clockMs:0}});
   assert.deepEqual(base.snapshot,snapshot);assert.deepEqual(base.value.result.snapshotId,snapshot);
   assert.deepEqual(base.value.result.rows.map(row=>row.entryId),['source']);
-  assert.equal(base.value.result.rows[0].values['config.TITLE'].value,'first');
+  // Column IDs name literal note properties; nested access belongs to the
+  // explicit formula expression, whose canonical output ID is formula.*.
+  assert.deepEqual(base.value.result.properties,['file.path','formula.caseInsensitiveTitle']);
+  assert.deepEqual(base.value.result.rows[0].values['formula.caseInsensitiveTitle'],{type:'string',value:'first'});
+  assert.deepEqual(base.value.result.rows[0].values['note.config'],{type:'object',value:[['Title',{type:'string',value:'first'}],['title',{type:'string',value:'second'}]]});
   const staleStage=await other('begin');
   await cli(root,['write','--id','source','--expected-revision',oldRevision,'--operation-id','independent-write','--input','-'],'# Changed\nNo old links or literal text.\n');
   const laggedStatus=await call('status');
