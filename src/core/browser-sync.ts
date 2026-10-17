@@ -108,46 +108,57 @@ function requireWasm(value:Partial<BrowserSyncWasm>):BrowserSyncWasm {
 export function browserSync(host:BrowserSyncHost,assertActive:()=>void=()=>{}):{api:BrowserSync;localWrite:(tx:IDBTransaction,request:Json,revision:string,changes:Json[],commandJson:string|undefined,done:(managed:boolean)=>void,abort:(error:unknown)=>void)=>void;validate:(tx:IDBTransaction,done:()=>void,abort:(error:unknown)=>void)=>void;admitMutation:(tx:IDBTransaction,request:Json,commandJson:string|undefined,done:(canonicalCommand:string|undefined)=>void,abort:(error:unknown)=>void)=>void} {
   function load(tx:IDBTransaction,done:(snapshot:Snapshot)=>void,abort:(error:unknown)=>void):void {
     const names=[...browserSyncStores,'metadata','content','presentation','control','journal','intents','receipts'],requests=names.map(name=>tx.objectStore(name).getAll());let remaining=requests.length;
-    const complete=()=>{if(--remaining)return;try{
+    const complete=()=>{if(--remaining)return;let invariant='publication_cache';try{
       const tables=Object.fromEntries(names.map((name,index)=>[name,requests[index].result]));
       const published:SyncPublication={entries:tables.metadata,contents:tables.content,presentation:tables.presentation,sequence:tables.control.find((row:Json)=>row.key==='sequence')?.value};
       host.validatePublication(published);
       const controls=new Map(tables.sync_state.map((row:Json)=>[row.key,row.value]));
       const config=(controls.get('config')??null) as Configuration|null;
       if(!config){if(requests.slice(0,browserSyncStores.length).some(r=>r.result.length))throw fail('storage_corrupt','Sync records exist without enrollment');done({config:null,graph:null,view:null,texts:new Map(),authored:new Map(),wires:new Map(),cursors:new Map(),retained:new Map(),publications:new Map(),revisions:new Set(),reserved:new Set(),counts:{authored:0,wires:0,publications:0,revisions:0},hasLegacyIntents:tables.intents.length>0||tables.receipts.length>0,published});return;}
+      invariant='enrollment_graph';
       const wasm=requireWasm(host.wasm),graph=controls.get('graph'),counts=controls.get('counts') as Snapshot['counts'];
       if(!graph||!equal((graph as Json).scope,{realm_id:config.realm_id,vault_id:config.vault_id})||!Number.isInteger(config.key_epoch)||config.key_epoch<1||config.key_epoch>0xffffffff||typeof config.replica_id!=='string'||typeof config.incarnation_id!=='string')throw fail('storage_corrupt','Invalid sync enrollment');
       const view=stored(()=>JSON.parse(wasm.inspectFileState(bounded(json(graph)))));
       if(!counts||counts.authored!==tables.sync_authored.length||counts.wires!==tables.sync_envelopes.length||counts.publications!==tables.sync_publications.length||counts.revisions!==tables.sync_revisions.length)throw fail('storage_corrupt','Sync identity fences are missing');
+      invariant='text_states';
       const texts=new Map<string,Json>();
       for(const row of tables.sync_text){stored(()=>wasm.materializeTextState(bounded(json(row.state))));if(row.key!==idKey(row.state.identity)||row.state.identity.realm_id!==config.realm_id||row.state.identity.vault_id!==config.vault_id)throw fail('storage_corrupt','Text state identity mismatch');texts.set(row.key,row.state);}
+      invariant='envelope_ledger';
       const authored=new Map<string,Authored>(),wires=new Map<string,Wire>();
       const checkMetadata=(row:Authored|Wire)=>{if(!row?.metadata||!equal(row.key,keyOf(row.metadata.key))||row.metadata.key.realm_id!==config.realm_id||row.metadata.key.vault_id!==config.vault_id)throw fail('storage_corrupt','Envelope scope/key mismatch');};
       for(const row of tables.sync_authored){checkMetadata(row);if(!(row.payload instanceof Uint8Array)||typeof row.accepted!=='boolean'||(row.sealed!==null && !(row.sealed instanceof Uint8Array))||(row.accepted&&!row.sealed))throw fail('storage_corrupt','Invalid authored envelope');stored(()=>wasm.validateAuthoredSyncPayload(json(row.metadata),row.payload));authored.set(json(row.key),row);}
       for(const row of tables.sync_envelopes){checkMetadata(row);if(!(row.exact_wire instanceof Uint8Array)||!['authored','received'].includes(row.direction))throw fail('storage_corrupt','Invalid wire ledger');stored(()=>wasm.validateSyncWire(json(row.metadata),row.exact_wire));wires.set(json(row.key),row);}
       for(const [key,row] of authored){const wire=wires.get(key);if(row.sealed?(!wire||wire.direction!=='authored'||!equal(wire.metadata,row.metadata)||!bytesEqual(row.sealed,wire.exact_wire)):wire!==undefined)throw fail('storage_corrupt','Authored wire and common ledger disagree');}
       for(const [key,row] of wires)if(row.direction==='authored'&&!authored.has(key))throw fail('storage_corrupt','Authored ledger has no durable intent');
+      invariant='cursor_scope';
       const cursors=new Map<string,SyncCursor>();for(const row of tables.sync_cursors){checkCursor(row.value,config);if(!equal(row.key,scopeKey(row.value)))throw fail('storage_corrupt','Cursor scope mismatch');cursors.set(json(row.key),row.value);}
+      invariant='materialization_rows';
       const retained=new Map<string,Retained>();for(const row of tables.sync_materializations){if(typeof row.id!=='string'||!['normal','pending','recovery','tombstone'].includes(row.status)||(row.bytes!==null && !(row.bytes instanceof Uint8Array)))throw fail('storage_corrupt','Invalid retained materialization');retained.set(row.id,row);}
+      invariant='publication_history';
       const publications=new Map<string,Publication>();
       for(const publication of tables.sync_publications){if(!publication?.row?.entry||publication.key!==json([publication.row.id,publication.row.entry.revision])||publication.row.status!=='normal')throw fail('storage_corrupt','Invalid immutable publication identity');publications.set(publication.key,publication);}
       checkPublicationBudget(publications);
+      invariant='revision_fences';
       const revisions=new Set<string>(tables.sync_revisions.map((row:Json)=>row.revision));
       if(revisions.size>8192||[...revisions].some(value=>typeof value!=='string'||!value||value.length>128)||!revisions.has((graph as Json).version)||[...texts.values()].some(state=>!revisions.has(state.version))||[...publications.values()].some(value=>!revisions.has(value.row.entry!.revision)))throw fail('storage_corrupt','Revision history fence is missing or malformed');
       const snapshot:Snapshot={config,graph,view,texts,authored,wires,cursors,retained,publications,revisions,reserved:new Set(),counts,hasLegacyIntents:tables.intents.length>0||tables.receipts.length>0,published};
+      invariant='namespace_payload_provenance';
       for(const [id,payload] of Object.entries((graph as Json).records)){
         const key=json([config.realm_id,config.vault_id,id]),meta=authored.get(key)?.metadata??wires.get(key)?.metadata;
         if(meta?.family!=='files')throw fail('storage_corrupt','Namespace record has no common identity fence');
         stored(()=>wasm.validateAuthoredSyncPayload(json(meta),new TextEncoder().encode(json(payload))));
       }
+      invariant='text_activity_provenance';
       for(const [id,value] of Object.entries((graph as Json).activities)){
         const activity=value as Json,key=json([config.realm_id,config.vault_id,id]),meta=authored.get(key)?.metadata??wires.get(key)?.metadata;
         if(meta?.family!=='text'||!meta.text_binding||activity.update_id!==id||!equal(activity.identity,textIdentity(config,meta.text_binding.entry_id,meta.text_binding.text_bootstrap_id))||!equal(activity.namespace,meta.text_binding.namespace)||!equal(activity.payload_digest,meta.payload_digest)||activity.payload_bytes!==meta.payload_bytes)throw fail('storage_corrupt','Text activity differs from immutable common ledger provenance');
       }
       for(const row of [...authored.values(),...wires.values()])if(!(row.metadata.key.update_id in (row.metadata.family==='text'?(graph as Json).activities:(graph as Json).records)))throw fail('storage_corrupt','Sync envelope lost its retained causal record');
+      invariant='journal_history';
       const journal=tables.journal as Json[];
       if(BigInt(journal.length)!==position(published.sequence)||journal.map(row=>position(row.sequence)).sort((a,b)=>a<b?-1:a>b?1:0).some((value,index)=>value!==BigInt(index+1)))throw fail('storage_corrupt','Publication journal history is incomplete');
       for(const event of journal)for(const change of event.changes??event.result?.changes??[]){if(change.after&&!revisions.has(change.after.revision))throw fail('storage_corrupt','Commit journal lost a historical metadata revision fence');}
+      invariant='historical_publication';
       for(const {row} of publications.values()) {
         const viewEntry=view.namespace.entries[row.id];
         if(!viewEntry||!row.entry||!journal.some(event=>(event.changes??event.result?.changes??[]).some((change:Json)=>equal(change.before,row.entry)||equal(change.after,row.entry)))||row.entry.id!==row.id||row.entry.kind!==viewEntry.kind||row.entry.deleted)throw fail('storage_corrupt','Immutable publication lacks exact historical metadata');
@@ -173,17 +184,20 @@ export function browserSync(host:BrowserSyncHost,assertActive:()=>void=()=>{}):{
           if(!bytesEqual(verified,row.bytes))throw fail('storage_corrupt','Published content differs from historical witness');
         }else if(row.witness!==null||row.entry.kind!=='folder'||row.reason.content!==null)throw fail('storage_corrupt','Published file lacks bytes');
       }
+      invariant='retained_baseline';
       for(const row of retained.values()) {
         if(row.entry){const original=publications.get(json([row.id,row.entry.revision]))?.row;
           if(!original||!equal(row.entry,original.entry)||!equal(row.bytes,original.bytes)||!equal(row.presentation,original.presentation)||!equal(row.witness,original.witness))throw fail('storage_corrupt','Retained baseline differs from immutable publication');
         }else if(row.bytes!==null||row.presentation!==null||row.witness!==null)throw fail('storage_corrupt','Unpublished identity has fabricated baseline');
       }
+      invariant='derived_classification';
       const textCount=texts.size,derived=stored(()=>materializations(snapshot));
       if(texts.size!==textCount || derived.length!==retained.size || derived.some(row=>retained.get(row.id)?.fingerprint!==row.fingerprint||retained.get(row.id)?.status!==row.status||!equal(retained.get(row.id)?.reason,row.reason)))throw fail('storage_corrupt','Retained publication does not match causal state');
+      invariant='visible_publication_agreement';
       const visible=derived.filter(row=>row.status==='normal');
       if(visible.length!==published.entries.length || visible.some(row=>!equal(row.entry,published.entries.find(entry=>entry.id===row.id))||!equal(row.presentation,published.presentation.find(stat=>stat.id===row.id)) || (row.bytes!==null && !bytesEqual(row.bytes,published.contents.find(value=>value.id===row.id)?.bytes??new Uint8Array()))))throw fail('storage_corrupt','Published cache differs from verified causal materialization');
       done(snapshot);
-    }catch(error){abort(error);}};
+    }catch(error){abort(error instanceof BrowserVaultError&&error.code==='storage_corrupt'?new BrowserVaultError(error.code,error.message,{invariant},error.source):error);}};
     for(const request of requests)request.onsuccess=complete;
   }
   const transaction=<T>(mode:IDBTransactionMode,run:(tx:IDBTransaction,s:Snapshot,done:(value:T)=>void)=>void):Promise<T>=>{assertActive();return host.transact(mode,(tx,done,abort)=>load(tx,s=>{try{assertActive();run(tx,s,done);}catch(error){abort(error);}},abort));};
