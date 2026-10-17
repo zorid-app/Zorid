@@ -1133,16 +1133,18 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn charge(&mut self, work: usize) -> Result<(), ()> {
+    fn charge(&mut self, work: usize) -> Result<(), RuntimeValue> {
         if self
             .context
             .cancellation
             .as_ref()
             .is_some_and(|cancellation| cancellation.stop_reason().is_some())
         {
-            return Err(());
+            return Err(RuntimeValue::Error("cancelled\0Operation cancelled".into()));
         }
-        self.remaining_work = self.remaining_work.checked_sub(work).ok_or(())?;
+        self.remaining_work = self.remaining_work.checked_sub(work).ok_or_else(|| {
+            RuntimeValue::Error("budget\0Builtin traversal exceeds work budget".into())
+        })?;
         Ok(())
     }
 
@@ -1248,8 +1250,8 @@ impl<'a> Evaluator<'a> {
             RuntimeValue::String(value) => value.len() / 256,
             _ => 0,
         };
-        if self.charge(work).is_err() {
-            return RuntimeValue::Error("budget\0Builtin traversal exceeds work budget".into());
+        if let Err(error) = self.charge(work) {
+            return error;
         }
         if name == "isTruthy" {
             return RuntimeValue::Bool(is_truthy(&receiver));
@@ -1482,8 +1484,8 @@ impl<'a> Evaluator<'a> {
                 .saturating_sub(values.len()),
             _ => 0,
         };
-        if self.charge(extra).is_err() {
-            return RuntimeValue::Error("budget\0List builtin exceeds work budget".into());
+        if let Err(error) = self.charge(extra) {
+            return error;
         }
         match name {
             "contains" => {
