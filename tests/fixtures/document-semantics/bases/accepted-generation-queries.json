@@ -1,0 +1,922 @@
+{
+  "schemaVersion": 1,
+  "oracle": "Hand-authored accepted Zorid graph semantics; no evaluator-derived expected output.",
+  "cases": [
+    {
+      "id": "complete-outgoing-embeds-unique-backlinks",
+      "request": {
+        "source": {
+          "localStoreId": "graph-store",
+          "watermark": "1"
+        },
+        "snapshotId": {
+          "localStoreId": "graph-store",
+          "generationEpoch": "graph-epoch",
+          "generation": "1",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        },
+        "entries": [
+          {
+            "id": "graph-a",
+            "path": "A.md",
+            "kind": "file",
+            "revision": "r1",
+            "deleted": false
+          },
+          {
+            "id": "graph-b",
+            "path": "B.md",
+            "kind": "file",
+            "revision": "r1",
+            "deleted": false
+          },
+          {
+            "id": "graph-c",
+            "path": "C.md",
+            "kind": "file",
+            "revision": "r1",
+            "deleted": false
+          }
+        ],
+        "sources": [
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-a",
+              "contentRevision": "r1",
+              "source": "[[B]] ![[B]] [[Missing]] [web](https://example.com)\n"
+            },
+            "markdown": true
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-b",
+              "contentRevision": "r1",
+              "source": ""
+            },
+            "markdown": true
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-c",
+              "contentRevision": "r1",
+              "source": "[[B]] [[B]]\n"
+            },
+            "markdown": true
+          }
+        ],
+        "facts": [],
+        "configuration": {
+          "formulas": {
+            "out": "file.links.length",
+            "embeds": "file.embeds.length",
+            "incoming": "file.backlinks.length",
+            "hasB": "file.hasLink(\"B\")",
+            "hasMissing": "file.hasLink(\"Missing\")",
+            "hasRenamed": "file.hasLink(\"Renamed\")",
+            "links": "file.links",
+            "backlinks": "file.backlinks"
+          },
+          "views": [
+            {
+              "type": "table",
+              "name": "Graph",
+              "order": [
+                "file.path",
+                "formula.out",
+                "formula.embeds",
+                "formula.incoming",
+                "formula.hasB",
+                "formula.hasMissing",
+                "formula.hasRenamed",
+                "formula.links",
+                "formula.backlinks"
+              ]
+            }
+          ]
+        },
+        "options": {
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC"
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "A.md",
+          "B.md",
+          "C.md"
+        ],
+        "relationshipsAvailable": true,
+        "values": {
+          "A.md": {
+            "formula.out": {
+              "type": "number",
+              "value": 4
+            },
+            "formula.embeds": {
+              "type": "number",
+              "value": 1
+            },
+            "formula.incoming": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.hasB": {
+              "type": "boolean",
+              "value": true
+            },
+            "formula.hasMissing": {
+              "type": "boolean",
+              "value": true
+            },
+            "formula.hasRenamed": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.links": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "link",
+                  "path": "B",
+                  "target": {
+                    "entryId": "graph-b",
+                    "revision": "r1"
+                  },
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "B",
+                  "target": {
+                    "entryId": "graph-b",
+                    "revision": "r1"
+                  },
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "Missing",
+                  "target": null,
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "https://example.com",
+                  "target": null,
+                  "display": null,
+                  "external": true
+                }
+              ]
+            }
+          },
+          "B.md": {
+            "formula.out": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.embeds": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.incoming": {
+              "type": "number",
+              "value": 2
+            },
+            "formula.hasB": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasMissing": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasRenamed": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.backlinks": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "link",
+                  "path": "A.md",
+                  "target": {
+                    "entryId": "graph-a",
+                    "revision": "r1"
+                  },
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "C.md",
+                  "target": {
+                    "entryId": "graph-c",
+                    "revision": "r1"
+                  },
+                  "display": null,
+                  "external": false
+                }
+              ]
+            }
+          },
+          "C.md": {
+            "formula.out": {
+              "type": "number",
+              "value": 2
+            },
+            "formula.embeds": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.incoming": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.hasB": {
+              "type": "boolean",
+              "value": true
+            },
+            "formula.hasMissing": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasRenamed": {
+              "type": "boolean",
+              "value": false
+            }
+          }
+        },
+        "snapshotId": {
+          "localStoreId": "graph-store",
+          "generationEpoch": "graph-epoch",
+          "generation": "1",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        }
+      }
+    },
+    {
+      "id": "target-move-invalidates-old-resolution",
+      "request": {
+        "source": {
+          "localStoreId": "graph-store",
+          "watermark": "2"
+        },
+        "snapshotId": {
+          "localStoreId": "graph-store",
+          "generationEpoch": "graph-epoch",
+          "generation": "2",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        },
+        "entries": [
+          {
+            "id": "graph-a",
+            "path": "A.md",
+            "kind": "file",
+            "revision": "r1",
+            "deleted": false
+          },
+          {
+            "id": "graph-b",
+            "path": "Renamed.md",
+            "kind": "file",
+            "revision": "r2",
+            "deleted": false
+          },
+          {
+            "id": "graph-c",
+            "path": "C.md",
+            "kind": "file",
+            "revision": "r1",
+            "deleted": false
+          }
+        ],
+        "sources": [
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-a",
+              "contentRevision": "r1",
+              "source": "[[B]] ![[B]] [[Missing]] [web](https://example.com)\n"
+            },
+            "markdown": true
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-b",
+              "contentRevision": "r2",
+              "source": ""
+            },
+            "markdown": true
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-c",
+              "contentRevision": "r1",
+              "source": "[[B]] [[B]]\n"
+            },
+            "markdown": true
+          }
+        ],
+        "facts": [],
+        "configuration": {
+          "formulas": {
+            "out": "file.links.length",
+            "embeds": "file.embeds.length",
+            "incoming": "file.backlinks.length",
+            "hasB": "file.hasLink(\"B\")",
+            "hasMissing": "file.hasLink(\"Missing\")",
+            "hasRenamed": "file.hasLink(\"Renamed\")",
+            "links": "file.links",
+            "backlinks": "file.backlinks"
+          },
+          "views": [
+            {
+              "type": "table",
+              "name": "Graph",
+              "order": [
+                "file.path",
+                "formula.out",
+                "formula.embeds",
+                "formula.incoming",
+                "formula.hasB",
+                "formula.hasMissing",
+                "formula.hasRenamed",
+                "formula.links",
+                "formula.backlinks"
+              ]
+            }
+          ]
+        },
+        "options": {
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC"
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "A.md",
+          "C.md",
+          "Renamed.md"
+        ],
+        "relationshipsAvailable": true,
+        "values": {
+          "A.md": {
+            "formula.out": {
+              "type": "number",
+              "value": 4
+            },
+            "formula.embeds": {
+              "type": "number",
+              "value": 1
+            },
+            "formula.incoming": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.hasB": {
+              "type": "boolean",
+              "value": true
+            },
+            "formula.hasMissing": {
+              "type": "boolean",
+              "value": true
+            },
+            "formula.hasRenamed": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.links": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "link",
+                  "path": "B",
+                  "target": null,
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "B",
+                  "target": null,
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "Missing",
+                  "target": null,
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "https://example.com",
+                  "target": null,
+                  "display": null,
+                  "external": true
+                }
+              ]
+            }
+          },
+          "Renamed.md": {
+            "formula.out": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.embeds": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.incoming": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.hasB": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasMissing": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasRenamed": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.backlinks": {
+              "type": "list",
+              "value": []
+            }
+          },
+          "C.md": {
+            "formula.out": {
+              "type": "number",
+              "value": 2
+            },
+            "formula.embeds": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.incoming": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.hasB": {
+              "type": "boolean",
+              "value": true
+            },
+            "formula.hasMissing": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasRenamed": {
+              "type": "boolean",
+              "value": false
+            }
+          }
+        },
+        "snapshotId": {
+          "localStoreId": "graph-store",
+          "generationEpoch": "graph-epoch",
+          "generation": "2",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        }
+      }
+    },
+    {
+      "id": "source-revision-rebinds-moved-target",
+      "request": {
+        "source": {
+          "localStoreId": "graph-store",
+          "watermark": "3"
+        },
+        "snapshotId": {
+          "localStoreId": "graph-store",
+          "generationEpoch": "graph-epoch",
+          "generation": "3",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        },
+        "entries": [
+          {
+            "id": "graph-a",
+            "path": "A.md",
+            "kind": "file",
+            "revision": "r2",
+            "deleted": false
+          },
+          {
+            "id": "graph-b",
+            "path": "Renamed.md",
+            "kind": "file",
+            "revision": "r2",
+            "deleted": false
+          },
+          {
+            "id": "graph-c",
+            "path": "C.md",
+            "kind": "file",
+            "revision": "r1",
+            "deleted": false
+          }
+        ],
+        "sources": [
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-a",
+              "contentRevision": "r2",
+              "source": "[[Renamed]] ![[Renamed]] [[Missing]] [web](https://example.com)\n"
+            },
+            "markdown": true
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-b",
+              "contentRevision": "r2",
+              "source": ""
+            },
+            "markdown": true
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-c",
+              "contentRevision": "r1",
+              "source": "[[B]] [[B]]\n"
+            },
+            "markdown": true
+          }
+        ],
+        "facts": [],
+        "configuration": {
+          "formulas": {
+            "out": "file.links.length",
+            "embeds": "file.embeds.length",
+            "incoming": "file.backlinks.length",
+            "hasB": "file.hasLink(\"B\")",
+            "hasMissing": "file.hasLink(\"Missing\")",
+            "hasRenamed": "file.hasLink(\"Renamed\")",
+            "links": "file.links",
+            "backlinks": "file.backlinks"
+          },
+          "views": [
+            {
+              "type": "table",
+              "name": "Graph",
+              "order": [
+                "file.path",
+                "formula.out",
+                "formula.embeds",
+                "formula.incoming",
+                "formula.hasB",
+                "formula.hasMissing",
+                "formula.hasRenamed",
+                "formula.links",
+                "formula.backlinks"
+              ]
+            }
+          ]
+        },
+        "options": {
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC"
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "A.md",
+          "C.md",
+          "Renamed.md"
+        ],
+        "relationshipsAvailable": true,
+        "values": {
+          "A.md": {
+            "formula.out": {
+              "type": "number",
+              "value": 4
+            },
+            "formula.embeds": {
+              "type": "number",
+              "value": 1
+            },
+            "formula.incoming": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.hasB": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasMissing": {
+              "type": "boolean",
+              "value": true
+            },
+            "formula.hasRenamed": {
+              "type": "boolean",
+              "value": true
+            },
+            "formula.links": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "link",
+                  "path": "Renamed",
+                  "target": {
+                    "entryId": "graph-b",
+                    "revision": "r2"
+                  },
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "Renamed",
+                  "target": {
+                    "entryId": "graph-b",
+                    "revision": "r2"
+                  },
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "Missing",
+                  "target": null,
+                  "display": null,
+                  "external": false
+                },
+                {
+                  "type": "link",
+                  "path": "https://example.com",
+                  "target": null,
+                  "display": null,
+                  "external": true
+                }
+              ]
+            }
+          },
+          "Renamed.md": {
+            "formula.out": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.embeds": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.incoming": {
+              "type": "number",
+              "value": 1
+            },
+            "formula.hasB": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasMissing": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasRenamed": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.backlinks": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "link",
+                  "path": "A.md",
+                  "target": {
+                    "entryId": "graph-a",
+                    "revision": "r2"
+                  },
+                  "display": null,
+                  "external": false
+                }
+              ]
+            }
+          },
+          "C.md": {
+            "formula.out": {
+              "type": "number",
+              "value": 2
+            },
+            "formula.embeds": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.incoming": {
+              "type": "number",
+              "value": 0
+            },
+            "formula.hasB": {
+              "type": "boolean",
+              "value": true
+            },
+            "formula.hasMissing": {
+              "type": "boolean",
+              "value": false
+            },
+            "formula.hasRenamed": {
+              "type": "boolean",
+              "value": false
+            }
+          }
+        },
+        "snapshotId": {
+          "localStoreId": "graph-store",
+          "generationEpoch": "graph-epoch",
+          "generation": "3",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        }
+      }
+    },
+    {
+      "id": "incomplete-graph-is-unavailable",
+      "request": {
+        "source": {
+          "localStoreId": "graph-store",
+          "watermark": "4"
+        },
+        "snapshotId": {
+          "localStoreId": "graph-store",
+          "generationEpoch": "graph-epoch",
+          "generation": "4",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        },
+        "entries": [
+          {
+            "id": "graph-a",
+            "path": "A.md",
+            "kind": "file",
+            "revision": "r1",
+            "deleted": false
+          },
+          {
+            "id": "graph-b",
+            "path": "B.md",
+            "kind": "file",
+            "revision": "r1",
+            "deleted": false
+          },
+          {
+            "id": "graph-c",
+            "path": "C.md",
+            "kind": "file",
+            "revision": "r1",
+            "deleted": false
+          }
+        ],
+        "sources": [
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-a",
+              "contentRevision": "r1",
+              "source": "[[B]] ![[B]] [[Missing]] [web](https://example.com)\n"
+            },
+            "markdown": true
+          },
+          {
+            "kind": "excluded",
+            "entryId": "graph-b",
+            "contentRevision": "r1",
+            "reason": "unreadable"
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "graph-c",
+              "contentRevision": "r1",
+              "source": "[[B]] [[B]]\n"
+            },
+            "markdown": true
+          }
+        ],
+        "facts": [],
+        "configuration": {
+          "formulas": {
+            "out": "file.links.length",
+            "embeds": "file.embeds.length",
+            "incoming": "file.backlinks.length",
+            "hasB": "file.hasLink(\"B\")",
+            "hasMissing": "file.hasLink(\"Missing\")",
+            "hasRenamed": "file.hasLink(\"Renamed\")",
+            "links": "file.links",
+            "backlinks": "file.backlinks"
+          },
+          "views": [
+            {
+              "type": "table",
+              "name": "Graph",
+              "order": [
+                "file.path",
+                "formula.out",
+                "formula.embeds",
+                "formula.incoming",
+                "formula.hasB",
+                "formula.hasMissing",
+                "formula.hasRenamed",
+                "formula.links",
+                "formula.backlinks"
+              ]
+            }
+          ]
+        },
+        "options": {
+          "evaluation": {
+            "clockMs": 1705314030000,
+            "timezone": "UTC"
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "A.md",
+          "B.md",
+          "C.md"
+        ],
+        "relationshipsAvailable": false,
+        "diagnostics": [
+          {
+            "path": "A.md",
+            "property": "formula.out",
+            "code": "unavailable"
+          }
+        ],
+        "values": {
+          "A.md": {
+            "formula.out": {
+              "type": "error",
+              "code": "unavailable",
+              "message": "Relationship metadata is unavailable or incomplete"
+            }
+          }
+        },
+        "snapshotId": {
+          "localStoreId": "graph-store",
+          "generationEpoch": "graph-epoch",
+          "generation": "4",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        }
+      }
+    }
+  ]
+}

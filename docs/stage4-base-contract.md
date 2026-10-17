@@ -226,3 +226,53 @@ An initial expected ordering in `typed-group-keys` was corrected after the runne
 showed numeric key 2 before whole-list [1,2], consistent with the source comparator.
 No broad suite, native app, Rust reuse or WASM check is claimed. This runner is
 preparation evidence and does not add a second production formula engine.
+
+## Generation-bound implementation checkpoint (2026-10-17)
+
+The attributed extraction is now implemented in `crates/zorid-bases`. The
+coordinator's native proof at candidate `0ce5cd40` passed the accepted 30 expression
+and 10 query cases and focused guards. That evidence predates the generation
+factory below; it does not establish current API, WASM or consumer acceptance.
+The original TypeScript fixture observations remain unchanged, including the
+legacy broken UTF-16 reverse string. `project-accepted.mjs --check` validates the
+scalar-safe accepted transport projection using only explicitly approved fixture
+expectations, never Rust results.
+
+`query_generation` and `BaseSnapshot::from_generation` derive rows, type hints,
+tags and relationships from the same immutable `zorid_index::Generation`. Optional
+`FilePresentationFacts` can supply only size/ctime/mtime and must match strong
+entry/revision witnesses. Rows and graph are sealed together. A current-record
+context must exactly match a canonical row; caller metadata cannot override it.
+Actual validated `IndexSnapshotId` is returned, with decimal-string generation
+serde owned by the index. The native facade separately binds the Base document's
+entry/revision and retained raw source. Detached expression contexts may omit a
+file and witness; `1+1` does not invent an entry ID.
+
+Accepted Zorid relationship semantics: `file.links` contains every outgoing parsed
+occurrence including embeds, in parser order; `file.embeds` is its embedded subset.
+`file.backlinks` contains unique incoming source files by stable ID, preserving
+shared namespace order. Link values retain the parser's semantic destination,
+optional resolved target entry/revision, and shared resolver external classification.
+`file.hasLink` recognizes an exact written destination even when unresolved;
+other target comparisons use one prebuilt shared Rust index resolver. Rename and
+content revisions rebuild relationships. No imported suffix/name fallback is an
+authority. Link-to-file coercion remains explicitly unsupported.
+
+Missing or incomplete relationships return `unavailable` diagnostics, never an
+invented empty complete graph. `relationshipsAvailable` reports coverage. Detached
+snapshot transport rejects any non-null supplied relationship report: only the
+Rust-owned generation factory can provide a graph. The canonical
+`accepted-generation-queries.json` hand-authored oracle covers duplicate outgoing
+links, embeds, unique backlinks, missing/external targets, a target move, source
+retargeting and incomplete coverage, for identical native/WASM requests. New
+factory source/tests are uncompiled until the coordinator's serialized proof.
+
+Caller ceilings are checked before generation preparation, with record/property/
+edge work lower bounds; hint/discovery lookup uses hash membership, preserving
+first-seen order without quadratic scans. A shared graph is bounded to 100,000
+edges and 64 MiB; rows to 64 MiB, results to 8 MiB. Cancellation is checked before
+and after the shared index snapshot operation and between preflight records.
+The current index snapshot API has no per-edge cancellation seam; the bounded
+synchronous snapshot call remains a stated cooperative-cancellation gap, not a
+claim of immediate interruption. No file write, IO resolver fallback, plugin
+callback or ambient clock enters this crate.

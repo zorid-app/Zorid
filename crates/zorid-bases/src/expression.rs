@@ -1708,10 +1708,9 @@ impl<'a> Evaluator<'a> {
             "asFile" => {
                 RuntimeValue::Error("unsupported\0Link file coercion is not exposed".into())
             }
-            "linksTo" => match self.file_from_link(link) {
-                RuntimeValue::File(file) => self.file_method(&file, "hasLink", arguments),
-                _ => RuntimeValue::Error("Could not coerce link to file".to_string()),
-            },
+            "linksTo" => {
+                RuntimeValue::Error("unsupported\0Link file coercion is not exposed".into())
+            }
             // Obsidian applies string functions to a link's path, e.g. `link.replace(...)`.
             _ => self.string_method(&link.path, name, arguments),
         }
@@ -1871,16 +1870,10 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn resolve_link(&self, target: &str) -> Option<String> {
-        for candidate in link_resolution_keys(target) {
-            if let Some(value) = self.context.link_resolutions.get(&candidate) {
-                return value.clone();
-            }
-            if let Some(value) = self.context.link_resolutions.get(&candidate.to_lowercase()) {
-                return value.clone();
-            }
-        }
-        self.find_file(target).map(|file| file.path.clone())
+    fn resolve_link(&self, _target: &str) -> Option<String> {
+        // Active relationship target resolution occurs only in has_link through
+        // the index resolver. Detached/inherited helpers never use name fallback.
+        None
     }
 
     fn find_file(&self, target: &str) -> Option<&BasesFile> {
@@ -1920,11 +1913,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn link_resolved(&self, link: &BasesLink) -> Option<String> {
-        link.resolved_path
-            .clone()
-            .flatten()
-            .or_else(|| self.resolve_link(&link.path))
-            .or_else(|| Some(strip_subpath(&link.path)))
+        link.resolved_path.clone().flatten()
     }
 
     fn link_identity(&self, link: &BasesLink) -> String {

@@ -57,9 +57,10 @@ fn rank(value: &BaseValue) -> u8 {
         BaseValue::String { .. } => 4,
         BaseValue::List { .. } => 5,
         BaseValue::Object { .. } => 6,
-        BaseValue::File { .. } | BaseValue::Link { .. } => 7,
-        BaseValue::Error { .. } => 8,
-        BaseValue::Null => 9,
+        BaseValue::File { .. } => 7,
+        BaseValue::Link { .. } => 8,
+        BaseValue::Error { .. } => 9,
+        BaseValue::Null => 10,
     }
 }
 /// Compare a pair of typed keys. Null/error placement is independent of direction;
@@ -149,6 +150,20 @@ fn sequence(a: &[BaseValue], b: &[BaseValue]) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_and_link_have_distinct_total_type_ranks() {
+        let a = BaseValue::File { path: "a".into() };
+        let z = BaseValue::File { path: "z".into() };
+        let m = BaseValue::Link {
+            path: "m".into(),
+            target: None,
+            display: None,
+            external: false,
+        };
+        assert_eq!(compare(&a, &z, false), Ordering::Less);
+        assert_eq!(compare(&z, &m, false), Ordering::Less);
+        assert_eq!(compare(&a, &m, false), Ordering::Less);
+    }
     #[test]
     fn multilingual_digits_zero_padding_and_null_direction() {
         let mut values = [
