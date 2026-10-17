@@ -1,0 +1,17 @@
+[package]
+name = "zorid-store"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+description = "Transactional native persistence for Zorid's shared vault core"
+
+[dependencies]
+zorid-core = { path = "../zorid-core" }
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
