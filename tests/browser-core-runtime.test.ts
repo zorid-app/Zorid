@@ -33,6 +33,14 @@ test('worker runtime gates recovered commands until exact outcome acknowledgemen
     assert.equal(calls.at(-1).operation,'prepare','persisting a token does not authorize execution');
     await runtime.commit('new-intent');
     assert.equal(calls.at(-2).payload.intentId,'new-intent');
+    const checkpoint={key:'draft',expectedRevision:null,nextRevision:'01234567-89ab-4cde-8123-0123456789ab',encodedState:'x'.repeat(32*1024*1024)};
+    const beforeCheckpoint=calls.length;
+    await assert.rejects(runtime.checkpoints!.compareAndSwap({...checkpoint,encodedState:checkpoint.encodedState+'x'}),{code:'checkpoint_too_large'});
+    await assert.rejects(runtime.checkpoints!.compareAndSwap({...checkpoint,encodedState:'\ud800'}),{code:'checkpoint_too_large'});
+    assert.equal(calls.length,beforeCheckpoint,'invalid checkpoint bodies never reach postMessage/structured clone');
+    await runtime.checkpoints!.compareAndSwap(checkpoint);
+    assert.equal(calls.at(-1).operation,'checkpoint-cas');
+    assert.equal(calls.at(-1).payload.encodedState.length,32*1024*1024,'exact limit reaches transport unchanged');
     runtime.close(); assert.equal(terminated,true);
     await assert.rejects(runtime.intents(),{code:'storage_closed'});
   } finally {

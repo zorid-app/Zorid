@@ -1,6 +1,8 @@
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '../core/browser-vault.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
+import type { DurableCheckpoints, Checkpoint, CheckpointPage, CheckpointListOptions, CheckpointChangesOptions } from '../core/durable-checkpoints.ts';
+import { boundedUtf8, checkpointKey, snapshotCheckpointChange } from '../core/checkpoint-input.ts';
 
 export interface BrowserCoreRuntimeOptions {
   database: string;
@@ -18,6 +20,8 @@ interface Pending { resolve(value: unknown): void; reject(error: unknown): void;
 export class BrowserCoreRuntime implements BrowserCoreBackend {
   private authorityScope?: Readonly<{vaultId:string;clientId:string}>;
   get durableScope(): Readonly<{vaultId:string;clientId:string}> | undefined { return this.authorityScope; }
+  private checkpointProvider?: DurableCheckpoints;
+  get checkpoints():DurableCheckpoints|undefined{return this.checkpointProvider;}
   private worker: Worker;
   private pending = new Map<string, Pending>();
   private listeners = new Set<(paths?: readonly string[]) => void>();
@@ -56,6 +60,21 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       const opened = await runtime.call<{recovery:string[];authorityId:string}>('open', {...options, wasmModuleUrl:moduleUrl.href});
       if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
       runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
+      const pageOptions=(input:CheckpointListOptions)=>{
+        if(!input || !Number.isInteger(input.limit) || input.limit<1 || input.limit>1000)throw new BrowserVaultError('invalid_checkpoint','Page limit must be 1–1000');
+        if(input.cursor!==undefined)boundedUtf8(input.cursor,8192,'invalid_checkpoint_cursor');
+        return {limit:input.limit,...(input.cursor===undefined?{}:{cursor:input.cursor})};
+      };
+      runtime.checkpointProvider=Object.freeze({scope:runtime.authorityScope,
+        async load(key:string){checkpointKey(key);return runtime.call<Checkpoint|null>('checkpoint-load',key);},
+        async compareAndSwap(input){const {change}=snapshotCheckpointChange(input);return runtime.call<Checkpoint>('checkpoint-cas',change);},
+        async list(input:CheckpointListOptions){return runtime.call<CheckpointPage>('checkpoint-list',pageOptions(input));},
+        async changes(input:CheckpointChangesOptions){
+          const page=pageOptions(input),after=input.after;
+          if(typeof after!=='string' || !/^(0|[1-9][0-9]{0,19})$/.test(after))throw new BrowserVaultError('invalid_checkpoint','Invalid checkpoint change sequence');
+          return runtime.call<CheckpointPage>('checkpoint-changes',{...page,after});
+        },
+      } satisfies DurableCheckpoints);
       runtime.recovery = new Set(opened.recovery);
       document.addEventListener('visibilitychange', runtime.visibility);
       return runtime;
@@ -80,6 +99,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   }
   inventory(): Promise<BrowserVaultRead[]> { return this.call('inventory'); }
   readEntry(path: string): Promise<BrowserVaultRead | null> { return this.call('read', path); }
+  readEntryById(id:string):Promise<BrowserVaultRead|null>{return this.call('read-id',id);}
   async execute(intentId: string, requestJson: string): Promise<string> {
     await this.prepare(intentId,requestJson);
     return this.commit(intentId);

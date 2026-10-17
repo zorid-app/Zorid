@@ -26,6 +26,7 @@ function textSize(value: unknown): number {
 export function browserDurableWrites(backend: BrowserCoreBackend, scope: {vaultId:string;clientId:string}, closed:()=>boolean): DurableWrites {
   if (!identity(scope.vaultId) || !identity(scope.clientId) || !backend.prepare || !backend.commit) throw error('durable_writes_unavailable','Durable writes require explicit vault/client scope and phase-aware backend');
   if (backend.durableScope?.vaultId !== scope.vaultId || backend.durableScope.clientId !== scope.clientId) throw error('intent_identity_mismatch','Adapter scope disagrees with the opened persistence runtime');
+  if(!backend.checkpoints || backend.checkpoints.scope.vaultId!==scope.vaultId || backend.checkpoints.scope.clientId!==scope.clientId || !backend.readEntryById)throw error('durable_writes_unavailable','Durable writes require coherent ID reads and checkpoints in the same authority/client scope');
   const vaultId = scope.vaultId, clientId = scope.clientId;
   function active(): void { if (closed()) throw error('storage_closed','Browser vault is closed'); }
   function bound(value: {vaultId:string;clientId:string;operationId:string;entryId:string}): void {
@@ -64,7 +65,9 @@ export function browserDurableWrites(backend: BrowserCoreBackend, scope: {vaultI
       let receipt;
       try { receipt = JSON.parse(row.receipt!); } catch { throw error('storage_corrupt','Stored receipt is invalid'); }
       if (receipt?.operation_id !== row.operation_id || typeof receipt.sequence !== 'string' || !/^[1-9][0-9]*$/.test(receipt.sequence)) throw error('storage_corrupt','Receipt identity is inconsistent');
-      return Object.freeze({ref,state:'committed',acknowledged:row.acknowledged,receipt:Object.freeze({operationId:row.operation_id,sequence:receipt.sequence})});
+      const targets=Array.isArray(receipt.changes)?receipt.changes.filter((change:any)=>change?.after?.id===ref.entryId):[];
+      if(targets.length!==1 || targets[0].after.kind!=='file' || targets[0].after.deleted!==false || !identity(targets[0].after.revision))throw error('storage_corrupt','Receipt has no unique resulting text-entry witness');
+      return Object.freeze({ref,state:'committed',acknowledged:row.acknowledged,receipt:Object.freeze({operationId:row.operation_id,sequence:receipt.sequence,entryId:ref.entryId,revision:targets[0].after.revision})});
     }
     if (row.status !== 'rejected' || !row.error || row.error.source !== 'rust') throw error('storage_corrupt','Invalid settled intent');
     return Object.freeze({ref,state:'rejected',acknowledged:row.acknowledged,error:Object.freeze({operationId:row.operation_id,code:row.error.code,message:row.error.message,details:row.error.details})});
@@ -84,12 +87,21 @@ export function browserDurableWrites(backend: BrowserCoreBackend, scope: {vaultI
     return row;
   }
   return Object.freeze({
+    checkpoints:backend.checkpoints,
     async readText(input: string): Promise<DurableWriteRead> {
       active();
       const path = vaultPath(input), row = await backend.readEntry(path);
       if (!row) throw error('ENOENT',`File not found: ${path}`);
       if (row.entry.kind !== 'file' || !row.bytes) throw error('not_file',`Path is not a file: ${path}`);
-      return Object.freeze({content:new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.bytes),entryId:row.entry.id,revision:row.entry.revision});
+      return Object.freeze({content:new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.bytes),path:row.entry.path,entryId:row.entry.id,revision:row.entry.revision,stat:Object.freeze({ctime:row.presentation.ctime_ms,mtime:row.presentation.mtime_ms,size:row.presentation.size_bytes})});
+    },
+    async readTextById(entryId:string):Promise<DurableWriteRead|null> {
+      active();if(!identity(entryId))throw error('invalid_write_plan','Stable entry identity is required');
+      const row=await backend.readEntryById!(entryId);
+      if(!row || row.entry.deleted)return null;
+      if(row.entry.id!==entryId)throw error('storage_corrupt','Coherent ID read returned a different entry');
+      if(row.entry.kind!=='file' || !row.bytes)throw error('not_file','Entry is not a text file');
+      return Object.freeze({content:new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.bytes),path:row.entry.path,entryId:row.entry.id,revision:row.entry.revision,stat:Object.freeze({ctime:row.presentation.ctime_ms,mtime:row.presentation.mtime_ms,size:row.presentation.size_bytes})});
     },
     async planWrite(input: DurableWriteInput): Promise<DurableWritePlan> {
       active();

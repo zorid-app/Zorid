@@ -48,6 +48,11 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
   switch (operation) {
     case 'inventory': return vault.inventory();
     case 'read': return vault.readEntry(payload);
+    case 'read-id':return vault.readEntryById(payload);
+    case 'checkpoint-load':return vault.checkpoints(clientId).load(payload);
+    case 'checkpoint-cas':return vault.checkpoints(clientId).compareAndSwap(payload);
+    case 'checkpoint-list':return vault.checkpoints(clientId).list(payload);
+    case 'checkpoint-changes':return vault.checkpoints(clientId).changes(payload);
     case 'prepare':
       if (recovery.size && !recovery.has(payload.intentId)) throw new BrowserVaultError('recovery_required', 'Reconcile recovered intent outcomes before new mutations', {intent_ids:[...recovery]});
       return vault.prepareIntent(clientId, payload.intentId, payload.requestJson);

@@ -1,3 +1,5 @@
+import { browserCheckpoints } from './browser-checkpoints.ts';
+import type { DurableCheckpoints } from './durable-checkpoints.ts';
 /** Browser persistence host for the initialized, shared Rust/WASM vault planner.
  * No production platform selection uses this adapter yet. */
 export interface BrowserVaultWasm {
@@ -26,6 +28,7 @@ export interface BrowserVaultOptions {
 export interface BrowserVault {
   /** Persistent local storage authority; distinct from database name or sync vault ID. */
   readonly authorityId: string;
+  checkpoints(clientId:string):DurableCheckpoints;
   /** Serialized Rust MutationRequest in; serialized original CommitResult out. */
   mutate(requestJson: string): Promise<string>;
   /** Transaction-consistent {entries, sequence}; includes retained tombstones. */
@@ -33,6 +36,7 @@ export interface BrowserVault {
   /** Retained bytes by stable ID, including tombstones; returns a fresh copy. */
   readBytes(id: string): Promise<Uint8Array>;
   readEntry(path: string): Promise<BrowserVaultRead | null>;
+  readEntryById(id:string):Promise<BrowserVaultRead|null>;
   inventory(): Promise<BrowserVaultRead[]>;
   prepareIntent(clientId: string, intentId: string, requestJson: string): Promise<void>;
   intents(clientId: string): Promise<BrowserVaultIntent[]>;
@@ -60,8 +64,8 @@ interface Request { operation_id: string; mutation: { type: string; id: string; 
 interface Receipt { operation_id: string; sequence: string; changes: EntryChange[] }
 interface RecordValue { request: Request; result: Receipt }
 type Decision = { status: 'new' } | { status: 'replay'; result: Receipt };
-const stores = ['metadata', 'content', 'receipts', 'journal', 'outbox', 'control', 'presentation', 'intents'];
-const keyPaths: Record<string, string | string[]> = { metadata: 'id', content: 'id', receipts: 'operation_id', journal: 'sequence', outbox: 'sequence', control: 'key', presentation: 'id', intents: ['client_id', 'intent_id'] };
+const stores = ['metadata', 'content', 'receipts', 'journal', 'outbox', 'control', 'presentation', 'intents', 'checkpoint_heads', 'checkpoint_revisions'];
+const keyPaths: Record<string, string | string[]> = { metadata: 'id', content: 'id', receipts: 'operation_id', journal: 'sequence', outbox: 'sequence', control: 'key', presentation: 'id', intents: ['client_id', 'intent_id'], checkpoint_heads:['clientId','key'], checkpoint_revisions:['clientId','revision'] };
 const maxSequence = 18446744073709551615n;
 
 function hostError(code: string, message: string, details?: unknown): BrowserVaultError {
@@ -105,12 +109,18 @@ function validateSchema(db: IDBDatabase): void {
     const store = tx.objectStore(name);
     const indexes = Array.from(store.indexNames);
     if (JSON.stringify(store.keyPath) !== JSON.stringify(keyPaths[name]) || store.autoIncrement ||
-        JSON.stringify(indexes) !== JSON.stringify(name === 'intents' ? ['by_operation'] : [])) {
+        JSON.stringify(indexes) !== JSON.stringify(name === 'intents' ? ['by_operation'] : name==='checkpoint_revisions'?['by_creation','by_global_sequence','by_key','by_sequence']:[])) {
       throw hostError('storage_schema_mismatch', `Unexpected schema for ${name}`);
     }
     if (name === 'intents') {
       const index = store.index('by_operation');
       if (index.keyPath !== 'operation_id' || !index.unique || index.multiEntry) throw hostError('storage_schema_mismatch', 'Invalid global operation ownership index');
+    }
+    if(name==='checkpoint_revisions') {
+      for(const [indexName,path,unique] of [['by_creation',['clientId','creationOrder'],true],['by_global_sequence','order',true],['by_key',['clientId','key','order'],false],['by_sequence',['clientId','order'],true]] as const) {
+        const index=store.index(indexName);
+        if(JSON.stringify(index.keyPath)!==JSON.stringify(path) || index.unique!==unique || index.multiEntry)throw hostError('storage_schema_mismatch','Invalid checkpoint revision index');
+      }
     }
   }
 }
@@ -162,7 +172,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
   }
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
     let rejected = false;
-    const opening = indexedDB.open(name, 4);
+    const opening = indexedDB.open(name, 5);
     let schemaError: BrowserVaultError | undefined;
     opening.onupgradeneeded = event => {
       if (event.oldVersion !== 0) {
@@ -179,8 +189,15 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
       control.add({ key: 'sequence', value: '0' });
       control.add({ key: 'intent-sequence', value: '0' });
       control.add({ key: 'local-store-id', value: crypto.randomUUID() });
+      control.add({ key: 'checkpoint-sequence', value: '0' });
       database.createObjectStore('presentation', { keyPath: 'id' });
       database.createObjectStore('intents', { keyPath: ['client_id', 'intent_id'] }).createIndex('by_operation','operation_id',{unique:true});
+      database.createObjectStore('checkpoint_heads',{keyPath:['clientId','key']});
+      const revisions=database.createObjectStore('checkpoint_revisions',{keyPath:['clientId','revision']});
+      revisions.createIndex('by_key',['clientId','key','order']);
+      revisions.createIndex('by_sequence',['clientId','order'],{unique:true});
+      revisions.createIndex('by_global_sequence','order',{unique:true});
+      revisions.createIndex('by_creation',['clientId','creationOrder'],{unique:true});
     };
     opening.onerror = () => reject(schemaError ?? storageError(opening.error));
     opening.onblocked = () => {
@@ -403,9 +420,11 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
   };
   return {
     authorityId,
+    checkpoints(clientId){return browserCheckpoints(db,authorityId,clientId);},
     mutate,
     inventory,
     async readEntry(path) { return (await inventory()).find(row => row.entry.path === path) ?? null; },
+    async readEntryById(id){return (await inventory()).find(row=>row.entry.id===id)??null;},
     intents: readIntents,
     acknowledgeIntent(clientId, intentId, outcome) {
       const key = intentKey(clientId, intentId);

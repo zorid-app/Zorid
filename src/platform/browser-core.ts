@@ -4,14 +4,17 @@ import { BrowserVaultError } from '../core/browser-vault.ts';
 import { vaultPath } from './path.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
 import { browserDurableWrites } from './browser-durable-writes.ts';
+import type { DurableCheckpoints } from '../core/durable-checkpoints.ts';
 
 /** Stable identity preserves the existing workspace/session/draft namespace. */
 export const BROWSER_CORE_VAULT_ID = 'browser:default';
 export interface BrowserCoreBackend {
   /** Authoritative persistence scope, captured by the runtime that opens it. */
   readonly durableScope?: Readonly<{vaultId:string;clientId:string}>;
+  readonly checkpoints?: DurableCheckpoints;
   inventory(): Promise<BrowserVaultRead[]>;
   readEntry(path: string): Promise<BrowserVaultRead | null>;
+  readEntryById?(id:string):Promise<BrowserVaultRead|null>;
   /** Persist exact intent before executing; retries must reuse both arguments. */
   execute(intentId: string, requestJson: string): Promise<string>;
   prepare?(intentId: string, requestJson: string): Promise<void>;

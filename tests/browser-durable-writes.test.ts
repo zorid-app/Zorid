@@ -18,8 +18,10 @@ function fixture() {
   let listingFailure: Error | undefined;
   const backend: BrowserCoreBackend = {
     durableScope:scope,
+    checkpoints:{scope,async load(){return null;},async compareAndSwap(){throw new Error('Use real host fixture for checkpoint persistence');},async list(){return {items:[],cursor:null,highWater:'0'};},async changes(){return {items:[],cursor:null,highWater:'0'};}},
     async inventory() { return [structuredClone(entry)]; },
     async readEntry() { reads++; return structuredClone(entry); },
+    async readEntryById(id) { reads++; return entry.entry.id===id && !entry.entry.deleted?structuredClone(entry):null; },
     async execute() { throw new Error('Legacy execute must not be used by durable wrapper'); },
     async prepare(token,json) {
       calls.push({operation:'prepare',token,json});
@@ -36,7 +38,7 @@ function fixture() {
         row.status='rejected'; row.error={code:'revision_conflict',message:'stale',source:'rust'};
         throw new BrowserVaultError('revision_conflict','stale',undefined,'rust');
       }
-      row.status='committed'; row.receipt=JSON.stringify({operation_id:row.operation_id,sequence:'9007199254740993'});
+      row.status='committed'; row.receipt=JSON.stringify({operation_id:row.operation_id,sequence:'9007199254740993',changes:[{before:entry.entry,after:{...entry.entry,id:JSON.parse(row.request_json).mutation.id,revision:'committed-revision',deleted:false}}]});
       if (loseCommit) { loseCommit=false; throw new BrowserVaultError('outcome_unknown','lost commit response'); }
       return row.receipt;
     },
@@ -59,7 +61,7 @@ test('readText returns bytes and identity from one backend observation',async()=
   const f=fixture();
   const reading=f.durable.readText('Note.md');
   f.entry.entry.id='replacement'; f.entry.entry.revision='revision-b'; f.entry.bytes=new TextEncoder().encode('peer');
-  assert.deepEqual(await reading,{content:'old',entryId:'entry-a',revision:'revision-a'});
+  assert.deepEqual(await reading,{content:'old',path:'Note.md',entryId:'entry-a',revision:'revision-a',stat:{ctime:1,mtime:2,size:3}});
   assert.equal(f.reads,1); assert.equal(f.calls.length,0);
 });
 test('same-byte recreation or revision change rejects planning before any intent is prepared',async()=>{
@@ -122,11 +124,22 @@ test('missing checkpointed refs never recreate intents; foreign identities never
 test('recreated local store rejects old plans and refs before host mutation even with the same client',async()=>{
   const f=fixture(), plan=await f.plan(), prepared=await f.durable.prepare(plan);
   const replacement=Object.freeze({...f.scope,vaultId:'new-local-authority'});
-  const next=new BrowserCoreAdapter({...f.backend,durableScope:replacement},replacement).durableWrites!;
+  const next=new BrowserCoreAdapter({...f.backend,durableScope:replacement,checkpoints:{...f.backend.checkpoints!,scope:replacement}},replacement).durableWrites!;
   await assert.rejects(next.prepare(plan),{code:'intent_identity_mismatch'});
   await assert.rejects(next.query(prepared.ref),{code:'intent_identity_mismatch'});
   await assert.rejects(next.commit(prepared.ref),{code:'intent_identity_mismatch'});
   assert.deepEqual(f.calls.map(call=>call.operation),['prepare']);
+});
+test('stable-ID reads follow renames and receipt witnesses remain historical after peer changes',async()=>{
+  const f=fixture(), prepared=await f.durable.prepare(await f.plan());
+  const committed=await f.durable.commit(prepared.ref);
+  assert.equal(committed.state,'committed');if(committed.state!=='committed')throw new Error('missing receipt');
+  assert.deepEqual(committed.receipt,{operationId:'operation-a',sequence:'9007199254740993',entryId:'entry-a',revision:'committed-revision'});
+  f.entry.entry.path='Renamed.md';f.entry.entry.revision='peer-revision';f.entry.bytes=new TextEncoder().encode('peer');f.entry.presentation.size_bytes=4;
+  assert.deepEqual(await f.durable.readTextById('entry-a'),{path:'Renamed.md',content:'peer',entryId:'entry-a',revision:'peer-revision',stat:{ctime:1,mtime:2,size:4}});
+  assert.equal((await f.durable.query(prepared.ref))?.state,'committed');
+  assert.equal(committed.receipt.revision,'committed-revision');
+  f.entry.entry.deleted=true;assert.equal(await f.durable.readTextById('entry-a'),null);
 });
 test('ref and ack identities are copied before asynchronous lookups',async()=>{
   const f=fixture(), prepared=await f.durable.prepare(await f.plan());
