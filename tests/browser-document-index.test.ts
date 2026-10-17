@@ -162,4 +162,9 @@ test('Base transport keeps retained definition and facts and captures one valida
   assert.equal(f.baseCalls.length,2);await index.close();
 });
 
+test('fresh and explicitly rebuilt caches are uninitialized rather than corrupt',async()=>{
+  const f=fixture(),index=f.open();let status=await index.status();assert.equal(status.snapshot,null);assert.equal(status.rebuildRequired,false);await index.initialize();status=await index.status();assert.equal(status.rebuildRequired,false);
+  await index.rebuild();status=await index.status();assert.equal(status.rebuildRequired,false);assert.equal(status.current,false);await f.build(index);assert.equal((await index.status()).current,true);await index.close();
+});
+
 test.after(()=>{(globalThis as any).IDBKeyRange=range;});
