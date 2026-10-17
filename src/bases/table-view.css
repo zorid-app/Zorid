@@ -19,3 +19,4 @@
 .zorid-bases-table-status:empty { display: none; }
 
 textarea.zorid-bases-table-input { height: 100%; resize: none; }
+.zorid-bases-table-cell.is-selected { background: var(--table-selection, rgba(126, 95, 220, .18)); }

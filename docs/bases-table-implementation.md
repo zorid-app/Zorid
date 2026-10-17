@@ -61,3 +61,35 @@ The tests use JSDOM. They do not measure browser layout, pixel identity, actual 
 - Group geometry/gaps, repeated/sticky group headers and summary rows, stable group collapse across updates, selection identity when a path occurs in several groups.
 - Automatic column sizing, horizontal virtualization, direction-aware geometry, exact CSS/style, mouse selection/drag behavior and mobile interactions.
 - Native comparison, theme/zoom/font changes, real large-vault profiling, and integration tests with the finished query engine.
+
+## Group selection and clipboard slice (2026-10-16)
+
+This follow-up changes only the Table presentation, styles, and focused tests. It does not introduce controller/config/query mutations. Existing edit callbacks and session wiring remain unchanged.
+
+### Bounded reference observations
+
+The same REA-bound desktop `app.js` was read inertly at these character offsets:
+
+- `3206409`: primary non-touch pointer selection starts from a cell; Shift-click within the active group forms a rectangle while retaining the active-cell anchor. Drag lookup is constrained to that group. Ordinary non-draggable property controls participate in selection handling before their widget click.
+- `3197580–3201377`: Shift-arrow navigation extends/contracts selection within the current group; ordinary vertical movement can cross groups. Ctrl+Space selects the current column span through a group, Shift+Space selects the current row span across properties, and platform Mod+A selects the group. Mod+Shift+arrow extends to the corresponding group/property boundary. Enter does not edit while a range exists; Escape clears it.
+- `3194327`: copy exports selected cells or the active cell. `text/plain` uses TSV **without** headers; Markdown and `obsidian/table` include selected property display names as headers. Error/null display becomes empty text. `obsidian/bases-cells` additionally contains raw note metadata and namespace markers.
+- `1620498–1621714`: text serialization quotes fields containing a tab, quote, CR, or LF, doubles inner quotes, joins rows with LF and has no terminal LF. The table clipboard envelope contains `header`, `rows`, and a same-width `alignment` array of nulls. The Markdown formatter escapes pipes and centers cell padding; the inspected helper does not sanitize literal CR/LF, so multiline values can produce structurally awkward Markdown. This limitation is retained in the independently implemented formatter, not described as valid Markdown for every input.
+
+These readings establish bounded shipped-code behavior, not native pointer geometry, clipboard round trips between running apps, or all surrounding widget propagation.
+
+### Implemented
+
+- Group-index/row-index cell identity, including repeated paths in separate groups.
+- Shift+click, Shift+arrows, Ctrl+Space, Shift+Space, Mod+A and Mod+Shift+arrows, with range highlight and `aria-selected`. Repeated mouse Shift-click retains its original active anchor. Keyboard movement can shrink an existing range and retains the other axis of whole-row/column selections.
+- Mouse/pen primary-pointer dragging over mounted cells of the anchor group; touch continues through its existing native path. The following synthesized click is suppressed after a drag. Listener lifetime ends on pointerup/cancel, window blur, result replacement, or destroy.
+- Selected-cell copy through the native `copy` event, exporting quoted TSV, the observed table envelope, and the inspected Markdown format. Values are obtained from immutable query data, so copying includes selected offscreen rows without expanding DOM. Formula conversion failures produce empty exported values.
+- Existing input/textarea composition, drafts, copy, blur-save and pinning remain owned by their editor. A noncollapsed native DOM text selection is also left alone. This latter guard is an original ownership safeguard: the inspected table listener itself does not contain that guard, and surrounding reference property-widget propagation still needs runtime verification.
+- A direct rendered-checkbox click clears an earlier range before its single property edit request. Enter on a range still does not edit a cell.
+
+`obsidian/bases-cells` is deliberately absent: the query result contains typed/display values but does not expose original raw metadata. Reconstructing that raw payload from display text would lose information. This does **not** establish full clipboard compatibility. Paste, clear-selection writes, and multi-file transactions remain pending a coordinated controller action contract.
+
+### Checks and remaining boundaries
+
+The 18 existing Table tests and 16 new selection tests pass with serial execution; targeted strict TypeScript checking passes. Independent review exercises pointer event sequences, copy ownership, anchor behavior, formatting and lifecycle. No native app or heavy build was launched by this worker.
+
+Native layout and event sequencing remain unverified. Pointer ranges currently ignore hits outside the anchor group rather than mapping them to the nearest in-group cell as the reference does. Auto-scroll, offscreen drag hit testing, horizontal virtualization, RTL arrow geometry, PageUp/PageDown/Tab navigation, mobile selection, selection context menus, native clipboard interoperability, raw metadata payloads and large clipboard resource profiling remain incomplete. Query replacement deliberately clears the range. Header sorting, menus, resize/reorder, property management, summaries and their persisted view actions are still required in separate slices.
