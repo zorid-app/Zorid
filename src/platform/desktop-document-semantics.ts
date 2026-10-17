@@ -4,11 +4,19 @@ import type {DocumentService,DocumentSnapshotId,DocumentTransport} from '../core
 export interface DesktopDocumentRequest {schemaVersion:1;command:Readonly<Record<string,unknown>>&{op:string}}
 /** One instance per admitted desktop context. The invocation closure must retain
  * that admission and its normal release guard; it is not an unrestricted IPC. */
-export function desktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>):DocumentService{
+export interface DesktopDocumentBinding {readonly service:DocumentService;release():Promise<void>}
+export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>):DesktopDocumentBinding{
   const stages=new Map<string,DocumentSnapshotId>();let stageSequence=0n,pinSequence=0n;
   let opening:Promise<unknown>|undefined,pendingPin:string|undefined;
   const object=(value:unknown):Record<string,unknown>=>{if(!value||typeof value!=='object'||Array.isArray(value))throw new DocumentSemanticsError('invalid_document_response');return value as Record<string,unknown>;};
-  const command=(op:string,fields:Record<string,unknown>={})=>invoke({schemaVersion:1,command:{op,...fields}});
+  let phase:'active'|'releasing'|'released'='active',releasing:Promise<void>|undefined;
+  const pendingCalls=new Set<Promise<unknown>>(),pins=new Set<string>();
+  const raw=(op:string,fields:Record<string,unknown>={})=>invoke({schemaVersion:1,command:{op,...fields}});
+  const command=(op:string,fields:Record<string,unknown>={}):Promise<unknown>=>{
+    if(phase!=='active')return Promise.reject(new DocumentSemanticsError('client_not_admitted'));
+    const call=Promise.resolve().then(()=>raw(op,fields)).then(value=>{if(op==='open')pins.add(String(fields.pinId));else if(op==='close')pins.delete(String(fields.pinId));return value;});
+    pendingCalls.add(call);void call.then(()=>pendingCalls.delete(call),()=>pendingCalls.delete(call));return call;
+  };
   const snapshotFor=(id:string)=>{const snapshot=stages.get(id);if(!snapshot)throw new DocumentSemanticsError('stage_expired');return snapshot;};
   const transport:DocumentTransport={
     async status(){
@@ -46,5 +54,18 @@ export function desktopDocumentService(invoke:(request:DesktopDocumentRequest)=>
     backlinks:({targetId,...input})=>command('backlinks',{...input,id:targetId,limit:input.limit??100}),
     base:input=>command('base',input),
   };
-  return createDocumentService(transport);
+  return {service:createDocumentService(transport),release(){
+    if(phase==='released')return Promise.resolve();if(releasing)return releasing;phase='releasing';
+    releasing=(async()=>{
+      // New semantic reads are blocked before draining admitted requests. Source
+      // writes retain their existing save/release protocol in the binding.
+      await Promise.allSettled([...pendingCalls]);
+      for(const pinId of [...pins]){await raw('close',{pinId});pins.delete(pinId);}
+      for(const [stageId,snapshot] of [...stages]){await raw('discard',{snapshot});stages.delete(stageId);}
+      phase='released';
+    })().finally(()=>{releasing=undefined;});return releasing;
+  }};
 }
+/** Convenience for hosts whose containing admission owns all final cleanup. */
+export function desktopDocumentService(invoke:(request:DesktopDocumentRequest)=>Promise<unknown>):DocumentService{return createDesktopDocumentService(invoke).service;}
+

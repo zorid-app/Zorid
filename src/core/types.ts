@@ -1,3 +1,4 @@
+import type {DocumentService} from './document-semantics.ts';
 import type {BinaryStreams} from './binary-streams.ts';
 import type { DurableWrites } from './durable-writes.ts';
 
@@ -16,6 +17,8 @@ export interface VaultEntry {
 
 /** Paths are relative to the vault. Implementations must enforce the vault boundary. */
 export interface VaultAdapter {
+  /** Optional admitted Rust-owned metadata/index/Base read capability. */
+  readonly documentSemantics?:DocumentService;
   /** Optional admitted bounded stage/pinned-read authority. */
   readonly binaryStreams?: BinaryStreams;
   /** Optional durable text-save protocol; commit/publication run through Vault. */

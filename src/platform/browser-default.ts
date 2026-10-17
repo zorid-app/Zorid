@@ -149,7 +149,7 @@ export async function openDefaultBrowserVault():Promise<PlatformVault>{
     const retire=()=>{active=false;opened.close();slot.retire();};
     window.addEventListener('pagehide',retire,{once:true});
     const release=createBrowserRelease(consumer,slot,()=>{active=false;window.removeEventListener('pagehide',retire);});
-    return {adapter,label:'Browser vault',id:`browser:core:${consumer.scope.vaultId}:client:${consumer.scope.clientId}`,
+    return {adapter,...(adapter.documentSemantics?{documentSemantics:adapter.documentSemantics}:{}),label:'Browser vault',id:`browser:core:${consumer.scope.vaultId}:client:${consumer.scope.clientId}`,
       legacyExport:legacyBrowserExport(),recoverCommands:()=>consumer.recoverCommands!(),
       release,
     };
