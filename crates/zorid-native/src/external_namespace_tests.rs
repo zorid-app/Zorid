@@ -1320,10 +1320,18 @@ fn external_namespace_prepared_corrupt_graph_cache_is_fatal_and_never_authors() 
         matches!(error, Error::Store(zorid_store::StoreError::Corrupt(_))),
         "{error:?}"
     );
-    assert_eq!(
-        vault.family_pending_authored(None, 1000).unwrap().len(),
-        authored
-    );
+    // Public family status intentionally rejects the corrupt graph. Inspect
+    // the independent durable outbox count without loading that graph again.
+    let sql = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+    let retained: i64 = sql
+        .query_row(
+            "SELECT count(*) FROM authored_envelopes WHERE accepted=0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(usize::try_from(retained).unwrap(), authored);
+    drop(sql);
     assert_eq!(binding(&vault, &before.state.id), before);
     assert_eq!(namespace_rows(root.path()).len(), 1);
     assert!(!namespace_rows(root.path())[0].1);
