@@ -1,6 +1,7 @@
 # Durable binary stage foundation
 
-Status: source implementation prepared, not built or runtime verified. Owner
+Status: additive foundation compiled and passed its scoped store tests; no
+application streaming activation or native-client acceptance is established. Owner
 `/root/package_sol/cli_tests`, parent `/root/package_sol`; branch/worktree
 `store-binary-streaming`. Parent owns central schema registration, exports,
 global operation admission and envelope reservation integration. The portable
@@ -9,7 +10,7 @@ builder/descriptor dependency is present at `65086ba`; no build is claimed.
 This increment implements only durable invisible staging in
 `crates/zorid-store/src/blob_stage.rs`. It does not implement binary command
 commit, entry visibility, projection, public pinned reads, sync ingress or client
-streaming. Seven focused module tests are prepared and unrun. No unrestricted file
+streaming. Seven focused module tests passed in the store library gate. No unrestricted file
 size or bounded-memory end-to-end claim follows from this foundation.
 
 ## Public Rust surface
@@ -120,7 +121,10 @@ Request paths are checked before encoding; payload/descriptor and persisted
 stage metadata lengths are checked before body loading. Manifest reconstruction
 retains at most the fixed per-file descriptor/page metadata, not file bodies.
 
-These tests have not run. Central integration still needs its own reciprocal
-operation/update collision checks and schema-10 registration/rejection check.
+The seven tests passed in the 29-case store library gate at source `ada6e8b`
+(handle `30523`, exit 0). Parent integration includes reciprocal operation/update
+collision checks and schema-10 registration. The three-case family transaction
+suite passed (handle `32902`, exit 0), including byte-preserving rejection of old
+schema 9. See [full gate record](store-binary-streaming.md).
 Actual >16 MiB native/client input, commit, publication, read, crash/recovery,
 encrypted transfer and memory measurements remain future integrated gates.

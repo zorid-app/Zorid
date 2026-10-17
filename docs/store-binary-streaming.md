@@ -16,7 +16,9 @@ remain with `external_reconcile_sol`.
 `cli_tests` owns the new stage module and its seven tests; `package_sol` owns the
 descriptor index, ledger provenance, central schema/reservations and existing
 store seams. `packaging_review` independently reviews the store candidate.
-No one in this branch integrates into main.
+No one in this branch integrates into main. The independently reviewed foundation
+is `277adb0`; independently reviewed checked SQLite integer conversions and a
+previously missing materialization-test import are `ada6e8b`.
 
 ## Implemented source
 
@@ -82,9 +84,30 @@ performance limitation, not proof of the planned short final publication commit.
 
 ## Verification record
 
-Source formatted and `git diff --check` clean. Store compilation/tests have not
-run yet. Prepared tests cover seven stage lifecycle/integrity cases, two descriptor
-source-integrity cases, and the existing byte-preserving old-schema rejection
-case extended to schema 9. Independent source review is in progress. Record exact
-source freeze, command/handle/exit and observed results here after the serialized
-gate; do not infer store or application runtime acceptance from portable tests.
+Source `ada6e8b` is the tested freeze. `packaging_review` independently accepted
+both the foundation and the narrow compile corrections. `git diff --check` is
+clean. Root granted the exclusive shared target slot, with no parallel builds.
+
+Commands ran with `CARGO_BUILD_JOBS=1` and
+`CARGO_TARGET_DIR=/Users/ctk/orca/workspaces/Zorid/core-default-integration/target`:
+
+- `cargo test -p zorid-store --lib -- --test-threads=1`: handle `30523`, exit 0,
+  **29 passed**, including all seven stage and two descriptor/source tests.
+- `cargo test -p zorid-store --test family -- --test-threads=1`: handle `32902`,
+  exit 0, **3 passed**. These cover actual family command/receive/restart/replay,
+  exact wire/graph/visibility/cursor rollback, and byte-preserving rejection of
+  earlier schemas including schema 9.
+
+The first library compile, handle `62102`, exited 101 before running tests: three
+staging sites used unsupported rusqlite u64 conversions, and an existing test
+module lacked its explicit `OperationId` import. The reviewed `ada6e8b` correction
+uses checked SQLite i64 conversions; the successful gates above ran afterward.
+Warnings include existing unused compatibility helpers and the intentionally
+unactivated descriptor-reader foundation. No warning was treated as a passing
+activation gate.
+
+The exclusive slot was explicitly released to the coordinator and portable
+owner after both commands completed. No Electron process or application test was
+started. These 32 checks establish only the scoped additive store foundation;
+public binary commit/read, end-to-end streaming, memory bounds and client runtime
+acceptance remain pending.
