@@ -3,9 +3,15 @@ import type { VaultEntry } from '../core/types';
 import type { ContextMenuRequest } from './context-menu';
 
 export interface DesktopDurableContext { admissionId: string; scope: CheckpointScope }
-export interface DesktopVault { path: string; name: string }
+export interface DesktopReconciliation {
+  scanId: string; complete: boolean; scanComplete: boolean; finished: boolean;
+  observed: number; imported: number; namespaceApplied: number; issueCount: number; issuesTruncated: boolean;
+  issues: readonly {path: string | null; code: 'scan_limit' | 'recovery_retained' | 'changed_during_scan' | 'reconciliation_blocked'}[];
+  failure?: 'scan_failed';
+}
+export interface DesktopVault { path: string; name: string; reconciliation?: DesktopReconciliation }
 export interface DesktopWindowInfo { id: string; initialState: 'restore' | 'empty' }
-export interface VaultChange { vault?: string; type: string; path?: string; message?: string }
+export interface VaultChange { vault?: string; type: string; path?: string; message?: string; reconciliation?: DesktopReconciliation }
 export interface DesktopBridge {
   getWindowInfo?(): Promise<DesktopWindowInfo>;
   newWindow?(): Promise<{ id: string }>;
@@ -16,6 +22,7 @@ export interface DesktopBridge {
   dismissContextMenu?(): Promise<void>;
   getPathForFile?(file: File): string;
   getVault(): Promise<DesktopVault | null>;
+  retryReconciliation?(vault: string): Promise<DesktopReconciliation>;
   /** Native close is held until this asynchronous save/release callback succeeds. */
   onBeforeClose?(handler: () => Promise<void>): () => void;
   getDurableContext?(vault: string): Promise<DesktopDurableContext | null>;

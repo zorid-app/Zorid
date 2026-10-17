@@ -1,9 +1,23 @@
 import type { DurableWrites } from '../core/durable-writes.ts';
 import type { VaultAdapter } from '../core/types';
-import type { DesktopBridge, DesktopVault } from './bridge';
+import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
-export interface PlatformVault { adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void> }
+export interface PlatformVault { adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
 async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<PlatformVault> {
+  let reconciliationStatus=info.reconciliation??null;
+  const reconciliation=info.reconciliation&&bridge.retryReconciliation?{
+    getStatus:()=>reconciliationStatus,
+    subscribe:(listener:(status:DesktopReconciliation)=>void)=>{
+      let changed=false,disposed=false;
+      const stop=bridge.onChange(change=>{
+        if(change.vault===info.path&&change.reconciliation){changed=true;reconciliationStatus=change.reconciliation;listener(change.reconciliation);}
+      });
+      // Catch a scan that finished between getVault and this subscription.
+      void bridge.getVault().then(latest=>{if(!disposed&&!changed&&latest?.path===info.path&&latest.reconciliation){reconciliationStatus=latest.reconciliation;listener(latest.reconciliation);}}).catch(()=>{});
+      return ()=>{disposed=true;stop();};
+    },
+    retry:async()=>{reconciliationStatus=await bridge.retryReconciliation!(info.path);},
+  }:undefined;
   const binding = await bridge.getDurableContext?.(info.path);
   let durableWrites: DurableWrites | undefined;
   let release: (() => Promise<void>) | undefined;
@@ -51,6 +65,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
   }
   return {
     ...(release ? {release} : {}),
+    ...(reconciliation?{reconciliation}:{}),
     id: durableWrites ? `desktop-core:${durableWrites.checkpoints.scope.vaultId}:${durableWrites.checkpoints.scope.clientId}` : `desktop:${info.path}`,
     label: info.name,
     adapter: {

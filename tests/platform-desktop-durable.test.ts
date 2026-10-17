@@ -43,3 +43,26 @@ for (const lateOutcome of ['success', 'terminal rejection']) {
     }
   });
 }
+
+test('desktop reconciliation status catches subscription gaps and remains scoped through retry',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'window');
+  const initial={scanId:'startup',complete:true,scanComplete:true,finished:true,observed:0,imported:0,namespaceApplied:0,issueCount:0,issuesTruncated:false,issues:[]};
+  const pending={...initial,scanId:'pending',complete:false,scanComplete:false,issueCount:1,issues:[{path:null,code:'scan_limit'}]};
+  let listener:(change:any)=>void=()=>{},stops=0,reads=0;
+  Object.defineProperty(globalThis,'window',{configurable:true,value:{zorid:{
+    getVault:async()=>({path:'/fixture',name:'Fixture',reconciliation:reads++?pending:initial}),
+    onChange:(next:(change:any)=>void)=>{listener=next;return ()=>{stops++;};},
+    retryReconciliation:async(root:string)=>{assert.equal(root,'/fixture');return initial;},
+  }}});
+  try {
+    const vault=(await createPlatformAdapter())!;const statuses:unknown[]=[];
+    assert.equal(vault.reconciliation!.getStatus()!.complete,true);
+    const stop=vault.reconciliation!.subscribe(status=>statuses.push(status));
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(vault.reconciliation!.getStatus()!.scanId,'pending');
+    listener({vault:'/other',reconciliation:initial});assert.equal(statuses.length,1);
+    listener({vault:'/fixture',reconciliation:{...pending,scanId:'current'}});assert.equal(vault.reconciliation!.getStatus()!.scanId,'current');
+    await vault.reconciliation!.retry();assert.equal(vault.reconciliation!.getStatus()!.complete,true);
+    stop();assert.equal(stops,1);
+  } finally {if(previous)Object.defineProperty(globalThis,'window',previous);else Reflect.deleteProperty(globalThis,'window');}
+});
