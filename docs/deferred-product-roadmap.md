@@ -117,6 +117,24 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
+- Subsequent21:43 checkpoint: native-only fixturehost bbe26f1d passed actual
+  nine-case check54202 (compile1m48s/test0.71s), source integrated maind94c3ae3.
+  Log copied to tmp/stage4-host-fixture-run1.log. This does not prove successful
+  relay/FFI/simulator/phone sync. Root reclaimed compiler slot, no compiler live
+  while current Base group-token source freezes; mobile owns no active Xcode.
+- Current isolated root candidatee97d5bf9 composes Base context+frame-error/null
+  guards, search+released-owner fix, typed-date display, retained-row edit witness
+  +provider atomic rename and deferred pin-close handling. Combined frontend
+  check1925 passes91/91, full TypeScript79631 exit0 (before final pin follow-up).
+  Reviewer source gates pass for these slices. Last presentation gap: Kanban loose
+  equality merged distinct Rust keys; contract owner adds opaque existing-canonical
+  keyId fields, Base owner projects them, renderer owner uses them through moves/
+  hide/order and fixes inert nested file/link labels. No TS formula regrouping.
+- Native owner may merge current canonicalmain863 into isolated recovery only
+  under named resolution grantmsg_e4d21dcde2bd, preserving Stage4 guards/capabilities
+  and scoped native hooks. Main remains root-owned. Its phonebuild5 is signed
+  ready but uninstalled until actual CoreDevice connectivity; simulator hotfix
+  proof and separate outstanding keyboard/PDF presentation are recorded in findings.
 - Subsequent21:36 checkpoint: native facade21944 exit0, all6 tests PASS,
   including explicit external import and authenticated sync receive with exact
   bytes, metadata/search/backlink retarget, old-pin coherence, rebuild equivalence

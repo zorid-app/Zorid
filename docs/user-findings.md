@@ -201,3 +201,12 @@ the exclusive iOS hotfix slot in msg_d40cc87b1ea0; native owns the minimal
 containment fix and must verify actual file opening in the existing Simulator
 before installing the replacement phone build. No storage repair is indicated;
 implementation, build and runtime verification remain separate pending results.
+
+Follow-up: native hotfix source `51d8b84f` (build5) passes actual Simulator
+file opening, Back/Forward, typing and exact67-byte saved-content checks without
+the containment crash. Generic phone build40602 succeeds and passes strict
+signing/Dev identity checks. Build5 is **not installed on the phone yet** because
+CoreDevice reports its tunnel unavailable; native awaits reconnect/unlock.
+Keep the earlier glass-controls change paired with the containment fix during
+integration. Native checkpoint `d7605a3e` records these separate outcomes; this
+does not verify software-keyboard/foreground or PDF presentation follow-ups.
