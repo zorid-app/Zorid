@@ -41,9 +41,22 @@ No variant API is exposed to the shared web editor yet.
 ## Delivery boundary
 
 The target/product remain App / App.app. Existing shipping App + Release and
-simulator App + Debug callers remain production aliases. The SDK-specific Rust
-library paths, bridging header and linker flags are unchanged; configuration
-selection does not build Rust or choose a new Rust profile.
+simulator App + Debug callers remain production aliases. Legacy Debug/Release
+keep their original SDK paths: simulator/debug and device/release. The new variant
+target configurations select the Rust profile matching their compiler mode:
+
+| Target configurations | iphoneos static library directory | iphonesimulator static library directory |
+| --- | --- | --- |
+| Debug-Dev, Debug-Prod | aarch64-apple-ios/debug | aarch64-apple-ios-sim/debug |
+| Release-Dev, Release-Prod | aarch64-apple-ios/release | aarch64-apple-ios-sim/release |
+
+These paths live under mobile/rust/target. Before direct Xcode Run/Archive,
+prebuild libzorid_mobile_ffi.a for the exact SDK target/profile using the delivery
+build script or Cargo with mobile/rust/Cargo.toml, the matching --target, and
+--release only for Release. A simulator Release build also needs its own Release
+Rust library; a device or Debug library is not a substitute. Configuration
+selection does not build Rust: no new build phase or tool dependency is added.
+The bridging header and linker flags are unchanged.
 
 Development delivery scripts formerly built Debug with command-line bundle/name
 overrides. Bundle/name overrides alone do not select environment or compile
@@ -55,7 +68,8 @@ signing/provisioning are owned by delivery, not this config layer. Separate bund
 IDs use separate app containers; no cross-variant vault sharing/migration is added.
 
 Source validation covers plist/project syntax, xcconfig includes, the six-config
-matrix, scheme target/config references, mode settings and unchanged Rust links.
+matrix, scheme target/config references, mode settings, matching variant Rust
+profile paths, unchanged legacy SDK paths and unchanged Rust linker flags.
 Xcode-resolved settings, signing, install/coexistence and native behavior require
 owner verification after the active build finishes. No build is implied by these
 checked-in configuration files.

@@ -632,7 +632,7 @@
 				SWIFT_VERSION = 5.0;
                 SWIFT_OBJC_BRIDGING_HEADER = "App/Zorid-Bridging-Header.h";
                 "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios-sim/debug";
-                "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/release";
+                "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/debug";
                 OTHER_LDFLAGS = ("$(inherited)", "-lzorid_mobile_ffi", "-lz", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration");
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -659,7 +659,7 @@
 				SWIFT_VERSION = 5.0;
                 SWIFT_OBJC_BRIDGING_HEADER = "App/Zorid-Bridging-Header.h";
                 "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios-sim/debug";
-                "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/release";
+                "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/debug";
                 OTHER_LDFLAGS = ("$(inherited)", "-lzorid_mobile_ffi", "-lz", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration");
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -684,7 +684,7 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited)";
 				SWIFT_VERSION = 5.0;
                 SWIFT_OBJC_BRIDGING_HEADER = "App/Zorid-Bridging-Header.h";
-                "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios-sim/debug";
+                "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios-sim/release";
                 "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/release";
                 OTHER_LDFLAGS = ("$(inherited)", "-lzorid_mobile_ffi", "-lz", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration");
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -710,7 +710,7 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited)";
 				SWIFT_VERSION = 5.0;
                 SWIFT_OBJC_BRIDGING_HEADER = "App/Zorid-Bridging-Header.h";
-                "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios-sim/debug";
+                "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios-sim/release";
                 "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/release";
                 OTHER_LDFLAGS = ("$(inherited)", "-lzorid_mobile_ffi", "-lz", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration");
 				TARGETED_DEVICE_FAMILY = "1,2";
