@@ -116,6 +116,21 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Latest user sequence correction — 2026-10-17:
+- Complete the active Vite migration first, then build the Bases/tasks/calendar
+  product milestone BEFORE Stage5. This supersedes the immediately preceding
+  Vite→Stage5 sequence and older task/calendar discussion-only deferral.
+- Shared Rust Base parsing/query/index semantics are already accepted Stage4;
+  this new milestone concerns usable first-party Bases, task and calendar
+  workflows on that foundation. Use earlier FullCalendar/TaskNotes references
+  as capability input, prioritize Zorid UX, and settle bounded behavior/contracts
+  before parallel implementation. No speculative plugin framework is needed.
+- Native mobile improvements continue independently under its named owner.
+  Stage5 enrollment/history/backups/management remain required, resequenced rather
+  than dropped. Built-in active goal text predates this correction; this durable
+  checkpoint is authoritative for execution order after Vite.
+
+
 Latest execution steering — Vite then Stage5 (2026-10-17 22:41 UTC):
 - User authorizes Vite renderer migration now; Stage5 follows it. New built-in
   goal tracks both in this order. Mobile owner continues UX improvements in

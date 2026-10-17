@@ -268,3 +268,12 @@ native owner for scoped focus fix and actual software-keyboard verification,
 preserving edits/title commits. Pending implementation and runtime evidence.
 Phone6 source829cd2c9 installed/launched successfully per owner, build52508 and
 install/launch24342 exit0; detailed interaction checks still pending separately.
+
+### 2026-10-17 — Bases/tasks/calendar before Stage5
+
+User explicitly requests Bases, tasks and calendar before Stage5. Accepted order:
+active Vite migration → first-party Bases/task/calendar milestone → Stage5.
+Earlier task/calendar deferral is superseded. Shared Rust Base/index semantics
+remain the foundation, web/native presentation respects existing ownership. This
+request is recorded for implementation after Vite, not marked complete by the
+existing Stage4 query engine. Mobile UX work continues in parallel.
