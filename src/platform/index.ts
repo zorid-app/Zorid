@@ -109,8 +109,15 @@ export async function createPlatformAdapter(): Promise<PlatformVault | null> {
   }
   const { Capacitor } = await import('@capacitor/core');
   if (Capacitor.isNativePlatform()) {
-    const { openNativeMobileVault } = await import('./mobile-native.ts');
-    return openNativeMobileVault();
+    if (Capacitor.getPlatform() === 'ios') {
+      const { openNativeMobileVault } = await import('./mobile-native.ts');
+      return openNativeMobileVault();
+    }
+    // Android retains its current adapter until the native/JNI binding is ready.
+    const { MobileAdapter } = await import('./mobile');
+    const adapter = new MobileAdapter();
+    await adapter.initialize();
+    return { adapter, label: 'Zorid', id: 'mobile:documents:Zorid' };
   }
   if (typeof __ZORID_CORE_FIXTURES__ !== 'undefined' && __ZORID_CORE_FIXTURES__) {
     const { browserCoreFixtureConfig, openBrowserCoreFixture } = await import('./browser-core-fixture');
