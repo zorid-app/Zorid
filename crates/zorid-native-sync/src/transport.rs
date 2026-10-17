@@ -211,6 +211,8 @@ fn status(status: Status) -> super::Error {
         Code::Unauthenticated | Code::PermissionDenied => "sync_authorization_failed",
         Code::AlreadyExists | Code::Aborted => "sync_relay_conflict",
         Code::ResourceExhausted => "sync_limit",
+        // Tonic rejects an oversized declared message before Prost decoding.
+        Code::OutOfRange => "sync_response_limit",
         Code::FailedPrecondition => match rpc::decode_error_detail(status.details())
             .ok()
             .and_then(|detail| pb::ErrorCode::try_from(detail.code).ok())
@@ -245,6 +247,7 @@ mod tests {
             (Code::PermissionDenied, "sync_authorization_failed"),
             (Code::AlreadyExists, "sync_relay_conflict"),
             (Code::ResourceExhausted, "sync_limit"),
+            (Code::OutOfRange, "sync_response_limit"),
             (Code::FailedPrecondition, "sync_invalid_response"),
         ] {
             assert_eq!(
