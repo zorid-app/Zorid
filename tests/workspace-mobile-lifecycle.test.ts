@@ -29,9 +29,20 @@ for(const failure of ['flush','session','stale_lifecycle'])test(`failed ${failur
 test('duplicate lifecycle cannot enter flush while first is pending; generation changes forbid ACK',async()=>{
   const f=fixture();let resolve!:()=>void;f.host.flush=()=>new Promise<void>(r=>{resolve=r;});
   const first=f.run('background');await assert.rejects(f.run('switchVault'),/not ready/);f.host.vaultGeneration++;resolve();
-  await assert.rejects(first,/changed during save/);assert.equal(f.host.root.inert,false);assert.ok(!f.events.includes('ack'));
+  await assert.rejects(first,/changed during save/);assert.equal(f.host.root.inert,true,'stale generation must not unlock a replacement workspace');assert.ok(!f.events.includes('ack'));
 });
 test('rebinding cleans old subscription and captured callback cannot ACK another platform',async()=>{
   const f=fixture(),old=f.run;f.host.platform={};(Workspace.prototype as any).bindMobileLifecycle.call(f.host);assert.equal(f.removed(),1);
   await assert.rejects(old('switchVault'),/not ready/);assert.equal(f.host.root.inert,false);
+});
+
+
+test('a failed old lifecycle cannot restore or republish a replacement platform',async()=>{
+  const f=fixture();let resolve!:()=>void;f.host.flush=()=>new Promise<void>(r=>{resolve=r;});
+  const first=f.run('background');
+  const states:unknown[]=[];f.host.platform={nativeEditor:{setState:async(state:unknown)=>{states.push(state);}}};
+  f.host.vaultGeneration++;f.host.root.inert=true;f.host.closing=true;
+  f.host.activePane={editor:{nativeState:()=>({focused:true,editable:true,canUndo:true,canRedo:false})}};
+  resolve();await assert.rejects(first,/changed during save/);
+  assert.equal(f.host.root.inert,true);assert.equal(f.host.closing,true);assert.deepEqual(states,[]);
 });

@@ -259,9 +259,10 @@ export class Workspace {
         // Successful switch ACK transfers host/lease teardown to native. Never
         // destroy/release before ACK or after a timeout which retained this view.
       } finally {
-        if(reason==='background'||!accepted){this.closing=wasClosing;this.root.inert=wasInert;}
+        const sameOwner=this.platform===platform&&this.vaultGeneration===generation;
+        if(sameOwner&&(reason==='background'||!accepted)){this.closing=wasClosing;this.root.inert=wasInert;}
         pending=false;
-        if(reason==='background'||!accepted){const state=this.activePane?.editor?.nativeState?.();if(state)this.sendNativeEditorState(state);}
+        if(sameOwner&&(reason==='background'||!accepted)){const state=this.activePane?.editor?.nativeState?.();if(state)this.sendNativeEditorState(state,platform);}
       }
     });
   }
@@ -1318,7 +1319,8 @@ export class Workspace {
     for(const [path,buffer] of this.buffers){
       const conflict=buffer.hasRecoveryConflict;
       // Current-note conflicts already have the full shared recovery banner.
-      if(!buffer.error&&(!conflict||this.activePane?.viewPath===path))continue;
+      if(conflict&&this.activePane?.viewPath===path)continue;
+      if(!buffer.error&&!conflict)continue;
       const row=el('div','native-document-notice');
       row.append(el('p','',conflict?`Retained draft for “${nameOf(path)}” needs attention.`:`Could not save “${nameOf(path)}”. Your draft is retained. ${buffer.error?.message??''}`));
       const current=()=>generation===this.vaultGeneration&&this.buffers.get(path)===buffer&&!this.platformReleased;
