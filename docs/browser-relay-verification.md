@@ -135,3 +135,23 @@ Closing and reopening the second tab with its original identity succeeded.
 These checks prove ownership fencing, independent same-vault tab writes/reads
 and lifetime release; they do not force simultaneous conflicting transactions.
 Extra test tabs closed; the original relay fixture remains for follow-up.
+
+## 2026-10-17 desktop namespace receive and CLI isolation
+
+Main2c811ef includes reviewed file-command integration. Actual browser database
+smoke-fb7cbedd-655a-4615-807e-fd9df8b65cb2 uploaded its2 pending tab records and
+received35 records after desktop/CLI upload. Inventory includes renamed
+TestRename-verified.md, asdf/test.md and the original stable entry moved under
+.trash/9d92af2f-e0f3-4360-aff9-a38132d16fcd/Test2.md. Renamed entry
+0e77560f-65ea-4996-a172-cf1b7cd51bec read33 exact bytes, SHA256
+fe6e12b606bbb56ad85120863a93a6cbb788036690bb62bb74bfffdd2b74d0bf,
+matching CLI/disk. Reload without importing credentials retained identical bytes.
+Later user edits in desktop are separate and not covered by this digest.
+
+Actual standalone CLI account isolation passed, report
+/private/tmp/zorid-client-isolation-20261017-100530/report.json: authorized B
+created/uploaded its33-byte sentinel; B-token/A-scope read/upload rejected with
+sync_authorization_failed; two rejected upload processes retained exact sealed
+wire and2 pending updates; cursor stayed0, no remote entries appeared. B-bound
+local vault rejects A config with sync_binding_mismatch. All52 A relay records
+were unchanged. Browser B receive and mixed-credential rejection remain pending.

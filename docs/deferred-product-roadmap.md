@@ -69,6 +69,11 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Latest browser receive/reload proof and CLI isolation pass are recorded in
+  browser-relay-verification.md; browser account-isolation portion remains.
+  External ordinary create/move/delete discovery implementation now assigned to
+  mobile_readiness in core-external-namespace based2c811ef, with portable planner
+  crdt_interop, import worker client_sync_review, review data_readiness. No builds.
 - 2026-10-17 10:04 handoff: main f4ec6bf integrates the entire reviewed native
   namespace/external-edit/publication-handoff and desktop full-command chain,
   including retry identity guard. Independent source equivalence review confirms
@@ -79,7 +84,8 @@ Current authoritative update (older bullets below record preceding stages):
   0e77560f-65ea-4996-a172-cf1b7cd51bec with33 bytes (leading tab plus
   "Rename and restart verification."). Physical bytes and core agree. User-created
   folder/nested file and trash move are also visible through independent CLI.
-- Running test app session78880, PID7579, child12514 explicitly uses
+- Test app session78880 exited0 after app-menu Quit (keyboard shortcut did not
+  close it). Its PID7579, child12514 explicitly used
   core-namespace-external-gate/target/debug/zorid-desktop-host; rendered source is
   desktop-file-commands/dist/index.html. Fresh fixture is
   /private/tmp/zorid-cli-family-20261017-lockfixed. Old0936 fixture remains broken;
