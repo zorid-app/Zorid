@@ -574,7 +574,7 @@ fn external_namespace_store_rejects_forged_move_bytes_against_capture_proof() {
                         parent_inode: captured.parent_identity.clone(),
                     }
                 )),
-                observed_content: Some(b"fake".to_vec()),
+                observed_content: Some(zorid_store::StoredContent::InlineBytes(b"fake".to_vec())),
             }],
         )
         .is_err());
