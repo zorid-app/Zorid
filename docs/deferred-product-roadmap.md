@@ -20,6 +20,15 @@ sequence below; completion of the first goal must not close those requirements.
 
 ### Resume procedure and status rules
 
+Latest reuse review: the user explicitly requested evaluating Etebase before
+expanding custom sync/E2EE infrastructure. `livesync_audit` owns the source-based
+comparison; `crdt_interop` independently reviews Yrs transport and security
+lifecycle fit. Current Yrs/RustCrypto primitives remain in use; no backend switch
+or migration is approved. Compare complete requirements, including browser/core
+portability, independent CLI, durable ingestion, key recovery/revocation and
+encrypted restore; library encryption alone does not establish protocol safety.
+Evidence/recommendation is pending in `/private/tmp/zorid-etebase-reuse-audit.md`.
+
 1. Read AGENTS.md, this checkpoint, the accepted decisions/sequence below and
    relevant rows of `docs/user-findings.md`; inspect the active built-in goal.
 2. Inspect current git status, main HEAD, worktrees and live agents. Verify task
