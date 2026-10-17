@@ -7,6 +7,7 @@ import { Transaction } from '@codemirror/state';
 import { Workspace } from '../src/ui/workspace.ts';
 import type { WorkspaceViewFactories } from '../src/ui/workspace.ts';
 import { MemoryAdapter } from '../src/core/memory-adapter.ts';
+import { durableRecoveryFixture,recoveredDraft,externalText } from './helpers/durable-recovery-fixture.ts';
 import type { EditorHandle, EditorOptions } from '../src/ui/editor.ts';
 
 // These integration tests exercise workspace wiring and storage using an injected
@@ -826,4 +827,43 @@ for(const kind of ['note','canvas'] as const)test(`new ${kind} waiting on a save
   assert.equal(target.tabs.find(tab=>tab.id===target.active)?.path,'Note.md');
   assert.equal(await adapter.read('Note.md'),'dirty');
   assert.ok(workspace.vault.entries.has(`Untitled.${kind==='note'?'md':'canvas'}`));
+});
+
+test('restored durable conflict opens its editor, stays navigable and offers recovery-copy actions',async t=>{
+  const f=await durableRecoveryFixture();
+  const session={panes:[{tabs:[{id:'old-tab',path:'One.md',mode:'live',kind:'note'}],active:0}]};
+  const {workspace,root,click}=await setup(t,f.adapter,'test:durable-recovery',{'zorid:workspace:test:durable-recovery':session});
+  assert.equal(currentEditor().value,recoveredDraft);assert.equal(root.querySelector<HTMLElement>('.note-recovery')?.hidden,false);
+  assert.match(root.querySelector('.save-state')!.textContent!,/draft retained/);
+  assert.ok([...root.querySelectorAll('button')].some(button=>button.textContent==='Copy draft'));
+  await workspace.openNote('Other.md');assert.equal(currentEditor().value,'Another note');
+  await workspace.openNote('One.md');assert.equal(currentEditor().value,recoveredDraft);
+  click('Save recovery copy');await until(()=>currentEditor().value===externalText,'recovery adopted original');
+  assert.equal(f.copies.length,1);assert.equal(await f.adapter.read(f.copies[0]),recoveredDraft);
+  assert.equal(await f.adapter.read('One.md'),externalText);
+  assert.equal(root.querySelector<HTMLElement>('.note-recovery')?.hidden,true);
+});
+
+test('startup recovery releases only uninstalled admissions before allowing another vault',async t=>{
+  const {root,destroy,workspace:installed}=await setup(t);
+  let released=0;
+  const platform={adapter:new MemoryAdapter(),label:'Failure',id:'startup-failure',release:async()=>{released++;}};
+  assert.equal(await installed.cleanupFailedStartup(platform),false);assert.equal(released,0);
+  assert.equal((installed as any).hotkeySurfaceBlocked(),true,'a hidden failed workspace cannot receive editing hotkeys');
+  await destroy();
+  const failing=new Workspace(root,editor);
+  platform.adapter.list=async()=>{throw new Error('admission read failed');};
+  await assert.rejects(failing.start(platform),/admission read failed/);
+  assert.equal(await failing.cleanupFailedStartup(platform),true);assert.equal(released,1);
+  await failing.start(null);assert.ok(root.querySelector('.vault-picker'));await failing.destroy();
+});
+
+test('startup recovery with a failed lease release cannot offer another vault',async t=>{
+  const {root,destroy}=await setup(t);await destroy();
+  const failing=new Workspace(root,editor);
+  const adapter=new MemoryAdapter();adapter.list=async()=>{throw new Error('admission read failed');};
+  const platform={adapter,label:'Failure',id:'startup-failure',release:async()=>{throw new Error('release failed');}};
+  await assert.rejects(failing.start(platform),/admission read failed/);
+  await assert.rejects(failing.cleanupFailedStartup(platform),/release failed/);
+  await failing.destroy();
 });

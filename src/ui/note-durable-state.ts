@@ -13,16 +13,20 @@ export class DurableNoteState {
   private tail:Promise<unknown>=Promise.resolve();
   private key='';
   error:Error|null=null;
-  constructor(private vault:Vault,private writes:DurableWrites,private changed:()=>void){}
+  private vault:Vault;
+  private writes:DurableWrites;
+  private changed:()=>void;
+  constructor(vault:Vault,writes:DurableWrites,changed:()=>void){this.vault=vault;this.writes=writes;this.changed=changed;}
   get ready(){return !!this.state;}
   get text(){return this.state!.draft;}
+  get conflicted(){return !!this.state?.conflict;}
   get base(){return this.state!.base;}
   get dirty(){return !!this.error||!!this.state&&(this.state.conflict||!!this.state.operation||!!this.uncertain||this.state.draft!==this.state.base.content);}
   private queue<T>(run:()=>Promise<T>):Promise<T>{const p=this.tail.then(run).catch(error=>{this.error=error instanceof Error?error:failure('operation failed');this.changed();throw this.error;});this.tail=p.catch(()=>{});return p;}
   private checkIdentity(value:DurableWritePlan|DurableWriteRef){const scope=this.writes.checkpoints.scope;if(value.vaultId!==scope.vaultId||value.clientId!==scope.clientId||value.entryId!==this.base.entryId||!value.operationId)throw failure('checkpoint identity mismatch');}
-  private async persist():Promise<void>{
+  private async persist(state=this.state):Promise<void>{
     if(this.uncertain){const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.uncertain=undefined;}
-    const encodedState=JSON.stringify(this.state);boundedUtf8(encodedState,32*1024*1024,'checkpoint_too_large');
+    const encodedState=JSON.stringify(state);boundedUtf8(encodedState,32*1024*1024,'checkpoint_too_large');
     this.uncertain={key:this.key,expectedRevision:this.revision,nextRevision:crypto.randomUUID(),encodedState};
     const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.uncertain=undefined;
   }
@@ -38,6 +42,7 @@ export class DurableNoteState {
       if(raw.operation?.ref)await this.resume(()=>{});
       else if(observed.revision!==raw.base.revision){if(raw.draft===raw.base.content){raw.base=observed;raw.draft=observed.content;}else raw.conflict=true;}
     }
+    if(this.state.conflict)this.error=failure('file changed elsewhere; your draft is retained');
     this.changed();
   });}
   update(text:string):void{this.state!.draft=text;this.state!.generation++;void this.queue(()=>this.persist()).catch(()=>{});}
@@ -52,6 +57,29 @@ export class DurableNoteState {
       if(this.state!.conflict)throw failure('file advanced or write rejected; draft preserved');
     }
     await this.persist();this.error=null;this.changed();
+  });}
+  /** Navigation may retain a conflict, but must durably checkpoint every edit. */
+  preserveDraft():Promise<void>{return this.queue(()=>this.persist());}
+  /** Save a separate file before adopting the original's latest version. Never
+   * rebase a rejected draft, and never discard edits made during this operation. */
+  saveRecoveryCopy():Promise<{path:string;resolved:boolean}>{return this.queue(async()=>{
+    if(this.state!.operation)await this.resume(()=>{throw failure('pending write must settle before recovery');});
+    if(!this.state!.conflict)throw failure('this note has no conflict to recover');
+    if(!this.vault.adapter.createText)throw failure('safe recovery-copy creation is unavailable');
+    const generation=this.state!.generation,draft=this.text,original=this.base.path;
+    const dot=original.lastIndexOf('.'),slash=original.lastIndexOf('/');
+    const stem=dot>slash?original.slice(0,dot):original,extension=dot>slash?original.slice(dot):'.md';
+    const path=`${stem} (recovered draft ${crypto.randomUUID().slice(0,8)})${extension}`;
+    // Vault.create checks destination absence; the durable create consumer also
+    // rejects collisions atomically. A rejected/uncertain create leaves this draft.
+    await this.vault.create(path,draft);
+    const current=await this.vault.readDurableTextById(this.base.entryId);
+    if(!current||this.state!.generation!==generation){this.changed();return{path,resolved:false};}
+    const adopted={...this.state!,base:current,draft:current.content,conflict:false};
+    // Keep the visible draft in place until the clean checkpoint is durable.
+    await this.persist(adopted);
+    if(this.state!.generation!==generation){await this.persist();this.changed();return{path,resolved:false};}
+    this.state=adopted;this.error=null;this.changed();return{path,resolved:true};
   });}
   private async resume(validate:()=>void):Promise<void>{
     const op=this.state!.operation!;

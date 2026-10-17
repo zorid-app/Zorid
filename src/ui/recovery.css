@@ -1,0 +1,13 @@
+.startup-error { min-height:100%; display:grid; place-items:center; padding:32px; overflow:auto; }
+.startup-error-panel { width:min(100%,540px); }
+.startup-error-panel h1 { font-size:24px; line-height:1.3; margin:20px 0 12px; }
+.startup-error-panel p { color:var(--text-muted); line-height:1.6; }
+.startup-error-actions,.note-recovery-actions { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0; }
+.startup-error-actions button,.startup-error-details button,.note-recovery-actions button { padding:8px 12px; border-radius:6px; }
+.startup-error-details { border-top:1px solid var(--background-modifier-border); padding-top:16px; color:var(--text-muted); }
+.startup-error-details summary { cursor:pointer; }
+.startup-error-details pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:35vh; overflow:auto; font-size:12px; user-select:text; }
+.note-recovery { flex:0 0 auto; max-height:40%; overflow:auto; padding:12px 20px; border-bottom:1px solid var(--background-modifier-border); background:var(--background-secondary); }
+.note-recovery[hidden] { display:none; }
+.note-recovery p { margin:0; line-height:1.5; }
+.note-recovery-actions { margin:10px 0 0; }

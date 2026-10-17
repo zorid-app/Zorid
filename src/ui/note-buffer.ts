@@ -236,6 +236,31 @@ export class NoteBuffer {
     return this.enqueue(() => this.save());
   }
 
+  get hasRecoveryConflict():boolean { return !!this.durable?.conflicted; }
+
+  /** Retained conflicts stay navigable without turning navigation into a save. */
+  flushForNavigation():Promise<void> {
+    if(!this.hasRecoveryConflict)return this.flush();
+    this.cancelTimer();
+    return this.enqueue(async()=>{await this.durable!.preserveDraft();this.syncDurable();});
+  }
+
+  saveRecoveryCopy():Promise<{path:string;resolved:boolean}> {
+    this.cancelTimer();
+    return this.enqueueResult(async()=>{
+      this.requireLoaded();
+      if(!this.durable)throw new Error('Durable recovery is unavailable for this note');
+      const result=await this.durable.saveRecoveryCopy();this.syncDurable();
+      if(!this.dirty)this.writeValidators.clear();
+      return result;
+    });
+  }
+
+  private enqueueResult<T>(operation:()=>Promise<T>):Promise<T> {
+    const result=this.pending.then(operation).catch(error=>{this.rememberError(error);this.notify();throw this.error;});
+    this.pending=result.catch(()=>undefined);return result;
+  }
+
   reload(): Promise<void> {
     return this.enqueue(async () => {
       this.requireLoaded();

@@ -142,6 +142,7 @@ export class Workspace {
   private bufferRevisions = new WeakMap<NoteBuffer,number>();
   private bufferEntries = new WeakMap<NoteBuffer,symbol>();
   private initialized = false;
+  private startupFailed = false;
   private attachments?:AttachmentResources;
   private attachmentImporter?: AttachmentImporter;
   private sessionState: Record<string, unknown> = {};
@@ -298,7 +299,7 @@ export class Workspace {
     this.splitLayout!.setPanes(new Map(this.panes.map(pane=>[pane.id,pane.element])),this.sessionState.layout);
     this.activate(this.panes.find(pane=>pane.id===this.sessionState.activePaneId)??this.panes[0]);
     this.restoringLayout=false;
-    for (const pane of this.panes) await this.renderPane(pane);
+    for (const pane of this.panes) await this.renderPane(pane,{flush:false});
     this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
     this.disposers.push(this.vault.on('create', change => { this.invalidateTreeTokens(change.path); this.renderSidebar(); }), this.vault.on('delete', change => {
       this.invalidateTreeTokens(change.path);
@@ -560,9 +561,10 @@ export class Workspace {
     const version=++this.viewSequence;pane.renderVersion=version;pane.viewTabId=tab.id;pane.viewPath=tab.path;pane.viewMode=tab.mode;pane.viewKind=tab.kind;pane.viewSettings=this.viewSettings();
     pane.history=tab.history??[];pane.historyIndex=tab.historyIndex??-1;
     const content=el('div','tab-view-content');Object.assign(content.style,{display:'flex',flexDirection:'column',flex:'1',minHeight:'0',minWidth:'0',overflow:'hidden'});pane.element.append(content);pane.content=content;
+    let recoveryCleanup:(()=>void)|undefined;
     const runtime=createTabViewRuntime({id:tab.id,element:content,owner:this.viewOwner(pane),
-      flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flush();await pane.baseView?.close();await pane.baseEmbeds?.flush();},
-      dispose:async()=>{await pane.baseEmbeds?.close();this.releasePaneView(pane,content);},focus:()=>this.focusPane(pane)});pane.runtime=runtime;
+      flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flushForNavigation();await pane.baseView?.close();await pane.baseEmbeds?.flush();},
+      dispose:async()=>{await pane.baseEmbeds?.close();recoveryCleanup?.();this.releasePaneView(pane,content);},focus:()=>this.focusPane(pane)});pane.runtime=runtime;
     let ownerChanged=()=>{};pane.rebindView=owner=>{pane=owner;ownerChanged();};
     const toolbar=el('div','pane-toolbar');
     const back=button('left','Navigate back',()=>this.run(()=>this.navigate(-1,pane)));back.disabled=pane.historyIndex<=0;
@@ -651,6 +653,7 @@ export class Workspace {
     scroll.append(title);content.append(scroll);
     try{
       const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
+      recoveryCleanup=this.mountNoteRecovery(content,buffer);
       {
         const host=el('div','properties-host');scroll.append(host);
         pane.properties=renderProperties(host,{isCurrent:()=>pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
@@ -1119,6 +1122,33 @@ export class Workspace {
     }
   }
 
+  private mountNoteRecovery(content:HTMLElement,buffer:NoteBuffer):()=>void{
+    const banner=el('section','note-recovery');banner.setAttribute('aria-label','Retained note draft');
+    const message=el('p','','This note changed elsewhere. Your draft is shown below and is safely retained. Save a recovery copy to keep both versions.');
+    const actions=el('div','note-recovery-actions');
+    const copy=textButton('Copy draft',()=>this.run(async()=>{await navigator.clipboard.writeText(buffer.text);notice('Draft copied.');}));
+    let busy=false;
+    const save=textButton('Save recovery copy',()=>this.run(async()=>{
+      if(busy)return;busy=true;save.disabled=true;
+      try{
+        const result=await buffer.saveRecoveryCopy();
+        notice(result.resolved?`Draft saved to “${result.path}”. The original now shows its latest version.`:`Draft saved to “${result.path}”. Newer edits are still retained here.`);
+        // Every pane sharing this buffer must follow its newly adopted text.
+        if(result.resolved)for(const view of this.loadedViews())if(view.viewPath===buffer.path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
+      }finally{busy=false;save.disabled=false;refresh();}
+    }),'mod-cta');
+    actions.append(copy,save);banner.append(message,actions);content.insertBefore(banner,content.querySelector('.note-scroll'));
+    const refresh=()=>{banner.hidden=!buffer.hasRecoveryConflict;};refresh();
+    return this.bufferSubscriptions.subscribe(buffer,refresh);
+  }
+
+  /** A failed admission can offer another folder only before any vault/buffer
+   * was installed, and after its platform lease has been released successfully. */
+  async cleanupFailedStartup(platform:PlatformVault|null):Promise<boolean>{
+    if(this.platform||this.buffers.size||this.panes.length){this.startupFailed=true;return false;}
+    await platform?.release?.();await this.destroy();return true;
+  }
+
   private renderStatus():void{
     if(!this.activePane)return;const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
     this.status.replaceChildren();
@@ -1442,7 +1472,7 @@ export class Workspace {
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','',`Link to another note with [[note name]]. Customize workspace shortcuts in Settings → Hotkeys. Create note: ${this.hotkeys.label('new-note')||'not assigned'}. Find file: ${this.hotkeys.label('quick-switcher')||'not assigned'}. Command palette: ${this.hotkeys.label('command-palette')||'not assigned'}.`));
   }
   private hotkeySurfaceBlocked(): boolean {
-    return this.closing||!!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
+    return this.startupFailed||this.closing||!!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
   }
   private onKey(event:KeyboardEvent):void{
     if(event.defaultPrevented||event.isComposing||event.getModifierState('AltGraph')||this.hotkeySurfaceBlocked())return;
@@ -1464,7 +1494,7 @@ export class Workspace {
     const primary=this.hotkeys.platform==='mac'?event.metaKey&&!event.ctrlKey:event.ctrlKey&&!event.metaKey;
     if(primary&&!event.shiftKey&&!event.altKey&&!event.repeat&&event.key.toLowerCase()==='f'&&this.activePane?.pdfView){event.preventDefault();this.activePane.pdfView.showSearch();}
   }
-  private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
+  private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
   async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased)await this.platform?.release?.();this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}
 }
