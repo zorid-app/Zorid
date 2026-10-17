@@ -199,7 +199,7 @@ private enum NativeRecentStore {
 // Native presentation binding for the existing admitted Rust document API.
 // Each operation owns its lease/stage/pin until cleanup ACK; nothing is lent to web.
 private enum NativeSearchFailure: Error, Equatable {
-    case invalid, invalidQuery, unsupported, cancelled, preparationLimit, rebuildRequired, queryFailed, cleanup
+    case invalid, invalidQuery, unsupported, cancelled, rebuildRequired, queryFailed, cleanup
 }
 
 private struct NativeSearchHit: Decodable {
@@ -222,6 +222,10 @@ private struct NativeSearchHit: Decodable {
     let snippetTruncated: Bool
     var rowId: String { "\(entry.id):\(line)" }
     struct Range: Decodable { let bytes: [UInt32]; let utf16: [UInt32] }
+}
+private enum NativeSearchProgress {
+    case preparing(UInt64, UInt64)
+    case searching
 }
 private struct NativeSearchResult {
     let hits: [NativeSearchHit]
@@ -334,15 +338,27 @@ private final class NativePageSearch {
     private var stage: Snapshot?
     private var pin: String?
     private var sequence: UInt64 = 0
-    // Bound work even when a large vault or zero-visible-hit pages need continuation.
-    private let deadline = Date().addingTimeInterval(8)
+    private let progress: (NativeSearchProgress) -> Void
+    private var batchStarted = Date()
+    private var batchOperations = 0
 
-    init(session: NativeMobileSession, store: String, active: @escaping () -> Bool) {
-        self.session = session; self.store = store; self.active = active
+    init(session: NativeMobileSession, store: String, active: @escaping () -> Bool,
+         progress: @escaping (NativeSearchProgress) -> Void) {
+        self.session = session; self.store = store; self.active = active; self.progress = progress
     }
     private func check() throws {
         guard active() else { throw NativeSearchFailure.cancelled }
-        guard Date() < deadline else { throw NativeSearchFailure.preparationLimit }
+    }
+    private func yieldBatch(limit: Int) async {
+        // Rust bounds each pump/page. A soft batch boundary gives UI/lifecycle
+        // work time without throwing away progress or restarting a scan prefix.
+        batchOperations += 1
+        await Task.yield()
+        if batchOperations >= limit || Date().timeIntervalSince(batchStarted) >= 8 {
+            batchOperations = 0
+            batchStarted = Date()
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
     private func object<T: Encodable>(_ value: T) throws -> Any {
         try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
@@ -403,16 +419,23 @@ private final class NativePageSearch {
         stage = try await document("begin", as: Stage.self).snapshot
         guard let stage = stage else { throw NativeSearchFailure.invalid }
         try stage.validate(store: store)
-        var ready = false
-        for _ in 0..<64 {
+        var previousPrepared: UInt64?
+        var expectedTotal: UInt64?
+        while true {
             try check()
-            let progress = try await document("pump", ["snapshot": try object(stage)], as: Progress.self)
-            guard progress.snapshot == stage, progress.preparedDocuments <= progress.totalDocuments,
-                  progress.reusedDocuments <= progress.totalDocuments else { throw NativeSearchFailure.invalid }
-            if progress.ready { ready = true; break }
-            await Task.yield()
+            let report = try await document("pump", ["snapshot": try object(stage)], as: Progress.self)
+            guard report.snapshot == stage, report.preparedDocuments <= report.totalDocuments,
+                  report.reusedDocuments <= report.totalDocuments,
+                  expectedTotal == nil || expectedTotal == report.totalDocuments,
+                  report.ready || previousPrepared == nil || report.preparedDocuments > previousPrepared! else {
+                throw NativeSearchFailure.invalid
+            }
+            expectedTotal = report.totalDocuments
+            previousPrepared = report.preparedDocuments
+            progress(.preparing(report.preparedDocuments, report.totalDocuments))
+            if report.ready { break }
+            await yieldBatch(limit: 64)
         }
-        guard ready else { throw NativeSearchFailure.preparationLimit }
         try check()
         let published = try await document("publish", ["snapshot": try object(stage)], as: Snapshot.self)
         guard published == stage else { throw NativeSearchFailure.invalid }
@@ -453,7 +476,8 @@ private final class NativePageSearch {
             var hitIds = Set<String>()
             var cursor: String?
             var complete = false
-            for _ in 0..<4 {
+            progress(.searching)
+            while true {
                 try check()
                 let page = try await document("search", ["pinId": "1", "query": query, "cursor": cursor.map { $0 as Any } ?? NSNull(), "limit": 50], as: Page.self)
                 let result = page.result, value = result.value
@@ -468,12 +492,16 @@ private final class NativePageSearch {
                           hit.range.bytes.count == 2, hit.range.utf16.count == 2,
                           hit.range.bytes[0] <= hit.range.bytes[1], hit.range.utf16[0] <= hit.range.utf16[1],
                           hit.snippet.utf8.count <= 1_048_576 else { throw NativeSearchFailure.invalid }
-                    guard hitIds.insert(hit.rowId).inserted else { throw NativeSearchFailure.invalid }
-                    if NativeFileEntry.isVisiblePath(hit.entry.path) { hits.append(hit) }
+                    if NativeFileEntry.isVisiblePath(hit.entry.path) {
+                        // Retain only the bounded visible result set. Hidden
+                        // matches may span the whole vault and are never kept.
+                        guard hitIds.insert(hit.rowId).inserted else { throw NativeSearchFailure.invalid }
+                        hits.append(hit)
+                    }
                 }
                 cursor = page.cursor; complete = value.complete
                 if cursor == nil || hits.count >= 50 { break }
-                await Task.yield()
+                await yieldBatch(limit: 4)
             }
             outcome = .success(NativeSearchResult(hits: Array(hits.prefix(50)), partial: !complete || hits.count > 50))
         } catch { outcome = .failure(error) }
@@ -757,10 +785,13 @@ private final class NativePagesCoordinator {
         busy = true
         owner?.setSearchAdmissionBusy(true)
         updateRouteControls()
-        let operation = NativePageSearch(session: session, store: store) { [weak self] in
+        let operation = NativePageSearch(session: session, store: store, active: { [weak self] in
             guard let self = self else { return false }
             return self.searchGeneration == ticket && self.pageActive && !self.refreshRequested && !self.chooseVaultRequested
-        }
+        }, progress: { [weak self] progress in
+            guard let self = self, self.searchGeneration == ticket, self.pageActive else { return }
+            self.owner?.showSearchProgress(progress)
+        })
         Task { @MainActor [weak self] in
             let result: Result<NativeSearchResult, Error>
             do { result = .success(try await operation.run(query: query)) }
@@ -1043,8 +1074,8 @@ private final class NativePagesModel: ObservableObject {
     func canPerform(_ action: NativePageAction) -> Bool {
         switch action {
         case .newNote: return canCreateNote && !searchLoading && !searchAdmissionBusy
-        case .recents: return !loading && !searchAdmissionBusy && preferences.selected != .recents
-        case .files: return !loading && !searchAdmissionBusy && (preferences.selected != .files || isInFolder)
+        case .recents: return !loading && !searchAdmissionBusy
+        case .files: return !loading && !searchAdmissionBusy
         case .settings, .chooseVault: return true // Cancel/drain through existing coordinator.
         }
     }
@@ -1062,6 +1093,12 @@ private final class NativePagesModel: ObservableObject {
         searchStatus = ""
         onSearch?(fieldMode == .search ? query : "")
     }
+    func showSearchProgress(_ progress: NativeSearchProgress) {
+        switch progress {
+        case .preparing(let prepared, let total): searchStatus = "Preparing search: \(prepared) of \(total) documents…"
+        case .searching: searchStatus = "Searching note content…"
+        }
+    }
     func setSearchAdmissionBusy(_ busy: Bool) { searchAdmissionBusy = busy }
     func beginSearchDisplay() { searchLoading = true; searchHits = []; searchStatus = "" }
     func cancelSearchDisplay() { searchLoading = false }
@@ -1078,7 +1115,6 @@ private final class NativePagesModel: ObservableObject {
             switch error as? NativeSearchFailure {
             case .invalidQuery: searchStatus = "Use a single-line search of at most 4 KB."
             case .unsupported: searchStatus = "Search is unavailable in this version."
-            case .preparationLimit: searchStatus = "Search preparation reached its limit. Submit the search again to retry."
             case .rebuildRequired: searchStatus = "The search index needs repair. Your notes have not been changed."
             case .cancelled: searchStatus = "Search paused. Submit again to retry."
             default: searchStatus = "Search could not finish safely. Submit again to retry."
@@ -1348,6 +1384,7 @@ final class NativePagesController: UIViewController {
         for observer in activityObservers { NotificationCenter.default.removeObserver(observer) }
     }
     fileprivate var searchQuery: String { model.fieldMode == .search ? model.searchQuery : "" }
+    fileprivate func showSearchProgress(_ progress: NativeSearchProgress) { model.showSearchProgress(progress) }
     fileprivate func setSearchAdmissionBusy(_ busy: Bool) { model.setSearchAdmissionBusy(busy) }
     fileprivate func beginSearchDisplay() { model.beginSearchDisplay() }
     fileprivate func cancelSearchDisplay() { model.cancelSearchDisplay() }
@@ -1523,7 +1560,7 @@ private struct NativePagesView: View {
                     .focused($fieldFocused)
                     .onSubmit {
                         if model.fieldMode == .actions {
-                            if let action = model.matchingActions.first(where: { model.canPerform($0) }) { perform(action) }
+                            if let action = model.matchingActions.first, model.canPerform(action) { perform(action) }
                         } else { model.setSearch(model.searchQuery) }
                     }
                     .accessibilityIdentifier("native.search.field")
