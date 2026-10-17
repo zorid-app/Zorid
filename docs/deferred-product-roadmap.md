@@ -69,6 +69,17 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Native lock fix integrated `ac6b09a`, independent subprocess checks2/2 passed.
+  Full follow-up candidate9c61837 then passed84 native and18 store namespace
+  checks, including mixed obligations, file/directory handoff and external edits.
+  CLI/host build3348 is the current heavy handle; root runs no build.
+- Protocol compatibility6/6 passed in corrected candidateeca934a, gate16371,
+  including lock fix. Required-feature ACK error classification fix integrated
+  main1a8f316. Exact retries/pending writes survive rejected acknowledgments;
+  incompatible payloads leave ledger/cursor/publication unchanged.
+- Actual browser tab ownership/independent same-database write/read/reopen checks
+  passed; see browser-relay-verification.md. Simultaneous conflicting tab writes
+  remain a narrower unproven scenario, not implied by those checks.
 - Broken live fixture evidence is now secured in
   `/private/tmp/zorid-wal-split-74662.{lsof,stat}.txt` and physical-note snapshot
   `/private/tmp/zorid-wal-split-physical-snapshot`. Normal Cmd-Q closed launch37850

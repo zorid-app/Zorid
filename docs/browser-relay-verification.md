@@ -122,3 +122,16 @@ crash injection, external edits and complete milestone acceptance remain open.
 Native/desktop batch integrated to main `5d29c53`. Main TypeScript check31928
 exited0 and four focused create checks passed. Rust crates/Cargo sources match
 built candidate292cd27 exactly; this is not a new main-bundle UI verification.
+
+## Current browser tab ownership — 2026-10-17
+
+On the hashed smoke artifact, opening a second actual Chrome tab with the same
+database/client51c3767c-2c4e-45f5-8b51-6fc010ad1164 failed explicitly with
+client_already_owned. A separate client692ea926-748b-46bc-a984-58554b2e189a
+opened the same database while the first remained live, created TabPeer.md, and
+the original tab read exact30 bytes `Written by second browser tab.` SHA256
+`ccc1d654335ccf8376e8c9392e9a80cfbd1619073c6df2c0d3956ea5a8f162bc`.
+Closing and reopening the second tab with its original identity succeeded.
+These checks prove ownership fencing, independent same-vault tab writes/reads
+and lifetime release; they do not force simultaneous conflicting transactions.
+Extra test tabs closed; the original relay fixture remains for follow-up.
