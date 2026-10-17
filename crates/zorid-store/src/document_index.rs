@@ -210,7 +210,8 @@ impl Header {
     }
 }
 /// Opaque durable staging locator. It confers no source or publication authority.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocumentIndexStage {
     snapshot: IndexSnapshotId,
 }
@@ -219,7 +220,8 @@ impl DocumentIndexStage {
         &self.snapshot
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocumentIndexProgress {
     pub snapshot: IndexSnapshotId,
     pub prepared_documents: usize,
@@ -228,7 +230,12 @@ pub struct DocumentIndexProgress {
     pub total_documents: usize,
     pub ready: bool,
 }
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(
+    tag = "state",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum DocumentIndexStatus {
     Uninitialized,
     RebuildRequired,
