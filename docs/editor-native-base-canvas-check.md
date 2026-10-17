@@ -14,9 +14,9 @@ Bootstrap only selects isolated userData before requiring candidate desktop/main
 - Typed Review in the Canvas Base status input, then dragged the card edge. Value was committed on blur and persisted in One.md; no draft loss observed. The input closed and focus moved to Canvas, so this does NOT establish input-focus retention.
 - SHA256 comparison after exit: only One.md, Two.md and Canvas verification.canvas changed. The other five fixture files were byte-identical.
 
-## Failure and limits
+## Unverified media and limits
 
-Tone.wav stayed Loading in Live Edit and showed Unable to play media in Reading. Python wave validates mono PCM, 16-bit, 8000Hz, 2000 frames; cause remains under source audit. This is a failed playback check, not a verified media implementation.
+Tone.wav exposed Loading in Live Edit and the accessibility label Unable to play media in Reading. Python wave validates mono PCM, 16-bit, 8000Hz, 2000 frames. Playback was not established in this pass. The prior docs/native-embed-controls-checkpoint.md records this same Chromium accessibility label alongside readyState4, canplay and successful playback; the app error string is instead Unable to play this media. Therefore the label alone does not establish a playback or decoder failure. A controlled playback check remains required; no speculative media fix is justified by this pass.
 
 This bounded pass does not establish Canvas undo/fit/autopan, multi-selection, mobile, full editor parity or complete Bases support. New fenced-Base consumer work was not in this tested build.
 
