@@ -32,7 +32,7 @@ sequence below; completion of the first goal must not close those requirements.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
 
-### Integration checkpoint — 2026-10-16 22:58 local
+### Integration checkpoint — 2026-10-16 23:10 local
 
 - Main `227f084` contains both native/CLI batches and editor E1/E2. Native batch2
   candidate `3df1de8` passed 109 tests in a fresh target (session30255 exit0),
@@ -61,17 +61,24 @@ sequence below; completion of the first goal must not close those requirements.
   test (session5557 exit0). Offline lock resolution preserved existing pins.
   See `docs/backend-integration-acceptance.md`. The server remains a loopback
   fixture: hosted enrollment, admin UI and deployment are unfinished.
-- Native owner implements schema6 atomic authored/received text persistence and
-  origin-aware projection jobs, plus durable local authority identity. Browser
-  owner handles shared durable-write types, wrapper and persistent authority
-  binding; desktop owner has reviewed source `5380d15` pending runtime checks.
-  Editor owns the NoteBuffer checkpoint consumer; the contract is frozen in
-  `docs/durable-write-contract.md`. Native owner now holds the heavy slot for
-  schema6/checkpoint focused checks. Checkpoint module `c1ed04f`, materialization
-  helper `2db0bf8` and external observed-baseline helper `dc3a697` are source
-  reviewed, runtime pending. Browser checkpoint pagination review found an
-  unbounded live-key scan despite fixed high-water; owner is fixing it. Vault
-  publication and desktop checkpoint transport are source-only pending checks.
+- Web foundation is integrated on main `c369571`. Candidate8eb89de passed
+  focused9 and full2005 app tests, typecheck, ordinary production and explicit
+  fixture builds. Ordinary build excludes fixture assets. Actual Chrome passed
+  host27 and WASM6 groups; the real app production worker opened a synthetic
+  vault, saved a note that survived reload, and a second client read identical
+  text. See `docs/browser-core-integration-acceptance.md`. The durable editor
+  consumer remains disabled; this is not its crash/restart acceptance.
+- Native schema6 `28cff13` passed108 focused native/store tests after source
+  review fixed historical cross-entry revision reuse, sealed epoch mismatch and
+  orphan managed-text binding. Isolated core assembles it as5a5cb46 with
+  checkpoints6f0084f and desktopab3a959. Root session99512 tests the combined
+  Rust workspace at0c98f6f; latest source is not on main or combined-pass yet.
+- Editor owns NoteBuffer checkpoint consumer against now-integrated Vault/types.
+  Desktop owner implements fixture exclusive client admission; CLI owner adds
+  actual encrypted text sync transport; namespace owner builds physical explicit
+  member moves/deletes in core-native-namespace with schema7. Shared contracts
+  include stable entry-key checkpoints and best-effort typing mirror arbitration.
+  Markdown/Bases migration is discussion only, not a current implementation task.
 - Actual web/Electron selection, durable editor handshake, complete moves/deletes,
   binary transfer and cross-client encrypted convergence/restore remain required.
   P2P, complete recovery/admin and native mobile remain later milestones.
