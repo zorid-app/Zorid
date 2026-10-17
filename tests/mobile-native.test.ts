@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import { openNativeMobileVault, type NativeVaultPlugin, type MobileLifecycleReason } from '../src/platform/mobile-native.ts';
+import { openNativeMobileVault, type NativeVaultPlugin, type MobileLifecycleReason, type NativeEditorAction, type NativeEditorState } from '../src/platform/mobile-native.ts';
 
 const clientId = 'a1b2c3d4-abcd-4abc-8abc-abcdef012345';
 const entryUuid='c3d4e5f6-cdef-4cde-acde-cdef01234567';
@@ -20,6 +20,8 @@ function fixture() {
   const state = () => ({ id:entryIdentity, path, kind:'file', revision, deleted:false });
   const presentation = () => ({id:entryIdentity,ctime_ms:1,mtime_ms:2,size_bytes:encoder.encode(content).length});
   const acks: {id:string;ok:boolean}[] = [], lifecycleOrder: string[] = [], expired = new Set<string>();
+  const actionCallbacks=new Set<(event:any)=>void>(),editorStates:NativeEditorState[]=[];
+  let actionInstalls=0,actionRemovals=0,actionInstallHook:(()=>Promise<void>)|undefined,editorStateHook:((state:NativeEditorState)=>Promise<void>)|undefined;
   const lifecycleCallbacks=new Set<(event:{id:string;reason:MobileLifecycleReason})=>void>();let removals = 0;
   let contextEvent: MobileLifecycleReason | undefined, wrongAuthority = false;
   let ackHook: ((input:{id:string;ok:boolean})=>Promise<void>) | undefined;
@@ -27,7 +29,8 @@ function fixture() {
   let refreshHook: (()=>Promise<void>) | undefined;
   let initialPath: any = undefined, initialEntryId: any = undefined, createNoteOnOpen: any = undefined, openedHook: ((path:string)=>Promise<void>) | undefined; const opened: string[] = [],openedRefs:{path:string;entryId:string}[]=[];
   const plugin: NativeVaultPlugin & {close():Promise<void>} = {
-    async addListener(event,handler) { assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
+    async addListener(event:'lifecycleRequest'|'editorAction',handler:(event:any)=>void) { if(event==='editorAction'){actionInstalls++;if(actionInstallHook)await actionInstallHook();actionCallbacks.add(handler);return{remove:async()=>{actionRemovals++;actionCallbacks.delete(handler);}};} assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
+    async editorState(state) {editorStates.push({...state});if(editorStateHook)await editorStateHook(state);},
     async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
     context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialEntryId===undefined?{}:{initialEntryId}),...(createNoteOnOpen===undefined?{}:{createNoteOnOpen}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
     async noteOpened({path,entryId}) { openedRefs.push({path,entryId}); active++;maxActive=Math.max(maxActive,active);opened.push(path);try{if(openedHook)await openedHook(path);await new Promise<void>(r=>setImmediate(r));}finally{active--;} },
@@ -101,7 +104,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, opened, openedRefs, newNote(value:any){createNoteOnOpen=value;}, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, editorStates, get actionInstalls(){return actionInstalls;},get actionRemovals(){return actionRemovals;}, onActionInstall(hook:()=>Promise<void>){actionInstallHook=hook;}, onEditorState(hook:(state:NativeEditorState)=>Promise<void>){editorStateHook=hook;}, action(event:any){for(const callback of actionCallbacks)callback(event);}, opened, openedRefs, newNote(value:any){createNoteOnOpen=value;}, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -682,4 +685,104 @@ for(const value of [null,0,'true',{},[]]) test(`nonboolean New note context ${JS
 for(const [path,entryId] of [['Note.md','Selected'],['Note.md',undefined],[undefined,'Selected']] as const) test(`New note intent cannot coexist with selection ${JSON.stringify([path,entryId])}`,async()=>{
   const f=fixture();f.newNote(true);f.selection(path,entryId);await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});
   assert.equal(f.requests.length,0);assert.equal(f.removals,1);assert.deepEqual(f.openedRefs,[]);
+});
+
+const enabledEditor:NativeEditorState={focused:true,editable:true,canUndo:true,canRedo:true};
+const disabledEditor:NativeEditorState={focused:false,editable:false,canUndo:false,canRedo:false};
+const toolbarActions:NativeEditorAction[]=['insertLink','insertTable','insertCodeBlock','insertHorizontalRule','bold','italic','strikethrough','inlineCode','undo','redo','dismissKeyboard'];
+
+test('toolbar enabling awaits subscriber listener readiness without blocking durable saves',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),actions:string[]=[];
+  f.onActionInstall(async()=>{await gate.promise;});const stop=v.nativeEditor.subscribe(action=>{actions.push(action);});
+  const state=v.nativeEditor.setState(enabledEditor);await until(()=>f.actionInstalls===1);
+  assert.deepEqual(f.editorStates,[]);f.action({action:'bold'});assert.deepEqual(actions,[]);
+  await v.adapter.write('Note.md','save while toolbar installs');assert.equal(f.content,'save while toolbar installs');
+  gate.resolve();await state;assert.deepEqual(f.editorStates,[enabledEditor]);
+  for(const action of toolbarActions){f.action({action});await until(()=>actions.length===toolbarActions.indexOf(action)+1);}
+  assert.deepEqual(actions,toolbarActions);stop();await until(()=>f.actionRemovals===1);assert.deepEqual(f.editorStates.at(-1),disabledEditor);await v.release!();
+});
+
+test('no subscriber can enable native toolbar or replay an old state into a new listener',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);await v.nativeEditor.setState(enabledEditor);assert.deepEqual(f.editorStates,[]);
+  let calls=0;const stop=v.nativeEditor.subscribe(()=>{calls++;});await until(()=>f.actionInstalls===1);f.action({action:'bold'});await new Promise<void>(r=>setImmediate(r));assert.equal(calls,0);assert.deepEqual(f.editorStates,[]);
+  await v.nativeEditor.setState(enabledEditor);stop();await until(()=>f.actionRemovals===1);await v.nativeEditor.setState(enabledEditor);assert.deepEqual(f.editorStates.at(-1),disabledEditor);await v.release!();
+});
+
+test('toolbar states coalesce in order and snapshot caller booleans',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred();const stop=v.nativeEditor.subscribe(()=>{});
+  f.onEditorState(async()=>{await gate.promise;});const first=v.nativeEditor.setState(enabledEditor);await until(()=>f.editorStates.length===1);
+  const skipped=v.nativeEditor.setState({...enabledEditor,canUndo:false});const input={...disabledEditor};const latest=v.nativeEditor.setState(input);input.focused=true;input.editable=true;
+  gate.resolve();await Promise.all([first,skipped,latest]);assert.deepEqual(f.editorStates,[enabledEditor,disabledEditor]);stop();await v.release!();
+});
+
+test('toolbar rejects malformed state and action payloads without touching storage',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),calls:string[]=[];const stop=v.nativeEditor.subscribe(action=>{calls.push(action);});
+  for(const state of [null,[],{...enabledEditor,extra:true},{...enabledEditor,canRedo:'true'},{focused:true,editable:true,canUndo:true}])await assert.rejects(v.nativeEditor.setState(state as any),{code:'invalid_editor_state'});
+  await v.nativeEditor.setState(enabledEditor);
+  for(const event of [null,[],{},{action:'unknown'},{action:'bold',extra:true},{action:1}])f.action(event);
+  await new Promise<void>(r=>setImmediate(r));assert.deepEqual(calls,[]);
+  const event={action:'bold'};f.action(event);event.action='unknown';await until(()=>calls.length===1);assert.deepEqual(calls,['bold']);
+  const before=f.requests.length;stop();await until(()=>f.actionRemovals===1);assert.equal(f.requests.length,before);await v.release!();
+});
+
+test('toolbar actions honor current edit/history state and pending read-mode transition',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),calls:string[]=[];v.nativeEditor.subscribe(action=>{calls.push(action);});
+  await v.nativeEditor.setState({...enabledEditor,canUndo:false,canRedo:false});f.action({action:'undo'});f.action({action:'redo'});f.action({action:'bold'});await until(()=>calls.length===1);
+  f.action({action:'italic'});await v.nativeEditor.setState(disabledEditor);await new Promise<void>(r=>setImmediate(r));assert.deepEqual(calls,['bold']);
+  await v.nativeEditor.setState({...enabledEditor,editable:false});f.action({action:'bold'});await new Promise<void>(r=>setImmediate(r));assert.equal(calls.length,1);await v.release!();
+});
+
+test('unsubscribe during listener installation cannot publish a stale enabling state',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred();f.onActionInstall(async()=>{await gate.promise;});
+  const stop=v.nativeEditor.subscribe(()=>assert.fail('retired action callback'));const state=v.nativeEditor.setState(enabledEditor);await until(()=>f.actionInstalls===1);stop();gate.resolve();await state;await until(()=>f.actionRemovals===1);
+  assert.deepEqual(f.editorStates,[disabledEditor]);await v.release!();
+});
+
+test('failed optional listener or state publication cannot fail a save or poison later subscription',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);f.onActionInstall(async()=>{throw new Error('listener unavailable');});
+  const first=v.nativeEditor.subscribe(()=>{});await v.nativeEditor.setState(enabledEditor);assert.deepEqual(f.editorStates,[]);await v.adapter.write('Note.md','listener failure survived');first();
+  f.onActionInstall(async()=>{});const second=v.nativeEditor.subscribe(()=>{});f.onEditorState(async()=>{throw new Error('native state unavailable');});await v.nativeEditor.setState(enabledEditor);
+  await v.adapter.write('Note.md','state failure survived');assert.equal(f.content,'state failure survived');second();await v.release!();assert.equal(f.closes,0);
+});
+
+test('in-flight optional state publication cannot block authoritative vault requests',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred();v.nativeEditor.subscribe(()=>{});f.onEditorState(async()=>{await gate.promise;});
+  const state=v.nativeEditor.setState(enabledEditor);await until(()=>f.editorStates.length===1);await v.adapter.write('Note.md','saved independently');assert.equal(f.content,'saved independently');gate.resolve();await state;await v.release!();
+});
+
+test('release disables toolbar then drains an admitted action save before releasing lease',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),entered=deferred();
+  v.nativeEditor.subscribe(async()=>{entered.resolve();await gate.promise;const w=v.adapter.durableWrites!;const plan=await w.planWrite({operationId:'toolbar-action-save',path:'Note.md',expectedEntryId:'entry',expectedRevision:'rev1',expectedContent:'before',content:'action saved'});const prepared=await w.prepare(plan);await w.commit(prepared.ref);});
+  await v.nativeEditor.setState(enabledEditor);f.action({action:'bold'});await entered.promise;
+  const release=v.release!();await until(()=>f.editorStates.at(-1)?.focused===false);assert.equal(f.actionRemovals,0);assert.equal(f.admitted,true);assert.equal(f.requests.some(r=>r.command.method==='release_client'),false);
+  gate.resolve();await release;assert.equal(f.content,'action saved');assert.equal(f.actionRemovals,1);assert.equal(f.admitted,false);
+  const before=f.editorStates.length;await v.nativeEditor.setState(enabledEditor);assert.equal(f.editorStates.length,before);assert.throws(()=>v.nativeEditor.subscribe(()=>{}),{code:'storage_closed'});
+});
+
+test('toolbar callback failures are contained and unsubscribe/resubscribe cannot relay stale actions',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);let calls=0;
+  const first=v.nativeEditor.subscribe(()=>{calls++;throw new Error('editor command rejected');});await v.nativeEditor.setState(enabledEditor);f.action({action:'bold'});await until(()=>calls===1);first();
+  const second=v.nativeEditor.subscribe(async()=>{calls++;throw new Error('async editor failure');});await v.nativeEditor.setState(enabledEditor);f.action({action:'italic'});await until(()=>calls===2);await until(()=>f.actionRemovals===1);
+  await v.adapter.write('Note.md','save unaffected');second();await v.release!();assert.equal(f.actionRemovals,2);
+});
+
+test('background ACK waits admitted editor action and leaves listener reusable after valid state refresh',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),entered=deferred(),done=deferred();let calls=0;
+  v.nativeEditor.subscribe(async()=>{calls++;entered.resolve();await gate.promise;});await v.nativeEditor.setState(enabledEditor);f.action({action:'bold'});await entered.promise;
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('background');await new Promise<void>(r=>setImmediate(r));assert.equal(f.acks.length,0);f.action({action:'italic'});assert.equal(calls,1);
+  gate.resolve();await done.promise;await until(()=>f.editorStates.at(-1)?.focused===false);assert.equal(f.actionRemovals,0);await new Promise<void>(r=>setImmediate(r));await v.nativeEditor.setState(enabledEditor);f.action({action:'italic'});await until(()=>calls===2);await v.release!();
+});
+
+test('unsubscribe disables promptly but removes old listener only after callback settles',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),entered=deferred();
+  const old=v.nativeEditor.subscribe(async()=>{entered.resolve();await gate.promise;});await v.nativeEditor.setState(enabledEditor);f.action({action:'bold'});await entered.promise;old();await until(()=>f.editorStates.at(-1)?.focused===false);assert.equal(f.actionRemovals,0);
+  let calls=0;const next=v.nativeEditor.subscribe(()=>{calls++;});await v.nativeEditor.setState(enabledEditor);gate.resolve();await until(()=>f.actionRemovals===1);assert.deepEqual(f.editorStates.at(-1),enabledEditor);f.action({action:'italic'});await until(()=>calls===1);next();await v.release!();
+});
+
+test('successful switch cannot replay pending toolbar enable or accept later actions',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),done=deferred();let calls=0;
+  v.nativeEditor.subscribe(()=>{calls++;});f.onEditorState(async()=>{await gate.promise;});const state=v.nativeEditor.setState(enabledEditor);await until(()=>f.editorStates.length===1);
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('switchVault');await done.promise;
+  f.action({action:'bold'});gate.resolve();await state;await until(()=>f.actionRemovals===1);assert.equal(calls,0);assert.deepEqual(f.editorStates.at(-1),disabledEditor);
+  const before=f.editorStates.length;await v.nativeEditor.setState(enabledEditor);assert.equal(f.editorStates.length,before);await v.release!();assert.equal(f.closes,0);
 });

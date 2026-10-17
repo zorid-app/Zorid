@@ -12,6 +12,8 @@ export interface NativeVaultPlugin {
   noteOpened(input: { path: string; entryId: string }): Promise<void>;
   refresh(): Promise<{ reconciliation: DesktopReconciliation }>;
   request(input: { header: string; body: string }): Promise<{ header: string; body: string }>;
+  editorState(state: NativeEditorState): Promise<void>;
+  addListener(event: 'editorAction', handler: (event: { action: NativeEditorAction }) => void): Promise<{ remove(): Promise<void> }>;
   addListener(event: 'lifecycleRequest', handler: (event: { id: string; reason: MobileLifecycleReason }) => void): Promise<{ remove(): Promise<void> }>;
   lifecycleAck(input: { id: string; ok: boolean }): Promise<void>;
 }
@@ -19,8 +21,16 @@ export type MobileLifecycleReason = 'background' | 'switchVault';
 export interface MobileLifecycle {
   subscribe(handler: (reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>): () => void;
 }
+export type NativeEditorAction = 'insertLink' | 'insertTable' | 'insertCodeBlock' | 'insertHorizontalRule' | 'bold' | 'italic' | 'strikethrough' | 'inlineCode' | 'undo' | 'redo' | 'dismissKeyboard';
+export interface NativeEditorState { focused: boolean; editable: boolean; canUndo: boolean; canRedo: boolean }
+export interface NativeEditorBridge {
+  setState(state: NativeEditorState): Promise<void>;
+  subscribe(handler: (action: NativeEditorAction) => void | Promise<void>): () => void;
+}
+const editorActions = new Set<string>(['insertLink','insertTable','insertCodeBlock','insertHorizontalRule','bold','italic','strikethrough','inlineCode','undo','redo','dismissKeyboard']);
+const disabledEditorState: Readonly<NativeEditorState> = Object.freeze({ focused: false, editable: false, canUndo: false, canRedo: false });
 // Keep this owned surface until the coordinator lands the PlatformVault declaration.
-type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; editorOnly: true; createNoteOnOpen?: boolean; initialPath?: string; initialEntryId?: string; noteOpened(path: string, entryId: string): Promise<void> };
+type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; nativeEditor: NativeEditorBridge; editorOnly: true; createNoteOnOpen?: boolean; initialPath?: string; initialEntryId?: string; noteOpened(path: string, entryId: string): Promise<void> };
 const FILE_LIMIT = 16 * 1024 * 1024, PLAN_LIMIT = 8 * 1024 * 1024, CHECKPOINT_LIMIT = 32 * 1024 * 1024;
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 // Wire objects are validated at their consumer boundary; never cast them to editor state directly.
@@ -103,6 +113,91 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   let requestId = 0n, closed = false, closing = false, lease: Wire | undefined;
   const listeners = new Set<(paths?: readonly string[]) => void>();
   let timer: ReturnType<typeof setInterval> | undefined;
+  // Presentation calls never enter the authoritative vault request queue.
+  let editorTail: Promise<unknown> = Promise.resolve();
+  type EditorSubscription = {
+    alive: boolean; ready: Promise<void>; handle?: { remove(): Promise<void> };
+    latest: NativeEditorState; accepted: NativeEditorState; version: number;
+    flushing?: Promise<void>; callbacks: Set<Promise<void>>;
+  };
+  let editorSubscription: EditorSubscription | undefined;
+  const editorRetirements = new Set<Promise<void>>();
+  function editorQueue<T>(action: () => Promise<T>): Promise<T> {
+    const task = editorTail.then(action); editorTail = task.catch(() => {}); return task;
+  }
+  function editorAlive(sub: EditorSubscription) { return sub.alive && editorSubscription === sub && !closed && !closing && !releasePromise; }
+  function editorActionAllowed(sub: EditorSubscription, action: NativeEditorAction) {
+    return editorAlive(sub) && !lifecycleTask && sub.latest.focused && sub.latest.editable && sub.accepted.focused && sub.accepted.editable
+      && (action !== 'undo' || sub.latest.canUndo && sub.accepted.canUndo) && (action !== 'redo' || sub.latest.canRedo && sub.accepted.canRedo);
+  }
+  function publishEditorState(sub: EditorSubscription): Promise<void> {
+    if (sub.flushing) return sub.flushing;
+    const task = editorQueue(async () => {
+      try {
+        await sub.ready;
+        let sent = -1;
+        while (sub.handle && editorAlive(sub) && sent !== sub.version) {
+          sent = sub.version; const state = sub.latest;
+          try {
+            await bridge.editorState(state);
+            if (editorAlive(sub)) sub.accepted = state;
+          } catch { /* Optional toolbar failure never fails a save or poisons its queue. */ }
+        }
+      } finally { sub.flushing = undefined; }
+    });
+    sub.flushing = task; return task;
+  }
+  function retireEditor(sub: EditorSubscription): void {
+    if (!sub.alive) return;
+    sub.alive = false; sub.latest = disabledEditorState;
+    if (editorSubscription === sub) editorSubscription = undefined;
+    // Disable promptly. Callback draining stays outside the state queue so a
+    // callback awaiting its last state update cannot deadlock teardown.
+    const disable = editorQueue(async () => {
+      await sub.ready;
+      if (sub.handle) { try { await bridge.editorState(disabledEditorState); } catch { /* Best effort. */ } }
+    });
+    const retired = (async () => {
+      await disable;
+      await Promise.allSettled([...sub.callbacks]);
+      if (sub.handle) { try { await sub.handle.remove(); } catch { /* Best effort. */ } }
+    })();
+    editorRetirements.add(retired);
+    void retired.finally(() => { editorRetirements.delete(retired); });
+  }
+  function stopNativeEditor() { if (editorSubscription) retireEditor(editorSubscription); }
+  const nativeEditor: NativeEditorBridge = {
+    async setState(input) {
+      if (!input || Array.isArray(input) || !sameKeys(input,['focused','editable','canUndo','canRedo'])
+        || ![input.focused,input.editable,input.canUndo,input.canRedo].every(v => typeof v === 'boolean')) throw fail('invalid_editor_state');
+      const sub = editorSubscription;
+      if (!sub || !editorAlive(sub)) return;
+      sub.latest = Object.freeze({ focused: input.focused, editable: input.editable, canUndo: input.canUndo, canRedo: input.canRedo }); sub.version++;
+      await publishEditorState(sub);
+    },
+    subscribe(handler) {
+      active(); if (releasePromise) throw fail('storage_closed');
+      if (editorSubscription) throw fail('editor_handler_registered');
+      const sub: EditorSubscription = { alive: true, ready: Promise.resolve(), latest: disabledEditorState, accepted: disabledEditorState, version: 0, callbacks: new Set() };
+      editorSubscription = sub;
+      sub.ready = editorQueue(async () => {
+        if (!editorAlive(sub)) return;
+        try {
+          sub.handle = await bridge.addListener('editorAction',event => {
+            if (!event || Array.isArray(event) || !sameKeys(event,['action']) || typeof event.action !== 'string' || !editorActions.has(event.action)
+              || !editorActionAllowed(sub,event.action)) return;
+            const action = event.action;
+            // Catch synchronous and asynchronous consumer failures, without
+            // serializing editor intents behind storage or reinterpreting them.
+            const callback = Promise.resolve().then(() => { if (editorActionAllowed(sub,action)) return handler(action); });
+            const settled = callback.then(() => {},() => {});
+            sub.callbacks.add(settled); void settled.finally(() => { sub.callbacks.delete(settled); });
+          });
+        } catch { /* Missing/failed optional native presentation capability stays disabled. */ }
+      });
+      return () => { retireEditor(sub); };
+    },
+  };
   function stopPolling() { if (timer) { clearInterval(timer); timer = undefined; } listeners.clear(); reconciliationListeners.clear(); }
   const rejectLifecycle = async (id: string) => { try { await bridge.lifecycleAck({ id, ok: false }); } catch { /* Native may already have expired this request. */ } };
   function onLifecycle(event: { id: string; reason: MobileLifecycleReason }) {
@@ -111,6 +206,8 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     if (lifecycleTask || lifecycleStopped || closed || closing || releasePromise || !['background','switchVault'].includes(event.reason)) { void rejectLifecycle(event.id); return; }
     lifecycleBusyId = event.id;
     const handler = lifecycleHandler;
+    // Background/switch presentation is disabled without joining the save path.
+    void nativeEditor.setState(disabledEditorState).catch(() => {});
     const task = Promise.resolve().then(async () => {
       let approved = false, finished = false, ackPromise: Promise<void> | undefined;
       const ack = (): Promise<void> => {
@@ -118,9 +215,10 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
         if (ackPromise) return ackPromise;
         ackPromise = (async () => {
           // Native owns the deadline and rejects stale_lifecycle without switching.
+          await Promise.allSettled([...(editorSubscription?.callbacks ?? [])]);
           await bridge.lifecycleAck({ id: event.id, ok: true });
           approved = true;
-          if (event.reason === 'switchVault') { stopPolling(); closed = true; leaseReleased = true; }
+          if (event.reason === 'switchVault') { stopNativeEditor(); stopPolling(); closed = true; leaseReleased = true; }
         })();
         void ackPromise.catch(() => {}); // An unawaited ACK must not create an unhandled rejection.
         return ackPromise;
@@ -541,7 +639,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { listeners.delete(listener); if (!listeners.size && timer) { clearInterval(timer); timer = undefined; } };
     },
   };
-  return { adapter, mobileLifecycle, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
+  return { adapter, mobileLifecycle, nativeEditor, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
     async noteOpened(path,entryId) {
       active(); if (releasePromise) throw fail('storage_closed');
       const captured = nativeNotePath(path);
@@ -573,10 +671,11 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     }),
     release() {
       if (releasePromise) return releasePromise;
-      stopPolling();
+      stopNativeEditor(); stopPolling();
       releasePromise = (async () => {
         // Flush admitted consumers before retiring the native client lease.
         await lifecycleTask;
+        await editorTail; await Promise.allSettled([...editorRetirements]);
         await serialTail; await tail; closing = true;
         if (!leaseReleased) {
           const result = (await request({ method:'release_client', reference:lease },undefined,true)).result;
