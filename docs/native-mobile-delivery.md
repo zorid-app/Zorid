@@ -131,6 +131,16 @@ uninstalls an app, or terminates a running app. Installing another development
 build may update the existing **development** app; retain development test data
 only with the usual care for unreleased schemas.
 
+Native variants from `9f507594` must be integrated alongside this script update;
+do not merge the entire native worker branch. `App-Dev` selects Debug-Dev for
+running and Release-Dev for archiving; `App-Prod` selects Debug-Prod/Release-Prod.
+Legacy `App` Debug/Release remain production aliases, and the existing simulator
+CI build (`App`/Debug) and TestFlight archive (`App`/Release) stay unchanged.
+Development never substitutes a bundle-only command-line override on legacy
+Debug: the native variant supplies `ZoridAppEnvironment=development` and the
+`ZORID_DEVELOPMENT` Swift compilation condition together. The install/launch
+wrapper also rejects output whose plist environment is not `development`.
+
 Development bundle ID is fixed to **`app.zorid.notes.dev`**. It has a separate app
 sandbox from production `app.zorid.notes`, protecting production's installed data.
 Development passes `ZORID_APP_DISPLAY_NAME=Zorid Dev` as one Xcode argument.
@@ -160,11 +170,21 @@ export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
 export IOS_TEAM_ID IOS_DEVICE_ID
 export IOS_BUILD_NUMBER=1
 export IOS_OUTPUT_DIR="$HOME/Library/Caches/zorid-iphone-dev-1"
-bash mobile/scripts/ios-run.sh build
+unset IOS_DEV_PROFILE_UUID IOS_DEV_SIGNING_IDENTITY
+IOS_ALLOW_PROVISIONING_UPDATES=0 bash mobile/scripts/ios-run.sh build
 ```
 
-For the existing owner-verified development profile, prefer manual signing:
-set both `IOS_DEV_PROFILE_UUID` and `IOS_DEV_SIGNING_IDENTITY` to the exact profile
+Observed owner device build `87781` failed Xcode exit 65: the existing wildcard
+profile is Xcode-managed, and Manual signing rejects a managed profile even when
+its key, bundle and phone match. Owner separately reported the device Debug Rust
+build passed in 1m05s; that does not establish Xcode signing or installation.
+Owner retry `63867` is using Automatic signing with the cached profile, both manual
+variables unset and `IOS_ALLOW_PROVISIONING_UPDATES=0`, without provisioning flags
+or new signing assets. Its outcome is **pending** at this source checkpoint.
+
+Manual signing requires a **manually managed development provisioning profile**,
+not the existing Xcode-managed wildcard profile. Only for such a profile, set both
+`IOS_DEV_PROFILE_UUID` and `IOS_DEV_SIGNING_IDENTITY` to the exact profile
 UUID and certificate SHA1 fingerprint supplied by Apple owner. These are nonsecret
 identifiers, passed as quoted scalar build settings. Setting either variable
 requires both to be nonempty and valid; invalid/incomplete settings fail without
@@ -181,13 +201,16 @@ contains `team_id`, `profile_uuid`, `identity_sha1`, `profile_path`,
 `code_sign_identity`, `device_udid`, `development`, and `bundle_id`. The retained
 `current.mobileprovision` is alongside it. Apple owner verified the existing
 wildcard development profile covers the phone and development bundle, with
-Developer Mode enabled. Populate `IOS_TEAM_ID`, `IOS_DEVICE_ID`,
-`IOS_DEV_PROFILE_UUID` and `IOS_DEV_SIGNING_IDENTITY` from that contract privately;
-do not dump it into logs or source and do not `source`/`eval` JSON. Owner still
-must verify build entitlements fit the profile and actual signing succeeds.
+Developer Mode enabled. Populate `IOS_TEAM_ID` and `IOS_DEVICE_ID` privately
+from that contract for the cached automatic path, leaving both manual variables
+unset. Use `profile_uuid` / `identity_sha1` for the manual variables only after
+Apple owner supplies a suitable manually managed profile and updates the contract.
+Do not dump the contract into logs or source and do not `source`/`eval` JSON.
+Owner still must verify build entitlements fit the profile and actual signing succeeds.
 
 ```sh
-# Set these from the Apple owner's private contract; use its identity_sha1, not a label.
+# Only after Apple owner supplies a manually managed profile; the cached wildcard is unsuitable.
+# Use its exact profile UUID and identity_sha1, not a certificate label.
 export IOS_DEV_PROFILE_UUID IOS_DEV_SIGNING_IDENTITY
 export IOS_OUTPUT_DIR="$HOME/Library/Caches/zorid-iphone-dev-manual-1"
 IOS_ALLOW_PROVISIONING_UPDATES=0 bash mobile/scripts/ios-run.sh build
@@ -216,15 +239,15 @@ settings on disk. Xcode uses its signed-in Apple Account/local keychain.
 
 Build sequence is the production `webpack --env target=desktop` bundle plus
 `cap copy ios`, then `cargo build --locked --manifest-path mobile/rust/Cargo.toml
---target aarch64-apple-ios -j1` **without `--release`**, and Xcode App project/scheme
-Debug/iphoneos, arm64, `-jobs 1`, selected phone destination, manual or automatic
+--target aarch64-apple-ios -j1` **without `--release`**, and Xcode App project,
+**App-Dev** scheme / **Debug-Dev** configuration, iphoneos, arm64, `-jobs 1`, selected phone destination, manual or automatic
 development signing as selected above, explicit development team and display name
 **Zorid Dev**. Both general and `iphoneos` SDK-specific
 `LIBRARY_SEARCH_PATHS` are overridden to
 `mobile/rust/target/aarch64-apple-ios/debug`; the existing project's iphoneos
 Release path cannot accidentally supply this library. `OTHER_LDFLAGS` stays under
 native project ownership. Output is
-`$IOS_OUTPUT_DIR/DerivedData/Build/Products/Debug-iphoneos/App.app`, with version
+`$IOS_OUTPUT_DIR/DerivedData/Build/Products/Debug-Dev-iphoneos/App.app`, with version
 0.1.0 and supplied build number. This is not a distribution archive or IPA.
 
 After the owner confirms the build, retain the same output/device variables and
@@ -236,7 +259,7 @@ bash mobile/scripts/ios-run.sh launch
 ```
 
 Before either device action, the wrapper checks the built Info.plist for exact
-`.dev` bundle ID, `iPhoneOS` platform and an existing app executable. Install uses
+`.dev` bundle ID, `development` app environment, `iPhoneOS` platform and an existing app executable. Install uses
 `xcrun devicectl device install app --device "$IOS_DEVICE_ID" <built-app>`; launch
 uses `xcrun devicectl device process launch --device "$IOS_DEVICE_ID"
 app.zorid.notes.dev`. A failed install or launch exits nonzero; it does not erase,

@@ -22,7 +22,7 @@ for cmd in xcrun python3; do command -v "$cmd" >/dev/null || fail "Missing comma
 xcrun --find devicectl >/dev/null || fail 'Selected Xcode does not provide devicectl.'
 OUTPUT="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).expanduser().resolve())' "$IOS_OUTPUT_DIR")"
 case "$OUTPUT/" in "$ROOT/"*) fail 'Development output must be outside the repository.' ;; esac
-APP="$OUTPUT/DerivedData/Build/Products/Debug-iphoneos/App.app"
+APP="$OUTPUT/DerivedData/Build/Products/Debug-Dev-iphoneos/App.app"
 # Validate the existing development build before either device action.
 python3 - "$APP" <<'PY'
 import pathlib
@@ -34,6 +34,8 @@ try:
         info = plistlib.load(source)
     if info.get('CFBundleIdentifier') != 'app.zorid.notes.dev':
         raise ValueError('bundle')
+    if info.get('ZoridAppEnvironment') != 'development':
+        raise ValueError('environment')
     if info.get('CFBundleSupportedPlatforms') != ['iPhoneOS']:
         raise ValueError('platform')
     executable = info.get('CFBundleExecutable', '')
