@@ -9,7 +9,7 @@ import { createEditor } from '../src/ui/editor.ts';
 
 // Real CM DOM listeners/state with synthetic rectangles; native geometry is a
 // separate verification step. No browser caret-layout emulation is asserted.
-function setup(t: TestContext, source = '', readonly = false, editable = true) {
+function setup(t: TestContext, source = '', readonly = false, editable = true, nativeCurrent?:()=>boolean) {
   const dom = new JSDOM('<!doctype html><body><button id="other">Other</button><div class="note-scroll"><input class="note-title"><div class="properties-host"><input></div><div class="editor-host"></div></div>', { pretendToBeVisual: true });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Text: dom.window.Text, Node: dom.window.Node, Window: dom.window.Window, MutationObserver: dom.window.MutationObserver, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window) })) {
@@ -20,7 +20,7 @@ function setup(t: TestContext, source = '', readonly = false, editable = true) {
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
   const document = dom.window.document, host = document.querySelector<HTMLElement>('.editor-host')!, surface = host.parentElement!;
   host.getBoundingClientRect = () => rect(100, 300); surface.getBoundingClientRect = () => rect(0, 800);
-  const editor = createEditor(host, { value: source, mode: 'live', paths: () => [], onChange() {}, open() {} });
+  const editor = createEditor(host, { value: source, mode: 'live', paths: () => [], onChange() {}, open() {}, ...(nativeCurrent?{onNativeEditorState(){},isCurrent:nativeCurrent}:{}) });
   const view = EditorView.findFromDOM(host.querySelector('.cm-editor')!)!;
   view.dispatch({ effects: StateEffect.appendConfig.of([EditorState.readOnly.of(readonly), EditorView.editable.of(editable)]) });
   view.contentDOM.getBoundingClientRect = () => rect(100, 124);
@@ -99,4 +99,50 @@ test('changed source, scrollbar, above-body, detached and disposed owners cannot
 
 for (const [readonly, editable] of [[true, true], [false, false]]) test(`readonly=${readonly}, editable=${editable} does not acquire typing focus`, t => {
   const ui = setup(t, '', readonly, editable); assert.equal(ui.click(ui.surface).defaultPrevented, false); assert.equal(ui.document.activeElement, ui.other);
+});
+
+
+function touch(ui:ReturnType<typeof setup>,target:EventTarget,type:string,x=200,y=600,points=1){
+  const event=new ui.dom.window.Event(type,{bubbles:true,cancelable:true});
+  const point={identifier:1,clientX:x,clientY:y};
+  Object.defineProperties(event,{touches:{value:type==='touchend'||type==='touchcancel'?[]:Array.from({length:points},(_,index)=>({...point,identifier:index+1}))},targetTouches:{value:type==='touchend'||type==='touchcancel'?[]:[point]},changedTouches:{value:[point]}});
+  target.dispatchEvent(event);return event;
+}
+
+test('native blank touch transfers directly from title to body within touchend without an explicit blur',t=>{
+  const ui=setup(t,'Existing',false,true,()=>true),title=ui.document.querySelector<HTMLInputElement>('.note-title')!;
+  let blurred=0;title.onblur=event=>{blurred++;assert.equal(event.relatedTarget,ui.view.contentDOM);};
+  title.focus();
+  assert.equal(touch(ui,ui.host,'touchstart').defaultPrevented,false,'scrolling remains available at touchstart');
+  assert.equal(ui.document.activeElement,title);
+  const end=touch(ui,ui.host,'touchend');
+  assert.equal(end.defaultPrevented,true,'suppress compatibility mouse defaults on a confirmed blank tap');
+  assert.equal(ui.document.activeElement,ui.view.contentDOM);assert.equal(blurred,1);
+  assert.equal(ui.view.state.selection.main.head,ui.view.state.doc.length);assert.equal(ui.view.state.doc.toString(),'Existing');
+  ui.view.dispatch({selection:EditorSelection.range(0,3)});
+  assert.equal(ui.mouse(ui.host,'mousedown',{clientY:600}).defaultPrevented,true,'compatibility mouse must not blur or repeat EOF selection');
+  ui.mouse(ui.host,'mouseup',{clientY:600});assert.equal(ui.view.state.selection.main.to,3);
+  for(const extra of [{button:2},{shiftKey:true},{ctrlKey:true},{metaKey:true},{altKey:true}])assert.equal(ui.mouse(ui.host,'mousedown',{clientY:600,...extra}).defaultPrevented,false);
+  title.focus();assert.equal(touch(ui,title,'touchstart').defaultPrevented,false);assert.equal(touch(ui,title,'touchend').defaultPrevented,false);
+  assert.equal(ui.document.activeElement,title,'reverse body-to-title route remains browser owned');
+});
+
+for(const reason of ['scroll','cancel','multitouch','external-multitouch','prevented-start','window-blur','new-selection','new-document','new-focus','inactive','disposed','detached','readonly','noneditable','content','desktop'] as const)test(`blank touch does not reclaim ${reason} interaction`,t=>{
+  let current=true;const ui=setup(t,'Existing',reason==='readonly',reason!=='noneditable',reason==='desktop'?undefined:()=>current);
+  const target=reason==='content'?ui.view.contentDOM:ui.host;
+  const start=touch(ui,target,'touchstart',200,600,reason==='multitouch'?2:1);
+  if(reason==='prevented-start')start.preventDefault();
+  if(reason==='external-multitouch')touch(ui,ui.other,'touchstart',200,600,2);
+  if(reason==='window-blur')ui.dom.window.dispatchEvent(new ui.dom.window.Event('blur'));
+  if(reason==='scroll')touch(ui,target,'touchmove',200,620);
+  if(reason==='cancel')touch(ui,target,'touchcancel');
+  if(reason==='new-selection')ui.view.dispatch({selection:EditorSelection.range(0,3)});
+  if(reason==='new-document')ui.view.dispatch({changes:{from:0,insert:'New'}});
+  if(reason==='new-focus')ui.document.querySelector<HTMLInputElement>('.note-title')!.focus();
+  if(reason==='inactive')current=false;
+  if(reason==='disposed')ui.dispose();
+  if(reason==='detached')ui.host.remove();
+  const before=ui.document.activeElement;
+  assert.equal(touch(ui,target,'touchend',200,reason==='scroll'?620:600).defaultPrevented,false);
+  assert.equal(ui.document.activeElement,before);
 });
