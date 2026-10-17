@@ -29,6 +29,14 @@ portability, independent CLI, durable ingestion, key recovery/revocation and
 encrypted restore; library encryption alone does not establish protocol safety.
 Evidence/recommendation is pending in `/private/tmp/zorid-etebase-reuse-audit.md`.
 
+Subsequent user clarification: use Etebase as a reference and selectively reuse
+or adapt its logic into Rust; Obsidian LiveSync must remain a reference too.
+Retain the Rust/SQLite architecture. Evaluate transferable account/key/storage
+patterns from Etebase and vault synchronization/recovery/P2P patterns from
+LiveSync against our own requirements. Record pinned provenance and applicable
+licenses for copied code, plus tests for adopted behavior. This is not approval
+to invent encryption primitives or a claim of compatibility with either system.
+
 1. Read AGENTS.md, this checkpoint, the accepted decisions/sequence below and
    relevant rows of `docs/user-findings.md`; inspect the active built-in goal.
 2. Inspect current git status, main HEAD, worktrees and live agents. Verify task
