@@ -11,3 +11,12 @@ Reference audit: supplied Obsidian 1.14.4 artifact and hashes are recorded in [m
 Only audio styling changes here. Other media parity remains separately queued. The existing generic wrapper click still exposes source while preserving the rendered player; native media clicks remain interactive. No deletion, caret mapping, keyboard, source-reveal or resource code changed.
 
 Validation: 33 serial Live embed tests passed, including actual `createEditor` block/inline audio controls, selector applicability, source-selection preservation, renderer retention, image/PDF/enclosing-note isolation, and existing Backspace/Delete/undo/redo boundaries. JSDOM assertions establish CSS applicability and interaction ownership, not native pixel geometry or the user's screenshot match. Root owns native verification of spacing, native playback controls and pointer hit testing.
+# Native checkpoint
+
+After integration in `3a46189` and a successful TypeScript/production build,
+the disposable macOS Electron verification note exposed play, mute, volume,
+scrubber and native more-controls actions with no edit-source overlay in its
+accessibility tree. Playback changed Play to Pause and advanced to 0:02. The
+owned app quit normally. Native screenshots remained white/clipped, so exact
+pixel appearance and reference runtime spacing are not certified by this pass.
+
