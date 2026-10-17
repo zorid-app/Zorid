@@ -1,6 +1,7 @@
 import { BaseController, createBaseMutationHost } from './controller.ts';
 import type { BaseBufferHost, BaseControllerState } from './controller.ts';
 import { BaseDocument } from './document.ts';
+import { BaseToolbarSaveError, createBaseToolbar } from './toolbar.ts';
 import { createBaseViewActions } from './view-actions.ts';
 import { createBaseTableView } from './table-view.ts';
 import { createBaseCardsView } from './cards-view.ts';
@@ -47,11 +48,11 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   options.validate();
   if (!options.readOnly && !options.buffers) throw new Error('Writable Bases require the shared workspace buffer host');
   const doc = container.ownerDocument, win = doc.defaultView;
-  const root = doc.createElement('div'), toolbar = doc.createElement('div'), selector = doc.createElement('select');
+  const root = doc.createElement('div'), toolbar = doc.createElement('div');
   const content = doc.createElement('div'), status = doc.createElement('div');
   root.className = 'bases-session'; toolbar.className = 'bases-session-toolbar'; content.className = 'bases-session-content';
-  selector.setAttribute('aria-label', 'Base view'); status.className = 'bases-session-status'; status.setAttribute('role', 'status');
-  toolbar.append(selector); root.append(toolbar, content, status); container.append(root);
+  status.className = 'bases-session-status'; status.setAttribute('role', 'status');
+  root.append(toolbar, content, status); container.append(root);
   let disposed = false, closing = false, mounted: MountedView | undefined, mountedType: string | undefined;
   let mountedResult: BaseQueryResult | undefined, deferred: BaseControllerState | undefined;
   let mountedIndex = -1, mountedMove = false;
@@ -65,7 +66,8 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (!disposed) status.textContent = error instanceof Error ? error.message : String(error);
     try { options.onError?.(error); } catch { /* User error reporters do not change persistence. */ }
   };
-  const activeDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, .bases-rendered-value input:not([type="checkbox"])');
+  const propertyDraft = () => !!mounted?.hasActiveEdits?.() || !!content.querySelector('.zorid-bases-table-input, .bases-rendered-value input:not([type="checkbox"])');
+  const activeDraft = () => propertyDraft() || toolbarUI.hasDraft();
   const schedule = () => {
     if (disposed || scheduled !== undefined) return;
     scheduled = setTimeout(() => { scheduled = undefined; if (deferred && !pending.size && !activeDraft()) { deferred = undefined; render(controller.state); } }, 0);
@@ -82,10 +84,12 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     void promise.then(settled, error => { settled(); report(error); });
     return promise;
   };
+  let configurationAttempt: { buffer?: NoteBuffer; text?: string } | undefined;
   const mutations = options.buffers ? createBaseMutationHost({ ...options.buffers,
     validate() { alive(); options.buffers!.validate(); },
     onBufferChange(path, buffer, previousText) {
       changedBuffers.add(buffer);
+      if (configurationAttempt && path === options.basePath) { configurationAttempt.buffer = buffer; configurationAttempt.text = buffer.text; }
       options.buffers!.onBufferChange?.(path, buffer, previousText);
     },
   }) : { async transform() { throw new Error('This base is read-only'); } };
@@ -94,6 +98,28 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
   });
   const actions = createBaseViewActions(controller, { validate: action, canRename: !!options.buffers?.rename,
     validateFolder(path) { if (path && options.vault.entries.get(path)?.type !== 'folder') throw new Error('The destination folder no longer exists'); },
+  });
+  const toolbarUI = createBaseToolbar(toolbar, {
+    preflight() { action(); if (pending.size || propertyDraft()) throw new Error('Finish or cancel the property edit before changing the view.'); },
+    selectView,
+    save(version, patch) {
+      action(); if (options.readOnly) return Promise.reject(new Error('This base is read-only'));
+      if (typeof version !== 'number') return Promise.reject(new Error('The base result is stale'));
+      const attempt: { buffer?: NoteBuffer; text?: string } = {};
+      configurationAttempt = attempt;
+      return track(() => controller.updateView(version, patch)).catch(error => {
+        const buffer = attempt.buffer, text = attempt.text;
+        if (buffer && (buffer.dirty || buffer.error)) {
+          throw new BaseToolbarSaveError(error instanceof Error ? error.message : String(error), () => track(async () => {
+            if (buffer.path !== options.basePath || buffer.text !== text) throw new Error('The retained configuration changed. Save or resolve that draft before retrying.');
+            await buffer.flush(); await controller.refresh();
+          }));
+        }
+        throw error;
+      }).finally(() => { if (configurationAttempt === attempt) configurationAttempt = undefined; });
+    },
+    onDraftChange: schedule,
+    onError: report,
   });
   function render(state: BaseControllerState): void {
     if (disposed) return;
@@ -106,10 +132,6 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (mountedResult === result) return;
     const document = BaseDocument.parse(state.source);
     const choices = document.views;
-    selector.replaceChildren(...choices.map((view, index) => {
-      const option = doc.createElement('option'); option.value = String(index); option.textContent = view.name; return option;
-    }));
-    selector.value = String(selectedIndex);
     propertyLabels = document.getRoot('properties');
     const getPropertyLabel = (property: string) => {
       if (propertyLabels && typeof propertyLabels === 'object' && !Array.isArray(propertyLabels)) {
@@ -118,6 +140,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }
       return property.replace(/^(?:note|file|formula)\./, '');
     };
+    toolbarUI.update({ result, views: choices, selectedIndex, rootFilters: document.getRoot('filters'), readOnly: !!options.readOnly, allowRename: options.viewName === undefined, label: getPropertyLabel });
     const writable = !options.readOnly;
     const shared = { result, getPropertyLabel,
       openFile(path: string, event: MouseEvent | KeyboardEvent) { try { action(); options.openFile(path, event); } catch (error) { report(error); } },
@@ -141,7 +164,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
       }
       mountedType = result.view.type; mountedIndex = selectedIndex; mountedMove = moveEnabled;
     }
-    mountedResult = result; status.textContent = '';
+    mountedResult = result; if (![...changedBuffers].some(buffer => buffer.dirty || buffer.error)) status.textContent = '';
   }
   const observer = win?.MutationObserver ? new win.MutationObserver(schedule) : undefined;
   observer?.observe(content, { subtree: true, childList: true });
@@ -153,12 +176,14 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     await controller.setView(index);
     if (!controller.state.error) selectedIndex = controller.selectedViewIndex;
   }
-  selector.addEventListener('change', () => { void selectView(Number(selector.value)).catch(error => { selector.value = String(selectedIndex); report(error); }); });
+
   async function settle(): Promise<void> {
     await Promise.allSettled([...pending]);
     // Let property widgets finish handling their accepted/rejected operations.
     await Promise.resolve();
+    const acknowledgement = [...changedBuffers].some(buffer => buffer.path === options.basePath && (buffer.dirty || buffer.error)) ? toolbarUI.captureSaveAcknowledgement() : undefined;
     for (const buffer of changedBuffers) await buffer.flush();
+    acknowledgement?.();
     releaseCleanBuffers();
     if (activeDraft()) throw new Error('Finish or cancel the property edit before leaving this base');
   }
@@ -169,7 +194,7 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     try {
       await settle();
       if (close) {
-        mounted?.destroy(); mounted = undefined; observer?.disconnect();
+        toolbarUI.destroy(); mounted?.destroy(); mounted = undefined; observer?.disconnect();
         if (scheduled !== undefined) clearTimeout(scheduled);
         controller.dispose(); disposed = true; root.remove();
       }

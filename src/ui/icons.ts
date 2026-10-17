@@ -1,8 +1,8 @@
 import {
-  ArrowUpNarrowWide, BookOpen, Bookmark, Calendar, Check, ChevronDown,
+  ArrowUpDown, ArrowUpNarrowWide, BookOpen, Bookmark, Calendar, Check, ChevronDown,
   ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleHelp,
-  CodeXml, Columns2, Copy, Ellipsis, Eye, EyeOff, File, FileSearch, FolderClosed, FolderPlus, GalleryVertical,
-  GitFork, GripHorizontal, GripVertical, House, LayoutDashboard, Link, List, Maximize, Minus, PanelLeft, PanelRight, PanelTop, StretchHorizontal,
+  CodeXml, Columns2, Columns3, Copy, Ellipsis, Eye, EyeOff, File, FileSearch, Filter, FolderClosed, FolderPlus, GalleryVertical,
+  GitFork, Group, GripHorizontal, GripVertical, House, LayoutDashboard, Link, List, Maximize, Minus, PanelLeft, PanelRight, PanelTop, StretchHorizontal,
   Plus, Redo2, RotateCw, Search, Settings, SquarePen, StickyNote, Tag, Terminal, Trash2, Undo2, X, ZoomIn,
 } from 'lucide';
 import type { IconNode } from 'lucide';
@@ -16,6 +16,7 @@ const glyphs: Record<string, IconNode> = {
   code: CodeXml, copy: Copy, settings: Settings, graph: GitFork, calendar: Calendar,
   terminal: Terminal, link: Link, list: List, tag: Tag, bookmark: Bookmark,
   'stretch-horizontal': StretchHorizontal, eye: Eye, 'eye-off': EyeOff,
+  filter: Filter, group: Group, 'columns-3': Columns3, 'arrow-up-down': ArrowUpDown,
   more: Ellipsis, sort: ArrowUpNarrowWide, collapse: ChevronsDownUp,
   trash: Trash2, split: Columns2, help: CircleHelp, check: Check,
   home: House, 'file-search': FileSearch, 'square-pen': SquarePen,

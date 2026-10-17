@@ -1,6 +1,36 @@
-.bases-session { display: flex; flex-direction: column; min-height: 0; height: 100%; }
-.bases-session-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
-.bases-session-toolbar select { max-width: 100%; }
-.bases-session-content { flex: 1; min-height: 0; overflow: hidden; }
-.bases-session-status { flex: none; padding: 0 12px; color: var(--text-error); }
+.bases-session { display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; container-type: inline-size; container-name: bases-pane; }
+.bases-session-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 40px; flex: none; padding: 4px 8px; border-bottom: 1px solid var(--background-modifier-border); font-size: var(--font-ui-small, 13px); }
+.bases-toolbar-view { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 180px; color: var(--text-normal); }
+.bases-toolbar-view .svg-icon { flex: none; }
+.bases-toolbar-view select { min-width: 0; width: 100%; max-width: 100%; text-overflow: ellipsis; border: 0; background: transparent; box-shadow: none; color: inherit; font: inherit; }
+.bases-toolbar-count { color: var(--text-muted); white-space: nowrap; margin-inline-end: auto; font-size: var(--font-ui-smaller, 12px); }
+.bases-toolbar-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 2px; min-width: 0; }
+.bases-toolbar-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 28px; height: 28px; padding: 4px 6px; border: 0; border-radius: 4px; color: var(--text-muted); background: transparent; box-shadow: none; font: inherit; cursor: pointer; }
+.bases-toolbar-action:hover, .bases-toolbar-action.is-active { background: var(--background-modifier-hover); color: var(--text-normal); }
+.bases-toolbar-action:focus-visible, .bases-toolbar-view select:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+@container bases-pane (width < 590px) { .bases-toolbar-label { display: none; } .bases-toolbar-view { flex-basis: 140px; } }
+@container bases-pane (width < 360px) { .bases-toolbar-view { flex: 1 1 90px; } .bases-toolbar-actions { flex-basis: 100%; } .bases-toolbar-count { margin-inline-end: 0; } }
+.bases-session-content { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.bases-session-status { flex: none; padding: 0 12px; color: var(--text-error); overflow-wrap: anywhere; }
 .bases-session-status:empty { display: none; }
+.bases-toolbar-popover { position: fixed; z-index: 1500; box-sizing: border-box; width: 460px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); color: var(--text-normal); box-shadow: 0 8px 30px #0003; font-size: var(--font-ui-small, 13px); }
+.bases-toolbar-popover h3 { margin: 0; padding: 12px; font: inherit; font-weight: 600; border-bottom: 1px solid var(--background-modifier-border); }
+.bases-toolbar-fields { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.bases-toolbar-fields label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bases-toolbar-fields label > input:not([type=checkbox]), .bases-toolbar-fields label > select { flex: 1; min-width: 0; }
+.bases-toolbar-popover input, .bases-toolbar-popover select, .bases-toolbar-popover textarea { font: inherit; max-width: 100%; min-width: 0; box-sizing: border-box; }
+.bases-toolbar-popover textarea { width: 100%; resize: vertical; }
+.bases-toolbar-popover button { font: inherit; }
+.bases-toolbar-rule, .bases-toolbar-property-row, .bases-filter-condition { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 0; }
+.bases-toolbar-rule > select { flex: 1 1 100px; }
+.bases-toolbar-property-list { max-height: 320px; overflow-y: auto; }
+.bases-toolbar-property-row label { flex: 1; overflow-wrap: anywhere; }
+.bases-toolbar-property-row button { flex: none; }
+.bases-toolbar-property-row input[type=checkbox] { flex: none; }
+.bases-filter-group { border-inline-start: 2px solid var(--background-modifier-border); padding: 8px; margin: 4px 0; min-width: 0; }
+.bases-filter-group > button { margin: 3px; }
+.bases-filter-condition > select, .bases-filter-condition > input { flex: 1 1 110px; }
+.bases-toolbar-footer { display: flex; justify-content: flex-end; gap: 8px; position: sticky; bottom: 0; padding: 10px 12px; border-top: 1px solid var(--background-modifier-border); background: var(--background-primary); }
+.bases-toolbar-error { padding: 0 12px 8px; color: var(--text-error); overflow-wrap: anywhere; }
+.bases-toolbar-error:empty { display: none; }
+.bases-toolbar-hint, .bases-toolbar-fields p { color: var(--text-muted); margin: 0; line-height: 1.45; }
