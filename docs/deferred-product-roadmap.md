@@ -32,39 +32,45 @@ sequence below; completion of the first goal must not close those requirements.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
 
-### Integration checkpoint — 2026-10-16 22:27 local
+### Integration checkpoint — 2026-10-16 22:40 local
 
-- Main through `dc51b33` contains the first core/native/standalone CLI batch and
-  the directly confirmed best-UX priority.
-  Combined acceptance on candidate `3ac9e06`: 76 affected Rust tests passed in a
-  fresh target (session 61703 exit 0). See `docs/core-integration-acceptance.md` on
-  main. Apps still use their existing storage; no migration or push by this session.
-- Editor E1/E2 is reconciled in `editor-base-embed-integration` at `9e7ecce`, with
-  the independently reviewed opaque-revision seam committed. The first full
-  run had only a new test fixture error (nonexistent MemoryAdapter.remove), fixed
-  to trash. Second run 62700: 1954/1955 passed; partial-parse table formatting
-  failed after passing in the first run. Type/build did not run. Editor team owns
-  focused format-menu/typecheck slot for a concrete stale-parser-tree fix and
-  deterministic regressions; do not launch competing heavy checks.
-- Isolated core branch through `9ceb564`: native schema3/folder/rescan integrated
-  as `2971706`, CLI `451c84b`/`5c959ac`; owner native/store 56 checks passed, combined
-  newer CLI checks pending. Shared target stale artifact caused one compile failure
-  before successful recompilation; future worktrees use separate target directories.
-- Source-reviewed but runtime-pending on core branch: backup/restore `c7de4e0`,
-  desktop host `ebc0348`, text-sync plans `4d5867b`/`c05595f`, browser schema2/worker
-  adapter `7ab190d`. Independent review fixes are included; these are not actual
-  client integration or verified encrypted convergence. Schema4 coherent reads,
-  presentation metadata and change cursors are integrated as `5e154ea`; the fresh
-  workspace validation session 37546 stopped at unsupported unsigned SQLite type
-  conversions. Independently reviewed checked-conversion fix `e404c8e` is applied;
-  rerun follows the editor's slot release. No runtime pass claimed for this slice.
-- Native owner prepares schema5 durable intents, distinguishing inert preparation
-  from authorized commit replay. Browser/desktop owners coordinate durable
-  host intent tokens and actual fixture-only app selection; ordinary vault migration
-  remains disabled. Physical moves/deletes and distributed binary/namespace/chunk
-  semantics are unfinished, not removed from the goal.
+- Main `227f084` contains both native/CLI batches and editor E1/E2. Native batch2
+  candidate `3df1de8` passed 109 tests in a fresh target (session30255 exit0),
+  covering folder creation, bounded rescans and coherent reads/change cursors.
+  See `docs/core-integration-acceptance.md`. Apps still use existing storage;
+  no migration, push or deployment by this session.
+- Editor candidate `6b96d1f` passed 29 focused and 1963 aggregate tests,
+  TypeScript and production webpack (three performance warnings), session64815
+  exit0. The stale parser-tree bug has eight verified fail-before regressions;
+  source fix `a8cfb75` equals editor `dfbfae7`. Native verification is separate:
+  the editor session was granted that slot after root34798 completed. Tested dist
+  is in `editor-base-embed-integration`, not the primary checkout's older dist.
+- Isolated core `b510194` passed the entire Rust workspace in dedicated
+  target-verification: session34798 exit0, 201 passes, one ignored crash helper
+  explicitly invoked by its parent. Includes schema5 host intents, text plans,
+  file/namespace/chunk plans, authenticated envelope capability, relay and basic
+  backup/restore. SQLite unsigned conversions and two invalid test setups were
+  corrected before this pass. These are component/process tests, not real app
+  convergence. WASM crate native tests do not substitute for browser execution.
+- Backend candidate `core-backend-integration` contains exact reviewed server,
+  protocol and crypto source from `b510194`, reconciled with current main.
+  Candidate-specific lock resolution and affected tests remain before integration.
+  The server is a loopback fixture service; hosted account enrollment, admin UI
+  and deployment are not implemented by this batch.
+- Native owner implements schema6 atomic authored/received text persistence and
+  origin-aware projection jobs, plus durable local authority identity. Browser
+  owner handles shared durable-write types, wrapper and persistent authority
+  binding; desktop owner has reviewed source `5380d15` pending runtime checks.
+  Editor owns the forthcoming NoteBuffer checkpoint consumer. Portable helper
+  `2db0bf8` and whole-text planner `7a07bfb` are queued for source integration/tests.
+- Actual web/Electron selection, durable editor handshake, complete moves/deletes,
+  binary transfer and cross-client encrypted convergence/restore remain required.
+  P2P, complete recovery/admin and native mobile remain later milestones.
 
-### Live work ledger
+### Foundation ledger and earlier evidence
+
+The current checkpoint above supersedes the older implementation/next-action
+cells below; retain their source and feasibility evidence for provenance.
 
 | ID | Scope / owner | Branch/worktree | Implementation | Verification / next action |
 | --- | --- | --- | --- | --- |
