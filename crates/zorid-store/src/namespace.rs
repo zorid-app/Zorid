@@ -2,7 +2,7 @@
 //! filesystem evidence; this journal never discovers members or performs IO.
 use super::*;
 use std::collections::BTreeSet;
-use zorid_core::EntryChange;
+use zorid_core::{EntryChange, OperationId};
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("namespace_attempts", "CREATE TABLE namespace_attempts (job_id TEXT PRIMARY KEY NOT NULL REFERENCES projection_jobs(job_id), completed INTEGER NOT NULL CHECK(completed IN (0,1)), record TEXT NOT NULL)"),

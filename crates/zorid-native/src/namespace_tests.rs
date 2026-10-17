@@ -689,6 +689,7 @@ fn same_path_move_preserves_inode_and_completes_only_its_job() {
         assert!(v.status().unwrap().namespace_attempts[0].completed);
     }
 }
+#[cfg(target_os = "linux")]
 #[test]
 fn non_utf8_retained_child_is_reported_without_aborting_recovery() {
     use std::os::unix::ffi::OsStringExt;

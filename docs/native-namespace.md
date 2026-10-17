@@ -88,6 +88,23 @@ unlisted children, retained late handle writes, previous file-projection crash
 phases and unproven legacy jobs. Store fixtures cover atomic evidence binding,
 progress CAS, baseline CAS, later-job retention and migration.
 
-Runtime verification is pending the coordinator's serialized test slot. No
-browser/Electron/CLI subprocess namespace convergence or received namespace sync
-claim follows from these source fixtures.
+Initial macOS verification passed in session57772 (exit0): 137 tests, comprising
+59 native and 78 store tests, at a012eaa plus the missing OperationId import and
+Linux-only gating of the non-UTF8 fixture. The latter failed at fixture creation
+with macOS EILSEQ92; it is source-covered but not runtime-verified on Linux.
+Initial session83915 found the missing import; session23350 passed 59 native
+checks and failed only that unsupported fixture setup. The final run used:
+
+```
+CARGO_TARGET_DIR=/Users/ctk/orca/workspaces/Zorid/core-native-namespace/target \
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
+cargo test --offline -p zorid-store -p zorid-native -j1 -- --test-threads=1
+```
+
+Cargo resolved 17 cached dependency entries in this isolated worktree; the
+coordinator owns the root lockfile reconciliation. Tested isolated lock SHA256:
+`7e87159c99304f7bf33807f58a955bdcbb67a607a8ed4f23b6a23d309c20d773`.
+
+No browser/Electron/CLI subprocess namespace convergence or received namespace
+sync claim follows from these native/store results. The approved per-member
+journal optimization requires another source review and relevant runtime pass.
