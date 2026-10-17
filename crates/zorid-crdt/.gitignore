@@ -1,0 +1,3 @@
+# Standalone spike builds; integrated workspace owns its root lockfile.
+/target/
+/Cargo.lock
