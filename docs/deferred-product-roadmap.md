@@ -116,6 +116,25 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Latest Vite completion — main165cf17a +manager-lock60efe609:
+- Vite is the default application renderer build. Actual dev/prod browser, desktop
+  file renderer/save/math/code,307exactvendorassets,347fileASAR/nativearm64 and
+  actual iOS build7 create/save99bytes/reopen/math/Prism/PDF2pages all pass.
+  Final main frozeninstall0/fulltsc0/73affectedchecks pass. First main install
+  required byte-exact original pnpm12.14 manager-lockdoc restoration; application
+  dependency resolutions unchanged, independently reviewed. Main cache activation
+  uses existing source/artifact fingerprint validation. Source/evidence:
+  docs/vite-migration.md, tmp/vite-main-*.log, native msg67c02132f86d.
+- Root returned exclusive heavy slot to native owner in msgdcd919ecad0d for signed
+  phone7 EXACTce1e0ace build/install. Simulatorapp/helperclosed, root no live apps/
+  servers/compiler. Phone7 install/keyboard/search/newSettings remain separate.
+- Next active milestone is first-party Bases/tasks/calendar, then Stage5. Task
+  representations optional question has had a reasonable reply window; working
+  default is both inline checkboxes and task notes, pending later user correction.
+  Freeze a narrow source-preserving model before parallel UI/core implementation;
+  no inline schedule syntax invention or speculative plugin records.
+
+
 Current Vite checkpoint — candidate103428be (not main default yet):
 - Root isolated vite-renderer-migration composes independently reviewed native
  9c35d6d7/source829cd2c9 with Vite8.3.4. Final source/config and native-preservation

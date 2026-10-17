@@ -3,7 +3,10 @@
 User authorized migration on2026-10-17. Root owns isolated
 `tingkai-c/vite-renderer-migration`; frozen candidate103428be. Native owner is
 reconciling reviewed focus/silent-refresh source for one combined iOS proof.
-All affected client gates now pass; root is integrating the confirmed batch into main. Latest product
+All affected client gates pass; integrated on main165cf17a.
+Main manager-lock preservation60efe609 passes frozen install0, typecheck0 and
+73 affected checks. Original manager lock document is byte-identical; the app
+lock/resolutions are unchanged. Vite is now the application default. Latest product
 sequence: Vite → Bases/tasks/calendar → Stage5; mobile UX continues in parallel.
 
 ## Build boundary
