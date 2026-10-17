@@ -173,7 +173,7 @@ test('readonly, modal, completion and invalid event ownership consume without ed
     assert.equal(press(view, dom).defaultPrevented, true); element.remove();
   }
   assert.equal(press(view, dom, 'F7', { repeat: true }).defaultPrevented, true);
-  assert.equal(press(view, dom, 'F7', { isComposing: true }).defaultPrevented, true);
+  assert.equal(press(view, dom, 'F7', { isComposing: true }).defaultPrevented, false);
   view.dispatch({ effects: StateEffect.appendConfig.of(EditorState.readOnly.of(true)) });
   assert.equal(press(view, dom).defaultPrevented, true);
   assert.equal(fallback, 0); assert.equal(view.state.doc.toString(), 'word');

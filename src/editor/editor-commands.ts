@@ -96,8 +96,11 @@ export function editorCommandHotkeys(source?: EditorHotkeySource, owner?: Editor
       this.unsubscribe = preferences.subscribe(() => { this.pending = true; this.schedule(); });
     }
     private guard = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !(event.repeat || event.isComposing || event.getModifierState('AltGraph'))
-        || (event.target as Element | null)?.closest('.cm-editor') !== this.view.dom) return;
+      if (event.defaultPrevented || (event.target as Element | null)?.closest('.cm-editor') !== this.view.dom) return;
+      // IME/AltGraph keystrokes may insert text. Suppress shortcut dispatch,
+      // including layout-based keymap matching, without cancelling that input.
+      if (event.isComposing || event.getModifierState('AltGraph')) { event.stopPropagation(); return; }
+      if (!event.repeat) return;
       const chord = eventHotkey({ key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey,
         shiftKey: event.shiftKey, isComposing: false, repeat: false }, preferences.platform);
       if (chord && current.some(({ binding }) => hotkeyIdentity(binding, preferences.platform) === hotkeyIdentity(chord, preferences.platform))) {
