@@ -1,8 +1,10 @@
+import { browserSync, browserSyncStores, browserSyncKeyPaths } from './browser-sync.ts';
+import type { BrowserSync, BrowserSyncWasm } from './browser-sync.ts';
 import { browserCheckpoints } from './browser-checkpoints.ts';
 import type { DurableCheckpoints } from './durable-checkpoints.ts';
 /** Browser persistence host for the initialized, shared Rust/WASM vault planner.
  * No production platform selection uses this adapter yet. */
-export interface BrowserVaultWasm {
+export interface BrowserVaultWasm extends Partial<BrowserSyncWasm> {
   planMutation(input: string): string;
   checkIdempotency(input: string): string;
   validateSnapshot(input: string): void;
@@ -22,12 +24,13 @@ export interface BrowserVaultOptions {
   /** Host display clock only; never used as a revision or ordering token. */
   now?: () => number;
   /** Trusted fixture injection only. Never populate this from mutation JSON. */
-  testHooks?: { afterMetadataWrite?(abort: () => void): void; afterCommitRequested?(): void };
+  testHooks?: { afterMetadataWrite?(abort: () => void): void; afterCommitRequested?(): void; afterSyncWrite?(abort: () => void): void };
 }
 
 export interface BrowserVault {
   /** Persistent local storage authority; distinct from database name or sync vault ID. */
   readonly authorityId: string;
+  readonly sync: BrowserSync;
   checkpoints(clientId:string):DurableCheckpoints;
   /** Serialized Rust MutationRequest in; serialized original CommitResult out. */
   mutate(requestJson: string): Promise<string>;
@@ -39,6 +42,7 @@ export interface BrowserVault {
   readEntryById(id:string):Promise<BrowserVaultRead|null>;
   inventory(): Promise<BrowserVaultRead[]>;
   prepareIntent(clientId: string, intentId: string, requestJson: string): Promise<void>;
+  prepareFamilyIntent(clientId:string,intentId:string,commandJson:string):Promise<void>;
   intents(clientId: string): Promise<BrowserVaultIntent[]>;
   executeIntent(clientId: string, intentId: string): Promise<string>;
   acknowledgeIntent(clientId: string, intentId: string, outcome: BrowserVaultOutcome): Promise<void>;
@@ -50,6 +54,8 @@ export interface BrowserVaultPresentation { id: string; ctime_ms: number; mtime_
 export interface BrowserVaultRead { entry: EntryState; presentation: BrowserVaultPresentation; bytes?: Uint8Array }
 export interface BrowserVaultIntent {
   client_id: string; intent_id: string; operation_id: string; request_json: string;
+  /** Exact validated composite retained before commit authorization. */
+  family_command_json?: string;
   order: string;
   acknowledged: boolean;
   status: 'prepared' | 'commit_requested' | 'committed' | 'rejected'; receipt?: string;
@@ -64,10 +70,14 @@ interface Request { operation_id: string; mutation: { type: string; id: string; 
 interface Receipt { operation_id: string; sequence: string; changes: EntryChange[] }
 interface RecordValue { request: Request; result: Receipt }
 type Decision = { status: 'new' } | { status: 'replay'; result: Receipt };
-const stores = ['metadata', 'content', 'receipts', 'journal', 'outbox', 'control', 'presentation', 'intents', 'checkpoint_heads', 'checkpoint_revisions'];
-const keyPaths: Record<string, string | string[]> = { metadata: 'id', content: 'id', receipts: 'operation_id', journal: 'sequence', outbox: 'sequence', control: 'key', presentation: 'id', intents: ['client_id', 'intent_id'], checkpoint_heads:['clientId','key'], checkpoint_revisions:['clientId','revision'] };
+const stores = ['metadata', 'content', 'receipts', 'journal', 'outbox', 'control', 'presentation', 'intents', 'checkpoint_heads', 'checkpoint_revisions', ...browserSyncStores];
+const keyPaths: Record<string, string | string[]> = { ...browserSyncKeyPaths, metadata: 'id', content: 'id', receipts: 'operation_id', journal: 'sequence', outbox: 'sequence', control: 'key', presentation: 'id', intents: ['client_id', 'intent_id'], checkpoint_heads:['clientId','key'], checkpoint_revisions:['clientId','revision'] };
 const maxSequence = 18446744073709551615n;
 
+function sameJson(a:unknown,b:unknown):boolean {
+  const normalized=(value:any):any=>Array.isArray(value)?value.map(normalized):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,normalized(value[key])])):value;
+  return JSON.stringify(normalized(a))===JSON.stringify(normalized(b));
+}
 function hostError(code: string, message: string, details?: unknown): BrowserVaultError {
   return new BrowserVaultError(code, message, details);
 }
@@ -172,7 +182,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
   }
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
     let rejected = false;
-    const opening = indexedDB.open(name, 5);
+    const opening = indexedDB.open(name, 6);
     let schemaError: BrowserVaultError | undefined;
     opening.onupgradeneeded = event => {
       if (event.oldVersion !== 0) {
@@ -198,6 +208,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
       revisions.createIndex('by_sequence',['clientId','order'],{unique:true});
       revisions.createIndex('by_global_sequence','order',{unique:true});
       revisions.createIndex('by_creation',['clientId','creationOrder'],{unique:true});
+      for (const name of browserSyncStores) database.createObjectStore(name,{keyPath:browserSyncKeyPaths[name]});
     };
     opening.onerror = () => reject(schemaError ?? storageError(opening.error));
     opening.onblocked = () => {
@@ -221,6 +232,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
     catch (error) { throw hostError('storage_corrupt', 'Persisted metadata failed shared Rust snapshot validation', {reason:String(error)}); }
   };
 
+  const transactionAborts=new WeakMap<IDBTransaction,(error:unknown)=>void>();
   function transact<T>(mode: IDBTransactionMode,
     start: (tx: IDBTransaction, result: (value: T) => void, abort: (error: unknown) => void) => void): Promise<T> {
     if (closed) return Promise.reject(hostError('storage_closed', 'Browser vault is closed'));
@@ -233,9 +245,11 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
         rejected ??= storageError(error);
         try { tx.abort(); } catch { /* Already aborting: onabort still owns settlement. */ }
       };
-      tx.onabort = () => reject(rejected ?? storageError(tx.error ?? new Error('Transaction aborted')));
+      transactionAborts.set(tx,abort);
+      tx.onabort = () => {transactionAborts.delete(tx);reject(rejected ?? storageError(tx.error ?? new Error('Transaction aborted')));};
       tx.onerror = () => { /* Request failures abort by default; no early success. */ };
       tx.oncomplete = () => {
+        transactionAborts.delete(tx);
         if (hasResult) resolve(value);
         else reject(hostError('storage_protocol_error', 'Transaction completed without a result'));
       };
@@ -259,6 +273,56 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
     };
   }).catch(error => { close(); throw error; });
 
+  const sync = browserSync({transact,wasm,now,validatePublication(current){
+    validatePresentation(current.entries,current.contents,current.presentation);validateDomain(current.entries);currentSequence(current.sequence);
+  },publish(tx,rows,origin,forced,current) {
+    validatePresentation(current.entries,current.contents,current.presentation); validateDomain(current.entries);
+    const previous=currentSequence(current.sequence);
+    const visible=rows.filter(row=>row.status==='normal');
+    const next=visible.map(row=>row.entry!); validateDomain(next);
+    const byId=new Map(current.entries.map(entry=>[entry.id,entry]));
+    const contents=new Map(current.contents.map(row=>[row.id,row.bytes]));
+    const changes:{before:EntryState|null;after:EntryState|null}[]=[];
+    for(const row of visible) {
+      if(!row.entry || !row.presentation || (row.entry.kind==='file' && !(row.bytes instanceof Uint8Array))) throw hostError('storage_corrupt','Normal publication has no complete materialization');
+      const before=byId.get(row.id)??null,old=contents.get(row.id);
+      const byteChanged=row.bytes!==null && (!old || old.length!==row.bytes.length || old.some((value,index)=>value!==row.bytes![index]));
+      if(!sameJson(before,row.entry)||byteChanged)changes.push({before,after:row.entry});
+      byId.delete(row.id);
+    }
+    for(const before of byId.values())changes.push({before,after:null});
+    if(forced){
+      const expected=forced.changes.map(change=>({before:change.before,after:change.after.deleted?null:change.after}));
+      const sorted=(items:typeof changes)=>[...items].sort((a,b)=>(a.after?.id??a.before!.id).localeCompare(b.after?.id??b.before!.id));
+      if(!sameJson(sorted(changes),sorted(expected)))throw hostError('sync_projection_conflict','Family command publication differs from exact core changes');
+    }
+    for(const row of visible) {
+      if(!changes.some(change=>change.after?.id===row.id))continue;
+      tx.objectStore('metadata').put(row.entry);tx.objectStore('presentation').put(row.presentation);
+      if(row.entry!.kind==='file')tx.objectStore('content').put({id:row.id,bytes:row.bytes});
+    }
+    for(const {before,after} of changes)if(!after&&before){tx.objectStore('metadata').delete(before.id);tx.objectStore('content').delete(before.id);tx.objectStore('presentation').delete(before.id);}
+    if(testHooks?.afterSyncWrite){const probe=tx.objectStore('sync_state').get('counts');probe.onsuccess=()=>{try{testHooks.afterSyncWrite!(()=>transactionAborts.get(tx)!(hostError('fixture_abort','Trusted fixture aborted after sync writes')));}catch(error){transactionAborts.get(tx)!(error);}};}
+    // Managed local writes get their one command journal/receipt below. Remote
+    // and explicit namespace fixture operations never fabricate local commands.
+    if(forced || !changes.length)return {sequence:String(previous)};
+    if(previous===maxSequence)throw hostError('sequence_exhausted','Local commit sequence exhausted');
+    const sequence=String(previous+1n);
+    tx.objectStore('journal').add({sequence,origin:{kind:'sync',direction:origin.kind,update_id:origin.update_id},changes});
+    tx.objectStore('control').put({key:'sequence',value:sequence});
+    return {sequence};
+  }});
+
+  const validateFamily=(input:string):string=>{
+    if(typeof input!=='string'||input.length>4*1024*1024||new TextEncoder().encode(input).byteLength>4*1024*1024)throw hostError('sync_input_too_large','Family command exceeds encoded host limit');
+    if(!wasm.validateFamilyCommand)throw hostError('sync_bindings_unavailable','Family command Rust validation is unavailable');
+    return JSON.stringify(rustCall(()=>wasm.validateFamilyCommand!(input)));
+  };
+  const assertFamilyRequest=(commandJson:string,requestJson:string):string=>{
+    const canonical=validateFamily(commandJson),command=JSON.parse(canonical);
+    if(validateFamily(`{"version":1,"request":${requestJson},"create_mode":${JSON.stringify(command.create_mode)}}`)!==canonical)throw hostError('storage_corrupt','Family composite disagrees with retained core request');
+    return canonical;
+  };
   const mutate = async (requestJson: string, tracked?: BrowserVaultIntent): Promise<string> => {
       let request: Request;
       if (typeof requestJson !== 'string') throw hostError('invalid_request_json', 'Mutation request must be serialized JSON');
@@ -272,11 +336,15 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
         const receipts = tx.objectStore('receipts');
         const lookup = receipts.get(request.operation_id);
         const ownerLookup = tx.objectStore('intents').index('by_operation').get(request.operation_id);
+        const enrollment = tx.objectStore('sync_state').get('config');
+        let familyCommandJson=tracked?.family_command_json;
         const trackedLookup = tracked ? tx.objectStore('intents').get(intentKey(tracked.client_id, tracked.intent_id)) : undefined;
-        let lookedUp = tracked ? 3 : 2;
+        let lookedUp = tracked ? 4 : 3;
         const processLookup = () => {
           if (--lookedUp) return;
           try {
+            if(enrollment.result)familyCommandJson=assertFamilyRequest(familyCommandJson??`{"version":1,"request":${requestJson},"create_mode":null}`,requestJson);
+            else if(familyCommandJson!==undefined)throw hostError('storage_corrupt','Family intent lost its sync enrollment');
             const owner = ownerLookup.result as BrowserVaultIntent | undefined;
             if (owner && (!tracked || owner.client_id !== tracked.client_id || owner.intent_id !== tracked.intent_id)) {
               throw hostError('intent_operation_owned', 'Operation ID belongs to a prepared intent; use its exact owner token');
@@ -284,7 +352,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
             if (tracked) {
               if (!owner) throw hostError('storage_corrupt', 'Prepared intent lost its operation ownership fence');
               const stored = trackedLookup!.result as BrowserVaultIntent | undefined;
-              if (!stored || stored.request_json !== requestJson) throw hostError('storage_corrupt', 'Prepared intent was lost or changed');
+              if (!stored || stored.request_json !== requestJson || stored.family_command_json!==familyCommandJson) throw hostError('storage_corrupt', 'Prepared intent was lost or changed');
               if (stored.status === 'rejected') throw new BrowserVaultError(stored.error!.code, stored.error!.message, stored.error!.details, stored.error!.source);
               if (stored.status === 'committed' && lookup.result === undefined) throw hostError('storage_corrupt', 'Committed intent has no operation receipt');
               if (!['commit_requested', 'committed'].includes(stored.status)) throw hostError('intent_not_authorized', 'Prepared intent has no durable commit authorization');
@@ -294,13 +362,22 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
             }
             let decision: Decision;
             try {
+              if(lookup.result!==undefined){
+                const prior=lookup.result.family_command_json;
+                if((prior===undefined)!==(familyCommandJson===undefined))throw hostError('storage_corrupt','Operation receipt lost its family command identity');
+                if(prior!==undefined){
+                  const canonical=assertFamilyRequest(prior,JSON.stringify(lookup.result.record.request));
+                  if(canonical!==prior)throw hostError('storage_corrupt','Stored family command is not canonical');
+                  rustCall(()=>{wasm.checkFamilyCommandReplay!(prior,familyCommandJson!);return 'null';});
+                }
+              }
               decision = rustCall<Decision>(() => wasm.checkIdempotency(JSON.stringify({
                 request, record: lookup.result === undefined ? null : lookup.result.record,
               })));
             } catch (error) {
               // A settled intent is verifying an existing receipt, never issuing
               // a new command that could receive a semantic rejection.
-              if (trackedLookup?.result?.status === 'committed') throw hostError('storage_corrupt', 'Committed intent failed Rust receipt validation');
+              if (trackedLookup?.result && lookup.result!==undefined) throw hostError('storage_corrupt', 'Owned intent failed validation of an already durable receipt');
               throw error;
             }
             if (trackedLookup?.result?.status === 'committed' &&
@@ -329,15 +406,18 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
                 const previous = currentSequence(sequenceRequest.result?.value);
                 if (previous === maxSequence) throw hostError('sequence_exhausted', 'Local commit sequence exhausted');
                 const sequence = String(previous + 1n);
+                const nextRevision=crypto.randomUUID();
                 const changes = rustCall<EntryChange[]>(() => wasm.planMutation(JSON.stringify({
-                  request, entries: all.result, next_revision: crypto.randomUUID(),
+                  request, entries: all.result, next_revision: nextRevision,
                 })));
                 const result: Receipt = { operation_id: request.operation_id, sequence, changes };
                 const record: RecordValue = { request, result };
                 // Validate the receipt using Rust before persisting host-assembled fields.
                 const validated = rustCall<Decision>(() => wasm.checkIdempotency(JSON.stringify({ request, record })));
                 if (validated.status !== 'replay') throw hostError('invalid_wasm_result', 'Rust did not validate the new receipt');
-                for (const [index, change] of changes.entries()) {
+                const commit = (managed:boolean) => {
+                try {
+                if(!managed)for (const [index, change] of changes.entries()) {
                   const write = metadata.put(change.after);
                   const previousStats = (presentation.result as BrowserVaultPresentation[]).find(row => row.id === change.after.id);
                   const bytes = (contents.result as {id: string; bytes: Uint8Array}[]).find(row => row.id === change.after.id)?.bytes;
@@ -350,16 +430,19 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
                   };
                 }
                 const mutation = request.mutation;
-                if (mutation.type === 'write' || (mutation.type === 'create' && mutation.content != null)) {
+                if (!managed && (mutation.type === 'write' || (mutation.type === 'create' && mutation.content != null))) {
                   tx.objectStore('content').put({ id: mutation.id, bytes: new Uint8Array(mutation.content!) });
                 }
                 // Moves and logical deletions retain content by stable ID.
-                receipts.add({ operation_id: request.operation_id, record });
+                receipts.add({ operation_id: request.operation_id, record, ...(familyCommandJson===undefined?{}:{family_command_json:familyCommandJson}) });
                 tx.objectStore('journal').add({ sequence, request, result });
-                tx.objectStore('outbox').add({ sequence, operation_id: request.operation_id,
+                if(!managed)tx.objectStore('outbox').add({ sequence, operation_id: request.operation_id,
                   bytes: new TextEncoder().encode(JSON.stringify({ request, result })) });
                 tx.objectStore('control').put({ key: 'sequence', value: sequence });
                 const receipt = JSON.stringify(result); commitIntent(receipt); done(receipt);
+                } catch(error) { abort(error); }
+                };
+                sync.localWrite(tx,request,nextRevision,changes,familyCommandJson,commit,abort);
               } catch (error) { abort(error); }
             };
             all.onsuccess = planned;
@@ -370,6 +453,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
         };
         lookup.onsuccess = processLookup;
         ownerLookup.onsuccess = processLookup;
+        enrollment.onsuccess = processLookup;
         if (trackedLookup) trackedLookup.onsuccess = processLookup;
       });
   };
@@ -378,7 +462,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
     const entries = tx.objectStore('metadata').getAll();
     const contents = tx.objectStore('content').getAll();
     const presentation = tx.objectStore('presentation').getAll();
-    let remaining = 3;
+    let remaining = 4;
     const read = () => {
       if (--remaining) return;
       try {
@@ -391,7 +475,41 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
       } catch (error) { abort(error); }
     };
     entries.onsuccess = read; contents.onsuccess = read; presentation.onsuccess = read;
+    sync.validate(tx,read,abort);
   });
+  const prepareIntent=(clientId:string,intentId:string,requestJson:string,familyCommandJson?:string):Promise<void>=>{
+      const key = intentKey(clientId, intentId);
+      // Preserve original serialized input, including duplicate-field rejection.
+      let request: Request;
+      try { request = JSON.parse(requestJson) as Request; } catch { return Promise.reject(hostError('invalid_request_json', 'Intent request must be JSON')); }
+      rustCall<Decision>(() => wasm.checkIdempotency(`{"request":${requestJson},"record":null}`));
+      return transact('readwrite', (tx, done, abort) => {
+        const store = tx.objectStore('intents'), read = store.get(key), owner = store.index('by_operation').get(request.operation_id);
+        const receipt = tx.objectStore('receipts').get(request.operation_id);
+        let remaining = 3;
+        const prepared = () => {
+          if (--remaining) return;
+          if (receipt.result !== undefined && !owner.result) { abort(hostError('intent_operation_owned','Operation ID already has a receipt outside this intent')); return; }
+          if (owner.result && (owner.result.client_id !== clientId || owner.result.intent_id !== intentId)) { abort(hostError('intent_operation_owned','Operation ID already belongs to another intent')); return; }
+          if (read.result !== undefined && read.result.request_json !== requestJson) { abort(hostError('intent_conflict', 'Intent ID already has different request bytes')); return; }
+          sync.admitMutation(tx,request,familyCommandJson,(canonical)=>{
+          if(read.result!==undefined){if(read.result.family_command_json!==canonical){abort(hostError('intent_conflict','Intent already owns another exact family command'));return;}done(undefined);return;}
+          const control = tx.objectStore('control'), order = control.get('intent-sequence');
+          order.onsuccess = () => {
+            try {
+              const previous = currentSequence(order.result?.value);
+              if (previous === maxSequence) throw hostError('sequence_exhausted', 'Intent preparation sequence exhausted');
+              const next = String(previous + 1n);
+              store.add({client_id: clientId, intent_id: intentId, operation_id:request.operation_id, request_json: requestJson, ...(canonical===undefined?{}:{family_command_json:canonical}), status: 'prepared', order:next, acknowledged:false});
+              control.put({key:'intent-sequence', value:next}); done(undefined);
+            } catch (error) { abort(error); }
+          };
+          },abort);
+        };
+        read.onsuccess = prepared; owner.onsuccess = prepared; receipt.onsuccess = prepared;
+      });
+    };
+
   const readIntents = (clientId: string): Promise<BrowserVaultIntent[]> => {
     intentKey(clientId, 'lookup');
     return transact('readonly', (tx, done, abort) => {
@@ -408,6 +526,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
                 (row.status === 'rejected' && (typeof row.error?.code !== 'string' || typeof row.error.message !== 'string' || row.error.source !== 'rust'))) throw hostError('storage_corrupt', 'Invalid stored intent');
             try {
               const request = JSON.parse(row.request_json);
+              if(row.family_command_json!==undefined&&assertFamilyRequest(row.family_command_json,row.request_json)!==row.family_command_json)throw hostError('storage_corrupt','Stored family command is not canonical');
               if (row.operation_id !== request.operation_id) throw hostError('storage_corrupt','Intent operation identity disagrees with exact request');
               rustCall(() => wasm.checkIdempotency(`{"request":${row.request_json},"record":null}`));
               if (row.status === 'committed') rustCall(() => wasm.checkIdempotency(JSON.stringify({request,record:{request,result:JSON.parse(row.receipt!)}})));
@@ -420,6 +539,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
   };
   return {
     authorityId,
+    sync:sync.api,
     checkpoints(clientId){return browserCheckpoints(db,authorityId,clientId);},
     mutate,
     inventory,
@@ -450,11 +570,20 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
           try {
             const current = currentSequence(control.result?.value);
             if (previous > current) throw hostError('storage_corrupt', 'Observed sequence moved backwards');
-            const events = (journal.result as {sequence:string;request:Request;result:Receipt}[])
+            const events = (journal.result as {sequence:string;request:Request;result:Receipt;origin?:{kind:'sync';direction:string;update_id:string};changes?:{before:EntryState|null;after:EntryState|null}[]}[])
               .filter(row => currentSequence(row.sequence) > previous)
               .sort((a,b) => BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1);
             let expected = previous; let structural = false; const paths = new Set<string>();
             for (const event of events) {
+              if(event.origin?.kind==='sync'){
+                if(currentSequence(event.sequence)!==++expected || !['authored','received'].includes(event.origin.direction) || typeof event.origin.update_id!=='string' || !Array.isArray(event.changes))throw hostError('storage_corrupt','Invalid sync change event');
+                for(const change of event.changes){
+                  if(!change || (!change.before&&!change.after))throw hostError('storage_corrupt','Invalid sync publication change');
+                  structural=true;
+                  if(change.after?.kind==='file')paths.add(change.after.path);
+                }
+                continue;
+              }
               if (currentSequence(event.sequence) !== ++expected || event.result.sequence !== event.sequence) throw hostError('storage_corrupt', 'Commit journal is not contiguous');
               try { rustCall(() => wasm.checkIdempotency(JSON.stringify({request:event.request,record:{request:event.request,result:event.result}}))); }
               catch (error) { throw hostError('storage_corrupt', 'Stored commit journal failed Rust receipt validation', {reason:String(error)}); }
@@ -470,36 +599,8 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
         journal.onsuccess = read; control.onsuccess = read;
       });
     },
-    prepareIntent(clientId, intentId, requestJson) {
-      const key = intentKey(clientId, intentId);
-      // Preserve original serialized input, including duplicate-field rejection.
-      let request: Request;
-      try { request = JSON.parse(requestJson) as Request; } catch { return Promise.reject(hostError('invalid_request_json', 'Intent request must be JSON')); }
-      rustCall<Decision>(() => wasm.checkIdempotency(`{"request":${requestJson},"record":null}`));
-      return transact('readwrite', (tx, done, abort) => {
-        const store = tx.objectStore('intents'), read = store.get(key), owner = store.index('by_operation').get(request.operation_id);
-        const receipt = tx.objectStore('receipts').get(request.operation_id);
-        let remaining = 3;
-        const prepared = () => {
-          if (--remaining) return;
-          if (receipt.result !== undefined && !owner.result) { abort(hostError('intent_operation_owned','Operation ID already has a receipt outside this intent')); return; }
-          if (owner.result && (owner.result.client_id !== clientId || owner.result.intent_id !== intentId)) { abort(hostError('intent_operation_owned','Operation ID already belongs to another intent')); return; }
-          if (read.result !== undefined && read.result.request_json !== requestJson) { abort(hostError('intent_conflict', 'Intent ID already has different request bytes')); return; }
-          if (read.result !== undefined) { done(undefined); return; }
-          const control = tx.objectStore('control'), order = control.get('intent-sequence');
-          order.onsuccess = () => {
-            try {
-              const previous = currentSequence(order.result?.value);
-              if (previous === maxSequence) throw hostError('sequence_exhausted', 'Intent preparation sequence exhausted');
-              const next = String(previous + 1n);
-              store.add({client_id: clientId, intent_id: intentId, operation_id:request.operation_id, request_json: requestJson, status: 'prepared', order:next, acknowledged:false});
-              control.put({key:'intent-sequence', value:next}); done(undefined);
-            } catch (error) { abort(error); }
-          };
-        };
-        read.onsuccess = prepared; owner.onsuccess = prepared; receipt.onsuccess = prepared;
-      });
-    },
+    prepareIntent,
+    prepareFamilyIntent(clientId,intentId,commandJson){const canonical=validateFamily(commandJson);return prepareIntent(clientId,intentId,JSON.stringify(JSON.parse(canonical).request),canonical);},
     async executeIntent(clientId, intentId) {
       intentKey(clientId, intentId);
       let intent = (await readIntents(clientId)).find(row => row.intent_id === intentId);
@@ -513,7 +614,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
         read.onsuccess = () => {
           const row = read.result as BrowserVaultIntent | undefined;
           if (!row) { abort(hostError('intent_not_found', 'Prepared intent does not exist')); return; }
-          if (row.request_json !== intent!.request_json) { abort(hostError('storage_corrupt','Prepared intent changed before commit authorization')); return; }
+          if (row.request_json !== intent!.request_json || row.family_command_json!==intent!.family_command_json) { abort(hostError('storage_corrupt','Prepared intent changed before commit authorization')); return; }
           if (row.status === 'prepared') store.put({...row,status:'commit_requested'});
           else if (!['commit_requested','committed','rejected'].includes(row.status)) { abort(hostError('storage_corrupt','Invalid intent phase')); return; }
           done(undefined);
@@ -553,7 +654,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
         const contents = tx.objectStore('content').getAll();
         const presentation = tx.objectStore('presentation').getAll();
         const sequence = tx.objectStore('control').get('sequence');
-        let remaining = 4;
+        let remaining = 5;
         const read = () => {
           if (--remaining !== 0) return;
           try {
@@ -564,13 +665,14 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
           catch (error) { abort(error); }
         };
         entries.onsuccess = read; contents.onsuccess = read; presentation.onsuccess = read; sequence.onsuccess = read;
+        sync.validate(tx,read,abort);
       });
     },
     readBytes(id) {
       return transact<Uint8Array>('readonly', (tx, done, abort) => {
         const metadata = tx.objectStore('metadata').getAll();
         const read = tx.objectStore('content').get(id);
-        let remaining = 2;
+        let remaining = 3;
         const completed = () => {
           if (--remaining !== 0) return;
           try {
@@ -581,7 +683,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
             done(read.result.bytes.slice());
           } catch (error) { abort(error); }
         };
-        read.onsuccess = completed; metadata.onsuccess = completed;
+        read.onsuccess = completed; metadata.onsuccess = completed; sync.validate(tx,completed,abort);
       });
     },
     close,
