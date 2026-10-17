@@ -640,13 +640,39 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
       };next();
     }
   }
-  async function prepareReceive(updateId:string,wireInput:Uint8Array,keyInput:BrowserSyncKey,delivery?:SyncDelivery):Promise<PreparedStreamingMutation> {
+  interface ReceivedDuplicate { duplicate:true; sequence:string }
+  function commitReceivedDuplicate(s:Snapshot,header:SourceHeader,wire:Uint8Array,payload:Uint8Array,expectedEnvelope:Json,expectedAuthored:Json|null,delivery:SyncDelivery):Promise<ReceivedDuplicate> {
+    // A committed exact receipt can advance delivery without creating any new
+    // content proof. Never republish from this path or admit source-only rows.
+    if(!equals(s.headers.get(keyString(header)),header))throw failure('sync_snapshot_conflict');
+    return transact<ReceivedDuplicate>('readwrite',(tx,done,abort)=>capture(tx,actual=>{
+      try{
+        if(!equals(actual.config,s.config)||!equals(actual.head,s.head)||!equals(actual.records,s.records)||!equals(actual.activities,s.activities)||
+          !equals([...actual.headers],[...s.headers])||!equals([...actual.texts],[...s.texts])||!equals([...actual.retained],[...s.retained])||!equals(actual.publication,s.publication))throw failure('sync_snapshot_conflict');
+        checkDelivery(actual,delivery);
+        read(tx,tx.objectStore('sync_envelopes').get(key(header)),envelope=>{
+          if(!equals(envelope,expectedEnvelope))throw failure('sync_snapshot_conflict');
+          read(tx,tx.objectStore('sync_authored').get(key(header)),authored=>{
+            if(!equals(authored??null,expectedAuthored))throw failure('sync_snapshot_conflict');
+            getExactSource(tx,header,'payload',source=>{try{
+              active();if(!source||!equals(source.header,header)||!sameBytes(source.bytes,payload))throw failure('immutable_source_conflict');
+              getExactSource(tx,header,'wire',retained=>{try{
+                active();if(!retained||!equals(retained.header,header)||!sameBytes(retained.bytes,wire))throw failure('sync_update_collision');
+                tx.objectStore('sync_cursors').put({key:[header.realmId,header.vaultId],value:delivery.next});
+                done({duplicate:true,sequence:actual.publication.sequence});
+              }catch(error){abort(error);}},abort);
+            }catch(error){abort(error);}},abort);
+          },abort,active);
+        },abort,active);
+      }catch(error){abort(error);}
+    },abort));
+  }
+  async function prepareReceive(updateId:string,wireInput:Uint8Array,keyInput:BrowserSyncKey,delivery?:SyncDelivery):Promise<PreparedStreamingMutation|ReceivedDuplicate> {
     active();delivery=delivery?copy(delivery):undefined;if(!(wireInput instanceof Uint8Array)||wireInput.byteLength>1052720)throw failure('sync_input_too_large');
     const wire=wireInput.slice(),s=await snapshot(),config=enrolled(s);checkDelivery(s,delivery);
     const opened=rust(()=>keyInput.openSyncUpdate(stringify({realm_id:config.realm_id,vault_id:config.vault_id,update_id:updateId,key_epoch:config.key_epoch}),wire)) as unknown as StreamingOpenedUpdate;
     let ownedGraph:StreamingMetadataState|undefined;
     try{
-      const graph=state(s);ownedGraph=graph;
       const metadata=boundedJson(opened.metadataJson(),128*1024) as EnvelopeMetadata;assertScope(config,metadata);
       if(metadata.key.update_id!==updateId)throw failure('sync_update_collision');
       const authenticated=boundedJson(opened.authenticatedDescriptorJson(),normalizedLimits.metadataRow),header=sourceHeader(metadata,authenticated.record??null,authenticated.activity??null,authenticated.summary_digest),payload=opened.exactPlaintext();
@@ -654,6 +680,8 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
       active();let prior:Uint8Array=new Uint8Array();if(priorRow){const retained=await exact(header,'wire');if(!equals(retained.header,header)||!sameBytes(retained.bytes,wire))throw failure('sync_update_collision');prior=retained.bytes;}
       const authored=await transact<Json>('readonly',(tx,done,abort)=>read(tx,tx.objectStore('sync_authored').get(key(header)),row=>done(row??null),abort,active));active();
       if(authored&&(!authored.sealed||!prior.byteLength))throw failure('sync_update_collision');
+      if(priorRow&&delivery)return await commitReceivedDuplicate(s,header,wire,payload,priorRow,authored??null,delivery);
+      const graph=state(s);ownedGraph=graph;
       let candidate:StreamingCandidate,expectedText:Json|null=null;
       if(metadata.family==='files')candidate=rust(()=>opened.prepareMetadataFile(graph,fresh(),prior));
       else{
@@ -737,7 +765,9 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
       }finally{graph.free();if(!consumed)batch.free();}
     },
     async receive(updateId,wire,keyInput,delivery){
-      const token=await prepareReceive(updateId,wire,keyInput,delivery),value=prepared.get(token)!;
+      const token=await prepareReceive(updateId,wire,keyInput,delivery);
+      if('duplicate' in token)return token;
+      const value=prepared.get(token)!;
       const duplicate=value.prior.byteLength>0;
       try{const result=await transact<{sequence:string}>('readwrite',(tx,done,abort)=>host.readPublication(tx,current=>commitLocal(tx,token,current,done,abort),abort));return {duplicate,sequence:result.sequence};}finally{token.dispose();}
     },

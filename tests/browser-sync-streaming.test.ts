@@ -331,6 +331,62 @@ test('new graph and forced Text or ancestor revisions still reject retained revi
     assert.equal(h.f.row('control','test-publication').value.sequence,'1');
   }
 });
+test('exact authored echo advances only cursor without all-history proof or publication',async()=>{
+  const h=await receiving();await h.commit(await local(h));
+  const pending=await h.engine.api.pending(10),id=pending[0].metadata.key.update_id,wire=await h.engine.api.seal(id,h.key);
+  const publication=clone(h.f.row('control','test-publication')),usage=clone(h.f.row('control','binary-stream-usage:v1'));
+  const fences=h.f.records.get('sync_revisions')!.size,baseline=h.f.requests.length;
+  h.rejectProof();
+  assert.deepEqual(await h.engine.api.receive(id,wire,h.key,delivery),{duplicate:true,sequence:'1'});
+  assert.deepEqual(h.f.row('sync_cursors',['realm','vault']).value,delivery.next);
+  assert.deepEqual(h.f.row('control','test-publication'),publication);
+  assert.deepEqual(h.f.row('control','binary-stream-usage:v1'),usage);
+  assert.equal(h.f.records.get('sync_revisions')!.size,fences);
+  assert.equal(h.f.row('sync_authored',keyOfId(id)).pending,1,'receive is not an upload ACK');
+  const writes=h.f.requests.slice(baseline).filter(r=>['add','put'].includes(r.operation));
+  assert.deepEqual(writes.map(r=>r.store),['sync_cursors']);
+});
+test('exact received Text replay preserves pending dependencies and only advances cursor',async()=>{
+  const h=await receiving(),binding={entry_id:'pending-note',text_bootstrap_id:'pending-bootstrap',namespace:{bootstrap_id:'missing-create',parents:['missing-create']}};
+  const e=emission('pending-text',new Uint8Array([4,5,6]),binding),wire=h.wire(e);
+  await h.engine.api.receive('pending-text',wire,h.key,delivery);
+  const publication=clone(h.f.row('control','test-publication')),text=clone([...h.f.records.get('sync_text')!.values()]),usage=clone(h.f.row('control','binary-stream-usage:v1'));
+  h.rejectProof();
+  const next={expected:delivery.next,next:{...startCursor,after:'2'}};
+  assert.deepEqual(await h.engine.api.receive('pending-text',wire,h.key,next),{duplicate:true,sequence:'1'});
+  assert.deepEqual(h.f.row('control','test-publication'),publication);
+  assert.deepEqual([...h.f.records.get('sync_text')!.values()],text);
+  assert.deepEqual(h.f.row('control','binary-stream-usage:v1'),usage);
+  assert.deepEqual(h.f.row('sync_cursors',['realm','vault']).value,next.next);
+});
+test('exact receipt cursor commit rejects changed bytes and rolls back safely on abort',async()=>{
+  for(const failure of ['payload','wire','abort']){
+    const h=await receiving();await h.commit(await local(h));
+    const id=(await h.engine.api.pending(10))[0].metadata.key.update_id,wire=await h.engine.api.seal(id,h.key);
+    const publication=clone(h.f.row('control','test-publication'));
+    if(failure==='abort')h.f.failNextCommit();
+    else h.f.seed(failure==='payload'?'sync_source_payloads':'sync_source_wires',keyOfId(id),{realmId:'realm',vaultId:'vault',updateId:id,bytes:new Uint8Array([99])});
+    await assert.rejects(h.engine.api.receive(id,wire,h.key,delivery),{code:failure==='abort'?'storage_failure':failure==='payload'?'immutable_source_conflict':'sync_update_collision'});
+    assert.deepEqual(h.f.row('sync_cursors',['realm','vault']).value,startCursor);
+    assert.deepEqual(h.f.row('control','test-publication'),publication);
+    if(failure==='abort')assert.deepEqual(await h.engine.api.receive(id,wire,h.key,delivery),{duplicate:true,sequence:'1'});
+  }
+});
+test('duplicate cursor commit rechecks configuration cursor and active lease after authentication',async()=>{
+  for(const changed of ['config','cursor','lease']){
+    const h=await receiving();await h.commit(await local(h));
+    const id=(await h.engine.api.pending(10))[0].metadata.key.update_id,wire=await h.engine.api.seal(id,h.key),open=h.key.openSyncUpdate;
+    h.key.openSyncUpdate=(raw:string,bytes:Uint8Array)=>{const result=open(raw,bytes);
+      if(changed==='lease')h.retire();
+      else if(changed==='cursor')h.f.seed('sync_cursors',['realm','vault'],{key:['realm','vault'],value:delivery.next});
+      else {const row=clone(h.f.row('sync_state','config'));row.value.key_epoch++;h.f.seed('sync_state','config',row);}
+      return result;
+    };
+    await assert.rejects(h.engine.api.receive(id,wire,h.key,delivery),{code:changed==='lease'?'owner_retired':changed==='cursor'?'sync_cursor_conflict':'sync_snapshot_conflict'});
+    assert.equal(h.f.row('control','test-publication').value.sequence,'1');
+    assert.deepEqual(h.f.row('sync_cursors',['realm','vault']).value,changed==='cursor'?delivery.next:startCursor);
+  }
+});
 test('failed proof and final transaction abort retain cursor publication and source absence',async()=>{
   for(const failure of ['proof','commit']){
     const h=await receiving(),e=emission('remote'),wire=h.wire(e);h.requestVerification(['remote']);h.publishReceivedFolder();
