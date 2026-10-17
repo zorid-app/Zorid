@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Write};
+use std::time::{SystemTime, UNIX_EPOCH};
 use zorid_core::{EntryId, OperationId};
 use zorid_native::{
     DocumentQueryPin, IndexSnapshotId, LiteralQuery, LiteralToken, NativeDocumentError,
@@ -84,7 +85,12 @@ struct BaseOptions {
     view_index: usize,
     search_terms: Vec<String>,
     ignore_paths: Vec<String>,
-    clock_ms: i64,
+    #[serde(
+        default,
+        deserialize_with = "clock_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    clock_ms: Option<i64>,
     timezone: String,
     max_rows: usize,
 }
@@ -94,7 +100,7 @@ impl Default for BaseOptions {
             view_index: 0,
             search_terms: Vec::new(),
             ignore_paths: Vec::new(),
-            clock_ms: 0,
+            clock_ms: None,
             timezone: "UTC".into(),
             max_rows: 1000,
         }
@@ -102,6 +108,12 @@ impl Default for BaseOptions {
 }
 impl BaseOptions {
     fn into_options(self) -> Result<QueryOptions, Value> {
+        self.into_options_with_clock(capture_clock_ms)
+    }
+    fn into_options_with_clock(
+        self,
+        capture: impl FnOnce() -> Result<i64, Value>,
+    ) -> Result<QueryOptions, Value> {
         if self.max_rows == 0 || self.max_rows > 10_000 || self.view_index > 1000 {
             return Err(failure("invalid_budget"));
         }
@@ -109,11 +121,36 @@ impl BaseOptions {
         options.view_index = self.view_index;
         options.search_terms = self.search_terms;
         options.ignore_paths = self.ignore_paths;
-        options.evaluation.clock_ms = self.clock_ms;
+        // Capture one host clock for this invocation. The portable engine gets
+        // an explicit value; explicit zero/custom request clocks never read it.
+        options.evaluation.clock_ms = safe_clock_ms(match self.clock_ms {
+            Some(clock) => clock,
+            None => capture()?,
+        })?;
         options.evaluation.timezone = self.timezone;
         options.max_rows = self.max_rows;
         Ok(options)
     }
+}
+// Missing differs from explicit null: only omission selects the host clock.
+fn clock_option<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<i64>, D::Error> {
+    i64::deserialize(deserializer).map(Some)
+}
+const MAX_SAFE_CLOCK_MS: i64 = 9_007_199_254_740_991;
+fn safe_clock_ms(clock: i64) -> Result<i64, Value> {
+    if !(-MAX_SAFE_CLOCK_MS..=MAX_SAFE_CLOCK_MS).contains(&clock) {
+        return Err(failure("invalid_clock"));
+    }
+    Ok(clock)
+}
+fn capture_clock_ms() -> Result<i64, Value> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| failure("invalid_clock"))?
+        .as_millis();
+    safe_clock_ms(i64::try_from(millis).map_err(|_| failure("invalid_clock"))?)
 }
 #[derive(Clone, PartialEq, Eq)]
 enum Cursor {
@@ -465,4 +502,73 @@ fn pin_sequence(id: &OperationId) -> Result<u64, Value> {
         .ok()
         .filter(|n| *n > 0 && n.to_string() == id.as_str())
         .ok_or_else(|| failure("invalid_pin_id"))
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn omitted_base_clock_is_captured_once_with_utc_and_row_defaults() {
+        let calls = Cell::new(0);
+        let request: BaseOptions = serde_json::from_str("{}").unwrap();
+        let options = request
+            .into_options_with_clock(|| {
+                calls.set(calls.get() + 1);
+                Ok(1_720_000_000_123)
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(options.evaluation.clock_ms, 1_720_000_000_123);
+        assert_eq!(options.evaluation.timezone, "UTC");
+        assert_eq!(options.max_rows, 1000);
+    }
+
+    #[test]
+    fn explicit_zero_and_custom_base_clocks_do_not_read_ambient_time() {
+        for clock in [0, -42, 1_720_000_000_123, MAX_SAFE_CLOCK_MS] {
+            let request: BaseOptions =
+                serde_json::from_str(&format!(r#"{{"clockMs":{clock}}}"#)).unwrap();
+            let options = request
+                .into_options_with_clock(|| panic!("explicit clock must not capture ambient time"))
+                .unwrap();
+            assert_eq!(options.evaluation.clock_ms, clock);
+        }
+    }
+
+    #[test]
+    fn base_clock_rejects_unsafe_values_and_never_falls_back_to_epoch_zero() {
+        for clock in [
+            MAX_SAFE_CLOCK_MS + 1,
+            -MAX_SAFE_CLOCK_MS - 1,
+            i64::MAX,
+            i64::MIN,
+        ] {
+            let request = BaseOptions {
+                clock_ms: Some(clock),
+                ..BaseOptions::default()
+            };
+            let error = request
+                .into_options_with_clock(|| panic!("explicit clock must not capture ambient time"))
+                .unwrap_err();
+            assert_eq!(error["code"], "invalid_clock");
+        }
+        let error = BaseOptions::default()
+            .into_options_with_clock(|| Ok(MAX_SAFE_CLOCK_MS + 1))
+            .unwrap_err();
+        assert_eq!(error["code"], "invalid_clock");
+        let error = BaseOptions::default()
+            .into_options_with_clock(|| Err(failure("clock_unavailable")))
+            .unwrap_err();
+        assert_eq!(error["code"], "clock_unavailable");
+        for raw in [
+            r#"{"clockMs":null}"#,
+            r#"{"clockMs":1.5}"#,
+            r#"{"clockMs":"0"}"#,
+            r#"{"clockMs":NaN}"#,
+        ] {
+            assert!(serde_json::from_str::<BaseOptions>(raw).is_err(), "{raw}");
+        }
+    }
 }
