@@ -3,6 +3,7 @@
 //! changes; an unfinished batch can expose independently rechecked positives.
 use super::external_scan::ExternalSnapshot;
 use super::*;
+use crate::fs_stream::{stream_snapshot, StreamSnapshot, MAX_STREAM_BYTES};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,6 +12,7 @@ use std::{
 };
 use zorid_store::{
     DirectoryCoverage, ExternalScanProof, PhysicalBinding, ScanObservation, ScanObservationKind,
+    Sha256Digest,
 };
 
 const MAX_INVENTORY: u32 = 100_000;
@@ -340,7 +342,7 @@ impl ProgressScan {
         };
         let parent = open_directory(vault, &self.directories, path.parent().as_ref())?;
         let same = if snapshot.kind == EntryKind::File {
-            self.content(vault, path)?.is_some()
+            self.file_snapshot(vault, path)?.is_some()
         } else {
             let Some(child) = fs::optional_directory(&parent, path.file_name())? else {
                 return Ok(false);
@@ -354,7 +356,13 @@ impl ProgressScan {
         open_directory(vault, &self.directories, path.parent().as_ref())?;
         Ok(same)
     }
-    pub(super) fn content(&self, vault: &NativeVault, path: &VaultPath) -> Result<Option<Vec<u8>>> {
+    /// Return only immutable byte evidence and strict text facts. Import callers
+    /// capture typed content separately; inventory discovery never stages it.
+    pub(super) fn file_snapshot(
+        &self,
+        vault: &NativeVault,
+        path: &VaultPath,
+    ) -> Result<Option<StreamSnapshot>> {
         if !self.inventory.authority_matches(vault)? {
             return Err(Error::Busy("external inventory authority changed"));
         }
@@ -367,12 +375,8 @@ impl ProgressScan {
             return Ok(None);
         };
         let parent = open_directory(vault, &self.directories, path.parent().as_ref())?;
-        let limit = usize::try_from(*content_bytes)
-            .map_err(|_| corrupt("external inventory file length overflow"))?;
-        if limit > vault.options.max_file_bytes {
-            return Err(Error::Unsupported(
-                "external inventory file exceeds configured limit",
-            ));
+        if *content_bytes > MAX_STREAM_BYTES {
+            return Err(Error::Unsupported("external inventory file exceeds 64 MiB"));
         }
         // A changed size is an ordinary mismatch, not permission to recapture.
         let Some(file) = fs::regular(&parent, path.file_name())? else {
@@ -382,24 +386,25 @@ impl ProgressScan {
             return Ok(None);
         }
         drop(file);
-        let Some(disk) = fs::snapshot(&parent, path.file_name(), vault.options.max_file_bytes)?
+        let Some(disk) = stream_snapshot(&parent, path.file_name(), MAX_STREAM_BYTES, |_| Ok(()))?
         else {
             return Ok(None);
         };
-        let proof = ExternalScanProof::present(
+        let proof = ExternalScanProof::present_from_digest(
             path.clone(),
             EntryKind::File,
             PhysicalIdentity {
-                inode: disk.identity,
-                parent_inode: fs::identity(&parent)?,
+                inode: disk.identity.clone(),
+                parent_inode: disk.parent_identity.clone(),
             },
-            Some(&disk.bytes),
+            disk.length,
+            Some(Sha256Digest(disk.digest)),
         );
         open_directory(vault, &self.directories, path.parent().as_ref())?;
         if self.proofs.get(path) != Some(&proof) {
             return Ok(None);
         }
-        Ok(Some(disk.bytes))
+        Ok(Some(disk))
     }
 }
 
@@ -761,16 +766,19 @@ impl NativeVault {
                 }
                 let captured = (|| -> Result<Option<(ExternalSnapshot, ExternalScanProof, Option<DirectoryCursor>)>> {
                     saved.check(&directory)?;
-                    let (kind, identity, bytes, child) = match fs::node_type(&directory, &name)? {
+                    let (kind, identity, content_bytes, content_digest, child) = match fs::node_type(&directory, &name)? {
                         Some(rustix::fs::FileType::RegularFile) => {
                             let file = fs::regular(&directory, &name)?.ok_or(Error::Busy("external inventory file disappeared"))?;
                             let length = file.metadata()?.len();
                             drop(file);
-                            if length > self.options.max_file_bytes as u64 { return Err(Error::Unsupported("external inventory file exceeds configured limit")); }
-                            if length > options.max_total_bytes.saturating_sub(total_bytes) { return Ok(None); }
-                            let disk = fs::snapshot(&directory, &name, self.options.max_file_bytes)?.ok_or(Error::Busy("external inventory file disappeared"))?;
-                            if disk.bytes.len() as u64 > options.max_total_bytes.saturating_sub(total_bytes) || started.elapsed() >= options.max_duration { return Ok(None); }
-                            (EntryKind::File, disk.identity, Some(disk.bytes), None)
+                            if length > MAX_STREAM_BYTES { return Err(Error::Unsupported("external inventory file exceeds 64 MiB")); }
+                            let remaining = options.max_total_bytes.saturating_sub(total_bytes);
+                            if length > remaining { return Ok(None); }
+                            // Admit by metadata before reading, then finish this bounded
+                            // file even if the soft duration expires during its capture.
+                            let disk = stream_snapshot(&directory, &name, remaining.min(MAX_STREAM_BYTES), |_| Ok(()))?.ok_or(Error::Busy("external inventory file disappeared"))?;
+                            if disk.parent_identity != saved.identity { return Err(Error::Busy("external inventory file parent changed")); }
+                            (EntryKind::File, disk.identity, disk.length, Some(Sha256Digest(disk.digest)), None)
                         }
                         Some(rustix::fs::FileType::Directory) => {
                             if saved.depth >= inventory.max_depth { return Err(Error::Unsupported("external inventory depth bound exhausted")); }
@@ -779,14 +787,14 @@ impl NativeVault {
                             if directories.values().any(|known| known.identity == cursor.identity && known.path != cursor.path) {
                                 return Err(Error::UnsafePath("external inventory directory inode is aliased".into()));
                             }
-                            (EntryKind::Folder, cursor.identity.clone(), None, Some(cursor))
+                            (EntryKind::Folder, cursor.identity.clone(), 0, None, Some(cursor))
                         }
                         _ => return Err(Error::UnsafePath("external inventory entry is missing, linked or unsupported".into())),
                     };
                     saved.check(&directory)?;
-                    let proof = ExternalScanProof::present(path.clone(), kind, PhysicalIdentity { inode: identity.clone(), parent_inode: saved.identity.clone() }, bytes.as_deref());
+                    let proof = ExternalScanProof::present_from_digest(path.clone(), kind, PhysicalIdentity { inode: identity.clone(), parent_inode: saved.identity.clone() }, content_bytes, content_digest);
                     let snapshot = ExternalSnapshot { kind, identity, parent_identity: saved.identity.clone(), bytes: None };
-                    total_bytes += bytes.as_ref().map_or(0, |b| b.len() as u64);
+                    total_bytes += content_bytes;
                     Ok(Some((snapshot, proof, child)))
                 })();
                 match captured {

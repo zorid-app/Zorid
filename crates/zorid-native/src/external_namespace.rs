@@ -39,6 +39,9 @@ impl NativeVault {
                 "external family reconciliation requires enrollment",
             ));
         }
+        let namespace_origin = OperationId::new("native_external_namespace")?;
+        let observe_origin = OperationId::new("native_external_observe")?;
+        let create_origin = OperationId::new("native_external_create")?;
         let started = std::time::Instant::now();
         let duration = options.max_duration;
         let mut scan = self.external_progress_scan_locked(options)?;
@@ -240,16 +243,40 @@ impl NativeVault {
                                 {
                                     return Err(Error::Busy("external move member changed"));
                                 }
-                                (
-                                    Some((
-                                        path.clone(),
-                                        PhysicalIdentity {
-                                            inode: found.identity.clone(),
-                                            parent_inode: found.parent_identity.clone(),
-                                        },
-                                    )),
-                                    scan.content(self, &path)?,
-                                )
+                                let physical = PhysicalIdentity {
+                                    inode: found.identity.clone(),
+                                    parent_inode: found.parent_identity.clone(),
+                                };
+                                let observed_content = if found.kind == EntryKind::File {
+                                    let expected = scan
+                                        .file_snapshot(self, &path)?
+                                        .ok_or(Error::Busy("file snapshot missing"))?;
+                                    let baseline =
+                                        self.store.projection_baseline(&member.state.id)?;
+                                    let proof = ObservationPhysical {
+                                        physical: physical.clone(),
+                                        expected_binding: Some(member.clone()),
+                                    };
+                                    let (parent, name) = self.paths.parent(&path)?;
+                                    // Capture under the actual destination and historical
+                                    // binding. Namespace import retains it only after moving
+                                    // the baseline, so an ordinary observer can consume it.
+                                    Some(self.capture_observed_file(
+                                        &path,
+                                        &parent,
+                                        &name,
+                                        &namespace_origin,
+                                        baseline.as_ref(),
+                                        Some(&proof),
+                                        &expected,
+                                        baseline.as_ref().is_some_and(|baseline| {
+                                            baseline.content.inline_bytes().is_some()
+                                        }),
+                                    )?)
+                                } else {
+                                    None
+                                };
+                                (Some((path.clone(), physical)), observed_content)
                             } else {
                                 if member.state.id == before.state.id
                                     || scan
@@ -334,7 +361,8 @@ impl NativeVault {
                             root: before.state.id.clone(),
                         },
                     };
-                    let observation = self.store.record_family_namespace_observation(
+                    let observation = self.store.record_family_namespace_observation_content(
+                        &content_stream::core_client()?,
                         &scan.run.scan_id,
                         action,
                         evidence,
@@ -402,7 +430,7 @@ impl NativeVault {
                 if owner.is_some_and(|b| b.state.path != path) {
                     return Err(Error::Busy("external inode retains another physical path"));
                 }
-                let (parent, name) = self.paths.parent(&path)?;
+                let (parent, _) = self.paths.parent(&path)?;
                 if let Some(owner) = owner {
                     let visible = self
                         .store
@@ -414,51 +442,11 @@ impl NativeVault {
                             "external physical branch retained for recovery",
                         ));
                     }
-                    if snapshot.kind == EntryKind::File && self.namespace_obscures(&path)? {
-                        let physical = PhysicalIdentity {
-                            inode: snapshot.identity.clone(),
-                            parent_inode: snapshot.parent_identity.clone(),
-                        };
-                        // Pending namespace work blocks import, but an exact
-                        // historical owner can still retain its observed edit.
-                        // This journal write conveys no new publication authority.
-                        if owner.state.kind == EntryKind::File && owner.physical == physical {
-                            if let Some(base) = self
-                                .store
-                                .projection_baseline(&owner.state.id)?
-                                .filter(|base| base.state == owner.state)
-                            {
-                                let bytes = scan
-                                    .content(self, &path)?
-                                    .ok_or(Error::Busy("file bytes missing"))?;
-                                if base.content != bytes {
-                                    self.verify_observed_file(&path, &parent, &physical, &bytes)?;
-                                    self.paths.verify_parent(&path, &parent)?;
-                                    self.store.record_external_bound(
-                                        &path,
-                                        Some(base),
-                                        bytes,
-                                        &ObservationPhysical {
-                                            physical,
-                                            expected_binding: Some(owner.clone()),
-                                        },
-                                    )?;
-                                }
-                            }
-                        }
-                        return Err(Error::Busy("pending namespace job obscures this path"));
-                    }
                     return if snapshot.kind == EntryKind::File {
-                        self.observe_snapshot(
-                            &path,
-                            &parent,
-                            Some(fs::Snapshot {
-                                identity: snapshot.identity.clone(),
-                                bytes: scan
-                                    .content(self, &path)?
-                                    .ok_or(Error::Busy("file bytes missing"))?,
-                            }),
-                        )
+                        let expected = scan
+                            .file_snapshot(self, &path)?
+                            .ok_or(Error::Busy("file snapshot missing"))?;
+                        self.observe_streamed_file(&path, &parent, &expected, &observe_origin)
                     } else {
                         Ok(None)
                     };
@@ -491,17 +479,23 @@ impl NativeVault {
                     )
                     .map(Some)
                 } else {
-                    let bytes = scan
-                        .content(self, &path)?
-                        .ok_or(Error::Busy("file bytes missing"))?;
-                    let selected = select_external_file_mode(&path, &bytes, mode)?;
-                    let disk = fs::snapshot(&parent, &name, self.options.max_file_bytes)?
-                        .ok_or(Error::Busy("external file disappeared"))?;
-                    if disk.identity != snapshot.identity || disk.bytes != bytes {
-                        return Err(Error::Busy("external file changed"));
-                    }
-                    self.observe_new_family_file(&path, &parent, &disk, selected)
-                        .map(Some)
+                    let expected = scan
+                        .file_snapshot(self, &path)?
+                        .ok_or(Error::Busy("file snapshot missing"))?;
+                    let selected = external_create::select_external_file_mode_from_facts(
+                        &path,
+                        expected.valid_utf8,
+                        expected.has_nul,
+                        mode,
+                    )?;
+                    self.observe_new_family_stream(
+                        &path,
+                        &parent,
+                        &expected,
+                        selected,
+                        &create_origin,
+                    )
+                    .map(Some)
                 }
             })();
             match attempt {

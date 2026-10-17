@@ -15,6 +15,15 @@ pub use zorid_store::{
     LocalChange, PresentedEntry, PresentedState, TextReceiveOutcome, MAX_CHECKPOINT_BYTES,
 };
 pub use zorid_store::{
+    BinaryCaptureRequest, BinaryReadChunk, BinaryReadRef, BinaryReadSession, BinarySourceRef,
+    BinaryStageCommit, BinaryStageLocator, BinaryStageRef, BinaryStageRejection,
+    BinaryStageRejectionCode, BinaryStageRequest, BinaryStageStatus, BinaryStageTerminal,
+    BinaryTarget, CapturedBinaryRef, ContentMetadata, PublishedBinaryRef, Sha256Digest,
+    StageChunkReceipt, StagePhase, StagedBinaryRef, StoredContent, StoredEntryMetadata,
+    StreamingLimits, BINARY_COMMIT_MAX_RECEIPT_BYTES, BINARY_STAGE_MAX_CHUNK_BYTES,
+    BINARY_STAGE_MAX_FILE_BYTES, BINARY_STAGE_MAX_PATH_BYTES, DEFAULT_STREAMING_LIMITS,
+};
+pub use zorid_store::{
     FamilyAuthoredStatus, FamilyCreateMode, FamilyEnvelopeStatus, FamilyReceiveCommit, FamilyScope,
     FamilyStatus,
 };

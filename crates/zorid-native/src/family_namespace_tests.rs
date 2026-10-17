@@ -135,9 +135,12 @@ fn family_move_preserves_old_physical_text_branch_then_publishes_newer_content()
         b"new logical content"
     );
     let attempt = vault.store.namespace_attempts(true).unwrap().pop().unwrap();
+    let evidence = &attempt.members[0].evidence;
     assert_eq!(
-        attempt.members[0].evidence.content.as_deref(),
-        Some(b"before".as_slice())
+        vault
+            .test_content_bytes(Some(&evidence.before), evidence.content.as_ref().unwrap())
+            .unwrap(),
+        b"before"
     );
     let physical = vault
         .store

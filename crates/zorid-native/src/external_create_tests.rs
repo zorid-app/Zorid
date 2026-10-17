@@ -66,13 +66,11 @@ fn external_create_folder_and_exact_text_binary_publish_and_sync() {
             .unwrap()
             .after
             .clone();
+        let baseline = vault.store.projection_baseline(&entry.id).unwrap().unwrap();
         assert_eq!(
             vault
-                .store
-                .projection_baseline(&entry.id)
-                .unwrap()
-                .unwrap()
-                .content,
+                .test_content_bytes(Some(&baseline.state), &baseline.content)
+                .unwrap(),
             bytes
         );
         assert_eq!(

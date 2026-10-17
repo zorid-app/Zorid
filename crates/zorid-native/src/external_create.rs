@@ -115,37 +115,111 @@ impl NativeVault {
         disk: &fs::Snapshot,
         mode: FamilyCreateMode,
     ) -> Result<CommitResult> {
+        self.paths.verify_parent(path, parent)?;
+        let streamed = content_stream::file_snapshot(parent, path.file_name())?
+            .ok_or(Error::Busy("external file disappeared"))?;
+        if streamed.identity != disk.identity
+            || streamed.length != disk.bytes.len() as u64
+            || streamed.digest != zorid_store::Sha256Digest::of(&disk.bytes).0
+        {
+            return Err(Error::Busy("external file differs from supplied snapshot"));
+        }
+        self.observe_new_family_stream(
+            path,
+            parent,
+            &streamed,
+            mode,
+            &OperationId::new("native_external_create")?,
+        )
+    }
+
+    pub(super) fn observe_new_family_stream(
+        &mut self,
+        path: &VaultPath,
+        parent: &File,
+        expected: &crate::fs_stream::StreamSnapshot,
+        mode: FamilyCreateMode,
+        origin: &OperationId,
+    ) -> Result<CommitResult> {
+        self.paths.verify_parent(path, parent)?;
         self.namespace_clear(path)?;
         if self.store.physical_owner_at(path)?.is_some()
             || self.store.list()?.iter().any(|entry| entry.path == *path)
+            || self
+                .store
+                .physical_bindings()?
+                .iter()
+                .any(|binding| binding.physical.inode == expected.identity)
         {
             return Err(Error::Busy("new external file path already has an owner"));
         }
         let physical = PhysicalIdentity {
-            inode: disk.identity.clone(),
-            parent_inode: fs::identity(parent)?,
+            inode: expected.identity.clone(),
+            parent_inode: expected.parent_identity.clone(),
         };
-        self.verify_observed_file(path, parent, &physical, &disk.bytes)?;
-        let observation = self.store.record_external_bound(
+        let proof = ObservationPhysical {
+            physical: physical.clone(),
+            expected_binding: None,
+        };
+        let client = content_stream::core_client()?;
+        let matched = self.store.find_matching_external_observation(
+            &client,
             path,
             None,
-            disk.bytes.clone(),
-            &ObservationPhysical {
-                physical: physical.clone(),
-                expected_binding: None,
-            },
+            Some(&proof),
+            expected.length,
+            &zorid_store::Sha256Digest(expected.digest),
         )?;
-        self.store.prepare_family_external_create(
+        let reused = matched.is_some();
+        let observation = match matched {
+            Some(observation) => {
+                self.verify_observed_content(path, parent, &physical, &observation.content)?;
+                observation
+            }
+            None => {
+                let content = self.capture_observed_file(
+                    path,
+                    parent,
+                    path.file_name(),
+                    origin,
+                    None,
+                    Some(&proof),
+                    expected,
+                    mode == FamilyCreateMode::Text,
+                )?;
+                self.verify_observed_content(path, parent, &physical, &content)?;
+                self.retain_observed_content(path, None, &content, Some(&proof))?
+            }
+        };
+        let unsupported_text =
+            mode == FamilyCreateMode::Text && observation.content.inline_bytes().is_none();
+        // Fresh rejected Text captures carry no accepted Create intent. They
+        // remain inert, so a later explicit Binary enrollment is still allowed.
+        if unsupported_text && !reused {
+            return Err(Error::Unsupported(
+                "external text exceeds supported inline limit",
+            ));
+        }
+        // On a retry, validate the original accepted mode before the generic
+        // Text limit. Store rejects a fresh unsupported Text source before
+        // persisting an intent, and checks a saved Binary intent's mode first.
+        self.store.prepare_family_external_create_content(
+            &client,
             &observation.observation_id,
             EntryKind::File,
             Some(mode),
         )?;
+        if unsupported_text {
+            return Err(Error::Unsupported(
+                "external text exceeds supported inline limit",
+            ));
+        }
         self.point("external_create_prepared");
-        self.verify_observed_file(path, parent, &physical, &disk.bytes)?;
+        self.verify_observed_content(path, parent, &physical, &observation.content)?;
         self.paths.verify_parent(path, parent)?;
         Ok(self
             .store
-            .import_family_external_create(&observation.observation_id)?)
+            .import_family_external_create_content(&client, &observation.observation_id)?)
     }
     pub(super) fn observe_new_family_directory(
         &mut self,
@@ -153,9 +227,15 @@ impl NativeVault {
         parent: &File,
         physical: &PhysicalIdentity,
     ) -> Result<CommitResult> {
+        self.paths.verify_parent(path, parent)?;
         self.namespace_clear(path)?;
         if self.store.physical_owner_at(path)?.is_some()
             || self.store.list()?.iter().any(|entry| entry.path == *path)
+            || self
+                .store
+                .physical_bindings()?
+                .iter()
+                .any(|binding| binding.physical.inode == physical.inode)
         {
             return Err(Error::Busy(
                 "new external directory path already has an owner",
@@ -174,16 +254,18 @@ impl NativeVault {
         {
             return Err(Error::Busy("external directory identity changed"));
         }
-        let observation = self.store.record_external_bound(
+        let observation = self.retain_observed_content(
             path,
             None,
-            Vec::new(),
-            &ObservationPhysical {
+            &StoredContent::InlineBytes(Vec::new()),
+            Some(&ObservationPhysical {
                 physical: physical.clone(),
                 expected_binding: None,
-            },
+            }),
         )?;
-        self.store.prepare_family_external_create(
+        let client = content_stream::core_client()?;
+        self.store.prepare_family_external_create_content(
+            &client,
             &observation.observation_id,
             EntryKind::Folder,
             None,
@@ -195,8 +277,9 @@ impl NativeVault {
         if fs::identity(&current)? != physical.inode {
             return Err(Error::Busy("external directory replaced before import"));
         }
+        self.paths.verify_parent(path, parent)?;
         Ok(self
             .store
-            .import_family_external_create(&observation.observation_id)?)
+            .import_family_external_create_content(&client, &observation.observation_id)?)
     }
 }

@@ -1,6 +1,7 @@
 //! Settle an interrupted file publication before attaching namespace work.
 //! Only saved inode/parent evidence authorizes the old public path. Stages and
 //! alternatives stay retained; a newer logical path never supplies ownership.
+use super::content_stream::{file_snapshot, snapshot_matches_content};
 use super::*;
 
 impl NativeVault {
@@ -28,16 +29,19 @@ impl NativeVault {
         }
         let previous = format!("{}.previous", a.attempt_id.as_str());
         let stage = format!("{}.stage", a.attempt_id.as_str());
-        let mut dest = fs::snapshot(&parent, &name, self.options.max_file_bytes)?;
-        let backup = fs::snapshot(&self.paths.private, &previous, self.options.max_file_bytes)?;
+        let private = self.paths.private.try_clone()?;
+        let mut dest = file_snapshot(&parent, &name)?;
+        let backup = file_snapshot(&private, &previous)?;
         if let Some(old) = &backup {
             if proof
                 .expected_binding
                 .as_ref()
                 .is_none_or(|b| b.physical.inode != old.identity)
-                || a.baseline.as_ref().is_none_or(|b| b.content != old.bytes)
+                || a.baseline
+                    .as_ref()
+                    .is_none_or(|b| !snapshot_matches_content(old, &b.content))
             {
-                self.capture(a, old.bytes.clone())?;
+                self.capture_projection_file(a, &private, &previous)?;
                 return Err(Error::Busy("displaced namespace source changed; retained"));
             }
         }
@@ -48,16 +52,18 @@ impl NativeVault {
             .is_some_and(|d| Some(&d.identity) == a.stage_identity.as_ref())
         {
             let disk = dest.as_ref().unwrap();
-            if disk.bytes != a.target.content {
-                self.capture(a, disk.bytes.clone())?;
+            if !snapshot_matches_content(disk, &a.target.content) {
+                self.capture_projection_file(a, &parent, &name)?;
                 return Err(Error::Busy("published namespace source changed; retained"));
             }
             self.paths.verify_parent(path, &parent)?;
             parent.sync_all()?;
-            let final_disk = fs::snapshot(&parent, &name, self.options.max_file_bytes)?
+            let final_disk = file_snapshot(&parent, &name)?
                 .ok_or(Error::Busy("published namespace source disappeared"))?;
-            if final_disk.identity != disk.identity || final_disk.bytes != a.target.content {
-                self.capture(a, final_disk.bytes)?;
+            if final_disk.identity != disk.identity
+                || !snapshot_matches_content(&final_disk, &a.target.content)
+            {
+                self.capture_projection_file(a, &parent, &name)?;
                 return Err(Error::Busy(
                     "published namespace source changed during handoff",
                 ));
@@ -73,10 +79,10 @@ impl NativeVault {
         // A recorded stage must still exist privately before cancellation. Its
         // disappearance could mean publication followed by an external replace.
         if let Some(identity) = &a.stage_identity {
-            let staged = fs::snapshot(&self.paths.private, &stage, self.options.max_file_bytes)?
+            let staged = file_snapshot(&private, &stage)?
                 .ok_or(Error::Busy("namespace publication stage disappeared"))?;
             if &staged.identity != identity
-                || staged.bytes != a.target.content
+                || !snapshot_matches_content(&staged, &a.target.content)
                 || a.phase == ProjectionPhase::Published
             {
                 return Err(Error::Busy("namespace publication stage changed; retained"));
@@ -92,9 +98,11 @@ impl NativeVault {
                     .expected_binding
                     .as_ref()
                     .is_none_or(|b| b.physical.inode != disk.identity)
-                || a.baseline.as_ref().is_none_or(|b| b.content != disk.bytes)
+                || a.baseline
+                    .as_ref()
+                    .is_none_or(|b| !snapshot_matches_content(disk, &b.content))
             {
-                self.capture(a, disk.bytes.clone())?;
+                self.capture_projection_file(a, &parent, &name)?;
                 return Err(Error::Busy("namespace source occupant changed; retained"));
             }
         } else if let Some(old) = &backup {
@@ -103,10 +111,13 @@ impl NativeVault {
             self.paths.verify_parent(path, &parent)?;
             fs::rename_new(&self.paths.private, &previous, &parent, &name)?;
             self.paths.verify_parent(path, &parent)?;
-            let restored = fs::snapshot(&parent, &name, self.options.max_file_bytes)?
+            let restored = file_snapshot(&parent, &name)?
                 .ok_or(Error::Busy("restored namespace source disappeared"))?;
-            if restored.identity != old.identity || restored.bytes != old.bytes {
-                self.capture(a, restored.bytes)?;
+            if restored.identity != old.identity
+                || restored.length != old.length
+                || restored.digest != old.digest
+            {
+                self.capture_projection_file(a, &parent, &name)?;
                 return Err(Error::Busy("restored namespace source changed"));
             }
             dest = Some(restored);
@@ -116,9 +127,11 @@ impl NativeVault {
             ));
         }
         self.paths.verify_parent(path, &parent)?;
-        let final_disk = fs::snapshot(&parent, &name, self.options.max_file_bytes)?;
-        if final_disk.as_ref().map(|d| (&d.identity, &d.bytes))
-            != dest.as_ref().map(|d| (&d.identity, &d.bytes))
+        let final_disk = file_snapshot(&parent, &name)?;
+        if final_disk
+            .as_ref()
+            .map(|d| (&d.identity, d.length, d.digest))
+            != dest.as_ref().map(|d| (&d.identity, d.length, d.digest))
         {
             return Err(Error::Busy("namespace source changed before cancellation"));
         }

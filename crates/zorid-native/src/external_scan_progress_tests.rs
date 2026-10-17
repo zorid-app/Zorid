@@ -93,7 +93,7 @@ fn enrolled_with_missing_candidate(root: &Path) -> (NativeVault, PhysicalBinding
     (vault, binding)
 }
 
-fn assert_retained_missing(vault: &NativeVault, before: &PhysicalBinding) {
+fn assert_retained_missing(vault: &mut NativeVault, before: &PhysicalBinding) {
     assert_eq!(
         vault
             .store
@@ -113,10 +113,15 @@ fn assert_retained_missing(vault: &NativeVault, before: &PhysicalBinding) {
         .unwrap()
         .unwrap();
     assert_eq!(baseline.state, before.state);
-    assert_eq!(baseline.content, b"retained until complete inventory");
+    assert_eq!(
+        vault
+            .test_content_bytes(Some(&baseline.state), &baseline.content)
+            .unwrap(),
+        b"retained until complete inventory"
+    );
 }
 
-fn observe_visible(vault: &NativeVault, expected: &Inventory, seen: &mut SeenIds) {
+fn observe_visible(vault: &mut NativeVault, expected: &Inventory, seen: &mut SeenIds) {
     let bindings: BTreeMap<_, _> = vault
         .store
         .physical_bindings()
@@ -146,13 +151,11 @@ fn observe_visible(vault: &NativeVault, expected: &Inventory, seen: &mut SeenIds
                 vault.read(&entry.id).unwrap().unwrap().content.as_ref(),
                 Some(bytes)
             );
+            let baseline = vault.store.projection_baseline(&entry.id).unwrap().unwrap();
             assert_eq!(
                 vault
-                    .store
-                    .projection_baseline(&entry.id)
-                    .unwrap()
-                    .unwrap()
-                    .content,
+                    .test_content_bytes(Some(&baseline.state), &baseline.content)
+                    .unwrap(),
                 *bytes
             );
         }
@@ -193,7 +196,7 @@ fn finish_inventory(
         } else {
             active = Some(report.run.scan_id.clone());
         }
-        observe_visible(&vault, expected, seen);
+        observe_visible(&mut vault, expected, seen);
         if report.run.finished {
             assert!(
                 report.run.complete,
@@ -230,7 +233,7 @@ fn finish_inventory(
             report.namespace.is_empty(),
             "partial inventory authorized namespace changes"
         );
-        assert_retained_missing(&vault, missing);
+        assert_retained_missing(&mut vault, missing);
     }
     panic!("bounded inventory did not finish within 128 independent reopen passes");
 }
@@ -253,8 +256,8 @@ fn first_pending(
     assert!(!report.complete);
     assert!(report.namespace.is_empty());
     assert!(report.imported.len() <= 32);
-    observe_visible(&vault, expected, seen);
-    assert_retained_missing(&vault, missing);
+    observe_visible(&mut vault, expected, seen);
+    assert_retained_missing(&mut vault, missing);
     report.run.scan_id
 }
 
@@ -271,7 +274,7 @@ fn assert_invalidated(root: &Path, scan: &OperationId, missing: &PhysicalBinding
         );
         assert!(!report.complete);
         assert!(report.namespace.is_empty());
-        assert_retained_missing(&vault, missing);
+        assert_retained_missing(&mut vault, missing);
         if report.run.finished {
             assert!(!report.issues.is_empty());
             let durable = vault.store.scan_run(scan).unwrap();
@@ -315,7 +318,7 @@ fn external_scan_progress_more_than_257_directories_survives_bounded_reopens() {
     assert!(repeat.complete, "{repeat:?}");
     assert!(repeat.imported.is_empty());
     assert!(repeat.namespace.is_empty());
-    observe_visible(&vault, &expected, &mut seen);
+    observe_visible(&mut vault, &expected, &mut seen);
 }
 
 #[test]
@@ -370,8 +373,8 @@ fn pending_with_enumerated_child(
             assert_eq!(&report.run.scan_id, previous);
         }
         active = Some(report.run.scan_id.clone());
-        observe_visible(&vault, expected, seen);
-        assert_retained_missing(&vault, missing);
+        observe_visible(&mut vault, expected, seen);
+        assert_retained_missing(&mut vault, missing);
         if let Some(note) = vault
             .list()
             .unwrap()
@@ -558,7 +561,12 @@ fn external_scan_progress_ready_retries_partial_moved_edit_and_new_child() {
         assert_eq!(retained.state.path, path("AMoved/note.custom"));
         assert_eq!(retained.content.as_deref(), Some(edited.as_slice()));
         let baseline = vault.store.projection_baseline(&note.id).unwrap().unwrap();
-        assert_eq!(baseline.content, edited);
+        assert_eq!(
+            vault
+                .test_content_bytes(Some(&baseline.state), &baseline.content)
+                .unwrap(),
+            edited
+        );
         assert_eq!(
             vault
                 .store
