@@ -467,3 +467,94 @@ fn complete_content_distinguishes_empty_from_pending_insert_and_delete_after_res
     corrupt.snapshot = vec![255];
     assert!(corrupt.complete_materialized_utf8().is_err());
 }
+
+#[test]
+fn rebind_revision_preserves_exact_causal_state_and_rejects_stale_or_invalid_state() {
+    let initial = empty();
+    let authored = plan_authored_text(
+        &initial,
+        &request(&initial, "authored", 1, vec![insert(0, "\u{feff}Hello 😀")]),
+        &context(&["namespace-bootstrap"]),
+    )
+    .unwrap();
+    for state in [&initial, &authored.plan.next_state] {
+        let rebound = state
+            .rebind_revision(&state.version, &rev("moved"))
+            .unwrap();
+        let mut expected = state.clone();
+        expected.version = rev("moved");
+        assert_eq!(rebound, expected);
+        assert_eq!(restart(&rebound), expected);
+        assert_eq!(
+            rebound.materialized_utf8().unwrap(),
+            state.materialized_utf8().unwrap()
+        );
+        assert_eq!(
+            state.rebind_revision(&rev("stale"), &rev("moved")),
+            Err(SyncError::VersionConflict)
+        );
+        assert_eq!(
+            state.rebind_revision(&state.version, &state.version),
+            Err(SyncError::VersionConflict)
+        );
+    }
+    let mut corrupt = authored.plan.next_state.clone();
+    corrupt.snapshot = vec![255];
+    assert!(corrupt
+        .rebind_revision(&corrupt.version, &rev("moved"))
+        .is_err());
+    let mut missing_owner = authored.plan.next_state.clone();
+    missing_owner.actors.clear();
+    assert_eq!(
+        missing_owner.rebind_revision(&missing_owner.version, &rev("moved")),
+        Err(SyncError::InvalidState)
+    );
+}
+
+#[test]
+fn rebind_revision_retains_pending_insert_and_delete_dependencies() {
+    let initial = empty();
+    let first = plan_authored_text(
+        &initial,
+        &request(&initial, "first", 1, vec![insert(0, "abc")]),
+        &context(&["namespace-bootstrap"]),
+    )
+    .unwrap();
+    for (name, edit, expected) in [
+        ("insert", insert(3, "!"), b"abc!".as_slice()),
+        (
+            "delete",
+            Edit::Delete {
+                index: 0,
+                length: 3,
+            },
+            b"".as_slice(),
+        ),
+    ] {
+        let second = plan_authored_text(
+            &first.plan.next_state,
+            &request(&first.plan.next_state, name, 1, vec![edit]),
+            &context(&["first"]),
+        )
+        .unwrap();
+        let pending = receive(&initial, &incoming(&second), "pending")
+            .next_state
+            .unwrap();
+        assert_eq!(pending.complete_materialized_utf8().unwrap(), None);
+        let rebound = pending
+            .rebind_revision(&pending.version, &rev("namespace-change"))
+            .unwrap();
+        assert_eq!(rebound.identity, pending.identity);
+        assert_eq!(rebound.snapshot, pending.snapshot);
+        assert_eq!(rebound.actors, pending.actors);
+        let rebound = restart(&rebound);
+        assert_eq!(rebound.complete_materialized_utf8().unwrap(), None);
+        let complete = receive(&rebound, &incoming(&first), "complete")
+            .next_state
+            .unwrap();
+        assert_eq!(
+            complete.complete_materialized_utf8().unwrap(),
+            Some(expected.to_vec())
+        );
+    }
+}

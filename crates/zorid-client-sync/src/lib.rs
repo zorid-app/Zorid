@@ -105,6 +105,18 @@ impl TextState {
             Ok(Some(doc.text().into_bytes()))
         }
     }
+    /// Changes only the local revision after a namespace transition. Validates
+    /// the persisted causal state, including retained pending dependencies, and
+    /// preserves identity, snapshot bytes and actor ownership exactly. This does
+    /// not authorize namespace changes, emit a text update or prove publication.
+    /// The host must reserve a globally unused revision in the same transaction.
+    pub fn rebind_revision(&self, expected: &Revision, next: &Revision) -> Result<Self> {
+        check_version(self, expected, next)?;
+        load(self, 0)?;
+        let mut rebound = self.clone();
+        rebound.version = next.clone();
+        Ok(rebound)
+    }
     /// A host must persist this baseline only when it corresponds to the bytes
     /// actually projected/observed on disk, retaining its causal snapshot.
     pub fn projection_baseline(&self) -> Result<TextBaseline> {
