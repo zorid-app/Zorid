@@ -239,7 +239,19 @@ fn runtime_file(
     }
     let fullname = record.path.rsplit('/').next().unwrap_or_default();
     let (basename, extension) = fullname.rsplit_once('.').unwrap_or((fullname, ""));
-    let mut bytes = 0usize;
+    let mut bytes = record.path.len().saturating_add(
+        record
+            .tags
+            .iter()
+            .map(|tag| tag.len().saturating_add(16))
+            .sum::<usize>(),
+    );
+    if bytes > 8 * 1024 * 1024 {
+        return Err(ExpressionDiagnostic::new(
+            "budget",
+            "File facts exceed byte budget",
+        ));
+    }
     let mut hints = std::collections::HashMap::new();
     for (name, hint) in &record.property_types {
         bytes = bytes.saturating_add(name.len() + 16);

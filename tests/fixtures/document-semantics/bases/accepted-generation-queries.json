@@ -900,8 +900,7 @@
           "A.md": {
             "formula.out": {
               "type": "error",
-              "code": "unavailable",
-              "message": "Relationship metadata is unavailable or incomplete"
+              "code": "unavailable"
             }
           }
         },
@@ -915,7 +914,19 @@
             "resolver": "link-nfc-lower-segment-utf16-v1",
             "query": "literal-lines-exact-v1"
           }
-        }
+        },
+        "metadataComplete": false,
+        "metadataIssues": [
+          {
+            "witness": {
+              "entryId": "graph-b",
+              "revision": "r1"
+            },
+            "exclusion": "unreadable",
+            "diagnostics": [],
+            "propertiesUnavailable": true
+          }
+        ]
       }
     }
   ]

@@ -84,7 +84,7 @@ fn budgets_cancellation_and_missing_host_facts_are_observable() {
         evaluate_expression("file.links.length", &record, &options)
             .unwrap_err()
             .code,
-        "unsupported"
+        "unavailable"
     );
     let cancellation = zorid_bases::OperationCancellation::default();
     cancellation.cancel();
@@ -328,5 +328,60 @@ fn typed_date_properties_and_unbound_context_keep_their_meaning() {
             .unwrap()
             .value,
         BaseValue::Null
+    );
+}
+
+#[test]
+fn shared_metadata_date_hints_and_nested_case_order_are_observable() {
+    let record = DetachedRecord {
+        path: "a.md".into(),
+        properties: vec![
+            ("day".into(), PropertyValue::String("2024-01-15".into())),
+            ("invalid".into(), PropertyValue::String("not a date".into())),
+            (
+                "config".into(),
+                PropertyValue::Object(vec![
+                    ("Title".into(), PropertyValue::String("first".into())),
+                    ("title".into(), PropertyValue::String("second".into())),
+                ]),
+            ),
+        ],
+        property_types: vec![
+            ("day".into(), zorid_bases::PropertyType::Date),
+            ("invalid".into(), zorid_bases::PropertyType::Datetime),
+        ],
+        ..Default::default()
+    };
+    let options = EvaluationOptions::default();
+    assert_eq!(
+        evaluate_expression("day", &record, &options).unwrap().value,
+        BaseValue::Date {
+            timestamp: 1705276800000,
+            has_time: false
+        }
+    );
+    assert_eq!(
+        evaluate_expression("invalid", &record, &options)
+            .unwrap()
+            .value,
+        BaseValue::Null
+    );
+    assert_eq!(
+        evaluate_expression("config.TITLE", &record, &options)
+            .unwrap()
+            .value,
+        BaseValue::String {
+            value: "first".into()
+        }
+    );
+    let mut duplicate = record;
+    duplicate
+        .property_types
+        .push(("day".into(), zorid_bases::PropertyType::Text));
+    assert_eq!(
+        evaluate_expression("day", &duplicate, &options)
+            .unwrap_err()
+            .code,
+        "input"
     );
 }

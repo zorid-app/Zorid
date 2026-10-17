@@ -63,7 +63,7 @@ fn generation_factory_canonical_graph_corpus() {
             .iter()
             .map(|row| (row.path.clone(), serde_json::to_value(&row.values).unwrap()))
             .collect::<serde_json::Map<_, _>>();
-        let actual = json!({"paths":result.rows.iter().map(|row|&row.path).collect::<Vec<_>>(),"snapshotId":result.snapshot_id,"relationshipsAvailable":result.relationships_available,"values":values});
+        let actual = json!({"paths":result.rows.iter().map(|row|&row.path).collect::<Vec<_>>(),"snapshotId":result.snapshot_id,"relationshipsAvailable":result.relationships_available,"metadataComplete":result.metadata_complete,"metadataIssues":result.metadata_issues,"values":values});
         for (key, expected) in case.expected.as_object().unwrap() {
             let matches = if key == "diagnostics" {
                 expected.as_array().unwrap().iter().all(|e| {

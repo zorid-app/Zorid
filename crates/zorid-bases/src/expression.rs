@@ -1182,11 +1182,7 @@ impl<'a> Evaluator<'a> {
             "duration" => parse_duration(&plain_string(&first))
                 .map(RuntimeValue::Duration)
                 .unwrap_or_else(|| RuntimeValue::Error("Invalid duration".to_string())),
-            "file" => match first {
-                RuntimeValue::File(file) => RuntimeValue::File(file),
-                RuntimeValue::Link(link) => self.file_from_link(&link),
-                value => self.file_from_target(&plain_string(&value)),
-            },
+
             "html" => RuntimeValue::Html(plain_string(&first)),
             "image" => RuntimeValue::Image(match first {
                 RuntimeValue::File(file) => file.path,
