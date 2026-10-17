@@ -194,7 +194,8 @@ impl NativeVault {
                     }
                 };
                 let result: Result<(ScanObservation, Option<String>)> = (|| {
-                    if active_files.contains(&path)
+                    if self.namespace_obscures(&path)?
+                        || active_files.contains(&path)
                         || active_dirs
                             .iter()
                             .any(|p| p == &path || path.is_descendant_of(p))
@@ -366,7 +367,10 @@ impl NativeVault {
                     let Some(baseline) = baseline else {
                         continue;
                     };
-                    if active_files.contains(&entry.path) || active_dirs.contains(&entry.path) {
+                    if self.namespace_obscures(&entry.path)?
+                        || active_files.contains(&entry.path)
+                        || active_dirs.contains(&entry.path)
+                    {
                         complete = false;
                         issues.push(ScanIssue {
                             path: Some(entry.path),

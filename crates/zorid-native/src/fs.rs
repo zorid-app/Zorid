@@ -254,14 +254,29 @@ impl Paths {
         Ok(file)
     }
     pub fn parent(&self, path: &VaultPath) -> Result<(File, String)> {
+        let (dir, name) = self.parent_scope(path)?;
+        exact(&dir, &name)?;
+        Ok((dir, name))
+    }
+    /// Namespace preflight may need a future case-only leaf spelling while the
+    /// old source still occupies its alias. All ancestor spellings remain exact.
+    /// This does not authorize reading/writing that unchecked leaf.
+    pub(crate) fn parent_scope(&self, path: &VaultPath) -> Result<(File, String)> {
         let mut parts: Vec<&str> = path.as_str().split('/').collect();
         let name = parts.pop().unwrap().to_owned();
         let mut dir = self.root.try_clone()?;
         for part in parts {
             dir = open_dir_at(&dir, part)?;
         }
-        exact(&dir, &name)?;
         Ok((dir, name))
+    }
+    pub(crate) fn verify_parent_scope(&self, path: &VaultPath, expected: &File) -> Result<()> {
+        self.verify()?;
+        let (current, _) = self.parent_scope(path)?;
+        if identity(&current)? != identity(expected)? {
+            return Err(Error::Busy("namespace parent directory moved or replaced"));
+        }
+        Ok(())
     }
     pub fn verify_parent(&self, path: &VaultPath, expected: &File) -> Result<()> {
         self.verify()?;
@@ -295,6 +310,18 @@ pub(crate) fn optional_directory(parent: &File, name: &str) -> Result<Option<Fil
             "expected real directory: {name}"
         ))),
     }
+}
+/// Emptiness is independent of UTF-8 representability and enumeration budgets.
+/// Stop at the first real entry, including names the logical vault cannot import.
+pub(crate) fn directory_empty(directory: &File) -> Result<bool> {
+    for item in Dir::read_from(directory)? {
+        let item = item?;
+        let name = item.file_name().to_bytes();
+        if name != b"." && name != b".." {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 pub(crate) fn directory_names(directory: &File, limit: usize, root: bool) -> Result<Vec<String>> {
     let mut names = Vec::new();

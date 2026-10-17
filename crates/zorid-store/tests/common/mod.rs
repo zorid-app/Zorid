@@ -14,6 +14,7 @@ pub fn downgrade_v6_to_v5(db: &rusqlite::Connection) {
     CREATE UNIQUE INDEX active_directory_projection ON directory_attempts(entry_id) WHERE completed = 0;
     INSERT INTO directory_attempts SELECT d.attempt_id,d.entry_id,o.operation_id,d.completed,json_set(json_remove(d.record,'$.job_id','$.origin'),'$.operation_id',o.operation_id,'$.sequence',cast(o.sequence AS TEXT)) FROM directory_attempts_v6 d JOIN projection_jobs j ON j.job_id=d.job_id JOIN operations o ON o.operation_id=json_extract(j.record,'$.origin.operation_id');
     DROP TABLE directory_attempts_v6;
+    DROP TABLE IF EXISTS namespace_attempts;
     DROP TABLE projection_jobs;
     DROP TABLE revision_fences;
     DROP TABLE checkpoint_heads; DROP TABLE checkpoint_revisions;

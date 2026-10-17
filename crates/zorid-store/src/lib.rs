@@ -9,6 +9,11 @@ pub use checkpoints::{
     Checkpoint, CheckpointError, CheckpointMetadata, CheckpointPage, CheckpointScope,
     CheckpointWrite, MAX_CHECKPOINT_BYTES,
 };
+mod namespace;
+pub use namespace::{
+    NamespaceAttempt, NamespaceEvidence, NamespaceMember, MAX_NAMESPACE_EVIDENCE_BYTES,
+    MAX_NAMESPACE_MEMBERS,
+};
 mod host_intents;
 pub use host_intents::{
     HostIntentAcknowledgment, HostIntentPage, HostIntentRef, HostIntentState, HostIntentView,
@@ -35,7 +40,7 @@ use zorid_core::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const APPLICATION_ID: i64 = 0x5a4f5244; // ZORD
 const SCHEMA: &[(&str, &str)] = &[
     ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB)"),
@@ -48,7 +53,7 @@ const SCHEMA: &[(&str, &str)] = &[
 fn check_schema(connection: &Connection) -> Result<i64> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
-    if !matches!(version, 0 | 1 | 2 | 3 | 4 | 5 | SCHEMA_VERSION) {
+    if !matches!(version, 0 | 1 | 2 | 3 | 4 | 5 | 6 | SCHEMA_VERSION) {
         return Err(StoreError::UnsupportedSchema(version));
     }
     if version == 0 {
@@ -103,6 +108,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             } else {
                 &[]
             })
+            .chain(if version >= 7 { namespace::SCHEMA } else { &[] })
             .chain(if version >= 6 { text_sync::SCHEMA } else { &[] })
             .chain(if version >= 6 {
                 checkpoints::SCHEMA
@@ -155,6 +161,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             } else {
                 &[]
             })
+            .chain(if version >= 7 { namespace::SCHEMA } else { &[] })
             .chain(if version >= 6 { text_sync::SCHEMA } else { &[] })
             .chain(if version >= 6 {
                 checkpoints::SCHEMA
@@ -372,6 +379,11 @@ impl Store {
             directory::migrate_job_schema(&tx)?;
             text_sync::migrate(&tx)?;
             checkpoints::migrate(&tx)?;
+        }
+        if version < 7 {
+            for (_, sql) in namespace::SCHEMA {
+                tx.execute_batch(sql)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;

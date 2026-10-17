@@ -4,6 +4,7 @@ impl NativeVault {
     /// Imports an observed existing folder, or binds legacy imported metadata to
     /// its first physical identity. An existing baseline cannot be rebound.
     pub(super) fn observe_directory(&mut self, path: &VaultPath) -> Result<Option<CommitResult>> {
+        self.namespace_clear(path)?;
         let (parent, name) = self.paths.parent(path)?;
         let folder =
             fs::optional_directory(&parent, &name)?.ok_or(Error::Busy("directory disappeared"))?;
@@ -61,6 +62,9 @@ impl NativeVault {
         Ok(imported)
     }
     pub(super) fn project_directory(&mut self, id: &EntryId) -> Result<()> {
+        if let Some(entry) = self.store.read(id)? {
+            self.namespace_clear(&entry.state.path)?;
+        }
         if let Some(a) = self
             .store
             .directory_attempts(false)?

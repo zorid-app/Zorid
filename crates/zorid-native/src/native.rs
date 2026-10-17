@@ -11,6 +11,8 @@ mod checkpoints;
 mod directory;
 #[path = "host_intents.rs"]
 mod host_intents;
+#[path = "namespace.rs"]
+mod namespace;
 #[path = "rescan.rs"]
 mod rescan;
 #[path = "text_sync.rs"]
@@ -133,6 +135,7 @@ impl NativeVault {
                 })
                 .collect(),
             scan: self.store.latest_scan()?,
+            namespace_attempts: self.namespace_attempt_statuses()?,
             attempts: self
                 .store
                 .projection_attempts(false)?
@@ -166,10 +169,23 @@ impl NativeVault {
     }
     fn apply_locked(&mut self, request: &MutationRequest) -> Result<ApplyOutcome> {
         if let Some(commit) = self.store.replay(request)? {
-            let projection = self.project_status(request.mutation.id());
+            let projection = if matches!(
+                request.mutation,
+                Mutation::Move { .. } | Mutation::Delete { .. }
+            ) {
+                self.namespace_status(&request.operation_id)
+            } else {
+                self.project_status(request.mutation.id())
+            };
             return Ok(ApplyOutcome { commit, projection });
         }
         self.store.validate_host_execution(request)?;
+        if matches!(
+            request.mutation,
+            Mutation::Move { .. } | Mutation::Delete { .. }
+        ) {
+            return self.apply_namespace_locked(request);
+        }
         let (path, bytes): (VaultPath, &[u8]) = match &request.mutation {
             Mutation::Create {
                 path,
@@ -195,6 +211,7 @@ impl NativeVault {
             ),
             _ => return Err(Error::Unsupported("physical moves and deletions")),
         };
+        self.namespace_clear(&path)?;
         if bytes.len() > self.options.max_file_bytes {
             return Err(Error::Unsupported(
                 "file exceeds configured whole-file limit",
@@ -273,6 +290,7 @@ impl NativeVault {
     }
     fn recover_locked(&mut self) -> Result<ReconcileReport> {
         let mut report = ReconcileReport::default();
+        self.recover_namespaces(&mut report)?;
         for a in self.store.directory_attempts(false)? {
             match self.resume_directory(&a) {
                 Ok(()) => report.projected.push(a.target.id),
@@ -368,6 +386,7 @@ impl NativeVault {
         Ok(())
     }
     fn observe(&mut self, path: &VaultPath) -> Result<Option<CommitResult>> {
+        self.namespace_clear(path)?;
         let (parent, name) = self.paths.parent(path)?;
         if fs::node_type(&parent, &name)? == Some(rustix::fs::FileType::Directory) {
             return self.observe_directory(path);
@@ -381,6 +400,7 @@ impl NativeVault {
         parent: &File,
         disk: Option<fs::Snapshot>,
     ) -> Result<Option<CommitResult>> {
+        self.namespace_clear(path)?;
         self.paths.verify_parent(path, &parent)?;
         let state = self.store.list()?.into_iter().find(|s| s.path == *path);
         let Some(disk) = disk else {
@@ -487,6 +507,9 @@ impl NativeVault {
         )?))
     }
     fn project(&mut self, id: &EntryId) -> Result<()> {
+        if let Some(entry) = self.store.read(id)? {
+            self.namespace_clear(&entry.state.path)?;
+        }
         self.paths.verify()?;
         if let Some(a) = self
             .store

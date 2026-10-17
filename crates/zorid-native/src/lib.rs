@@ -140,6 +140,26 @@ pub struct Status {
     pub observations: Vec<ObservationStatus>,
     pub directory_attempts: Vec<FolderAttemptStatus>,
     pub scan: Option<ScanRun>,
+    /// Durable namespace journal metadata; paths are relative to the vault root.
+    pub namespace_attempts: Vec<NamespaceAttemptStatus>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NamespaceAttemptStatus {
+    pub job_id: OperationId,
+    pub completed: bool,
+    pub members: Vec<NamespaceMemberStatus>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NamespaceMemberStatus {
+    pub entry_id: EntryId,
+    pub source: VaultPath,
+    pub target: VaultPath,
+    /// This is a reserved recovery location; it may be empty after publication.
+    pub recovery_path: String,
+    pub directory_stage_path: Option<String>,
+    pub captured: bool,
+    pub published: bool,
+    pub finished: bool,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttemptStatus {
@@ -365,3 +385,6 @@ mod tests;
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod sync_tests;
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod namespace_tests;

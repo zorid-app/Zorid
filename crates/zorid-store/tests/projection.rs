@@ -32,7 +32,7 @@ fn migrates_v1_preserving_receipts_and_intents() {
     assert_eq!(
         c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        6
+        7
     );
 }
 #[test]
