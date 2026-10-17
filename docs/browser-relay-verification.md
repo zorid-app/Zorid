@@ -22,7 +22,12 @@ IndexedDB and loopback Rust/SQLite relay (not direct storage seeding):
   Sync was deliberately withheld during edits; network connectivity itself was
   not disabled. This proves concurrent-edit convergence in this fixture.
 
-Remaining: binary transfer, moves/deletions/folders, actual disconnected/restart
+- Binary transfer also passed: browser A imported a 4,106-byte fixture containing
+  all byte values and invalid UTF-8, then browser B received three updates and read
+  the same length and SHA256 as the original local file:
+  `1747d2793a50e7b872a8c354e68264a9a10043101766ed8f63d6b74d4ca74c8a`.
+
+Remaining: moves/deletions/folders, actual disconnected/restart
 flow, account-B browser isolation, integrated CLI/Electron and backup/restore.
 This is runtime/core proof, not the main editor's storage integration or production
 security acceptance.
