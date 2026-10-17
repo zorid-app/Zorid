@@ -108,7 +108,13 @@ resulting envelope before upload; retries resend those exact bytes. Calling
 different header/nonce/ciphertext under one identity; it does not authenticate
 either envelope and cannot replace endpoint authorization.
 
-## Relay and client transaction contracts (not implemented yet)
+## Relay and client transaction contracts
+
+Implementation update: the relay is on main and the native text-sync client/CLI
+slice is integrated in `6b450d7`/`13214dd`. See
+`native-sync-integration-acceptance.md` for exact verification. The contracts below
+also constrain remaining browser and full-file integration; they do not imply
+all client acceptance gates have passed.
 
 First transport: authenticated HTTP polling with these bounded operations:
 

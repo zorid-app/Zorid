@@ -52,6 +52,24 @@ to invent encryption primitives or a claim of compatibility with either system.
 
 ### Integration checkpoint — 2026-10-16 23:10 local
 
+- Latest promotion: `6b450d7`/`13214dd` integrate the reviewed native schema6,
+  text-sync CLI, desktop-host/wrapper and shared protocol decoder batch.
+  Candidate `3660c77` plus resolved lock passed 202 Rust tests (session14067),
+  6 protocol tests, fresh CLI/host builds and 46 CJS tests (session72147), all
+  exit0. Real CLI processes converged offline text through a loopback relay;
+  real desktop-host/CLI fixtures covered concurrent access and checkpoint
+  restart. See `native-sync-integration-acceptance.md`. Ordinary app storage
+  selection, Electron UI, browser/server convergence, full namespace/binary
+  sync and clean-client encrypted restore remain incomplete.
+- Editor insertion batch is integrated as `dedbcfa` with evidence `56c9d12`:
+  112 affected/regression tests and full TypeScript passed on main-based
+  candidate `6e44bf2`. No new native UI or production build claim.
+- Next native namespace source `61a98e3` passed 137 focused tests after a missing
+  import and Linux-only filename fixture correction; per-member journal
+  optimization is ongoing in its isolated worktree. Text-v2/file-v2 and schema8
+  work have separate owners and coordinated APIs. Root has released the heavy
+  slot after session72147; no root verification process remains running.
+
 - Main `227f084` contains both native/CLI batches and editor E1/E2. Native batch2
   candidate `3df1de8` passed 109 tests in a fresh target (session30255 exit0),
   covering folder creation, bounded rescans and coherent reads/change cursors.
