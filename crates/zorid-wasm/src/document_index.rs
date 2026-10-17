@@ -299,8 +299,17 @@ struct BaseReadOptions {
     clock_ms: Option<i64>,
     timezone: Option<String>,
     max_rows: Option<usize>,
+    #[serde(default, deserialize_with = "present_option")]
     current_entry_id: Option<EntryId>,
+    #[serde(default, deserialize_with = "present_option")]
     max_steps: Option<usize>,
+}
+fn present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 fn base_error(code: &str, diagnostic: &impl Serialize) -> JsValue {
     JsValue::from_str(

@@ -66,13 +66,22 @@ pub struct QueryOptions {
     pub ignore_paths: Vec<String>,
     pub evaluation: EvaluationOptions,
     /// Select `this` only from the exact query snapshot, never from caller fields.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "current_entry_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub current_entry_id: Option<crate::EntryId>,
     pub max_steps: usize,
     pub max_scanned: usize,
     pub max_rows: usize,
     pub max_groups: usize,
     pub max_output_bytes: usize,
+}
+fn current_entry_option<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<crate::EntryId>, D::Error> {
+    crate::EntryId::deserialize(deserializer).map(Some)
 }
 impl Default for QueryOptions {
     fn default() -> Self {

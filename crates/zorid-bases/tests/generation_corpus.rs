@@ -216,7 +216,7 @@ fn current_entry_selection_rejects_missing_conflicting_and_unbounded_contexts() 
         "stale-source"
     );
     options.evaluation.current_record = None;
-    for steps in [0, 1, zorid_bases::MAX_QUERY_STEPS + 1] {
+    for steps in [0, 1, QueryOptions::default().max_steps + 1] {
         options.max_steps = steps;
         assert_eq!(
             query_generation(&program, &generation, &request.facts, &options)
@@ -224,5 +224,18 @@ fn current_entry_selection_rejects_missing_conflicting_and_unbounded_contexts() 
                 .code,
             "budget"
         );
+    }
+}
+
+#[test]
+fn current_entry_and_step_options_reject_present_null_and_duplicate_fields() {
+    assert!(serde_json::from_str::<QueryOptions>("{}").is_ok());
+    for raw in [
+        r#"{"currentEntryId":null}"#,
+        r#"{"maxSteps":null}"#,
+        r#"{"currentEntryId":"one","currentEntryId":"two"}"#,
+        r#"{"maxSteps":1,"maxSteps":2}"#,
+    ] {
+        assert!(serde_json::from_str::<QueryOptions>(raw).is_err(), "{raw}");
     }
 }

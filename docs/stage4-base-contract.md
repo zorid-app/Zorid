@@ -344,3 +344,13 @@ per-expression ceiling. Clock and maxRows defaults are unchanged. The shared
 canonical generation corpus adds `.base` context, Markdown context and omitted
 context cases for native/WASM parity; new source requires the coordinator's
 serialized native/WASM proof before those additions are verified.
+
+
+Only omission defaults the new selector/step options. Present `null`, duplicate
+fields and malformed strong IDs are rejected in raw Rust and WASM decoding as
+well as admitted JS transports. Shared diagnostics keep codes such as
+`stale-source` and `numeric-domain`. The desktop stdio outer error category maps
+hyphens to underscores (`stale_source`, `numeric_domain`) to obey its existing
+strict frame grammar; typed diagnostics inside successful query reports retain
+the shared codes. Unexpected non-category spellings become
+`document_query_failed`, never an invalid frame or arbitrary caught text.
