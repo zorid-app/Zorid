@@ -16,7 +16,7 @@ test('packaged HTML allows local media blobs without broadening other resource p
   const temporary = await mkdtemp(path.join(tmpdir(), 'zorid-media-csp-'));
   let compiler;
   try {
-    const config = require('../webpack.config.cjs');
+    const config = require('../webpack.config.cjs')({});
     // Exercise the real packaging template/plugin with a tiny entry. No renderer
     // compilation or PDF/math asset copying is needed to verify the shipped CSP.
     const plugins = config.plugins.filter(plugin => plugin instanceof HtmlWebpackPlugin);

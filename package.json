@@ -17,6 +17,8 @@
     "mobile:ios": "cap open ios",
     "mobile:android": "cap open android",
     "check": "tsc --noEmit",
+    "build:core": "node scripts/build-core-wasm.cjs",
+    "build:desktop": "tsc --noEmit && webpack --mode production --env target=desktop",
     "package:stage": "node scripts/stage-desktop.mjs",
     "package:mac": "node scripts/package-macos.mjs",
     "package:mac:unsigned": "node scripts/package-macos.mjs --unsigned",
