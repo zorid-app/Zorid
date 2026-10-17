@@ -30,6 +30,12 @@ process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(b
  if(mode==='reject'){send({version:1,request_id:req.request_id,ok:false,error:{code:'revision_conflict',commit_uncertain:false}});continue;}
  let responseBody = Buffer.alloc(0);
  let result = req.command.method==='apply' ? {commit:{operation_id:req.command.operation_id,sequence:'1',changes:[{before:null,after:{id:req.command.mutation.id,path:req.command.mutation.path,kind:'file',revision:'new',deleted:false}}]},projection:{state:'pending'},captured:[...body]} : {pending_outbox:'0',pending_projection:'0',attempts:[],observations:[],command:req.command};
+ if(mode.startsWith('family_journal_') && req.command.method==='changes_after') {
+  const origin=mode==='family_journal_remote'?{kind:'received_update',realm_id:'realm',vault_id:'vault',update_id:'update'}:{kind:'local_command',operation_id:'operation'};
+  result={changes:[{cursor:'1',origin,requires_full_reload:true,entries:[]}],next_cursor:'1',head_cursor:'1',has_more:false};
+  if(mode==='family_journal_bad_entries')result.changes[0].requires_full_reload=false;
+  if(mode==='family_journal_bad_origin')result.changes[0].origin={kind:'received_update'};
+ }
  if(req.command.method==='checkpoint_cas') {
   responseBody=body;
   result={checkpoint:{version:1,...req.command.scope,key:req.command.key,revision:req.command.next_revision,sequence:'1',deleted:!req.command.has_state,byteLength:body.length}};
@@ -53,7 +59,7 @@ process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(b
   if(mode==='intent_nonterminal') {result.intent.state='commit_requested';result.intent.receipt=null;result.intent.projection=null;}
   if(mode==='intent_bad_ack')result.intent.acknowledged=true;
  }
- if(mode.startsWith('family_')) {
+ if(mode.startsWith('family_') && !mode.startsWith('family_journal_')) {
   const scope={realm_id:'realm',vault_id:'vault'};
   const family={scope,cursor:null,limits:{max_file_bytes:16777216,max_graph_encoded_bytes:134217728,max_records:4096},graph_records:0,graph_encoded_bytes:2,pending_authored:'0',pending_dependencies:'0',pending_projection:'0',recovery_entries:'0'};
   const status={scope:'fixture_families_v2',family_sync_supported:true,all_file_sync_supported:false,synced:false,family,pending_envelope_sample:0,pending_envelope_sample_complete:true,pending_envelopes:[],unsupported_capabilities:['larger_file_streaming','production_enrollment']};
@@ -230,3 +236,21 @@ for(const mode of ['family_missing_recovery','family_bad_recovery','family_wrong
     await assert.rejects(promise,{code:'invalid_response',commitUncertain:true});
   });
 }
+
+// Regression from the actual enrolled-vault Electron save: native family
+// materialization emits full-reload events for both local and remote origins.
+test('family journal full reload accepts local and received events without poisoning later RPCs', async t => {
+  for (const mode of ['family_journal_local', 'family_journal_remote']) {
+    const host = await fixture(t, mode);
+    const page = await host.changesAfter('0', 100);
+    assert.equal(page.changes[0].requires_full_reload, true);
+    assert.deepEqual(page.changes[0].entries, []);
+    assert.equal((await host.status()).pending_outbox, '0');
+  }
+});
+test('family journal still rejects empty incremental events and malformed origins', async t => {
+  for (const mode of ['family_journal_bad_entries', 'family_journal_bad_origin']) {
+    const host = await fixture(t, mode);
+    await assert.rejects(host.changesAfter('0', 100), { code:'invalid_response', commitUncertain:true });
+  }
+});

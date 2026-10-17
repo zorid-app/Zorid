@@ -94,3 +94,21 @@ Four changed desktop entry/bridge modules also passed `node --check`, and
 ran. The symlink was removed after building. Heavy slot released after webpack.
 No Electron window was launched and no native save/sync/restart was exercised by
 these checks. Root coordinates the matching host build and actual smoke next.
+
+### Actual runtime correction — family journal reload events
+
+The first normal-editor smoke exposed `invalid_response` after a family write.
+Native schema8 correctly emits `requires_full_reload:true, entries:[]` for
+validated local-command and received-update origins. The JS journal validator
+incorrectly restricted these events to bootstrap, killed the host, and caused
+subsequent list/save calls to fail. The adapter already supported coherent full
+snapshot reload; the correction accepts that declared journal shape while
+retaining origin validation and empty-versus-incremental entry invariants.
+
+Focused verification session37082 exited0: two family-journal regression tests
+passed. A separate read-only real host using binary5c68619 against disposable
+`/private/tmp/zorid-cli-family-20261017-0910` then accepted all12 journal events,
+listed cursor12/two visible entries, and read cli-note.md (34bytes), with the
+transport still alive. The child was closed normally. The existing Electron
+window and its retained draft were not closed, replaced or retried; a fresh
+actual-editor recovery/save smoke remains coordinator-owned.

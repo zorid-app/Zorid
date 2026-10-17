@@ -42,11 +42,14 @@ function changePage(command, result) {
     if (!object(change) || !decimal(change.cursor) || BigInt(change.cursor) !== cursor + 1n
       || !Array.isArray(change.entries) || !change.entries.every(presented) || !object(change.origin)) return false;
     cursor++;
+    // Family materialization invalidates the complete visible namespace for
+    // local and received updates too; full reload is not bootstrap-only.
+    if (typeof change.requires_full_reload !== 'boolean'
+      || (change.requires_full_reload ? change.entries.length !== 0 : change.entries.length === 0)) return false;
     const origin = change.origin;
     if (origin.kind === 'bootstrap') {
       if (change.requires_full_reload !== true || change.entries.length) return false;
     } else {
-      if (change.requires_full_reload !== false || !change.entries.length) return false;
       if (origin.kind === 'local_command') { if (!identity(origin.operation_id)) return false; }
       else if (origin.kind !== 'received_update' || ![origin.realm_id, origin.vault_id, origin.update_id].every(value => typeof value === 'string' && value.length > 0)) return false;
     }
