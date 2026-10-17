@@ -8,9 +8,16 @@ export interface PdfSidebarDocument {
   cachedPageNumber?(ref:unknown):number|null;
 }
 export interface PdfSidebarState { open:boolean; active:0|1|2; hasOutline:boolean }
+export interface PdfOutlineContext {
+  title:string;
+  isCurrent():boolean;
+  /** Resolves a document destination without navigating or changing selection. */
+  resolveSubpath():Promise<string|null>;
+}
 export interface PdfSidebarOptions {
   onPage:(page:number)=>void; onDestination:(destination:string|unknown[])=>void;
   onChange?:(state:PdfSidebarState)=>void; onError?:(error:Error)=>void;
+  onOutlineContextMenu?:(event:MouseEvent,context:PdfOutlineContext)=>void;
 }
 export interface PdfSidebar {
   readonly state:PdfSidebarState; readonly element:HTMLElement;
@@ -27,7 +34,7 @@ export function createPdfSidebar(parent:HTMLElement,pdf:PdfSidebarDocument,optio
   element.hidden=true;element.setAttribute('aria-label','PDF sidebar');thumbs.setAttribute('aria-label','Thumbnails');outline.setAttribute('role','tree');outline.setAttribute('aria-label','Table of contents');element.append(thumbs,outline);parent.append(element);
   const top=make('div','zorid-pdf-thumbnail-spacer'),bottom=make('div','zorid-pdf-thumbnail-spacer');thumbs.append(top,bottom);
   let closed=false,open=false,active:0|1|2=1,hasOutline=false,page=1,labels:string[]|null=null,rotation=0,generation=0,rendering=false,task:PdfThumbnailTask|undefined,pendingCell:ThumbnailCell|undefined;
-  let rows:OutlineRow[]=[],selected:OutlineRow|undefined;
+  let rows:OutlineRow[]=[],selected:OutlineRow|undefined,outlineRevision=0;
   const cells=new Map<number,ThumbnailCell>(),heights=new Float64Array(pdf.numPages).fill(150),offsets=new Float64Array(pdf.numPages+1);
   const state=():PdfSidebarState=>({open,active,hasOutline});
   const error=(cause:unknown)=>{if(!closed)options.onError?.(cause instanceof Error?cause:new Error(String(cause)));};
@@ -71,10 +78,10 @@ export function createPdfSidebar(parent:HTMLElement,pdf:PdfSidebarDocument,optio
     }finally{rendering=false;if(!closed&&generation!==version)queueMicrotask(()=>{void paint();});}
   }
   function setPage(value:number){if(closed||!Number.isInteger(value)||value<1||value>pdf.numPages)return;page=value;if(open&&active===1){const start=offsets[page-1],end=offsets[page];if(start<thumbs.scrollTop||end>thumbs.scrollTop+(thumbs.clientHeight||600))thumbs.scrollTop=start;updateWindow();}}
-  function switchView(view:0|1|2){if(closed||view===2&&!hasOutline)return;if(view===0){open=false;cancel();}else{if(active!==view)cancel();active=view;open=true;}notify();if(open&&active===1)setPage(page);else if(open)void labelVisibleRows();}
+  function switchView(view:0|1|2){if(closed||view===2&&!hasOutline)return;outlineRevision++;if(view===0){open=false;cancel();}else{if(active!==view)cancel();active=view;open=true;}notify();if(open&&active===1)setPage(page);else if(open)void labelVisibleRows();}
   const scroll=()=>updateWindow();thumbs.addEventListener('scroll',scroll,{passive:true});
   const resize=typeof win.ResizeObserver==='function'?new win.ResizeObserver(updateWindow):undefined;resize?.observe(thumbs);
-  function expanded(row:OutlineRow,value:boolean){row.expanded=value;row.group.hidden=!value;row.toggle.setAttribute('aria-expanded',String(value));row.toggle.textContent=value?'⌄':'›';if(value)void labelVisibleRows();}
+  function expanded(row:OutlineRow,value:boolean){if(row.expanded!==value)outlineRevision++;row.expanded=value;row.group.hidden=!value;row.toggle.setAttribute('aria-expanded',String(value));row.toggle.textContent=value?'⌄':'›';if(value)void labelVisibleRows();}
   function visible(row:OutlineRow){for(let parent=row.parent;parent;parent=parent.parent)if(!parent.expanded)return false;return true;}
   function resolvePage(row:OutlineRow):Promise<number|null>{
     return row.page??=(async()=>{try{const destination=typeof row.item.dest==='string'?await pdf.getDestination(row.item.dest):row.item.dest;if(closed||!Array.isArray(destination))return null;const ref=destination[0];const number=Number.isInteger(ref)?Number(ref)+1:ref&&typeof ref==='object'?(pdf.cachedPageNumber?.(ref)??(await pdf.getPageIndex(ref))+1):null;return !closed&&number&&number>=1&&number<=pdf.numPages?number:null;}catch(cause){error(cause);return null;}})();
@@ -82,10 +89,41 @@ export function createPdfSidebar(parent:HTMLElement,pdf:PdfSidebarDocument,optio
   let labeling=false,labelsDirty=false;
   async function labelVisibleRows(){if(closed||!open||active!==2)return;if(labeling){labelsDirty=true;return;}labeling=true;labelsDirty=false;try{for(const row of rows){if(closed||!open||active!==2)break;if(!visible(row))continue;const number=await resolvePage(row);if(closed)break;if(number){let flair=row.row.querySelector<HTMLElement>('.zorid-pdf-outline-page');if(!flair){flair=make('span','zorid-pdf-outline-page');row.row.append(flair);}flair.textContent=labels?.[number-1]??String(number);}}}finally{labeling=false;if(labelsDirty)queueMicrotask(()=>{void labelVisibleRows();});}}
   function select(row:OutlineRow){selected?.row.removeAttribute('aria-current');selected=row;row.row.setAttribute('aria-current','true');}
+  function outlineContext(event:MouseEvent,row:OutlineRow){
+    if(closed||event.defaultPrevented||!options.onOutlineContextMenu)return;
+    const source=row.item.dest,title=row.item.title,revision=outlineRevision;
+    let snapshot:string;try{snapshot=JSON.stringify(source)??'';}catch{return;}
+    const isCurrent=()=>{
+      if(closed||outlineRevision!==revision||!open||active!==2||!visible(row)||!element.isConnected||!outline.contains(row.row)||row.item.title!==title||row.item.dest!==source)return false;
+      try{return JSON.stringify(row.item.dest)===snapshot;}catch{return false;}
+    };
+    if(!isCurrent())return;
+    options.onOutlineContextMenu(event,{title,isCurrent,async resolveSubpath(){
+      if(!isCurrent())return null;
+      try{
+        const destination=typeof source==='string'?await pdf.getDestination(source):source;
+        if(!isCurrent()||!Array.isArray(destination)||!destination.length)return null;
+        const ref=destination[0];
+        const number=Number.isInteger(ref)?Number(ref)+1:ref&&typeof ref==='object'?(pdf.cachedPageNumber?.(ref)??(await pdf.getPageIndex(ref))+1):null;
+        if(!isCurrent()||number===null||!Number.isSafeInteger(number)||number<1||number>pdf.numPages)return null;
+        let subpath=`#page=${number}`;
+        const mode=destination[1] as {name?:string}|undefined;
+        if(mode?.name==='XYZ'&&destination.length===5&&typeof destination[2]==='number'&&Number.isFinite(destination[2])){
+          const offsets=[destination[2]];
+          if(typeof destination[3]==='number'&&Number.isFinite(destination[3])){
+            offsets.push(destination[3]);if(typeof destination[4]==='number'&&Number.isFinite(destination[4]))offsets.push(destination[4]);
+          }
+          subpath+=`&offset=${offsets.join(',')}`;
+        }
+        return subpath;
+      }catch(cause){if(isCurrent())error(cause);return null;}
+    }});
+  }
   function build(items:PdfOutlineItem[]){
     const queue=items.map(item=>({item,parent:undefined as OutlineRow|undefined,host:outline,depth:1})).reverse();
     while(queue.length){const {item,parent,host,depth}=queue.pop()!;const container=make('div','zorid-pdf-outline-item'),line=make('div','zorid-pdf-outline-line'),button=make('button','zorid-pdf-outline-title'),toggle=make('button','zorid-pdf-outline-toggle'),group=make('div','zorid-pdf-outline-children');button.type=toggle.type='button';button.textContent=item.title.replace(/\0/g,'');button.setAttribute('role','treeitem');button.setAttribute('aria-level',String(depth));if(item.bold)button.style.fontWeight='bold';if(item.italic)button.style.fontStyle='italic';group.setAttribute('role','group');group.hidden=true;
       const row:OutlineRow={item,parent,row:button,toggle,group,expanded:false};rows.push(row);toggle.textContent='›';toggle.setAttribute('aria-label',`Toggle ${button.textContent}`);toggle.setAttribute('aria-expanded','false');toggle.hidden=!item.items?.length;toggle.onclick=()=>{if(!closed)expanded(row,!row.expanded);};button.onclick=()=>{if(closed)return;if(item.dest){select(row);options.onDestination(item.dest);}else if(item.items?.length)expanded(row,!row.expanded);};
+      line.addEventListener('contextmenu',event=>outlineContext(event,row));
       button.onkeydown=event=>{if(closed)return;const list=rows.filter(visible),index=list.indexOf(row);let target:OutlineRow|undefined;if(event.key==='ArrowDown')target=list[index+1];else if(event.key==='ArrowUp')target=list[index-1];else if(event.key==='Home')target=list[0];else if(event.key==='End')target=list.at(-1);else if(event.key==='ArrowRight'&&item.items?.length){if(!row.expanded)expanded(row,true);else target=rows.find(entry=>entry.parent===row);}else if(event.key==='ArrowLeft'){if(row.expanded)expanded(row,false);else target=row.parent;}else return;event.preventDefault();event.stopPropagation();target?.row.focus();};
       line.append(toggle,button);container.append(line,group);host.append(container);for(let i=(item.items?.length??0)-1;i>=0;i--)queue.push({item:item.items![i],parent:row,host:group,depth:depth+1});
     }

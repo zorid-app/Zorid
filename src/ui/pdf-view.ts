@@ -1,6 +1,6 @@
 import { showContextMenu, dismissContextMenu } from '../platform/context-menu.ts';
-import { createPdfSidebar, type PdfSidebar, type PdfSidebarDocument } from './pdf-sidebar.ts';
-import { createPdfDisplayMenu, createPdfSidebarMenu, createPdfPageMenu, createPdfThumbnailMenu, type PdfMenuSession } from './pdf-menus.ts';
+import { createPdfSidebar, type PdfSidebar, type PdfSidebarDocument, type PdfOutlineContext } from './pdf-sidebar.ts';
+import { createPdfDisplayMenu, createPdfSidebarMenu, createPdfPageMenu, createPdfThumbnailMenu, createPdfOutlineMenu, type PdfMenuSession } from './pdf-menus.ts';
 import type { AttachmentLease, AttachmentResources } from './attachments.ts';
 
 /** Small boundary around the public PDF.js components; no recovered viewer code. */
@@ -101,16 +101,16 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   const sidebarToggle=button('Toggle sidebar','sidebar',()=>sidebar?.toggle()),sidebarOptions=button('Sidebar options','chevron',()=>{void openSidebarMenu();});sidebarToggle.setAttribute('aria-expanded','false');sidebarOptions.setAttribute('aria-haspopup','menu');
   let sidebarMenu:ReturnType<typeof createPdfSidebarMenu>|undefined;
   async function openSidebarMenu(){
-    if(closed||!sidebar)return;sidebarMenu?.dispose();const current=sidebar;
-    const session=createPdfSidebarMenu(current.state,{switchSidebar:value=>current.switchView(value),revealCurrentOutlineItem:()=>current.revealCurrentOutlineItem(),isCurrent:()=>!closed&&sidebar===current&&sidebarMenu===session});sidebarMenu=session;const rect=sidebarOptions.getBoundingClientRect();
+    if(closed||!sidebar)return;contextMenu?.dispose();contextMenu=undefined;const version=++contextVersion;sidebarMenu?.dispose();const current=sidebar;
+    const session=createPdfSidebarMenu(current.state,{switchSidebar:value=>current.switchView(value),revealCurrentOutlineItem:()=>current.revealCurrentOutlineItem(),isCurrent:()=>!closed&&contextVersion===version&&sidebar===current&&sidebarMenu===session});sidebarMenu=session;const rect=sidebarOptions.getBoundingClientRect();
     try{await session.run(await showContextMenu({clientX:rect.left,clientY:rect.bottom,target:sidebarOptions,view:win},session.items,{document:doc}));}catch(cause){if(!closed)options.onError?.(cause instanceof Error?cause:new Error(String(cause)));}finally{session.dispose();if(sidebarMenu===session)sidebarMenu=undefined;}
   }
   let menuSession:ReturnType<typeof createPdfDisplayMenu>|undefined;
   const display=button('Display options','chevron',()=>{void openDisplayMenu();});display.setAttribute('aria-haspopup','menu');
   async function openDisplayMenu():Promise<void>{
     if(closed||!loaded||!viewer)return;
-    menuSession?.dispose();const active=viewer;
-    const session=createPdfDisplayMenu({scale:active.currentScaleValue,spread:active.spreadMode as 0|1|2},{setScale,setSpread:value=>{if(!closed&&viewer===active){active.spreadMode=value;updateHeight();}},isCurrent:()=>!closed&&viewer===active&&menuSession===session});menuSession=session;
+    contextMenu?.dispose();contextMenu=undefined;const version=++contextVersion;menuSession?.dispose();const active=viewer;
+    const session=createPdfDisplayMenu({scale:active.currentScaleValue,spread:active.spreadMode as 0|1|2},{setScale,setSpread:value=>{if(!closed&&viewer===active){active.spreadMode=value;updateHeight();}},isCurrent:()=>!closed&&contextVersion===version&&viewer===active&&menuSession===session});menuSession=session;
     const rect=display.getBoundingClientRect();display.setAttribute('aria-expanded','true');
     try{const choice=await showContextMenu({clientX:rect.left,clientY:rect.bottom,target:display,view:win},session.items,{document:doc});await session.run(choice);}
     catch(error){if(!closed)options.onError?.(error instanceof Error?error:new Error(String(error)));}
@@ -203,6 +203,20 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   const clipboard=options.writeClipboard??(win.navigator.clipboard?.writeText?((text:string)=>win.navigator.clipboard.writeText(text)):undefined);
   const basename=(path.split('/').at(-1)??path).replace(/\.pdf$/i,'');
   const contextError=(cause:unknown)=>{if(!closed)try{options.onError?.(cause instanceof Error?cause:new Error(String(cause)));}catch{/* A host diagnostic must not create an unhandled menu rejection. */}};
+  function outlineContext(event:MouseEvent,target:PdfOutlineContext):void{
+    if(closed||!loaded||!pdf||!viewer||!clipboard||!options.generateMarkdownLink||event.defaultPrevented||!target.isCurrent())return;
+    event.preventDefault();event.stopPropagation();contextMenu?.dispose();contextMenu=undefined;
+    const version=++contextVersion,document=pdf,active=viewer;
+    const current=()=>!closed&&loaded&&contextVersion===version&&pdf===document&&viewer===active&&root.isConnected&&target.isCurrent();
+    void (async()=>{
+      const subpath=await target.resolveSubpath();if(!subpath||!current())return;
+      const title=target.title.replace(/[\s\n\r]+/g,' '),markdownLink=options.generateMarkdownLink!(subpath,`${basename}, ${title}`);
+      if(!markdownLink||!current())return;
+      const session=createPdfOutlineMenu({title,markdownLink},{writeClipboard:clipboard,isCurrent:current});contextMenu=session;
+      try{await session.run(await showContextMenu(event,session.items,{document:doc}));}
+      finally{session.dispose();if(contextMenu===session)contextMenu=undefined;}
+    })().catch(error=>{if(current())contextError(error);});
+  }
   const context=(event:MouseEvent)=>{
     if(closed||!loaded||!viewer||!pdf||options.mobile||event.defaultPrevented)return;
     const target=event.target instanceof win.Element?event.target:null;
@@ -315,7 +329,7 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
       task=engine.core.getDocument({data,ownerDocument:doc,cMapUrl:new URL('cmaps/',assetBase).href,cMapPacked:true,standardFontDataUrl:new URL('standard_fonts/',assetBase).href,wasmUrl:new URL('wasm/',assetBase).href,iccUrl:new URL('iccs/',assetBase).href,isEvalSupported:false,enableXfa:true});
       task.onPassword=(update,reason)=>{if(closed)return;passwordCallback=update;passwordLabel.textContent=reason===2?'Incorrect password. Try again.':'This PDF requires a password.';password.hidden=false;passwordInput.focus();};
       pdf=await task.promise;if(closed)return;links.setDocument(pdf);viewer.setDocument(pdf);
-      sidebar=createPdfSidebar(stage,pdf,{onPage:goToPage,onDestination:destination=>{if(!closed)links?.goToDestination(destination);},onError:options.onError,onChange:state=>{if(closed)return;sidebarToggle.setAttribute('aria-expanded',String(state.open));scroller.style.insetInlineStart=state.open&&!options.embed&&!options.mobile?'140px':'0';resized();}});
+      sidebar=createPdfSidebar(stage,pdf,{onPage:goToPage,onDestination:destination=>{if(!closed)links?.goToDestination(destination);},onOutlineContextMenu:clipboard&&options.generateMarkdownLink?outlineContext:undefined,onError:options.onError,onChange:state=>{if(closed)return;sidebarToggle.setAttribute('aria-expanded',String(state.open));scroller.style.insetInlineStart=state.open&&!options.embed&&!options.mobile?'140px':'0';resized();}});
       await Promise.race([viewer.firstPagePromise??Promise.resolve(),cancelled]);if(closed)return;
       labels=await pdf.getPageLabels();if(closed)return;viewer.setPageLabels(labels);sidebar?.setPageLabels(labels);updatePage();await Promise.race([initialPages,cancelled]);
     }catch(error){if(!closed){report(error);abort.abort();await release();throw error;}}

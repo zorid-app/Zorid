@@ -3,7 +3,7 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { createPdfSidebar } from '../src/ui/pdf-sidebar.ts';
-import type { PdfSidebarDocument, PdfSidebarOptions, PdfOutlineItem } from '../src/ui/pdf-sidebar.ts';
+import type { PdfSidebarDocument, PdfSidebarOptions, PdfOutlineItem, PdfOutlineContext } from '../src/ui/pdf-sidebar.ts';
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(reason:Error)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 async function ticks(){for(let i=0;i<40;i++)await Promise.resolve();}
 function setup(t:TestContext,configuration:{document?:Partial<PdfSidebarDocument>;options?:Partial<PdfSidebarOptions>}={}){
@@ -58,6 +58,15 @@ test('closing during render cancels work and rotation invalidates bounded thumbn
 test('stale outline reveal and retained buttons never navigate a destroyed document',async t=>{
   const destination=deferred<unknown[]|null>();const f=setup(t,{document:{numPages:10,async getOutline(){return [{title:'Named',dest:'chapter'}];},getDestination:()=>destination.promise}});await ticks();f.sidebar.switchView(2);const row=f.doc.querySelector<HTMLButtonElement>('.zorid-pdf-outline-title')!;
   const pending=f.sidebar.revealCurrentOutlineItem();f.sidebar.destroy();destination.resolve([2,{name:'Fit'}]);await pending;row.click();f.sidebar.toggle();assert.equal(f.destinations.length,0);assert.equal(f.doc.querySelector('aside'),null);
+});
+
+test('outline context never revives after sidebar hide/reopen or ancestor collapse/re-expand',async t=>{
+  let captured:PdfOutlineContext|undefined;
+  const f=setup(t,{document:{numPages:8,async getOutline(){return outline;}},options:{onOutlineContextMenu(_event,context){captured=context;}}});await ticks();f.sidebar.switchView(2);await ticks();
+  const capture=(row:Element)=>{row.dispatchEvent(new f.dom.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true}));assert.ok(captured);assert.equal(captured.isCurrent(),true);return captured;};
+  const rows=f.doc.querySelectorAll('.zorid-pdf-outline-title'),first=capture(rows[0]);
+  f.sidebar.switchView(0);f.sidebar.switchView(2);assert.equal(first.isCurrent(),false);assert.equal(await first.resolveSubpath(),null);
+  const toggle=f.doc.querySelector<HTMLButtonElement>('.zorid-pdf-outline-toggle')!;toggle.click();const child=capture(rows[1]);toggle.click();toggle.click();assert.equal(child.isCurrent(),false);assert.equal(await child.resolveSubpath(),null);
 });
 
 test('missing outline cannot select an empty view and a failed thumbnail does not retry forever',async t=>{

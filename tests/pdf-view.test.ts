@@ -20,14 +20,14 @@ function fixture(t:TestContext,options:PdfViewOptions={}){
     setDocument(value:unknown){if(value){for(let i=1;i<=3;i++){const page=env.window.document.createElement('div');page.className='page';page.dataset.pageNumber=String(i);const span=env.window.document.createElement('span');span.textContent='Hello PDF world';page.append(span);(this.config.viewer as HTMLElement).append(page);this.pages.set(i-1,{div:page,viewport:{height:720},textLayer:{highlighter:{textDivs:[span],textContentItemsStr:[span.textContent]}}});}queueMicrotask(()=>bus.dispatch('pagesinit',{}));}else disposed.push('viewer');}
     setPageLabels(){}update(){}increaseScale(){this.currentScale=1.1;}decreaseScale(){this.currentScale=.9;}updateScale(options:Record<string,unknown>){events.push({name:'zoom',data:options});}nextPage(){this.currentPageNumber=Math.min(3,this.currentPageNumber+1);return true;}previousPage(){this.currentPageNumber=Math.max(1,this.currentPageNumber-1);return true;}getPageView(index:number){return this.pages.get(index);}scrollPageIntoView(){}cleanup(){}
   }
-  class Links {constructor(){links=this;}setViewer(){}setDocument(){}setHash(hash:string){hashes.push(hash);}goToPage(value:string|number){if(value==='ii')viewer.currentPageNumber=2;else if(Number(value)>=1&&Number(value)<=3)viewer.currentPageNumber=Number(value);}}
+  class Links {constructor(){links=this;}setViewer(){}setDocument(){}setHash(hash:string){hashes.push(hash);}goToDestination(value:string|unknown[]){hashes.push(JSON.stringify(value));}goToPage(value:string|number){if(value==='ii')viewer.currentPageNumber=2;else if(Number(value)>=1&&Number(value)<=3)viewer.currentPageNumber=Number(value);}}
   const loading=deferred<{numPages:number;getPageLabels():Promise<string[]|null>;destroy():Promise<void>}>();
   const task:{promise:typeof loading.promise;destroy:()=>Promise<void>;onPassword?:((update:(password:string)=>void,reason:number)=>void)|null}={promise:loading.promise,async destroy(){disposed.push('task');}};
   const engine:PdfEngine={core:{GlobalWorkerOptions:{workerSrc:''},getDocument(config){opens.push(config);return task;}},viewer:{EventBus:Bus as never,PDFLinkService:Links as never,PDFFindController:class {} as never,PDFViewer:Viewer as never}};
   let acquired=0;const resources={async acquire(){acquired++;return {url:'blob:owned-pdf',type:'application/pdf',async arrayBuffer(){return Uint8Array.of(1,2,3).buffer;},release(){disposed.push('lease');}};}};
   const view=createPdfView(root,'Folder/Example.pdf',resources,{loadEngine:async()=>engine,...options});
   t.after(()=>view.destroy());
-  const resolve=()=>loading.resolve({numPages:3,async getPageLabels(){return ['i','ii','iii'];},async getOutline(){return null;},async getPage(){throw new Error('not requested');},async getDestination(){return null;},async getPageIndex(){return 0;},async destroy(){disposed.push('doc');}});
+  const resolve=(overrides:Record<string,unknown>={})=>loading.resolve({numPages:3,async getPageLabels(){return ['i','ii','iii'];},async getOutline(){return null;},async getPage(){throw new Error('not requested');},async getDestination(){return null;},async getPageIndex(){return 0;},async destroy(){disposed.push('doc');},...overrides});
   return {env,root,view,events,hashes,disposed,opens,loading,task,resolve,get bus(){return bus;},get viewer(){return viewer;},get acquired(){return acquired;}};
 }
 async function ticks(){for(let i=0;i<6;i++)await Promise.resolve();}
@@ -35,6 +35,60 @@ function selectPdfText(f:ReturnType<typeof fixture>,start=6,end=9,page=0){
   const node=f.viewer.pages.get(page)!.textLayer.highlighter.textDivs[0].firstChild!,range=f.env.window.document.createRange();range.setStart(node,start);range.setEnd(node,end);const selection=f.env.window.getSelection()!;selection.removeAllRanges();selection.addRange(range);return selection;
 }
 function pdfContext(f:ReturnType<typeof fixture>,target:Element){const event=new f.env.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:333,clientY:212});target.dispatchEvent(event);return event;}
+async function openOutline(f:ReturnType<typeof fixture>){
+  f.root.querySelector<HTMLButtonElement>('[aria-label="Sidebar options"]')!.click();
+  Array.from(f.env.window.document.querySelectorAll<HTMLButtonElement>('.context-menu-item')).find(button=>button.textContent==='Table of contents')!.click();await ticks();
+  return f.root.querySelector<HTMLButtonElement>('.zorid-pdf-outline-title')!;
+}
+
+test('outline menu resolves named XYZ section link, preserves selection, and never navigates',async t=>{
+  const copies:string[]=[],requests:ContextMenuRequest[]=[],formats:unknown[]=[];
+  const f=fixture(t,{embed:true,writeClipboard:text=>{copies.push(text);},generateMarkdownLink:(subpath,alias)=>{formats.push([subpath,alias]);return `${subpath}|${alias}`;}});
+  f.resolve({getOutline:async()=>[{title:'Chapter\n one',dest:'chapter'}],getDestination:async()=>[{num:4,gen:0},{name:'XYZ'},12.5,45,1.25],getPageIndex:async()=>1});await f.view.ready;
+  const row=await openOutline(f),selection=selectPdfText(f);let outer=0;f.root.addEventListener('contextmenu',()=>outer++);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return 'pdf-copy-section-link';}}});
+  assert.equal(pdfContext(f,row).defaultPrevented,true);await ticks();await ticks();
+  assert.equal(outer,0);assert.deepEqual(requests[0].items,[{id:'pdf-copy-section-link',label:'Copy link to “Chapter one”'}]);assert.equal(requests[0].x,333);assert.equal(requests[0].y,212);
+  assert.deepEqual(formats,[['#page=2&offset=12.5,45,1.25','Example, Chapter one']]);assert.deepEqual(copies,['#page=2&offset=12.5,45,1.25|Example, Chapter one']);assert.equal(selection.toString(),'PDF');assert.equal(f.viewer.currentPageNumber,1);assert.deepEqual(f.hashes,[]);
+});
+
+test('outline destination resolution and native popup reject closed sidebar, retargeting and destruction',async t=>{
+  for(const action of ['close','retarget','destroy'] as const){
+    const copies:string[]=[],popup=deferred<string|null>(),item={title:'Section',dest:[0,{name:'Fit'}]};
+    const f=fixture(t,{writeClipboard:text=>{copies.push(text);},generateMarkdownLink:subpath=>subpath});f.resolve({getOutline:async()=>[item]});await f.view.ready;const row=await openOutline(f);
+    Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:()=>popup.promise,dismissContextMenu:async()=>{}}});pdfContext(f,row);await ticks();
+    if(action==='close')f.root.querySelector<HTMLButtonElement>('[aria-label="Toggle sidebar"]')!.click();else if(action==='retarget')item.dest[0]=1;else f.view.destroy();
+    popup.resolve('pdf-copy-section-link');await ticks();assert.deepEqual(copies,[]);
+  }
+});
+
+test('late outline resolution cannot create a native popup after destruction',async t=>{
+  const destination=deferred<unknown[]|null>();let popups=0;
+  const f=fixture(t,{writeClipboard:()=>{},generateMarkdownLink:subpath=>subpath});f.resolve({getOutline:async()=>[{title:'Pending',dest:'named'}],getDestination:()=>destination.promise});await f.view.ready;const row=await openOutline(f);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async()=>{popups++;return null;}}});pdfContext(f,row);f.view.destroy();destination.resolve([0,{name:'Fit'}]);await ticks();assert.equal(popups,0);
+});
+
+test('a newer toolbar menu supersedes pending outline resolution without opening a second popup',async t=>{
+  const destination=deferred<unknown[]|null>(),requests:ContextMenuRequest[]=[];
+  const f=fixture(t,{writeClipboard:()=>{},generateMarkdownLink:subpath=>subpath});f.resolve({getOutline:async()=>[{title:'Pending',dest:'named'}],getDestination:()=>destination.promise});await f.view.ready;const row=await openOutline(f);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return null;}}});pdfContext(f,row);
+  f.root.querySelector<HTMLButtonElement>('[aria-label="Display options"]')!.click();destination.resolve([0,{name:'Fit'}]);await ticks();assert.equal(requests.length,1);assert.equal('id'in requests[0].items[0]?requests[0].items[0].id:'','pdf-fit-width');
+});
+
+test('outline untitled destination uses generic action and mobile path has no desktop-only gate',async t=>{
+  const copies:string[]=[],requests:ContextMenuRequest[]=[];const f=fixture(t,{mobile:true,writeClipboard:text=>{copies.push(text);},generateMarkdownLink:(subpath,alias)=>`${subpath}|${alias}`});
+  f.resolve({getOutline:async()=>[{title:'',dest:[0,{name:'XYZ'},0,null,2]}]});await f.view.ready;const row=await openOutline(f);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return 'pdf-copy-section-link';}}});pdfContext(f,row);await ticks();
+  assert.deepEqual(requests[0].items,[{id:'pdf-copy-section-link',label:'Copy link to section'}]);assert.deepEqual(copies,['#page=1&offset=0|Example, ']);
+});
+
+test('unresolvable outlines and absent clipboard or formatter do not show dead actions',async t=>{
+  for(const kind of ['missing-destination','missing-clipboard','missing-formatter'] as const){
+    let popups=0;const f=fixture(t,{writeClipboard:kind==='missing-clipboard'?undefined:()=>{},generateMarkdownLink:kind==='missing-formatter'?undefined:subpath=>subpath});
+    f.resolve({getOutline:async()=>[{title:'External',url:'https://example.test',dest:kind==='missing-destination'?null:[0,{name:'Fit'}]}]});await f.view.ready;const row=await openOutline(f);
+    Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async()=>{popups++;return null;}}});pdfContext(f,row);await ticks();assert.equal(popups,0);
+  }
+});
 
 test('PDF page menu claims embedded event synchronously and copies a real same-page selection link',async t=>{
   const copied:string[]=[],requests:ContextMenuRequest[]=[],formats:unknown[]=[];

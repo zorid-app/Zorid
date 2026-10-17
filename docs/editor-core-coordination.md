@@ -14,6 +14,11 @@ silently staged or overwritten.
   current root dependency graph, and native editor verification.
 - Shared-core coordinator: Rust/core/storage/sync contracts and isolated core
   implementation. Client writers wait for the relevant reviewed contracts.
+  The user's renewed handoff explicitly assigns new Rust crates, Cargo manifests,
+  core prototypes and `src/core/browser-vault.ts` to that session. Existing editor
+  and Workspace behavior remain editor-owned. Coordinate existing storage
+  interfaces, desktop bridges, platform selection and shared JS build files
+  before changing those seams.
 - Configurable hotkeys: `parity/settings-hotkeys` owns settings, command bindings,
   and narrow desktop/preload command-menu wiring. Coordinate before touching
   those desktop bridge paths. This work does not redesign the public plugin API.
@@ -49,3 +54,26 @@ At this acknowledgment, the Bases aggregate `e8a48b8` completed 1,712 tests,
 TypeScript and production build with no remaining worker process. The next
 planned heavy activity is the editor coordinator's native Bases verification.
 This is a scheduling snapshot, not a permanent reservation or lock.
+
+## Renewed handoff acknowledgment
+
+The user relayed the arrangement again after editor main `f718f61`. The editor
+coordinator read the tracker in `.worktrees/core-sync-foundation` (whose live
+ledger reports coordinator work through `49f884a`) and confirmed sole main
+integration ownership. No core merge was requested. Core fixture reports are not
+treated as editor, native or mobile verification. The primary checkout's existing
+uncommitted `AGENTS.md`, roadmap and user-findings changes remain preserved.
+
+Preferred batch delivery is an ordered commit list with base SHA, dependencies,
+affected paths, review results, exact validation commands/results and known gaps
+in the core worktree tracker, relayed to the editor coordinator. Branch-wide
+integration is not automatic. Editor changes in progress concern Canvas, Bases,
+hotkeys and PDF views; none takes ownership of the newly assigned Rust/browser
+vault paths. Writable Bases embeds reuse the existing VaultAdapter/NoteBuffer
+interfaces rather than replacing storage.
+
+At the renewed acknowledgment, the editor browser verification tab and loopback
+server were closed and no editor-session heavy build or native app was running.
+The Canvas/Table full gate is held pending cross-session scheduling confirmation;
+light source review and scoped checks continue. This is not a claim about processes
+owned by the separate core session, nor an automatically shared build lock.
