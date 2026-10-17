@@ -12,6 +12,8 @@ use zorid_store::{
 mod checkpoints;
 #[path = "directory.rs"]
 mod directory;
+#[path = "family.rs"]
+mod family;
 #[path = "host_intents.rs"]
 mod host_intents;
 #[path = "namespace.rs"]

@@ -14,6 +14,15 @@ pub use zorid_store::{
     HostMutationKind, HostProjectionState, HostRejection, HostRejectionCode, ListingSnapshot,
     LocalChange, PresentedEntry, PresentedState, TextReceiveOutcome, MAX_CHECKPOINT_BYTES,
 };
+pub use zorid_store::{
+    FamilyAuthoredStatus, FamilyCreateMode, FamilyEnvelopeStatus, FamilyReceiveCommit, FamilyScope,
+    FamilyStatus,
+};
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FamilyReceiveOutcome {
+    pub commit: FamilyReceiveCommit,
+    pub projection: ProjectionStatus,
+}
 use zorid_store::{DirectoryPhase, ProjectionPhase, ScanRun, StoredEntry};
 
 #[derive(Debug)]
@@ -373,6 +382,73 @@ impl NativeVault {
         unsupported()
     }
 }
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+impl NativeVault {
+    pub fn family_enroll(&mut self, _: &FamilyScope) -> Result<FamilyStatus> {
+        unsupported()
+    }
+    pub fn family_status(&self) -> Result<FamilyStatus> {
+        unsupported()
+    }
+    pub fn family_pending_authored(
+        &self,
+        _: Option<&zorid_sync_protocol::UpdateId>,
+        _: u32,
+    ) -> Result<Vec<FamilyAuthoredStatus>> {
+        unsupported()
+    }
+    pub fn family_seal(
+        &mut self,
+        _: &zorid_sync_protocol::ExpectedContext,
+        _: &zorid_crypto::VaultKey,
+    ) -> Result<Vec<u8>> {
+        unsupported()
+    }
+    pub fn family_ack(
+        &mut self,
+        _: &zorid_sync_protocol::RealmId,
+        _: &zorid_sync_protocol::VaultId,
+        _: &zorid_sync_protocol::UpdateId,
+        _: &[u8],
+    ) -> Result<()> {
+        unsupported()
+    }
+    pub fn family_receive_cursor(
+        &self,
+        _: &zorid_sync_protocol::RealmId,
+        _: &zorid_sync_protocol::VaultId,
+    ) -> Result<Option<zorid_client_sync::ReceiveCursor>> {
+        unsupported()
+    }
+    pub fn family_set_receive_cursor(
+        &mut self,
+        _: Option<&zorid_client_sync::ReceiveCursor>,
+        _: &zorid_client_sync::ReceiveCursor,
+    ) -> Result<()> {
+        unsupported()
+    }
+    pub fn family_envelope_status(
+        &self,
+        _: &zorid_sync_protocol::UpdateId,
+    ) -> Result<Option<FamilyEnvelopeStatus>> {
+        unsupported()
+    }
+    pub fn family_apply(
+        &mut self,
+        _: &MutationRequest,
+        _: Option<FamilyCreateMode>,
+    ) -> Result<ApplyOutcome> {
+        unsupported()
+    }
+    pub fn family_receive(
+        &mut self,
+        _: &zorid_crypto::OpenedEnvelope,
+        _: Option<&zorid_client_sync::CursorAdvance>,
+    ) -> Result<FamilyReceiveOutcome> {
+        unsupported()
+    }
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn unsupported<T>() -> Result<T> {
     Err(Error::Unsupported(
