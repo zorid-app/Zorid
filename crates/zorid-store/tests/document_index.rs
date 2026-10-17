@@ -435,7 +435,11 @@ fn count_based_retention_and_pin_limit_are_bounded_with_explicit_expiry() {
         Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
     ));
     let db = Connection::open(&path).unwrap();
-    assert_eq!(db.query_row("SELECT count(*) FROM document_index_generations WHERE json_extract(record,'$.value.published')=1",[],|r|r.get::<_,usize>(0)).unwrap(),DOCUMENT_INDEX_RETAINED_GENERATIONS);
+    let retained: i64 = db.query_row(
+        "SELECT count(*) FROM document_index_generations WHERE json_extract(record,'$.value.published')=1",
+        [], |r|r.get(0)
+    ).unwrap();
+    assert_eq!(retained, DOCUMENT_INDEX_RETAINED_GENERATIONS as i64);
     let oldest = store.begin_document_index().unwrap();
     for _ in 0..DOCUMENT_INDEX_RETAINED_STAGES {
         store.begin_document_index().unwrap();
