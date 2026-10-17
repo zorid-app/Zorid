@@ -1,3 +1,5 @@
+import { BrowserSyncWorker } from './browser-sync-worker.ts';
+import type { BrowserSyncCodec } from './browser-sync-worker.ts';
 import { openBrowserVault, BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserVault, BrowserVaultWasm } from '../core/browser-vault.ts';
 import { afterDurableCommit } from './browser-core-events.ts';
@@ -10,15 +12,21 @@ let vault: BrowserVault | undefined, clientId = '', channel: BroadcastChannel | 
 let sequence = '0', queue: Promise<unknown> = Promise.resolve();
 let recovery = new Set<string>();
 let lease: BrowserClientLease | undefined, released = false;
+let sync:BrowserSyncWorker|undefined;
+function local<T>(operation:()=>Promise<T>):Promise<T> {
+  const result=queue.catch(()=>undefined).then(()=>{assertOwner();return operation();});
+  queue=result.catch(()=>undefined);return result;
+}
 function assertOwner(): void {
   if (released || !lease) throw new BrowserVaultError('client_ownership_lost', 'Worker no longer owns this consumer');
   lease.assertActive();
 }
-async function refresh(): Promise<void> {
+async function refresh(assertSession?:()=>void): Promise<void> {
   if (!vault || released) return;
   assertOwner();
   const next = await vault.changesSince(sequence);
   assertOwner();
+  assertSession?.();
   if (next.sequence !== sequence) { port.postMessage({event:'change',paths:next.paths}); sequence = next.sequence; }
 }
 async function execute(intentId: string): Promise<string> {
@@ -40,10 +48,12 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       // Open only reads the persisted authority. No intent replay/checkpoint access
       // occurs before this lifetime lease; no IDB transaction spans the wait.
       lease = await claimBrowserClient(self.navigator.locks, {vaultId:vault.authorityId,clientId}, error => {
-        channel?.close(); vault?.close();
+        sync?.revoke(); channel?.close(); vault?.close();
         try { port.postMessage({event:'storage-error',code:error.code}); } catch { /* Worker transport already failed. */ }
       });
       assertOwner();
+      sync = new BrowserSyncWorker({storage:vault.sync,wasm:wasm as unknown as BrowserSyncCodec,assertOwner,local,
+        changed:async assertSession=>{assertSession();await refresh(assertSession);assertSession();channel?.postMessage({changed:true});}});
       channel = new BroadcastChannel(`zorid-core:${payload.database}`);
       let recoveredCommit = false;
       for (const intent of await vault.intents(clientId)) if (!intent.acknowledged && ['commit_requested','committed'].includes(intent.status)) {
@@ -54,13 +64,13 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       if (recoveredCommit) channel.postMessage({changed:true});
       channel.onmessage = () => {
         // Serialize hints with operations; lost hints are repaired on visibility.
-        queue = queue.then(refresh).catch(error => port.postMessage({event:'storage-error', code:error.code ?? 'storage_failure'}));
+        queue = queue.then(()=>refresh()).catch(error => port.postMessage({event:'storage-error', code:error.code ?? 'storage_failure'}));
       };
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
       assertOwner();
       return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery]};
     } catch (error) {
-      channel?.close(); channel = undefined; vault.close(); vault = undefined;
+      sync?.revoke(); channel?.close(); channel = undefined; vault.close(); vault = undefined;
       if (lease) { try { await lease.release(); } catch { /* Original open failure remains uncertain. */ } }
       throw error;
     }
@@ -70,7 +80,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     if (released) return; // Exact retry after a lost release acknowledgement.
     assertOwner();
     // Serialized behind all earlier dispatches, including timed-out RPCs/hints.
-    channel?.close(); channel = undefined; vault.close();
+    sync?.revoke(); channel?.close(); channel = undefined; vault.close();
     await lease!.release(); released = true; return;
   }
   assertOwner();
@@ -85,6 +95,9 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     case 'prepare':
       if (recovery.size && !recovery.has(payload.intentId)) throw new BrowserVaultError('recovery_required', 'Reconcile recovered intent outcomes before new mutations', {intent_ids:[...recovery]});
       return vault.prepareIntent(clientId, payload.intentId, payload.requestJson);
+    case 'prepare-family':
+      if(recovery.size&&!recovery.has(payload.intentId))throw new BrowserVaultError('recovery_required','Reconcile recovered outcomes before new family mutations');
+      return vault.prepareFamilyIntent(clientId,payload.intentId,payload.commandJson);
     case 'execute':
       if (recovery.size && !recovery.has(payload)) throw new BrowserVaultError('recovery_required', 'Reconcile recovered outcomes before authorizing another mutation', {intent_ids:[...recovery]});
       return execute(payload);
@@ -97,6 +110,28 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
 }
 port.onmessage = ({data}) => {
   const {id, operation, payload} = data;
+  // Revoke before queued storage dispatch. Network work never occupies the local-operation tail.
+  if (operation === 'release-client') sync?.revoke();
+  if (['sync-configure','sync-once','sync-revoke'].includes(operation)) {
+    void (async()=>{
+      try {
+        assertOwner();if(!sync)throw new BrowserVaultError('not_open','Open worker vault first');
+        let result:unknown;
+        if(operation==='sync-configure'){
+          const configured=sync.configure(payload);
+          if(payload){payload.bearerToken='';if(payload.keyBytes instanceof Uint8Array)payload.keyBytes.fill(0);}
+          result=await configured;
+        }else result=operation==='sync-once'?await sync.once():sync.revoke();
+        port.postMessage({id,ok:true,result});
+      } catch(error) {
+        const code=error instanceof BrowserVaultError?error.code:'sync_failed';
+        try {port.postMessage({id,ok:false,error:{code,message:'Browser sync operation failed'}});}catch{}
+      } finally {
+        if(operation==='sync-configure'&&payload){payload.bearerToken='';if(payload.keyBytes instanceof Uint8Array)payload.keyBytes.fill(0);}
+      }
+    })();
+    return;
+  }
   queue = queue.catch(() => undefined).then(async () => {
     try { port.postMessage({id, ok:true, result:await dispatch(operation, payload)}); }
     catch (error) {
@@ -106,7 +141,7 @@ port.onmessage = ({data}) => {
       if (['storage_closed','storage_corrupt','client_ownership_lost'].includes(failure.code)) {
         // For example, IDB versionchange can close the database while the worker
         // is still alive. Revoke the runtime rather than retain an admitted scope.
-        channel?.close(); vault?.close();
+        sync?.revoke(); channel?.close(); vault?.close();
         try { port.postMessage({event:'storage-error',code:failure.code}); } catch { /* Transport is already lost. */ }
       }
     }

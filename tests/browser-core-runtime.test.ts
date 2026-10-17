@@ -154,3 +154,30 @@ test('queued visibility refresh cancellation does not terminate ordered release'
     assert.equal(worker.terminated,true);
   });
 });
+
+test('sync network waits do not block local editing or revocation RPCs',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    worker.block='sync-once';const entered=enteredRequest(worker,'sync-once');
+    const syncing=runtime.syncOnce();await entered;
+    await runtime.prepare('local-edit','exact-request');
+    await runtime.revokeSync();
+    assert.deepEqual(calls.map(call=>call.operation),['open','sync-once','prepare','sync-revoke']);
+    worker.completeBlocked();await syncing;
+  });
+});
+test('sync RPCs obey admission and credential snapshots are bounded before dispatch',async()=>{
+  await runtimeFixture(async(runtime,calls,worker)=>{
+    const credentials={endpoint:'https://relay.test',realmId:'r',vaultId:'v',serverEpoch:'e',keyEpoch:1,bearerToken:'secret',keyBytes:new Uint8Array(32).fill(7)};
+    await assert.rejects(runtime.configureSyncFixture({...credentials,keyBytes:new Uint8Array(33)}),{code:'invalid_sync_credentials'});
+    assert.equal(calls.length,1);
+    let captured:any;
+    worker.onPosted=(message:any)=>{if(message.operation==='sync-configure')captured=structuredClone(message.payload);};
+    await runtime.configureSyncFixture(credentials);
+    assert.equal(captured.bearerToken,'secret');assert.equal(captured.keyBytes[0],7);
+    assert.equal(calls.at(-1).payload.bearerToken,'');assert.ok(calls.at(-1).payload.keyBytes.every((v:number)=>v===0));
+    assert.equal(credentials.keyBytes[0],7,'caller retains its own explicitly supplied key');
+    let admitted=true;runtime.installAdmissionGuard(()=>{if(!admitted)throw Object.assign(new Error('retired'),{code:'owner_retired'});});
+    admitted=false;await assert.rejects(runtime.syncOnce(),{code:'owner_retired'});
+    assert.equal(calls.length,2);
+  });
+});

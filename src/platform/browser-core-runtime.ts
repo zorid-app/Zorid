@@ -1,3 +1,4 @@
+import type { BrowserSyncFixtureCredentials, BrowserSyncSweep } from './browser-sync-worker.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '../core/browser-vault.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
@@ -32,6 +33,8 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   private closed = false;
   private releasing = false;
   private releasePending?: Promise<void>;
+  private syncPending?:Promise<BrowserSyncSweep>;
+  private syncRevokePending?:Promise<void>;
   private recovery = new Set<string>();
   private timeoutMs: number;
   private visibility = () => {
@@ -107,16 +110,16 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     if (this.admissionGuard || typeof guard !== 'function') throw new BrowserVaultError('client_already_admitted', 'Runtime already has a consumer guard');
     this.admissionGuard = guard;
   }
-  private call<T>(operation: string, payload?: unknown): Promise<T> {
+  private call<T>(operation: string, payload?: unknown, network = false): Promise<T> {
     let snapshot: unknown;
     try {
       this.assertDispatch(operation);
       // Bound retained structured-clone payloads while the worker is stalled.
-      if (this.queuedCalls >= 8) throw new BrowserVaultError('client_queue_full', 'Browser consumer request queue is full; retain the original operation');
+      if (this.queuedCalls >= 8 && operation !== 'sync-revoke') throw new BrowserVaultError('client_queue_full', 'Browser consumer request queue is full; retain the original operation');
       snapshot = structuredClone(payload);
     } catch (error) { return Promise.reject(error); }
     this.queuedCalls++;
-    const result = this.dispatchTail.then(() => {
+    const result = (network ? Promise.resolve() : this.dispatchTail).then(() => {
       this.assertDispatch(operation);
       const id = crypto.randomUUID();
       return new Promise<T>((resolve, reject) => {
@@ -124,14 +127,19 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
           // The worker might still execute a timed-out request. Terminate and
           // fence all queued calls, rather than advancing behind unknown work.
           this.fail(new BrowserVaultError('outcome_unknown', 'Worker response timed out; recover the exact durable operation in a new runtime', {request_id:id,operation}));
-        }, this.timeoutMs);
+        }, network ? 60_000 : this.timeoutMs);
         this.pending.set(id, {resolve: value => resolve(value as T), reject, timer, operation});
-        try { this.worker.postMessage({id, operation, payload:snapshot}); }
+        try { this.worker.postMessage({id, operation, payload:snapshot});
+          if(operation==='sync-configure'){const credentials=snapshot as BrowserSyncFixtureCredentials;credentials.keyBytes.fill(0);credentials.bearerToken='';}
+        }
         catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
       });
     });
-    this.dispatchTail = result.then(() => undefined, () => undefined);
-    return result.finally(() => { this.queuedCalls--; });
+    if (!network) this.dispatchTail = result.then(() => undefined, () => undefined);
+    return result.finally(() => {
+      this.queuedCalls--;
+      if(operation==='sync-configure'&&snapshot){const credentials=snapshot as BrowserSyncFixtureCredentials;credentials.keyBytes?.fill(0);credentials.bearerToken='';}
+    });
   }
   private fail(error: BrowserVaultError): void {
     for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(error); }
@@ -152,6 +160,22 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       .finally(() => { this.releasePending = undefined; });
     return this.releasePending;
   }
+  /** Explicit synthetic session only; key/token stay in worker memory until revoke/close. */
+  configureSyncFixture(credentials:BrowserSyncFixtureCredentials):Promise<void> {
+    if(!credentials || !(credentials.keyBytes instanceof Uint8Array)||credentials.keyBytes.length!==32||
+      typeof credentials.endpoint!=='string'||credentials.endpoint.length>2048||typeof credentials.bearerToken!=='string'||credentials.bearerToken.length>4096||
+      ![credentials.realmId,credentials.vaultId,credentials.serverEpoch].every(value=>typeof value==='string'&&value.length<=128))
+      return Promise.reject(new BrowserVaultError('invalid_sync_credentials','Invalid fixture sync credentials'));
+    return this.call('sync-configure',credentials,true);
+  }
+  syncOnce():Promise<BrowserSyncSweep> {
+    if(this.syncPending)return this.syncPending;
+    this.syncPending=this.call<BrowserSyncSweep>('sync-once',undefined,true).finally(()=>{this.syncPending=undefined;});return this.syncPending;
+  }
+  revokeSync():Promise<void> {
+    if(this.syncRevokePending)return this.syncRevokePending;
+    this.syncRevokePending=this.call<void>('sync-revoke',undefined,true).finally(()=>{this.syncRevokePending=undefined;});return this.syncRevokePending;
+  }
   inventory(): Promise<BrowserVaultRead[]> { return this.call('inventory'); }
   readEntry(path: string): Promise<BrowserVaultRead | null> { return this.call('read', path); }
   readEntryById(id:string):Promise<BrowserVaultRead|null>{return this.call('read-id',id);}
@@ -164,6 +188,12 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     if (this.recovery.size && !this.recovery.has(intentId)) throw new BrowserVaultError('recovery_required',
       'Reconcile and acknowledge this client’s recovered intent outcomes before issuing new mutations', {intent_ids:[...this.recovery]});
     await this.call('prepare', {intentId, requestJson});
+  }
+  /** Persist the shared Rust FamilyCommand unchanged before explicit commit authorization. */
+  async prepareFamily(intentId:string,commandJson:string):Promise<void> {
+    if(this.recovery.size&&!this.recovery.has(intentId))throw new BrowserVaultError('recovery_required','Reconcile recovered outcomes before new family mutations');
+    boundedUtf8(commandJson,32*1024*1024,'sync_input_too_large');
+    await this.call('prepare-family',{intentId,commandJson});
   }
   /** Explicit authorization: host persists commit_requested before applying. */
   commit(intentId: string): Promise<string> {
