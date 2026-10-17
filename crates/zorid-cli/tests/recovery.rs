@@ -3,9 +3,11 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::{
     fs,
+    io::Read,
     os::unix::fs::PermissionsExt,
     path::Path,
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
@@ -13,45 +15,174 @@ use zorid_crypto::{recovery::*, SystemEntropy, VaultKey};
 use zorid_sync_protocol::{Cursor, DeviceId, RealmId, VaultId};
 use zorid_sync_server::{BearerToken, RelayError, RelayStore};
 
+const MAX_LOG_BYTES: usize = 1024 * 1024;
+const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
+
+struct Capture {
+    bytes: Vec<u8>,
+    exceeded: bool,
+}
+fn capture(mut stream: impl Read + Send + 'static) -> JoinHandle<Capture> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut exceeded = false;
+        let mut chunk = [0; 4096];
+        loop {
+            let read = stream.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            let retained = read.min(MAX_LOG_BYTES.saturating_sub(bytes.len()));
+            bytes.extend_from_slice(&chunk[..retained]);
+            exceeded |= retained != read;
+            // Continue draining after the cap so an unexpected noisy child cannot
+            // deadlock on a full pipe. The caller fails the bounded capture.
+        }
+        Capture { bytes, exceeded }
+    })
+}
+
 struct Server {
     address: std::net::SocketAddr,
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    child: Option<Child>,
+    stdout: Option<JoinHandle<Capture>>,
+    stderr: Option<JoinHandle<Capture>>,
 }
 impl Server {
-    fn start(store: RelayStore) -> Self {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let address = listener.local_addr().unwrap();
-        let (stop, receiver) = tokio::sync::oneshot::channel();
-        let thread = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(async move {
-                let app = zorid_sync_server::http::router(store, &[]).unwrap();
-                axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
-                    .with_graceful_shutdown(async move {
-                        let _ = receiver.await;
-                    })
-                    .await
-                    .unwrap();
-            });
-        });
-        Self {
-            address,
-            stop: Some(stop),
-            thread: Some(thread),
+    fn start(database: &Path, ready: &Path) -> Self {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "recovery_relay_process",
+                "--nocapture",
+            ])
+            .env("ZORID_RECOVERY_RELAY_DB", database)
+            .env("ZORID_RECOVERY_RELAY_READY", ready)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = capture(child.stdout.take().unwrap());
+        let stderr = capture(child.stderr.take().unwrap());
+        let mut server = Self {
+            address: "127.0.0.1:0".parse().unwrap(),
+            child: Some(child),
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(file) = fs::File::open(ready) {
+                let mut bytes = Vec::new();
+                file.take(129).read_to_end(&mut bytes).unwrap();
+                assert!(bytes.len() <= 128, "oversized relay readiness record");
+                if let Ok(address) = std::str::from_utf8(&bytes).unwrap().parse() {
+                    server.address = address;
+                    return server;
+                }
+            }
+            assert!(
+                server.child.as_mut().unwrap().try_wait().unwrap().is_none(),
+                "fixture relay exited before readiness"
+            );
+            assert!(Instant::now() < deadline, "fixture relay readiness timeout");
+            std::thread::sleep(Duration::from_millis(10));
         }
+    }
+    fn finish(&mut self) -> Vec<Capture> {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            child.wait().unwrap();
+        }
+        [self.stdout.take(), self.stderr.take()]
+            .into_iter()
+            .flatten()
+            .map(|thread| thread.join().unwrap())
+            .collect()
+    }
+    fn stop(mut self) -> Vec<Capture> {
+        self.finish()
     }
 }
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.stop.take().unwrap().send(());
-        self.thread.take().unwrap().join().unwrap();
+        let _ = self.finish();
     }
 }
+
+// Executes the real relay router in a separate process so stdout/stderr capture
+// includes the service itself, without redirecting the test runner globally.
+// No logging subscriber is installed by the fixture or current relay binary;
+// captured output is supporting leak evidence, not proof about future logging.
+#[test]
+#[ignore = "subprocess helper, started explicitly by the recovery test"]
+fn recovery_relay_process() {
+    let database = std::env::var_os("ZORID_RECOVERY_RELAY_DB").unwrap();
+    let ready = std::env::var_os("ZORID_RECOVERY_RELAY_READY").unwrap();
+    let store = RelayStore::open(Path::new(&database), &RealmId::new("realm").unwrap()).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ready = std::path::PathBuf::from(ready);
+        let staging = ready.with_extension("pending");
+        fs::write(&staging, listener.local_addr().unwrap().to_string()).unwrap();
+        fs::rename(staging, ready).unwrap();
+        axum::serve(
+            listener,
+            zorid_sync_server::http::router(store, &[]).unwrap(),
+        )
+        .await
+        .unwrap();
+    });
+}
+
+fn bounded_artifact(path: &Path) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .unwrap()
+        .take((MAX_ARTIFACT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert!(
+        bytes.len() <= MAX_ARTIFACT_BYTES,
+        "artifact fixture exceeded scan bound"
+    );
+    bytes
+}
+fn assert_no_sentinels(bytes: &[u8], sentinels: &[&[u8]]) {
+    for sentinel in sentinels {
+        assert!(!sentinel.is_empty());
+        let base64 = Zeroizing::new(STANDARD.encode(sentinel));
+        let hex = Zeroizing::new(
+            sentinel
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
+        );
+        for spelling in [*sentinel, base64.as_bytes(), hex.as_bytes()] {
+            assert!(
+                !bytes
+                    .windows(spelling.len())
+                    .any(|window| window == spelling),
+                "fixture secret/plaintext sentinel found in relay artifact or captured output"
+            );
+        }
+    }
+}
+fn inspect_artifacts_and_logs(paths: &[&Path], logs: &[Capture], sentinels: &[&[u8]]) {
+    for path in paths {
+        assert_no_sentinels(&bounded_artifact(path), sentinels);
+    }
+    for log in logs {
+        assert!(!log.exceeded, "relay output exceeded capture bound");
+        assert_no_sentinels(&log.bytes, sentinels);
+    }
+}
+
 fn cli(vault: &Path, args: &[&str]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_zorid"))
         .arg("--vault")
@@ -61,25 +192,52 @@ fn cli(vault: &Path, args: &[&str]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let out = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take(32 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        bytes
+    });
+    let err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        bytes
+    });
     let deadline = Instant::now() + Duration::from_secs(25);
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            return child.wait_with_output().unwrap();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = out.join();
+            let _ = err.join();
             panic!("fixture CLI deadline exceeded");
         }
         std::thread::sleep(Duration::from_millis(10));
+    };
+    let stdout = out.join().unwrap();
+    let stderr = err.join().unwrap();
+    assert!(
+        stdout.len() <= 32 * 1024 * 1024 && stderr.len() <= 1024 * 1024,
+        "fixture output exceeded bounds"
+    );
+    Output {
+        status,
+        stdout,
+        stderr,
     }
 }
 fn success(output: Output) -> Value {
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(output.status.success(), "fixture CLI command failed");
     assert!(output.stderr.is_empty());
     serde_json::from_slice::<Value>(&output.stdout).unwrap()["result"].clone()
 }
@@ -88,10 +246,13 @@ fn sync(vault: &Path, credentials: &Path, command: &[&str]) -> Output {
     args.extend(command);
     cli(vault, &args)
 }
-fn create(vault: &Path, input: &Path) {
+fn initialize(vault: &Path, credentials: &Path) {
     fs::create_dir(vault).unwrap();
     success(cli(vault, &["init"]));
-    fs::write(input, []).unwrap();
+    success(sync(vault, credentials, &["fixture-enroll"]));
+}
+fn create_text(vault: &Path, input: &Path, content: &str) {
+    fs::write(input, content).unwrap();
     success(cli(
         vault,
         &[
@@ -101,44 +262,7 @@ fn create(vault: &Path, input: &Path) {
             "note",
             "--operation-id",
             "create",
-            "--input",
-            input.to_str().unwrap(),
-        ],
-    ));
-}
-fn revision(vault: &Path) -> String {
-    success(cli(vault, &["read", "--id", "note"]))["entry"]["revision"]
-        .as_str()
-        .unwrap()
-        .into()
-}
-fn bind(vault: &Path, credentials: &Path) {
-    success(sync(
-        vault,
-        credentials,
-        &[
-            "fixture-bind-empty",
-            "--id",
-            "note",
-            "--bootstrap-id",
-            "shared-bootstrap",
-            "--expected-revision",
-            &revision(vault),
-        ],
-    ));
-}
-fn write(vault: &Path, input: &Path, operation: &str, content: &str) {
-    fs::write(input, content).unwrap();
-    success(cli(
-        vault,
-        &[
-            "write",
-            "--id",
-            "note",
-            "--expected-revision",
-            &revision(vault),
-            "--operation-id",
-            operation,
+            "--text",
             "--input",
             input.to_str().unwrap(),
         ],
@@ -169,10 +293,11 @@ fn credentials(
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-// This proves known-note recovery into a fresh local store. The fixture declares
-// its note path/ID/bootstrap independently; text-v1 is not a namespace backup.
+// The receiver starts with no namespace entries or note/bootstrap bindings.
+// It reconstructs this text fixture from authenticated family envelopes. This
+// does not cover every file type, key epoch, history policy or production setup.
 #[test]
-fn external_recovery_secret_restores_known_note_from_managed_relay_backup() {
+fn external_recovery_secret_restores_namespace_and_text_from_managed_backup() {
     let original = tempfile::tempdir().unwrap();
     let backup = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
@@ -190,7 +315,6 @@ fn external_recovery_secret_restores_known_note_from_managed_relay_backup() {
     let secret_path = external.path().join("recovery-secret");
     fs::write(&secret_path, recovery.expose_secret()).unwrap();
     fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600)).unwrap();
-    drop(recovery);
 
     let db = original.path().join("relay.db");
     let mut store = RelayStore::open(&db, &realm).unwrap();
@@ -200,26 +324,40 @@ fn external_recovery_secret_restores_known_note_from_managed_relay_backup() {
     let old_token = store.issue_device("fixture", &device).unwrap();
     let old_epoch = store.identity().unwrap().server_epoch;
     let mut admin = RelayStore::open(&db, &realm).unwrap();
-    let server = Server::start(store);
+    drop(store);
+    let server = Server::start(&db, &original.path().join("relay-ready"));
     let local = original.path().join("local-vault");
     let old_credentials = original.path().join("credentials.json");
     let input = original.path().join("input");
     credentials(&old_credentials, &server, &old_epoch, &old_token, &key);
-    create(&local, &input);
-    bind(&local, &old_credentials);
-    let expected = "Recovered known note: \u{feff}Unicode 🦀\r\n";
-    write(&local, &input, "seed-recovery", expected);
-    assert_eq!(
-        success(sync(&local, &old_credentials, &["once"]))["server_accepted"],
-        1
+    initialize(&local, &old_credentials);
+    let expected = "recovery-private-sentinel-6b7d97a4: \u{feff}Unicode 🦀\r\n";
+    create_text(&local, &input, expected);
+    let uploaded = success(sync(&local, &old_credentials, &["once"]))["server_accepted"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        uploaded >= 2,
+        "expected namespace and text family envelopes"
     );
     let backup_db = backup.path().join("relay-backup.db");
     admin.backup_to(&backup_db).unwrap();
     // A post-backup revocation must not be undone by restoring an older snapshot.
     admin.revoke_device(&device).unwrap();
-    drop(server);
+    let logs = server.stop();
+    inspect_artifacts_and_logs(
+        &[&backup_db, &bundle_path],
+        &logs,
+        &[
+            b"recovery-private-sentinel-6b7d97a4",
+            key.expose_secret(),
+            recovery.expose_secret(),
+            old_token.expose_secret().as_bytes(),
+        ],
+    );
     drop(admin);
     drop(key);
+    drop(recovery);
     let original_path = original.path().to_owned();
     original.close().unwrap();
     assert!(!original_path.exists()); // No original DB, credential, key or input access.
@@ -248,7 +386,7 @@ fn external_recovery_secret_restores_known_note_from_managed_relay_backup() {
             .unwrap()
             .items
             .len(),
-        1
+        uploaded as usize
     );
 
     let secret_bytes = Zeroizing::new(fs::read(&secret_path).unwrap());
@@ -262,8 +400,8 @@ fn external_recovery_secret_restores_known_note_from_managed_relay_backup() {
     .is_err());
     let recovered_key = open_recovery_bundle(&wire, &context, &recovery).unwrap();
     drop(secret_bytes);
-    drop(recovery);
-    let server = Server::start(restored);
+    drop(restored);
+    let server = Server::start(&restored_db, &clean.path().join("restored-ready"));
     let clean_vault = clean.path().join("fresh-local-vault");
     let clean_credentials = clean.path().join("new-credentials.json");
     credentials(
@@ -273,12 +411,10 @@ fn external_recovery_secret_restores_known_note_from_managed_relay_backup() {
         &fresh_token,
         &recovered_key,
     );
-    drop(recovered_key);
-    let clean_input = clean.path().join("new-input");
-    create(&clean_vault, &clean_input);
-    bind(&clean_vault, &clean_credentials);
+    initialize(&clean_vault, &clean_credentials);
+    assert!(!clean_vault.join("note.md").exists());
     let result = success(sync(&clean_vault, &clean_credentials, &["once"]));
-    assert_eq!(result["locally_received"], 1);
+    assert_eq!(result["locally_received"], uploaded);
     assert_eq!(result["server_accepted"], 0);
     assert_eq!(read(&clean_vault), expected.as_bytes());
     // A fresh CLI process resumes its durable receipt without echoing the update.
@@ -286,4 +422,20 @@ fn external_recovery_secret_restores_known_note_from_managed_relay_backup() {
     assert_eq!(replay["locally_received"], 0);
     assert_eq!(replay["server_accepted"], 0);
     assert_eq!(read(&clean_vault), expected.as_bytes());
+    assert_eq!(
+        fs::read(clean_vault.join("note.md")).unwrap(),
+        expected.as_bytes()
+    );
+    let logs = server.stop();
+    inspect_artifacts_and_logs(
+        &[&backup_db, &bundle_path],
+        &logs,
+        &[
+            b"recovery-private-sentinel-6b7d97a4",
+            recovered_key.expose_secret(),
+            recovery.expose_secret(),
+            old_token.expose_secret().as_bytes(),
+            fresh_token.expose_secret().as_bytes(),
+        ],
+    );
 }
