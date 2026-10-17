@@ -25,3 +25,30 @@ The complete candidate passed 1,573 automated tests, TypeScript and production
 build checks. Those results do not establish native card placement, attachment
 playback inside Canvas, drag/drop behavior, or exact visual parity. No private
 vault content or screenshot is included in this report.
+
+## Services and accessibility follow-up
+
+The production build of `3fa19fc` was verified on the same macOS Electron 31.6.0
+runtime with original disposable content after the reviewed 1,587-test gate.
+
+- Rich card groups now expose their text editors, checkboxes and native media
+  controls in the accessibility tree instead of flattening them into option text.
+- Double-clicking a text-card paragraph entered its shared editor. Typed text
+  appeared immediately and was confirmed in the actual Canvas JSON.
+- Pasting `![[Native media tone.wav]]` rendered an audio player inside the Live
+  text card. Its source was persisted in the Canvas node text.
+- After leaving and reopening editing, Command-Z removed that pasted embed;
+  the saved JSON confirmed the undo while retaining earlier typed text.
+- Add card focused a new empty editor immediately. Typing without another click
+  persisted a third text node with the expected content.
+- Clicking Play inside the Live card exposed a defect: the card switched to
+  Reading and the first playback click was lost. A second click in Reading
+  changed Play to Pause. An independent real-editor probe reproduced the native
+  control blur boundary; its repair is separate from this checkpoint.
+- A direct WAV file card temporarily reported a playback error after Canvas
+  navigation. A subsequent card creation cleared the error. Resource-lease
+  probes have not reproduced premature URL revocation; the cause remains open.
+
+The owned Electron process exited normally after the pass. These observations
+establish actual text-card editing and persistence, not complete media, visual,
+mobile, drag/drop, or source-reference parity.
