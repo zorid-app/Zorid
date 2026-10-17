@@ -117,6 +117,21 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
+- Subsequent21:36 checkpoint: native facade21944 exit0, all6 tests PASS,
+  including explicit external import and authenticated sync receive with exact
+  bytes, metadata/search/backlink retarget, old-pin coherence, rebuild equivalence
+  and no authored receive echo. Reviewed tests29bdb786 integrated mainecd52a4f.
+  Native hotfix simulator51d8b84f/build5 now verifies actual open/Back/Forward/type
+  and exact67-byte save without UIKit crash. Phone87290 stopped before compile
+  because destination unavailable; native checks connection/generic build. Root
+  returned brief Rust slot in msg_e7b43ac5d754; no root compiler currently live.
+- Remaining consumer candidate: Base context/options e224f491 plus controller
+  b067f8b3/datec13ff75d/late-pin97a63eff composed isolated. Focused TS passes;
+  native/WASM proof pending. Independent review caught a shared `stale-source`
+  diagnostic incompatible with desktop frame error spelling; contract owner fixes
+  mapping without relaxing framing. Shared-row mutation identity freshness is
+  under source audit; do not integrate controller until resolved. Search57dafece
+  source frozen,16 focused tests/typecheck pass, independent review pending.
 - Reviewed engine39a306e7 composed into main without source conflicts. Normal
   browser backlink removal also PASS. Main full frontend typecheck7046 exit0,
   focused document/browser/desktop/backlink/workspace tests24094 PASS48/48.

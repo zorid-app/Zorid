@@ -114,12 +114,12 @@ explicit imported/received-update index evidence. Keep the milestone active.
 | Requirement | Observed evidence | Remaining work |
 | --- | --- | --- |
 | Markdown properties/tags/headings/links/tasks and offsets | Native canonical49 plus bounds/value/YAML checks; actual Chrome worker49/49 +4 malformed request checks; actual downloaded report independently verified | Preserve provenance through main integration |
-| Revision-aware index/search/backlinks | Portable contracts7, generations15, restore2 pass; actual CLI document3 +metadata4 pass | Explicit imported/received update refresh coverage being strengthened |
+| Revision-aware index/search/backlinks | Portable contracts7, generations15, restore2 pass; actual CLI document3 +metadata4 pass | Actual six-case native run21944 passes import/receive refresh, old-pin, raw-byte, rebuild and no-echo checks; test integrated ecd52a4f |
 | Publication/concurrency/moves/deletes/rebuild | Store19/19 plus changed discard case1/1 pass; actual production browser worker/IDB suite passes including retained edit/move/delete, CAS/rebuild expiry, concurrent publication, worker restart and page reload | Verify integrated composition; no large-vault performance claim |
 | Base definitions/formulas/filter/sort/group | Actual WASM51/51 +5 malformed requests; native current query3/3 and graph2/2 pass; actual desktop/CLI query evidence | Normal Base controller still uses TS; migration assigned |
 | Native facade/desktop transport | Correctly enrolled facade fixture1/1 passes, previous4 unchanged; host clock3/3; actual CJS→Rust child→independent CLI retained-query fixture1/1 passes | Preserve admission and retained-source guarantees during integration |
 | Normal workspace consumers | Desktop actual save/navigation/backlink refresh passes with independent exact42-byte file check; normal browser creates/renames/saves, displays Rust backlinks, navigates Source and restores source after reload | Normal sidebar search migration assigned |
-| Raw-source/editor authority | Parser/index paths are read-only; browser production suite rawBytesPreserved=true; desktop exact saved bytes and browser reload persistence observed | Imported/received update regression and integrated smoke |
+| Raw-source/editor authority | Parser/index paths are read-only; browser production suite rawBytesPreserved=true; desktop exact saved bytes and browser reload persistence observed | Imported/received update regression passes; final migrated-consumer smoke remains |
 
 Evidence files under coordinator `tmp/`: `stage4-browser-document-report.json`,
 `stage4-browser-base-report-run2.json`,
@@ -155,7 +155,9 @@ ownership, handles and exact commands.
   as80e2416e in the isolated root candidate. Explicit external reconciliation and
   authenticated receive must advance metadata/search/backlinks, preserve raw
   bytes/old pins, rebuild equivalently and avoid authored receive echoes. Actual
-  Rust execution awaits the native hotfix terminal resource boundary.
+  six-case Rust run21944 passed, official1.95/jobs1/testthreads1, compile13.52s +
+  tests2.08s. Exact log `tmp/stage4-native-import-receive-run1.log`; test integrated
+  mainecd52a4f. No production source change was required.
 
 Root remains sole main integrator. Mobile's separately owned host fixture-sync
 slice is not a Stage4 completion condition or proof of production remote sync.
