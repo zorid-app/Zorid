@@ -118,6 +118,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 Current authoritative update — 2026-10-17 20:30 UTC. The bullets below
 this update are historical checkpoints where their status differs:
+- Subsequent root checks: Base graph corpus44023 passed2/2 after the fixture
+  correction (tmp/stage4-base-generation-run4.log); changed Store discard6800
+  passed1/1 (tmp/stage4-store-discard-run4.log). Native retry57384 compiled and
+  passed4/5; external reconciliation fixture lacked required enrollment. Fixture
+  correction8619664e is composed but not executed. No authority checks relaxed.
+- Root released the heavy slot to native in msg_653a697e7e30; no root heavy
+  process remains live. Await explicit native release before new heavy checks.
+  Isolated candidatebc374d91 includes reviewed browser discard/pruning fixes
+  through e4b68158 and desktop preservation fixture2545c70b; actual browser/
+  host proof remains pending. Root workspace hook is still isolated/uncommitted.
 - Native owner reports successful physical iPhone build39896, install80894 and
   launch63110; simulator flow independently read the exact43 saved body bytes
   after create/rename/back/reopen. This verifies that bounded flow, not complete
