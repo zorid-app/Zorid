@@ -39,3 +39,17 @@ or complete reference toolbar/menu parity. Markdown Base embeds remain separate.
 Persisted Base-specific view state, full global property-type coercion, recovered
 config editing UI and richer thumbnails remain documented gaps. No Electron app
 was launched during this integration gate.
+
+## Native desktop checkpoint
+
+The identical reviewed renderer was run from main `19c4684` with Electron 44.8.0
+arm64 against two original disposable notes and a four-view Base. Table, Cards,
+List and Board all mounted through the native view selector. Editing Alpha's
+status from Todo to In progress in the table saved the actual Markdown file;
+Cards and List subsequently displayed the new value with the existing priority.
+
+The Board exposed only Todo and Done after that edit when the fixture explicitly
+specified `groupOrder: [Todo, Done]`. Whether the missing new group follows the
+reference contract is under audit; this observation is not a full grouping-parity
+pass. Native drag/drop, selection geometry, IME, failed writes and restart recovery
+remain unverified by this pass. The owned app exited normally after verification.
