@@ -467,3 +467,66 @@ fn historical_binary_content_need_not_be_present_to_validate_namespace() {
     let saved = baseline(&graph, "binary", "binary");
     validate_baselines(&graph, &[saved]).unwrap();
 }
+
+#[test]
+fn unresolved_heads_wrong_physical_parent_and_descendant_move_are_rejected() {
+    let mut graph = authored(&empty(), &create("folder", None, EntryKind::Folder));
+    graph = authored(&graph, &create("child", Some("folder"), EntryKind::Folder));
+    let saved = vec![
+        baseline(&graph, "child", "folder/child"),
+        baseline(&graph, "folder", "folder"),
+    ];
+    assert!(plan_external_namespace(
+        &graph,
+        &saved,
+        &ExternalNamespaceAction::Move {
+            root: entry("folder"),
+            target: location(Some("child"), "cycle")
+        },
+        &allocation(&["move-into-child"]),
+    )
+    .is_err());
+
+    // The physical path is insufficient when its saved immediate parent ID
+    // belongs to another known folder. Never infer membership from a prefix alone.
+    let mut other = authored(&graph, &create("other", None, EntryKind::Folder));
+    other = authored(&other, &create("wrong", Some("other"), EntryKind::File));
+    let wrong_parent = vec![
+        baseline(&other, "folder", "folder"),
+        baseline(&other, "wrong", "folder/wrong"),
+    ];
+    assert!(plan_external_namespace(
+        &other,
+        &wrong_parent,
+        &ExternalNamespaceAction::Delete {
+            root: entry("folder")
+        },
+        &allocation(&["delete-folder", "delete-wrong"]),
+    )
+    .is_err());
+
+    let pending = payload(
+        "child",
+        "pending",
+        &["missing"],
+        v2::Effect::Move {
+            location: location(Some("folder"), "later"),
+        },
+    );
+    let pending_graph = receive(&graph, &pending);
+    let mut unresolved = saved[0].clone();
+    unresolved.heads = vec![id("pending")];
+    unresolved.location_event = id("pending");
+    assert_eq!(
+        validate_baselines(&pending_graph, &[unresolved]),
+        Err(Error::InvalidCausality)
+    );
+
+    let mut oversized = saved[0].clone();
+    oversized.heads = vec![id("create-child"); MAX_PARENTS + 1];
+    assert!(validate_baselines(&graph, &[oversized]).is_err());
+    assert_eq!(
+        validate_baselines(&graph, &vec![saved[0].clone(); MAX_EVENTS + 1]),
+        Err(Error::TooLarge)
+    );
+}
