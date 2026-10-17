@@ -69,6 +69,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Priority storage blocker: browser_sync_plan observed live host74662 holding
+  WAL inode342471712/SHM342471713 while pathname WAL/SHM are342480671/342480672.
+  Host writes and later CLI/Python reads therefore see split SQLite state.
+  Likely cause is native fs::regular open/drop on SQLite-managed inodes in
+  fs.rs::verify and post-open database identity capture, releasing POSIX locks.
+  data_readiness owns narrow descriptor-relative metadata fix and regression.
+  Preserve live0936 host and WAL; no further SQLite opens or termination until
+  evidence is secured. Earlier sequential interop evidence is retained, but
+  concurrent safety is not established. Native combined gate waits for this fix.
 - Encrypted restore extension integrated as main `e71f59a` after candidate
   f53a6b5 recovery54884 exit0: clean CLI restored exact text and 262163-byte
   multi-chunk binary, then restart preserved both. Existing metadata/credential
