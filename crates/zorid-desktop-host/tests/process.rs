@@ -350,13 +350,14 @@ fn family_commands_embed_native_core_and_retry_exact_mode_without_http() {
     let private = tempfile::tempdir().unwrap();
     let config = private.path().join("sync.json");
     std::fs::write(&config, serde_json::to_vec(&json!({
-        "version":1,"endpoint":"http://127.0.0.1:9/","realm_id":"realm","vault_id":"vault",
+        "version":2,"transport":"grpc","endpoint":"http://127.0.0.1:9/","realm_id":"realm","vault_id":"vault",
         "server_epoch":"epoch","key_epoch":1,"key_base64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         "bearer_token":"a".repeat(64)
     })).unwrap()).unwrap();
     std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
     let mut host = Host::spawn_config(root.path(), Some(&config));
-    assert_eq!(host.recv().0["ok"], true);
+    let startup = host.recv().0;
+    assert_eq!(startup["ok"], true, "{startup}");
     let enrolled = host
         .request(json!({"method":"fixture_family_enroll"}), &[])
         .0;
