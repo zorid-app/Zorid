@@ -376,6 +376,9 @@ fn control(tx: &Connection) -> IndexResult<Control> {
 }
 fn source(tx: &Connection) -> IndexResult<SourceSnapshotId> {
     let (head, allocated): (i64,i64) = tx.query_row("SELECT (SELECT coalesce(max(cursor),0) FROM local_changes),(SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='local_changes'),0))", [], |r|Ok((r.get(0)?,r.get(1)?)))?;
+    // Source11 initialization always appends Bootstrap at cursor1, including
+    // empty vaults. Zero therefore means missing authority history, not a
+    // legitimate virgin source watermark.
     if head <= 0 || head != allocated {
         return Err(StoreError::Corrupt("journal head missing or inconsistent".into()).into());
     }
@@ -523,6 +526,41 @@ fn check_stage(tx: &Connection, h: &Header) -> IndexResult<()> {
         return Err(DocumentIndexError::RebuildRequired);
     }
     Ok(())
+}
+
+fn index_status(
+    tx: &Connection,
+    observed_source: &SourceSnapshotId,
+) -> IndexResult<DocumentIndexStatus> {
+    let count = cache_tables(tx)?;
+    if count == 0 {
+        return Ok(DocumentIndexStatus::Uninitialized);
+    }
+    let result = (|| {
+        let c = control(tx)?;
+        let Some(head) = c.head else {
+            return Ok(DocumentIndexStatus::Building);
+        };
+        let id = head.id()?;
+        let h = header(tx, &id)?;
+        if !h.published {
+            return Err(DocumentIndexError::RebuildRequired);
+        }
+        let (_, generation) = builder(tx, &h)?
+            .finish()
+            .map_err(|_| DocumentIndexError::RebuildRequired)?
+            .into_parts();
+        Ok(DocumentIndexStatus::Ready {
+            snapshot: id,
+            covered_watermark: h.manifest.watermark,
+            observed_source_head: observed_source.watermark().as_str().into(),
+            coverage_complete: generation.coverage_complete(),
+        })
+    })();
+    match result {
+        Err(DocumentIndexError::RebuildRequired) => Ok(DocumentIndexStatus::RebuildRequired),
+        other => other,
+    }
 }
 
 fn pinned_header(
@@ -1089,38 +1127,20 @@ impl Store {
         tx.commit()?;
         Ok(stage.snapshot.clone())
     }
-    pub fn document_index_status(&self) -> IndexResult<DocumentIndexStatus> {
+    /// Capture the local authority identity/head and cache status in one read
+    /// transaction. Cache absence/corruption never fabricates a source watermark.
+    pub fn document_index_status_with_source(
+        &self,
+    ) -> IndexResult<(SourceSnapshotId, DocumentIndexStatus)> {
         let tx = self.connection.unchecked_transaction()?;
-        let count = cache_tables(&tx)?;
-        if count == 0 {
-            return Ok(DocumentIndexStatus::Uninitialized);
-        }
-        let result = (|| {
-            let c = control(&tx)?;
-            let Some(head) = c.head else {
-                return Ok(DocumentIndexStatus::Building);
-            };
-            let id = head.id()?;
-            let h = header(&tx, &id)?;
-            if !h.published {
-                return Err(DocumentIndexError::RebuildRequired);
-            }
-            let (_, g) = builder(&tx, &h)?
-                .finish()
-                .map_err(|_| DocumentIndexError::RebuildRequired)?
-                .into_parts();
-            Ok(DocumentIndexStatus::Ready {
-                snapshot: id,
-                covered_watermark: h.manifest.watermark,
-                observed_source_head: source(&tx)?.watermark().as_str().into(),
-                coverage_complete: g.coverage_complete(),
-            })
-        })();
+        let source = source(&tx)?;
+        let status = index_status(&tx, &source)?;
         tx.commit()?;
-        match result {
-            Err(DocumentIndexError::RebuildRequired) => Ok(DocumentIndexStatus::RebuildRequired),
-            other => other,
-        }
+        Ok((source, status))
+    }
+    pub fn document_index_status(&self) -> IndexResult<DocumentIndexStatus> {
+        self.document_index_status_with_source()
+            .map(|(_, status)| status)
     }
     pub fn open_document_snapshot(&self) -> IndexResult<DocumentQueryPin> {
         if self

@@ -888,3 +888,72 @@ fn discarding_one_stale_stage_preserves_source_published_pins_and_other_stages()
     assert!(store.resume_document_index(current.snapshot()).is_ok());
     assert_eq!(authority(&path), before_authority);
 }
+
+#[test]
+fn empty_vault_compound_status_reports_real_source_and_coherent_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let (initial, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(
+        initial.local_store_id(),
+        &store.identity().unwrap().local_store_id
+    );
+    assert_eq!(initial.watermark().as_str(), "1");
+    assert!(matches!(status, DocumentIndexStatus::Uninitialized));
+    assert!(store.list_snapshot().unwrap().entries.is_empty());
+    let authority_before = authority(&path);
+    store.initialize_document_index().unwrap();
+    let (building, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(building, initial);
+    assert!(matches!(status, DocumentIndexStatus::Building));
+    let stage = store.begin_document_index().unwrap();
+    let progress = store.pump_document_index(&stage).unwrap();
+    assert!(progress.ready);
+    assert_eq!(
+        (progress.prepared_documents, progress.total_documents),
+        (0, 0)
+    );
+    store.publish_document_index(&stage).unwrap();
+    let (ready, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(ready, initial);
+    assert!(
+        matches!(status,DocumentIndexStatus::Ready {snapshot,covered_watermark,observed_source_head,coverage_complete:true} if snapshot==*stage.snapshot() && covered_watermark==ready.watermark().as_str() && observed_source_head==ready.watermark().as_str())
+    );
+    assert!(matches!(
+        store.document_index_status().unwrap(),
+        DocumentIndexStatus::Ready { .. }
+    ));
+    let pin = store.open_document_snapshot().unwrap();
+    let page = store
+        .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), None, 10)
+        .unwrap();
+    assert!(page.complete);
+    assert!(page.hits.is_empty());
+    assert!(page.next.is_none());
+    assert_eq!(authority(&path), authority_before);
+    let mut writer = Store::open(&path).unwrap();
+    writer.apply(&create("new", "new.md", b"needle")).unwrap();
+    let (advanced, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(advanced.local_store_id(), initial.local_store_id());
+    assert_eq!(advanced.watermark().as_str(), "2");
+    assert!(
+        matches!(status,DocumentIndexStatus::Ready {covered_watermark,observed_source_head,..} if covered_watermark==initial.watermark().as_str() && observed_source_head==advanced.watermark().as_str())
+    );
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("DROP TABLE document_index_rows").unwrap();
+    let (partial, status) = store.document_index_status_with_source().unwrap();
+    assert_eq!(partial, advanced);
+    assert!(matches!(status, DocumentIndexStatus::RebuildRequired));
+    assert!(matches!(
+        store.document_index_status().unwrap(),
+        DocumentIndexStatus::RebuildRequired
+    ));
+    db.execute("DELETE FROM local_changes", []).unwrap();
+    assert!(matches!(
+        store.document_index_status_with_source(),
+        Err(DocumentIndexError::Authority(
+            zorid_store::StoreError::Corrupt(_)
+        ))
+    ));
+}
