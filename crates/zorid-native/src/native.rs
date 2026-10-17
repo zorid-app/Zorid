@@ -11,6 +11,9 @@ use zorid_store::{
 };
 #[path = "binary_api.rs"]
 mod binary_api;
+#[cfg(test)]
+#[path = "binary_stream_tests.rs"]
+mod binary_stream_tests;
 #[path = "checkpoints.rs"]
 mod checkpoints;
 #[path = "content_stream.rs"]

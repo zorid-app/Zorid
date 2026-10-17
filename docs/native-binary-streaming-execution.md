@@ -173,3 +173,17 @@ all bytes with buffers no larger than128 KiB. They will be a separate follow-up
 commit so initial aggregate compilation is not delayed. Coupled Store activation
 commit and serialized coordinator build remain required before any activation
 claim.
+
+### Focused large-file fixture source
+
+Store activation `2921096` is composed here as `32e80a7` (documentation conflict
+retained the Store owner's newer verification record). Native adapter source is
+frozen at `d42f82d`. Two independently source-reviewed fixtures now cover exactly
+17 MiB +17 byte bodies: stage restart, invisibility, original receipt and lost-Open
+pin replay across a later write; and prepared external folder move/edit/delete
+restart with one original pending-content observation, stable IDs/inode and quiet
+repeat. Expected/public/pinned bytes are compared chunkwise, including EOF. The
+new fixture needs only a test-only serde_json dependency and its existing lock
+package edge to inspect the persisted prepared journal; it does not decode body
+JSON. Formatting and whitespace checks pass. These fixtures have not compiled or
+run; coordinator serialization still applies.
