@@ -11,6 +11,14 @@ impl NativeVault {
         self.paths.verify()?;
         Ok(self.store.document_index_status()?)
     }
+    /// Observe authority identity and cache status in the same Store read
+    /// transaction, including uninitialized/building/rebuild-required states.
+    pub fn document_index_status_with_source(
+        &self,
+    ) -> NativeDocumentResult<(SourceSnapshotId, DocumentIndexStatus)> {
+        self.paths.verify()?;
+        Ok(self.store.document_index_status_with_source()?)
+    }
     pub fn initialize_document_index(&mut self) -> NativeDocumentResult<()> {
         self.paths.verify()?;
         Ok(self.store.initialize_document_index()?)
