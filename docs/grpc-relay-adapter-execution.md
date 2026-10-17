@@ -42,7 +42,15 @@ Proposal: `prototypes/grpc-web-proof/REMOTE-SYNC-PROPOSAL.md` at `7b5dea9`.
 
 Source-only initial checks: `rustfmt --edition 2021` passed for owned Rust files;
 `git diff --check` passed. No Cargo build/test run before root's heavy slot.
-Independent source review is requested through root; not yet reported complete.
+Independent source review by `/root/default_lifecycle_review_sol/browser_client_slots`
+approved `a615f92` + `f4c23d3` with no scoped source blocker. It confirmed unchanged
+transaction/auth/duplicate rules, predecode permits/frame bounds, cancel-held work,
+sanitized status details, shared native/Web router and preserved HTTP semantics.
+It did not compile, execute fixtures or establish actual browser acceptance.
+Follow-up `3088871` only strengthens the maximum-size fixture: encrypted payload
+and authenticated header reach the exact `MAX_WIRE_BYTES` cap. Worktree is clean
+at this freeze; source batch order is `a615f92`, `f4c23d3`, `3088871`, then this
+execution evidence update.
 
 Focused pending checks:
 `cargo test -p zorid-sync-server -- --test-threads=1` under the root's serialized
