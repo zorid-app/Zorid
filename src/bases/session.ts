@@ -29,6 +29,9 @@ export interface BaseSession {
   readonly state: BaseControllerState;
   refresh(): Promise<void>;
   selectView(index: number): Promise<void>;
+  /** Workspace preflight: retain the mounted view while settling accepted edits. */
+  flush(): Promise<void>;
+  hasPendingChanges(): boolean;
   /** Retains UI/controller on failure; callers must not silently discard this rejection. */
   close(): Promise<void>;
 }
@@ -40,6 +43,7 @@ interface MountedView {
 
 /** Compose existing Bases modules for a workspace pane or an embedded base. */
 export function createBaseSession(container: HTMLElement, options: BaseSessionOptions): BaseSession {
+  options.validate();
   if (!options.readOnly && !options.buffers) throw new Error('Writable Bases require the shared workspace buffer host');
   const doc = container.ownerDocument, win = doc.defaultView;
   const root = doc.createElement('div'), toolbar = doc.createElement('div'), selector = doc.createElement('select');
@@ -65,10 +69,16 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     if (disposed || scheduled !== undefined) return;
     scheduled = setTimeout(() => { scheduled = undefined; if (deferred && !pending.size && !activeDraft()) { deferred = undefined; render(controller.state); } }, 0);
   };
+  const releaseCleanBuffers = () => { for (const buffer of changedBuffers) if (!buffer.dirty && !buffer.error) changedBuffers.delete(buffer); };
   const track = <T>(operation: () => Promise<T>): Promise<T> => {
     action();
     const promise = operation(); pending.add(promise);
-    void promise.then(() => { pending.delete(promise); schedule(); }, error => { pending.delete(promise); report(error); schedule(); });
+    const settled = () => {
+      pending.delete(promise);
+      releaseCleanBuffers();
+      schedule();
+    };
+    void promise.then(settled, error => { settled(); report(error); });
     return promise;
   };
   const mutations = options.buffers ? createBaseMutationHost({ ...options.buffers,
@@ -139,26 +149,35 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
     selectedIndex = index; await controller.setView(index);
   }
   selector.addEventListener('change', () => { void selectView(Number(selector.value)).catch(error => { selector.value = String(selectedIndex); report(error); }); });
+  async function settle(): Promise<void> {
+    await Promise.allSettled([...pending]);
+    // Let property widgets finish handling their accepted/rejected operations.
+    await Promise.resolve();
+    for (const buffer of changedBuffers) await buffer.flush();
+    releaseCleanBuffers();
+    if (activeDraft()) throw new Error('Finish or cancel the property edit before leaving this base');
+  }
+  async function finish(close: boolean): Promise<void> {
+    if (disposed) return;
+    if (closing) throw new Error('This base view is already finishing edits');
+    closing = true;
+    try {
+      await settle();
+      if (close) {
+        mounted?.destroy(); mounted = undefined; observer?.disconnect();
+        if (scheduled !== undefined) clearTimeout(scheduled);
+        controller.dispose(); disposed = true; root.remove();
+      }
+    } catch (error) { report(error); throw error; }
+    finally { closing = false; }
+  }
   return {
     ready: controller.refresh(),
     get state() { return controller.state; },
     refresh: () => controller.refresh(),
     selectView,
-    async close() {
-      if (disposed) return;
-      if (closing) throw new Error('This base view is already closing');
-      closing = true;
-      try {
-        await Promise.allSettled([...pending]);
-        // Let the property widget finish handling its accepted/rejected operation.
-        await Promise.resolve();
-        for (const buffer of changedBuffers) await buffer.flush();
-        if (activeDraft()) throw new Error('Finish or cancel the property edit before closing this base');
-        mounted?.destroy(); mounted = undefined; observer?.disconnect();
-        if (scheduled !== undefined) clearTimeout(scheduled);
-        controller.dispose(); disposed = true; root.remove();
-      } catch (error) { report(error); throw error; }
-      finally { closing = false; }
-    },
+    hasPendingChanges: () => !disposed && (!!pending.size || activeDraft() || [...changedBuffers].some(buffer => buffer.dirty || !!buffer.error)),
+    flush: () => finish(false),
+    close: () => finish(true),
   };
 }

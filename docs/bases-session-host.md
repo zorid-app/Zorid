@@ -71,3 +71,30 @@ be persisted, immutable config is retained, readonly embeds cannot mutate, and
 close waits for accepted writes. Independent probes cover CAS failures/retry,
 exact prior-text callbacks, deferred query error publication and vault-root moves.
 No full suite, production build or native Electron verification is implied here.
+
+## Cached pane preflight and recovered base configuration
+
+`flush()` settles the same accepted mutations/shared drafts as `close()`, but
+retains the mounted renderer and controller. Workspace navigation must await it
+before changing tab paths, pane generations or vault ownership. Only actual
+resource disposal calls `close()`. `hasPendingChanges()` covers accepted pending
+operations, dirty/error buffers still owned by the session, and active/failed/IME
+property widgets; the host can use it for unload protection and tab lifetime.
+A clean successfully saved buffer is released from session ownership so disposing
+that buffer elsewhere cannot permanently prevent closing the base.
+
+Queries intentionally read committed `.base` configuration. Before mounting a
+writable base, the host must load its shared base buffer and flush recovered or
+dirty configuration through CAS. A recovery conflict rejects navigation while
+retaining the previous editor; during startup, display the error while keeping
+the recovered shared draft. Do not silently display persisted configuration over
+an unresolved recovered config. Editing recovered config text directly remains a
+separate recovery UI requirement.
+
+The reference Kanban conversion at app.js `3155364–3155500` consults the global
+`metadataTypeManager.getTypeInfo(propertyName).inferred.type`. Only exact
+`multitext` wraps non-null, non-array destinations in an array; current source
+value shape does not establish this registry type. Zorid's property selection is
+currently UI-local, so this session does not invent global type inference. Null
+move destinations remove the existing property (reference `3156373`) through the
+normal guarded controller mutation. Full registry-driven coercion remains open.

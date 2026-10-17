@@ -75,3 +75,25 @@ test('file.folder root group maps to a relative root filename',async()=>{
  const controller=new BaseController({vault,basePath:'Work.base',mutations:{async transform(){throw Error('unused');},async rename(_path,target,validate){validate();destination=target;}},delayMs:1000});
  try{await controller.refresh();const result=controller.state.result!;const from=result.groups.find(group=>group.rows.some(row=>row.path==='Folder/One.md'))!;const to=result.groups.find(group=>group.key?.type==='string'&&group.key.value==='/')!;await createBaseViewActions(controller,{validate(){},canRename:true}).requestMove({version:result.version,path:'Folder/One.md',property:'file.folder',source:from.key!,destination:to.key!});assert.equal(destination,'One.md');}finally{controller.dispose();}
 });
+
+for (const type of ['cards','list'] as const) test(`${type} composing blur and pending save preserve source ownership until close completes`,async()=>{
+ let release!:()=>void;
+ class Delayed extends MemoryAdapter { gate?:Promise<void>; override async write(path:string,text:string){if(path==='One.md')await this.gate;return super.write(path,text);} }
+ const config=source.replace('type: table',`type: ${type}`),adapter=new Delayed({'Work.base':config,'One.md':note});
+ const f=await fixture(adapter);
+ try {
+  const cell=f.container.querySelector<HTMLElement>('[data-property="note.status"]')!;
+  cell.dispatchEvent(new f.dom.window.MouseEvent('click',{bubbles:true}));
+  const input=cell.querySelector<HTMLInputElement>('input')!;assert.ok(input);
+  input.dispatchEvent(new f.dom.window.CompositionEvent('compositionstart',{bubbles:true}));input.value='中';
+  input.dispatchEvent(new f.dom.window.Event('blur'));
+  f.dom.window.dispatchEvent(new f.dom.window.Event('resize'));
+  const scroller=f.container.querySelector<HTMLElement>('.bases-virtual-scroll')!;scroller.scrollTop=10000;scroller.dispatchEvent(new f.dom.window.Event('scroll'));
+  await assert.rejects(f.session.close(),/Finish or cancel/);
+  assert.equal(input.isConnected,true);assert.equal(await f.vault.read('One.md'),note);
+  adapter.gate=new Promise<void>(resolve=>{release=resolve;});
+  input.dispatchEvent(new f.dom.window.CompositionEvent('compositionend',{bubbles:true,data:'中文'}));input.value='中文';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));await settle();
+  assert.equal(input.disabled,true);let closed=false;const closing=f.session.close().then(()=>{closed=true;});await settle();assert.equal(closed,false);assert.equal(input.isConnected,true);
+  release();await closing;assert.match(await f.vault.read('One.md'),/status: 中文/);assert.equal(f.container.childElementCount,0);
+ }finally{release?.();await f.stop();}
+});

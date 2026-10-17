@@ -135,3 +135,53 @@ test('Cards and List edit through the same mutation host and retain precommit dr
     } finally { await f.cleanup(); }
   }
 });
+
+test('successful edits release clean shared buffers before another owner disposes them', async () => {
+  const f = await fixture();
+  try {
+    const cell = f.host.querySelector('[data-property="note.status"][role="gridcell"]')!;
+    f.key(cell, 'Enter'); const input = cell.querySelector('input')!; input.value = 'Done'; f.key(input, 'Enter');
+    await tick(); await tick();
+    const buffer = await f.getBuffer('One.md'); await buffer.dispose();
+    await f.session.close(); assert.equal(f.host.querySelector('.bases-session'), null);
+  } finally { await f.cleanup(); }
+});
+
+test('Cards pending checkbox and session close share one accepted persistence lifetime', async () => {
+  const f = await fixture();
+  try {
+    await f.vault.modify('Work.base', base.replaceAll('[file.name, status]', '[file.name, status, done]'));
+    await f.vault.modify('One.md', '---\nstatus: Todo\ndone: false\n---\nBody');
+    await f.session.refresh(); await f.session.selectView(1);
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; }), writing = new Promise<void>(resolve => { started = resolve; });
+    const originalWrite = f.adapter.write.bind(f.adapter);
+    f.adapter.write = async (path, source) => { if (path === 'One.md') { started(); await gate; } await originalWrite(path, source); };
+    const checkbox = f.host.querySelector('.bases-rendered-value[data-property="note.done"] input') as HTMLInputElement;
+    checkbox.checked = true; checkbox.dispatchEvent(new f.dom.window.Event('change', { bubbles: true }));
+    await writing;
+    const closing = f.session.close(); await Promise.resolve();
+    assert.equal(checkbox.isConnected, true); assert.equal(checkbox.disabled, true);
+    release(); await closing;
+    assert.equal(readProperties(await f.vault.read('One.md')).find(item => item.key === 'done')?.value, true);
+    assert.equal(f.host.querySelector('.bases-session'), null);
+  } finally { await f.cleanup(); }
+});
+
+test('flush preflights shared edits without destroying the cached Bases session', async () => {
+  const f = await fixture();
+  try {
+    assert.equal(f.session.hasPendingChanges(), false);
+    const root = f.host.querySelector('.bases-session');
+    const cell = f.host.querySelector('[data-property="note.status"][role="gridcell"]')!;
+    f.key(cell, 'Enter'); const input = cell.querySelector('input')!; input.value = 'Done';
+    assert.equal(f.session.hasPendingChanges(), true);
+    await assert.rejects(f.session.flush(), /Finish or cancel/);
+    assert.equal(f.host.querySelector('.bases-session'), root);
+    f.key(input, 'Enter'); await f.session.flush();
+    assert.equal(f.session.hasPendingChanges(), false);
+    assert.equal(f.host.querySelector('.bases-session'), root);
+    assert.equal(readProperties(await f.vault.read('One.md'))[0].value, 'Done');
+    await f.session.selectView(1); assert.ok(f.host.querySelector('.bases-cards-container'));
+  } finally { await f.cleanup(); }
+});
