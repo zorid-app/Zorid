@@ -42,8 +42,12 @@ fn revision(raw: &str) -> Result<Revision> {
 fn control<T: DeserializeOwned>(raw: &str) -> Result<T> {
     bounded(raw, zorid_sync_protocol::MAX_CONTROL_BYTES)
 }
+// Transport-only allowance for quoted u64 manifest/page lengths and the
+// bounded metadata envelope. After normalization GraphRecord still enforces its
+// original canonical MAX_GRAPH_RECORD_BYTES cap; this does not raise core limits.
+const MAX_ROW_INPUT_BYTES: usize = meta::MAX_GRAPH_RECORD_BYTES + 64 * 1024;
 fn row<T: DeserializeOwned>(raw: &str) -> Result<T> {
-    bounded(raw, meta::MAX_GRAPH_RECORD_BYTES)
+    bounded(raw, MAX_ROW_INPUT_BYTES)
 }
 fn metadata_value(value: &impl serde::Serialize) -> Result<serde_json::Value> {
     let mut value = serde_json::to_value(value).map_err(|_| "invalid metadata output")?;

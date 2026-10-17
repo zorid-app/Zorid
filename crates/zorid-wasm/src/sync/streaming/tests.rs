@@ -262,3 +262,145 @@ fn local_stage_replay_rejects_scope_id_role_and_noncanonical_sources_without_adv
     restored.restore_page("page", page.payload_bytes()).unwrap();
     assert!(restored.pending.is_empty());
 }
+
+#[test]
+fn decimal_metadata_transport_headroom_does_not_raise_portable_record_cap() {
+    let event = |index: usize, pages: usize| files::EntryEvent {
+        id: id(&format!("create-{index}")).unwrap(),
+        identity: EntryIdentity {
+            entry_id: EntryId::new(&format!("file-{index}")).unwrap(),
+            bootstrap_id: id(&format!("create-{index}")).unwrap(),
+        },
+        parents: vec![],
+        effect: files::Effect::Create {
+            entry_kind: EntryKind::File,
+            location: Location {
+                parent: None,
+                name: format!("file-{index}.bin"),
+            },
+            content: Some(files::ContentSeed::Binary {
+                manifest: zorid_file_sync::Manifest {
+                    bytes: pages as u64,
+                    digest: Sha256Digest([0; 32]),
+                    pages: (0..pages)
+                        .map(|page| zorid_file_sync::PageRef {
+                            id: id(&format!("{:<128}", format!("page-{index}-{page}-"))
+                                .replace(' ', "x"))
+                            .unwrap(),
+                            bytes: 1,
+                            digest: Sha256Digest([0; 32]),
+                        })
+                        .collect(),
+                },
+            }),
+        },
+    };
+    let mut payload = files::Payload {
+        family: Family::Files,
+        format_version: 2,
+        scope: scope(),
+        id: id("large-record").unwrap(),
+        body: files::Body::Events { events: vec![] },
+    };
+    loop {
+        let files::Body::Events { events } = &mut payload.body else {
+            unreachable!()
+        };
+        let index = events.len();
+        events.push(event(index, 128));
+        if payload.encode().is_ok() {
+            continue;
+        }
+        let files::Body::Events { events } = &mut payload.body else {
+            unreachable!()
+        };
+        events.pop();
+        let (mut low, mut high) = (0, 127);
+        while low < high {
+            let count = (low + high + 1) / 2;
+            let files::Body::Events { events } = &mut payload.body else {
+                unreachable!()
+            };
+            events.push(event(index, count));
+            let fits = payload.encode().is_ok();
+            let files::Body::Events { events } = &mut payload.body else {
+                unreachable!()
+            };
+            events.pop();
+            if fits {
+                low = count
+            } else {
+                high = count - 1
+            }
+        }
+        if low > 0 {
+            let files::Body::Events { events } = &mut payload.body else {
+                unreachable!()
+            };
+            events.push(event(index, low));
+        }
+        break;
+    }
+    let exact = payload.encode().unwrap();
+    let (_, key, record) = meta::GraphRecord::from_authored_exact(&exact).unwrap();
+    let raw = descriptor(&record).unwrap();
+    assert!(raw.len() > meta::MAX_GRAPH_RECORD_BYTES);
+    assert!(raw.len() <= MAX_ROW_INPUT_BYTES);
+    let make = || WasmMetadataStateBuilder {
+        scope: scope(),
+        version: revision("restored").unwrap(),
+        records: BTreeMap::new(),
+        activities: BTreeMap::new(),
+        bytes: 0,
+    };
+    make()
+        .restore_record(
+            key.as_str(),
+            &raw,
+            record.payload_bytes() as f64,
+            &record.payload_digest().0,
+            &record.summary_digest().unwrap().0,
+        )
+        .unwrap();
+    // A structurally valid descriptor just above the canonical portable cap
+    // remains invalid even though its quoted transport fits the new allowance.
+    let files::Body::Events { events } = &mut payload.body else {
+        unreachable!()
+    };
+    let index = events.len();
+    events.push(event(index, 1));
+    let oversized = loop {
+        let candidate = value!({"payload_bytes":record.payload_bytes(),"payload_digest":record.payload_digest(),"body":payload.body});
+        if serde_json::to_vec(&candidate).unwrap().len() > meta::MAX_GRAPH_RECORD_BYTES {
+            break metadata_json(&candidate).unwrap();
+        }
+        let files::Body::Events { events } = &mut payload.body else {
+            unreachable!()
+        };
+        let files::Effect::Create {
+            content: Some(files::ContentSeed::Binary { manifest }),
+            ..
+        } = &mut events.last_mut().unwrap().effect
+        else {
+            unreachable!()
+        };
+        let next = manifest.pages.len();
+        manifest.pages.push(zorid_file_sync::PageRef {
+            id: id(&format!("extra-page-{next}")).unwrap(),
+            bytes: 1,
+            digest: Sha256Digest([0; 32]),
+        });
+        manifest.bytes += 1;
+    };
+    assert!(oversized.len() <= MAX_ROW_INPUT_BYTES);
+    let error = make()
+        .restore_record(
+            key.as_str(),
+            &oversized,
+            record.payload_bytes() as f64,
+            &record.payload_digest().0,
+            &[0; 32],
+        )
+        .unwrap_err();
+    assert!(error.contains("TooLarge"), "{error}");
+}
