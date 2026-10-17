@@ -70,3 +70,26 @@ fn yaml_only_duplicate_alias_and_resource_failures_have_stable_codes() {
     assert_eq!(error.range.bytes, [0, 0]);
     assert_eq!(error.range.utf16, [0, 0]);
 }
+
+#[test]
+fn initial_bom_before_comment_is_ignored_only_for_yaml_syntax() {
+    let yaml =
+        "\u{feff}# Keep me\r\nunknown: keep\r\nviews:\r\n  - type: custom\r\n    name: Custom\r\n";
+    let result = parse_yaml_mapping(yaml).unwrap();
+    assert_eq!(result.get("unknown").unwrap().as_str(), Some("keep"));
+    assert_eq!(
+        result.get("views").unwrap().as_array().unwrap()[0]
+            .get("name")
+            .unwrap()
+            .as_str(),
+        Some("Custom")
+    );
+    let invalid = "\u{feff}# comment\r\nnull\r\n";
+    let error = parse_yaml_mapping(invalid).unwrap_err();
+    assert_eq!(error.code, YamlDiagnosticCode::Mapping);
+    assert_eq!(error.range.bytes, [0, invalid.len() as u32]);
+    assert_eq!(
+        error.range.utf16,
+        [0, invalid.encode_utf16().count() as u32]
+    );
+}

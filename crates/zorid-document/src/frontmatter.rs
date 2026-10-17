@@ -107,7 +107,11 @@ fn event_tree(source: &str) -> Result<Tree, DiagnosticCode> {
     let mut stack: Vec<Frame> = Vec::new();
     let mut anchors = HashMap::new();
     let mut documents = 0;
-    for event in Parser::new_from_str(source) {
+    // The pinned Saphyr scanner leaves BOM handling as a TODO. Ignore only the
+    // initial Unicode BOM for syntax, then rebase every source span immediately.
+    let parser_source = source.strip_prefix('\u{feff}').unwrap_or(source);
+    let bom_bytes = source.len() - parser_source.len();
+    for event in Parser::new_from_str(parser_source) {
         let (event, span) = event.map_err(|error| syntax(&error))?;
         let (kind, anchor, opens) = match event {
             Event::Scalar(text, style, anchor, tag) => (
@@ -139,7 +143,7 @@ fn event_tree(source: &str) -> Result<Tree, DiagnosticCode> {
                 if frame.pending_key.is_some() {
                     return Err(DiagnosticCode::FrontmatterSyntax);
                 }
-                tree.nodes[frame.node].span.end = span.end.index();
+                tree.nodes[frame.node].span.end = bom_bytes + span.end.index();
                 continue;
             }
             Event::DocumentStart(_) => {
@@ -158,7 +162,7 @@ fn event_tree(source: &str) -> Result<Tree, DiagnosticCode> {
         let node = tree.nodes.len();
         tree.nodes.push(Node {
             kind,
-            span: span.start.index()..span.end.index(),
+            span: bom_bytes + span.start.index()..bom_bytes + span.end.index(),
         });
         if anchor != 0 {
             anchors.insert(anchor, node);
@@ -329,6 +333,8 @@ fn decode_mapping(source: &str) -> Result<(Tree, Vec<(String, PropertyValue)>), 
     let entries = match value {
         PropertyValue::Object(entries) => entries,
         _ if source
+            .strip_prefix('\u{feff}')
+            .unwrap_or(source)
             .split(['\r', '\n'])
             .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#')) =>
         {

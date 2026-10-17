@@ -406,3 +406,12 @@ candidate's runtime success or native/WASM/consumer equivalence yet.
 
 These are concrete capability gaps supporting small compatibility adapters,
 not a new Markdown parser or permission to weaken the independent expectations.
+
+
+Native Base-source integration additionally exposed a Saphyr 0.2.2 scanner BOM
+TODO: an initial BOM before a comment made otherwise valid YAML fail Syntax.
+The common event adapter now strips only the initial BOM for syntax and rebases
+all AST byte spans by three, keeping original BOM/CRLF coordinates and source
+untouched. Focused YAML-only cases cover nonempty BOM content and BOM+comment
+before both a valid map and an invalid null root. This is a framing/offset
+compatibility adapter around the same established YAML parser.
