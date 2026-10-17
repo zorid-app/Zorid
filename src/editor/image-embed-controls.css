@@ -1,0 +1,13 @@
+.zorid-image-embed-controls-owner { position: relative; width: fit-content; max-width: 100%; vertical-align: bottom; }
+.zorid-image-embed-actions { position: absolute; top: 8px; inset-inline-end: 8px; z-index: 2; display: flex; gap: 2px; padding: 2px; border-radius: 6px; background: color-mix(in srgb, var(--background-primary) 80%, transparent); backdrop-filter: blur(4px); box-shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 0 6px rgb(0 0 0 / 5%); opacity: 0; pointer-events: none; transition: opacity 70ms ease-out; }
+.zorid-image-embed-action { display: flex; padding: 4px 6px; border: 0; border-radius: 4px; color: var(--text-normal); background: transparent; cursor: pointer; }
+.zorid-image-embed-action[hidden] { display: none; }
+.zorid-image-embed-actions.is-mobile .zorid-image-embed-action { padding: 8px; }
+@media (hover: hover) {
+  .zorid-image-embed-controls-owner:hover > .zorid-image-embed-actions { opacity: 1; pointer-events: auto; }
+  .zorid-image-embed-action:hover { background: var(--background-modifier-hover); }
+}
+.zorid-image-embed-actions:focus-within,
+.zorid-image-selected > .zorid-image-embed-actions { opacity: 1; pointer-events: auto; }
+.zorid-image-no-hover-actions:not(.zorid-image-selected) > .zorid-image-embed-actions { opacity: 0; pointer-events: none; }
+.zorid-image-selected::after { position: absolute; inset: 0; border-radius: var(--image-radius, 4px); box-shadow: inset 0 0 0 2px var(--text-muted), inset 0 0 0 4px var(--background-primary); content: ''; pointer-events: none; }
