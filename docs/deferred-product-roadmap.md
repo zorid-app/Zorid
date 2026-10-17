@@ -66,7 +66,30 @@ areas rather than claiming that every upstream edge case has been exhausted.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
 
-### Integration checkpoint — 2026-10-17 00:24 local
+### Integration checkpoint — 2026-10-17 09:35 local
+
+Current authoritative update (older bullets below record preceding stages):
+- Main `517f87b` includes reviewed browser ancestor-publication fix and hashed
+  smoke assets. Actual worker nested create/reload/read and encrypted upload
+  passed; see `docs/browser-relay-verification.md`. Old failed database is
+  preserved. Earlier apparent failed rerun used cached JavaScript.
+- Normal desktop bridge `96e4542` fixes full-reload journal response validation.
+  Latest observed fixture draft was committed and checkpointed; exact UI restart
+  acknowledgment verification remains pending. Original process80439 exited;
+  replacement82184 is live and user-interacted. Do not count source fixes as
+  normal desktop verification.
+- User reported New note fails with `durable_consumer_required`. Desktop owner
+  owns explicit createText adapter/Vault seam, checkpointed main-process create
+  consumer, and narrow leased Rust host create_text command (`9fe9571`).
+  Focused checks/build and actual New note UI verification are pending.
+- Native namespace batch `b27de4d` passed 24 native and 18 store checks, merged
+  into isolated CLI candidate `878a2e3`; not yet main or actual CLI-verified.
+  New canonical schema8 tables require a fresh disposable vault. Mixed folder
+  Move/Delete claims are a separate client_sync_review follow-up; active content
+  publication transfer remains unresolved. Do not migrate current open fixture.
+- `core_cli` owns combined native/host build; desktop owner runs scoped
+  TypeScript/webpack afterward. Serialize these checks. Browser diagnostic
+  server8768 stopped; root relay and smoke8767 remain for subsequent interop.
 
 - User explicitly approved remaining namespace physical-binding patch; owner
   committed `f7f81ce` in `core-family-namespace` and continues received/local
