@@ -1,5 +1,6 @@
 import UIKit
 import SwiftUI
+import WebKit
 import Capacitor
 import Darwin
 
@@ -463,6 +464,13 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 }
 
+// WKContentView delegates its accessory getter to its WKWebView. Override the
+// public responder property on our own view to remove the entire form bar;
+// NativeEditorContainer supplies the editor toolbar and keyboard dismissal.
+private final class NativeEditorWebView: WKWebView {
+    override var inputAccessoryView: UIView? { nil }
+}
+
 private final class NativeEditorBridge: CAPBridgeViewController {
     let vaultPlugin: NativeVaultPlugin
 
@@ -485,6 +493,10 @@ private final class NativeEditorBridge: CAPBridgeViewController {
         plugins["Keyboard"] = keyboard
         descriptor.pluginConfigurations = plugins
         return descriptor
+    }
+
+    override func webView(with frame: CGRect, configuration: WKWebViewConfiguration) -> WKWebView {
+        NativeEditorWebView(frame: frame, configuration: configuration)
     }
 
     override func capacitorDidLoad() {
@@ -517,7 +529,6 @@ final class NativeEditorContainer: UIViewController {
     private var toolbarHeight: NSLayoutConstraint?
     private var editorBottom: NSLayoutConstraint?
     private var keyboardObservers: [NSObjectProtocol] = []
-    private var keyboardFrame: CGRect?
     private var toolbarVisible = false
 
     init(session: NativeMobileSession, launch: NativeEditorLaunch, originTitle: String = "Pages", onClosed: @escaping () -> Void = {}) {
@@ -572,6 +583,8 @@ final class NativeEditorContainer: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         navigationController?.interactivePopGestureRecognizer?.isEnabled = false
+        view.setNeedsLayout()
+        updateToolbarLayout()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -626,28 +639,32 @@ final class NativeEditorContainer: UIViewController {
         for name in [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardWillHideNotification] {
             keyboardObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 guard let self = self else { return }
-                let local = notification.userInfo?[UIResponder.keyboardIsLocalUserInfoKey] as? Bool ?? true
-                self.keyboardFrame = name == UIResponder.keyboardWillHideNotification || !local ? nil
-                    : (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+                // Geometry belongs to the layout guide, including keyboards
+                // retained across focus/app transitions without a new frame event.
                 self.updateToolbarLayout(notification: notification)
             })
         }
         keyboardObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.keyboardFrame = nil
             self?.editor.vaultPlugin.resetEditorState()
+        })
+        keyboardObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            self.view.setNeedsLayout()
+            self.view.layoutIfNeeded()
+            self.updateToolbarLayout()
         })
     }
 
     private var hasDockedSoftwareKeyboard: Bool {
-        guard let window = view.window, let frame = keyboardFrame else { return false }
-        let local = window.screen.coordinateSpace.convert(frame, to: view)
-        let intersection = view.bounds.intersection(local)
-        // Floating/undocked keyboards and hardware accessory strips do not
-        // reserve a full-width software-keyboard viewport for this toolbar.
+        guard view.window != nil else { return false }
+        let frame = view.keyboardLayoutGuide.layoutFrame
+        let intersection = view.bounds.intersection(frame)
+        // Docked-only guide collapses to the bottom safe area for hidden/floating
+        // keyboards. Hardware accessory strips cannot pass the height threshold.
         return !intersection.isNull && intersection.height > 100
             && intersection.width >= view.bounds.width - 2
-            && local.maxY >= view.bounds.maxY - 2
-            && local.minX <= view.bounds.minX + 2 && local.maxX >= view.bounds.maxX - 2
+            && frame.maxY >= view.bounds.maxY - 2
+            && frame.minX <= view.bounds.minX + 2 && frame.maxX >= view.bounds.maxX - 2
     }
 
     private func updateToolbarLayout(notification: Notification? = nil) {
@@ -732,7 +749,6 @@ final class NativeEditorContainer: UIViewController {
 
     func enterBackground() {
         guard backgroundTask == .invalid else { return }
-        keyboardFrame = nil
         editor.vaultPlugin.resetEditorState()
         // Cancel a foreground navigation request; it must never pop on suspension.
         editor.vaultPlugin.cancelLifecycle()
