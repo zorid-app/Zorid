@@ -22,4 +22,4 @@ scope.onmessage = event => {
     scope.postMessage({ id, tokens });
   } catch (error) { scope.postMessage({ id, error: error instanceof Error ? error.message : String(error) }); }
 };
-export {};
+

@@ -71,9 +71,9 @@ export function loadPdfEngine(doc:Document,base:string):Promise<PdfEngine>{
   let pending=engineLoads.get(assetBase);
   if(!pending){
     pending=(async()=>{
-      const core=await import(/* webpackIgnore: true */ new URL('build/pdf.mjs',assetBase).href) as PdfEngine['core'];
+      const core=await import(/* @vite-ignore */ /* webpackIgnore: true */ new URL('build/pdf.mjs',assetBase).href) as PdfEngine['core'];
       core.GlobalWorkerOptions.workerSrc=new URL('build/pdf.worker.mjs',assetBase).href;
-      const viewer=await import(/* webpackIgnore: true */ new URL('web/pdf_viewer.mjs',assetBase).href) as PdfEngine['viewer'];
+      const viewer=await import(/* @vite-ignore */ /* webpackIgnore: true */ new URL('web/pdf_viewer.mjs',assetBase).href) as PdfEngine['viewer'];
       return {core,viewer};
     })();engineLoads.set(assetBase,pending);void pending.catch(()=>engineLoads.delete(assetBase));
   }
