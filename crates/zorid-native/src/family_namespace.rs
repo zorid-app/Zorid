@@ -85,7 +85,7 @@ impl NativeVault {
     /// Caller holds the vault lock. Call before legacy namespace diagnostics and
     /// normal materialization; existing attempts are resumed by recover_namespaces.
     pub(super) fn attach_family_namespaces(&mut self, report: &mut ReconcileReport) -> Result<()> {
-        if self.store.family_status()?.scope.is_none() {
+        if !self.store.family_is_enrolled()? {
             return Ok(());
         }
         let attempts: BTreeSet<_> = self
