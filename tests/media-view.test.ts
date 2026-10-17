@@ -182,3 +182,19 @@ test('two players share real resource bytes until last release and modification 
     third.destroy(); assert.deepEqual(revoked, ['blob:shared-1','blob:shared-2']);
   } finally { first.destroy(); second.destroy(); resources.destroy(); URL.createObjectURL = originalCreate; URL.revokeObjectURL = originalRevoke; f.close(); }
 });
+
+test('media loading attributes settle on metadata, failure, timeout and pending-acquire disposal',async()=>{
+  const f=fixture();
+  try {
+    const success=createMediaView(f.parent,'audio.wav',f.resources),root=f.parent.querySelector<HTMLElement>('.zorid-media-view')!;
+    assert.equal(root.dataset.nativeLoading,'true');assert.equal(root.getAttribute('aria-busy'),'true');await tick();metadata(f,f.parent.querySelector('audio')!);await success.ready;
+    assert.equal(root.hasAttribute('data-native-loading'),false);assert.equal(root.getAttribute('aria-busy'),'false');success.destroy();
+    const failed=createMediaView(f.parent,'bad.wav',{acquire:async()=>{throw new Error('Missing bytes');}});const errorRoot=f.parent.querySelector<HTMLElement>('.zorid-media-view')!;await failed.ready;
+    assert.equal(errorRoot.getAttribute('aria-busy'),'false');assert.match(errorRoot.textContent!,/Missing bytes/);failed.destroy();
+    const timeout=createMediaView(f.parent,'slow.wav',f.resources),timeoutRoot=f.parent.querySelector<HTMLElement>('.zorid-media-view')!;await tick();
+    [...f.timers.values()][0].callback();await timeout.ready;assert.equal(timeoutRoot.getAttribute('aria-busy'),'false');timeout.destroy();
+    let resolve!:(lease:AttachmentLease)=>void;
+    const late=createMediaView(f.parent,'late.wav',{acquire:()=>new Promise(r=>{resolve=r;})}),lateRoot=f.parent.querySelector<HTMLElement>('.zorid-media-view')!;await tick();late.destroy();resolve(f.lease);await tick();await late.ready;
+    assert.equal(lateRoot.hasAttribute('data-native-loading'),false);assert.equal(lateRoot.getAttribute('aria-busy'),'false');assert.equal(f.parent.querySelector('.zorid-media-view'),null);
+  } finally { f.close(); }
+});

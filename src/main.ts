@@ -9,6 +9,7 @@ import './ui/styles.css';
 import './ui/hotkey-settings.css';
 import './ui/reference-defaults.css';
 import './ui/chrome.css';
+import './ui/mobile-editor.css';
 import './ui/sidebar-controls.css';
 import './ui/file-tree-create.css';
 import './ui/file-tree-drag.css';

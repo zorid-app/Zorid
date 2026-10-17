@@ -2,6 +2,12 @@ import type { AttachmentLease, AttachmentResources } from './attachments.ts';
 import { button, el } from './dom.ts';
 import { showAttachmentMenu } from './attachment-menus.ts';
 
+// The marker is consumed only by native skeleton CSS; desktop styling is unchanged.
+function nativeLoading(node: HTMLElement, loading: boolean): void {
+  if (loading) node.dataset.nativeLoading = 'true'; else delete node.dataset.nativeLoading;
+  node.setAttribute('aria-busy', String(loading));
+}
+
 export interface ImageSource { alt:string; load:()=>Promise<AttachmentLease> }
 export interface ImageView { destroy():void }
 export interface ImageViewOptions {
@@ -16,12 +22,13 @@ export interface ImageViewOptions {
 /** Standalone file view; gallery gestures belong to the shared lightbox. */
 export function createImageView(parent:HTMLElement,path:string,resources:AttachmentResources,options:ImageViewOptions={}):ImageView{
   const container=el('div','image-container'),img=el('img');img.alt=path.split('/').at(-1)!;img.draggable=false;
-  container.append(img);parent.append(container);
+  container.append(img);parent.append(container);nativeLoading(container,true);
   let closed=false,lease:AttachmentLease|undefined,lightbox:ImageView|undefined,menuVersion=0;
   const load=()=>resources.acquire(path);
   void load().then(result=>{if(closed){result.release();return;}lease=result;img.src=result.url;})
-    .catch(error=>{if(!closed)container.append(el('p','error-message',error instanceof Error?error.message:String(error)));});
-  img.onerror=()=>{if(!closed&&!container.querySelector('.error-message'))container.append(el('p','error-message','Unable to display this image.'));};
+    .catch(error=>{if(!closed){nativeLoading(container,false);container.append(el('p','error-message',error instanceof Error?error.message:String(error)));}});
+  img.onload=()=>{if(!closed)nativeLoading(container,false);};
+  img.onerror=()=>{if(closed)return;nativeLoading(container,false);if(!container.querySelector('.error-message'))container.append(el('p','error-message','Unable to display this image.'));};
   img.onclick=()=>{lightbox?.destroy();lightbox=openImageLightbox([{alt:img.alt,load}]);};
   img.addEventListener('contextmenu',event=>{
     const version=++menuVersion;
@@ -38,7 +45,7 @@ export function createImageView(parent:HTMLElement,path:string,resources:Attachm
       onError:options.onError??(error=>{if(isAlive())container.append(el('p','error-message',error instanceof Error?error.message:String(error)));}),
     });
   });
-  return {destroy(){closed=true;lightbox?.destroy();lease?.release();img.removeAttribute('src');container.remove();}};
+  return {destroy(){closed=true;nativeLoading(container,false);lightbox?.destroy();lease?.release();img.removeAttribute('src');container.remove();}};
 }
 
 /** Original interaction implementation guided by static reference handlers; native/touch parity is unverified. */
@@ -70,12 +77,17 @@ export function openImageLightbox(sources:readonly ImageSource[],initial=0):Imag
   const point=(event:MouseEvent)=>{const rect=stage.getBoundingClientRect();return {x:event.clientX-rect.left-rect.width/2,y:event.clientY-rect.top-rect.height/2};};
   const show=async()=>{
     const attempt=++version;zoom=1;x=0;y=0;draw();img.alt=sources[index].alt;
+    nativeLoading(stage,true);
+    // An event from the previous image must not settle a newer acquisition.
+    img.onload=draw;img.onerror=null;
     overlay.querySelector('.image-lightbox-error')?.remove();
     try{
       const result=await sources[index].load();
       if(closed||attempt!==version){result.release();return;}
+      img.onload=()=>{if(!closed&&attempt===version){nativeLoading(stage,false);draw();}};
+      img.onerror=()=>{if(!closed&&attempt===version){nativeLoading(stage,false);if(!overlay.querySelector('.image-lightbox-error'))overlay.append(el('p','image-lightbox-error','Unable to display this image.'));}};
       const old=lease;lease=result;img.src=result.url;old?.release();
-    }catch(error){if(!closed&&attempt===version)overlay.append(el('p','image-lightbox-error',error instanceof Error?error.message:String(error)));}
+    }catch(error){if(!closed&&attempt===version){nativeLoading(stage,false);overlay.append(el('p','image-lightbox-error',error instanceof Error?error.message:String(error)));}}
   };
   const key=(event:KeyboardEvent)=>{
     if(!overlay.contains(event.target as Node)&&event.target!==document.body)return;
@@ -98,11 +110,11 @@ export function openImageLightbox(sources:readonly ImageSource[],initial=0):Imag
   img.onpointerdown=event=>{if(event.button!==0||zoom<=1)return;event.preventDefault();drag={id:event.pointerId,clientX:event.clientX,clientY:event.clientY,x,y};img.setPointerCapture?.(event.pointerId);};
   img.onpointermove=event=>{if(!drag||event.pointerId!==drag.id)return;x=drag.x+event.clientX-drag.clientX;y=drag.y+event.clientY-drag.clientY;draw();};
   const endDrag=()=>{drag=undefined;};img.onpointerup=endDrag;img.onpointercancel=endDrag;img.onlostpointercapture=endDrag;
-  img.onload=draw;img.onerror=()=>{if(!closed&&!overlay.querySelector('.image-lightbox-error'))overlay.append(el('p','image-lightbox-error','Unable to display this image.'));};
+  img.onload=draw;
   stage.onclick=event=>{if(event.target===stage)destroy();};
   const observer=typeof ResizeObserver!=='undefined'?new ResizeObserver(draw):undefined;observer?.observe(stage);
   function destroy():void{
-    if(closed)return;closed=true;version++;document.removeEventListener('keydown',key,true);document.removeEventListener('keyup',keyup,true);observer?.disconnect();lease?.release();img.removeAttribute('src');overlay.remove();if(previous?.isConnected)previous.focus();
+    if(closed)return;closed=true;version++;nativeLoading(stage,false);document.removeEventListener('keydown',key,true);document.removeEventListener('keyup',keyup,true);observer?.disconnect();lease?.release();img.removeAttribute('src');overlay.remove();if(previous?.isConnected)previous.focus();
   }
   document.addEventListener('keydown',key,true);document.addEventListener('keyup',keyup,true);overlay.focus();void show();
   return {destroy};

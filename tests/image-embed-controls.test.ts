@@ -67,7 +67,7 @@ test('mobile omits toolbar zoom while retaining image selection, viewing and sou
     assert.equal(f.container.querySelector('[aria-label="Zoom in"]'), null);
     assert.equal(f.dom.window.getComputedStyle(f.button('Edit image source')).padding, '8px');
     f.click(f.image); f.click(f.image); f.click(f.button('Edit image source'));
-    assert.equal(f.counts().zoomed, 1); assert.equal(f.counts().edited, 1);
+    assert.equal(f.counts().zoomed, 2); assert.equal(f.counts().edited, 1);
   } finally { f.close(); }
 });
 
@@ -130,4 +130,22 @@ test('resize capability is desktop-only and small-image corner remains reachable
     desktop.controls.setSelected(true); assert.notEqual(desktop.dom.window.getComputedStyle(corner).pointerEvents, 'none');
     assert.equal(desktop.dom.window.getComputedStyle(corner).opacity, '1');
   } finally { desktop.close(); mobile.close(); }
+});
+
+test('native compatibility mouse events open on the first tap and do not double-call renderer click', () => {
+  const f=setup(true);
+  try {
+    const down=new f.dom.window.MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true});
+    f.image.dispatchEvent(down);assert.equal(down.defaultPrevented,true);
+    f.image.dispatchEvent(new f.dom.window.MouseEvent('mouseup',{button:0,bubbles:true,cancelable:true}));
+    f.click(f.image);assert.deepEqual(f.counts(),{selected:1,edited:0,zoomed:1,oldClicks:1,disconnects:0});
+    f.click(f.image);assert.equal(f.counts().zoomed,2);assert.equal(f.counts().selected,1);
+  } finally { f.close(); }
+});
+
+test('mobile selection callback cannot zoom a replaced or disposed image owner', () => {
+  const dom=new JSDOM('<main><img></main>'),container=dom.window.document.querySelector('main')!,image=container.querySelector('img')!;
+  let zooms=0;
+  const controls=createImageEmbedControls(container,{isMobile:true,onSelect(){container.replaceChildren(dom.window.document.createElement('img'));},onEditSource(){},onZoom(){zooms++;}});
+  image.dispatchEvent(new dom.window.MouseEvent('click',{button:0,bubbles:true,cancelable:true}));assert.equal(zooms,0);controls.destroy();dom.window.close();
 });

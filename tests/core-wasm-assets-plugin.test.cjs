@@ -51,6 +51,14 @@ test('normal assets require complete family, recovery, sync exports and returned
     await assert.rejects(createCoreWasmAssets({enabled:true,directory}),/missing method WasmVaultKey.openSyncUpdate/);
   });
 });
+test('normal assets require actual RPC exports and returned page methods',async()=>{
+  await fixture(async directory=>{
+    await fs.writeFile(path.join(directory,'zorid_wasm.js'),normalJs.toString().replace('export function validateRpcHello() {}','/* missing RPC validation export */'));
+    await assert.rejects(createCoreWasmAssets({enabled:true,directory}),/missing export validateRpcHello/);
+    await fs.writeFile(path.join(directory,'zorid_wasm.js'),normalJs.toString().replace('wire() {}','/* missing returned page method */'));
+    await assert.rejects(createCoreWasmAssets({enabled:true,directory}),/missing method WasmRpcPage.wire/);
+  },normalJs);
+});
 test('normal JS and WASM share a content version; changing either changes both URLs',async()=>{
   await fixture(async directory=>{
     const first=await createCoreWasmAssets({enabled:true,directory});
@@ -67,28 +75,27 @@ test('normal JS and WASM share a content version; changing either changes both U
     const third=await createCoreWasmAssets({enabled:true,directory});assert.notEqual(third.modulePath,second.modulePath);
   },normalJs);
 });
-test('webpack compiles the prepared module URL and emits its exact matching asset pair',async()=>{
+test('Vite compiles the prepared module URL and emits its exact matching asset pair',async()=>{
   await fixture(async directory=>{
-    const webpack=require('webpack'),plugin=new CoreWasmAssetsPlugin({enabled:true,directory});
-    const entry=path.join(directory,'entry.js');await fs.writeFile(entry,'globalThis.coreModule = __ZORID_CORE_MODULE_PATH__;');
-    const compiler=webpack({mode:'development',context:directory,entry,devtool:false,
-      output:{path:path.join(directory,'dist'),filename:'main.js'},
-      plugins:[plugin,new webpack.DefinePlugin({__ZORID_CORE_MODULE_PATH__:webpack.DefinePlugin.runtimeValue(()=>JSON.stringify(plugin.modulePath),true)})]});
-    try {
-      const stats=await new Promise((resolve,reject)=>compiler.run((error,stats)=>error?reject(error):resolve(stats)));
-      assert.equal(stats.hasErrors(),false,stats.toString({all:false,errors:true}));
-      assert.ok((await fs.readFile(path.join(directory,'dist/main.js'),'utf8')).includes(JSON.stringify(plugin.modulePath)));
-      assert.deepEqual(await fs.readFile(path.join(directory,'dist',plugin.modulePath)),normalJs);
-      assert.deepEqual(await fs.readFile(path.join(directory,'dist',path.posix.dirname(plugin.modulePath),'zorid_wasm_bg.wasm')),wasm);
-    } finally {await new Promise((resolve,reject)=>compiler.close(error=>error?reject(error):resolve()));}
+    const {build}=await import('vite');
+    const {runtimeAssets}=await import('../vite.config.mjs');
+    const assets=await createCoreWasmAssets({enabled:true,directory});
+    await fs.writeFile(path.join(directory,'index.html'),'<script type="module" src="./entry.js"></script>');
+    await fs.writeFile(path.join(directory,'entry.js'),'globalThis.coreModule = __ZORID_CORE_MODULE_PATH__;');
+    const result=await build({configFile:false,root:directory,base:'./',logLevel:'silent',define:{__ZORID_CORE_MODULE_PATH__:JSON.stringify(assets.modulePath)},plugins:[runtimeAssets(assets)]});
+    const entry=result.output.find(item=>item.type==='chunk'&&item.isEntry);
+    assert.ok(entry.code.includes(assets.modulePath));
+    assert.deepEqual(await fs.readFile(path.join(directory,'dist',assets.modulePath)),normalJs);
+    assert.deepEqual(await fs.readFile(path.join(directory,'dist',path.posix.dirname(assets.modulePath),'zorid_wasm_bg.wasm')),wasm);
   },normalJs);
 });
-test('normal config generates web assets automatically; explicit desktop target omits toolchain',()=>{
-  const config=require('../webpack.config.cjs');
-  const web=config({}).plugins.find(plugin=>plugin instanceof CoreWasmAssetsPlugin);
-  const desktop=config({target:'desktop'}).plugins.find(plugin=>plugin instanceof CoreWasmAssetsPlugin);
-  assert.equal(web.options.enabled,true);assert.equal(web.options.build,true);
-  assert.equal(desktop.options.enabled,false);desktop.apply({});
+test('native Vite config bypasses the WASM toolchain and uses local asset URLs',async()=>{
+  const {default:config}=await import('../vite.config.mjs');
+  const native=await config({mode:'native',command:'build'});
+  assert.equal(native.base,'./');assert.equal(native.define.__ZORID_CORE_MODULE_PATH__,'""');
+  assert.equal(native.define.__ZORID_CORE_FIXTURES__,'false');
+  assert.equal(native.server.host,'127.0.0.1');assert.equal(native.server.strictPort,true);
+  assert.equal(native.worker.format,'iife');
 });
 test('required exports cover every declared browser storage and transport binding',async()=>{
   const ts=require('typescript');
@@ -104,4 +111,11 @@ test('required exports cover every declared browser storage and transport bindin
       for(const member of declaration.members)assert.ok(requiredExports.includes(member.name.text),`missing asset contract ${name}.${member.name.text}`);
     }
   }
+});
+test('required RPC page methods cover the declared browser transport return handle',async()=>{
+  const ts=require('typescript'),file='src/platform/browser-sync-worker.ts';
+  const source=ts.createSourceFile(file,await fs.readFile(path.join(__dirname,'..',file),'utf8'),ts.ScriptTarget.Latest,true);
+  const declaration=source.statements.find(node=>ts.isInterfaceDeclaration(node)&&node.name.text==='BrowserRpcPage');
+  assert.ok(declaration);
+  for(const member of declaration.members)assert.ok(requiredMethods.WasmRpcPage.includes(member.name.text),`missing RPC page method ${member.name.text}`);
 });

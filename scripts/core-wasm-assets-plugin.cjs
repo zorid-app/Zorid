@@ -10,6 +10,7 @@ const requiredExports = [...fixtureExports,
   'planFamilyMutation','rebindTextState','planTextReplace','planFileMutation','encodeFilePayload',
   'validateAuthoredSyncPayload','validateSyncWire','encodeSyncCursor','decodeSyncHello',
   'decodeSyncAccepted','decodeSyncPage','syncEnvelopeUpdateId',
+  'validateRpcHello','validateRpcAccepted','openRpcPage','WasmRpcPage',
   'WasmVaultKey','WasmFamilyMutationPlan','WasmAuthoredTextPlan','WasmAuthoredFilePlan',
   'WasmReceivedTextPlan','WasmReceivedFilePlan','WasmSyncUpdate'];
 const planMethods = ['resultJson','checkPreconditions','free'];
@@ -20,9 +21,10 @@ const requiredMethods = {
   WasmAuthoredFilePlan:[...planMethods,'metadataJson'],
   WasmReceivedTextPlan:planMethods, WasmReceivedFilePlan:planMethods,
   WasmSyncUpdate:['metadataJson','exactWire','matchesPayload','planText','planFile','free'],
+  WasmRpcPage:['through','complete','length','sequence','wire','free'],
 };
 function moduleBindings(source) {
-  const parser = require(require.resolve('acorn',{paths:[path.dirname(require.resolve('webpack/package.json'))]}));
+  const parser = require('acorn');
   const ast = parser.parse(source,{ecmaVersion:'latest',sourceType:'module'});
   const names = new Set(), classes = new Map();
   for (const node of ast.body) {

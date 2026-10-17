@@ -167,11 +167,15 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
         const needsSource = ['pdf', 'base', 'unknown', 'unavailable'].includes(kind);
         if (kind === 'image') {
           if (!imageControls) {
+            // The native-owned shell explicitly marks its editor surface. Do
+            // not infer mobile from viewport width and change desktop behavior.
+            const nativeMobile = !!view.dom.closest('.native-editor-only');
             imageControls = createImageEmbedControls(instance.dom, {
+              isMobile: nativeMobile,
               onSelect: () => {
                 const span = view.state.field(field, false)?.spans.find(item => item.identity === this.span.identity);
                 if (!span || disposed) return;
-                view.focus();
+                if (!nativeMobile) view.focus();
                 view.dispatch({ effects: selectImage.of(span.identity), selection: { anchor: span.from }, userEvent: 'select.pointer' });
               },
               onEditSource: () => { if (!disposed) editSource(view, this.span.identity, true); },

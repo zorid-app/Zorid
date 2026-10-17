@@ -1,0 +1,5 @@
+// Product identity is independent of Debug/Release optimization and logging.
+PRODUCT_BUNDLE_IDENTIFIER = app.zorid.notes.dev
+ZORID_APP_DISPLAY_NAME = Zorid Dev
+ZORID_APP_ENVIRONMENT = development
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) ZORID_DEVELOPMENT

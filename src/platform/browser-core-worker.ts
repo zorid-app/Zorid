@@ -62,7 +62,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     if (payload?.allowNewVault !== true || typeof payload?.clientId !== 'string') throw new BrowserVaultError('invalid_open', 'Explicit vault and client identity required');
     const moduleUrl = new URL(payload.wasmModuleUrl, self.location.href);
     if (moduleUrl.origin !== self.location.origin) throw new BrowserVaultError('invalid_wasm_url', 'WASM must be a same-origin application asset');
-    const wasm = await import(/* webpackIgnore: true */ moduleUrl.href) as BrowserVaultWasm & {default(): Promise<unknown>};
+    const wasm = await import(/* @vite-ignore */ /* webpackIgnore: true */ moduleUrl.href) as BrowserVaultWasm & {default(): Promise<unknown>};
     await wasm.default();
     clientId=payload.clientId;
     vault=payload.legacyFixture===true?await openBrowserVault({name:payload.database,wasm}):await openBrowserStreamingVault({name:payload.database,wasm:wasm as unknown as BrowserStreamingVaultOptions['wasm'],clientId,assertActive:assertOwner});

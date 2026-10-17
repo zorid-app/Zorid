@@ -20,7 +20,7 @@ import type { PlatformVault } from '../platform/index.ts';
 import { el, icon, button, textButton, modal, notice, promptName } from './dom.ts';
 import { renderMarkdown } from './markdown.ts';
 import { destroyMarkdown } from './markdown-lifecycle.ts';
-import type { EditorHandle, EditorOptions, EditorViewState } from './editor.ts';
+import type { EditorHandle, EditorOptions, EditorViewState, NativeEditorState } from './editor.ts';
 import { NoteBuffer } from './note-buffer.ts';
 import { createCanvasMarkdownBufferSession, NoteBufferSubscriptions } from './canvas-markdown-session.ts';
 import type { CanvasMarkdownBufferSession } from './canvas-markdown-session.ts';
@@ -110,6 +110,8 @@ export class Workspace {
   private documentBacklinks?: ReturnType<typeof mountDocumentBacklinks>;
   private documentBacklinksGeneration = 0;
   private status = el('footer', 'status-bar');
+  private nativeDocumentStatus?:HTMLElement;
+  private nativeRecoveryBusy=new WeakSet<NoteBuffer>();
   private treeTab: 'files' | 'search' | 'bookmarks' = 'files';
   private rightTab: 'backlinks' | 'outline' | 'tags' = 'backlinks';
   private collapsed = new Set<string>();
@@ -218,6 +220,67 @@ export class Workspace {
     row.append(description, textButton('Open', () => this.run(() => this.chooseVault()), 'mod-cta')); panel.append(row); screen.append(panel); this.root.append(screen);
   }
 
+  private nativeEditorCleanup?:()=>void;
+  private sendNativeEditorState(state:NativeEditorState,platform=this.platform):void{
+    // Keyboard presentation is best effort and must never interrupt durable saves.
+    try{void platform?.nativeEditor?.setState(state).catch(()=>{});}catch{/* Optional native UI unavailable. */}
+  }
+  private hideNativeEditorToolbar():void{
+    this.sendNativeEditorState({focused:false,editable:false,canUndo:false,canRedo:false});
+  }
+  private bindNativeEditor():void{
+    this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
+    const platform=this.platform,generation=this.vaultGeneration;
+    if(!platform.nativeEditor)return;
+    this.hideNativeEditorToolbar();
+    const publishCurrent=()=>{
+      if(this.platform!==platform||this.vaultGeneration!==generation||this.closing||this.root.inert||this.startupFailed||this.platformReleased)return;
+      const state=this.activePane?.editor?.nativeState?.();
+      if(state)this.sendNativeEditorState(state,platform);
+    };
+    const unsubscribe=platform.nativeEditor.subscribe(action=>{
+      if(this.platform!==platform||this.vaultGeneration!==generation||this.closing||this.root.inert||this.startupFailed||this.platformReleased)return;
+      const pane=this.activePane,editor=pane?.editor;
+      if(!editor||!pane.viewReady||pane.viewMode==='reading'||pane.runtime?.phase==='disposed'||!pane.content?.isConnected||this.current(pane)?.id!==pane.viewTabId)return;
+      editor.nativeAction?.(action);
+    },publishCurrent);
+    const resume=()=>{if(document.visibilityState!=='hidden')publishCurrent();};
+    const appearance=window.matchMedia('(prefers-color-scheme: dark)');
+    const updateAppearance=()=>{if(this.platform===platform&&this.vaultGeneration===generation&&this.settings.theme==='system')this.applySettings();};
+    document.addEventListener('visibilitychange',resume);window.addEventListener('focus',resume);appearance.addEventListener('change',updateAppearance);
+    this.nativeEditorCleanup=()=>{unsubscribe();document.removeEventListener('visibilitychange',resume);window.removeEventListener('focus',resume);appearance.removeEventListener('change',updateAppearance);};
+  }
+
+  private mobileLifecycleCleanup?:()=>void;
+  private bindMobileLifecycle():void {
+    this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
+    const platform=this.platform,generation=this.vaultGeneration;
+    if(!platform.mobileLifecycle)return;
+    let pending=false;
+    this.mobileLifecycleCleanup=platform.mobileLifecycle.subscribe(async(reason,ack)=>{
+      if(pending||this.closing||this.startupFailed||this.platform!==platform||this.vaultGeneration!==generation||this.platformReleased)throw new Error('Mobile lifecycle is not ready');
+      pending=true;
+      this.nativePresentationEpoch++;
+      const wasClosing=this.closing,wasInert=this.root.inert;
+      this.closing=true;this.root.inert=true;
+      this.hideNativeEditorToolbar();
+      let accepted=false;
+      try {
+        // Use the same note/Base/canvas flush and recovery paths as navigation.
+        // Native deadlines are authoritative; failed/stale ACK restores editing.
+        await this.flush();this.saveSession();
+        if(this.platform!==platform||this.vaultGeneration!==generation||this.platformReleased)throw new Error('Mobile vault changed during save');
+        await ack();accepted=true;
+        // Successful switch ACK transfers host/lease teardown to native. Never
+        // destroy/release before ACK or after a timeout which retained this view.
+      } finally {
+        const sameOwner=this.platform===platform&&this.vaultGeneration===generation;
+        if(sameOwner&&(reason==='background'||!accepted)){this.closing=wasClosing;this.root.inert=wasInert;}
+        pending=false;
+        if(sameOwner&&(reason==='background'||!accepted)){const state=this.activePane?.editor?.nativeState?.();if(state)this.sendNativeEditorState(state,platform);}
+      }
+    });
+  }
   private closeCleanup?:()=>void;
   private closing=false;
   private platformReleased=false;
@@ -265,6 +328,149 @@ export class Workspace {
     return result;
   }
 
+  // At most one pending state per live runtime. No presentation promise joins
+  // admission, saving or lifecycle ACK; the native bridge owns its own delivery.
+  private nativePresentationEpoch=0;
+  private nativePresentations=new WeakMap<TabViewRuntime,{
+    last?:'ready'|'password'|'error'; pending?:'ready'|'password'|'error'; sent?:'ready'|'password'|'error';
+    current:()=>boolean; send:(state:'ready'|'password'|'error')=>void;
+    receive:(state:'ready'|'password'|'error')=>void; checkError:()=>boolean; rearm:(pane:Pane)=>void; dispose:()=>void;
+  }>();
+
+  private nativePresentationCallback(pane:Pane,rearm=false):((state:'ready'|'password'|'error')=>void)|undefined{
+    const platform=this.platform,runtime=pane.runtime,content=pane.content,path=pane.viewPath;
+    if(!platform?.presentationSettled||!runtime||!content||!path)return;
+    const existing=this.nativePresentations.get(runtime);
+    if(existing){if(rearm)existing.rearm(pane);return existing.receive;}
+    const vault=this.vault,generation=this.vaultGeneration,tabId=pane.viewTabId,entryId=vault.entries.get(path)?.entryId;
+    let navigation=this.navigationIntent.get(pane),request=this.vaultRequest,epoch=this.nativePresentationEpoch;
+    if(!entryId)return;
+    const owns=()=>this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation
+      &&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased&&!this.platformDrained
+      &&this.activePane===pane&&this.panes.includes(pane)&&pane.runtime===runtime&&runtime.phase==='active'
+      &&pane.content===content&&content.isConnected&&pane.viewTabId===tabId&&pane.viewPath===path
+      &&this.current(pane)?.id===tabId&&this.current(pane)?.path===path
+      &&vault.entries.get(path)?.type==='file'&&vault.entries.get(path)?.entryId===entryId;
+    const current=()=>owns()&&this.vaultRequest===request&&this.navigationIntent.get(pane)===navigation&&this.nativePresentationEpoch===epoch;
+    const receive=(state:'ready'|'password'|'error')=>{
+      if(!['ready','password','error'].includes(state)||!current())return;
+      record.last=state;record.pending=state;this.flushNativePresentation(pane);
+    };
+    const checkError=()=>{
+      if(!current())return false;
+      const password=content.querySelector<HTMLElement>('.zorid-pdf-password');
+      if(password&&!password.closest('[hidden]')){receive('password');return true;}
+      const pdfError=[...content.querySelectorAll<HTMLElement>('.zorid-pdf-status')].some(node=>!node.closest('[hidden]')&&node.textContent?.startsWith('Unable to display PDF:'));
+      const errors=content.querySelectorAll<HTMLElement>('.error-message,.embed-error,.native-unavailable-view,.zorid-media-view.is-error .zorid-media-status');
+      const visible=pdfError||[...errors].some(node=>!!node.textContent?.trim()&&!node.closest('[hidden]'))
+        ||!!pane.baseView?.state.error&&!!content.querySelector('.bases-session-status')?.textContent?.trim();
+      if(visible)receive('error');return visible;
+    };
+    const Observer=content.ownerDocument.defaultView?.MutationObserver;
+    let observing=true;
+    const stopObserving=()=>{observing=false;observer?.disconnect();};
+    const observer=Observer?new Observer(()=>{if(observing)checkError();}):undefined;
+    const record={current,send:(state:'ready'|'password'|'error')=>{
+      // Settlement ends subtree watching; explicit PDF callbacks and retained
+      // activation checks still report subsequent current presentation states.
+      if(state!=='password')stopObserving();
+      try{void Promise.resolve(platform.presentationSettled!({path,entryId,state})).catch(()=>{});}catch{/* UI-only host failures cannot fail editing. */}
+    },receive,checkError,rearm:(owner:Pane)=>{
+      // Only an explicit render/activation can rebind the same retained runtime.
+      // Never retarget a callback to a replacement document, entry or content node.
+      const previous=pane;pane=owner;if(!owns()){pane=previous;return;}
+      const next=this.navigationIntent.get(pane);
+      if(next!==navigation||request!==this.vaultRequest||epoch!==this.nativePresentationEpoch||previous!==pane){
+        navigation=next;request=this.vaultRequest;epoch=this.nativePresentationEpoch;record.pending=record.last;record.sent=undefined;
+      }
+    },dispose:stopObserving,last:undefined as 'ready'|'password'|'error'|undefined,pending:undefined as 'ready'|'password'|'error'|undefined,sent:undefined as 'ready'|'password'|'error'|undefined};
+    this.nativePresentations.set(runtime,record);
+    observer?.observe(content,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','hidden']});
+    return receive;
+  }
+
+  private flushNativePresentation(pane:Pane):void{
+    const record=pane.runtime&&this.nativePresentations.get(pane.runtime);
+    if(!record)return;
+    if(!record.current()){record.pending=undefined;return;}
+    if(this.nativeOpening===this.platform||!pane.viewReady||!record.pending)return;
+    const state=record.pending;record.pending=undefined;
+    if(record.sent===state)return;
+    record.sent=state;record.send(state);
+  }
+
+  private nativeReadyViews=new WeakSet<TabViewRuntime>();
+  private nativeObservedViews=new WeakSet<TabViewRuntime>();
+
+  private observeNativeNoteView(pane:Pane):void{
+    if((!this.platform?.noteOpened&&!this.platform?.presentationSettled)||!pane.runtime||!pane.viewReady)return;
+    const presentation=this.nativePresentationCallback(pane,true);
+    const presentationRecord=this.nativePresentations.get(pane.runtime);
+    const visibleError=presentationRecord?.checkError();
+    if(!visibleError&&this.nativeReadyViews.has(pane.runtime))presentation?.('ready');
+    const runtime=pane.runtime,generation=this.vaultGeneration,path=pane.viewPath,content=pane.content;
+    if(this.nativeObservedViews.has(runtime))return;
+    this.nativeObservedViews.add(runtime);
+    const ready=()=>{
+      if(generation!==this.vaultGeneration||runtime.phase==='disposed')return;
+      this.nativeReadyViews.add(runtime);
+      presentation?.('ready');
+      const owner=this.panes.find(candidate=>candidate.runtime===runtime);
+      if(owner)this.notifyNativeNoteOpened(owner);
+    };
+    if(!path)return;
+    if(isMarkdown(path)){if(pane.editor||pane.refreshPreview)ready();return;}
+    const base=pane.baseView;
+    if(base){void base.ready.then(()=>{if(!base.state.error&&base.state.result)ready();},()=>{});return;}
+    if(pane.pdfView){void pane.pdfView.ready.then(ready,()=>{});return;}
+    if(pane.canvasView){ready();return;}
+    // ImageView has no success promise; use the actual image's load result.
+    const image=pane.imageView?content?.querySelector('img'):null;
+    if(image){if(image.complete&&image.naturalWidth>0)ready();else image.addEventListener('load',()=>{if(image.naturalWidth>0)ready();},{once:true});return;}
+    // MediaView.ready also settles on errors/timeouts. Only metadata is success.
+    if(pane.mediaView){
+      const check=()=>{const media=content?.querySelector('audio,video') as HTMLMediaElement|null;if(media&&media.readyState>=1&&!media.error)ready();};
+      check();content?.addEventListener('loadedmetadata',check,{capture:true,once:true});
+      void pane.mediaView.ready.then(check,()=>{});
+    }
+  }
+
+  private nativeOpening?:PlatformVault;
+  private nativeOpened?:{platform:PlatformVault;entryId:string;tabId:string};
+
+  private notifyNativeNoteOpened(pane:Pane):void {
+    const platform=this.platform;
+    if(!platform?.noteOpened||this.nativeOpening===platform||this.closing||this.startupFailed||this.platformReleased||this.activePane!==pane||!this.panes.includes(pane))return;
+    const tab=this.current(pane);
+    if(!tab?.path||tab.kind!=='note'){this.nativeOpened=undefined;return;}
+    if(!pane.viewReady||pane.viewTabId!==tab.id||pane.viewPath!==tab.path||pane.runtime?.phase!=='active')return;
+    if(!this.nativeReadyViews.has(pane.runtime))return;
+    const entry=this.vault.entries.get(tab.path);
+    if(entry?.type!=='file'||!entry.entryId)return;
+    const previous=this.nativeOpened;
+    if(previous?.platform===platform&&previous.entryId===entry.entryId&&previous.tabId===tab.id)return;
+    this.nativeOpened={platform,entryId:entry.entryId,tabId:tab.id};
+    // Recents is presentation state. Never make a rejected/stale notification
+    // fail the shared editor's activation, durable checkpoint or save path.
+    try{void platform.noteOpened(tab.path,entry.entryId).catch(()=>{});}catch{/* Optional native history is nonfatal. */}
+  }
+
+  private async openNativeInitialNote(platform:PlatformVault):Promise<void>{
+    if(platform.createNoteOnOpen){await this.newNote();return;}
+    if(platform.initialPath===undefined)return;
+    const entry=this.vault.entries.get(platform.initialPath);
+    if(!platform.initialEntryId||entry?.type!=='file'||entry.entryId!==platform.initialEntryId){
+      notice('The selected note changed or is no longer available. Return to Files and select it again.');
+      // This error has no document runtime. Reveal its visible notice using only
+      // the admitted launch identity; never acknowledge the replacement file.
+      if(platform.initialEntryId&&this.platform===platform&&this.nativeOpening===platform&&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased){
+        try{void Promise.resolve(platform.presentationSettled?.({path:platform.initialPath,entryId:platform.initialEntryId,state:'error'})).catch(()=>{});}catch{/* Optional UI delivery cannot fail admission. */}
+      }
+      return;
+    }
+    await this.openNote(platform.initialPath);
+  }
+
   async openVault(platform: PlatformVault): Promise<void> {
     const request=++this.vaultRequest,next=new Vault(platform.adapter);
     // Initialization is read-only and can overlap; only the latest request may
@@ -272,7 +478,16 @@ export class Workspace {
     // a new adapter initializes, and a late request cannot acquire a watcher.
     await next.initialize();
     if(request!==this.vaultRequest)return;
-    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){let recovered=await this.recoverDurableBuffers(next);if(await platform.recoverCommands?.()){await next.initialize();recovered=await this.recoverDurableBuffers(next);}await this.replaceVault(platform,next,recovered);}});
+    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){
+      this.nativeOpening=platform;
+      try{
+        let recovered=await this.recoverDurableBuffers(next);
+        if(await platform.recoverCommands?.()){await next.initialize();recovered=await this.recoverDurableBuffers(next);}
+        await this.replaceVault(platform,next,recovered);
+        if(request===this.vaultRequest&&this.platform===platform)await this.openNativeInitialNote(platform);
+      }finally{if(this.nativeOpening===platform){this.nativeOpening=undefined;if(request===this.vaultRequest&&this.platform===platform)this.flushNativePresentation(this.activePane);}}
+      if(request===this.vaultRequest&&this.platform===platform)this.notifyNativeNoteOpened(this.activePane);
+    }});
     this.vaultTransition=transition.catch(()=>{});
     await transition;
   }
@@ -295,17 +510,19 @@ export class Workspace {
     this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;
     this.treeDrag?.destroy(); this.treeDrag=undefined; this.treeRename?.session.dispose(); this.treeRename=undefined; this.folderCreationIntent++;
     this.treeRows=[]; this.treeSelection.clear(); this.treeSelectionAnchor=undefined; this.entryTokens.clear();
+    this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
+    this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
     this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.buffers=recovered; this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
     this.panes = []; this.autoRevealFiles=false; this.collapsed.clear(); this.bookmarks.clear(); this.sessionState = {};
     this.buildShell();
-    this.mountFileTreeDrag();
+    if(!platform.editorOnly)this.mountFileTreeDrag();
     let restored = false;
     try {
       const saved = JSON.parse(localStorage.getItem(this.sessionKey()) || 'null');
-      if (saved) {
+      if (saved && !platform.editorOnly) {
         this.sessionState = saved;this.autoRevealFiles=saved.autoRevealFiles===true;
         this.root.classList.toggle('right-hidden', saved.rightHidden !== false);
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
@@ -322,7 +539,7 @@ export class Workspace {
     this.activate(this.panes.find(pane=>pane.id===this.sessionState.activePaneId)??this.panes[0]);
     this.restoringLayout=false;
     for (const pane of this.panes) await this.renderPane(pane,{flush:false});
-    this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
+    if(!platform.editorOnly)this.tabDocking=createTabDocking({root:this.root,getPanes:()=>this.dockPanes(),dock:intent=>this.dockTab(intent),enabled:()=>!matchMedia('(max-width: 700px)').matches,onError:error=>notice(error instanceof Error?error.message:String(error))});
     this.disposers.push(this.vault.on('create', change => { this.invalidateTreeTokens(change.path); this.renderSidebar(); }), this.vault.on('delete', change => {
       this.invalidateTreeTokens(change.path);
       const removed=(path:string)=>path===change.path||path.startsWith(change.path+'/');
@@ -417,10 +634,12 @@ export class Workspace {
     });
     if (unsubscribe) this.disposers.push(unsubscribe);
     this.renderSidebar(); this.renderRight(); this.saveSession();
+    this.bindMobileLifecycle();this.bindNativeEditor();
     }catch(error){if(this.vault===searchVault)this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
 
   private disposeShell(): void {
+    this.nativeDocumentStatus=undefined;
     this.clearDocumentBacklinks();
     this.documentSearchSuspended=true;this.clearDocumentSearch();
     this.importStatusCleanup?.();this.importStatusCleanup=undefined;
@@ -432,6 +651,7 @@ export class Workspace {
     this.disposeShell();
     this.documentSearchSuspended=false;
     this.root.replaceChildren(); this.root.className = 'workspace right-hidden';
+    this.root.classList.toggle('native-editor-only',this.platform.editorOnly===true);
     this.root.classList.toggle('is-macos-desktop',!!window.zorid&&/Mac/i.test(window.navigator.platform));
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
     const top = el('div', 'ribbon-top');
@@ -470,6 +690,10 @@ export class Workspace {
     for (const [type,glyph,label] of [['backlinks','link','Backlinks'],['outline','list','Outline'],['tags','tag','Tags']] as const) rightTabs.append(button(glyph,label,()=>{this.rightTab=type;this.renderRight();}));
     rightTabs.append(button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle')); this.rightContent=el('div','right-content'); this.right.append(rightTabs,this.rightContent);
     this.status = el('footer','status-bar'); this.status.setAttribute('aria-live','polite');
+    if(this.platform.editorOnly){
+      const status=el('section','native-document-status');status.setAttribute('aria-label','Save and recovery notices');status.setAttribute('aria-live','polite');
+      center.prepend(status);this.nativeDocumentStatus=status;this.root.append(center);return;
+    }
     this.root.append(ribbon,this.sidebar,center,this.right,this.status);
     this.addResizeHandle(this.sidebar,'left'); this.addResizeHandle(this.right,'right');
     this.sidebarControls=createSidebarControls(this.root,{onToggleLeft:()=>this.toggleLeft(),onToggleRight:()=>this.toggleRight()});
@@ -508,8 +732,9 @@ export class Workspace {
     this.panes.push(pane); this.paneContainer.append(pane.element); return pane;
   }
   private focusPane(pane:Pane):void{if(pane.editor)pane.editor.focus();else pane.element.focus({preventScroll:true});}
-  private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); }
+  private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); if(changed)this.notifyNativeNoteOpened(pane); }
   async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath='',expectedActivation?:number,commitGuard?:()=>boolean): Promise<void> {
+    if(this.platform.editorOnly)newTab=false;
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
     await this.flushPane(pane);
@@ -557,6 +782,7 @@ export class Workspace {
   }
 
   private renderTabBar(pane:Pane):void{
+    if(this.platform.editorOnly){pane.element.querySelector(':scope > .tab-bar')?.remove();return;}
     const tab=this.current(pane);if(!tab)return;
     const bar=el('div','tab-bar'); bar.setAttribute('role','tablist');
     bar.append(button('sidebar','Toggle left sidebar',()=>this.toggleLeft(),'pane-sidebar-toggle'));
@@ -576,13 +802,20 @@ export class Workspace {
 
   private async selectTab(pane:Pane,tab:Tab):Promise<void>{
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration;this.navigationIntent.set(pane,intent);
-    if(pane.active===tab.id){this.activate(pane);this.focusPane(pane);return;}
+    if(pane.active===tab.id){this.activate(pane);this.observeNativeNoteView(pane);this.flushNativePresentation(pane);this.focusPane(pane);return;}
     await this.flushPane(pane);
     if(intent!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab))return;
     pane.active=tab.id;this.activate(pane);await this.renderPane(pane);this.saveSession();
   }
 
   async renderPane(initialPane:Pane,options:{flush?:boolean;refresh?:boolean}={}):Promise<void>{
+    await this.renderPaneContent(initialPane,options);
+    this.observeNativeNoteView(initialPane);
+    this.notifyNativeNoteOpened(initialPane);
+    this.flushNativePresentation(initialPane);
+  }
+
+  private async renderPaneContent(initialPane:Pane,options:{flush?:boolean;refresh?:boolean}={}):Promise<void>{
     let pane=initialPane;
     const request=(this.renderRequests.get(initialPane)??0)+1,generation=this.vaultGeneration;this.renderRequests.set(initialPane,request);
     const current=()=>generation===this.vaultGeneration&&this.panes.includes(initialPane)&&this.renderRequests.get(initialPane)===request;
@@ -592,6 +825,7 @@ export class Workspace {
     if(!options.refresh&&pane.viewReady&&pane.viewTabId===wanted?.id&&pane.viewPath===wanted.path&&pane.viewMode===wanted.mode&&pane.viewKind===wanted.kind ){
       this.applyViewSettings(pane);this.renderTabBar(pane);pane.refreshPreview?.();return;
     }
+    if(this.platform.nativeEditor&&pane===this.activePane)this.hideNativeEditorToolbar();
     if(pane.viewTabId&&pane.viewTabId!==pane.active&&pane.tabs.some(tab=>tab.id===pane.viewTabId))this.parkPaneView(pane);else await this.disposePaneViews(pane);
     if(!current())return;
     const tab=this.current(pane);if(!tab)return;
@@ -605,6 +839,7 @@ export class Workspace {
     const runtime=createTabViewRuntime({id:tab.id,element:content,owner:this.viewOwner(pane),
       flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flushForNavigation();await pane.baseView?.close();await pane.baseEmbeds?.flush();},
       dispose:async()=>{await pane.baseEmbeds?.close();recoveryCleanup?.();this.releasePaneView(pane,content);},focus:()=>this.focusPane(pane)});pane.runtime=runtime;
+    const nativePresentation=this.nativePresentationCallback(pane);
     let ownerChanged=()=>{};pane.rebindView=owner=>{pane=owner;ownerChanged();};
     const toolbar=el('div','pane-toolbar');
     const back=button('left','Navigate back',()=>this.run(()=>this.navigate(-1,pane)));back.disabled=pane.historyIndex<=0;
@@ -612,7 +847,7 @@ export class Workspace {
     toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.md$/,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
     if(!tab.path||isMarkdown(tab.path))actions.append(this.hotkeyButton(tab.mode==='reading'?'edit':'book','toggle-reading',tab.mode==='reading'?'Switch to Live Edit':'Switch to reading view',()=>this.run(()=>this.toggleReading(pane))));
-    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);content.append(toolbar);
+    actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);if(!this.platform.editorOnly)content.append(toolbar);
     if(tab.kind==='graph'){this.renderGraph(content);pane.viewReady=true;return;}
     if(!tab.path){this.renderEmpty(pane,content);pane.viewReady=true;return;}
     const path=tab.path;
@@ -645,7 +880,7 @@ export class Workspace {
       else if(/\.pdf$/i.test(path)){
         host.classList.add('pdf-attachment-view');
         const vault=this.vault,fileToken=this.treeEntryToken(path);
-        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{generateMarkdownLink:(subpath:string,alias:string)=>this.vault===vault&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.treeEntryToken(path)===fileToken?pdfMarkdownLink(vault,path,subpath,alias,this.settings):null,subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches,onOpenMenu:event=>{const entry=this.vault.entries.get(path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}}});
+        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{generateMarkdownLink:(subpath:string,alias:string)=>this.vault===vault&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.treeEntryToken(path)===fileToken?pdfMarkdownLink(vault,path,subpath,alias,this.settings):null,subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches,onPresentationSettled:nativePresentation,onOpenMenu:event=>{const entry=this.vault.entries.get(path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}}});
         pane.pdfView=view;void view.ready.catch(error=>{if(pane.pdfView===view&&version===pane.renderVersion)notice(error instanceof Error?error.message:String(error));});
       }else if(/\.canvas$/i.test(path)){
         host.classList.add('canvas-attachment-view');
@@ -679,7 +914,7 @@ export class Workspace {
           openFileInNewTab:target=>this.vault.entries.has(target)?this.openNote(target,true,pane):Promise.resolve(),openLink:target=>{if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');},onError:error=>notice(error instanceof Error?error.message:String(error))});
         }catch(error){pane.embeds?.destroy();pane.embeds=undefined;host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
       }
-      else host.append(el('p','muted',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
+      else host.append(el('p','muted native-unavailable-view',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
       pane.viewReady=true;this.renderStatus();return;
     }
     const scroll=el('div','note-scroll');scroll.classList.toggle('readable-width',this.settings.readableWidth);
@@ -722,7 +957,8 @@ export class Workspace {
         const factory=this.editorFactory||(await import('./editor.ts')).createEditor;if(version!==pane.renderVersion)return;
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
         const ownsEditor=()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path;
-        pane.editor=factory(host,{hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
+        const nativeCurrent=()=>ownsEditor()&&this.activePane===pane&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.current(pane)?.id===tab.id&&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased;
+        pane.editor=factory(host,{...(this.platform.nativeEditor?{isCurrent:nativeCurrent,onNativeEditorState:(state:NativeEditorState)=>{if(nativeCurrent())this.sendNativeEditorState(state);}}:{}),hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
           wiki:{sourcePath:()=>ownsEditor()?path:null,
             metadata:target=>{if(!ownsEditor())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):this.vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:this.vault.entries.get(target)?.mtime};},
             resolvePath:(target,source)=>ownsEditor()?this.vault.metadata.resolveLink(source,target):null,
@@ -1010,6 +1246,7 @@ export class Workspace {
   }
   private async clearCachedViews():Promise<void>{for(const [tab,pane] of this.cachedViews){await this.disposePaneViews(pane);this.cachedViews.delete(tab);}}
   private releasePaneView(pane:Pane,content:HTMLElement):void{
+    if(pane.runtime){this.nativePresentations.get(pane.runtime)?.dispose();this.nativePresentations.delete(pane.runtime);}
     this.capturePaneState(pane);destroyMarkdown(content);
     clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
   }
@@ -1381,11 +1618,43 @@ export class Workspace {
   /** A failed admission can offer another folder only before any vault/buffer
    * was installed, and after its platform lease has been released successfully. */
   async cleanupFailedStartup(platform:PlatformVault|null):Promise<boolean>{
+    this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
     if(this.platform||this.buffers.size||this.panes.length){this.startupFailed=true;return false;}
     await platform?.release?.();await this.destroy();return true;
   }
 
+  private renderNativeDocumentStatus():void{
+    const status=this.nativeDocumentStatus;if(!status)return;
+    status.replaceChildren();
+    const generation=this.vaultGeneration;
+    for(const [path,buffer] of this.buffers){
+      const conflict=buffer.hasRecoveryConflict;
+      // Current-note conflicts already have the full shared recovery banner.
+      if(conflict&&this.activePane?.viewPath===path)continue;
+      if(!buffer.error&&!conflict)continue;
+      const row=el('div','native-document-notice');
+      row.append(el('p','',conflict?`Retained draft for “${nameOf(path)}” needs attention.`:`Could not save “${nameOf(path)}”. Your draft is retained. ${buffer.error?.message??''}`));
+      const current=()=>generation===this.vaultGeneration&&this.buffers.get(path)===buffer&&!this.platformReleased;
+      const actions=el('div','note-recovery-actions');
+      if(conflict&&this.vault.entries.get(path)?.type==='file')actions.append(textButton('Review draft',()=>{if(current())this.run(()=>this.openNote(path));}));
+      const save=textButton(conflict?'Save recovery copy':'Retry save',()=>this.run(async()=>{
+        if(!current()||this.nativeRecoveryBusy.has(buffer))return;
+        this.nativeRecoveryBusy.add(buffer);this.renderStatus();
+        try{
+          if(conflict){
+            const result=await buffer.saveRecoveryCopy();
+            if(current()&&result.resolved)for(const view of this.loadedViews())if(view.viewPath===path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
+            notice(`Draft saved to “${result.path}”.`);
+          }else await buffer.flush();
+        }finally{this.nativeRecoveryBusy.delete(buffer);if(current())this.renderStatus();}
+      }));
+      save.disabled=this.nativeRecoveryBusy.has(buffer);actions.append(save);row.append(actions);status.append(row);
+    }
+    status.hidden=!status.childElementCount;
+  }
+
   private renderStatus():void{
+    this.renderNativeDocumentStatus();
     if(!this.activePane)return;const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
     this.status.replaceChildren();
     if(tab?.path&&!isMarkdown(tab.path)){this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
@@ -1564,6 +1833,7 @@ export class Workspace {
   }
   private executeHotkey(id:string):void{
     if(this.closing)return;
+    if(this.platform?.editorOnly&&(id.startsWith('tab-')||['new-window','new-tab','close-tab','split-right','split-down','toggle-left','toggle-right','search-all','graph','open-vault'].includes(id)))return;
     if(id==='new-window'){if(workspaceWindowBridge(window.zorid))this.run(()=>this.newWindow());return;}
     if(!this.vault)return;
     if(id.startsWith('tab-')){
@@ -1743,5 +2013,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}catch(error){if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
+  async destroy():Promise<void>{const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}catch(error){if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
 }
