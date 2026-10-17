@@ -289,6 +289,13 @@ confirmed for Zorid app actions, not shell commands; owner notified.
 
 ### 2026-10-17 — Native follow-up ownership and phone7
 
+Simulator8 owner evidence23:41UTC (msg814cedb8c784): full native Settings push,
+navigation configuration and back pass; Rust literal search returns two enabled
+hits at lines7/9 and opens the matched note, with return/clear working. Notes was
+restored after testing old empty-bar behavior. That behavior is superseded by the
+minimum-one request below. Caret observation continues; phone8 intentionally
+skipped. These results do not establish build9/minimum-one or phone acceptance.
+
 Latest navigation correction23:38UTC: navigation bar must always contain at least
 one item. This supersedes the earlier explicit-empty configuration. Native371
 prepares a separate minimal patch: normalize empty/malformed preferences to Notes,
