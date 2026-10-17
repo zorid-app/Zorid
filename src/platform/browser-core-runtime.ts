@@ -1,6 +1,8 @@
 import type { BrowserSyncFixtureCredentials, BrowserSyncSweep } from './browser-sync-worker.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '../core/browser-vault.ts';
+import { BINARY_CHUNK_BYTES, BINARY_FORMAT_FILE_BYTES } from '../core/binary-streams.ts';
+import type { BinaryStreams, BinaryStreamLimits, BinaryStageRef, BinaryReadRef } from '../core/binary-streams.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
 import type { DurableCheckpoints, Checkpoint, CheckpointPage, CheckpointListOptions, CheckpointChangesOptions } from '../core/durable-checkpoints.ts';
 import { boundedUtf8, checkpointKey, snapshotCheckpointChange } from '../core/checkpoint-input.ts';
@@ -16,8 +18,15 @@ export interface BrowserCoreRuntimeOptions {
   allowNewVault: true;
   /** Normal local vault: enroll persistent family authority without network credentials. */
   initializeLocal?: boolean;
+  /** Explicit reference fixtures only; normal startup never falls back. */
+  legacyFixture?:true;
   timeoutMs?: number;
 }
+type ReadInput=Parameters<BinaryStreams['openRead']>[0];
+interface ReadState {version:1;requestedReadId:string;input:ReadInput;phase:'opening'|'opened'|'closing';ref?:BinaryReadRef}
+const binaryId=(value:unknown):value is string=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}(?![\s\S])/.test(value);
+const binaryFailure=(code:string)=>new BrowserVaultError(code,'Browser binary request did not complete; its original identity is retained');
+function binaryLength(value:unknown):bigint {if(typeof value!=='string'||!/^(0|[1-9][0-9]{0,19})(?![\s\S])/.test(value)||BigInt(value)>18446744073709551615n)throw binaryFailure('invalid_binary_length');return BigInt(value);}
 interface Pending { resolve(value: unknown): void; reject(error: unknown): void; timer: ReturnType<typeof setTimeout>; operation: string }
 
 /** Dedicated worker transport. No native service, filesystem or desktop bridge. */
@@ -26,6 +35,10 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   get durableScope(): Readonly<{vaultId:string;clientId:string}> | undefined { return this.authorityScope; }
   private checkpointProvider?: DurableCheckpoints;
   get checkpoints():DurableCheckpoints|undefined{return this.checkpointProvider;}
+  private binaryCapability?:BinaryStreams;
+  get binaryStreams():BinaryStreams|undefined{return this.binaryCapability;}
+  private readonly binaryInFlight=new Set<Promise<unknown>>();
+  private readonly liveReads=new Map<string,{key:string;ref:BinaryReadRef}>();
   private worker: Worker;
   private pending = new Map<string, Pending>();
   private dispatchTail: Promise<void> = Promise.resolve();
@@ -39,6 +52,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   private syncRevokePending?:Promise<void>;
   private recovery = new Set<string>();
   private timeoutMs: number;
+  private readonly legacyFixture:boolean;
   private visibility = () => {
     if (!this.closed && !this.releasing && document.visibilityState === 'visible') void this.call('refresh').catch(error => {
       // Refresh is only a hint. Intentional release may cancel an already queued
@@ -48,6 +62,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     });
   };
   private constructor(options: BrowserCoreRuntimeOptions) {
+    this.legacyFixture=options.legacyFixture===true;
     this.timeoutMs = options.timeoutMs ?? 20000;
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > 120000) throw new BrowserVaultError('invalid_timeout', 'Worker timeout must be 1–120000 milliseconds');
     this.worker = new Worker(new URL('./browser-core-worker.ts', import.meta.url), {type:'module'});
@@ -77,7 +92,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       // this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
       const clientId = options.clientId;
-      const opened = await runtime.call<{recovery:string[];authorityId:string}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      const opened = await runtime.call<{recovery:string[];authorityId:string;binaryLimits?:BinaryStreamLimits}>('open', {...options, wasmModuleUrl:moduleUrl.href});
       if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
       runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
       const pageOptions=(input:CheckpointListOptions)=>{
@@ -96,6 +111,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
         },
       } satisfies DurableCheckpoints);
       runtime.recovery = new Set(opened.recovery);
+      if(opened.binaryLimits){runtime.installBinaryStreams(opened.binaryLimits);await runtime.recoverReadRequests();}
       document.addEventListener('visibilitychange', runtime.visibility);
       return runtime;
     } catch (error) { runtime.close(); throw error; }
@@ -121,7 +137,8 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       snapshot = structuredClone(payload);
     } catch (error) { return Promise.reject(error); }
     this.queuedCalls++;
-    const result = (network ? Promise.resolve() : this.dispatchTail).then(() => {
+    const binary=operation.startsWith('binary-'),independent=network||binary;
+    const result = (independent ? Promise.resolve() : this.dispatchTail).then(() => {
       this.assertDispatch(operation);
       const id = crypto.randomUUID();
       return new Promise<T>((resolve, reject) => {
@@ -131,16 +148,105 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
           this.fail(new BrowserVaultError('outcome_unknown', 'Worker response timed out; recover the exact durable operation in a new runtime', {request_id:id,operation}));
         }, network ? 60_000 : this.timeoutMs);
         this.pending.set(id, {resolve: value => resolve(value as T), reject, timer, operation});
-        try { this.worker.postMessage({id, operation, payload:snapshot});
+        try {
+          const chunk=operation==='binary-append'?(snapshot as {input:{bytes:Uint8Array}}).input.bytes:undefined;
+          this.worker.postMessage({id, operation, payload:snapshot},chunk?[chunk.buffer as ArrayBuffer]:[]);
           if(operation==='sync-configure'){const credentials=snapshot as BrowserSyncFixtureCredentials;credentials.keyBytes.fill(0);credentials.bearerToken='';}
         }
         catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
       });
     });
-    if (!network) this.dispatchTail = result.then(() => undefined, () => undefined);
-    return result.finally(() => {
+    if (!independent) this.dispatchTail = result.then(() => undefined, () => undefined);
+    const tracked=result.finally(() => {
       this.queuedCalls--;
+      if(binary)this.binaryInFlight.delete(tracked);
       if(operation==='sync-configure'&&snapshot){const credentials=snapshot as BrowserSyncFixtureCredentials;credentials.keyBytes?.fill(0);credentials.bearerToken='';}
+    });
+    if(binary)this.binaryInFlight.add(tracked);
+    return tracked;
+  }
+  private binaryActive():void {this.assertDispatch('binary-query');this.assertActive();}
+  private boundStage(input:BinaryStageRef):BinaryStageRef {
+    const scope=this.authorityScope;
+    if(!scope||input?.localStoreId!==scope.vaultId||input.clientId!==scope.clientId||!binaryId(input.operationId)||!binaryId(input.stageId))throw binaryFailure('owner_mismatch');
+    return {localStoreId:input.localStoreId,clientId:input.clientId,operationId:input.operationId,stageId:input.stageId};
+  }
+  private readInput(input:ReadInput):ReadInput {
+    if(!input||!binaryId(input.entryId)||input.expectedRevision!==undefined&&!binaryId(input.expectedRevision)||input.expectedContentEvent!==undefined&&!binaryId(input.expectedContentEvent))throw binaryFailure('invalid_request');
+    return {entryId:input.entryId,...(input.expectedRevision===undefined?{}:{expectedRevision:input.expectedRevision}),...(input.expectedContentEvent===undefined?{}:{expectedContentEvent:input.expectedContentEvent})};
+  }
+  private boundRead(input:BinaryReadRef):BinaryReadRef {
+    const scope=this.authorityScope;
+    if(!scope||input?.localStoreId!==scope.vaultId||input.clientId!==scope.clientId||!binaryId(input.readId)||!binaryId(input.entryId)||!binaryId(input.entryRevision)||!binaryId(input.selectedContentEvent)||binaryLength(input.length)>binaryLength(this.binaryCapability!.limits.maxFileBytes))throw binaryFailure('owner_mismatch');
+    return {localStoreId:input.localStoreId,clientId:input.clientId,readId:input.readId,entryId:input.entryId,entryRevision:input.entryRevision,selectedContentEvent:input.selectedContentEvent,length:input.length};
+  }
+  private async saveRead(head:Checkpoint|null,state:ReadState|null,key:string):Promise<Checkpoint> {
+    this.binaryActive();const encodedState=state===null?null:JSON.stringify(state);if(encodedState!==null)boundedUtf8(encodedState,16384,'invalid_binary_checkpoint');
+    return this.checkpointProvider!.compareAndSwap({key,expectedRevision:head?.revision??null,nextRevision:crypto.randomUUID(),encodedState});
+  }
+  private decodeRead(head:Checkpoint):ReadState {
+    try{
+      if(head.deleted||!head.encodedState||head.vaultId!==this.authorityScope!.vaultId||head.clientId!==this.authorityScope!.clientId)throw 0;
+      boundedUtf8(head.encodedState,16384);const state=JSON.parse(head.encodedState) as ReadState;
+      if(state.version!==1||!binaryId(state.requestedReadId)||head.key!=='binary-read/v1/'+state.requestedReadId||!['opening','opened','closing'].includes(state.phase)||JSON.stringify(this.readInput(state.input))!==JSON.stringify(state.input))throw 0;
+      if(state.ref){const ref=this.boundRead(state.ref);if(JSON.stringify(ref)!==JSON.stringify(state.ref)||ref.entryId!==state.input.entryId||state.input.expectedRevision!==undefined&&ref.entryRevision!==state.input.expectedRevision||state.input.expectedContentEvent!==undefined&&ref.selectedContentEvent!==state.input.expectedContentEvent)throw 0;}
+      if(state.phase!=='opening'&&!state.ref)throw 0;return state;
+    }catch{throw binaryFailure('invalid_binary_checkpoint');}
+  }
+  private async recoverReadRequests():Promise<void> {
+    let cursor:string|undefined;
+    for(let pageNumber=0;pageNumber<100;pageNumber++){
+      this.binaryActive();const page=await this.checkpointProvider!.list({limit:100,cursor});
+      for(const item of page.items){
+        if(item.deleted||!item.key.startsWith('binary-read/v1/'))continue;
+        const head=await this.checkpointProvider!.load(item.key);if(!head?.encodedState)continue;const state=this.decodeRead(head);
+        if(state.phase==='opened'&&state.ref&&this.liveReads.get(state.ref.readId)?.key===head.key)continue;
+        // Closing the original request is idempotent, including a lost open ACK.
+        // Never reopen an entry/path to discover a replacement read reference.
+        await this.call<void>('binary-close-request',{requestedReadId:state.requestedReadId,input:state.input});
+        await this.saveRead(head,null,head.key);if(state.ref)this.liveReads.delete(state.ref.readId);
+      }
+      if(page.cursor===null)return;cursor=page.cursor;
+    }
+    throw binaryFailure('binary_read_recovery_limit');
+  }
+  private installBinaryStreams(input:BinaryStreamLimits):void {
+    const limits=Object.freeze({...input});
+    if(binaryLength(limits.maxFileBytes)>BigInt(BINARY_FORMAT_FILE_BYTES)||binaryLength(limits.smallReadBytes)>binaryLength(limits.maxFileBytes)||binaryLength(limits.smallReadBytes)>16777216n||!Number.isInteger(limits.maxChunkBytes)||limits.maxChunkBytes<1||limits.maxChunkBytes>BINARY_CHUNK_BYTES)throw binaryFailure('invalid_stream_limits');
+    this.binaryCapability=Object.freeze<BinaryStreams>({limits,
+      begin:input=>this.call('binary-begin',structuredClone(input)),
+      append:(inputRef,input)=>{
+        try{const ref=this.boundStage(inputRef);if(!input||!(input.bytes instanceof Uint8Array)||!input.bytes.length||input.bytes.length>limits.maxChunkBytes||!Number.isInteger(input.sequence)||input.sequence<0||input.sequence>0xffffffff||binaryLength(input.offset)>binaryLength(limits.maxFileBytes))throw binaryFailure('request_limit');
+          return this.call('binary-append',{ref,input:{sequence:input.sequence,offset:input.offset,bytes:input.bytes.slice()}});
+        }catch(error){return Promise.reject(error);}
+      },
+      query:ref=>{try{return this.call('binary-query',this.boundStage(ref));}catch(error){return Promise.reject(error);}},
+      seal:(ref,input)=>{try{return this.call('binary-seal',{ref:this.boundStage(ref),input:structuredClone(input)});}catch(error){return Promise.reject(error);}},
+      commit:ref=>{try{return this.call('binary-commit',this.boundStage(ref));}catch(error){return Promise.reject(error);}},
+      abort:ref=>{try{return this.call('binary-abort',this.boundStage(ref));}catch(error){return Promise.reject(error);}},
+      openRead:async input=>{
+        const captured=this.readInput(input);await this.recoverReadRequests();this.binaryActive();
+        const state:ReadState={version:1,requestedReadId:crypto.randomUUID(),input:captured,phase:'opening'},key='binary-read/v1/'+state.requestedReadId;
+        let head=await this.saveRead(null,state,key);
+        const ref=this.boundRead(await this.call<BinaryReadRef>('binary-open-read',{requestedReadId:state.requestedReadId,input:captured}));this.binaryActive();
+        if(ref.entryId!==captured.entryId||captured.expectedRevision!==undefined&&ref.entryRevision!==captured.expectedRevision||captured.expectedContentEvent!==undefined&&ref.selectedContentEvent!==captured.expectedContentEvent)throw binaryFailure('invalid_binary_response');
+        head=await this.saveRead(head,{...state,phase:'opened',ref},key);this.binaryActive();this.liveReads.set(ref.readId,{key,ref});return {...ref};
+      },
+      read:async(inputRef,input)=>{
+        const ref=this.boundRead(inputRef);if(!input||!Number.isInteger(input.maxBytes)||input.maxBytes<1||input.maxBytes>limits.maxChunkBytes||binaryLength(input.offset)>binaryLength(ref.length))throw binaryFailure('request_limit');
+        const captured={offset:input.offset,maxBytes:input.maxBytes};
+        const part=await this.call<Awaited<ReturnType<BinaryStreams['read']>>>('binary-read',{ref,input:captured});this.binaryActive();
+        if(!(part.bytes instanceof Uint8Array)||part.bytes.length>captured.maxBytes||part.nextOffset!==String(binaryLength(captured.offset)+BigInt(part.bytes.length))||binaryLength(part.nextOffset)>binaryLength(ref.length)||part.eof!==(part.nextOffset===ref.length)||!part.bytes.length&&!part.eof)throw binaryFailure('invalid_binary_response');
+        return {bytes:part.bytes.slice(),nextOffset:part.nextOffset,eof:part.eof};
+      },
+      closeRead:async input=>{
+        const ref=this.boundRead(input),live=this.liveReads.get(ref.readId);if(!live||JSON.stringify(live.ref)!==JSON.stringify(ref))throw binaryFailure('read_checkpoint_missing');
+        let head=await this.checkpointProvider!.load(live.key);
+        if(!head?.encodedState){if(head?.deleted){this.liveReads.delete(ref.readId);return;}throw binaryFailure('invalid_binary_checkpoint');}
+        const state=this.decodeRead(head);if(!state.ref||JSON.stringify(state.ref)!==JSON.stringify(ref))throw binaryFailure('owner_mismatch');
+        if(state.phase!=='closing')head=await this.saveRead(head,{...state,phase:'closing'},head.key);
+        await this.call<void>('binary-close-read',ref);await this.saveRead(head,null,head.key);this.liveReads.delete(ref.readId);
+      },
     });
   }
   private fail(error: BrowserVaultError): void {
@@ -158,7 +264,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     if (this.closed) return Promise.reject(new BrowserVaultError('client_ownership_lost', 'Worker release cannot be confirmed after transport loss'));
     this.releasing = true;
     document.removeEventListener('visibilitychange', this.visibility);
-    this.releasePending = this.call<void>('release-client').then(() => this.close())
+    this.releasePending = (async()=>{while(this.binaryInFlight.size)await Promise.allSettled([...this.binaryInFlight]);await this.call<void>('release-client');this.close();})()
       .finally(() => { this.releasePending = undefined; });
     return this.releasePending;
   }
@@ -168,7 +274,13 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       typeof credentials.endpoint!=='string'||credentials.endpoint.length>2048||typeof credentials.bearerToken!=='string'||credentials.bearerToken.length>4096||
       ![credentials.realmId,credentials.vaultId,credentials.serverEpoch].every(value=>typeof value==='string'&&value.length<=128))
       return Promise.reject(new BrowserVaultError('invalid_sync_credentials','Invalid fixture sync credentials'));
-    return this.call('sync-configure',credentials,true);
+    const enrollEmpty=credentials.enrollEmpty===true;
+    return this.call<void>('sync-configure',credentials,true).then(async()=>{
+      if(enrollEmpty&&!this.legacyFixture&&!this.binaryCapability){
+        const limits=await this.call<BinaryStreamLimits>('binary-limits');this.binaryActive();
+        this.installBinaryStreams(limits);await this.recoverReadRequests();
+      }
+    });
   }
   syncOnce():Promise<BrowserSyncSweep> {
     if(this.syncPending)return this.syncPending;
@@ -181,6 +293,8 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   inventory(): Promise<BrowserVaultRead[]> { return this.call('inventory'); }
   readEntry(path: string): Promise<BrowserVaultRead | null> { return this.call('read', path); }
   readEntryById(id:string):Promise<BrowserVaultRead|null>{return this.call('read-id',id);}
+  readMetadata(path:string):Promise<BrowserVaultRead|null>{return this.call(this.legacyFixture?'read':'read-metadata',path);}
+  readMetadataById(id:string):Promise<BrowserVaultRead|null>{return this.call(this.legacyFixture?'read-id':'read-metadata-id',id);}
   async execute(intentId: string, requestJson: string): Promise<string> {
     await this.prepare(intentId,requestJson);
     return this.commit(intentId);

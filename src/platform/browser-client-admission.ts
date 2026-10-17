@@ -3,6 +3,8 @@ import type { CheckpointScope, DurableCheckpoints } from '../core/durable-checkp
 import type { DurableWrites } from '../core/durable-writes.ts';
 import type { BrowserCoreRuntime } from './browser-core-runtime.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
+import type { BinaryStreams } from '../core/binary-streams.ts';
+import { createBrowserBinaryCommands } from './browser-binary-commands.ts';
 import { browserDurableWrites } from './browser-durable-writes.ts';
 import { createBrowserFileCommands } from './browser-file-commands.ts';
 import type { BrowserFileCommandInput } from './browser-file-commands.ts';
@@ -13,6 +15,7 @@ export interface BrowserFlushContext {
   assertActive(): void;
 }
 export interface BrowserClientContext extends BrowserFlushContext {
+  readonly binaryStreams?:BinaryStreams;
   fileCommand?(input:BrowserFileCommandInput):Promise<void>;
   recoverCommands?():Promise<boolean>;
   release(flushGate: (context: BrowserFlushContext) => void | Promise<void>): Promise<void>;
@@ -54,6 +57,8 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
     inventory: () => dispatch(() => runtime.inventory()),
     readEntry: path => dispatch(() => runtime.readEntry(path)),
     readEntryById: id => dispatch(() => runtime.readEntryById(id)),
+    ...(typeof runtime.readMetadata==='function'?{readMetadata:(path:string)=>dispatch(()=>runtime.readMetadata(path))}:{}),
+    ...(typeof runtime.readMetadataById==='function'?{readMetadataById:(id:string)=>dispatch(()=>runtime.readMetadataById(id))}:{}),
     execute: (id, json) => dispatch(() => runtime.execute(id, json)),
     prepare: (id, json) => dispatch(() => runtime.prepare(id, json)),
     ...(typeof runtime.prepareFamily==='function'?{prepareFamily:(id:string,json:string)=>dispatch(()=>runtime.prepareFamily(id,json))}:{}),
@@ -96,14 +101,30 @@ export function admitBrowserClient(runtime: BrowserCoreRuntime,
   }
   const durableWrites = wrap();
   const commands=backend.prepareFamily?createBrowserFileCommands({
-    checkpoints,readEntry:path=>backend.readEntry(path),prepareFamily:backend.prepareFamily,
+    checkpoints,readEntry:path=>backend.readEntry(path),...(backend.readMetadata?{readMetadata:(path:string)=>backend.readMetadata!(path)}:{}),prepareFamily:backend.prepareFamily,
     commit:id=>backend.commit!(id),intents:()=>backend.intents(),acknowledge:(id,outcome)=>backend.acknowledge(id,outcome),
   },()=>dispatch(()=>undefined)):undefined;
+  const raw=runtime.binaryStreams;
+  const binary=raw?createBrowserBinaryCommands({backend:{
+    limits:raw.limits,
+    begin:input=>dispatch(()=>raw.begin(input)),append:(ref,input)=>dispatch(()=>raw.append(ref,input)),
+    query:ref=>dispatch(()=>raw.query(ref)),seal:(ref,input)=>dispatch(()=>raw.seal(ref,input)),
+    commit:ref=>dispatch(()=>raw.commit(ref)),abort:ref=>dispatch(()=>raw.abort(ref)),
+    openRead:input=>dispatch(()=>raw.openRead(input)),read:(ref,input)=>dispatch(()=>raw.read(ref,input)),closeRead:ref=>dispatch(()=>raw.closeRead(ref)),
+  },scope,checkpoints,assertActive:()=>dispatch(()=>undefined)}):undefined;
+  const binaryStreams=binary?Object.freeze<BinaryStreams>({limits:binary.streams.limits,
+    begin:input=>invoke(()=>binary.streams.begin(input)),append:(ref,input)=>invoke(()=>binary.streams.append(ref,input)),
+    query:ref=>invoke(()=>binary.streams.query(ref)),seal:(ref,input)=>invoke(()=>binary.streams.seal(ref,input)),
+    commit:ref=>invoke(()=>binary.streams.commit(ref)),abort:ref=>invoke(()=>binary.streams.abort(ref)),
+    openRead:input=>invoke(()=>binary.streams.openRead(input)),read:(ref,input)=>invoke(()=>binary.streams.read(ref,input)),closeRead:ref=>invoke(()=>binary.streams.closeRead(ref)),
+  }):undefined;
   runtime.installAdmissionGuard(() => dispatch(() => undefined));
   admittedRuntimes.add(runtime);
   async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
   return Object.freeze({ scope, durableWrites, assertActive: () => allowed(),
-    ...(commands?{fileCommand:(input:BrowserFileCommandInput)=>invoke(()=>commands.execute(input)),recoverCommands:()=>invoke(()=>commands.recover())}:{}),
+    ...(commands?{fileCommand:(input:BrowserFileCommandInput)=>invoke(()=>commands.execute(input))}:{}),
+    ...(binaryStreams?{binaryStreams}:{}),
+    ...(commands||binary?{recoverCommands:()=>invoke(async()=>{const files=commands?await commands.recover():false;const stages=binary?await binary.recover():false;return files||stages;})}:{}),
     release(flushGate: (context: BrowserFlushContext) => void | Promise<void>): Promise<void> {
       if (phase === 'released') return Promise.resolve();
       if (closing) return closing;
