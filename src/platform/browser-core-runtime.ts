@@ -70,7 +70,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > 120000) throw new BrowserVaultError('invalid_timeout', 'Worker timeout must be 1–120000 milliseconds');
     this.worker = new Worker(new URL('./browser-core-worker.ts', import.meta.url), {type:'module'});
     this.worker.onmessage = ({data}) => {
-      if (data?.event === 'storage-error') { this.fail(new BrowserVaultError(data.code, 'Browser vault could not refresh committed state')); return; }
+      if (data?.event === 'storage-error') { this.fail(new BrowserVaultError(data.code, 'Browser vault could not refresh committed state', data.details)); return; }
       if (data?.event === 'change') {
         for (const listener of this.listeners) { try { listener(data.paths); } catch (error) { console.error('Browser vault listener failed', error); } }
         return;

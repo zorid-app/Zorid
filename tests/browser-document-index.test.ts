@@ -115,7 +115,7 @@ test('cache corruption requires explicit rebuild and rebuild expires pins withou
 });
 test('source content digest mismatch fails before Rust extraction',async()=>{
   const f=fixture();f.file('a','text');f.seed('content','a',{id:'a',bytes:new TextEncoder().encode('evil')});const index=f.open(),stage=await index.begin();
-  await assert.rejects(index.pump(stage.stageId),{code:'storage_corrupt'});assert.equal(f.stats().textExtractions,0);await index.close();
+  await assert.rejects(index.pump(stage.stageId),{code:'storage_corrupt',details:{invariant:'index_source_text_commitment',entryId:'a',lengthMatches:true,identityMatches:true,revisionMatches:true,digestArray:true}});assert.equal(f.stats().textExtractions,0);await index.close();
 });
 test('bounded pin limit and cross-client nonce ownership reject fabricated pins',async()=>{
   const f=fixture();f.file('a','text');const a=f.open(),b=f.open('client-b');await f.build(a);const pins=[];for(let i=0;i<4;i++)pins.push(await a.open());

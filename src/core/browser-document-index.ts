@@ -8,7 +8,7 @@ import type {StreamingPublication} from './browser-sync-streaming.ts';
 const PREFIX='document-index:v1/', CATALOG=PREFIX+'catalog';
 const LIMITS=Object.freeze({header:16*1024*1024,row:16*1024*1024,text:16*1024*1024,records:100000,
   metadata:64*1024*1024,baseRecords:50000,baseFacts:8*1024*1024,projection:256*1024*1024,cache:512*1024*1024,pins:4,stages:4,generations:3});
-const fail=(code:string)=>new BrowserVaultError(code,'Disposable document index is unavailable; source files remain authoritative');
+const fail=(code:string,details?:unknown)=>new BrowserVaultError(code,'Disposable document index is unavailable; source files remain authoritative',details);
 const size=(text:string)=>new TextEncoder().encode(text).byteLength;
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 interface Free {free():void}
@@ -99,9 +99,9 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       if(publication.entries.length>LIMITS.records)throw fail('index_generation_limit');
       const descriptors:{id:string;content:any}[]=[],entries=new Map(publication.entries.map(e=>[e.id,e])),presentation=new Map(publication.presentation.map(p=>[p.id,p]));let bytes=0,scanned=0;
       const request=tx.objectStore('sync_materialization_refs').openCursor();
-      on(request,function next(cursor){if(!cursor){if(descriptors.length!==entries.size)throw fail('storage_corrupt');done({publication,descriptors});return;}
+      on(request,function next(cursor){if(!cursor){if(descriptors.length!==entries.size)throw fail('storage_corrupt',{invariant:'index_capture_inventory'});done({publication,descriptors});return;}
         if(++scanned>LIMITS.records)throw fail('index_generation_limit');const row=cursor.value,entry=entries.get(row?.id);if(entry){
-          if(row.status!=='normal'||!equal(row.entry,entry)||!equal(row.presentation,presentation.get(entry.id))||entry.kind==='file'&&!['text','binary'].includes(row.content?.kind)||entry.kind==='folder'&&row.content!==null)throw fail('storage_corrupt');
+          if(row.status!=='normal'||!equal(row.entry,entry)||!equal(row.presentation,presentation.get(entry.id))||entry.kind==='file'&&!['text','binary'].includes(row.content?.kind)||entry.kind==='folder'&&row.content!==null)throw fail('storage_corrupt',{invariant:'index_capture_descriptor',entryId:entry.id,normal:row.status==='normal',sameEntry:equal(row.entry,entry),samePresentation:equal(row.presentation,presentation.get(entry.id)),textMode:row.content?.kind==='text',binaryMode:row.content?.kind==='binary'});
           const descriptor={id:entry.id,content:row.content};bytes+=size(JSON.stringify(descriptor));if(bytes>LIMITS.header)throw fail('index_generation_limit');descriptors.push(descriptor);
         }cursor.continue();
       },abort);
@@ -222,14 +222,14 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
         const source=await run<{entry:EntryState;presentation:BrowserVaultPresentation;bytes?:Uint8Array}>('readonly',['control','metadata','presentation','content','sync_materialization_refs'],(tx,done,abort)=>{
           readCatalog(tx,c=>sourceFence(tx,stage.header,c,stage.capture,()=>{
             on(tx.objectStore('metadata').get(entry.id),row=>{if(!equal(row,entry))throw fail('index_source_changed');on(tx.objectStore('presentation').get(entry.id),presentation=>{
-              if(!presentation||presentation.id!==entry.id||![presentation.ctime_ms,presentation.mtime_ms,presentation.size_bytes].every(n=>Number.isSafeInteger(n)&&n>=0))throw fail('storage_corrupt');
-              on(tx.objectStore('content').get(entry.id),content=>{if(content!==undefined&&(!(content.bytes instanceof Uint8Array)||content.bytes.length!==presentation.size_bytes))throw fail('storage_corrupt');const mode=stage.capture.descriptors.find(d=>d.id===entry.id)?.content?.kind;if(mode==='text'&&!content||mode==='binary'&&content)throw fail('storage_corrupt');done({entry,presentation,...(mode==='text'?{bytes:content.bytes}:{})});},abort);
+              if(!presentation||presentation.id!==entry.id||![presentation.ctime_ms,presentation.mtime_ms,presentation.size_bytes].every(n=>Number.isSafeInteger(n)&&n>=0))throw fail('storage_corrupt',{invariant:'index_source_presentation',entryId:entry.id});
+              on(tx.objectStore('content').get(entry.id),content=>{if(content!==undefined&&(!(content.bytes instanceof Uint8Array)||content.bytes.length!==presentation.size_bytes))throw fail('storage_corrupt',{invariant:'index_source_inline',entryId:entry.id});const mode=stage.capture.descriptors.find(d=>d.id===entry.id)?.content?.kind;if(mode==='text'&&!content||mode==='binary'&&content)throw fail('storage_corrupt',{invariant:'index_source_mode',entryId:entry.id,textMode:mode==='text',binaryMode:mode==='binary',hasInline:!!content});done({entry,presentation,...(mode==='text'?{bytes:content.bytes}:{})});},abort);
             },abort);},abort);
           },abort),abort);
         });
         const bytes=source.bytes,sourceDescriptor=stage.capture.descriptors.find(d=>d.id===entry.id)?.content;
         if(bytes){const metadata=sourceDescriptor?.metadata;
-          if(metadata?.byte_length!==String(bytes.length)||metadata.witness?.identity?.entry_id!==entry.id||metadata.witness?.revision!==entry.revision||!Array.isArray(metadata.digest)||metadata.digest.length!==32||!metadata.digest.every((n:unknown)=>typeof n==='number'&&Number.isInteger(n)&&n>=0&&n<=255)||hex(new Uint8Array(metadata.digest))!==await byteDigest(bytes))throw fail('storage_corrupt');
+          if(metadata?.byte_length!==String(bytes.length)||metadata.witness?.identity?.entry_id!==entry.id||metadata.witness?.revision!==entry.revision||!Array.isArray(metadata.digest)||metadata.digest.length!==32||!metadata.digest.every((n:unknown)=>typeof n==='number'&&Number.isInteger(n)&&n>=0&&n<=255)||hex(new Uint8Array(metadata.digest))!==await byteDigest(bytes))throw fail('storage_corrupt',{invariant:'index_source_text_commitment',entryId:entry.id,lengthMatches:metadata?.byte_length===String(bytes.length),identityMatches:metadata?.witness?.identity?.entry_id===entry.id,revisionMatches:metadata?.witness?.revision===entry.revision,digestArray:Array.isArray(metadata?.digest)});
         }
         if(sourceBytes>0&&bytes&&sourceBytes+bytes.length>1024*1024)break;
         let reused=false;try{

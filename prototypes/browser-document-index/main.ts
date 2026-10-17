@@ -43,6 +43,15 @@ async function search(index:Index,pin:BrowserIndexPin,query:string,limit=1){
 async function fingerprint(session:Session){const entries=await session.runtime.inventory();const rows=[];for(const value of entries){let digest:string|null=null;if(value.entry.kind==='file'){
   const bytes=await sourceBytes(session,value.entry.path);digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes as Uint8Array<ArrayBuffer>))).map(n=>n.toString(16).padStart(2,'0')).join('');}
   rows.push({entry:value.entry,presentation:value.presentation,digest});}return rows;}
+async function retryRetained(){
+  await releaseAll();const {database,client}=parameters();assert(database?.startsWith('zorid-core-vault:document-index-')&&client,'Retain the failed suite URL first');
+  stage('open retained normal worker');const session=await open(database,client);
+  try{const before=await fingerprint(session);stage('retained generation begin');let progress=await session.index.begin();
+    do{stage('retained generation pump');progress=await session.index.pump(progress.stageId);}while(!progress.ready);
+    stage('retained generation publication');const snapshot=await session.index.publish(progress.stageId);assert(same(before,await fingerprint(session)),'Retained retry changed source');
+    return {status:'passed',fixtureSource:__DOCUMENT_INDEX_SOURCE__,database,snapshot,current:await session.index.status(),rawBytesPreserved:true,scope:'retained source publication diagnostic; full suite still required'};
+  }finally{await release(session);}
+}
 async function persisted(){
   const {database,client}=parameters();assert(database?.startsWith('zorid-core-vault:document-index-')&&client,'Run the fresh suite first');
   const session=await open(database,client);try{const status=await session.index.status();assert(status.snapshot&&status.current&&!status.rebuildRequired,'Persisted generation is not current');
@@ -86,6 +95,6 @@ function action(id:string,task:()=>Promise<unknown>){document.getElementById(id)
   try{show(await task());}catch(error){show({status:'failed',phase,fixtureSource:__DOCUMENT_INDEX_SOURCE__,code:(error as {code?:string}).code??'assertion',message:String((error as Error).message),details:(error as {details?:unknown}).details});try{await releaseAll();}catch{/* Preserve first failure evidence. */}}
   finally{active=false;document.querySelectorAll('button').forEach(button=>button.disabled=false);}
 });}
-action('run',run);action('persisted',persisted);action('release',async()=>{await releaseAll();return {status:'released'};});
+action('run',run);action('retry-retained',retryRetained);action('persisted',persisted);action('release',async()=>{await releaseAll();return {status:'released'};});
 window.addEventListener('pagehide',()=>{for(const session of sessions)session.runtime.close();sessions.clear();},{once:true});
 identity.textContent=parameters().database??'Fresh disposable vault is selected when the suite starts.';

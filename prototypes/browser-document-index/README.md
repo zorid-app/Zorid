@@ -40,3 +40,10 @@ proof. Competing clients here are independent production workers in one page.
 Raw source fingerprints are deliberately per-entry observations under serialized
 fixture commands; they are not a new cross-file source snapshot API. Each suite
 run uses a fresh database; no real vault, legacy migration or source reset occurs.
+
+For a preserved failed database, reload the same origin and exact database/client
+URL, then click **Retry retained index**. It reuses every committed source without
+resetting or recreating files, retries bounded generation publication, and checks
+raw source fingerprints. The visible failure report includes only bounded index
+invariant names, stable entry IDs and boolean checks; this diagnostic retry does
+not replace the full acceptance suite.
