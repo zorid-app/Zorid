@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import { openNativeMobileVault, type NativeVaultPlugin } from '../src/platform/mobile-native.ts';
+import { openNativeMobileVault, type NativeVaultPlugin, type MobileLifecycleReason } from '../src/platform/mobile-native.ts';
 
 const clientId = '11111111-1111-4111-8111-111111111111';
 const token = '22222222-2222-4222-8222-222222222222';
@@ -13,8 +13,14 @@ function fixture() {
   let failCommand = false, failCheckpoint = false, failCommit = false, wrongId = false;
   const state = () => ({ id:'entry', path, kind:'file', revision, deleted:false });
   const presentation = () => ({id:'entry',ctime_ms:1,mtime_ms:2,size_bytes:encoder.encode(content).length});
-  const plugin: NativeVaultPlugin = {
-    context: async () => ({ name:'Native fixture',clientId }), close: async () => { closes++; },
+  const acks: {id:string;ok:boolean}[] = [], lifecycleOrder: string[] = [], expired = new Set<string>();
+  let lifecycleListener: ((event:{id:string;reason:MobileLifecycleReason})=>void) | undefined, removals = 0;
+  let contextEvent: MobileLifecycleReason | undefined, wrongAuthority = false;
+  let ackHook: ((input:{id:string;ok:boolean})=>Promise<void>) | undefined;
+  const plugin: NativeVaultPlugin & {close():Promise<void>} = {
+    async addListener(event,handler) { assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleListener=handler; return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleListener=undefined;}}; },
+    async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
+    context: async () => { lifecycleOrder.push('context'); if(contextEvent)lifecycleListener!({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId}; }, close: async () => { closes++; },
     async request(input) {
       active++; maxActive = Math.max(maxActive,active);
       await new Promise(resolve => setImmediate(resolve));
@@ -24,7 +30,7 @@ function fixture() {
       try {
         switch (c.method) {
           case 'claim_client': result = {lease:{local_store_id:'store',client_id:clientId,token}}; break;
-          case 'identity': result = {identity:{local_store_id:'store'}}; break;
+          case 'identity': result = {identity:{local_store_id:wrongAuthority?'wrong':'store'}}; break;
           case 'release_client': result = {released:true,reference:c.reference}; break;
           case 'list_snapshot': result = {entries:exists?[{state:state(),presentation:presentation()}]:[]}; break;
           case 'read_path': case 'read_presented': result = {entry:exists?state():null,presentation:presentation(),has_content:exists}; output = exists?body(content):''; break;
@@ -69,7 +75,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, acks, lifecycleOrder, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id=crypto.randomUUID()){lifecycleListener!({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(){wrongAuthority=true;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -87,7 +93,7 @@ test('durable text planning validates expected identity/content and prepare rema
   await assert.rejects(writes.acknowledge(result.ref,{status:'committed',operationId:'operation',sequence:'999'}),{code:'intent_outcome_mismatch'});
   await writes.acknowledge(result.ref,{status:'committed',operationId:'operation',sequence:'1'});
   assert.equal((await writes.listUnacknowledged()).length,0);
-  await vault.release!(); assert.equal(f.closes,1);
+  await vault.release!(); assert.equal(f.closes,0);
 });
 
 test('checkpoint lost ACK is recovered with stable scope/body across reopen',async()=>{
@@ -170,8 +176,136 @@ test('absent native plugin fails closed without any Filesystem fallback',async()
 test('release drains an admitted namespace consumer and retires the lease once',async()=>{
   const f=fixture(), v=await openNativeMobileVault(f.plugin);
   const saving=v.adapter.write('Note.md','drained'), releasing=v.release!();
-  await Promise.all([saving,releasing]); assert.equal(f.content,'drained'); assert.equal(f.closes,1);
+  await Promise.all([saving,releasing]); assert.equal(f.content,'drained'); assert.equal(f.closes,0);
   const methods=f.requests.map(r=>r.command.method); assert.ok(methods.indexOf('file_command')<methods.indexOf('release_client'));
   await assert.rejects(v.adapter.read('Note.md'),{code:'storage_closed'});
-  await v.release!(); assert.equal(f.closes,1);
+  await v.release!(); assert.equal(f.closes,0);
+});
+
+function deferred() { let resolve!:()=>void; const promise=new Promise<void>(r=>{resolve=r;}); return {promise,resolve}; }
+async function until(predicate:()=>boolean) { for(let i=0;i<100;i++){if(predicate())return;await new Promise<void>(r=>setImmediate(r));} assert.fail('Lifecycle did not settle'); }
+
+test('listener precedes context and startup requests without a workspace are rejected',async()=>{
+  const f=fixture(); f.duringContext('switchVault'); const v=await openNativeMobileVault(f.plugin);
+  assert.deepEqual(f.lifecycleOrder.slice(0,2),['listen','context']);
+  await until(()=>f.acks.length===1); assert.equal(f.acks[0].ok,false);
+  assert.equal(await v.adapter.read('Note.md'),'before'); await v.release!();
+  assert.equal(f.closes,0); assert.equal(f.removals,1);
+});
+
+test('background flush and session checkpoint precede ACK and leave storage active',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),done=deferred();
+  const stop=v.mobileLifecycle.subscribe(async(reason,ack)=>{
+    assert.equal(reason,'background');
+    await v.adapter.write('Note.md','flushed');
+    await v.adapter.durableWrites!.checkpoints.compareAndSwap({key:'session',expectedRevision:null,nextRevision:crypto.randomUUID(),encodedState:'saved-session'});
+    assert.equal(f.acks.length,0); await ack(); await ack(); done.resolve();
+  });
+  f.emit('background'); await done.promise; await until(()=>f.acks.length===1);
+  assert.equal(f.acks[0].ok,true); assert.equal(f.closes,0); assert.equal(f.removals,0);
+  assert.equal(await v.adapter.read('Note.md'),'flushed');
+  assert.equal((await v.adapter.durableWrites!.checkpoints.load('session'))!.encodedState,'saved-session');
+  stop(); await v.release!(); assert.equal(f.requests.filter(r=>r.command.method==='release_client').length,1); assert.equal(f.removals,1);
+});
+
+test('switch ACK must succeed before retirement; release waits for callback settlement',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),ackGate=deferred(),callbackGate=deferred(),entered=deferred();
+  f.onAck(async input=>{if(input.ok)await ackGate.promise;});
+  v.mobileLifecycle.subscribe(async(reason,ack)=>{assert.equal(reason,'switchVault'); await ack(); entered.resolve(); await callbackGate.promise;});
+  f.emit('switchVault'); await until(()=>f.acks.length===1);
+  assert.equal(await v.adapter.read('Note.md'),'before'); // Native ACK has not resolved yet.
+  const release=v.release!(); await new Promise<void>(r=>setImmediate(r));
+  assert.equal(f.removals,0); assert.equal(f.requests.filter(r=>r.command.method==='release_client').length,0);
+  ackGate.resolve(); await entered.promise;
+  await assert.rejects(v.adapter.read('Note.md'),{code:'storage_closed'}); assert.equal(f.removals,0);
+  callbackGate.resolve(); await release;
+  assert.equal(f.removals,1); assert.equal(f.closes,0);
+  assert.equal(f.requests.filter(r=>r.command.method==='release_client').length,0); // Successful switch transfers cleanup to native.
+});
+
+test('native deadline expiry rejects late ACK and workspace can resume editing',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),flush=deferred(),done=deferred(); let restored=false;
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{
+    await flush.promise;
+    try { await ack(); assert.fail('expired request approved'); }
+    catch(error){assert.equal((error as any).code,'stale_lifecycle');restored=true;}
+    done.resolve();
+  });
+  const id=f.emit('switchVault');
+  await new Promise<void>(resolve=>setTimeout(()=>{f.expire(id);resolve();},5));
+  assert.equal(f.acks.length,0); flush.resolve(); await done.promise;
+  await until(()=>f.acks.length===2); assert.deepEqual(f.acks.map(a=>a.ok),[true,false]);
+  assert.equal(restored,true); assert.equal(f.removals,0); assert.equal(f.closes,0);
+  await v.adapter.write('Note.md','editing resumed'); assert.equal(f.content,'editing resumed'); await v.release!();
+});
+
+for(const mode of ['no handler','failure','missing ACK'] as const) test(`lifecycle ${mode} sends negative ACK only`,async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);
+  if(mode!=='no handler')v.mobileLifecycle.subscribe(async()=>{if(mode==='failure')throw new Error('flush failed');});
+  f.emit('switchVault'); await until(()=>f.acks.length===1); assert.equal(f.acks[0].ok,false);
+  assert.equal(await v.adapter.read('Note.md'),'before'); await v.release!(); assert.equal(f.closes,0);
+});
+
+test('concurrent lifecycle requests cannot run a second workspace callback',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred();let calls=0;
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{calls++;await gate.promise;await ack();});
+  const first=f.emit('background'); await until(()=>calls===1);
+  f.emit('background',first); const second=f.emit('switchVault');
+  await until(()=>f.acks.length===1); assert.deepEqual(f.acks[0],{id:second,ok:false}); assert.equal(calls,1);
+  gate.resolve(); await until(()=>f.acks.length===2); assert.deepEqual(f.acks[1],{id:first,ok:true});
+  await v.release!(); assert.equal(f.closes,0);
+});
+
+test('ACK retained beyond handler completion cannot authorize a later switch',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);let lateAck!:()=>Promise<void>;
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{lateAck=ack;});
+  f.emit('switchVault');await until(()=>f.acks.length===1);
+  await assert.rejects(lateAck(),{code:'stale_lifecycle'}); assert.equal(f.acks.length,1); assert.equal(f.acks[0].ok,false);
+  await v.release!();
+});
+
+test('startup identity failure releases the valid claimed lease without closing native host',async()=>{
+  const f=fixture();f.badAuthority();
+  await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_authority'});
+  assert.deepEqual(f.requests.map(r=>r.command.method),['claim_client','identity','release_client']);
+  assert.equal(f.removals,1);assert.equal(f.closes,0);
+});
+
+test('context failure removes preinstalled listener without attempting host close',async()=>{
+  const f=fixture();f.plugin.context=async()=>{throw new Error('context failed');};
+  await assert.rejects(openNativeMobileVault(f.plugin),/context failed/);
+  assert.equal(f.requests.length,0);assert.equal(f.removals,1);assert.equal(f.closes,0);
+});
+
+test('throwing callback cannot detach listener while its ACK is still in flight',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred();
+  f.onAck(async input=>{if(input.ok)await gate.promise;});
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{void ack();throw new Error('callback failed after authorizing');});
+  f.emit('switchVault');await until(()=>f.acks.length===1);
+  const release=v.release!();await new Promise<void>(r=>setImmediate(r));assert.equal(f.removals,0);
+  gate.resolve();await release;
+  assert.deepEqual(f.acks.map(a=>a.ok),[true]);assert.equal(f.removals,1);assert.equal(f.closes,0);
+  assert.equal(f.requests.filter(r=>r.command.method==='release_client').length,0);
+});
+
+test('background ACK transport rejection preserves adapter for workspace recovery',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),done=deferred();
+  f.onAck(async input=>{if(input.ok)throw new Error('ACK transport unavailable');});
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await assert.rejects(ack(),/transport unavailable/);done.resolve();});
+  f.emit('background');await done.promise;await until(()=>f.acks.length===2);
+  assert.deepEqual(f.acks.map(a=>a.ok),[true,false]);assert.equal(f.removals,0);
+  assert.equal(await v.adapter.read('Note.md'),'before');await v.release!();assert.equal(f.closes,0);
+});
+
+test('successful switch ACK stops polling and rejects further adapter work',async t=>{
+  let poll!:()=>void,stops=0;
+  t.mock.method(globalThis,'setInterval',(callback:()=>void)=>{poll=callback;return 42 as any;});
+  t.mock.method(globalThis,'clearInterval',()=>{stops++;});
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),done=deferred();
+  v.adapter.subscribe!(()=>{});poll();await until(()=>f.requests.some(r=>r.command.method==='list_snapshot'));
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});
+  f.emit('switchVault');await done.promise;await until(()=>f.removals===1);
+  const before=f.requests.length;poll();await new Promise<void>(r=>setImmediate(r));
+  assert.equal(stops,1);assert.equal(f.requests.length,before);
+  await assert.rejects(v.adapter.list(),{code:'storage_closed'});await v.release!();assert.equal(f.closes,0);
 });

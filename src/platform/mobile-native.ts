@@ -8,8 +8,15 @@ import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints
 export interface NativeVaultPlugin {
   context(): Promise<{ name: string; clientId: string }>;
   request(input: { header: string; body: string }): Promise<{ header: string; body: string }>;
-  close(): Promise<void>;
+  addListener(event: 'lifecycleRequest', handler: (event: { id: string; reason: MobileLifecycleReason }) => void): Promise<{ remove(): Promise<void> }>;
+  lifecycleAck(input: { id: string; ok: boolean }): Promise<void>;
 }
+export type MobileLifecycleReason = 'background' | 'switchVault';
+export interface MobileLifecycle {
+  subscribe(handler: (reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>): () => void;
+}
+// Keep this owned surface until the coordinator lands the PlatformVault declaration.
+type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle };
 const FILE_LIMIT = 16 * 1024 * 1024, PLAN_LIMIT = 8 * 1024 * 1024, CHECKPOINT_LIMIT = 32 * 1024 * 1024;
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 // Wire objects are validated at their consumer boundary; never cast them to editor state directly.
@@ -41,20 +48,79 @@ const terminal = new Set(['invalid_request','not_found','invalid_path','invalid_
 /** Native Rust authority only. Whole-file binary I/O is bounded to 16 MiB;
  * binaryStreams/media resource URLs are deliberately unavailable until admitted.
  * Optional bridge injection supports focused tests without a native shell. */
-export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise<PlatformVault> {
+export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise<NativeMobilePlatformVault> {
   if (!plugin) {
     const { Capacitor, registerPlugin } = await import('@capacitor/core');
     if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('NativeVault')) throw fail('native_plugin_unavailable');
     plugin = registerPlugin<NativeVaultPlugin>('NativeVault');
   }
   const bridge = plugin;
-  const context = await bridge.context();
-  if (typeof context.clientId !== 'string' || !uuid(context.clientId.toLowerCase()) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
-  const clientId = context.clientId;
+  let clientId = '';
+  let releasePromise: Promise<void> | undefined, leaseReleased = false;
+  let lifecycleHandler: ((reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>) | undefined;
+  let lifecycleTask: Promise<void> | undefined, lifecycleBusyId: string | undefined;
+  let lifecycleStopped = false;
   let tail: Promise<unknown> = Promise.resolve(), serialTail: Promise<unknown> = Promise.resolve();
   let requestId = 0n, closed = false, closing = false, lease: Wire | undefined;
   const listeners = new Set<(paths?: readonly string[]) => void>();
   let timer: ReturnType<typeof setInterval> | undefined;
+  function stopPolling() { if (timer) { clearInterval(timer); timer = undefined; } listeners.clear(); }
+  const rejectLifecycle = async (id: string) => { try { await bridge.lifecycleAck({ id, ok: false }); } catch { /* Native may already have expired this request. */ } };
+  function onLifecycle(event: { id: string; reason: MobileLifecycleReason }) {
+    if (typeof event?.id !== 'string' || !uuid(event.id.toLowerCase())) return;
+    if (lifecycleBusyId === event.id) return; // Duplicate delivery shares the original outcome.
+    if (lifecycleTask || lifecycleStopped || closed || closing || releasePromise || !['background','switchVault'].includes(event.reason)) { void rejectLifecycle(event.id); return; }
+    lifecycleBusyId = event.id;
+    const handler = lifecycleHandler;
+    const task = Promise.resolve().then(async () => {
+      let approved = false, finished = false, ackPromise: Promise<void> | undefined;
+      const ack = (): Promise<void> => {
+        if (finished) return Promise.reject(fail('stale_lifecycle'));
+        if (ackPromise) return ackPromise;
+        ackPromise = (async () => {
+          // Native owns the deadline and rejects stale_lifecycle without switching.
+          await bridge.lifecycleAck({ id: event.id, ok: true });
+          approved = true;
+          if (event.reason === 'switchVault') { stopPolling(); closed = true; leaseReleased = true; }
+        })();
+        void ackPromise.catch(() => {}); // An unawaited ACK must not create an unhandled rejection.
+        return ackPromise;
+      };
+      try {
+        if (handler) await handler(event.reason,ack);
+      } catch { /* The workspace receives ACK rejection and restores editing. */ }
+      finally {
+        finished = true;
+        // Even a throwing handler may already have sent an ACK. Settle it before
+        // releasing the listener or sending a contradictory negative response.
+        if (ackPromise) { try { await ackPromise; } catch { /* Native rejected authorization. */ } }
+        if (!approved) await rejectLifecycle(event.id);
+      }
+    });
+    lifecycleTask = task;
+    void task.finally(() => {
+      if (lifecycleTask === task) { lifecycleTask = undefined; lifecycleBusyId = undefined; }
+      if (closed) void stopLifecycle().catch(() => {});
+    });
+  }
+  // Subscribe before context: startup-time requests must receive a negative ACK.
+  const lifecycleListener = await bridge.addListener('lifecycleRequest',onLifecycle);
+  let removePromise: Promise<void> | undefined;
+  function stopLifecycle(): Promise<void> {
+    lifecycleStopped = true; lifecycleHandler = undefined;
+    if (!removePromise) removePromise = lifecycleListener.remove().catch(error => { removePromise = undefined; throw error; });
+    return removePromise;
+  }
+  const mobileLifecycle: MobileLifecycle = {
+    subscribe(handler) {
+      active();
+      if (releasePromise || lifecycleStopped) throw fail('storage_closed');
+      if (lifecycleHandler) throw fail('lifecycle_handler_registered');
+      lifecycleHandler = handler;
+      return () => { if (lifecycleHandler === handler) lifecycleHandler = undefined; };
+    },
+  };
+  let context: { name: string; clientId: string };
   function notify() { for (const listener of listeners) { try { listener(); } catch { /* Consumer errors do not change durable storage outcomes. */ } } }
   function active() { if (closed || closing) throw fail('storage_closed'); }
   function serial<T>(action: () => Promise<T>): Promise<T> { active(); if (releasePromise) throw fail('storage_closed'); const task = serialTail.then(action); serialTail = task.catch(() => {}); return task; }
@@ -85,12 +151,20 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   }
   const call = async (method: string, fields: Wire = {}, bytes?: Uint8Array) => (await request({ method, ...fields }, bytes)).result;
   try {
+    context = await bridge.context();
+    if (typeof context.clientId !== 'string' || !uuid(context.clientId.toLowerCase()) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
+    clientId = context.clientId;
     const claimed = (await call('claim_client', { client_id: clientId })).lease;
     if (!claimed || !id(claimed.local_store_id) || claimed.client_id !== clientId || !uuid(claimed.token)) throw fail('invalid_client_lease');
     lease = Object.freeze({ local_store_id: claimed.local_store_id, client_id: clientId, token: claimed.token });
     const authority = (await call('identity')).identity;
     if (authority?.local_store_id !== lease.local_store_id) throw fail('invalid_authority');
-  } catch (error) { closed = true; await bridge.close().catch(() => {}); throw error; }
+  } catch (error) {
+    closing = true;
+    if (lease) await request({ method: 'release_client', reference: lease },undefined,true).catch(() => {});
+    await lifecycleTask; await stopLifecycle().catch(() => {}); closed = true;
+    throw error;
+  }
   const scope = Object.freeze({ vaultId: lease!.local_store_id as string, clientId });
   function checkScope(value: Wire) { if (value?.vaultId !== scope.vaultId || value.clientId !== clientId) throw fail('checkpoint_scope_mismatch'); }
   function key(value: string) { textBytes(value, 1024); if (!value || value.includes('\0')) throw fail('checkpoint_invalid'); return value; }
@@ -348,8 +422,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { listeners.delete(listener); if (!listeners.size && timer) { clearInterval(timer); timer = undefined; } };
     },
   };
-  let releasePromise: Promise<void> | undefined, leaseReleased = false;
-  return { adapter, label: context.name, id: `mobile-core:${scope.vaultId}:${clientId}`,
+  return { adapter, mobileLifecycle, label: context.name, id: `mobile-core:${scope.vaultId}:${clientId}`,
     recoverCommands: () => serial(async () => {
       let cursor: string | undefined;
       for (let count = 0; count < 100; count++) {
@@ -366,16 +439,17 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     }),
     release() {
       if (releasePromise) return releasePromise;
-      if (timer) clearInterval(timer); listeners.clear();
+      stopPolling();
       releasePromise = (async () => {
         // Flush admitted consumers before retiring the native client lease.
+        await lifecycleTask;
         await serialTail; await tail; closing = true;
         if (!leaseReleased) {
           const result = (await request({ method:'release_client', reference:lease },undefined,true)).result;
           if (result.released !== true || !result.reference || ['local_store_id','client_id','token'].some(k => result.reference[k] !== lease![k])) throw fail('invalid_release',true);
           leaseReleased = true;
         }
-        await bridge.close(); closed = true;
+        await stopLifecycle(); closed = true;
       })().catch(error => { releasePromise = undefined; throw error; });
       return releasePromise;
     },
