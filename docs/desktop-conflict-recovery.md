@@ -46,3 +46,24 @@ malformed checkpoints still fail closed. Unclassified live `planWrite` failures
 can show the existing Save-failed state until reload establishes a revision
 conflict; this change does not redesign provider error classification. Global
 close remains strict until the retained conflict is resolved or separately saved.
+
+## Incomplete startup import status follow-up
+
+`recovery_ui_sol` separately owns the standalone `src/ui/import-status.ts` module,
+its stylesheet and four narrow module checks. `desktop_default_sol` owns typed
+`DesktopReconciliation`/platform retry and reporting; `default_lifecycle_review_sol`
+owns workspace mounting, subscriptions and cleanup. This module commit alone
+changes no workspace or desktop bridge behavior.
+
+The nonmodal status remains visible for incomplete imports even when some notes
+are usable. With no visible files it explicitly warns that notes may exist but
+not yet be shown. Details list bounded sanitized issue paths/reasons and import
+counts. Retry coalesces clicks, keeps existing notes usable and retains the warning
+if checking fails. A complete result clears the warning; null status shows pending
+checking. Fatal admission/schema errors remain on the startup error path.
+
+`node --test --test-concurrency=1 tests/import-status.test.ts`: four checks pass.
+Strict source typecheck against the desktop owner's actual exported bridge
+contract passes via a TypeScript module-resolution override; this branch predates
+that export, so whole-project typecheck belongs to combined integration.
+`git diff --check` passes. No build or native UI verification was performed.

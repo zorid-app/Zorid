@@ -1,0 +1,14 @@
+.import-status { flex:0 0 auto; max-height:35%; overflow:auto; padding:10px 16px; border-bottom:1px solid var(--background-modifier-border); background:var(--background-secondary); }
+.import-status[hidden] { display:none; }
+.import-status-row { display:flex; align-items:center; gap:12px; }
+.import-status-copy { flex:1; min-width:0; }
+.import-status-heading { font-size:13px; }
+.import-status-message { margin:3px 0 0; color:var(--text-muted); font-size:12px; line-height:1.5; }
+.import-status-retry { flex-shrink:0; padding:6px 12px; border-radius:6px; }
+.import-status-details { margin-top:6px; color:var(--text-muted); font-size:12px; }
+.import-status-details summary { cursor:pointer; width:fit-content; }
+.import-status-detail-body p { margin:7px 0; }
+.import-status-issues { margin:7px 0; padding-left:20px; }
+.import-status-issues li { margin:5px 0; overflow-wrap:anywhere; }
+.import-status-path { color:var(--text-normal); user-select:text; }
+.import-status-retry-error { user-select:text; overflow-wrap:anywhere; }
