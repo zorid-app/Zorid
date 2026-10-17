@@ -7,7 +7,7 @@ import type {StreamingPublication} from './browser-sync-streaming.ts';
  * consult these keys. No source envelopes, receipts or sync exports contain them. */
 const PREFIX='document-index:v1/', CATALOG=PREFIX+'catalog';
 const LIMITS=Object.freeze({header:16*1024*1024,row:16*1024*1024,text:16*1024*1024,records:100000,
-  metadata:64*1024*1024,projection:256*1024*1024,cache:512*1024*1024,pins:4,stages:4,generations:3});
+  metadata:64*1024*1024,baseRecords:50000,baseFacts:8*1024*1024,projection:256*1024*1024,cache:512*1024*1024,pins:4,stages:4,generations:3});
 const fail=(code:string)=>new BrowserVaultError(code,'Disposable document index is unavailable; source files remain authoritative');
 const size=(text:string)=>new TextEncoder().encode(text).byteLength;
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
@@ -49,6 +49,17 @@ const hex=(bytes:Uint8Array)=>Array.from(bytes).map(n=>n.toString(16).padStart(2
 const byteDigest=async(bytes:Uint8Array):Promise<string>=>hex(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes as Uint8Array<ArrayBuffer>)));
 const digest=(value:string):Promise<string>=>byteDigest(new TextEncoder().encode(value));
 function pageLimit(value:unknown):number{if(value===undefined)return 100;if(typeof value!=='number'||!Number.isInteger(value)||value<1||value>1000)throw fail('index_invalid_budget');return value;}
+function baseOptions(input:unknown):string {
+  if(input===undefined)input={};if(!input||typeof input!=='object'||Array.isArray(input))throw fail('index_invalid_request');
+  const value=input as Record<string,unknown>,allowed=new Set(['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows']);
+  if(Object.keys(value).some(key=>!allowed.has(key)))throw fail('index_invalid_request');
+  const result:Record<string,unknown>={};
+  for(const key of ['viewIndex','maxRows','clockMs'])if(value[key]!==undefined){const n=value[key];if(typeof n!=='number'||!Number.isSafeInteger(n)||(key!=='clockMs'&&n<0))throw fail('index_invalid_request');result[key]=n;}
+  result.clockMs=value.clockMs===undefined?Date.now():value.clockMs;
+  if(value.timezone!==undefined)result.timezone=inputText(value.timezone,256);
+  for(const key of ['searchTerms','ignorePaths'])if(value[key]!==undefined){const array=value[key];if(!Array.isArray(array)||array.length>1000)throw fail('index_input_limit');result[key]=array.map(item=>inputText(item,4096));}
+  const raw=JSON.stringify(result);if(size(raw)>65536)throw fail('index_input_limit');return raw;
+}
 function inputText(value:unknown,maxBytes:number):string{if(typeof value!=='string'||value.length>maxBytes||size(value)>maxBytes)throw fail('index_invalid_request');for(let i=0;i<value.length;i++){const code=value.charCodeAt(i);if(code>=0xd800&&code<=0xdbff){const next=value.charCodeAt(++i);if(!(next>=0xdc00&&next<=0xdfff))throw fail('index_invalid_request');}else if(code>=0xdc00&&code<=0xdfff)throw fail('index_invalid_request');}return value;}
 const validId=(id:unknown):id is string=>typeof id==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(id);
 function json<T>(raw:string,max=LIMITS.header):T {if(typeof raw!=='string'||size(raw)>max)throw fail('index_rebuild_required');try{return JSON.parse(raw) as T;}catch{throw fail('index_rebuild_required');}}
@@ -248,10 +259,12 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
     async resolve(input){const g=await assertPin(input.pinId),result=json<unknown>(rust(()=>g.resolveJson(inputText(input.sourceId,128),inputText(input.destination,4096))));await assertPin(input.pinId);return result;},
     async backlinks(input){const g=await assertPin(input.pinId),result=pinPage(input.pinId,rust(()=>g.backlinksJson(inputText(input.targetId,128),tokenForPin(input.pinId,input.cursor),pageLimit(input.limit))));await assertPin(input.pinId);return result;},
     async metadata(input){const g=await assertPin(input.pinId),result=json<unknown>(rust(()=>g.metadataJson(inputText(input.id,128))));await assertPin(input.pinId);return result;},
-    async base(input){const g=await assertPin(input.pinId),pin=pins.get(input.pinId)!,id=inputText(input.id,128),entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
-      const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_source_unavailable');
-      const facts=pin.header.entries.filter(e=>e.kind==='file').map(e=>{const presentation=pin.capture.publication.presentation.find(p=>p.id===e.id);if(!presentation)throw fail('index_rebuild_required');return {witness:{entryId:e.id,revision:e.revision},size:presentation.size_bytes,ctimeMs:presentation.ctime_ms,mtimeMs:presentation.mtime_ms};});
-      const factsJson=JSON.stringify(facts),options=JSON.stringify(input.options??{});if(size(factsJson)>8*1024*1024||size(options)>65536)throw fail('index_input_limit');
+    async base(input){const options=baseOptions(input.options),g=await assertPin(input.pinId),pin=pins.get(input.pinId)!,id=inputText(input.id,128),entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
+      const files=pin.header.entries.filter(e=>e.kind==='file');if(files.length>LIMITS.baseRecords)throw fail('index_input_limit');
+      const presentations=new Map<string,BrowserVaultPresentation>();for(const row of pin.capture.publication.presentation){if(presentations.has(row.id))throw fail('index_rebuild_required');presentations.set(row.id,row);}
+      const facts=[];let factsBytes=2;for(const e of files){const presentation=presentations.get(e.id);if(!presentation)throw fail('index_rebuild_required');
+        const fact={witness:{entryId:e.id,revision:e.revision},size:presentation.size_bytes,ctimeMs:presentation.ctime_ms,mtimeMs:presentation.mtime_ms};factsBytes+=size(JSON.stringify(fact))+(facts.length?1:0);if(factsBytes>LIMITS.baseFacts)throw fail('index_input_limit');facts.push(fact);}
+      const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_source_unavailable');const factsJson=JSON.stringify(facts);
       const viewName=input.viewName==null?undefined:inputText(input.viewName,1024);await assertPin(input.pinId);
       const result=json<unknown>(rust(()=>g.baseJson(id,row.projection!,factsJson,options,viewName)));await assertPin(input.pinId);return result;
     },
