@@ -16,6 +16,18 @@ impl State {
         identity: &EntryIdentity,
         content_event: &UpdateId,
     ) -> Result<Option<Vec<u8>>> {
+        self.materialize_retained_binary_bounded(identity, content_event, crate::MAX_FILE_BYTES)
+    }
+    /// Apply a caller's output-byte budget before allocating the expanded file.
+    /// A compact manifest may repeat chunk references, so serialized state size
+    /// is not a bound on materialized bytes. Graph/reference validation remains
+    /// mandatory and bounded by the core's normal limits.
+    pub fn materialize_retained_binary_bounded(
+        &self,
+        identity: &EntryIdentity,
+        content_event: &UpdateId,
+        max_bytes: u64,
+    ) -> Result<Option<Vec<u8>>> {
         let (view, graph) = self.view_and_ancestry()?;
         let event = graph.resolved_event(content_event)?;
         if event.identity != *identity {
@@ -33,6 +45,9 @@ impl State {
             | GraphEffect::SetContent { content: manifest } => manifest,
             _ => return Err(Error::InvalidContent),
         };
+        if manifest.bytes > max_bytes {
+            return Err(Error::TooLarge);
+        }
         self.binary_records().materialize(manifest)
     }
 }

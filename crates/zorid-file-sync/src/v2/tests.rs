@@ -1419,3 +1419,110 @@ fn historical_binary_witness_distinguishes_missing_chunks_empty_files_and_corrup
         .materialize_retained_binary(&identity(), &id("namespace-create"))
         .is_err());
 }
+
+#[test]
+fn retained_binary_output_budget_precedes_expanded_materialization() {
+    let bytes = vec![7; 4096];
+    let count = 128;
+    let chunk = crate::ChunkRef {
+        id: id("repeated-chunk"),
+        bytes: bytes.len() as u32,
+        digest: Sha256Digest::of(&bytes),
+    };
+    let page = crate::ChunkPage {
+        chunks: vec![chunk.clone(); count],
+    };
+    let expanded = bytes.repeat(count);
+    let manifest = Manifest {
+        bytes: expanded.len() as u64,
+        digest: Sha256Digest::of(&expanded),
+        pages: vec![page.reference(id("repeated-page")).unwrap()],
+    };
+    let mut root = create();
+    root.effect = Effect::Create {
+        entry_kind: EntryKind::File,
+        location: location("repeated.bin"),
+        content: Some(ContentSeed::Binary { manifest }),
+    };
+    let root = payload(root);
+    let page = Payload {
+        family: Family::Files,
+        format_version: 2,
+        scope: scope(),
+        id: id("repeated-page"),
+        body: Body::Page { page },
+    };
+    let chunk = Payload {
+        family: Family::Files,
+        format_version: 2,
+        scope: scope(),
+        id: id("repeated-chunk"),
+        body: Body::Chunk {
+            bytes: bytes.to_vec(),
+        },
+    };
+    let records = BTreeMap::from([
+        (root.id.clone(), root),
+        (page.id.clone(), page),
+        (chunk.id.clone(), chunk),
+    ]);
+    let state = State::from_records(scope(), rev("expanded"), records, BTreeMap::new()).unwrap();
+    assert!(serde_json::to_vec(&state).unwrap().len() < expanded.len());
+    assert_eq!(
+        state
+            .materialize_retained_binary_bounded(
+                &identity(),
+                &id("namespace-create"),
+                expanded.len() as u64 - 1
+            )
+            .unwrap_err(),
+        Error::TooLarge
+    );
+    assert_eq!(
+        state
+            .materialize_retained_binary_bounded(
+                &identity(),
+                &id("namespace-create"),
+                expanded.len() as u64
+            )
+            .unwrap(),
+        Some(expanded.clone())
+    );
+    assert_eq!(
+        state
+            .materialize_retained_binary(&identity(), &id("namespace-create"))
+            .unwrap(),
+        Some(expanded)
+    );
+    let mut missing = state.records.clone();
+    missing.remove(&id("repeated-chunk"));
+    let missing =
+        State::from_records(scope(), rev("missing-expanded"), missing, BTreeMap::new()).unwrap();
+    // An oversized witness fails its output budget even before dependencies are downloaded.
+    assert_eq!(
+        missing
+            .materialize_retained_binary_bounded(&identity(), &id("namespace-create"), 0)
+            .unwrap_err(),
+        Error::TooLarge
+    );
+    let empty = apply(
+        &state,
+        event(
+            "empty-budget",
+            &["namespace-create"],
+            Effect::SetContent {
+                content: Manifest {
+                    bytes: 0,
+                    digest: Sha256Digest::of(&[]),
+                    pages: vec![],
+                },
+            },
+        ),
+    );
+    assert_eq!(
+        empty
+            .materialize_retained_binary_bounded(&identity(), &id("empty-budget"), 0)
+            .unwrap(),
+        Some(vec![])
+    );
+}
