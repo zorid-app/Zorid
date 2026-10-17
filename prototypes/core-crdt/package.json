@@ -1,0 +1,7 @@
+{
+  "name": "zorid-core-crdt-interop",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node interop.mjs" },
+  "dependencies": { "yjs": "13.6.27" }
+}

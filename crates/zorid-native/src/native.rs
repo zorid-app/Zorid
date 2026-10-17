@@ -1,0 +1,593 @@
+use crate::{
+    fs::{self, Paths},
+    *,
+};
+use std::path::Path;
+use zorid_core::{EntryKind, Mutation, OperationId};
+use zorid_store::{ProjectionAttempt, ProjectionPhase, Store};
+
+pub struct NativeVault {
+    paths: Paths,
+    store: Store,
+    options: Options,
+    #[cfg(test)]
+    pub(crate) fault: Option<fn(&str)>,
+}
+impl NativeVault {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_options(path, Options::default())
+    }
+    pub fn open_with_options(path: impl AsRef<Path>, options: Options) -> Result<Self> {
+        Self::open_mode(path.as_ref(), options, true)
+    }
+    pub fn open_existing(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_existing_with_options(path, Options::default())
+    }
+    pub fn open_existing_with_options(path: impl AsRef<Path>, options: Options) -> Result<Self> {
+        Self::open_mode(path.as_ref(), options, false)
+    }
+    fn open_mode(path: &Path, options: Options, create: bool) -> Result<Self> {
+        let mut paths = Paths::open(path, create)?;
+        let _guard = paths.lock(options.lock_timeout)?;
+        paths.db_id = fs::regular(&paths.private, "vault.sqlite")?
+            .as_ref()
+            .map(fs::identity)
+            .transpose()?;
+        // Standard SQLite opens a pathname. This is private-owned storage, NOT a
+        // custom descriptor-anchored VFS. Check aliases/identity before and after.
+        let db_path = paths.absolute.join(".zorid/vault.sqlite");
+        let store = if create {
+            Store::open_no_follow(db_path)?
+        } else {
+            Store::open_existing_no_follow(db_path)?
+        };
+        paths.verify()?;
+        paths.db_id = Some(fs::identity(
+            &fs::regular(&paths.private, "vault.sqlite")?
+                .ok_or_else(|| Error::UnsafePath("database missing after open".into()))?,
+        )?);
+        paths.private.sync_all()?;
+        Ok(Self {
+            paths,
+            store,
+            options,
+            #[cfg(test)]
+            fault: None,
+        })
+    }
+    fn point(&self, _name: &str) {
+        #[cfg(test)]
+        if let Some(f) = self.fault {
+            f(_name);
+        }
+    }
+    pub fn list(&self) -> Result<Vec<EntryState>> {
+        self.paths.verify()?;
+        Ok(self.store.list()?)
+    }
+    pub fn read(&self, id: &EntryId) -> Result<Option<StoredEntry>> {
+        self.paths.verify()?;
+        Ok(self.store.read(id)?)
+    }
+    pub fn status(&self) -> Result<Status> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        let (outbox, projection) = self.store.pending_counts()?;
+        Ok(Status {
+            pending_outbox: outbox.to_string(),
+            pending_projection: projection.to_string(),
+            attempts: self
+                .store
+                .projection_attempts(false)?
+                .into_iter()
+                .map(|a| AttemptStatus {
+                    attempt_id: a.attempt_id,
+                    entry_id: a.target.state.id,
+                    path: a.target.state.path,
+                    target_revision: a.target.state.revision,
+                    phase: a.phase,
+                })
+                .collect(),
+            observations: self
+                .store
+                .external_observations()?
+                .into_iter()
+                .map(|o| ObservationStatus {
+                    observation_id: o.observation_id,
+                    path: o.path,
+                    byte_length: o.content.len().to_string(),
+                    resolved: o.resolution.is_some(),
+                })
+                .collect(),
+        })
+    }
+    /// The lock is held only around local reconciliation/transactions/publication;
+    /// no desktop process, daemon, IPC endpoint, network or background thread.
+    pub fn apply(&mut self, request: &MutationRequest) -> Result<ApplyOutcome> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        if let Some(commit) = self.store.replay(request)? {
+            let projection = self.project_status(request.mutation.id());
+            return Ok(ApplyOutcome { commit, projection });
+        }
+        let (path, bytes) = match &request.mutation {
+            Mutation::Create {
+                path,
+                kind: EntryKind::File,
+                content: Some(content),
+                ..
+            } => (path.clone(), content),
+            Mutation::Write { id, content, .. } => (
+                self.store
+                    .read(id)?
+                    .ok_or_else(|| {
+                        Error::Contract(zorid_core::ContractError::EntryNotFound { id: id.clone() })
+                    })?
+                    .state
+                    .path,
+                content,
+            ),
+            _ => {
+                return Err(Error::Unsupported(
+                    "physical folder creation, moves and deletions",
+                ))
+            }
+        };
+        if bytes.len() > self.options.max_file_bytes {
+            return Err(Error::Unsupported(
+                "file exceeds configured whole-file limit",
+            ));
+        }
+        // Recover a prior attempt first. Unresolved divergence may block physical
+        // publication but need not discard a new optimistic database mutation.
+        if let Some(a) = self
+            .store
+            .projection_attempts(false)?
+            .into_iter()
+            .find(|a| a.target.state.path == path)
+        {
+            let _ = self.resume(&a);
+        }
+        let _ = self.observe(&path)?;
+        if matches!(request.mutation, Mutation::Create { .. }) {
+            self.parent_imports(&path)?;
+        }
+        self.paths.verify()?;
+        let commit = self.store.apply(request)?;
+        self.point("committed");
+        // After this boundary errors are represented as Pending with the receipt;
+        // callers must never retry under a new operation ID due to projection I/O.
+        let projection = self.project_status(request.mutation.id());
+        Ok(ApplyOutcome { commit, projection })
+    }
+    fn project_status(&mut self, id: &EntryId) -> ProjectionStatus {
+        match self.project(id) {
+            Ok(()) => ProjectionStatus::Projected,
+            Err(e) => ProjectionStatus::Pending(e.to_string()),
+        }
+    }
+    /// Explicit path hints are authoritative only after re-reading the filesystem.
+    /// A watcher/startup scanner can call this API; no scanner is included yet.
+    pub fn reconcile(&mut self, paths: &[VaultPath]) -> Result<ReconcileReport> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        let mut report = self.recover_locked()?;
+        for path in paths {
+            match self.observe(path) {
+                Ok(Some(commit)) => report.imported.push(commit),
+                Ok(None) => {}
+                Err(e) => {
+                    report.blocked.push((path.clone(), e.to_string()));
+                    continue;
+                }
+            }
+            if let Some(state) = self
+                .store
+                .list()?
+                .into_iter()
+                .find(|s| s.path == *path && s.kind == EntryKind::File)
+            {
+                match self.project(&state.id) {
+                    Ok(()) => report.projected.push(state.id),
+                    Err(e) => report.blocked.push((path.clone(), e.to_string())),
+                }
+            }
+        }
+        self.paths.verify()?;
+        Ok(report)
+    }
+    pub fn recover(&mut self) -> Result<ReconcileReport> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.recover_locked()
+    }
+    fn recover_locked(&mut self) -> Result<ReconcileReport> {
+        let mut report = ReconcileReport::default();
+        // Retained old inodes can still be edited through external open handles.
+        for a in self
+            .store
+            .projection_attempts(true)?
+            .into_iter()
+            .filter(|a| a.completed())
+        {
+            let previous = format!("{}.previous", a.attempt_id.as_str());
+            if let Some(old) =
+                fs::snapshot(&self.paths.private, &previous, self.options.max_file_bytes)?
+            {
+                if a.baseline.as_ref().is_none_or(|b| b.content != old.bytes) {
+                    self.capture(&a, old.bytes)?;
+                    report.blocked.push((
+                        a.target.state.path.clone(),
+                        "retained external divergence needs reconciliation".into(),
+                    ));
+                }
+            }
+        }
+        for a in self.store.projection_attempts(false)? {
+            match self.resume(&a) {
+                Ok(()) => match self.project(&a.target.state.id) {
+                    Ok(()) => report.projected.push(a.target.state.id),
+                    Err(e) => report.blocked.push((a.target.state.path, e.to_string())),
+                },
+                Err(e) => report.blocked.push((a.target.state.path, e.to_string())),
+            }
+        }
+        for state in self
+            .store
+            .list()?
+            .into_iter()
+            .filter(|s| s.kind == EntryKind::File)
+        {
+            if report.blocked.iter().any(|(path, _)| *path == state.path)
+                || report.projected.contains(&state.id)
+            {
+                continue;
+            }
+            if self
+                .store
+                .projection_baseline(&state.id)?
+                .as_ref()
+                .is_some_and(|b| b.state == state)
+            {
+                continue;
+            }
+            match self.project(&state.id) {
+                Ok(()) => report.projected.push(state.id),
+                Err(e) => report.blocked.push((state.path, e.to_string())),
+            }
+        }
+        self.paths.verify()?;
+        Ok(report)
+    }
+    fn parent_imports(&mut self, path: &VaultPath) -> Result<()> {
+        let mut parents = Vec::new();
+        let mut parent = path.parent();
+        while let Some(path) = parent {
+            parent = path.parent();
+            parents.push(path);
+        }
+        parents.reverse();
+        for path in parents {
+            let _dir = self.paths.directory(&path)?;
+            let entries = self.store.list()?;
+            if let Some(state) = entries.iter().find(|s| s.path == path) {
+                if state.kind != EntryKind::Folder {
+                    return Err(Error::UnsafePath(
+                        "filesystem directory collides with logical file".into(),
+                    ));
+                }
+            } else {
+                self.store.import_directory(&MutationRequest {
+                    operation_id: new_op(),
+                    mutation: Mutation::Create {
+                        id: new_id(),
+                        path,
+                        kind: EntryKind::Folder,
+                        content: None,
+                    },
+                })?;
+            }
+        }
+        Ok(())
+    }
+    fn observe(&mut self, path: &VaultPath) -> Result<Option<CommitResult>> {
+        let (parent, name) = self.paths.parent(path)?;
+        let disk = fs::snapshot(&parent, &name, self.options.max_file_bytes)?;
+        self.paths.verify_parent(path, &parent)?;
+        let state = self.store.list()?.into_iter().find(|s| s.path == *path);
+        let Some(disk) = disk else {
+            if let Some(state) = &state {
+                if self.store.projection_baseline(&state.id)?.is_some() {
+                    return Err(Error::Unsupported(
+                        "external deletion retained; deletion reconciliation is not implemented",
+                    ));
+                }
+            }
+            return Ok(None);
+        };
+        if state.as_ref().is_some_and(|s| s.kind != EntryKind::File) {
+            return Err(Error::UnsafePath(
+                "filesystem file collides with logical folder".into(),
+            ));
+        }
+        let base = match &state {
+            Some(s) => self.store.projection_baseline(&s.id)?,
+            None => None,
+        };
+        if base
+            .as_ref()
+            .is_some_and(|base| base.state.path == *path && base.content == disk.bytes)
+        {
+            return Ok(None);
+        }
+        let active = self
+            .store
+            .projection_attempts(false)?
+            .iter()
+            .any(|a| a.target.state.path == *path);
+        let observation = self
+            .store
+            .record_external(path, base.clone(), disk.bytes.clone())?;
+        if active {
+            return Err(Error::Busy(
+                "unresolved projection; external observation retained",
+            ));
+        }
+        let mutation = match (state, base) {
+            (None, None) => {
+                self.parent_imports(path)?;
+                Mutation::Create {
+                    id: new_id(),
+                    path: path.clone(),
+                    kind: EntryKind::File,
+                    content: Some(disk.bytes),
+                }
+            }
+            (Some(state), Some(base))
+                if state.revision == base.state.revision && state.path == base.state.path =>
+            {
+                Mutation::Write {
+                    id: state.id,
+                    expected: state.revision,
+                    content: disk.bytes,
+                }
+            }
+            _ => {
+                return Err(Error::Busy(
+                    "external and database versions diverged; external observation retained",
+                ))
+            }
+        };
+        self.paths.verify_parent(path, &parent)?;
+        // Observation ID is the deterministic import operation key on retry.
+        Ok(Some(self.store.import_observation(
+            &observation.observation_id,
+            &MutationRequest {
+                operation_id: observation.observation_id.clone(),
+                mutation,
+            },
+        )?))
+    }
+    fn project(&mut self, id: &EntryId) -> Result<()> {
+        self.paths.verify()?;
+        if let Some(a) = self
+            .store
+            .projection_attempts(false)?
+            .into_iter()
+            .find(|a| a.target.state.id == *id)
+        {
+            self.resume(&a)?;
+        }
+        let Some(current) = self.store.read(id)? else {
+            return Err(Error::Unsupported("physical deletion"));
+        };
+        if current.state.kind != EntryKind::File {
+            return Err(Error::Unsupported("folder projection"));
+        }
+        if self
+            .store
+            .projection_baseline(id)?
+            .as_ref()
+            .is_some_and(|b| {
+                b.state == current.state && Some(&b.content) == current.content.as_ref()
+            })
+        {
+            // Do not claim success merely from a baseline: an external writer may
+            // have replaced it since the previous publication/import.
+            let (p, n) = self.paths.parent(&current.state.path)?;
+            if fs::snapshot(&p, &n, self.options.max_file_bytes)?
+                .as_ref()
+                .is_some_and(|d| Some(&d.bytes) == current.content.as_ref())
+            {
+                self.paths.verify_parent(&current.state.path, &p)?;
+                return Ok(());
+            }
+            return Err(Error::Busy("physical content no longer matches baseline"));
+        }
+        let attempt = self.store.begin_projection(id)?;
+        self.point("prepared");
+        self.resume(&attempt)
+    }
+    fn capture(&mut self, a: &ProjectionAttempt, content: Vec<u8>) -> Result<()> {
+        self.store
+            .record_external(&a.target.state.path, a.baseline.clone(), content)?;
+        Ok(())
+    }
+    fn resume(&mut self, original: &ProjectionAttempt) -> Result<()> {
+        self.paths.verify()?;
+        let mut a = original.clone();
+        let stage = format!("{}.stage", a.attempt_id.as_str());
+        let previous = format!("{}.previous", a.attempt_id.as_str());
+        let desired = self.store.read(&a.target.state.id)?;
+        if desired
+            .as_ref()
+            .is_none_or(|d| d.state.path != a.target.state.path || d.state.kind != EntryKind::File)
+        {
+            return Err(Error::Unsupported(
+                "projection target moved/deleted; retained for later reconciliation",
+            ));
+        }
+        let (parent, name) = self.paths.parent(&a.target.state.path)?;
+        let mut dest = fs::snapshot(&parent, &name, self.options.max_file_bytes)?;
+        let backup = fs::snapshot(&self.paths.private, &previous, self.options.max_file_bytes)?;
+        // A retained displaced inode may have received late writes through an
+        // already-open external handle. Preserve and expose these changed bytes.
+        if let Some(old) = &backup {
+            if a.baseline.as_ref().is_none_or(|b| b.content != old.bytes) {
+                self.capture(&a, old.bytes.clone())?;
+            }
+        }
+        if dest
+            .as_ref()
+            .is_some_and(|d| Some(&d.identity) == a.stage_identity.as_ref())
+        {
+            let changed = dest.as_ref().unwrap().bytes != a.target.content;
+            if changed {
+                self.capture(&a, dest.take().unwrap().bytes)?;
+            }
+            parent.sync_all()?;
+            self.paths.verify_parent(&a.target.state.path, &parent)?;
+            self.store.finish_projection(&a.attempt_id, true)?;
+            return if changed {
+                Err(Error::Busy("published content externally edited; retained"))
+            } else {
+                Ok(())
+            };
+        }
+        let current_target = desired.as_ref().is_some_and(|v| {
+            v.state == a.target.state && v.content.as_ref() == Some(&a.target.content)
+        });
+        if !current_target {
+            // Desired advanced while this attempt was offline. Never publish old
+            // bytes. Restore displaced baseline only into an absent destination.
+            if dest.is_none() && backup.is_some() {
+                self.paths.verify_parent(&a.target.state.path, &parent)?;
+                fs::rename_new(&self.paths.private, &previous, &parent, &name)?;
+                self.paths.verify_parent(&a.target.state.path, &parent)?;
+            }
+            if let Some(dest) = dest {
+                if a.baseline.as_ref().is_none_or(|b| b.content != dest.bytes) {
+                    self.capture(&a, dest.bytes)?;
+                }
+            }
+            self.store.finish_projection(&a.attempt_id, false)?;
+            return Ok(());
+        }
+        if let Some(old) = &backup {
+            if a.baseline.as_ref().is_none_or(|b| b.content != old.bytes) {
+                if dest.is_none() {
+                    self.paths.verify_parent(&a.target.state.path, &parent)?;
+                    fs::rename_new(&self.paths.private, &previous, &parent, &name)?;
+                    self.paths.verify_parent(&a.target.state.path, &parent)?;
+                }
+                return Err(Error::Busy(
+                    "displaced file changed; preserved and publication stopped",
+                ));
+            }
+            if let Some(disk) = &dest {
+                self.capture(&a, disk.bytes.clone())?;
+                return Err(Error::Busy(
+                    "external file appeared after displacement; all versions retained",
+                ));
+            }
+        } else {
+            match (&a.baseline, &dest) {
+                (None, None) => {}
+                (Some(base), Some(disk))
+                    if base.state.path == a.target.state.path && base.content == disk.bytes => {}
+                (_, Some(disk)) => {
+                    self.capture(&a, disk.bytes.clone())?;
+                    return Err(Error::Busy(
+                        "destination diverged from baseline; not overwritten",
+                    ));
+                }
+                (Some(_), None) => {
+                    return Err(Error::Unsupported("external deletion; not recreated"))
+                }
+            }
+        }
+        let staged = fs::snapshot(&self.paths.private, &stage, self.options.max_file_bytes)?;
+        let stage_id = if let Some(staged) = staged {
+            if staged.bytes != a.target.content {
+                if a.stage_identity.is_some() {
+                    return Err(Error::UnsafePath(
+                        "altered previously synced stage retained".into(),
+                    ));
+                }
+                let partial = format!("{}.partial-{}", a.attempt_id.as_str(), uuid::Uuid::new_v4());
+                fs::rename_new(&self.paths.private, &stage, &self.paths.private, &partial)?;
+                fs::stage(&self.paths.private, &stage, &a.target.content)?
+            } else {
+                fs::regular(&self.paths.private, &stage)?
+                    .ok_or(Error::Busy("stage disappeared"))?
+                    .sync_all()?;
+                self.paths.private.sync_all()?;
+                staged.identity
+            }
+        } else {
+            if a.stage_identity.is_some() {
+                return Err(Error::Busy(
+                    "previous stage disappeared without publication proof",
+                ));
+            }
+            let id = fs::stage(&self.paths.private, &stage, &a.target.content)?;
+            self.point("stage_written");
+            id
+        };
+        a = self
+            .store
+            .mark_projection(&a.attempt_id, ProjectionPhase::Staged, Some(stage_id))?;
+        self.point("staged");
+        if backup.is_none() && dest.is_some() {
+            self.paths.verify_parent(&a.target.state.path, &parent)?;
+            fs::rename_new(&parent, &name, &self.paths.private, &previous)?;
+            self.paths.verify_parent(&a.target.state.path, &parent)?;
+            self.point("displaced_before_record");
+            a = self
+                .store
+                .mark_projection(&a.attempt_id, ProjectionPhase::Displaced, None)?;
+            let moved = fs::snapshot(&self.paths.private, &previous, self.options.max_file_bytes)?
+                .ok_or(Error::Busy("displaced file missing"))?;
+            if a.baseline.as_ref().is_none_or(|b| b.content != moved.bytes) {
+                self.capture(&a, moved.bytes)?;
+                self.paths.verify_parent(&a.target.state.path, &parent)?;
+                let _ = fs::rename_new(&self.paths.private, &previous, &parent, &name);
+                self.paths.verify_parent(&a.target.state.path, &parent)?;
+                return Err(Error::Busy("file changed during displacement; retained"));
+            }
+        }
+        self.point("displaced");
+        self.paths.verify_parent(&a.target.state.path, &parent)?;
+        // NOREPLACE is atomic. A competing external create is never overwritten.
+        if let Err(e) = fs::rename_new(&self.paths.private, &stage, &parent, &name) {
+            if let Some(d) = fs::snapshot(&parent, &name, self.options.max_file_bytes)? {
+                self.capture(&a, d.bytes)?;
+            }
+            return Err(e);
+        }
+        self.paths.verify_parent(&a.target.state.path, &parent)?;
+        self.point("published_before_record");
+        self.store
+            .mark_projection(&a.attempt_id, ProjectionPhase::Published, None)?;
+        let final_file = fs::snapshot(&parent, &name, self.options.max_file_bytes)?
+            .ok_or(Error::Busy("published file disappeared"))?;
+        if Some(&final_file.identity) != a.stage_identity.as_ref() {
+            self.capture(&a, final_file.bytes)?;
+            return Err(Error::Busy("published path replaced; versions retained"));
+        }
+        let changed = final_file.bytes != a.target.content;
+        if changed {
+            self.capture(&a, final_file.bytes)?;
+        }
+        self.paths.verify()?;
+        self.point("before_baseline");
+        self.paths.verify_parent(&a.target.state.path, &parent)?;
+        self.store.finish_projection(&a.attempt_id, true)?;
+        if changed {
+            return Err(Error::Busy("published content externally edited; retained"));
+        }
+        Ok(())
+    }
+}
+fn new_op() -> OperationId {
+    OperationId::new(uuid::Uuid::new_v4().to_string()).unwrap()
+}
+fn new_id() -> EntryId {
+    EntryId::new(uuid::Uuid::new_v4().to_string()).unwrap()
+}

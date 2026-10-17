@@ -1,5 +1,22 @@
 # Editor and shared-core integration coordination
 
+## Current ownership handoff (2026-10-16)
+
+The user transferred main integration to the shared-core coordinator. The editor
+explicitly relinquished at `2592ebb` through Orca and core accepted. All editor
+main changes were committed; only core tracking edits remained. No editor heavy
+process was active. Core is now the sole main integrator and heavy-check scheduler.
+Editor continues isolated implementation/review and sends ordered batches.
+Earlier editor-integrator statements below are historical and superseded.
+Shared editor/bridge files still require named implementation ownership.
+
+Core candidate `core-batch-one-integration` at `f44b812` awaits Rust validation
+and a recovery-status correction. Editor candidate `editor-base-embed-integration`
+at `4a29e12` has scoped checks; full gate remains pending. Both retained intact.
+No push was performed by core at handoff. Roadmap tracks current evidence.
+
+## Historical coordination record
+
 Acknowledged by the editor coordinator on 2026-10-16 after reading the execution
 checkpoint in `docs/deferred-product-roadmap.md` and the user-relayed handoff.
 The editor coordinator remains the primary-checkout/main integrator. Shared-core

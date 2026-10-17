@@ -8,6 +8,25 @@
   changes into `main`; do not leave confirmed work only on a feature branch.
   Integration does not establish unverified native/mobile/reference parity.
 
+- Shared-core implementation is coordinated separately from the active editor
+  polish session. Before work or after context compaction, read the execution
+  checkpoint in `docs/deferred-product-roadmap.md` and relevant findings. Record
+  task owner, branch/worktree, dependencies, commits and verification separately.
+  The built-in goal is thread-scoped; repository records are the cross-session
+  source of truth. Do not assume another session has read new instructions.
+- Serialize changes to the primary `main` checkout across sessions. Use a shared
+  integration owner or an explicitly acknowledged common lock protocol before
+  either coordinator merges/cherry-picks there. A Git index lock alone does not
+  serialize an entire integrate/test/commit sequence. The user transferred sole
+  main integration to the shared-core coordinator, acknowledged by the editor
+  at main `2592ebb` on 2026-10-16. The editor continues isolated implementation
+  and review and sends ordered batches; it must not mutate main or push
+  concurrently. Do not stash, reset, clean or commit another session's work.
+- Keep editor/workspace internals with the editor session. Shared editor/core
+  seams, platform selection, desktop bridge and root build files require named
+  ownership before edits. Reconcile with current main and revalidate affected
+  behavior before integration; a clean cherry-pick is not semantic verification.
+
 - Maximize development velocity by using as many available agents in parallel
   as useful independent work allows. Do not leave agents idle when implementation,
   reference audits, integration, or verification can safely proceed independently.
@@ -49,13 +68,33 @@
 
 ## Product priorities
 
+- Latest execution steering (2026-10-16) supersedes the earlier discussion-only
+  restriction for the first shared-core milestone: the user requests persistent
+  plans/tracking and a built-in goal for coordinated implementation. Start with
+  contracts and feasibility, then Rust core, web + Electron clients and standalone
+  CLI, with E2EE server sync. CLI embeds its own core, covers all vault files and
+  runs independently; concurrent local access requires storage coordination, not
+  mandatory IPC/daemon ownership. See the roadmap execution checkpoint. P2P,
+  complete recovery/admin and native mobile remain later required milestones;
+  speculative plugin frameworks and calendar work stay deferred. Existing editor
+  parity work continues independently; do not replace its runtime/storage path
+  before the integration gates pass.
 - Latest architecture discussion (2026-10-16): the user no longer requires
   Obsidian plugin API compatibility and wants to discuss a clean Zorid API,
   app-managed syncable plugin data, secret storage, and native mobile shells
   around the web editor. These are discussion topics, not approved API designs.
   Do not redesign or implement those APIs until the discussion resolves them.
-  Continue existing editor correctness and verification work. The mobile shell
-  choice remains open; do not replace Capacitor merely from this discussion.
+  Continue existing editor correctness and verification work. Subsequent discussion
+  explicitly chooses a native-owned mobile shell embedding the shared web editor,
+  with registered plugin actions able to open plugin web screens. Detailed APIs,
+  native frameworks, and whether to retain Capacitor remain open; implementation
+  is not requested by this discussion. Do not replace Capacitor merely from it.
+  The user subsequently selected Rust for the shared data core. This settles the
+  language direction; core ownership, storage/sync semantics, binding choices,
+  API design and migration remain discussion topics before implementation.
+  Latest steering prioritizes a tight-knit first-party experience: do not design
+  speculative plugin content frameworks, Excalidraw integrations or JSONL formats.
+  Present the overall app architecture; those extension details are deferred.
 - Build an original open-source Obsidian recreation, with Electron desktop and
   Capacitor mobile apps. Keep recovered proprietary artifacts out of project source.
 - Prioritize the editor foundation, exact interactions, split views, and native

@@ -1,11 +1,375 @@
 # Product discussions after the editor foundation
 
+## Execution checkpoint — shared-core coordinator
+
+Updated 2026-10-16. Read this section before resuming after a context reset;
+earlier discussion restrictions below are historical where superseded here.
+
+The user requested durable written decisions, execution tracking and a Codex
+built-in goal. An active goal now targets the first integrated Rust core + web +
+Electron + standalone full-vault CLI + E2EE server-sync milestone. This is not a
+claim that implementation or validation is already complete. Subsequent P2P,
+full history/backups/admin and native mobile milestones remain required in the
+sequence below; completion of the first goal must not close those requirements.
+
+### Resume procedure and status rules
+
+1. Read AGENTS.md, this checkpoint, the accepted decisions/sequence below and
+   relevant rows of `docs/user-findings.md`; inspect the active built-in goal.
+2. Inspect current git status, main HEAD, worktrees and live agents. Verify task
+   ownership against actual files/commits; do not recreate work that already exists.
+3. Resume the first unblocked task. Every assignment must name scope, owned files,
+   dependencies, worktree and acceptance checks. Shared interfaces have one owner.
+4. Update the ledger after decisions, assignments, commits, verification, failed
+   attempts and integration. Record exact commit, command/result and environment
+   for evidence; keep implemented, reviewed, integrated and verified separate.
+5. At handoff/context reset, record unfinished operations, next action and blockers.
+   Reconcile stale statements rather than treating chat summaries as authoritative.
+
+### Live work ledger
+
+| ID | Scope / owner | Branch/worktree | Implementation | Verification / next action |
+| --- | --- | --- | --- | --- |
+| TRACK | Coordinator: goal, decisions, ledger, coordination | `feat/core-sync-foundation` / `.worktrees/core-sync-foundation` | Goal active; isolated branch through `295d3a8` | User transferred main integration to this core coordinator; editor relinquished at `2592ebb` |
+| CONTRACT | `/root/data_readiness`: portable contracts and mutation planner | `feat/core-vault-contract` / `.worktrees/core-vault-contract` | Integrated into coordinator as `9d02971`, `54df1af` | 26 native tests passed; independently reviewed; filesystem adapter design next |
+| WEB-SPIKE | `/root/mobile_readiness`: IndexedDB worker persistence/tab safety | `spike/core-browser-storage` / `.worktrees/core-browser-storage` | Coordinator `9ca1767`, `6c5d4c6`, `2617b1d` | Chrome155: seven storage checks, 40 worker commits/37 conflicts; two tabs 50 commits/38 conflicts; WASM+IDB replay and fresh-worker restore passed (`f6ec4f4`) |
+| CRDT-SPIKE | `/root/crdt_interop`: pinned Yjs/Yrs and WASM | `spike/core-crdt-interop` / `.worktrees/core-crdt-interop` | Coordinator `9b44bb9`, `e9a056b` | Native/Node, actual WASM browser and native↔browser byte exchange passed (`cb63b7f` evidence); idempotency/crypto bindings rebuilt through `74c802b`; actual browser checks passed (`ef687da` evidence) |
+| CORE | Coordinator: SQLite native storage | `feat/core-sync-foundation` | `1ed35af` plus `d4191d4`: SQLite authority and v2 projection provenance | Native/store tests passed; filesystem publication now implemented for regular files; namespace extensions pending |
+| NATIVE-FS | `/root/data_readiness`: file projection/import/crash recovery | `feat/core-native-vault` / `.worktrees/core-native-vault` | Integrated `d4191d4`; owner implementing rescan/folder-create next | 36 focused native/store tests passed (includes two harness entries), eight publication fault phases plus partial-write/process/late-FD/replay/corruption coverage; full namespace behavior remains pending |
+| CLI | `/root/core_cli`: standalone full-vault executable | `feat/core-cli` / `.worktrees/core-cli` | Integrated `c0d8b32`, `1d4e854`; embeds NativeVault directly | Root actual CLI: eight subprocess + one redaction tests passed; mkdir/rescan source `7ca8048` awaits native slice and tests; move/delete/sync incomplete |
+| WEB-VAULT | `/root/mobile_readiness`: full-metadata transactional browser adapter | `feat/core-browser-vault` / `.worktrees/core-browser-vault` | Integrated `ca4d157`, `05e60f9`, `d1e5e83`; real Rust planning/replay | TypeScript compile passed; 16 real-browser groups passed; not selected by production app; two-worker concurrency is not full two-tab proof |
+| DESKTOP | `/root/desktop_integration`: actual Electron adapter | Read-only main/core audit | Binding and storage seam plan underway | Preserve editor ownership/current recovery; no app integration yet |
+| SYNC-PROTOCOL | `/root/livesync_audit`: bounded protocol and AEAD | `feat/core-sync-protocol` / `.worktrees/core-sync-protocol` | Integrated coordinator `49f884a`; independent review issues fixed | Five protocol + six default crypto tests passed, five no-default tests passed; real native/browser crypto exchange passed (`ef687da`) |
+| SYNC-RELAY | `/root/livesync_audit`: ciphertext SQLite relay/auth | `feat/core-sync-relay` / `.worktrees/core-sync-relay` | Integrated `295d3a8` from reviewed `d8e0d6e`; cancellation admission flaw fixed | Nine focused tests passed, including actual TCP HTTP; backup/restore source underway |
+| VERIFY | `/root/livesync_audit`: independent source reviews | Read-only across worker/coordinator trees | Core planner, CRDT, store and WASM reviewed | SQLite identity/schema checks, wildcard bug and tests fixed; actual browser/Electron/failure gates outstanding |
+| LATER | P2P; full history/backups/admin; iOS/Android | Unassigned | Required, not started | Basic encrypted restore remains part of first integrated milestone |
+
+Six workers have independent scopes. Root owns shared Cargo manifests/lockfile.
+This core coordinator now owns main integration after the user-authorized
+handoff; both coordinators serialize heavy builds explicitly through Orca. Native regular-file projection and standalone
+CLI are implemented and tested; the Electron app has not been migrated. Client sync
+and distributed namespace semantics remain unfinished.
+
+### Current evidence and next steps
+
+- Native commands: `cargo test --offline -p zorid-core -p zorid-store -j1 -- --test-threads=1`
+  passed all 26 core tests; initial store run found an incorrect expected test
+  count (five successful operations, not six). Corrected to explicit operation IDs;
+  `cargo test --offline -p zorid-store -j1 -- --test-threads=1` passed all 11 tests.
+  Review fixes cover rejecting foreign/incomplete databases before WAL mutation,
+  SQL/JSON identity consistency, and actual subprocess writer-lock contention.
+- Full workspace attempt exhausted disk before tests; removed only task-generated
+  targets and set dev/test debug=0, incremental=false. No editor/user data removed.
+- Browser strict durability must fail closed; two-tab verification must observe
+  real CAS conflicts. Per-key CAS does not prove multi-entry mutation atomicity.
+- Yrs 0.28.0 / Yjs 13.6.27 update-v1 UTF-16 fixtures passed native/Node checks.
+  Deletion-only updates can leave state vectors unchanged: never use vectors as
+  durable revisions or skip exchange based only on vector equality.
+- Task-local rustup overlay has Rust 1.95.0 and wasm32 target. Global Homebrew Rust
+  1.99.0 has no matching target; select `RUSTC=/Users/ctk/.cargo/bin/rustc` as well as
+  task `RUSTUP_HOME` and `RUSTUP_TOOLCHAIN=stable`. Initial WASM build selected the
+  wrong compiler and failed before runtime tests; explicit RUSTC fixed it and the
+  actual release build completed successfully in 44.89s. Matching wasm-bindgen 0.2.129
+  official prebuilt SHA256 verified (`81d4a23d56b3c3eb8187658329116d50e0b228a93b343825fb71f70179051cd1`).
+- Current actual browser evidence is committed in
+  `prototypes/core-browser/validation/chrome-wasm-2026-10-16.json` and
+  `native-browser-exchange-2026-10-16.json`, with exact tested source and artifact
+  hashes. All five Rust/WASM checks passed; real native/browser transfer passed
+  both directions with duplicates, out-of-order dependencies and deletion-only
+  updates. Test tabs and servers closed. These do not prove real app integration,
+  browser process/power-loss durability, Safari/Firefox or encrypted sync.
+- Native `cargo test --offline -p zorid-crdt -p zorid-wasm -j1 -- --test-threads=1`
+  passed four CRDT and three WASM-helper tests before the later idempotency export.
+  `cargo build --offline -p zorid-crdt --example interop -j1` passed; executable was
+  used in the actual browser byte exchange. Current `d00a617` adds three helper
+  tests and browser replay assertions; those need a rebuild/run.
+- Protocol/crypto verified native-only in `docs/sync-protocol.md`; optional control
+  extensions are preserved, unknown required features fail, relay can retain a
+  future document format while clients reject unsupported consumption. No-default
+  crypto dependency tree excludes implicit system entropy. Actual native/browser
+  crypto exchange is verified in `ef687da`; product key enrollment remains pending.
+- Root integrated native+CLI candidates through `1d4e854` and ran
+  `cargo test -p zorid-cli -j1 -- --test-threads=1`: eight actual executable tests
+  plus one redaction unit test passed. Checks include independent invocations,
+  exact bytes, stale updates, lost-ACK replay, external nested-file import,
+  no-clobber, bounded input, existing-only opens, and commit-with-pending-projection.
+- Root built browser vault TypeScript using the existing main checkout compiler:
+  `node /Users/ctk/Projects/Zorid/node_modules/typescript/bin/tsc -p prototypes/core-vault-browser/tsconfig.json`.
+  It passed without modifying main. Exact IndexedDB schema and content-integrity
+  checks were added after review; runtime corruption fixtures passed in `ef687da`.
+- Root WASM release build through `74c802b` passed, using the explicit task-local
+  Rust compiler noted above. Seven native WASM helper tests passed; the real
+  `crypto-interop` example built and five no-default crypto tests passed. Browser
+  crypto exchange and all 16 browser vault groups passed; exact artifacts, assertions
+  and limits are recorded in `chrome-vault-crypto-2026-10-16.json` (`ef687da`).
+- Next: integrate native scanner/folder source, then client update planning and adapters. Native owner
+  is implementing recursive rescan/folder publication; moves/deletions follow.
+  Full web/Electron/CLI encrypted convergence, accounts/service recovery and basic
+  encrypted backup/restore remain required. No app runtime migration has occurred.
+- User restarted the editor in Orca and explicitly requested contact. Direct
+  acknowledgment received: editor is sole main integrator; core sends reviewed
+  ordered batches. Editor accepted the next heavy slot for candidate `1777025`
+  tests/type/build and will explicitly release it; core workers hold heavy checks.
+  Editor terminal: `term_3496fd0d-d06a-49fc-b79f-b687be61c58a`; core terminal:
+  `term_f6b0f772-a4cb-4b2b-af9e-148ed32a072d`. Revalidate live handles after restart.
+  Primary checkout coordination docs were read; its three existing dirty core
+  tracking files remain untouched. This is peer coordination, not delegated main ownership.
+
+### Client ingestion implementation boundary
+
+The next shared layer is `crates/zorid-client-sync`, owned by `/root/crdt_interop`.
+Local mutation request/receipt records are not wire operations. Authored commits
+must atomically persist CRDT state, materialized bytes, projection intent and a
+new durable sync intent. Received updates atomically merge state, deduplicate exact
+envelope identity and advance receive progress without creating authored outbox
+records. Sealing commits one immutable envelope before upload; retries reuse it.
+External edits need the CRDT snapshot that produced their disk baseline and a
+fresh actor for stale-baseline branches, preventing clock reuse and loss of unseen
+remote edits. Actor ownership collisions fail closed; random allocation is not a
+uniqueness proof. Native v3 scanner work remains independent of distributed moves,
+deletes, binary conflict heads and chunked transfers. Plans and tests must reach
+actual storage adapters and clients; a single-note fixture cannot complete the goal.
+
+Relay source `295d3a8` passed nine owner tests (one cancellation unit, two actual
+HTTP/TCP, six storage) and independent CLI-owner review. Root reconciled Cargo.lock
+with `cargo generate-lockfile --offline`, preserving existing pinned versions;
+combined root relay build passed all nine tests on `9728064` (session 48628 exit 0). Backup/restore source is assigned to
+relay owner: consistent SQLite snapshot, no-clobber new destination, schema/integrity
+validation, new epoch and revoked restored device tokens; accounts/permissions and
+ciphertext retained. Runtime restore verification is still required.
+
+### Applicable LiveSync reference invariants
+
+The user explicitly permits referencing critical applicable LiveSync logic.
+Source audit pinned livesync-commonlib `5f79422c96565ee33f26449668cda2f6d67376f7`;
+upstream tests were read, not executed. References are design evidence, not proof
+of Zorid correctness:
+
+- [Storage events and reflection](https://github.com/vrtmrz/livesync-commonlib/blob/5f79422c96565ee33f26449668cda2f6d67376f7/docs/storage-events-and-reflection.md)
+  and [offline scanner](https://github.com/vrtmrz/livesync-commonlib/blob/5f79422c96565ee33f26449668cda2f6d67376f7/docs/offline-scanner.md):
+  recheck stale watcher deletion against current files; lookup failure is unknown,
+  not absence. Persist projection provenance so crash replay cannot import an old
+  file projection as a new user edit. Preserve intentional reverts/external edits.
+- [RPC room](https://github.com/vrtmrz/livesync-commonlib/blob/5f79422c96565ee33f26449668cda2f6d67376f7/src/rpc/RpcRoom.ts):
+  transport ACK is not durable application acceptance. Keep outbox until durable
+  remote receipt; keep projection intents until filesystem completion.
+- [Chunk retrieval design](https://github.com/vrtmrz/obsidian-livesync/blob/main/docs/design_docs/chunk_retrieval_and_waiting.md):
+  references may arrive before bytes; do not acknowledge complete materialization
+  until required bytes are durable. Resume cancellation/retry without lost work.
+- [Garbage collection](https://github.com/vrtmrz/obsidian-livesync/blob/main/docs/specs_garbage_collection.md):
+  Zorid must protect retained history, conflict alternatives and pending uploads;
+  do not copy a GC policy that sacrifices retained history. PouchDB revision-tree
+  winners/path IDs and text three-way merge are not our CRDT model.
+
+### Shared-main integration coordination
+
+The user explicitly transferred sole main integration to this core coordinator
+and requested the editor clean up its main work. The editor relinquished through
+Orca at `2592ebb3f6b168d5b0fffdefa3ba042c7a240975`; core accepted. All editor-owned
+main work was committed, no heavy processes remained, and only this coordinator's
+three tracking files were dirty. Earlier editor-integrator statements are historical.
+
+- Core coordinator owns main integration and the shared heavy-check schedule.
+  Editor session continues isolated editor/workspace implementation and review,
+  and sends ordered batches with dependencies, evidence and known gaps. No editor
+  main writes or pushes occur without a new explicit handoff.
+- Shared editor/core interfaces, platform selection, desktop bridges and root
+  JavaScript build files require named implementation ownership. Existing editor
+  internals remain editor-owned; integration ownership does not permit overlap.
+- Before integration, reconcile current main in an isolated candidate and run
+  affected checks. Record tested/resulting SHAs. Preserve all unrelated work;
+  never stash/reset/clean or blindly stage another session's files.
+- Existing named desktop storage scope: `/root/desktop_integration` owns new
+  Rust host/runtime files and storage-only `desktop/vault-service.cjs` and
+  `desktop/vault-dispatch.cjs`. Existing main/preload/bridge/index/webpack seams
+  require exact narrow proposals and coordination before edits.
+
+Next: reconcile the three preserved primary tracking files, then validate the
+handed-over core candidate `f44b812` at
+`/Users/ctk/orca/workspaces/Zorid/core-batch-one-integration`, including the
+reviewed late-divergence recovery-status correction. Editor candidate `4a29e12`
+at `editor-base-embed-integration` has scoped checks but no full gate yet.
+Neither candidate has been merged by this coordinator. Source work continues
+on scanner finalization, browser intents, desktop host, client updates and backup.
+No heavy process remains after relay test session 48628 exited 0.
+
+## Architecture discussion record
+
 Later steering on 2026-10-16 explicitly opens discussion of app-managed syncable
 plugin data, secret storage, and a native mobile shell around the web editor.
 The user then said to discuss first and **not change the API design now**.
 No storage/sync/secret/mobile API design or runtime replacement is approved by
 that discussion. Obsidian plugin API compatibility is no longer required.
 The original calendar/task integrations below remain deferred.
+
+Subsequent discussion on 2026-10-16 explicitly chooses a **native-owned mobile
+shell with the shared web editor embedded inside it**. Plugins may register
+app-owned actions that open plugin web screens. This settles the intended shell
+ownership, but does not select native frameworks, decide whether to retain
+Capacitor, approve bridge/data APIs, or request implementation. Continue discussing
+those boundaries while editor parity work proceeds independently.
+
+The user subsequently selected **Rust for the shared data core**, after comparing
+Kotlin Multiplatform and other alternatives. This accepts the language direction,
+not a specific storage schema, sync protocol, binding library, API or migration
+plan. Those details remain under discussion; implementation has not been requested.
+
+Further requirements accepted during this discussion: device-local data excluded
+from sync; seamless setup and automatic conflict handling without routine prompts;
+and end-to-end encrypted sync with version history and automatic backups. The
+specific CRDT, backend, encryption/key-recovery protocol, history retention and
+backup design remain open. Yjs/Yrs and LiveSync have been examined as candidates
+and references, not selected as a complete stack.
+
+The user also accepted support for both an official hosted service and an open
+self-hostable backend, and the lightweight SQLite backend direction. Backups must
+cover all recovery-critical state, explicitly including accounts and permissions,
+as well as encrypted content. Detailed database schemas, structured-data sync
+semantics, deployment and restore protocols remain under discussion.
+
+Terminology correction from the user: **plugin data** means durable,
+non-disposable plugin configuration (for example connection strings, colors and
+settings). **Local device data** means disposable state derived from that
+configuration, local documents and local state; it can be regenerated and is not
+synced. This supersedes the earlier assistant proposal of a durable local plugin
+store. Required credentials and unsynced user edits must not be put in disposable
+storage. Secret-bearing configuration needs secure handling; any broader durable
+plugin-content API remains to be discussed.
+
+The user explicitly approved protected secret storage for sensitive plugin
+configuration. Whether individual secrets sync, how they are backed up, and
+their access/recovery policies remain open.
+
+Latest scope correction: the user wants a **tight-knit first-party experience**
+and an overview of the overall app architecture. Defer speculative plugin content
+stores, custom document frameworks, Excalidraw integration and JSONL format design.
+Earlier examples are discussion history, not requirements to implement. Keep the
+shared core, storage, sync and shell boundaries focused on actual Zorid features.
+
+The user subsequently explicitly requested **P2P live sync** in addition to the
+server-backed sync direction. Transport/protocol selection and implementation
+remain open. Peer delivery must not be confused with server persistence or an
+independent backup. The user also asks about a management web UI for the Rust
+backend; serving a web frontend and authenticated management APIs is compatible
+with that architecture, without granting the server plaintext content access.
+
+The user accepted an upgrade strategy using shared Rust protocol definitions
+without requiring Protobuf. Connections negotiate compatible versions; optional
+additive changes remain compatible, while unsupported consequential operations
+must not be silently discarded. Transport protocol, encrypted document format and
+local database schema have separate versions. E2EE content migration requires a
+client-side policy and cannot rely on server-side plaintext conversion.
+
+### Proposed implementation sequence after readiness review
+
+The user now asks whether the overall architecture is ready and what the plan is.
+This is a readiness/plan request, not a runtime migration already performed.
+Read-only refresh: the app still uses TypeScript VaultAdapter/NoteBuffer storage,
+whole-text editor change callbacks, and Capacitor shells hosting the workspace.
+No Rust core or sync service implementation was found in the current inventory.
+
+Latest sequencing decision: the user selects **web + Electron desktop** as the
+first two sync clients and explicitly requests a **CLI for full headless vault access**.
+These are the first delivery targets; native mobile implementation follows their
+core/sync milestone. Proposed browser architecture compiles the portable Rust
+logic to WASM and injects browser storage/network/key-storage adapters. Browser
+SQLite/OPFS feasibility and durability must be tested; the current localStorage
+preview adapter is not the production persistence contract. The web client must
+own an independent local replica, rather than merely control the desktop replica.
+
+The user clarified that the CLI must access and change **all vault files**, with
+changes synced; it is not limited to notes or recognized document types. It uses
+the app's shared durable mutation pipeline for arbitrary text and binary files,
+attachments, custom formats, nested paths and folder operations. Its surface
+covers list/read/search/create/update/import/rename/trash and folder operations,
+plus one-shot/continuous headless sync and status, with JSON output, stdin/file
+content, stable errors and revision-checked updates. External edits by agent
+tools must also be reconciled on watch or rescan, including edits made while the
+core is stopped. Existing exclusions for internal disposable caches and protected
+secret storage remain; this correction expands vault content access, not implicit
+sync of internal databases or credentials. Latest user correction explicitly
+rejects dependence on a running Rust core: the CLI embeds and runs its own Rust
+core independently, with no required desktop process, daemon or IPC connection.
+Shared core means shared library/behavior, not a shared running process. When
+desktop and CLI open the same local vault, coordinate mutations through a
+designed multi-process storage protocol: transactions, revision checks, durable
+change records and bounded locks for file projection/reconciliation. SQLite
+locking alone is not a complete solution for in-memory CRDT state and files;
+test stale readers, concurrent edits, interrupted projection and sync workers.
+This supersedes the earlier single running vault-owner/IPC proposal. Read-only
+inspection, pending offline edits and machine-readable sync state need explicit
+semantics. A CLI harness helps testing but does not substitute for actual web and
+Electron verification. These details are proposed contracts, not implemented APIs.
+Acceptance must include binary and unknown-format file changes, folder moves and
+deletions, desktop-open concurrency, external edits and offline/restart sync, in
+addition to Markdown editing. Binary conflicts preserve recoverable alternatives
+rather than claiming arbitrary binary content can be automatically merged.
+
+Implementation waves and parallel ownership (latest requested plan):
+
+1. **Contracts and feasibility.** One core owner defines commands/events, stable
+   file IDs, revision/commit semantics, database/file reconciliation, and the
+   multi-process desktop/CLI protocol. Agree versioned sync envelopes, durable
+   acknowledgements and key enrollment/recovery/revocation architecture with the
+   sync owner. In parallel, prove Rust/WASM persistence in a browser worker and
+   Yjs/Yrs editor interoperability, including undo/IME. Choose and pin compatible
+   formats before production data is written. Test keys are acceptable for
+   isolated fixtures, not production enrollment or recovery.
+2. **Parallel foundation work after the relevant contracts settle.** Build the
+   portable core and native SQLite/filesystem adapter; standalone CLI; browser
+   adapter; Electron adapter; and Rust backend concurrently in isolated worktrees.
+   A verifier builds crash/replay/concurrency fixtures independently. Start CLI
+   local operations before its sync commands, and wire clients to real core
+   behavior as it lands. Mocks can unblock UI/API work but do not establish
+   persistence or sync readiness. Native-only dependencies stay out of the
+   portable core. The first milestone's file model includes arbitrary text and
+   binary content, folder operations and external edits, even if the first
+   development fixture is one Markdown note.
+3. **Integrated web + Electron + standalone CLI gate.** Each web/desktop client
+   has independent local state and syncs E2EE through the same backend. CLI runs
+   with desktop closed and concurrently with desktop open using its own core.
+   Verify offline concurrent text edits, binary byte preservation, unknown file
+   formats, rename/delete/folder cases, external tools, failed writes/restarts,
+   two browser tabs, duplicate/reordered delivery, authorization and mixed
+   versions. Verify editor undo/selection/IME in the actual app. Pending edits,
+   local commit, server persistence and backups must have distinct semantics.
+   Run these as successive integration checks (text first, then file lifecycle,
+   then binary/unknown content), not one final large merge. Prove a basic encrypted
+   backup/restore round trip before introducing real user data; automated backup
+   scheduling and administration can follow in wave 4.
+4. **Parallel expansion after the integrated gate.** Separate owners add P2P
+   discovery/authentication/relay fallback; retained encrypted history and
+   coordinated off-host backups; hosted/self-hosted onboarding and administration
+   UI; and native iOS/Android shells. Core owner coordinates checkpoint retention,
+   long-offline rejoin, durable configuration and secret policy. Key and restore
+   design begins in wave 1 even though full recovery UX lands here. P2P must work
+   alongside server delivery without duplicate mutation. Mobile must prove native
+   bindings, keyboard/selection, permissions, lifecycle and process-death recovery.
+5. **Release and migration gate.** Verify account/vault isolation, enrollment and
+   key recovery, revocation-safe clean-server restoration, compatible upgrades,
+   rollback and migration of existing vaults. Restore backups of accounts,
+   permissions, ciphertext and recovery-critical configuration, not just notes.
+   Run real browser/Electron/mobile checks and independent security review of
+   E2EE boundaries before production rollout. Preserve existing vaults/recovery
+   drafts until their migration is verified.
+
+Proposed ownership boundaries (new paths are proposals, not existing crates):
+
+| Owner | Primary scope | Dependencies and boundaries |
+| --- | --- | --- |
+| Core/storage | `crates/zorid-core`, native storage adapter, schema and multi-process coordination | Own shared types and migrations; reconcile stale in-memory state and file projection |
+| CLI | `crates/zorid-cli`, CLI contracts and tests | Calls core library directly; no desktop/daemon requirement and no duplicate persistence logic |
+| Browser | WASM bindings, browser worker, durable browser adapter | Validate cross-tab ownership/coordination, quota failures and restart persistence |
+| Electron integration | Native binding and desktop adapter | Preserve authorization and recovery; coordinate shared bridge changes |
+| Backend/sync | Protocol implementation, encrypted relay, account/device/vault authorization | Core owner owns client apply/commit semantics; shared protocol changes reviewed together |
+| Verification/integration | Cross-client, multi-process, crash/recovery and version fixtures | Independent acceptance evidence; serialize heavy jobs and integrate coherent reviewed work |
+| Existing editor session | Editor behavior and parity | Retains ownership of editor/workspace internals; CRDT integration coordinated through one agreed seam |
+
+Use isolated branches/worktrees. One integrator owns root build manifests,
+lockfiles and shared entrypoint changes to avoid overlapping edits. Integrate
+reviewed, validated changes into main incrementally; keep unfinished work
+isolated. Serialize heavy builds/full suites on the 8 GB machine. No speculative
+plugin framework or calendar work is added to these waves.
 
 User direction recorded 2026-10-16: discuss the following only after the editor
 base is solid. These are deferred requirements, not approved architecture or

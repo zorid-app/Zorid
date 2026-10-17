@@ -1,6 +1,8 @@
 # Local proprietary application artifacts are not project-authored source.
 recovered/
 node_modules/
+target/
+/.tools/
 .DS_Store
 dist/
 .release/
