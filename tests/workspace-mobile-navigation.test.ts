@@ -25,7 +25,7 @@ async function setup(t:TestContext,selection:Partial<PlatformVault>={},rejectHis
   }
   dom.window.matchMedia=matchMedia as typeof window.matchMedia;
   const opened:[string,string][]=[];
-  const adapter=new IdentityAdapter({'A.md':'Alpha','B.md':'Beta','Bad.canvas':'{','Document.pdf':'%PDF-test','Clip.mp3':'test'});
+  const adapter=new IdentityAdapter({'A.md':'Alpha','B.md':'Beta','Bad.canvas':'{','Document.pdf':'%PDF-test','Clip.mp3':'test','Broken.base':'views: []'});
   const platform:PlatformVault={adapter,id:'native-test',label:'Disposable',...selection,noteOpened:async(path,id)=>{opened.push([path,id]);if(rejectHistory)throw new Error('stale history');}};
   const workspace=new Workspace(document.querySelector<HTMLElement>('#app')!,editor,views);
   t.after(async()=>{try{await workspace.destroy();}finally{dom.window.close();for(const[key,descriptor]of saved){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}}});
@@ -98,4 +98,10 @@ test('a late PDF success after navigation cannot record the old inactive view',a
 test('settled media error promise alone is not metadata/read success',async t=>{
   const f=await setup(t,{},false,{media:((host:HTMLElement)=>{host.textContent='Unable to play';return{ready:Promise.resolve(),destroy(){}};}) as any});
   await f.workspace.openNote('Clip.mp3');await new Promise(done=>setTimeout(done,0));assert.deepEqual(f.opened,[]);
+});
+
+
+test('resolved Base ready with a retained parse/query error is not successful history',async t=>{
+  const f=await setup(t,{},false,{base:((host:HTMLElement)=>{host.textContent='Invalid Base';return{ready:Promise.resolve(),state:{result:null,error:new Error('Invalid query')},flush:async()=>{},close:async()=>{},hasPendingChanges:()=>false};}) as any});
+  await f.workspace.openNote('Broken.base');await new Promise(done=>setTimeout(done,0));assert.deepEqual(f.opened,[]);
 });

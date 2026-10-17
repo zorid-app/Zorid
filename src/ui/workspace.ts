@@ -290,8 +290,9 @@ export class Workspace {
     };
     if(!path)return;
     if(isMarkdown(path)){if(pane.editor||pane.refreshPreview)ready();return;}
-    const pending=pane.baseView?.ready??pane.pdfView?.ready;
-    if(pending){void pending.then(ready,()=>{});return;}
+    const base=pane.baseView;
+    if(base){void base.ready.then(()=>{if(!base.state.error&&base.state.result)ready();},()=>{});return;}
+    if(pane.pdfView){void pane.pdfView.ready.then(ready,()=>{});return;}
     if(pane.canvasView){ready();return;}
     // ImageView has no success promise; use the actual image's load result.
     const image=pane.imageView?content?.querySelector('img'):null;
