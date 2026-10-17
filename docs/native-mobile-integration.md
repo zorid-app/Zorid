@@ -951,3 +951,36 @@ Exclusive native slot returned23:17:21 after phone7 and bounded Foundation
 harness; no compiler/test app/helper/server remains. Future iOS8/verification
 requires a newly acknowledged slot. Apple API last22:22 still403 and support
 case103000040642 remains; no repeated API loop or TestFlight readiness claim.
+
+
+### Native UI continuation — 2026-10-17 23:30 UTC
+
+Owner isolated native-mobile-recovery/tingkai-c/native-mobile-recovery merged
+reviewed ceef6006 as b947801b. The resolved NativePages.swift is byte-identical
+to ceef6006; syntax parse/diff checks passed. Search/actions and full Settings/
+nav configuration have not yet passed an Xcode build or actual UIKit acceptance.
+Reviewed native caret fix11b448f3 imported as0beb0268: exact three-file grant,
+85/85 focused real-CodeMirror tests with controlled geometry and scoped strict
+TypeScript check passed in worker against owner Vite dependencies. Owner source
+inspection confirms native capability opt-in, no focus/selection/content/inset
+writes, measured guarded scroll effects and manual-scroll/composition/current-
+owner fences. Actual touch/keyboard visibility remains unverified.
+
+Requested next acknowledged exclusive iOS build8 slot in msg58d501548dca; no
+heavy process started while awaiting coordinator. Phone still runs signed Dev7.
+
+Latest user context-menu reference inspected in Downloads: horizontal Duplicate/
+Move/Share with icons above names, divider, Rename/Delete red. Native371 assigned
+NativePages UI and workflow; d809 independent read-only existing Rust mutation/
+export protocol assessment. Apple UIMenu.preferredElementSize.medium provides
+three icon-and-label elements; native interaction must own lift/dismiss/haptics.
+No fake enabled actions, direct Swift vault writes, or speculative shared Rust
+changes. Functional source/review/build/runtime verification all still pending.
+
+Import first-slice source now explicitly granted by root:861 host staged_import
+helper/minimal lib seam and native C ABI/header; bd57 new staging/coordinator
+Swift files/minimal session/Scene/Info seams, plus focused test source approved.
+117 independently reviews protocol. Initial text|binary ABI proposal objected:
+Rust canonical Auto classification and exact existing live admission token must
+be agreed before Swift wrappers freeze. No Share extension/AppGroup/project/CI/
+signing changes in this source slice, no 64MiB limit raise, no build claimed.

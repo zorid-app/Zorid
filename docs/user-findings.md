@@ -250,3 +250,16 @@ operation retries;14 added race/input cases inspected. Owner reports180 mobile
 checks +scopedTS passing. Canonical contract/codec and workspace lifecycle/search
 unions preserved. Source blocker closed; composed build/link and actual simulator/
 phone behavior remain pending. Existing exclusive native validation grant continues.
+
+
+### 2026-10-17 — native file long-press actions
+
+User Downloads reference shows a native Files context menu. Requested layout:
+Duplicate, Move and Share/export as three horizontal icon-and-label actions;
+divider; Rename; destructive red Delete. Apply to native Recents/Files with
+system lift/dismiss animation and haptic feedback. Only functional supported
+actions should appear, with explicit folder applicability. NativePages371 owns
+UI; d809 independently assesses existing Rust file-command/export seams. Preserve
+stable-ID/revision witnesses, durable retry identities and same-host admission;
+no Swift vault-file mutation or hidden web Workspace. Source implementation and
+actual simulator/device behavior remain pending.
