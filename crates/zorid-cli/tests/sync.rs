@@ -598,7 +598,12 @@ fn revoked_device_and_wrong_epoch_do_not_advance_receive_cursor() {
     let mut value: Value = serde_json::from_slice(&fs::read(&f.cb).unwrap()).unwrap();
     value["server_epoch"] = json!("wrong-epoch");
     fs::write(&f.cb, serde_json::to_vec(&value).unwrap()).unwrap();
-    assert!(!sync(&f.b, &f.cb, &["once"]).status.success());
+    let failed = sync(&f.b, &f.cb, &["once"]);
+    assert!(!failed.status.success());
+    let failure: Value = serde_json::from_slice(&failed.stderr).unwrap();
+    // Public Hello must reject the pinned epoch before revoked authorization
+    // can mask an incorrect discovery check.
+    assert_eq!(failure["error"]["code"], "sync_epoch_or_realm_mismatch");
     assert_eq!(
         success(sync(&f.b, &f.cb, &["status"]))["family"]["cursor"]["after"],
         "0"
