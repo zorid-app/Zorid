@@ -2,14 +2,20 @@ import type { VaultAdapter, VaultEntry } from '../core/types.ts';
 import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '../core/browser-vault.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import { vaultPath } from './path.ts';
+import type { DurableWrites } from '../core/durable-writes.ts';
+import { browserDurableWrites } from './browser-durable-writes.ts';
 
 /** Stable identity preserves the existing workspace/session/draft namespace. */
 export const BROWSER_CORE_VAULT_ID = 'browser:default';
 export interface BrowserCoreBackend {
+  /** Authoritative persistence scope, captured by the runtime that opens it. */
+  readonly durableScope?: Readonly<{vaultId:string;clientId:string}>;
   inventory(): Promise<BrowserVaultRead[]>;
   readEntry(path: string): Promise<BrowserVaultRead | null>;
   /** Persist exact intent before executing; retries must reuse both arguments. */
   execute(intentId: string, requestJson: string): Promise<string>;
+  prepare?(intentId: string, requestJson: string): Promise<void>;
+  commit?(intentId: string): Promise<string>;
   intents(): Promise<BrowserVaultIntent[]>;
   acknowledge(intentId: string, outcome: BrowserVaultOutcome): Promise<void>;
   subscribe(listener: (paths?: readonly string[]) => void): () => void;
@@ -29,7 +35,11 @@ export class BrowserCoreAdapter implements VaultAdapter {
   private activeSignature = '';
   private closed = false;
   private readonly backend: BrowserCoreBackend;
-  constructor(backend: BrowserCoreBackend) { this.backend = backend; }
+  readonly durableWrites?: DurableWrites;
+  constructor(backend: BrowserCoreBackend, scope?: {vaultId:string;clientId:string}) {
+    this.backend = backend;
+    if (scope) this.durableWrites = browserDurableWrites(backend,scope,()=>this.closed);
+  }
 
   private enqueue(signature: string, operation: () => Promise<void>): Promise<void> {
     const result = this.pending.then(async () => {

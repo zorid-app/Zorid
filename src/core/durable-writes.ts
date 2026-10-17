@@ -1,0 +1,54 @@
+/** Durable consumer checkpoint data. All identities must survive retries/reload. */
+export interface DurableWritePlan {
+  readonly version: 1;
+  /** Persistent LOCAL storage authority, never a path/name or logical sync vault ID. */
+  readonly vaultId: string;
+  readonly clientId: string;
+  readonly operationId: string;
+  readonly entryId: string;
+  /** Exact provider request, at most 8 MiB of UTF-8. Never replan on retry.
+   * Provider serialization determines how much text fits inside this bound. */
+  readonly encodedPlan: string;
+}
+export interface DurableWriteRef {
+  /** Must match the store's persisted authority. Recreation creates a new ID;
+   * any future sanctioned restore must rotate it before accepting old refs. */
+  readonly vaultId: string;
+  readonly clientId: string;
+  readonly token: string;
+  readonly operationId: string;
+  readonly entryId: string;
+}
+export type DurableWriteOutcome =
+  | { readonly status: 'committed'; readonly operationId: string; readonly sequence: string }
+  | { readonly status: 'rejected'; readonly operationId: string; readonly code: string };
+export type DurableWriteIntent = { readonly ref: DurableWriteRef } & (
+  | { readonly state: 'prepared' | 'commit_requested'; readonly acknowledged: false }
+  | { readonly state: 'committed'; readonly acknowledged: boolean;
+      readonly receipt: { readonly operationId: string; readonly sequence: string } }
+  | { readonly state: 'rejected'; readonly acknowledged: boolean;
+      readonly error: { readonly operationId: string; readonly code: string; readonly message: string; readonly details?: unknown } }
+);
+export interface DurableWriteInput {
+  readonly operationId: string;
+  readonly path: string;
+  readonly expectedContent: string;
+  readonly content: string;
+}
+/** Optional editor capability; it does not replace legacy adapter methods.
+ * Persist plan BEFORE prepare; persist returned ref BEFORE commit; reconcile and
+ * persist settled outcome BEFORE acknowledge. A failed checkpoint forbids the
+ * next step. Prepared records are inert. Unknown outcomes reuse the same plan/ref.
+ */
+export interface DurableWrites {
+  planWrite(input: DurableWriteInput): Promise<DurableWritePlan>;
+  prepare(plan: DurableWritePlan): Promise<DurableWriteIntent>;
+  commit(ref: DurableWriteRef): Promise<DurableWriteIntent>;
+  /** Null for a missing record. A checkpointed ref that disappears is recovery
+   * failure, never permission to prepare again or manufacture a replacement. */
+  query(ref: DurableWriteRef): Promise<DurableWriteIntent | null>;
+  /** Includes inert prepared writes, excludes other command kinds. Listing never
+   * authorizes execution; other commands need their own recovery consumer. */
+  listUnacknowledged(): Promise<DurableWriteIntent[]>;
+  acknowledge(ref: DurableWriteRef, expected: DurableWriteOutcome): Promise<void>;
+}

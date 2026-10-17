@@ -24,6 +24,8 @@ export interface BrowserVaultOptions {
 }
 
 export interface BrowserVault {
+  /** Persistent local storage authority; distinct from database name or sync vault ID. */
+  readonly authorityId: string;
   /** Serialized Rust MutationRequest in; serialized original CommitResult out. */
   mutate(requestJson: string): Promise<string>;
   /** Transaction-consistent {entries, sequence}; includes retained tombstones. */
@@ -160,7 +162,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
   }
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
     let rejected = false;
-    const opening = indexedDB.open(name, 3);
+    const opening = indexedDB.open(name, 4);
     let schemaError: BrowserVaultError | undefined;
     opening.onupgradeneeded = event => {
       if (event.oldVersion !== 0) {
@@ -176,6 +178,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
       const control = database.createObjectStore('control', { keyPath: 'key' });
       control.add({ key: 'sequence', value: '0' });
       control.add({ key: 'intent-sequence', value: '0' });
+      control.add({ key: 'local-store-id', value: crypto.randomUUID() });
       database.createObjectStore('presentation', { keyPath: 'id' });
       database.createObjectStore('intents', { keyPath: ['client_id', 'intent_id'] }).createIndex('by_operation','operation_id',{unique:true});
     };
@@ -227,6 +230,17 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
       catch (error) { abort(error); }
     });
   }
+
+  const authorityId = await transact<string>('readonly', (tx, done, abort) => {
+    const read = tx.objectStore('control').get('local-store-id');
+    read.onsuccess = () => {
+      const value = read.result?.value;
+      if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)) {
+        abort(hostError('storage_corrupt','Missing or invalid persistent local storage authority')); return;
+      }
+      done(value);
+    };
+  }).catch(error => { close(); throw error; });
 
   const mutate = async (requestJson: string, tracked?: BrowserVaultIntent): Promise<string> => {
       let request: Request;
@@ -388,6 +402,7 @@ export async function openBrowserVault(options: BrowserVaultOptions): Promise<Br
     });
   };
   return {
+    authorityId,
     mutate,
     inventory,
     async readEntry(path) { return (await inventory()).find(row => row.entry.path === path) ?? null; },

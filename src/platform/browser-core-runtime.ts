@@ -16,6 +16,8 @@ interface Pending { resolve(value: unknown): void; reject(error: unknown): void;
 
 /** Dedicated worker transport. No native service, filesystem or desktop bridge. */
 export class BrowserCoreRuntime implements BrowserCoreBackend {
+  private authorityScope?: Readonly<{vaultId:string;clientId:string}>;
+  get durableScope(): Readonly<{vaultId:string;clientId:string}> | undefined { return this.authorityScope; }
   private worker: Worker;
   private pending = new Map<string, Pending>();
   private listeners = new Set<(paths?: readonly string[]) => void>();
@@ -50,7 +52,10 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     try {
       // The worker recovers only this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
-      const opened = await runtime.call<{recovery:string[]}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      const clientId = options.clientId;
+      const opened = await runtime.call<{recovery:string[];authorityId:string}>('open', {...options, wasmModuleUrl:moduleUrl.href});
+      if (typeof opened.authorityId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(opened.authorityId)) throw new BrowserVaultError('storage_corrupt','Worker returned no valid local storage authority');
+      runtime.authorityScope = Object.freeze({vaultId:opened.authorityId,clientId});
       runtime.recovery = new Set(opened.recovery);
       document.addEventListener('visibilitychange', runtime.visibility);
       return runtime;

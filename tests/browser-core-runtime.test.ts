@@ -10,7 +10,7 @@ test('worker runtime gates recovered commands until exact outcome acknowledgemen
     onmessage?: (event:any)=>void;
     postMessage(message:any) {
       calls.push(message);
-      queueMicrotask(() => this.onmessage?.({data:{id:message.id,ok:true,result:message.operation==='open'?{recovery:['old-intent']}:message.operation==='execute'?'original-receipt':undefined}}));
+      queueMicrotask(() => this.onmessage?.({data:{id:message.id,ok:true,result:message.operation==='open'?{authorityId:'12345678-1234-4123-8123-123456789abc',recovery:['old-intent']}:message.operation==='execute'?'original-receipt':undefined}}));
     }
     terminate() { terminated = true; }
   }
@@ -21,6 +21,7 @@ test('worker runtime gates recovered commands until exact outcome acknowledgemen
     const runtime = await BrowserCoreRuntime.open({database:'zorid-core-vault:explicit',clientId:'stable-tab-incarnation',
       wasmModuleUrl:'/assets/core.js',allowNewVault:true});
     assert.equal(calls[0].payload.clientId,'stable-tab-incarnation');
+    assert.deepEqual(runtime.durableScope,{vaultId:'12345678-1234-4123-8123-123456789abc',clientId:'stable-tab-incarnation'});
     await assert.rejects(runtime.execute('new-intent','{}'),{code:'recovery_required'});
     assert.equal(calls.length,1,'gate sends no fresh mutation to worker');
     assert.equal(await runtime.execute('old-intent','original-json'),'original-receipt');

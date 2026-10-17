@@ -41,7 +41,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         queue = queue.then(refresh).catch(error => port.postMessage({event:'storage-error', code:error.code ?? 'storage_failure'}));
       };
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
-      return {ready:true, sequence, recovery:[...recovery]};
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery]};
     } catch (error) { channel?.close(); channel = undefined; vault.close(); vault = undefined; throw error; }
   }
   if (!vault) throw new BrowserVaultError('not_open', 'Open worker vault first');
