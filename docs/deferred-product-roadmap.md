@@ -83,6 +83,13 @@ areas rather than claiming that every upstream edge case has been exhausted.
   and TypeScript via Orca `msg_4c1acfc31c9b`; root's last WASM session45875 exited0
   with21 wrapper tests. No core heavy checks until editor explicitly releases.
   New user-authorized Canvas/Bases UX work is active; NoteBuffer remains paused.
+- Editor acknowledged the handoff and reported Canvas session70192 as its live
+  handle via `msg_8a891d676c3e`; wait for explicit slot release before core builds.
+- `be8bfc3`/`90e7b91` integrate source-reviewed retained-binary and classifier
+  WASM bindings after21 native wrapper tests (session45875 exit0). New exports
+  are NOT yet browser-verified. Rebuild once with remaining FamilyCommand/wire
+  routing bindings for the combined browser storage/relay gate; do not reuse
+  artifact11d2544 as evidence for these exports.
 - Actual two-tab fixture `ecbffdf` passed four Chrome checks including competing
   same-revision edits and actual owner-tab closure/reacquisition. Evidence
   `bb296d8` extends `browser-admission-verification.md`; disposable resources closed.
