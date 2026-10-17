@@ -149,3 +149,102 @@ fn budgets_cancellation_and_missing_host_facts_are_observable() {
         "unsupported"
     );
 }
+
+#[test]
+fn boolean_paths_preserve_numeric_budget_and_cancellation_errors() {
+    let record = DetachedRecord {
+        path: "a.md".into(),
+        ..Default::default()
+    };
+    for source in ["!(1/0)", "(1/0)||true", "if(1/0,1,2)", "[1].filter(1/0)"] {
+        assert_eq!(
+            evaluate_expression(source, &record, &EvaluationOptions::default())
+                .unwrap_err()
+                .code,
+            "numeric-domain",
+            "{source}"
+        );
+    }
+    for source in [
+        "!true",
+        "true && true",
+        "false || true",
+        "if(true,1,2)",
+        "[1].filter(true)",
+    ] {
+        let options = EvaluationOptions {
+            max_steps: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            evaluate_expression(source, &record, &options)
+                .unwrap_err()
+                .code,
+            "budget",
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn numeric_and_calendar_edges_cannot_panic_or_erase_types() {
+    let record = DetachedRecord {
+        path: "a.md".into(),
+        ..Default::default()
+    };
+    let options = EvaluationOptions::default();
+    for source in [
+        "1e400",
+        "date(\"2024-01-15\")+duration(\"999999999999999999999 days\")",
+        "date(\"2024-01-15\")+duration(\"-2147483648 months\")",
+    ] {
+        assert_eq!(
+            evaluate_expression(source, &record, &options)
+                .unwrap_err()
+                .code,
+            "numeric-domain",
+            "{source}"
+        );
+    }
+    assert_eq!(
+        evaluate_expression("date(\"2024-01-15\").format(\"%Q\")", &record, &options)
+            .unwrap_err()
+            .code,
+        "unsupported"
+    );
+    let huge = format!("duration(\"{} days\")", "9".repeat(400));
+    assert_eq!(
+        evaluate_expression(&huge, &record, &options)
+            .unwrap_err()
+            .code,
+        "numeric-domain"
+    );
+    assert_eq!(
+        evaluate_expression("\"x\".repeat(1000000).split(\"\",1)", &record, &options)
+            .unwrap()
+            .value,
+        BaseValue::List {
+            value: vec![BaseValue::String { value: "x".into() }]
+        }
+    );
+    let record = DetachedRecord {
+        properties: vec![(
+            "items".into(),
+            PropertyValue::Array(vec![PropertyValue::Null; 1000]),
+        )],
+        ..record
+    };
+    assert_eq!(
+        evaluate_expression(
+            "items.sum()",
+            &record,
+            &EvaluationOptions {
+                max_steps: 5,
+                ..options
+            }
+        )
+        .unwrap_err()
+        .code,
+        "budget"
+    );
+}

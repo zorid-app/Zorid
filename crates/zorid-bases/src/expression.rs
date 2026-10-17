@@ -132,6 +132,9 @@ impl<'a> Lexer<'a> {
         let value = raw
             .parse::<f64>()
             .map_err(|_| format!("Invalid number {raw}"))?;
+        if !value.is_finite() {
+            return Err("numeric-domain\0Nonfinite numeric literal".into());
+        }
         self.push(TokenKind::Number(value), raw, true);
         Ok(())
     }
@@ -581,8 +584,12 @@ pub(crate) fn evaluate(
     expression: &str,
     context: &BasesEvaluationContext,
 ) -> Result<EvaluationResult, ExpressionDiagnostic> {
-    let ast =
-        parse_cached(expression).map_err(|message| ExpressionDiagnostic::new("parse", message))?;
+    let ast = parse_cached(expression).map_err(|message| {
+        let (code, text) = message
+            .split_once('\0')
+            .unwrap_or(("parse", message.as_str()));
+        ExpressionDiagnostic::new(code, text)
+    })?;
     let mut evaluator = Evaluator::new(context);
     let value = evaluator.evaluate(ast.as_ref(), &BTreeMap::new());
     let value = typed_result(value)?;
@@ -799,6 +806,9 @@ impl<'a> Evaluator<'a> {
     fn evaluate(&mut self, expression: &Expr, scope: &Scope) -> RuntimeValue {
         let value = self.evaluate_inner(expression, scope);
         match value {
+            RuntimeValue::Duration(ref duration) if !duration_finite(duration) => {
+                RuntimeValue::Error("numeric-domain\0Nonfinite duration result".into())
+            }
             RuntimeValue::Number(value) if !value.is_finite() => {
                 RuntimeValue::Error("numeric-domain\0Nonfinite numeric result".into())
             }
@@ -841,6 +851,9 @@ impl<'a> Evaluator<'a> {
             }
             Expr::Unary(operator, value) => {
                 let value = self.evaluate(value, scope);
+                if matches!(value, RuntimeValue::Error(_)) {
+                    return value;
+                }
                 if matches!(value, RuntimeValue::Null) {
                     return RuntimeValue::Null;
                 }
@@ -907,13 +920,20 @@ impl<'a> Evaluator<'a> {
     }
 
     fn binary(&mut self, operator: &str, left: &Expr, right: &Expr, scope: &Scope) -> RuntimeValue {
-        if operator == "&&" {
+        if operator == "&&" || operator == "||" {
             let left = self.evaluate(left, scope);
-            return RuntimeValue::Bool(is_truthy(&left) && is_truthy(&self.evaluate(right, scope)));
-        }
-        if operator == "||" {
-            let left = self.evaluate(left, scope);
-            return RuntimeValue::Bool(is_truthy(&left) || is_truthy(&self.evaluate(right, scope)));
+            if matches!(left, RuntimeValue::Error(_)) {
+                return left;
+            }
+            let truth = is_truthy(&left);
+            if (operator == "&&" && !truth) || (operator == "||" && truth) {
+                return RuntimeValue::Bool(truth);
+            }
+            let right = self.evaluate(right, scope);
+            if matches!(right, RuntimeValue::Error(_)) {
+                return right;
+            }
+            return RuntimeValue::Bool(is_truthy(&right));
         }
         let left = self.evaluate(left, scope);
         let right = self.evaluate(right, scope);
@@ -964,7 +984,9 @@ impl<'a> Evaluator<'a> {
         }
         if let RuntimeValue::Date(date) = &left {
             if let Some(duration) = coerce_duration(&right) {
-                return RuntimeValue::Date(add_duration(date, &duration, 1.0));
+                return add_duration(date, &duration, 1.0)
+                    .map(RuntimeValue::Date)
+                    .unwrap_or_else(RuntimeValue::Error);
             }
         }
         if matches!(left, RuntimeValue::String(_)) || matches!(right, RuntimeValue::String(_)) {
@@ -997,7 +1019,9 @@ impl<'a> Evaluator<'a> {
         }
         if let RuntimeValue::Date(date) = &left {
             if let Some(duration) = coerce_duration(&right) {
-                return RuntimeValue::Date(add_duration(date, &duration, -1.0));
+                return add_duration(date, &duration, -1.0)
+                    .map(RuntimeValue::Date)
+                    .unwrap_or_else(RuntimeValue::Error);
             }
         }
         numeric_pair(self, &left, &right, |a, b| a - b)
@@ -1032,6 +1056,9 @@ impl<'a> Evaluator<'a> {
                     .first()
                     .map(|value| self.evaluate(value, scope))
                     .unwrap_or(RuntimeValue::Null);
+                if matches!(condition, RuntimeValue::Error(_)) {
+                    return condition;
+                }
                 if is_truthy(&condition) {
                     arguments
                         .get(1)
@@ -1045,10 +1072,10 @@ impl<'a> Evaluator<'a> {
                 }
             }
             Expr::Identifier(name) => {
-                let arguments = arguments
-                    .iter()
-                    .map(|value| self.evaluate(value, scope))
-                    .collect::<Vec<_>>();
+                let arguments = match self.evaluate_arguments(arguments, scope) {
+                    Ok(values) => values,
+                    Err(error) => return error,
+                };
                 self.global(name, &arguments)
             }
             Expr::Member(object, Member::Named(method)) => {
@@ -1057,6 +1084,42 @@ impl<'a> Evaluator<'a> {
             }
             _ => RuntimeValue::Error("Expression is not callable".to_string()),
         }
+    }
+
+    fn charge(&mut self, work: usize) -> Result<(), ()> {
+        if self
+            .context
+            .cancellation
+            .as_ref()
+            .is_some_and(|cancellation| cancellation.stop_reason().is_some())
+        {
+            return Err(());
+        }
+        self.remaining_work = self.remaining_work.checked_sub(work).ok_or(())?;
+        Ok(())
+    }
+
+    fn evaluate_arguments(
+        &mut self,
+        arguments: &[Expr],
+        scope: &Scope,
+    ) -> Result<Vec<RuntimeValue>, RuntimeValue> {
+        let mut values = Vec::new();
+        let mut bytes = 0usize;
+        for argument in arguments {
+            let value = self.evaluate(argument, scope);
+            if matches!(value, RuntimeValue::Error(_)) {
+                return Err(value);
+            }
+            bytes = bytes.saturating_add(value_bytes(&value).unwrap_or(usize::MAX));
+            if bytes > 8 * 1024 * 1024 {
+                return Err(RuntimeValue::Error(
+                    "budget\0Arguments exceed byte budget".into(),
+                ));
+            }
+            values.push(value);
+        }
+        Ok(values)
     }
 
     fn global(&self, name: &str, arguments: &[RuntimeValue]) -> RuntimeValue {
@@ -1135,6 +1198,15 @@ impl<'a> Evaluator<'a> {
         if let RuntimeValue::Error(_) = receiver {
             return receiver;
         }
+        let work = match &receiver {
+            RuntimeValue::List(values) => values.len(),
+            RuntimeValue::Object(values) => values.len(),
+            RuntimeValue::String(value) => value.len() / 256,
+            _ => 0,
+        };
+        if self.charge(work).is_err() {
+            return RuntimeValue::Error("budget\0Builtin traversal exceeds work budget".into());
+        }
         if name == "isTruthy" {
             return RuntimeValue::Bool(is_truthy(&receiver));
         }
@@ -1155,24 +1227,24 @@ impl<'a> Evaluator<'a> {
             // As in Obsidian, a method on a missing value is missing rather than an error.
             RuntimeValue::Null => RuntimeValue::Null,
             RuntimeValue::String(value) => {
-                let values = arguments
-                    .iter()
-                    .map(|argument| self.evaluate(argument, scope))
-                    .collect::<Vec<_>>();
+                let values = match self.evaluate_arguments(arguments, scope) {
+                    Ok(values) => values,
+                    Err(error) => return error,
+                };
                 self.string_method(&value, name, &values)
             }
             RuntimeValue::Number(value) => {
-                let values = arguments
-                    .iter()
-                    .map(|argument| self.evaluate(argument, scope))
-                    .collect::<Vec<_>>();
+                let values = match self.evaluate_arguments(arguments, scope) {
+                    Ok(values) => values,
+                    Err(error) => return error,
+                };
                 self.number_method(value, name, &values)
             }
             RuntimeValue::Date(value) => {
-                let values = arguments
-                    .iter()
-                    .map(|argument| self.evaluate(argument, scope))
-                    .collect::<Vec<_>>();
+                let values = match self.evaluate_arguments(arguments, scope) {
+                    Ok(values) => values,
+                    Err(error) => return error,
+                };
                 self.date_method(&value, name, &values)
             }
             RuntimeValue::List(values) => self.list_method(&values, name, arguments, scope),
@@ -1194,17 +1266,17 @@ impl<'a> Evaluator<'a> {
                 }
             }
             RuntimeValue::File(file) => {
-                let values = arguments
-                    .iter()
-                    .map(|argument| self.evaluate(argument, scope))
-                    .collect::<Vec<_>>();
+                let values = match self.evaluate_arguments(arguments, scope) {
+                    Ok(values) => values,
+                    Err(error) => return error,
+                };
                 self.file_method(&file, name, &values)
             }
             RuntimeValue::Link(link) => {
-                let values = arguments
-                    .iter()
-                    .map(|argument| self.evaluate(argument, scope))
-                    .collect::<Vec<_>>();
+                let values = match self.evaluate_arguments(arguments, scope) {
+                    Ok(values) => values,
+                    Err(error) => return error,
+                };
                 self.link_method(&link, name, &values)
             }
             value => method_not_found(value_type(&value), name),
@@ -1327,10 +1399,12 @@ impl<'a> Evaluator<'a> {
     ) -> RuntimeValue {
         match name {
             "date" => RuntimeValue::Date(start_of_day(value)),
-            "format" => RuntimeValue::String(format_date(
+            "format" => try_format_date(
                 value,
                 &arguments.first().map(plain_string).unwrap_or_default(),
-            )),
+            )
+            .map(RuntimeValue::String)
+            .unwrap_or_else(RuntimeValue::Error),
             "time" => RuntimeValue::String(format_date(value, "HH:mm:ss")),
             "relative" => RuntimeValue::String(relative_date(value, &self.now)),
             _ => method_not_found("Date", name),
@@ -1360,23 +1434,25 @@ impl<'a> Evaluator<'a> {
                 let needle = self.evaluate(argument, scope);
                 values.iter().any(|value| self.equals(value, &needle))
             })),
-            "filter" => RuntimeValue::List(
-                values
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, value)| {
-                        let mut nested = scope.clone();
-                        nested.insert("value".to_string(), value.clone());
-                        nested.insert("index".to_string(), RuntimeValue::Number(index as f64));
-                        arguments
-                            .first()
-                            .is_some_and(|expression| {
-                                is_truthy(&self.evaluate(expression, &nested))
-                            })
-                            .then(|| value.clone())
-                    })
-                    .collect(),
-            ),
+            "filter" => {
+                let mut result = Vec::new();
+                for (index, value) in values.iter().enumerate() {
+                    let mut nested = scope.clone();
+                    nested.insert("value".into(), value.clone());
+                    nested.insert("index".into(), RuntimeValue::Number(index as f64));
+                    let condition = arguments
+                        .first()
+                        .map(|expression| self.evaluate(expression, &nested))
+                        .unwrap_or(RuntimeValue::Null);
+                    if matches!(condition, RuntimeValue::Error(_)) {
+                        return condition;
+                    }
+                    if is_truthy(&condition) {
+                        result.push(value.clone());
+                    }
+                }
+                RuntimeValue::List(result)
+            }
             "flat" => RuntimeValue::List(
                 values
                     .iter()
@@ -2097,6 +2173,12 @@ fn start_of_day(value: &DateValue) -> DateValue {
 }
 
 fn format_date(value: &DateValue, pattern: &str) -> String {
+    try_format_date(value, pattern).unwrap_or_default()
+}
+fn try_format_date(value: &DateValue, pattern: &str) -> Result<String, String> {
+    if pattern.len() > 65_536 {
+        return Err("budget\0Date format exceeds byte budget".into());
+    }
     let date = value.timezone.local_datetime(value.millis);
     let mut format = pattern.to_string();
     static LITERALS: LazyLock<Regex> =
@@ -2122,11 +2204,16 @@ fn format_date(value: &DateValue, pattern: &str) -> String {
     ] {
         format = format.replace(source, target);
     }
+    if chrono::format::StrftimeItems::new(&format)
+        .any(|item| matches!(item, chrono::format::Item::Error))
+    {
+        return Err("unsupported\0Invalid date format".into());
+    }
     let mut output = date.format(&format).to_string();
     for (index, literal) in stored.iter().enumerate() {
         output = output.replace(&format!("__L{index}__"), literal);
     }
-    output
+    Ok(output)
 }
 
 fn date_property(value: &DateValue, property: &str) -> RuntimeValue {
@@ -2185,31 +2272,72 @@ fn duration_millis(value: &DurationValue) -> f64 {
         + value.weeks * 604_800_000.0
 }
 
-fn add_duration(value: &DateValue, duration: &DurationValue, direction: f64) -> DateValue {
+fn add_duration(
+    value: &DateValue,
+    duration: &DurationValue,
+    direction: f64,
+) -> Result<DateValue, String> {
+    let invalid = || "numeric-domain\0Date arithmetic is out of range".to_string();
+    if !duration_finite(duration) {
+        return Err(invalid());
+    }
     let mut date = value.timezone.local_datetime(value.millis);
-    let months = ((duration.years * 12.0 + duration.months) * direction).round() as i32;
-    if months > 0 {
+    let months = ((duration.years * 12.0 + duration.months) * direction).round();
+    if !months.is_finite() || months.abs() > u32::MAX as f64 {
+        return Err(invalid());
+    }
+    if months > 0.0 {
         date = date
             .checked_add_months(Months::new(months as u32))
-            .unwrap_or(date);
-    } else if months < 0 {
+            .ok_or_else(invalid)?;
+    } else if months < 0.0 {
         date = date
             .checked_sub_months(Months::new((-months) as u32))
-            .unwrap_or(date);
+            .ok_or_else(invalid)?;
     }
-    let millis = ((duration.weeks * 604_800_000.0
-        + duration.days * 86_400_000.0
-        + duration.hours * 3_600_000.0
-        + duration.minutes * 60_000.0
-        + duration.seconds * 1_000.0
-        + duration.milliseconds)
-        * direction)
-        .round() as i64;
-    DateValue {
-        millis: value.timezone.millis_from_local(date) + millis,
-        date_only: value.date_only,
+    let days = (duration.weeks * 7.0 + duration.days) * direction;
+    if !days.is_finite() || days.abs() > i32::MAX as f64 {
+        return Err(invalid());
+    }
+    date = date
+        .checked_add_signed(chrono::Duration::try_days(days.trunc() as i64).ok_or_else(invalid)?)
+        .ok_or_else(invalid)?;
+    let elapsed = (days.fract() * 86_400_000.0
+        + (duration.hours * 3_600_000.0
+            + duration.minutes * 60_000.0
+            + duration.seconds * 1_000.0
+            + duration.milliseconds)
+            * direction)
+        .round();
+    if !elapsed.is_finite() || elapsed < i64::MIN as f64 || elapsed >= i64::MAX as f64 {
+        return Err(invalid());
+    }
+    let base = value.timezone.try_millis_from_local(date).ok_or_else(|| {
+        "invalid-local-time\0Calendar arithmetic produced a nonunique local time".to_string()
+    })?;
+    let millis = base.checked_add(elapsed as i64).ok_or_else(invalid)?;
+    if DateTime::<Utc>::from_timestamp_millis(millis).is_none() {
+        return Err(invalid());
+    }
+    Ok(DateValue {
+        millis,
+        date_only: value.date_only && elapsed == 0.0,
         timezone: value.timezone.clone(),
-    }
+    })
+}
+fn duration_finite(value: &DurationValue) -> bool {
+    [
+        value.years,
+        value.months,
+        value.weeks,
+        value.days,
+        value.hours,
+        value.minutes,
+        value.seconds,
+        value.milliseconds,
+    ]
+    .iter()
+    .all(|value| value.is_finite())
 }
 
 fn add_durations(left: &DurationValue, right: &DurationValue) -> DurationValue {
@@ -2516,40 +2644,53 @@ fn slice_values(values: &[RuntimeValue], start: isize, end: Option<isize>) -> Ve
     }
 }
 fn string_slice(value: &str, start: isize, end: Option<isize>) -> RuntimeValue {
-    let chars = value.chars().collect::<Vec<_>>();
+    let len = value.chars().count() as isize;
+    let start = if start < 0 {
+        len.saturating_add(start).max(0)
+    } else {
+        start.min(len)
+    };
+    let end = end
+        .map(|end| {
+            if end < 0 {
+                len.saturating_add(end).max(0)
+            } else {
+                end.min(len)
+            }
+        })
+        .unwrap_or(len);
     RuntimeValue::String(
-        slice_values(
-            &chars
-                .iter()
-                .map(|character| RuntimeValue::String(character.to_string()))
-                .collect::<Vec<_>>(),
-            start,
-            end,
-        )
-        .iter()
-        .map(plain_string)
-        .collect(),
+        value
+            .chars()
+            .skip(start as usize)
+            .take(end.saturating_sub(start).max(0) as usize)
+            .collect(),
     )
 }
 fn string_split(value: &str, separator: &RuntimeValue, limit: Option<usize>) -> RuntimeValue {
-    let mut values = match separator {
-        RuntimeValue::Regex(pattern, flags) => match regex_split(value, pattern, flags) {
-            Ok(value) => value,
-            Err(error) => return RuntimeValue::Error(error),
-        },
-        other if plain_string(other).is_empty() => value
+    let requested = limit.unwrap_or(usize::MAX);
+    let take = requested.min(100_001);
+    let values: Result<Vec<String>, String> = match separator {
+        RuntimeValue::Regex(pattern, flags) => compile_regex(pattern, flags)
+            .map(|regex| regex.split(value).take(take).map(String::from).collect()),
+        other if plain_string(other).is_empty() => Ok(value
             .chars()
+            .take(take)
             .map(|character| character.to_string())
-            .collect(),
-        other => value
+            .collect()),
+        other => Ok(value
             .split(&plain_string(other))
+            .take(take)
             .map(String::from)
-            .collect(),
+            .collect()),
     };
-    if let Some(limit) = limit {
-        values.truncate(limit);
+    match values {
+        Ok(values) if values.len() > 100_000 => {
+            RuntimeValue::Error("budget\0Split result exceeds item budget".into())
+        }
+        Ok(values) => RuntimeValue::List(values.into_iter().map(RuntimeValue::String).collect()),
+        Err(error) => RuntimeValue::Error(error),
     }
-    RuntimeValue::List(values.into_iter().map(RuntimeValue::String).collect())
 }
 fn compare_sort_keys(left: &RuntimeValue, right: &RuntimeValue) -> std::cmp::Ordering {
     match (left, right) {
