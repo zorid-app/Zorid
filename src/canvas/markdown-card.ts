@@ -71,6 +71,55 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
   let unsubscribe: (() => void) | undefined, activation = 0, previewVersion = 0, loadError: unknown, draftError: unknown;
   let previewOwners: { destroy(): void }[] = [];
   let listConfiguration = '', configurationQueued = false;
+  // Native media controls may blur the editor while exposing only the document
+  // body as activeElement. Keep card-local pointer interaction separate from
+  // keyboard focus; release/cancel must not leave a permanent focus exemption.
+  const insidePointers = new Set<number>();
+  let watchingFocus = false, focusIntent = 0;
+  const containsFocusTarget = (target: EventTarget | null) => !!target && (element.contains(target as Node) || toolbar.contains(target as Node));
+  const exitForFocus = () => { if (!closed && editing) void leaveEditing(focusIntent).catch(() => {}); };
+  const checkFocus = () => {
+    const intent = focusIntent;
+    queueMicrotask(() => {
+      if (intent === focusIntent && !insidePointers.size && !containsFocusTarget(document.activeElement)) exitForFocus();
+    });
+  };
+  const focusIn = (event: FocusEvent) => {
+    if (containsFocusTarget(event.target)) { focusIntent++; return; }
+    // A native media control can expose body as its focused owner. An actual
+    // external control gaining focus is an exit even during a held pointer.
+    if (event.target === document.body || event.target === document.documentElement) return;
+    focusIntent++; insidePointers.clear(); exitForFocus();
+  };
+  const pointerDown = (event: PointerEvent) => {
+    focusIntent++;
+    if (containsFocusTarget(event.target)) insidePointers.add(event.pointerId);
+    else { insidePointers.clear(); exitForFocus(); }
+  };
+  const pointerUp = (event: PointerEvent) => { insidePointers.delete(event.pointerId); };
+  const pointerCancel = (event: PointerEvent) => { pointerUp(event); checkFocus(); };
+  const keyFocus = (event: KeyboardEvent) => { if (event.key === 'Tab') { insidePointers.clear(); checkFocus(); } };
+  const windowBlur = () => { insidePointers.clear(); checkFocus(); };
+  function watchFocus(): void {
+    if (watchingFocus) return; watchingFocus = true;
+    document.addEventListener('focusin', focusIn, true);
+    document.addEventListener('pointerdown', pointerDown, true);
+    document.addEventListener('pointerup', pointerUp, true);
+    document.addEventListener('pointercancel', pointerCancel, true);
+    document.addEventListener('lostpointercapture', pointerUp, true);
+    document.addEventListener('keydown', keyFocus, true);
+    document.defaultView?.addEventListener('blur', windowBlur);
+  }
+  function unwatchFocus(): void {
+    if (!watchingFocus) return; watchingFocus = false; insidePointers.clear();
+    document.removeEventListener('focusin', focusIn, true);
+    document.removeEventListener('pointerdown', pointerDown, true);
+    document.removeEventListener('pointerup', pointerUp, true);
+    document.removeEventListener('pointercancel', pointerCancel, true);
+    document.removeEventListener('lostpointercapture', pointerUp, true);
+    document.removeEventListener('keydown', keyFocus, true);
+    document.defaultView?.removeEventListener('blur', windowBlur);
+  }
   const current = () => !closed && (options.isCurrent?.() ?? true);
   const previewCurrent = () => current() && (options.isPreviewCurrent?.() ?? true);
   const report = (error: unknown) => { if (closed) return; status.textContent = error instanceof Error ? error.message : String(error); try { options.onError?.(error); } catch { /* Observers do not own the card lifetime. */ } };
@@ -186,25 +235,26 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
       });
     }
     clearPreview(); editing = true; preview.hidden = true; editorHost.hidden = false; element.classList.add('is-editing');
-    options.onEditingChange?.(true); editor.focus();
+    watchFocus(); options.onEditingChange?.(true); editor.focus();
     const cm = EditorView.findFromDOM(editorHost.querySelector('.cm-editor') ?? editorHost);
     if (point && cm) { const position = cm.posAtCoords(point); if (position !== null) cm.dispatch({ selection: { anchor: position }, userEvent: 'select.pointer' }); }
   }
-  async function deactivate(): Promise<void> {
+  async function leaveEditing(expectedFocusIntent?: number): Promise<void> {
     const version = ++activation;
     if (!editing || closed) return;
     await flush();
-    if (closed || version !== activation) return;
-    editing = false; editorHost.hidden = true; preview.hidden = false; element.classList.remove('is-editing'); showPreview(); options.onEditingChange?.(false);
+    if (closed || version !== activation || expectedFocusIntent !== undefined && expectedFocusIntent !== focusIntent) return;
+    editing = false; unwatchFocus(); editorHost.hidden = true; preview.hidden = false; element.classList.remove('is-editing'); showPreview(); options.onEditingChange?.(false);
   }
+  // Explicit API/Escape exits do not depend on the automatic focus intent.
+  async function deactivate(): Promise<void> { await leaveEditing(); }
   edit.onclick = () => { if (current()) void activate().catch(report); };
   // Reading controls and retained links cannot outlive their session owner.
   element.addEventListener('click', event => {
     if (!current() || !canEdit() && (event.target as Element).closest('input[type="checkbox"]')) { event.preventDefault(); event.stopImmediatePropagation(); }
   }, true);
-  element.addEventListener('focusout', () => {
-    queueMicrotask(() => { if (!closed && editing && !element.contains(document.activeElement) && !toolbar.contains(document.activeElement)) void deactivate().catch(() => {}); });
-  });
+  element.addEventListener('focusout', checkFocus);
+  toolbar.addEventListener('focusout', checkFocus);
   editorHost.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); void deactivate().catch(() => {}); }
     else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); void flush().catch(() => {}); }
@@ -218,6 +268,7 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
     refreshPreview() { if (!closed && !editing) showPreview(); },
     destroy() {
       if (closed) return; closed = true; activation++;
+      unwatchFocus(); element.removeEventListener('focusout', checkFocus); toolbar.removeEventListener('focusout', checkFocus);
       for (const release of [unsubscribe, () => clearPreview(), () => editor?.destroy(), () => session?.destroy()]) {
         try { release?.(); } catch (error) { try { options.onError?.(error); } catch { /* Release the remaining owners. */ } }
       }
