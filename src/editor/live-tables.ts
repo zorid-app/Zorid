@@ -42,10 +42,10 @@ class TableController {
   readonly owner: EditorView;
   model: MarkdownTable;
   private open: (target: string) => void;
-  private cellExtensions: Extension;
+  private cellExtensions: Extension | ((owner: EditorView) => Extension);
   readonly identity: object;
 
-  constructor(owner: EditorView, model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension) {
+  constructor(owner: EditorView, model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension | ((owner: EditorView) => Extension)) {
     this.owner = owner; this.model = model; this.open = open; this.identity = identity;
     this.cellExtensions = cellExtensions;
     this.dom.className = 'cm-live-table';
@@ -474,7 +474,7 @@ class TableController {
         extensions: [EditorView.lineWrapping, this.readOnly.of(EditorState.readOnly.of(this.owner.state.readOnly)),
           markdown({ base: markdownLanguage, addKeymap: false, extensions: liveInlineMarkdown }), syntaxHighlighting(defaultHighlightStyle),
           EditorView.contentAttributes.of({ 'aria-label': `Table row ${row + 1}, column ${column + 1}`, spellcheck: 'true' }),
-          this.cellExtensions,
+          typeof this.cellExtensions === 'function' ? this.cellExtensions(this.owner) : this.cellExtensions,
           Prec.highest(keymap.of([
             { key: 'Tab', run: () => this.navigate('next'), shift: () => this.navigate('previous') },
             { key: 'Enter', run: () => this.navigate('down'), shift: insertNewline },
@@ -513,7 +513,8 @@ class TableController {
         if (changed) { active.from = start; active.to = start + encoded.length; active.insertion = undefined; }
         try { this.owner.dispatch({ ...(changed ? { changes: change } : {}),
           selection: EditorSelection.single(map(selection.anchor), map(selection.head)),
-          annotations: [cellSync.of(true), Transaction.userEvent.of(transactions.find(t => t.annotation(Transaction.userEvent))?.annotation(Transaction.userEvent) ?? (changed ? 'input.type' : 'select'))] });
+          annotations: [cellSync.of(true), Transaction.userEvent.of(transactions.find(t => t.annotation(Transaction.userEvent))?.annotation(Transaction.userEvent) ?? (changed ? 'input.type' : 'select')),
+            ...transactions.flatMap(transaction => { const isolation = transaction.annotation(isolateHistory); return isolation ? [isolateHistory.of(isolation)] : []; })] });
         } finally { this.syncing = false; }
       },
     });
@@ -651,8 +652,8 @@ class TableWidget extends WidgetType {
   readonly model: MarkdownTable;
   readonly open: (target: string) => void;
   readonly identity: object;
-  readonly cellExtensions: Extension;
-  constructor(model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension) { super(); this.model = model; this.open = open; this.identity = identity; this.cellExtensions = cellExtensions; }
+  readonly cellExtensions: Extension | ((owner: EditorView) => Extension);
+  constructor(model: MarkdownTable, open: (target: string) => void, identity: object, cellExtensions: Extension | ((owner: EditorView) => Extension)) { super(); this.model = model; this.open = open; this.identity = identity; this.cellExtensions = cellExtensions; }
   eq(other: TableWidget) { return this.identity === other.identity && this.model.from === other.model.from && this.model.source === other.model.source; }
   toDOM(view: EditorView) { return new TableController(view, this.model, this.open, this.identity, this.cellExtensions).dom; }
   updateDOM(dom: HTMLElement) { const controller = controllers.get(dom); if (!controller || controller.identity !== this.identity) return false; controller.update(this.model); return true; }
@@ -776,7 +777,7 @@ export function tableActionsAt(view: EditorView, target: HTMLElement): TableActi
   return flatten(tableMenuAt(view, target));
 }
 
-export function liveTables(open: (target: string) => void, cellExtensions: Extension = [],
+export function liveTables(open: (target: string) => void, cellExtensions: Extension | ((owner: EditorView) => Extension) = [],
   excludes?: (state: EditorState) => readonly { from: number; to: number }[]): Extension {
   type ExcludedRange = { from: number; to: number };
   const exclusions = (state: EditorState): ExcludedRange[] => {
