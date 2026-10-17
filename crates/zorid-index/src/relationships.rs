@@ -108,9 +108,41 @@ impl<'a> ResolutionView<'a> {
         max_edges: usize,
         max_bytes: usize,
     ) -> Result<ResolutionSnapshot, IndexError> {
+        self.snapshot_with(max_edges, max_bytes, &mut |_| Ok::<(), IndexError>(()))
+    }
+    /// Controlled construction begins BEFORE resolver/namespace allocation.
+    /// The host callback charges work and checks cancellation; its error remains
+    /// intact. Namespace, records, edges and resolver visits are checkpointed;
+    /// sorting reserves conservative comparison work before running.
+    pub fn snapshot_checked<E: From<IndexError>>(
+        generation: &'a Generation,
+        max_edges: usize,
+        max_bytes: usize,
+        mut check: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<ResolutionSnapshot, E> {
+        check(0)?;
         if max_bytes == 0 || max_bytes > MAX_GENERATION_METADATA_BYTES {
-            return Err(IndexError::InvalidBudget);
+            return Err(E::from(IndexError::InvalidBudget));
         }
+        let resolver = Resolver::new_checked(generation.manifest(), &mut check)?;
+        Self {
+            generation,
+            resolver,
+        }
+        .snapshot_with(max_edges, max_bytes, &mut check)
+    }
+    fn snapshot_with<E: From<IndexError>>(
+        &self,
+        max_edges: usize,
+        max_bytes: usize,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<ResolutionSnapshot, E> {
+        check(0)?;
+        if max_bytes == 0 || max_bytes > MAX_GENERATION_METADATA_BYTES {
+            return Err(E::from(IndexError::InvalidBudget));
+        }
+        // Charge namespace cloning and the coverage scan before either runs.
+        check(self.generation.manifest().entries().len().saturating_mul(2))?;
         let mut result = ResolutionSnapshot {
             snapshot_id: self.snapshot_id().clone(),
             source: self.source().clone(),
@@ -118,46 +150,49 @@ impl<'a> ResolutionView<'a> {
             edges: Vec::new(),
             manifest: self.generation.manifest().clone(),
         };
-        // Empty array's brackets are already counted; add each encoded edge
-        // and exactly one comma after the first. No hashing of JSON key order.
         let mut bytes = serde_json::to_vec(&result)
-            .map_err(|_| IndexError::InvalidRecord)?
+            .map_err(|_| E::from(IndexError::InvalidRecord))?
             .len();
         if bytes > max_bytes {
-            return Err(IndexError::GenerationLimit);
+            return Err(E::from(IndexError::GenerationLimit));
         }
         for record in self.generation.records() {
+            check(1)?;
             let Some(metadata) = record.metadata() else {
                 continue;
             };
             for (n, link) in metadata.links.iter().enumerate() {
+                check(1)?;
                 if result.edges.len() >= max_edges {
-                    return Err(IndexError::GenerationLimit);
+                    return Err(E::from(IndexError::GenerationLimit));
                 }
                 let target = self
-                    .resolve(&record.witness().entry().id, &link.destination)?
+                    .resolver
+                    .candidates_checked(&record.witness().entry().id, &link.destination, check)?
                     .first()
                     .map(|entry| (*entry).clone());
                 let edge = ResolvedEdge {
                     source: record.witness().entry().clone(),
-                    link_index: u32::try_from(n).map_err(|_| IndexError::GenerationLimit)?,
+                    link_index: u32::try_from(n)
+                        .map_err(|_| E::from(IndexError::GenerationLimit))?,
                     link: link.clone(),
                     target,
                 };
                 bytes = bytes
                     .checked_add(
                         serde_json::to_vec(&edge)
-                            .map_err(|_| IndexError::InvalidRecord)?
+                            .map_err(|_| E::from(IndexError::InvalidRecord))?
                             .len(),
                     )
                     .and_then(|n| n.checked_add(usize::from(!result.edges.is_empty())))
-                    .ok_or(IndexError::GenerationLimit)?;
+                    .ok_or_else(|| E::from(IndexError::GenerationLimit))?;
                 if bytes > max_bytes {
-                    return Err(IndexError::GenerationLimit);
+                    return Err(E::from(IndexError::GenerationLimit));
                 }
                 result.edges.push(edge);
             }
         }
+        check(0)?;
         Ok(result)
     }
 }

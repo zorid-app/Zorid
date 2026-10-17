@@ -96,15 +96,24 @@ pub struct Resolver<'a> {
 }
 impl<'a> Resolver<'a> {
     pub fn new(manifest: &'a Manifest) -> Self {
-        Self {
-            manifest,
-            files: manifest
-                .entries()
-                .iter()
-                .filter(|e| e.kind == EntryKind::File)
-                .map(|e| (e, normalize_link_key(e.path.as_str())))
-                .collect(),
+        Self::new_checked(manifest, &mut |_| Ok::<(), IndexError>(()))
+            .expect("infallible checkpoint")
+    }
+    /// Charge/cancel before allocating each namespace projection. The callback
+    /// owns its error classification; this engine has no clock/cancellation IO.
+    pub fn new_checked<E>(
+        manifest: &'a Manifest,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Self, E> {
+        check(0)?;
+        let mut files = Vec::new();
+        for entry in manifest.entries() {
+            check(1)?;
+            if entry.kind == EntryKind::File {
+                files.push((entry, normalize_link_key(entry.path.as_str())));
+            }
         }
+        Ok(Self { manifest, files })
     }
     /// Semantic destination from the document parser: Markdown escapes/entities
     /// have already been normalized by that established parser; percent encoding
@@ -116,12 +125,25 @@ impl<'a> Resolver<'a> {
         source_id: &EntryId,
         destination: &str,
     ) -> Result<Vec<&'a EntryState>, IndexError> {
-        let decoded = destination_path(destination)?;
+        self.candidates_checked(source_id, destination, &mut |_| Ok::<(), IndexError>(()))
+    }
+    /// Same resolver with explicit work/cancellation checkpoints. Namespace
+    /// lookup and sorting reserve conservative work before their bounded work;
+    /// filtering charges each candidate as visited. No alternative semantics.
+    pub fn candidates_checked<E: From<IndexError>>(
+        &self,
+        source_id: &EntryId,
+        destination: &str,
+        check: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Vec<&'a EntryState>, E> {
+        check(0)?;
+        let decoded = destination_path(destination).map_err(E::from)?;
+        check(self.manifest.entries().len())?;
         let source = self
             .manifest
             .entry(source_id)
             .filter(|e| e.kind == EntryKind::File)
-            .ok_or(IndexError::MissingSource)?;
+            .ok_or_else(|| E::from(IndexError::MissingSource))?;
         if decoded.is_empty() {
             return Ok(vec![source]);
         }
@@ -130,21 +152,23 @@ impl<'a> Resolver<'a> {
         }
         let mut target = normalize_link_key(&decoded);
         let rooted = target.starts_with('/');
-        let mut candidates: Vec<_> = if name(&target).contains('.') {
-            self.files
-                .iter()
-                .filter(|(_, p)| name(p) == name(&target))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let mut candidates = Vec::new();
+        if name(&target).contains('.') {
+            for pair in &self.files {
+                check(1)?;
+                if name(&pair.1) == name(&target) {
+                    candidates.push(pair);
+                }
+            }
+        }
         if candidates.is_empty() {
             target.push_str(".md");
-            candidates = self
-                .files
-                .iter()
-                .filter(|(_, p)| name(p) == name(&target))
-                .collect();
+            for pair in &self.files {
+                check(1)?;
+                if name(&pair.1) == name(&target) {
+                    candidates.push(pair);
+                }
+            }
         }
         if candidates.is_empty() {
             return Ok(Vec::new());
@@ -167,37 +191,60 @@ impl<'a> Resolver<'a> {
             } else {
                 format!("{directory}/{target}")
             };
-            let mut exact: Vec<_> = candidates
-                .iter()
-                .filter(|(_, p)| p == &target)
-                .map(|(e, _)| *e)
-                .collect();
+            let mut exact = Vec::new();
+            for (entry, path) in &candidates {
+                check(1)?;
+                if path.as_str() == target.as_str() {
+                    exact.push(*entry);
+                }
+            }
             if !exact.is_empty() {
+                check(sort_work(exact.len()))?;
                 exact.sort_by(|a, b| order(a, b));
+                check(0)?;
                 return Ok(exact);
             }
         }
         if target.starts_with('/') {
             target = target[1..].into();
         }
-        let mut exact: Vec<_> = candidates
-            .iter()
-            .filter(|(_, p)| p == &target)
-            .map(|(e, _)| *e)
-            .collect();
+        let mut exact = Vec::new();
+        for (entry, path) in &candidates {
+            check(1)?;
+            if path.as_str() == target.as_str() {
+                exact.push(*entry);
+            }
+        }
         if !exact.is_empty() {
+            check(sort_work(exact.len()))?;
             exact.sort_by(|a, b| order(a, b));
+            check(0)?;
             return Ok(exact);
         }
         if rooted {
             return Ok(Vec::new());
         }
-        candidates.retain(|(_, p)| suffix_segment(p, &target));
-        candidates.sort_by(|(a, ap), (b, bp)| {
+        let mut selected = Vec::new();
+        for pair in candidates {
+            check(1)?;
+            if suffix_segment(&pair.1, &target) {
+                selected.push(pair);
+            }
+        }
+        check(sort_work(selected.len()))?;
+        selected.sort_by(|(a, ap), (b, bp)| {
             in_directory(bp, &directory)
                 .cmp(&in_directory(ap, &directory))
                 .then(order(a, b))
         });
-        Ok(candidates.into_iter().map(|(e, _)| *e).collect())
+        check(0)?;
+        Ok(selected.into_iter().map(|(entry, _)| *entry).collect())
     }
+}
+fn sort_work(n: usize) -> usize {
+    if n < 2 {
+        return 0;
+    }
+    n.saturating_mul((usize::BITS - (n - 1).leading_zeros()) as usize + 1)
+        .saturating_mul(4)
 }

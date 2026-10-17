@@ -509,3 +509,56 @@ fn restored_cache_rejects_impossible_ranges_task_flags_and_expanded_strings() {
     bad.frontmatter.state = zorid_document::FrontmatterState::Absent;
     assert!(matches!(check(bad), Err(IndexError::InvalidRecord)));
 }
+
+#[test]
+fn controlled_graph_preparation_preserves_results_and_stops_with_host_errors() {
+    #[derive(Debug, PartialEq)]
+    enum HostError {
+        Index(IndexError),
+        Budget,
+        Cancelled,
+    }
+    impl From<IndexError> for HostError {
+        fn from(error: IndexError) -> Self {
+            Self::Index(error)
+        }
+    }
+    let generation = build(
+        "epoch-a",
+        &[("A.md", "[[B]] ![[B]]", true), ("B.md", "target", true)],
+    );
+    let ordinary = ResolutionView::new(&generation)
+        .snapshot(10, MAX_PUMP_BYTES)
+        .unwrap();
+    let mut work = 0usize;
+    let controlled = ResolutionView::snapshot_checked(&generation, 10, MAX_PUMP_BYTES, |units| {
+        work += units;
+        Ok::<(), HostError>(())
+    })
+    .unwrap();
+    assert!(work > generation.manifest().entries().len());
+    assert_eq!(
+        serde_json::to_vec(&controlled).unwrap(),
+        serde_json::to_vec(&ordinary).unwrap()
+    );
+    let mut remaining = 1usize;
+    assert!(matches!(
+        ResolutionView::snapshot_checked(&generation, 10, MAX_PUMP_BYTES, |units| {
+            remaining = remaining.checked_sub(units).ok_or(HostError::Budget)?;
+            Ok(())
+        }),
+        Err(HostError::Budget)
+    ));
+    let mut visited = 0usize;
+    assert!(matches!(
+        ResolutionView::snapshot_checked(&generation, 10, MAX_PUMP_BYTES, |units| {
+            visited += units;
+            if visited > 9 {
+                return Err(HostError::Cancelled);
+            }
+            Ok(())
+        }),
+        Err(HostError::Cancelled)
+    ));
+    assert_eq!(ordinary.snapshot_id(), generation.id());
+}
