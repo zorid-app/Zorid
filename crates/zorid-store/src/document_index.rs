@@ -403,8 +403,11 @@ fn builder(tx: &Connection, h: &Header) -> IndexResult<GenerationBuilder> {
         if bytes > MAX_GENERATION_METADATA_BYTES {
             return Err(DocumentIndexError::RebuildRequired);
         }
-        let record = decode::<Record>(&raw)?
-            .restore(manifest.witness(&EntryId::new(id).map_err(StoreError::from)?)?)?;
+        let id = EntryId::new(id).map_err(|_| DocumentIndexError::RebuildRequired)?;
+        let witness = manifest
+            .witness(&id)
+            .map_err(|_| DocumentIndexError::RebuildRequired)?;
+        let record = decode::<Record>(&raw)?.restore(witness)?;
         let length: Option<i64> = row.get(2)?;
         if length != record.text_digest().map(|_| record.text_bytes() as i64) {
             return Err(DocumentIndexError::RebuildRequired);

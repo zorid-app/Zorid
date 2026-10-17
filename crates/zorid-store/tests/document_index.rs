@@ -556,3 +556,37 @@ fn duplicate_registered_name_cannot_hide_a_trigger_on_authority() {
     .unwrap();
     assert!(Store::open(&path).is_err());
 }
+
+#[test]
+fn corrupt_cache_entry_keys_require_rebuild_without_blocking_authority_saves() {
+    for key in ["bad/id", "ghost"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let mut store = Store::open(&path).unwrap();
+        store.apply(&create("a", "a.md", b"before")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        Connection::open(&path)
+            .unwrap()
+            .execute("UPDATE document_index_rows SET entry_id=?1", [key])
+            .unwrap();
+        assert!(
+            matches!(
+                store.document_index_status().unwrap(),
+                DocumentIndexStatus::RebuildRequired
+            ),
+            "{key}"
+        );
+        write(&mut store, "save", "a", b"after");
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.read(&id("a")).unwrap().unwrap().content,
+            Some(b"after".to_vec())
+        );
+        assert!(matches!(
+            store.document_index_status().unwrap(),
+            DocumentIndexStatus::RebuildRequired
+        ));
+    }
+}
