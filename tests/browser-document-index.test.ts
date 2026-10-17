@@ -156,10 +156,11 @@ test('empty namespace stage is ready to publish without an extra pump',async()=>
 test('Base transport keeps retained definition and facts and captures one validated operation clock',async()=>{
   const f=fixture();f.file('base','old definition',{path:'Links.base'});const index=f.open();await f.build(index);const pin=await index.open();
   f.file('base','new definition',{path:'Links.base',revision:'r2',mtime:9});const before=Date.now();await index.base({pinId:pin.pinId,id:'base',viewName:'Links'});const after=Date.now();
-  assert.equal(f.baseCalls[0]!.text,'old definition');assert.equal(f.baseCalls[0]!.facts[0].witness.revision,'r1');assert.equal(f.baseCalls[0]!.facts[0].mtimeMs,1);assert.ok(f.baseCalls[0]!.options.clockMs>=before&&f.baseCalls[0]!.options.clockMs<=after);
-  await index.base({pinId:pin.pinId,id:'base',options:{clockMs:0}});assert.equal(f.baseCalls[1]!.options.clockMs,0);
+  assert.equal(f.baseCalls[0]!.text,'old definition');assert.equal(f.baseCalls[0]!.facts[0].witness.revision,'r1');assert.equal(f.baseCalls[0]!.facts[0].mtimeMs,1);assert.ok(f.baseCalls[0]!.options.clockMs>=before&&f.baseCalls[0]!.options.clockMs<=after);assert.equal(f.baseCalls[0]!.options.maxRows,1000);
+  await index.base({pinId:pin.pinId,id:'base',options:{clockMs:0,maxRows:0}});assert.equal(f.baseCalls[1]!.options.clockMs,0);assert.equal(f.baseCalls[1]!.options.maxRows,0);
+  await index.base({pinId:pin.pinId,id:'base',options:{maxRows:7}});assert.equal(f.baseCalls[2]!.options.maxRows,7);
   for(const options of [{clockMs:NaN},{clockMs:Infinity},{viewIndex:NaN},{maxRows:Infinity}])await assert.rejects(index.base({pinId:pin.pinId,id:'base',options}),{code:'index_invalid_request'});
-  assert.equal(f.baseCalls.length,2);await index.close();
+  assert.equal(f.baseCalls.length,3);await index.close();
 });
 
 test('fresh and explicitly rebuilt caches are uninitialized rather than corrupt',async()=>{
