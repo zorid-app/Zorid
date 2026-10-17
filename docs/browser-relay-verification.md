@@ -171,3 +171,7 @@ Fresh database smoke-6eab7e2c-a9ce-4682-a01c-f8a7c9d472ac, client
 remained empty. Reload/reimport/retry again rejected sync_authorization_failed.
 Both completed isolation tabs closed. This proves client-visible authorization
 and persistent scope fencing, not a production enrollment/security audit.
+
+## Relay outage and rejoin — 2026-10-17
+
+Common baseline OfflineRejoin1017.md id5b04e12c-d29b-4655-84c3-c823e8a5e8e1 reached browser and independent CLI vault /private/tmp/zorid-offline-rejoin-cli-20261017. Confirmed own loopback relay61606 terminated (session29766 exit143). Browser saved38 bytes offline and retained them after reload without credentials; CLI independently saved its own edit. Both actual sync attempts rejected sync_transport. Restarted same relay/database session43620, CLI uploaded1, browser uploaded1/received2, CLI received1. Both read exact55 bytes containing common baseline plus Browser outage edit and CLI outage edit, SHA256 1fc1be05e0655e0662bc244ddced0a93660c7a0a4104f6f7979e121853d9d493. CLI raw bytes equal physical file, pending authored/dependency/projection0 at cursor56. Evidence /private/tmp/zorid-offline-rejoin-result-1017.json. Static8767 server69072. This proves actual outage/rejoin convergence, not background sync or mobile.

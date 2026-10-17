@@ -27,6 +27,53 @@ claim that implementation or validation is already complete. Subsequent P2P,
 full history/backups/admin and native mobile milestones remain required in the
 sequence below; completion of the first goal must not close those requirements.
 
+### Device joining — proposed UX and implementation slot (2026-10-17)
+
+User explicitly requests planning new-device joining, suggesting a settings QR
+code or copyable key/code, and asks whether implementation should follow later.
+Recommendation: settle the bounded flow now; implement immediately after default
+Rust local startup, external reconciliation and retained-draft recovery gates.
+Do not interrupt that active integration or imply enrollment UI already exists.
+
+- Existing device Settings > Sync > Add device displays a short-lived one-use
+  invitation as QR plus a copyable invitation code/link; both enter the same flow.
+  New device registers its own identity/credential, chooses vault/destination and
+  obtains authorization plus encrypted vault-key access. Trusted-device approval
+  and supported recovery-key unlock are candidate key-access paths, not final
+  cryptographic/API designs. Use reviewed established primitives/protocols; never
+  expose raw reusable vault keys or long-lived device tokens in the QR/code.
+- Treat account authorization, key access and initial file reconciliation as
+  distinct gates. Hosted and self-hosted use the same vault protocol, with explicit
+  server identity. Device-local derived data and local secrets are not implicitly
+  imported/synced. Recovery key is distinct from a temporary invitation code.
+- Empty destination: download a complete bounded remote snapshot/history, verify
+  dependencies, then materialize; local absence does not authorize remote delete.
+  Persist progress and resume interrupted setup. Do not start ordinary scanning
+  against an incompletely bootstrapped database.
+- Existing local files: capture a recoverable local snapshot first, stage remote
+  state separately, then reconcile identities. Existing same-vault causal history
+  permits normal merges. Path+identical bytes can be reconciled as a duplicate
+  under an explicit identity-import plan; local-only files remain. Without shared
+  ancestry, differing same-path content must retain both versions; do not infer a
+  safe CRDT merge or choose destructive mtime winners. Existing independently
+  enrolled local vault scopes require an explicit import/rebind plan, never silent
+  logical-scope replacement. Show one setup summary; avoid per-file prompt storms.
+- Acceptance before enabling join: empty and populated destinations, interrupted
+  fetch/restart, wrong/expired/replayed invitation, wrong server/vault/key, absent
+  dependencies, offline device/tombstones, initial upload failure and revocation;
+  all preserve local work and prevent accidental remote replacement. Test the
+  selected implementation with actual web/desktop/independent CLI clients.
+
+Reference checked 2026-10-17: LiveSync quick_setup.md + tips/fast-setup.md on main
+separates first-device initialization from subsequent-device Fetch. Setup URI
+carries encrypted settings/credentials. Fast Setup offers newer-wins or remote-
+wins plus separate handling of extra/deleted files. It suspends reflection during
+fetch and retains progress/selected policy after failure. Adopt resumable staged
+setup and explicit direction; do not copy mtime winner policy as our default.
+Sources: https://github.com/vrtmrz/obsidian-livesync/blob/main/docs/quick_setup.md
+and https://github.com/vrtmrz/obsidian-livesync/blob/main/docs/tips/fast-setup.md .
+This discussion records recommendations; no public enrollment API is frozen.
+
 ### Resume procedure and status rules
 
 Latest reuse review: the user explicitly requested evaluating Etebase before
@@ -69,6 +116,9 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Combined candidate core-default-integration9aec09b holds reviewed Rust-default desktop, packaging, external reconciliation and recovery UI. Main not yet default; actual no-env native gate remains. Combined cargo check84218 failed unresolved crate alias in external_scan.rs410; owner preparing fix, no heavy job now.
+- Actual stopped-relay browser/CLI offline edits, browser reload and relay restart converge exact55 bytes/digest; see browser-relay-verification.md. Current relay43620/static69072; old60287/52832 handles gone. Old test app3337 handle missing and process inspection confirms no test app alive.
+- Agent tree reset on resume; replacements explicitly Sol/high now own existing worktrees. Prior work preserved. New-device QR/code join plan recorded below, implementation after current default/recovery gate.
 - Crash21481 terminated confirmed ownapp37756+host37814 with SIGKILL; restart3337
   retained checkpoint exactly and CLI physical bytes SHA256
   a54edd43b725a162f7e7bcc95d56f36e208a16c982b32348c71c266f13bfd7f7.
@@ -158,13 +208,13 @@ First-milestone acceptance snapshot (2026-10-17; not a completion claim):
 | --- | --- |
 | Portable Rust + independent web/Electron/CLI | Built WASM/native and actual three-client transfer; desktop remains explicit opt-in. Main integration recorded below |
 | Text, binary and folders | Actual nested browser create/reopen to CLI; binary digest preserved. Desktop remaining folder/binary/move/delete consumer is in isolated implementation |
-| Offline convergence | Independent unsynced browser edits converged; actual disconnected/rejoin scenario still required |
+| Offline convergence | Actual stopped-relay browser/CLI independent edits, browser reload and relay restart converge exact55 bytes; see verification document |
 | Desktop/CLI simultaneous safety | Blocked by observed split-WAL defect; metadata-only native identity fix and fresh cross-process check required |
 | Browser-tab safety | Earlier spike and store-connection checks exist; current complete worker/tab lifecycle still needs bounded integrated proof |
 | Durable-save crash/restart | Normal desktop restart preserves saved note; actual dirty-draft/unknown-commit process interruption remains unverified |
 | Move/delete/external edits | Fresh native receive physically retires deleted paths. Mixed obligations/publication handoff/existing external imports are reviewed follow-ups awaiting storage fix and combined runtime gate |
-| E2EE/account/vault isolation | Actual encrypted interop and server permission checks pass; current full client isolation and protocol fixtures remain queued |
-| Protocol compatibility | Existing current-v2 CLI fixture integrated; execution pending |
+| E2EE/account/vault isolation | Actual server, standalone CLI and browser worker isolation checks passed; production enrollment remains fixture-only |
+| Protocol compatibility | Current-v2 CLI checks6/6 passed, including exact retry after rejected required-feature ACK |
 | Basic encrypted backup/restore | Clean independent CLI text + multi-chunk binary restore/restart passed; account/permission/credential and pinned WAL snapshot tests passed |
 | Integration/resource discipline | Main owns reviewed confirmed batches; builds serialized. No real vault migration or deployment; active broken fixture retained for diagnosis |
 
