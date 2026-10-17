@@ -987,7 +987,6 @@ final class NativeEditorContainer: UIViewController {
 final class NativeVaultPicker: UITableViewController {
     private var catalog: LocalVaultCatalog?
     private var opening = false
-    private var openingHost: UIHostingController<NativeLoadingSkeleton>?
 
     init() { super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -1005,6 +1004,8 @@ final class NativeVaultPicker: UITableViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        opening = false
+        navigationItem.rightBarButtonItem?.isEnabled = true
         reloadVaults()
     }
 
@@ -1065,56 +1066,155 @@ final class NativeVaultPicker: UITableViewController {
         present(alert, animated: true)
     }
 
-    private func showOpeningSkeleton() {
-        let host = UIHostingController(rootView: NativeLoadingSkeleton(editor: false))
-        openingHost = host
-        addChild(host)
-        host.view.backgroundColor = .systemBackground
-        host.view.frame = CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 300)
-        let inset = UIView(frame: host.view.frame)
-        host.view.frame = inset.bounds.insetBy(dx: 20, dy: 20)
-        inset.addSubview(host.view)
-        tableView.tableHeaderView = inset
-        host.didMove(toParent: self)
-    }
-
-    private func removeOpeningSkeleton() {
-        guard let host = openingHost else { return }
-        host.willMove(toParent: nil)
-        tableView.tableHeaderView = nil
-        host.view.removeFromSuperview()
-        host.removeFromParent()
-        openingHost = nil
-    }
-
     private func open(_ vault: LocalVault) {
-        guard !opening, let catalog = catalog else { return }
+        guard !opening, let catalog = catalog, let navigation = navigationController,
+              navigation.topViewController === self else { return }
+        if let alert = presentedViewController as? UIAlertController {
+            alert.dismiss(animated: !UIAccessibility.isReduceMotionEnabled) { [weak self] in self?.open(vault) }
+            return
+        }
+        guard presentedViewController == nil else { return }
+        opening = true
+        navigationItem.rightBarButtonItem?.isEnabled = false
+        navigationItem.backButtonTitle = "Vaults"
+        let destination = NativeVaultOpeningController(vault: vault, root: { try catalog.root(for: vault) })
+        navigation.pushViewController(destination, animated: !UIAccessibility.isReduceMotionEnabled)
+    }
+}
+
+// This route exists before storage work starts. Only this controller owns its
+// pending host; a pop/changed route never lends that host to another destination.
+private final class NativeVaultOpeningController: UIViewController {
+    private let vault: LocalVault
+    private let resolveRoot: () throws -> URL
+    private var hosting: UIHostingController<AnyView>?
+    private var observers: [NSObjectProtocol] = []
+    private var attempt = 0
+    private var started = false
+    private var abandoned = false
+    private var replacing = false
+    private var visible = false
+    private var waitingForTransition = false
+    private var received: (session: NativeMobileSession, root: URL)?
+    private var failure: String?
+
+    init(vault: LocalVault, root: @escaping () throws -> URL) {
+        self.vault = vault; resolveRoot = root
+        super.init(nibName: nil, bundle: nil)
+        title = vault.name
+    }
+    required init?(coder: NSCoder) { fatalError("Use the native vault picker.") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemGroupedBackground
+        view.accessibilityIdentifier = "native.vault.opening"
+        let host = UIHostingController(rootView: AnyView(EmptyView()))
+        hosting = host; addChild(host); view.addSubview(host.view)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([host.view.topAnchor.constraint(equalTo: safe.topAnchor),
+            host.view.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
+            host.view.bottomAnchor.constraint(equalTo: safe.bottomAnchor)])
+        host.didMove(toParent: self); render()
+        for name in [UIApplication.didBecomeActiveNotification, UIScene.didActivateNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.scheduleSettlement() })
+        }
+    }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: false)
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated); visible = true
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = true
+        scheduleSettlement()
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        visible = false; super.viewWillDisappear(animated)
+    }
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if !replacing, navigationController?.topViewController !== self { abandon() }
+    }
+    private var current: Bool {
+        !abandoned && visible && navigationController?.topViewController === self
+            && viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive
+            && UIApplication.shared.applicationState == .active && presentedViewController == nil
+    }
+    private func scheduleSettlement() {
+        DispatchQueue.main.async { [weak self] in self?.settle() }
+    }
+    private func settle() {
+        guard current, let navigation = navigationController else { return }
+        if !started { begin(); return }
+        guard let received = received else { return }
+        if let transition = navigation.transitionCoordinator {
+            guard !waitingForTransition else { return }
+            waitingForTransition = true
+            transition.animate(alongsideTransition: nil) { [weak self] _ in
+                self?.waitingForTransition = false; self?.scheduleSettlement()
+            }
+            return
+        }
+        guard navigation.viewControllers.last === self else { return }
+        self.received = nil; replacing = true
+        var stack = navigation.viewControllers
+        stack[stack.count - 1] = NativePagesController(vault: vault, root: received.root, session: received.session)
+        navigation.setViewControllers(stack, animated: false)
+    }
+    private func begin() {
+        guard current, !started else { return }
+        started = true; attempt += 1
+        let ticket = attempt
         do {
-            let root = try catalog.root(for: vault)
-            opening = true
-            showOpeningSkeleton()
-            tableView.isUserInteractionEnabled = false
-            navigationItem.rightBarButtonItem?.isEnabled = false
+            let root = try resolveRoot()
             NativeMobileSession.open(vault: vault, root: root) { [weak self] result in
-                guard let self = self else {
+                guard let self = self, !self.abandoned, self.attempt == ticket else {
                     if case .success(let session) = result { session.close {} }
                     return
                 }
-                self.opening = false
-                self.removeOpeningSkeleton()
-                self.tableView.isUserInteractionEnabled = true
-                self.navigationItem.rightBarButtonItem?.isEnabled = true
                 switch result {
-                case .success(let session):
-                    let pages = NativePagesController(vault: vault, root: root, session: session)
-                    self.navigationController?.pushViewController(pages, animated: !UIAccessibility.isReduceMotionEnabled)
-                case .failure: self.showMessage("Could not open vault", "The local vault could not be opened. Your files remain on this device. Try again when device storage is available.")
+                case .success(let session): self.received = (session, root)
+                case .failure:
+                    self.failure = "The local vault could not be opened. Your files remain on this device. Try again when device storage is available."
+                    self.render()
                 }
+                self.scheduleSettlement()
             }
         } catch {
-            showMessage("Vault unavailable", "This local vault folder is unavailable. Refresh the vault list and try again.")
+            failure = "This local vault folder is unavailable. Return to Vaults or try again."
+            render()
         }
     }
+    private func retry() {
+        guard current, failure != nil else { return }
+        failure = nil; started = false; render(); scheduleSettlement()
+    }
+    private func render() {
+        hosting?.rootView = AnyView(ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if let message = failure {
+                    Text("Could not open vault").font(.title2.bold()).accessibilityAddTraits(.isHeader)
+                    Text(message).fixedSize(horizontal: false, vertical: true)
+                    Button("Retry") { [weak self] in self?.retry() }
+                        .buttonStyle(.borderedProminent).accessibilityIdentifier("native.vault.open.retry")
+                } else { NativeLoadingSkeleton(editor: false) }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
+        }.background(Color(uiColor: .systemGroupedBackground)))
+    }
+    private func abandon() {
+        guard !abandoned, !replacing else { return }
+        abandoned = true; attempt += 1
+        let session = received?.session; received = nil
+        session?.close {}
+    }
+    deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        received?.session.close {}
+    }
+
 }
 
 private extension UIViewController {

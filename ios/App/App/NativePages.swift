@@ -602,6 +602,8 @@ private final class NativePagesCoordinator {
     private var awaitingNoteActivation = false
     private var routeFailureOnReturn = false
     private weak var activeEditor: NativeEditorContainer?
+    private weak var openingDestination: NativeFileOpenDestinationController?
+    private var openingDestinationTicket: Int?
     weak var owner: NativePagesController?
 
     init(vault: LocalVault, root: URL, session: NativeMobileSession) {
@@ -925,41 +927,79 @@ private final class NativePagesCoordinator {
     }
 
     func openEditor(entry: NativeFileEntry?, origin: String) {
-        guard pageActive, !busy, !editorActive, let session = session, owner?.navigationController != nil else { return }
+        guard pageActive, !busy, !editorActive, let session = session,
+              let navigation = owner?.navigationController else { return }
         generation += 1
         let ticket = generation
         editorOpenGeneration += 1
         let navigationTicket = editorOpenGeneration
-        guard let entry = entry else { transfer(session, initialEntry: nil, origin: origin); return }
         busy = true
-        owner?.setLoading()
-        // The row's path is only a display locator. Resolve its stable identity
-        // again; never open a replacement entry that has reused the old path.
-        session.pageListing { [weak self] result in
-            guard let self = self, self.generation == ticket, !self.editorActive else { return }
-            switch result {
-            case .success(let listing):
-                guard self.pageActive else { self.busy = false; return }
-                guard self.editorOpenGeneration == navigationTicket else {
-                    // A newer native tab/folder choice wins over this lookup.
-                    self.busy = false
-                    self.owner?.showListing(listing)
-                    self.updateRouteControls()
-                    self.drainAutomaticRefresh()
+        cancelQueuedRefresh()
+        owner?.view.endEditing(true)
+        // Take the idle host before routing. Native menus/search cannot borrow it
+        // while the placeholder performs lookup or waits for cancellation cleanup.
+        self.session = nil
+        openingDestinationTicket = ticket
+        let destination = NativeFileOpenDestinationController(vault: vault, root: root, session: session,
+            title: entry?.name ?? "New note", ready: { [weak self] destination, session in
+                guard let self = self, self.generation == ticket,
+                      self.editorOpenGeneration == navigationTicket, !self.editorActive,
+                      self.openingDestination === destination else {
+                    destination.showFailure("This selection changed. Return and select the file again.", retry: false)
                     return
                 }
-                guard let current = listing.entries.first(where: { $0.id == entry.id && $0.kind == .file }) else {
-                    self.fail(session, ticket: ticket, missingSelection: true)
-                    return
+                let complete: (NativeFileEntry?) -> Void = { [weak self, weak destination] current in
+                    destination?.whenVisible { [weak self, weak destination] in
+                        guard let self = self, let destination = destination,
+                              self.generation == ticket, self.editorOpenGeneration == navigationTicket,
+                              self.openingDestination === destination, destination.owns(session) else {
+                            destination?.showFailure("This selection changed. Return and select the file again.", retry: false)
+                            return
+                        }
+                        self.transfer(session, initialEntry: current, origin: origin)
+                    }
                 }
-                self.transfer(session, initialEntry: current, origin: origin)
-            case .failure: self.fail(session, ticket: ticket)
-            }
-        }
+                guard let entry = entry else { complete(nil); return }
+                session.pageListing { [weak self, weak destination] result in
+                    guard let destination = destination, destination.owns(session) else { return }
+                    guard let self = self, self.generation == ticket,
+                          self.editorOpenGeneration == navigationTicket, !self.editorActive,
+                          self.openingDestination === destination else {
+                        destination.showFailure("This selection changed. Return and select the file again.", retry: false)
+                        return
+                    }
+                    switch result {
+                    case .success(let listing):
+                        guard let current = listing.entries.first(where: { $0.id == entry.id && $0.kind == .file }) else {
+                            destination.showFailure("The selected file is no longer available. Return and select it again.", retry: false)
+                            return
+                        }
+                        complete(current)
+                    case .failure: destination.showFailure("The file could not be opened. Your files remain on this device.")
+                    }
+                }
+            }, closed: { [weak self] in
+                guard let self = self, self.openingDestinationTicket == ticket else { return }
+                self.openingDestinationTicket = nil; self.openingDestination = nil
+                self.busy = false; self.pendingHistoryIndex = nil; self.awaitingNoteActivation = false
+                self.updateRouteControls(); self.drainAutomaticRefresh()
+            })
+        openingDestination = destination
+        updateRouteControls()
+        navigation.pushViewController(destination, animated: !UIAccessibility.isReduceMotionEnabled)
     }
 
     private func transfer(_ session: NativeMobileSession, initialEntry: NativeFileEntry?, origin: String) {
-        guard let navigation = owner?.navigationController else { busy = false; return }
+        guard let navigation = owner?.navigationController else { return }
+        let destination = openingDestination
+        if let destination = destination {
+            guard destination.navigationController === navigation,
+                  navigation.topViewController === destination,
+                  destination.takeSession(session) else { return }
+            openingDestination = nil; openingDestinationTicket = nil
+        } else {
+            guard pageActive, self.session === session else { return }
+        }
         busy = false
         owner?.view.endEditing(true)
         cancelQueuedRefresh()
@@ -995,7 +1035,10 @@ private final class NativePagesCoordinator {
         }
         editor.onNavigate = { [weak self] direction in self?.traverse(direction) }
         updateRouteControls()
-        navigation.pushViewController(editor, animated: !UIAccessibility.isReduceMotionEnabled)
+        if destination != nil {
+            var stack = navigation.viewControllers; stack[stack.count - 1] = editor
+            navigation.setViewControllers(stack, animated: false)
+        } else { navigation.pushViewController(editor, animated: !UIAccessibility.isReduceMotionEnabled) }
     }
 
     func chooseVault() {
@@ -2152,5 +2195,163 @@ private struct PageControlSurface: ViewModifier {
         } else {
             content.background(selected ? Color(uiColor: .tertiarySystemFill) : Color(uiColor: .secondarySystemBackground), in: Capsule())
         }
+    }
+}
+
+
+// Owns exactly one idle host while the selected file's native route is visible.
+// The editor gets that host only after settled navigation and stable-ID lookup.
+private final class NativeFileOpenDestinationController: UIViewController {
+    private let vault: LocalVault
+    private let root: URL
+    private let ready: (NativeFileOpenDestinationController, NativeMobileSession) -> Void
+    private var closed: (() -> Void)?
+    private var session: NativeMobileSession?
+    private var hosting: UIHostingController<AnyView>?
+    private var observers: [NSObjectProtocol] = []
+    private var pending: (() -> Void)?
+    private var closeCompletions: [() -> Void] = []
+    private var closing = false
+    private var opening = false
+    private var started = false
+    private var visible = false
+    private var abandoned = false
+    private var replacing = false
+    private var attempt = 0
+    private var waitingForTransition = false
+    private var failure: String?
+    private var retryAllowed = true
+
+    init(vault: LocalVault, root: URL, session: NativeMobileSession, title: String,
+         ready: @escaping (NativeFileOpenDestinationController, NativeMobileSession) -> Void,
+         closed: @escaping () -> Void) {
+        self.vault = vault; self.root = root; self.session = session
+        self.ready = ready; self.closed = closed
+        super.init(nibName: nil, bundle: nil); self.title = title
+    }
+    required init?(coder: NSCoder) { fatalError("Use the native file picker.") }
+    override func viewDidLoad() {
+        super.viewDidLoad(); view.backgroundColor = .systemBackground
+        view.accessibilityIdentifier = "native.file.opening"
+        let host = UIHostingController(rootView: AnyView(EmptyView()))
+        hosting = host; addChild(host); view.addSubview(host.view)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([host.view.topAnchor.constraint(equalTo: safe.topAnchor),
+            host.view.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
+            host.view.bottomAnchor.constraint(equalTo: safe.bottomAnchor)])
+        host.didMove(toParent: self); render()
+        for name in [UIApplication.didBecomeActiveNotification, UIScene.didActivateNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.schedule() })
+        }
+    }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated); navigationController?.setNavigationBarHidden(false, animated: false)
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated); visible = true
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = true; schedule()
+    }
+    override func viewWillDisappear(_ animated: Bool) { visible = false; super.viewWillDisappear(animated) }
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if !replacing, navigationController?.topViewController !== self { abandon() }
+    }
+    private var current: Bool {
+        !abandoned && visible && navigationController?.topViewController === self
+            && viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive
+            && UIApplication.shared.applicationState == .active && presentedViewController == nil
+    }
+    func owns(_ expected: NativeMobileSession) -> Bool { !abandoned && !replacing && session === expected }
+    func takeSession(_ expected: NativeMobileSession) -> Bool {
+        guard current, !closing, navigationController?.transitionCoordinator == nil, owns(expected) else { return false }
+        session = nil; replacing = true; closed = nil; pending = nil
+        return true
+    }
+    func whenVisible(_ operation: @escaping () -> Void) { guard !abandoned else { return }; pending = operation; schedule() }
+    private func schedule() { DispatchQueue.main.async { [weak self] in self?.settle() } }
+    private func settle() {
+        guard current, !closing, !opening else { return }
+        if let transition = navigationController?.transitionCoordinator {
+            guard !waitingForTransition else { return }
+            waitingForTransition = true
+            transition.animate(alongsideTransition: nil) { [weak self] _ in
+                self?.waitingForTransition = false; self?.schedule()
+            }
+            return
+        }
+        if let operation = pending { pending = nil; operation(); return }
+        guard !started, failure == nil else { return }
+        started = true
+        if let session = session { ready(self, session); return }
+        attempt += 1; let ticket = attempt
+        opening = true
+        // Accepted reopen work keeps its loader/cleanup gate alive through Back.
+        NativeMobileSession.open(vault: vault, root: root) { [self] result in
+            opening = false
+            guard !abandoned, attempt == ticket else {
+                if case .success(let returned) = result { session = returned }
+                disposeHost {}; return
+            }
+            switch result {
+            case .success(let returned):
+                session = returned
+                whenVisible { [weak self] in
+                    guard let self = self, self.owns(returned) else { return }; self.ready(self, returned)
+                }
+            case .failure: failure = "The vault could not be reopened. Return or try again."; render()
+            }
+        }
+    }
+
+    func showFailure(_ message: String, retry: Bool = true) {
+        guard !abandoned, !replacing else { return }
+        pending = nil
+        disposeHost { [weak self] in
+            guard let self = self, !self.abandoned else { return }
+            self.failure = message; self.retryAllowed = retry; self.render()
+        }
+    }
+    private func retry() {
+        guard current, !closing, failure != nil, retryAllowed else { return }
+        failure = nil; started = false; render(); schedule()
+    }
+    private func disposeHost(_ completion: @escaping () -> Void) {
+        closeCompletions.append(completion)
+        guard !opening, !closing else { return }
+        guard let session = session else { finishClose(); return }
+        self.session = nil; closing = true
+        // Retain the loader until close ACK; Back cannot unlock the page early.
+        session.close { [self] in closing = false; finishClose() }
+    }
+    private func finishClose() {
+        let callbacks = closeCompletions; closeCompletions = []
+        for callback in callbacks { callback() }
+    }
+
+    private func abandon() {
+        guard !abandoned, !replacing else { return }
+        abandoned = true; attempt += 1; pending = nil
+        disposeHost { [self] in let callback = closed; closed = nil; callback?() }
+    }
+    private func render() {
+        hosting?.rootView = AnyView(ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if let message = failure {
+                    Text("Could not open file").font(.title2.bold()).accessibilityAddTraits(.isHeader)
+                    Text(message).fixedSize(horizontal: false, vertical: true)
+                    if retryAllowed {
+                        Button("Retry") { [weak self] in self?.retry() }
+                            .buttonStyle(.borderedProminent).accessibilityIdentifier("native.file.open.retry")
+                    }
+                } else { NativeLoadingSkeleton(editor: true) }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
+        }.background(Color(uiColor: .systemBackground)))
+    }
+    deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        let callback = closed
+        if let session = session { session.close { callback?() } } else { callback?() }
     }
 }
