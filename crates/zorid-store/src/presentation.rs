@@ -18,6 +18,16 @@ pub(crate) fn validate_number(value: u64) -> Result<()> {
     }
     Ok(())
 }
+fn stored_number(value: i64) -> Result<u64> {
+    let number = u64::try_from(value)
+        .map_err(|_| StoreError::Corrupt("negative presentation value".into()))?;
+    if number > SAFE_INTEGER {
+        return Err(StoreError::Corrupt(
+            "stored presentation exceeds safe integer".into(),
+        ));
+    }
+    Ok(number)
+}
 fn safe_number<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<u64, D::Error> {
@@ -131,12 +141,13 @@ pub(crate) fn migrate(tx: &Connection) -> Result<()> {
     Ok(())
 }
 pub(crate) fn presentation(tx: &Connection, state: &EntryState) -> Result<EntryPresentation> {
-    let row = tx.query_row("SELECT p.ctime_ms,p.mtime_ms,p.size_bytes,coalesce(length(e.content),0) FROM entry_presentation p JOIN entries e ON e.id=p.entry_id WHERE p.entry_id=?1", [state.id.as_str()], |r| Ok((r.get::<_,u64>(0)?,r.get::<_,u64>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?))).optional()?;
+    let row = tx.query_row("SELECT p.ctime_ms,p.mtime_ms,p.size_bytes,coalesce(length(e.content),0) FROM entry_presentation p JOIN entries e ON e.id=p.entry_id WHERE p.entry_id=?1", [state.id.as_str()], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?))).optional()?;
     let (ctime_ms, mtime_ms, size_bytes, actual) =
         row.ok_or_else(|| StoreError::Corrupt("missing presentation".into()))?;
-    for value in [ctime_ms, mtime_ms, size_bytes] {
-        validate_number(value)?;
-    }
+    let ctime_ms = stored_number(ctime_ms)?;
+    let mtime_ms = stored_number(mtime_ms)?;
+    let size_bytes = stored_number(size_bytes)?;
+    let actual = stored_number(actual)?;
     if size_bytes != actual || (state.kind == EntryKind::Folder && size_bytes != 0) {
         return Err(StoreError::Corrupt(
             "presentation size differs from committed bytes".into(),
@@ -151,18 +162,20 @@ pub(crate) fn presentation(tx: &Connection, state: &EntryState) -> Result<EntryP
 }
 pub(crate) fn record_local(tx: &Connection, result: &CommitResult, now: u64) -> Result<()> {
     validate_number(now)?;
+    let now_sql = i64::try_from(now)
+        .map_err(|_| StoreError::Corrupt("display clock conversion overflow".into()))?;
     let mut entries = Vec::new();
     for change in &result.changes {
         let state = &change.after;
-        let size: u64 = tx.query_row(
+        let size: i64 = tx.query_row(
             "SELECT coalesce(length(content),0) FROM entries WHERE id=?1",
             [state.id.as_str()],
             |r| r.get(0),
         )?;
-        validate_number(size)?;
+        stored_number(size)?;
         // Preserve creation time, including legacy unknown=0. Clock rollback does
         // not roll display mtime backwards; revisions remain the only CAS token.
-        tx.execute("INSERT INTO entry_presentation VALUES (?1,?2,?2,?3) ON CONFLICT(entry_id) DO UPDATE SET mtime_ms=max(entry_presentation.mtime_ms,excluded.mtime_ms),size_bytes=excluded.size_bytes", params![state.id.as_str(),now,size])?;
+        tx.execute("INSERT INTO entry_presentation VALUES (?1,?2,?2,?3) ON CONFLICT(entry_id) DO UPDATE SET mtime_ms=max(entry_presentation.mtime_ms,excluded.mtime_ms),size_bytes=excluded.size_bytes", params![state.id.as_str(),now_sql,size])?;
         entries.push(PresentedState {
             state: state.clone(),
             presentation: presentation(tx, state)?,
@@ -280,11 +293,13 @@ impl Store {
                 "cursor is ahead of this database; reload required".into(),
             ));
         }
-        let sizes = tx.prepare("SELECT cursor,length(CAST(record AS BLOB)) FROM local_changes WHERE cursor>?1 ORDER BY cursor LIMIT ?2")?.query_map(params![start,limit],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,usize>(1)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        let sizes = tx.prepare("SELECT cursor,length(CAST(record AS BLOB)) FROM local_changes WHERE cursor>?1 ORDER BY cursor LIMIT ?2")?.query_map(params![start,limit],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
         let mut changes = Vec::new();
         let mut next = start;
         let mut total = 0usize;
         for (sequence, size) in sizes {
+            let size = usize::try_from(size)
+                .map_err(|_| StoreError::Corrupt("invalid journal record length".into()))?;
             if sequence
                 != next
                     .checked_add(1)
