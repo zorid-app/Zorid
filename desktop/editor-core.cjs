@@ -28,7 +28,8 @@ function createEditorCoreManager(environment=process.env){
   async function retire(broker,record){
     const pending=admissions.get(record);
     if(pending)await pending.catch(()=>{});
-    const saved=contexts.get(record);if(!saved)return;
+    const saved=contexts.get(record)??released.get(record);if(!saved)return;
+    released.delete(record);
     contexts.delete(record);servicePromise=undefined;
     // The renderer is gone: retain its durable checkpoints/intents; no synthetic
     // successful flush/ACK. Child exit releases its kernel lease after draining.
@@ -104,7 +105,7 @@ function createEditorCoreManager(environment=process.env){
       // requesting release. The admission layer drains already accepted RPCs.
       await saved.admission.release(()=>{});
       if(contexts.get(record)===saved)contexts.delete(record);
-      released.set(record,{id:admissionId,root:expectedRoot});
+      released.set(record,{id:admissionId,root:expectedRoot,service:saved.service});
     },
     retire,
     close(){

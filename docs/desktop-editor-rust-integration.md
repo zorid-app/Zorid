@@ -152,3 +152,12 @@ Matching host is `core-native-cli-combined/target-native-family-create/debug/`
 batch. The user's live old editor and current document were not closed or
 replaced. Actual New note UI/sync evidence remains pending. Temporary dependency
 symlink was removed after compilation; no package install ran.
+
+
+Close follow-up: the user confirmed closing a window, and the selected Electron
+application reported no windows. A still-running macOS main process alone did
+not establish a close-handshake hang. Source inspection did find that successful
+admission release removed the context before the window-closed cleanup could
+find its host. The released-record receipt now retains its service association so
+ordinary window closure drains/closes that owned child as well. This source-only
+cleanup changes no running process and has syntax/whitespace checks only.
