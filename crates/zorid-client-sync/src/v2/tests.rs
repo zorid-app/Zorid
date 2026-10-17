@@ -381,3 +381,37 @@ fn external_observation_preserves_old_namespace_and_exact_physical_witness() {
         vec![id("observed")]
     );
 }
+
+#[test]
+fn plaintext_inspection_is_strict_bounded_and_only_returns_data() {
+    let state = empty();
+    let request = request(&state, "inspect", 1, vec![insert(0, "text")]);
+    let plan = plan_authored_text(&state, &request, &context(&["namespace-bootstrap"])).unwrap();
+    let bytes = &plan.plan.authored.payload_bytes;
+    let metadata = inspect_payload(bytes, &request.update_id).unwrap();
+    assert_eq!(metadata.identity, state.identity);
+    assert_eq!(metadata.namespace, context(&["namespace-bootstrap"]));
+    // Metadata is deliberately ordinary serializable data, not an activity.
+    let restored: TextPayloadMetadata =
+        serde_json::from_slice(&serde_json::to_vec(&metadata).unwrap()).unwrap();
+    assert_eq!(restored, metadata);
+    assert!(matches!(
+        inspect_payload(&vec![b' '; MAX_PLAINTEXT_BYTES + 1], &request.update_id),
+        Err(SyncError::TooLarge)
+    ));
+    for (field, value) in [
+        ("format_version", serde_json::json!(1)),
+        ("unexpected", serde_json::json!(true)),
+        (
+            "actor",
+            serde_json::json!({"actor":2,"owner":{"replica_id":"other","incarnation_id":"incarnation"}}),
+        ),
+    ] {
+        let mut changed: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        changed[field] = value;
+        assert!(
+            inspect_payload(&serde_json::to_vec(&changed).unwrap(), &request.update_id).is_err()
+        );
+    }
+    assert!(inspect_payload(bytes, &id("namespace-bootstrap")).is_err());
+}

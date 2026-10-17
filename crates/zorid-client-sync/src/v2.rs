@@ -93,6 +93,30 @@ impl Payload {
     }
 }
 
+/// Unauthenticated payload metadata for validating stored local authored intents.
+/// This is ordinary data, not evidence that an update was received, authorized,
+/// or committed. It cannot create TextActivity or AuthenticatedText.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextPayloadMetadata {
+    pub identity: TextIdentity,
+    pub namespace: TextNamespaceContext,
+}
+
+/// Inspect bounded, strict current-format plaintext without authenticating it.
+/// `update_id` is external framing context and is NOT proven by this function.
+/// Hosts must independently compare exact persisted payload bytes/digest and all
+/// intent metadata. Receive paths must instead use AuthenticatedText::from_opened.
+/// Missing CRDT dependencies and content semantics are checked during planning;
+/// this inspection checks payload framing, declared actor and namespace shape.
+pub fn inspect_payload(bytes: &[u8], update_id: &UpdateId) -> Result<TextPayloadMetadata> {
+    let payload = Payload::decode(bytes, update_id)?;
+    Ok(TextPayloadMetadata {
+        identity: payload.identity,
+        namespace: payload.namespace,
+    })
+}
+
 /// Only authenticated v2 decoding or successful local planning can construct
 /// this evidence. It has no Deserialize, Clone or public raw constructor.
 /// Namespace graph validation remains mandatory before committing either plan.

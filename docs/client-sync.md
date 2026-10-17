@@ -294,3 +294,10 @@ rejection; canonical bounded frontiers; deletion-only updates arriving before
 insert dependencies, restart and duplicate receipt; and repeated external edits
 against old physical namespace/path witnesses with concurrent text. Runtime and
 cross-family/native tests remain separate validation gates.
+
+`v2::inspect_payload(bytes, update_id)` is a bounded strict plaintext inspector for
+persisted local authored intents. Its `TextPayloadMetadata { identity, namespace }`
+result is unauthenticated ordinary data. It has no conversion into text activity
+or authenticated updates. The caller must validate exact stored bytes/digest and
+all independently selected intent metadata; receive paths still require AEAD.
+The provided UpdateId is framing context, not a claim proven by this inspector.
