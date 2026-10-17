@@ -715,6 +715,7 @@ impl Store {
         };
         let mut prepared = Vec::new();
         let mut source_bytes = 0usize;
+        let mut encoded_bytes = 0usize;
         let mut reused_documents = 0;
         for witness in b.pending_entries() {
             let original = h
@@ -803,7 +804,14 @@ impl Store {
                     }
                 }
             };
-            match b.add(record.clone()) {
+            let encoded = encode(&Record::of(&record))?;
+            if !prepared.is_empty() && encoded_bytes.saturating_add(encoded.len()) > MAX_PUMP_BYTES
+            {
+                break;
+            }
+            let id = record.witness().entry().id.clone();
+            let bytes = record.text_bytes();
+            match b.add(record) {
                 Ok(()) => {}
                 Err(IndexError::PumpLimit) if !prepared.is_empty() => break,
                 Err(e) => return Err(e.into()),
@@ -811,8 +819,9 @@ impl Store {
             if reused_this_record {
                 reused_documents += 1;
             }
-            source_bytes += record.text_bytes();
-            prepared.push((record, text));
+            source_bytes += bytes;
+            encoded_bytes += encoded.len();
+            prepared.push((id, encoded, text));
         }
         let progress = DocumentIndexProgress {
             snapshot: stage.snapshot.clone(),
@@ -831,19 +840,22 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         // The source and derived-head fences are rechecked in this same write Tx.
         check_stage(&tx, &h)?;
-        for (record, text) in prepared {
-            let exists: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM document_index_rows WHERE snapshot_key=?1 AND entry_id=?2)",params![h.snapshot.key(),record.witness().entry().id.as_str()],|r|r.get(0))?;
+        let existing:i64=tx.query_row("SELECT coalesce(sum(length(CAST(record AS BLOB))),0) FROM document_index_rows WHERE snapshot_key=?1",[h.snapshot.key()],|r|r.get(0))?;
+        if existing < 0
+            || (existing as usize)
+                .checked_add(encoded_bytes)
+                .is_none_or(|n| n > MAX_GENERATION_METADATA_BYTES)
+        {
+            return Err(IndexError::GenerationLimit.into());
+        }
+        for (id, encoded, text) in prepared {
+            let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM document_index_rows WHERE snapshot_key=?1 AND entry_id=?2)",params![h.snapshot.key(),id.as_str()],|r|r.get(0))?;
             if exists {
                 return Err(IndexError::StaleIndex.into());
             }
             tx.execute(
                 "INSERT INTO document_index_rows VALUES(?1,?2,?3,?4)",
-                params![
-                    h.snapshot.key(),
-                    record.witness().entry().id.as_str(),
-                    encode(&Record::of(&record))?,
-                    text
-                ],
+                params![h.snapshot.key(), id.as_str(), encoded, text],
             )?;
         }
         tx.commit()?;
