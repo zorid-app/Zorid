@@ -104,3 +104,18 @@ test('temporary source rebinds during composition coalesce across two independen
   view.focus();view.dispatch({selection:{anchor:0,head:4}});press(view,dom,'F8');assert.equal(view.state.doc.toString(),'**word**');
   } finally { handle.destroy(); }
 });
+
+test('one rectangle-format undo preserves earlier cell typing and rectangle ownership',async t=>{
+  const source=preferences();source.set('editor-bold',[{key:'F7',modifiers:[]}]);
+  const text='| A | B |\n| --- | --- |\n| word | other |';
+  const {view,dom,host,editor}=setup(t,text,'live',{hotkeys:source});
+  const child=cellEditor(host,dom);
+  child.dispatch({changes:{from:4,insert:'!'},selection:{anchor:5},userEvent:'input.type'});
+  press(child,dom,'ArrowRight',{shiftKey:true});
+  assert.ok(tableSelectionAt(view,child.contentDOM));
+  press(child,dom);
+  assert.equal(editor.getValue(),text.replace('word','**word!**').replace('other','**other**'));
+  assert.ok(undo(view));await flush();
+  assert.equal(editor.getValue(),text.replace('word','word!'));
+  assert.ok(child.dom.isConnected);assert.ok(tableSelectionAt(view,child.contentDOM));assert.ok(child.hasFocus);
+});
