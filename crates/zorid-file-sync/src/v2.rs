@@ -406,6 +406,9 @@ impl State {
         }
     }
     pub fn view(&self) -> Result<VaultView> {
+        self.view_and_ancestry().map(|(view, _)| view)
+    }
+    fn view_and_ancestry(&self) -> Result<(VaultView, super::GraphAncestry)> {
         if self.records.len() + self.activities.len() > super::MAX_RECORDS {
             return Err(Error::TooLarge);
         }
@@ -681,12 +684,16 @@ impl State {
                 }
             }
         }
-        let namespace = super::derive_graph(&self.binary_records(), events)?;
+        let (namespace, ancestry) =
+            super::derive_graph_with_ancestry(&self.binary_records(), events)?;
         content_bindings.retain(|id, _| namespace.entries.contains_key(id));
-        Ok(VaultView {
-            namespace,
-            content_bindings,
-        })
+        Ok((
+            VaultView {
+                namespace,
+                content_bindings,
+            },
+            ancestry,
+        ))
     }
     pub fn materialize(&self, manifest: &Manifest) -> Result<Option<Vec<u8>>> {
         self.view()?;
@@ -912,3 +919,6 @@ pub fn plan_authored_text_activity(
 }
 #[cfg(test)]
 mod tests;
+
+mod frontier;
+mod retained;

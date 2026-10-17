@@ -585,7 +585,34 @@ impl From<EntryEvent> for GraphEvent {
         }
     }
 }
+/// The validated graph's existing causal closure, retained only when a caller
+/// needs a historical frontier operation as well as the current view.
+struct GraphAncestry {
+    events: BTreeMap<UpdateId, GraphEvent>,
+    indexes: BTreeMap<UpdateId, usize>,
+    ancestors: BTreeMap<UpdateId, Vec<u64>>,
+}
+impl GraphAncestry {
+    fn resolved_event(&self, id: &UpdateId) -> Result<&GraphEvent> {
+        if !self.ancestors.contains_key(id) {
+            return Err(Error::InvalidCausality);
+        }
+        self.events.get(id).ok_or(Error::InvalidCausality)
+    }
+    fn is_ancestor(&self, earlier: &UpdateId, later: &UpdateId) -> Result<bool> {
+        self.resolved_event(earlier)?;
+        let index = *self.indexes.get(earlier).ok_or(Error::InvalidCausality)?;
+        let past = self.ancestors.get(later).ok_or(Error::InvalidCausality)?;
+        Ok(past[index / 64] & (1u64 << (index % 64)) != 0)
+    }
+}
 fn derive_graph(state: &State, events: BTreeMap<UpdateId, GraphEvent>) -> Result<VaultView> {
+    derive_graph_with_ancestry(state, events).map(|(view, _)| view)
+}
+fn derive_graph_with_ancestry(
+    state: &State,
+    events: BTreeMap<UpdateId, GraphEvent>,
+) -> Result<(VaultView, GraphAncestry)> {
     let mut identities = BTreeMap::new();
     for event in events.values() {
         if let Some(prior) =
@@ -911,7 +938,14 @@ fn derive_graph(state: &State, events: BTreeMap<UpdateId, GraphEvent>) -> Result
         let projection = locate(&id, &entries, &collisions);
         entries.get_mut(&id).unwrap().projection = projection;
     }
-    Ok(VaultView { entries, pending })
+    Ok((
+        VaultView { entries, pending },
+        GraphAncestry {
+            events,
+            indexes,
+            ancestors,
+        },
+    ))
 }
 fn causal_order(events: &BTreeMap<UpdateId, GraphEvent>) -> Result<Vec<UpdateId>> {
     let mut visiting = BTreeSet::new();

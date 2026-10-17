@@ -962,3 +962,460 @@ fn authenticated_file_exposes_original_plaintext_without_canonicalizing() {
     assert_eq!(opened.payload(), &payload);
     assert_eq!(opened.record().exact_wire, wire);
 }
+
+#[test]
+fn physical_move_frontier_preserves_incomparable_published_text_without_latest_heads() {
+    let base = apply(&empty(), create());
+    let old_edit = activity("edit", &["namespace-create"], "published bytes");
+    let moved = event(
+        "move",
+        &["namespace-create"],
+        Effect::Move {
+            location: location("moved.md"),
+        },
+    );
+    let a = apply(&add_activity(&base, &old_edit), moved.clone());
+    let b = add_activity(&apply(&base, moved), &old_edit);
+    for state in [a, b] {
+        let unpublished = activity("unpublished", &["edit", "move"], "newer remote bytes");
+        let state = restart(&add_activity(&state, &unpublished));
+        assert_eq!(
+            state.view().unwrap().namespace.entries[&entry("note")].heads,
+            vec![id("unpublished")]
+        );
+        assert_eq!(
+            state
+                .join_physical_move_frontier(&identity(), &[id("edit")], &id("move"))
+                .unwrap(),
+            vec![id("edit"), id("move")]
+        );
+        // The semantic join does not mutate any stored activity, version or graph.
+        assert_eq!(restart(&state), state);
+    }
+}
+#[test]
+fn physical_move_frontier_drops_dominated_heads_and_is_idempotent() {
+    let base = add_activity(
+        &apply(&empty(), create()),
+        &activity("edit", &["namespace-create"], "published"),
+    );
+    let moved = apply(
+        &base,
+        event(
+            "move",
+            &["edit"],
+            Effect::Move {
+                location: location("new.md"),
+            },
+        ),
+    );
+    assert_eq!(
+        moved
+            .join_physical_move_frontier(&identity(), &[id("edit")], &id("move"))
+            .unwrap(),
+        vec![id("move")]
+    );
+    assert_eq!(
+        moved
+            .join_physical_move_frontier(&identity(), &[id("move")], &id("move"))
+            .unwrap(),
+        vec![id("move")]
+    );
+    // A retained physical head may already causally include this Move.
+    let later = add_activity(&moved, &activity("later", &["move"], "later published"));
+    assert_eq!(
+        later
+            .join_physical_move_frontier(&identity(), &[id("later")], &id("move"))
+            .unwrap(),
+        vec![id("later")]
+    );
+}
+#[test]
+fn physical_move_frontier_rejects_noncanonical_pending_and_wrong_entry_inputs() {
+    let base = apply(&empty(), create());
+    let state = apply(
+        &base,
+        event(
+            "move",
+            &["namespace-create"],
+            Effect::Move {
+                location: location("new.md"),
+            },
+        ),
+    );
+    for prior in [
+        vec![],
+        vec![id("move"), id("move")],
+        vec![id("namespace-create"), id("move")],
+        vec![id("move"), id("namespace-create")],
+        vec![id("absent")],
+    ] {
+        assert!(state
+            .join_physical_move_frontier(&identity(), &prior, &id("move"))
+            .is_err());
+    }
+    let mut wrong = identity();
+    wrong.bootstrap_id = id("other-bootstrap");
+    assert_eq!(
+        state
+            .join_physical_move_frontier(&wrong, &[id("namespace-create")], &id("move"))
+            .unwrap_err(),
+        Error::IdentityMismatch
+    );
+    assert!(state
+        .join_physical_move_frontier(
+            &identity(),
+            &[id("namespace-create")],
+            &id("namespace-create")
+        )
+        .is_err());
+    let pending = apply(
+        &state,
+        event(
+            "pending-move",
+            &["missing"],
+            Effect::Move {
+                location: location("pending.md"),
+            },
+        ),
+    );
+    assert!(pending
+        .join_physical_move_frontier(&identity(), &[id("move")], &id("pending-move"))
+        .is_err());
+    assert!(pending
+        .join_physical_move_frontier(&identity(), &[id("pending-move")], &id("move"))
+        .is_err());
+    let deleted = apply(&state, event("delete", &["move"], Effect::Delete));
+    let restored = apply(
+        &deleted,
+        event(
+            "restore",
+            &["delete"],
+            Effect::Restore {
+                location: location("restored.md"),
+            },
+        ),
+    );
+    assert!(restored
+        .join_physical_move_frontier(&identity(), &[id("move")], &id("restore"))
+        .is_err());
+}
+#[test]
+fn ancestor_folder_move_cannot_enter_child_physical_frontier() {
+    let folder_identity = EntryIdentity {
+        entry_id: entry("folder"),
+        bootstrap_id: id("folder-create"),
+    };
+    let folder_create = EntryEvent {
+        id: id("folder-create"),
+        identity: folder_identity.clone(),
+        parents: vec![],
+        effect: Effect::Create {
+            entry_kind: EntryKind::Folder,
+            location: location("folder"),
+            content: None,
+        },
+    };
+    let mut child = create();
+    if let Effect::Create { location, .. } = &mut child.effect {
+        location.parent = Some(entry("folder"));
+    }
+    let base = apply(&apply(&empty(), folder_create), child);
+    let moved = apply(
+        &base,
+        EntryEvent {
+            id: id("folder-move"),
+            identity: folder_identity.clone(),
+            parents: vec![id("folder-create")],
+            effect: Effect::Move {
+                location: location("new-folder"),
+            },
+        },
+    );
+    assert_eq!(
+        moved
+            .join_physical_move_frontier(&identity(), &[id("namespace-create")], &id("folder-move"))
+            .unwrap_err(),
+        Error::IdentityMismatch
+    );
+    assert_eq!(
+        moved
+            .join_physical_move_frontier(
+                &folder_identity,
+                &[id("folder-create")],
+                &id("folder-move")
+            )
+            .unwrap(),
+        vec![id("folder-move")]
+    );
+    assert_eq!(
+        moved.view().unwrap().namespace.entries[&entry("note")].heads,
+        vec![id("namespace-create")]
+    );
+}
+#[test]
+fn physical_move_frontier_bounds_the_result_and_can_collapse_a_full_frontier() {
+    let mut records = BTreeMap::new();
+    let root = payload(create());
+    records.insert(root.id.clone(), root);
+    let mut heads = Vec::new();
+    for index in 0..crate::MAX_PARENTS {
+        let name = format!("head-{index:03}");
+        let e = payload(event(
+            &name,
+            &["namespace-create"],
+            Effect::Move {
+                location: location("note.md"),
+            },
+        ));
+        heads.push(e.id.clone());
+        records.insert(e.id.clone(), e);
+    }
+    let independent = payload(event(
+        "independent",
+        &["namespace-create"],
+        Effect::Move {
+            location: location("independent.md"),
+        },
+    ));
+    records.insert(independent.id.clone(), independent);
+    let joined = payload(EntryEvent {
+        id: id("joined"),
+        identity: identity(),
+        parents: heads.clone(),
+        effect: Effect::Move {
+            location: location("joined.md"),
+        },
+    });
+    records.insert(joined.id.clone(), joined);
+    let state = State::from_records(scope(), rev("wide"), records, BTreeMap::new()).unwrap();
+    assert_eq!(
+        state
+            .join_physical_move_frontier(&identity(), &heads, &id("independent"))
+            .unwrap_err(),
+        Error::TooLarge
+    );
+    assert_eq!(
+        state
+            .join_physical_move_frontier(&identity(), &heads, &id("joined"))
+            .unwrap(),
+        vec![id("joined")]
+    );
+    let mut too_many = heads;
+    too_many.push(id("independent"));
+    assert_eq!(
+        state
+            .join_physical_move_frontier(&identity(), &too_many, &id("joined"))
+            .unwrap_err(),
+        Error::TooLarge
+    );
+}
+
+fn retained_binary_fixture() -> State {
+    let mut records = BTreeMap::new();
+    let mut manifest_for = |prefix: &str, bytes: &[u8]| {
+        let chunk_id = id(&format!("{prefix}-chunk"));
+        let page_id = id(&format!("{prefix}-page"));
+        let page = crate::ChunkPage {
+            chunks: vec![crate::ChunkRef {
+                id: chunk_id.clone(),
+                bytes: bytes.len() as u32,
+                digest: Sha256Digest::of(bytes),
+            }],
+        };
+        let page_ref = page.reference(page_id.clone()).unwrap();
+        records.insert(
+            chunk_id.clone(),
+            Payload {
+                family: Family::Files,
+                format_version: 2,
+                scope: scope(),
+                id: chunk_id,
+                body: Body::Chunk {
+                    bytes: bytes.to_vec(),
+                },
+            },
+        );
+        records.insert(
+            page_id.clone(),
+            Payload {
+                family: Family::Files,
+                format_version: 2,
+                scope: scope(),
+                id: page_id,
+                body: Body::Page { page },
+            },
+        );
+        Manifest {
+            bytes: bytes.len() as u64,
+            digest: Sha256Digest::of(bytes),
+            pages: vec![page_ref],
+        }
+    };
+    let first = manifest_for("old", b"retained old bytes");
+    let next = manifest_for("new", b"new bytes");
+    let mut root = create();
+    root.effect = Effect::Create {
+        entry_kind: EntryKind::File,
+        location: location("binary.dat"),
+        content: Some(ContentSeed::Binary { manifest: first }),
+    };
+    let root = payload(root);
+    records.insert(root.id.clone(), root);
+    let write = payload(event(
+        "binary-write",
+        &["namespace-create"],
+        Effect::SetContent { content: next },
+    ));
+    records.insert(write.id.clone(), write);
+    State::from_records(scope(), rev("binary-state"), records, BTreeMap::new()).unwrap()
+}
+#[test]
+fn historical_binary_witness_reads_dominated_content_in_recovery_and_tombstone() {
+    let base = retained_binary_fixture();
+    assert_eq!(
+        base.view().unwrap().namespace.entries[&entry("note")]
+            .contents
+            .len(),
+        1
+    );
+    assert_eq!(
+        base.view().unwrap().namespace.entries[&entry("note")].contents[0].event,
+        id("binary-write")
+    );
+    let deleted = apply(&base, event("delete", &["binary-write"], Effect::Delete));
+    let recovery = apply(
+        &deleted,
+        event(
+            "concurrent-move",
+            &["binary-write"],
+            Effect::Move {
+                location: location("recovery.dat"),
+            },
+        ),
+    );
+    for state in [base, deleted, recovery] {
+        let state = restart(&state);
+        assert_eq!(
+            state
+                .materialize_retained_binary(&identity(), &id("namespace-create"))
+                .unwrap(),
+            Some(b"retained old bytes".to_vec())
+        );
+        assert_eq!(
+            state
+                .materialize_retained_binary(&identity(), &id("binary-write"))
+                .unwrap(),
+            Some(b"new bytes".to_vec())
+        );
+    }
+}
+#[test]
+fn historical_binary_witness_rejects_other_identity_mode_noncontent_and_pending_event() {
+    let state = retained_binary_fixture();
+    let mut wrong = identity();
+    wrong.bootstrap_id = id("wrong-bootstrap");
+    assert_eq!(
+        state
+            .materialize_retained_binary(&wrong, &id("namespace-create"))
+            .unwrap_err(),
+        Error::IdentityMismatch
+    );
+    wrong = identity();
+    wrong.entry_id = entry("other");
+    assert_eq!(
+        state
+            .materialize_retained_binary(&wrong, &id("namespace-create"))
+            .unwrap_err(),
+        Error::IdentityMismatch
+    );
+    let moved = apply(
+        &state,
+        event(
+            "move",
+            &["binary-write"],
+            Effect::Move {
+                location: location("moved.dat"),
+            },
+        ),
+    );
+    assert_eq!(
+        moved
+            .materialize_retained_binary(&identity(), &id("move"))
+            .unwrap_err(),
+        Error::InvalidContent
+    );
+    assert!(moved
+        .materialize_retained_binary(&identity(), &id("old-chunk"))
+        .is_err());
+    let text = apply(&empty(), create());
+    assert_eq!(
+        text.materialize_retained_binary(&identity(), &id("namespace-create"))
+            .unwrap_err(),
+        Error::InvalidContent
+    );
+    let manifest = Manifest {
+        bytes: 0,
+        digest: Sha256Digest::of(&[]),
+        pages: vec![],
+    };
+    let pending = apply(
+        &state,
+        event(
+            "pending-write",
+            &["absent"],
+            Effect::SetContent { content: manifest },
+        ),
+    );
+    assert!(pending
+        .materialize_retained_binary(&identity(), &id("pending-write"))
+        .is_err());
+}
+#[test]
+fn historical_binary_witness_distinguishes_missing_chunks_empty_files_and_corruption() {
+    let state = retained_binary_fixture();
+    let mut records = state.records.clone();
+    records.remove(&id("old-chunk"));
+    let missing = State::from_records(scope(), rev("missing"), records, BTreeMap::new()).unwrap();
+    assert_eq!(
+        missing
+            .materialize_retained_binary(&identity(), &id("namespace-create"))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        missing
+            .materialize_retained_binary(&identity(), &id("binary-write"))
+            .unwrap(),
+        Some(b"new bytes".to_vec())
+    );
+    let empty_file = apply(
+        &state,
+        event(
+            "empty-write",
+            &["binary-write"],
+            Effect::SetContent {
+                content: Manifest {
+                    bytes: 0,
+                    digest: Sha256Digest::of(&[]),
+                    pages: vec![],
+                },
+            },
+        ),
+    );
+    assert_eq!(
+        empty_file
+            .materialize_retained_binary(&identity(), &id("empty-write"))
+            .unwrap(),
+        Some(vec![])
+    );
+    // Deserialization alone is not validation; the helper validates the complete
+    // restored graph and reference integrity before returning historical bytes.
+    let mut corrupted = state;
+    corrupted.records.get_mut(&id("old-chunk")).unwrap().body = Body::Chunk {
+        bytes: b"forged bytes".to_vec(),
+    };
+    assert!(corrupted
+        .materialize_retained_binary(&identity(), &id("namespace-create"))
+        .is_err());
+}

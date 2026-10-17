@@ -47,3 +47,36 @@ mode/identity/role collisions, impossible binary/causal references, authenticate
 text activity, strict version boundaries and binary-head behavior. Runtime
 verification must include the existing v1 tests because both versions share the
 private graph engine; source review is not a passing test result.
+
+## Physical and retained-content witnesses
+
+`v2::State::join_physical_move_frontier(identity, prior, applied_move)` validates
+an existing nonempty canonical physical frontier and joins one resolved Move for
+that exact entry/bootstrap. It uses the same validated ancestry bitsets as view
+construction, retains incomparable heads, removes dominated heads and bounds the
+result. It does not substitute the latest graph heads or claim that newer text
+bytes were published. Restore is excluded. An ancestor folder Move cannot enter
+a child's entry-scoped frontier; the host preserves the child's frontier and
+proves the ancestor/member path change separately in its physical journal.
+
+The helper validates causal semantics, not filesystem application or the truth
+of the caller's historical publication claim. A native adapter must couple the
+result to its durable source binding and actual completed Move, then atomically
+store the fresh physical branch revision, unchanged text snapshot/bytes and the
+new path/location evidence. Graph knowledge alone is not publication proof.
+
+`v2::State::materialize_retained_binary(identity, content_event)` validates the
+exact entry/bootstrap and immutable binary mode, derives the manifest from a
+retained resolved Create/SetContent event, then verifies/materializes it in Rust.
+Historical dominated content, Recovery entries and Tombstones remain readable;
+the call neither selects a normal projection path nor asserts current content.
+A Move/text event or another entry's event is not a binary-content witness.
+Missing dependencies return `None`, while a valid empty file returns
+`Some(Vec::new())`. A host validating already-retained bytes must treat missing
+or mismatched content as damaged storage, never silently replace it with empty
+bytes. Browser/WASM adapters should call this helper rather than implement
+independent identity, ancestry or mode checks in JavaScript.
+
+Both helpers and eight focused regression fixtures are source-reviewed only in
+`core-physical-frontier`, based on integrated main `a8d1733`. No build or runtime
+test has run for this follow-up yet. Existing view/wire formats are unchanged.
