@@ -31,7 +31,7 @@ function desktopTextCreates(service,checkpoints){
   const signature=request=>createHash('sha256').update(JSON.stringify(request)).digest('hex');
   const command=(operationId,mutation,mode=null,body='')=>({family:{version:1,request:{operation_id:operationId,mutation},create_mode:mode},body_base64:body});
   async function plan(request){
-    const current=await service.host.readPath(request.path),commands=[];
+    const current=await service.host.readMetadata(request.path),commands=[];
     const create=(path,kind,id=request.entryId,op=request.operationId)=>command(op,{type:'create',id,path,kind},kind==='file'?(request.kind.endsWith('Binary')?'binary':'text'):null,kind==='file'?request.body_base64:'');
     if(request.kind==='mkdir'||request.kind==='createText'||request.kind==='createBinary'){
       if(current)throw failure('revision_conflict');
@@ -41,7 +41,10 @@ function desktopTextCreates(service,checkpoints){
       if(!current){if(request.expected_base64!==undefined||request.expectedEntryId!==undefined)throw failure('revision_conflict');return [create(request.path,'file')];}
       if(!current.has_content)throw failure('invalid_request');
       if(request.expectedEntryId!==undefined&&(current.entry.id!==request.expectedEntryId||current.entry.revision!==request.expectedRevision))throw failure('revision_conflict');
-      if(request.expected_base64!==undefined&&Buffer.from(current.bytes).toString('base64')!==request.expected_base64)throw failure('revision_conflict');
+      if(request.expected_base64!==undefined){
+        const observed=await service.host.readPath(request.path);
+        if(!observed||observed.entry.id!==current.entry.id||observed.entry.revision!==current.entry.revision||Buffer.from(observed.bytes).toString('base64')!==request.expected_base64)throw failure('revision_conflict');
+      }
       return [command(request.operationId,{type:'write',id:current.entry.id,expected:current.entry.revision},null,request.body_base64)];
     }
     if(!current)throw failure('not_found');
@@ -51,13 +54,13 @@ function desktopTextCreates(service,checkpoints){
       destination=`.trash/${request.operationId}/${request.path}`;
       const parts=destination.split('/');parts.pop();
       for(let i=1;i<=parts.length;i++){
-        const path=parts.slice(0,i).join('/'),parent=await service.host.readPath(path);
+        const path=parts.slice(0,i).join('/'),parent=await service.host.readMetadata(path);
         if(parent){if(parent.entry.kind!=='folder')throw failure('invalid_request');}
         else commands.push(create(path,'folder',randomUUID(),randomUUID()));
       }
     }
     if(request.kind==='move'||request.kind==='trash'){
-      if(destination===request.path||destination.startsWith(request.path+'/')||await service.host.readPath(destination))throw failure('revision_conflict');
+      if(destination===request.path||destination.startsWith(request.path+'/')||await service.host.readMetadata(destination))throw failure('revision_conflict');
       commands.push(command(request.operationId,{type:'move',id:current.entry.id,expected:current.entry.revision,path:destination}));
     }else commands.push(command(request.operationId,{type:'delete',id:current.entry.id,expected:current.entry.revision,recursive:request.force}));
     return commands;

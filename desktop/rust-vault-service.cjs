@@ -7,6 +7,8 @@ const { familyStatus, syncStatus, syncReport, familyCommand } = require('./famil
 
 const MAX_HEADER = 1024 * 1024;
 const MAX_BODY = 16 * 1024 * 1024;
+// One protobuf message carries at most one 128 KiB chunk plus bounded metadata.
+const MAX_BINARY_FRAME = 128 * 1024 + 16 * 1024;
 const MAX_CHECKPOINT_BODY = 32 * 1024 * 1024;
 const MAX_QUEUED_BYTES = 64 * 1024 * 1024;
 const MAX_REQUESTS = 32;
@@ -126,8 +128,9 @@ function checkpointResult({ result, bytes }) {
 function successful(command, result, bytes, expectedBytes) {
   if (!object(result)) return false;
   if (!command) return bytes.length === 0; // Full startup validation follows.
-  if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas'].includes(command.method) && bytes.length) return false;
+  if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas', 'binary'].includes(command.method) && bytes.length) return false;
   switch (command.method) {
+    case 'binary': return result.binary === true && bytes.length > 0 && bytes.length <= MAX_BINARY_FRAME;
     case 'create_text': return successful({method:'apply',operation_id:command.operation_id,mutation:{type:'create',id:command.id,path:command.path,kind:'file'}}, result, bytes, expectedBytes);
     case 'fixture_family_enroll': return familyStatus(result.family);
     case 'fixture_family_status': return syncStatus(result.sync);
@@ -250,12 +253,14 @@ class RustVaultService {
         || (result.max_checkpoint_body !== undefined && result.max_checkpoint_body !== MAX_CHECKPOINT_BODY)
         || !Array.isArray(result.capabilities) || result.capabilities.length > 64
         || !result.capabilities.every(value => typeof value === 'string' && /^[a-z_]{1,64}$/.test(value))
+        || (result.capabilities.includes('binary_streams') && (result.max_binary_frame !== MAX_BINARY_FRAME || !object(result.binary_limits) || result.binary_limits.maxFileBytes !== '67108864' || result.binary_limits.maxChunkBytes !== 131072 || !decimal(result.binary_limits.smallReadBytes) || BigInt(result.binary_limits.smallReadBytes)>BigInt(MAX_BODY)))
         || (result.capabilities.includes('checkpoint_cas') && result.max_checkpoint_body !== MAX_CHECKPOINT_BODY)
         || (result.reconciliation!==undefined&&result.reconciliation!==null&&!reconciliationStatus(result.reconciliation))
         || (initializeLocal&&(!result.capabilities.includes('reconciliation_status')||!reconciliationStatus(result.reconciliation)))) {
         this.abort(failure('invalid_handshake'));
         throw this.fatal;
       }
+      this.binaryLimits=result.capabilities.includes('binary_streams')?Object.freeze({...result.binary_limits}):undefined;
       this.reconciliation=result.reconciliation?structuredClone(result.reconciliation):null;
       this.capabilities = Object.freeze([...(result.capabilities ?? [])]);
     });
@@ -304,7 +309,7 @@ class RustVaultService {
           if (this.prefixUsed < 8) continue;
           this.headerLength = this.prefix.readUInt32BE(0);
           const bodyLength = this.prefix.readUInt32BE(4);
-          const bodyLimit = ['checkpoint_load', 'checkpoint_cas'].includes(this.pending?.command?.method) ? MAX_CHECKPOINT_BODY : MAX_BODY;
+          const bodyLimit = ['checkpoint_load', 'checkpoint_cas'].includes(this.pending?.command?.method) ? MAX_CHECKPOINT_BODY : this.pending?.command?.method === 'binary' ? MAX_BINARY_FRAME : MAX_BODY;
           if (!this.headerLength || this.headerLength > MAX_HEADER || bodyLength > bodyLimit) throw failure('response_limit', true);
           this.frame = Buffer.allocUnsafe(this.headerLength + bodyLength);
           this.frameUsed = 0;
@@ -332,7 +337,7 @@ class RustVaultService {
     if (this.closing || this.fatal) return Promise.reject(this.fatal ?? failure('host_closed'));
     let body, header;
     try {
-      if (!(bytes instanceof Uint8Array) || bytes.byteLength > (command?.method === 'checkpoint_cas' ? MAX_CHECKPOINT_BODY : MAX_BODY)) throw failure('request_limit');
+      if (!(bytes instanceof Uint8Array) || bytes.byteLength > (command?.method === 'checkpoint_cas' ? MAX_CHECKPOINT_BODY : command?.method === 'binary' ? MAX_BINARY_FRAME : MAX_BODY)) throw failure('request_limit');
       const requestId = (++this.sequence).toString();
       // Serialize/copy before enqueue: later caller changes cannot alter a retry.
       header = Buffer.from(JSON.stringify({ version: 1, request_id: requestId, command, ...(lease ? { lease } : {}) }));
@@ -383,9 +388,13 @@ class RustVaultService {
   withClientLease(reference, beforeRequest = () => {}) {
     const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
     const context = { request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
-    const methods = ['fileCommand', 'createText', 'identity', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
+    const methods = ['binaryCommand', 'fileCommand', 'createText', 'identity', 'readMetadata', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
       'checkpointLoad', 'checkpointCompareAndSwap', 'checkpointList', 'checkpointChanges'];
     return Object.freeze(Object.fromEntries(methods.map(name => [name, (...args) => RustVaultService.prototype[name].apply(context, args)])));
+  }
+  binaryCommand(clientId, bytes) {
+    if (!identity(clientId) || !(bytes instanceof Uint8Array) || !bytes.length || bytes.byteLength > MAX_BINARY_FRAME) return Promise.reject(failure('request_limit'));
+    return this.request({method:'binary',client_id:clientId},bytes).then(reply=>new Uint8Array(reply.bytes));
   }
   checkpointLoad(scope, key) { return this.request({ method: 'checkpoint_load', scope, key }).then(checkpointResult); }
   checkpointCompareAndSwap(scope, change) {
@@ -407,6 +416,12 @@ class RustVaultService {
   queryIntent(reference) { return this.request({ method: 'query_intent', reference }).then(reply => reply.result.intent); }
   listIntents(clientId, cursor = '0', limit = 100) { return this.request({ method: 'list_intents', client_id: clientId, cursor, limit }).then(reply => reply.result); }
   acknowledgeIntent(reference, expected) { return this.request({ method: 'acknowledge_intent', reference, expected }).then(reply => reply.result.intent); }
+  readMetadata(path) {
+    // The existing snapshot is payload-free. Keep namespace/existence checks
+    // independent of legacy whole-file reads; native indexed lookup may replace
+    // this implementation without changing the caller contract.
+    return this.request({method:'list_snapshot'}).then(({result})=>{const row=result.entries.find(row=>row.state.path===path);return row?{entry:row.state,presentation:row.presentation,has_content:row.state.kind==='file'}:null;});
+  }
   readPath(path) {
     return this.request({ method: 'read_path', path }).then(({ result, bytes }) => result.entry === null ? null : { ...result, bytes });
   }
@@ -435,4 +450,4 @@ class RustVaultService {
     return this.closePromise;
   }
 }
-module.exports = { RustVaultService, reconciliationStatus };
+module.exports = { RustVaultService, reconciliationStatus, MAX_BINARY_FRAME };

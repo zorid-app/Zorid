@@ -21,6 +21,7 @@ function fixture() {
     assert.deepEqual(reference, active, 'each admitted RPC carries the owned native lease');
     let result;
     switch (command.method) {
+      case 'binary':if(readGate)await readGate.promise;return {result:{binary:true},bytes:new Uint8Array(bytes)};
       case 'identity': result = { identity: { local_store_id: 'authority', realm_id: null, vault_id: null } }; break;
       case 'read_path':
         if (readGate) await readGate.promise;
@@ -187,4 +188,14 @@ test('unexpected window retirement drains work and releases lease without cleari
   assert.equal(f.active,null);
   assert.equal(f.calls.includes('checkpoint_cas'),false);
   assert.equal(f.calls.includes('acknowledge_intent'),false);
+});
+
+test('binary admission drains one bounded call before release and rejects overlapping chunk copies',async()=>{
+  const f=fixture();f.host.capabilities=['binary_streams'];
+  const context=await admitDesktopFixtureClient(f.service,f.options);
+  const gate=deferred();f.readGate=gate;const pending=context.binaryCommand(new Uint8Array([8,1]));
+  await assert.rejects(context.binaryCommand(new Uint8Array([8,1])),{code:'binary_busy'});
+  const closing=context.release(()=>{});await assert.rejects(context.binaryCommand(new Uint8Array([8,1])),{code:'binary_busy'});
+  gate.resolve();assert.deepEqual([...await pending],[8,1]);await closing;assert.equal(f.active,null);
+  await assert.rejects(context.binaryCommand(new Uint8Array([8,1])),{code:'client_not_admitted'});
 });

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { tmpdir } = require('node:os');
-const { RustVaultService, reconciliationStatus } = require('../desktop/rust-vault-service.cjs');
+const { RustVaultService, reconciliationStatus, MAX_BINARY_FRAME } = require('../desktop/rust-vault-service.cjs');
 
 // Actual subprocess tests of the JS transport. This intentionally tiny fake host
 // tests framing/lifecycle only; Rust process.rs separately executes NativeVault.
@@ -78,6 +78,10 @@ process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(b
   if(mode==='family_bad_cursor')result.sync.family.cursor={...scope,vault_id:'other',server_epoch:'epoch',after:'1'};
   if(mode==='family_bad_counts')result.sync.server_accepted=req.command.max_push+1;
   if(mode==='family_bad_pending'){result.sync.pending_envelopes=[{scope,update_id:'update',family:'text',sealed:true,accepted:true}];result.sync.pending_envelope_sample=1;}
+ }
+ if(req.command.method==='binary') {
+  if(mode==='binary_oversized'){const prefix=Buffer.alloc(8);prefix.writeUInt32BE(2,0);prefix.writeUInt32BE(147457,4);process.stdout.write(prefix);continue;}
+  result={binary:true};responseBody=body;
  }
  if(mode==='missing')result=undefined;
  if(mode==='wrong_receipt')result.commit.operation_id='wrong';
@@ -273,4 +277,19 @@ test('reconciliation diagnostics reject false completeness, unbounded issues and
   assert.equal(reconciliationStatus({...status,issuesTruncated:true}),false);
   assert.equal(reconciliationStatus({...status,details:'/private/secret'}),false);
   assert.equal(reconciliationStatus({...status,issues:[{...status.issues[0],reason:'/private/secret'}]}),false);
+});
+
+// The fake host echoes opaque protobuf bytes; semantic protobuf/native checks
+// belong to the Rust/renderer adapters, not a second main-process DTO codec.
+test('binary protobuf frames preserve bytes/lease and reject oversized requests before queueing',async t=>{
+  const host=await fixture(t),lease={local_store_id:'local',client_id:'client',token:'token'};let checked=0;
+  const admitted=host.withClientLease(lease,()=>{checked++;});
+  const bytes=new Uint8Array([8,1,82,0]),pending=admitted.binaryCommand('client',bytes);bytes.fill(9);
+  assert.deepEqual([...await pending],[8,1,82,0]);assert.ok(checked>=2);
+  await assert.rejects(admitted.binaryCommand('client',new Uint8Array(MAX_BINARY_FRAME+1)),{code:'request_limit'});
+  assert.equal(host.queuedCount,0);
+});
+test('oversized binary response is rejected before frame allocation and retains uncertain outcome',async t=>{
+  const host=await fixture(t,'binary_oversized');
+  await assert.rejects(host.binaryCommand('client',new Uint8Array([8,1])),{code:'invalid_response',commitUncertain:true});
 });

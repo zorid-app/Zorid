@@ -1,6 +1,7 @@
 'use strict';
 const { desktopDurableWrites } = require('./durable-writes.cjs');
 const { desktopTextCreates } = require('./text-create.cjs');
+const { MAX_BINARY_FRAME } = require('./rust-vault-service.cjs');
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 function fail(code, uncertain = false) { return Object.assign(new Error('Desktop fixture consumer is not admitted.'), { code, commitUncertain: uncertain }); }
 
@@ -61,10 +62,18 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
         }),
       });
     }
+    let binaryPending=false;
+    const binaryCommand=bytes=>{
+      if(!(bytes instanceof Uint8Array)||!bytes.length||bytes.byteLength>MAX_BINARY_FRAME)return Promise.reject(fail('request_limit'));
+      if(binaryPending)return Promise.reject(fail('binary_busy'));
+      binaryPending=true;
+      return invoke(()=>guarded.binaryCommand(clientId,bytes),null).finally(()=>{binaryPending=false;});
+    };
     const writes = wrap(null);
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
+      ...(host.capabilities?.includes('binary_streams')?{binaryCommand,binaryLimits:host.binaryLimits}:{}),
       ...(creates?{createText:input=>invoke(()=>creates.create(input),null),fileCommand:input=>invoke(()=>creates.execute(input),null)}:{}),
       async retire() {
         // Window has gone away. Drain accepted calls and drop ownership only;

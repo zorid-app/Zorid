@@ -104,3 +104,10 @@ test('incomplete scan diagnostics persist through failure and clear only with a 
   core.host.rescan=async()=>({complete:true,reconciliation:complete});
   await core.retryReconciliation();assert.equal(core.reconciliation.complete,true);assert.equal(core.reconciliation.failure,undefined);
 });
+
+test('metadata stat preserves identity and rejects large convenience reads before asking for bodies',async()=>{
+  let payloadReads=0;const large={...state,path:'large.bin'},presentation={...presented.presentation,size_bytes:20*1024*1024};
+  const core=service({readMetadata:async()=>({entry:large,presentation,has_content:true}),readPath:async()=>{payloadReads++;throw new Error('must not allocate bytes');}});
+  assert.deepEqual(await core.stat('large.bin'),{path:'large.bin',entryId:'file',revision:'revision',type:'file',mtime:2,size:20*1024*1024,ctime:1});
+  await assert.rejects(core.readBinary('large.bin'),{code:'stream_required'});assert.equal(payloadReads,0);
+});

@@ -1,3 +1,4 @@
+import {createDesktopBinaryStreams} from './desktop.ts';
 import type { DurableWrites } from '../core/durable-writes.ts';
 import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
@@ -23,6 +24,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
   let release: (() => Promise<void>) | undefined;
   let createText: ((path:string,content:string)=>Promise<void>) | undefined;
   let commands:Partial<VaultAdapter>={};
+  let binary:ReturnType<typeof createDesktopBinaryStreams>|undefined;
   if (binding) {
     if (!bridge.durableInvoke || !bridge.releaseDurableContext || !binding.admissionId || !binding.scope?.vaultId || !binding.scope.clientId) throw new Error('Incomplete durable desktop capability');
     const invoke = bridge.durableInvoke.bind(bridge), releaseContext = bridge.releaseDurableContext.bind(bridge);
@@ -62,15 +64,19 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
         compareAndSwap: change => call('checkpoints.compareAndSwap',change),
         list: options => call('checkpoints.list',options), changes: options => call('checkpoints.changes',options)}),
     });
-    release = async () => { if (!released) { await releaseContext(info.path, admissionId); released = true; } };
+    let binaryDrained=false;
+    if(binding.binaryLimits)binary=createDesktopBinaryStreams({scope,checkpoints:durableWrites.checkpoints,limits:binding.binaryLimits,assertActive:()=>{if(released||binaryDrained)throw new Error('Desktop binary context released');},invoke:bytes=>call<Uint8Array>('binaryCommand',bytes)});
+    release = async () => { if (!released) { if(binary&&!binaryDrained){await binary.release();binaryDrained=true;} await releaseContext(info.path, admissionId); released = true; } };
   }
   return {
     ...(release ? {release} : {}),
     ...(reconciliation?{reconciliation}:{}),
+    ...(binary?{recoverCommands:()=>binary!.recover()}:{}),
     id: durableWrites ? `desktop-core:${durableWrites.checkpoints.scope.vaultId}:${durableWrites.checkpoints.scope.clientId}` : `desktop:${info.path}`,
     label: info.name,
     adapter: {
       ...(durableWrites ? {durableWrites} : {}),
+      ...(binary ? {binaryStreams:binary.streams} : {}),
       ...(createText ? {createText} : {}),
       list: () => bridge.list(info.path),
       stat: path => bridge.stat(info.path, path),

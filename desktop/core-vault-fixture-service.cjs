@@ -5,7 +5,7 @@ const { normalizePath } = require('./vault-service.cjs');
 
 function error(code) { const value = new Error('Rust vault operation failed.'); value.code = code; return value; }
 function metadata(state, presentation) {
-  return { path: state.path, type: state.kind, mtime: presentation.mtime_ms, size: presentation.size_bytes,
+  return { path: state.path, entryId:state.id, revision:state.revision, type: state.kind, mtime: presentation.mtime_ms, size: presentation.size_bytes,
     ...(presentation.ctime_ms ? { ctime: presentation.ctime_ms } : {}) };
 }
 function visible(path) { return !path.split('/').some(part => part.startsWith('.')); }
@@ -87,11 +87,19 @@ class CoreVaultFixtureService {
   }
   async readEntry(input) { this.live(); return this.host.readPath(normalizePath(input)); }
   async stat(input) {
-    const entry = await this.readEntry(input);
+    this.live();
+    const entry = await this.host.readMetadata(normalizePath(input));
     return entry ? metadata(entry.entry, entry.presentation) : null;
   }
   async readBinary(input) {
-    const entry = await this.readEntry(input);
+    this.live();
+    const path=normalizePath(input),observed=await this.host.readMetadata(path);
+    if(!observed)throw error('not_found');
+    if(!observed.has_content)throw error('not_file');
+    const small=BigInt(this.host.binaryLimits?.smallReadBytes??String(16*1024*1024));
+    if(BigInt(observed.presentation.size_bytes)>small)throw error('stream_required');
+    const entry = await this.readEntry(path);
+    if(entry&&(entry.entry.id!==observed.entry.id||entry.entry.revision!==observed.entry.revision))throw error('revision_conflict');
     if (!entry) throw error('not_found');
     if (!entry.has_content) throw error('not_file');
     return new Uint8Array(entry.bytes);
