@@ -71,7 +71,7 @@ permits plus one client decoder in flight. Those runtime guards are owned by the
 server/client workers and are not supplied by these portable DTO validators.
 Postdecode counts/encoded_len checks do not prevent decoder peak allocations.
 See [decoder measurements](rpc-decode-budget.md) for measured amplification and
-unresolved production budget/depth/concurrency gates. No custom protobuf scanner
+root-accepted initial development budget and remaining depth/concurrency gates. No custom protobuf scanner
 or reflection parser was added to impose the old JSON duplicate policy.
 
 Exclusive slot checks (jobs1; all handles terminal and slot released):
@@ -100,3 +100,10 @@ Not claimed: integrated server/native/browser runtime, TLS/CORS deployment,
 concurrent stress acceptance, actual browser heap peak, mobile, new plaintext
 format, or retirement of legacy fixtures/defaults. Future document-codec2/files3/
 Text3 remains only the separate mapping proposal.
+
+Root subsequently accepts the measured initial development thresholds documented
+in rpc-decode-budget.md and requires the supported browser Connect-Web2.2
+`binaryOptions: {readUnknownFields:false}`. Source/generation follows standard
+unknown/singular-merge behavior; no custom protobuf scanner or reflection added.
+Browser/CLI/server runtime guards and actual combined verification remain with
+their named owners. All schema-owner heavy handles are terminal.

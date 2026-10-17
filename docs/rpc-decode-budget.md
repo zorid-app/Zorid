@@ -8,8 +8,8 @@ The examples depend on the coordinator's pending RPC IDL/generated messages and
 
 Status: integrated into the schema-owner feature branch as `962459b`, then
 formatted and measured in the authorized exclusive slot on 2026-10-17. Results
-below describe standard runtime allocations; production acceptance budgets and
-actual predecode concurrency guards still require root/client/server verification.
+below describe standard runtime allocations; the initial development budget is accepted below; actual predecode concurrency
+guards still require client/server verification.
 
 After integration and generated-source checks, build the Rust example once in the
 coordinator's heavy slot, then invoke its binary separately for each listed case:
@@ -60,7 +60,7 @@ report retained-memory deltas after GC without asserting a universal GC threshol
 The runtime uses its default 100 depth limit explicitly. It neither performs
 production Rust semantic validation nor proves Chrome worker memory behavior.
 
-No pass/fail memory or timing threshold is approved here. Record compiler/runtime,
+Before the measurements, no pass/fail threshold was approved. Record compiler/runtime,
 architecture, exact cap, case, measurement and failure outcome before selecting
 budgets. A 1 MiB cap still allows roughly half a million empty repeated messages;
 post-decode count validation does not prevent their allocation. Standard protobuf
@@ -109,8 +109,40 @@ extensions show about 96 MiB sampled increases. These values exclude the cost of
 holding both a Connect-decoded JS object and Rust/WASM validation concurrently.
 No Connect decoder option change or production memory budget is implemented here.
 
-Root must accept a finite process/aggregate budget or reduce the representation/
-method caps/use a supported standard decoder option before activation. The harness
+Root has now accepted the initial development thresholds below and requires the
+supported standard browser unknown-field nonretention option before activation. The harness
 proves neither a hard JS allocation bound nor the service's admission enforcement.
 Depth/group adversarial tests and concurrent client/server behavior remain joint
 activation checks; schema-known message nesting itself is finite and nonrecursive.
+
+## Root-accepted initial development policy
+
+After reviewing these observations on 2026-10-17, root accepts this finite QA
+budget for the current new RPC slice:
+
+| Observation/guard | Accepted initial policy |
+| --- | --- |
+| Browser sampled JS heap increase | <=128 MiB with standard unknown-field nonretention |
+| Rust conservative allocator peak per malicious max-sized reply | <=160 MiB |
+| Rust conservative allocator peak per malicious max-sized Append | <=80 MiB |
+| Decode duration per measured case | <=250 ms |
+| Client decoding | One in-flight RPC per browser/CLI client |
+| Server admission/work | Eight predecode and eight blocking-work permits |
+| Framing | Strict method body/frame caps, no compression |
+
+Root verified the supported Connect-Web 2.2 API
+`binaryOptions: { readUnknownFields: false }` and requires the browser owner to use
+it. This uses standard protobuf unknown-field ignoring/nonretention, without a
+custom parser; the exact raw RPC payload remains available for independent Rust
+validation and original ZSE1 bytes remain unchanged. The named retention-enabled
+unknown fixture is a comparison, not accepted production browser configuration.
+The known-field cases contain no unknown tags, so retention did not contribute to
+those measured allocations. Raw evidence accurately retains each actual option.
+
+Observed maxima fit the accepted development thresholds: Rust144 MiB/reply and
+72 MiB/Append; known-field JS sampled increase about96 MiB; unknown-discard2.7 MiB;
+all decode cases below108 ms. These are measurement acceptance criteria, not a
+hard runtime allocator/JS-heap cap or proof of every possible message. The576 MiB
+eight-request extrapolation remains unmeasured. Actual admission/one-inflight
+enforcement, browser/CLI/server integration and depth/concurrency checks stay
+activation gates. No production/mobile resource guarantee follows.
