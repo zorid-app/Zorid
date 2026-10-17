@@ -9,7 +9,7 @@ declare const __DOCUMENT_INDEX_MODULE_PATH__:string;
 type Index=Omit<BrowserDocumentIndex,'close'>;
 interface Session {runtime:BrowserCoreRuntime;consumer:BrowserClientContext;adapter:VaultAdapter;index:Index}
 const output=document.getElementById('result')!,identity=document.getElementById('identity')!;
-const sessions=new Set<Session>();let active=false,phase='ready';
+const sessions=new Set<Session>();let active=false,phase='ready',retainedEntryCount:number|undefined;
 const binary=new TextEncoder().encode('# Binary-authored\nneedle\n[[Target]]\n');
 const original='\ufeff---\r\ntitle: Original\r\n---\r\n# Unicode α\r\n[[Target]]\r\n'+Array.from({length:24},(_,i)=>`needle ${i}\r\n`).join('');
 const definition='filters: file.hasLink("Target")\nviews:\n  - type: table\n    name: Links\n    order:\n      - file.path\n      - title\n';
@@ -44,12 +44,13 @@ async function fingerprint(session:Session){const entries=await session.runtime.
   const bytes=await sourceBytes(session,value.entry.path);digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes as Uint8Array<ArrayBuffer>))).map(n=>n.toString(16).padStart(2,'0')).join('');}
   rows.push({entry:value.entry,presentation:value.presentation,digest});}return rows;}
 async function retryRetained(){
-  await releaseAll();const {database,client}=parameters();assert(database?.startsWith('zorid-core-vault:document-index-')&&client,'Retain the failed suite URL first');
+  retainedEntryCount=undefined;await releaseAll();const {database,client}=parameters();assert(database?.startsWith('zorid-core-vault:document-index-')&&client,'Retain the failed suite URL first');
+  assert((await indexedDB.databases()).some(row=>row.name===database),'Retained database is absent; refusing to create a replacement');
   stage('open retained normal worker');const session=await open(database,client);
-  try{const before=await fingerprint(session);stage('retained generation begin');let progress=await session.index.begin();
+  try{const before=await fingerprint(session);retainedEntryCount=before.length;const paths=new Set(before.map(row=>row.entry.path));assert(paths.has('Notes/Source.MD')&&paths.has('Target.md')&&paths.has('Links.base'),'Preserved fixture sources are missing; refusing a replacement fixture');stage('retained generation begin');let progress=await session.index.begin();
     do{stage('retained generation pump');progress=await session.index.pump(progress.stageId);}while(!progress.ready);
     stage('retained generation publication');const snapshot=await session.index.publish(progress.stageId);assert(same(before,await fingerprint(session)),'Retained retry changed source');
-    return {status:'passed',fixtureSource:__DOCUMENT_INDEX_SOURCE__,database,snapshot,current:await session.index.status(),rawBytesPreserved:true,scope:'retained source publication diagnostic; full suite still required'};
+    return {status:'passed',fixtureSource:__DOCUMENT_INDEX_SOURCE__,database,snapshot,retainedEntryCount,current:await session.index.status(),rawBytesPreserved:true,scope:'retained source publication diagnostic; full suite still required'};
   }finally{await release(session);}
 }
 async function persisted(){
@@ -61,7 +62,7 @@ async function persisted(){
   }finally{await release(session);}
 }
 async function run(){
-  await releaseAll();const database='zorid-core-vault:document-index-'+crypto.randomUUID(),client=crypto.randomUUID(),url=new URL(location.href);url.searchParams.set('database',database);url.searchParams.set('client',client);history.replaceState(null,'',url);identity.textContent=database;
+  retainedEntryCount=undefined;await releaseAll();const database='zorid-core-vault:document-index-'+crypto.randomUUID(),client=crypto.randomUUID(),url=new URL(location.href);url.searchParams.set('database',database);url.searchParams.set('client',client);history.replaceState(null,'',url);identity.textContent=database;
   const checks:Record<string,unknown>={},started=performance.now();let currentSnapshot:BrowserIndexSnapshot|undefined;
   stage('open normal workers');const a=await open(database,client),b=await open(database,crypto.randomUUID());
   try{
@@ -92,7 +93,7 @@ async function run(){
   return {status:'passed',fixtureSource:__DOCUMENT_INDEX_SOURCE__,wasm:manifest,browser:navigator.userAgent,database,elapsedMs:Math.round(performance.now()-started),snapshot:currentSnapshot,checks};
 }
 function action(id:string,task:()=>Promise<unknown>){document.getElementById(id)!.addEventListener('click',async()=>{if(active)return;active=true;document.querySelectorAll('button').forEach(button=>button.disabled=true);
-  try{show(await task());}catch(error){show({status:'failed',phase,fixtureSource:__DOCUMENT_INDEX_SOURCE__,code:(error as {code?:string}).code??'assertion',message:String((error as Error).message),details:(error as {details?:unknown}).details});try{await releaseAll();}catch{/* Preserve first failure evidence. */}}
+  try{show(await task());}catch(error){show({status:'failed',phase,fixtureSource:__DOCUMENT_INDEX_SOURCE__,code:(error as {code?:string}).code??'assertion',message:String((error as Error).message),details:(error as {details?:unknown}).details,...(retainedEntryCount===undefined?{}:{retainedEntryCount})});try{await releaseAll();}catch{/* Preserve first failure evidence. */}}
   finally{active=false;document.querySelectorAll('button').forEach(button=>button.disabled=false);}
 });}
 action('run',run);action('retry-retained',retryRetained);action('persisted',persisted);action('release',async()=>{await releaseAll();return {status:'released'};});
