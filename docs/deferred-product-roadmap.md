@@ -68,6 +68,21 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-16 23:10 local
 
+- Main `90aa624` through `ec5b2ee` now contains purpose-separated recovery,
+  portable raw-response codecs and text/file-v2 planners. Combined current-native
+  candidate `a72e13c` passed 108 tests (session60597 exit0), including known-note
+  clean-client recovery. Evidence: `portable-family-integration-acceptance.md`.
+  Browser admission `cdd6b49` passed 47 focused tests/full TypeScript in its
+  reviewed source candidate; actual browser lifecycle proof remains required.
+- Root pinned WASM build session43081 is active at source `f79a294`; native
+  wrapper tests passed15, but browser artifacts/actual runtime remain pending.
+  No other heavy build is authorized concurrently.
+- Physical-binding namespace patch is blocked by automatic approval review,
+  which rejected cross-owner authorization evidence. Exact unapplied artifact:
+  `/tmp/zorid-namespace-physical-binding.patch`. User approval requested for that
+  scoped source patch; do not retry through another executor/path. Unaffected
+  browser, recovery and family-store work continues; real vaults are untouched.
+
 - Latest main promotion: namespace commits `82a8567` through `1a81819` include
   retained move/delete projection and bounded per-member progress. Main-based
   candidate `8ba5c55` passed 158 native/store/host tests, session12395 exit0;
