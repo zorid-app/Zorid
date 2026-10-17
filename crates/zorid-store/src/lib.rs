@@ -4,6 +4,7 @@
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 mod checkpoints;
+mod external_scan_progress;
 mod family_commands;
 mod family_external_create;
 mod family_external_namespace;

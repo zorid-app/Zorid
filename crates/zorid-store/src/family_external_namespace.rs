@@ -542,6 +542,61 @@ fn check_members(
     Ok(result)
 }
 impl Store {
+    /// Immutable metadata for a bounded unfinished/completed physical inventory.
+    /// Content bytes remain on disk; resumed native scans recheck them lazily.
+    pub fn external_scan_proofs(&self, id: &OperationId) -> Result<Vec<ExternalScanProof>> {
+        let run = scan::run(&self.connection, id)?;
+        let count: i64 = self.connection.query_row(
+            "SELECT count(*) FROM family_external_scan_proofs WHERE scan_id=?1",
+            [id.as_str()],
+            |r| r.get(0),
+        )?;
+        if count < 0 || count > i64::from(run.max_entries) {
+            return Err(invalid("external scan proof count exceeds inventory bound"));
+        }
+        let rows=self.connection.prepare("SELECT path,record FROM family_external_scan_proofs WHERE scan_id=?1 ORDER BY path")?.query_map([id.as_str()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        rows.into_iter()
+            .map(|(path, raw)| {
+                let value: ExternalScanProof = serde_json::from_str(&raw)?;
+                if value.path().as_str() != path {
+                    return Err(invalid("external scan proof path mismatch"));
+                }
+                match &value {
+                    ExternalScanProof::Present {
+                        entry_kind,
+                        physical,
+                        content_digest,
+                        content_bytes,
+                        ..
+                    } => {
+                        physical.validate()?;
+                        if (*entry_kind == EntryKind::File) != content_digest.is_some()
+                            || *entry_kind == EntryKind::Folder && *content_bytes != 0
+                            || *content_bytes > FAMILY_MAX_FILE_BYTES
+                        {
+                            return Err(invalid("external scan proof content kind or limit"));
+                        }
+                    }
+                    ExternalScanProof::Absent { before } => {
+                        before.physical.validate()?;
+                        if before.state.deleted {
+                            return Err(invalid("external absence has deleted physical binding"));
+                        }
+                    }
+                    ExternalScanProof::RelocatedAbsent { before, path } => {
+                        before.physical.validate()?;
+                        if before.state.deleted
+                            || path == &before.state.path
+                            || path.file_name() != before.state.path.file_name()
+                        {
+                            return Err(invalid("invalid relocated external absence"));
+                        }
+                    }
+                }
+                Ok(value)
+            })
+            .collect()
+    }
     /// Record the exact capture before finishing the scan. Finished scans and
     /// conflicting retries cannot acquire new physical evidence.
     pub fn record_external_scan_proof(
