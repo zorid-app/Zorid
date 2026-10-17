@@ -1,6 +1,8 @@
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod binary;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod metadata;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod search;
 mod sync;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -48,6 +50,12 @@ enum Command {
         /// Stable binary read identity for an explicit retry; normally generated per invocation.
         #[arg(long)]
         read_id: Option<String>,
+    },
+    /// Parse committed inline UTF-8 as Markdown by ID, including unknown filenames.
+    /// Binary, NUL and invalid UTF-8 sources are rejected; no scan or source edit.
+    Metadata {
+        #[arg(long)]
+        id: String,
     },
     /// Create a file; enrolled --binary streams up to 64 MiB, other input is bounded to 16 MiB.
     Create {
@@ -594,6 +602,10 @@ fn run(args: Args) -> Result<Output> {
             json!({"pending_outbox":status.pending_outbox,"pending_projection":status.pending_projection,"projection_attempts":status.attempts.len(),"external_observations":status.observations.len(),"max_file_bytes":MAX_FILE_BYTES,"max_binary_file_bytes":zorid_store::BINARY_STAGE_MAX_FILE_BYTES,"binary_chunk_bytes":zorid_store::BINARY_STAGE_MAX_CHUNK_BYTES,"sync_available":false,"fixture_family_sync_available":true})
         }
         Command::List => json!({"entries":vault.list()?}),
+        Command::Metadata { id } => {
+            // Direct typed serialization preserves recursively ordered property maps.
+            return Ok(Output::Raw(metadata::run(&vault, EntryId::new(id)?)?));
+        }
         Command::Read { id, raw, read_id } => {
             let id = EntryId::new(id)?;
             let read_id = read_id.map(OperationId::new).transpose()?;
