@@ -71,7 +71,7 @@ function compareQuery(outcome, item) {
     metadataIssues: result.metadataIssues,
     properties: result.properties,
     counts: result.counts,
-    groups: result.groups.map(group => ({ key: compact(group.key), entryIds: group.entryIds })),
+    groups: result.groups.map(group => ({ key: compact(group.key), keyId: group.keyId, entryIds: group.entryIds })),
     groupOptions: compact(result.groupOptions),
   };
   for (const [key, expected] of Object.entries(item.expected)) {
