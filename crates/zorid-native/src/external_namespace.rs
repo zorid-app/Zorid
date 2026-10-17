@@ -414,6 +414,40 @@ impl NativeVault {
                             "external physical branch retained for recovery",
                         ));
                     }
+                    if snapshot.kind == EntryKind::File && self.namespace_obscures(&path)? {
+                        let physical = PhysicalIdentity {
+                            inode: snapshot.identity.clone(),
+                            parent_inode: snapshot.parent_identity.clone(),
+                        };
+                        // Pending namespace work blocks import, but an exact
+                        // historical owner can still retain its observed edit.
+                        // This journal write conveys no new publication authority.
+                        if owner.state.kind == EntryKind::File && owner.physical == physical {
+                            if let Some(base) = self
+                                .store
+                                .projection_baseline(&owner.state.id)?
+                                .filter(|base| base.state == owner.state)
+                            {
+                                let bytes = scan
+                                    .content(self, &path)?
+                                    .ok_or(Error::Busy("file bytes missing"))?;
+                                if base.content != bytes {
+                                    self.verify_observed_file(&path, &parent, &physical, &bytes)?;
+                                    self.paths.verify_parent(&path, &parent)?;
+                                    self.store.record_external_bound(
+                                        &path,
+                                        Some(base),
+                                        bytes,
+                                        &ObservationPhysical {
+                                            physical,
+                                            expected_binding: Some(owner.clone()),
+                                        },
+                                    )?;
+                                }
+                            }
+                        }
+                        return Err(Error::Busy("pending namespace job obscures this path"));
+                    }
                     return if snapshot.kind == EntryKind::File {
                         self.observe_snapshot(
                             &path,
