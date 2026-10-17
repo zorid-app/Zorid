@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "oracle": "Hand-authored accepted Zorid graph semantics; no evaluator-derived expected output.",
+  "oracle": "Hand-authored accepted Zorid graph semantics. Values select only declared row/cell observables; typed lists/link fields are exact, error comparison freezes codes, JSON numbers compare by numeric value. No evaluator-derived expected output.",
   "cases": [
     {
       "id": "complete-outgoing-embeds-unique-backlinks",
@@ -49,7 +49,7 @@
             "request": {
               "entryId": "graph-a",
               "contentRevision": "r1",
-              "source": "[[B]] ![[B]] [[Missing]] [web](https://example.com)\n"
+              "source": "[[B]] ![[B]] [[Missing]] [web](https%3A%2F%2Fexample.com) [omitted](https://omitted.example)\n"
             },
             "markdown": true
           },
@@ -174,7 +174,7 @@
                 },
                 {
                   "type": "link",
-                  "path": "https://example.com",
+                  "path": "https%3A%2F%2Fexample.com",
                   "target": null,
                   "display": null,
                   "external": true
@@ -320,7 +320,7 @@
             "request": {
               "entryId": "graph-a",
               "contentRevision": "r1",
-              "source": "[[B]] ![[B]] [[Missing]] [web](https://example.com)\n"
+              "source": "[[B]] ![[B]] [[Missing]] [web](https%3A%2F%2Fexample.com) [omitted](https://omitted.example)\n"
             },
             "markdown": true
           },
@@ -439,7 +439,7 @@
                 },
                 {
                   "type": "link",
-                  "path": "https://example.com",
+                  "path": "https%3A%2F%2Fexample.com",
                   "target": null,
                   "display": null,
                   "external": true
@@ -564,7 +564,7 @@
             "request": {
               "entryId": "graph-a",
               "contentRevision": "r2",
-              "source": "[[Renamed]] ![[Renamed]] [[Missing]] [web](https://example.com)\n"
+              "source": "[[Renamed]] ![[Renamed]] [[Missing]] [web](https%3A%2F%2Fexample.com) [omitted](https://omitted.example)\n"
             },
             "markdown": true
           },
@@ -689,7 +689,7 @@
                 },
                 {
                   "type": "link",
-                  "path": "https://example.com",
+                  "path": "https%3A%2F%2Fexample.com",
                   "target": null,
                   "display": null,
                   "external": true
@@ -825,7 +825,7 @@
             "request": {
               "entryId": "graph-a",
               "contentRevision": "r1",
-              "source": "[[B]] ![[B]] [[Missing]] [web](https://example.com)\n"
+              "source": "[[B]] ![[B]] [[Missing]] [web](https%3A%2F%2Fexample.com) [omitted](https://omitted.example)\n"
             },
             "markdown": true
           },

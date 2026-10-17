@@ -295,3 +295,15 @@ occurrences charge one shared operation budget and check local Rust cancellation
 preparation steps are included in the returned query total. These callbacks are
 private Rust operation guards, never serialized capabilities or JavaScript/plugin
 hooks. The canonical compiled/browser proof still belongs to the coordinator.
+
+Canonical graph corpus correction after the first compiled factory run: ordinary
+external Markdown URLs are intentionally omitted by the frozen document parser.
+The external graph probe therefore uses `https%3A%2F%2Fexample.com`, preserving
+that encoded semantic destination in the Link value while the shared resolver
+classifies it as external after percent decoding (same input pattern as index
+fixture commit `3dee860d`). An additional ordinary external URL remains in source
+and is absent from the exact four-element outgoing list. This changes fixture
+inputs/oracles coherently; it does not change extraction or derive expectations
+from engine outputs. Graph `expected.values` declares selected row/cell observables;
+undeclared columns are not an oracle. Declared typed lists and link fields remain
+exact, errors freeze codes, and JSON numbers compare by numeric value.
