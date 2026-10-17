@@ -984,3 +984,50 @@ Swift files/minimal session/Scene/Info seams, plus focused test source approved.
 Rust canonical Auto classification and exact existing live admission token must
 be agreed before Swift wrappers freeze. No Share extension/AppGroup/project/CI/
 signing changes in this source slice, no 64MiB limit raise, no build claimed.
+
+
+### Build8 actual evidence and next minimum-one candidate
+
+Frozen95df87fa Simulator8 build exec30987 terminal0 BUILD SUCCEEDED. Vite972ms,
+cached Rust0.49s, fresh output/private/tmp/zorid-ios-v8-sim-20261017; log
+/private/tmp/mobile-v8-simulator-build.log. Bundle/version assertions, install
+and launch0 (PID5143), Orca helper5261. Actual full native Settings/config/back
+works; Notes removal->Available Add->re-add works under OLD empty-valid rule,
+which user then superseded. Restored Notes before cleanup. Actual native Rust
+content search returned two NativeSearchNeedle hits at displayed lines7/9;
+selected hit opens matching shared editor body, normal save/return and clear
+work. Long-note literal search found line85, opened same stable ID. One AX
+transport error recovered by observation; this was not an app crash.
+
+Caret pixel acceptance remains UNVERIFIED: lower-paragraph tap showed software
+keyboard/native toolbar, initial framebuffer left lower caret offscreen. Later
+framebuffer showed paragraph4/caret above toolbar but also unintended "hh"
+input; no known test typing command was issued in that note. This contaminated
+the no-typing criterion, so do not claim tap-only reveal from that capture.
+Desktop Simulator captures/scroll automation also returned incomplete white
+window images while simctl framebuffer remained valid. Native Undo, keyboard
+dismiss and save/return succeeded; disposable fixture only. No broad caret feel
+or momentum/native-phone claim. Close test app/helper; leave Simulator booted.
+
+User minimum-one navigation rule supersedes empty-valid source. Worker reviewed
+c1faeda136012b76e5b36d3c6aaa017932afc1ef imported ase0070be2 after8build
+completed (existing8artifact unchanged). Owner regenerated actual-source minimum
+Foundation harness and Swift exec47159 terminal0:34/34PASS, injected disposable
+UserDefaults domain cleaned. Full UIKit remove/drag-out proof pending9. Root
+msg2d36653c37bf directs skip phone8, prepare tiny patch, request exact new frozen
+head before Simulator/phone9 compile. Phone remains signed Dev7.
+
+New isolated native tab worker started with source-only named grant35680aa23345:
+/Users/ctk/orca/workspaces/Zorid/mobile-document-tabs, branch
+tingkai-c/mobile-document-tabs, terminal2f48a270-8a1f-4f4c-9fe4-1b9f1be5b8d0.
+Only NEW NativeDocumentTabs.swift/NativeTabOverview.swift; existing NativePages
+371/wiring scope retained. Startup defaultorigin base7467c22a stale; instructed
+to fast-forward isolated branch to current LOCALcanonicalmain ea1e209d before
+edits (exactbase correction receipt pending), never mutate main. Tabs outside9.
+
+Import stack8c94529d+708012df+c62bc79b+cc3e7721 independently SOURCE accepted
+117 after fixing terminal text-collision resurrection and missing recursive test
+field. Host10/ABI4 test bodies UNRUN. FFI exact-error envelope followup3e9b6574
+adds source case, review pending. Root isolated b21d18d9 composes productionsha2
+and mobilelock edge, not compiled. Native staging/admission source2ab4e411 and
+subsequent typed wrapper work unregistered/unbuilt; no completed import claim.
