@@ -2,6 +2,7 @@
 //! the host still owns immutable source pins, client admission and atomic commit.
 //! No handle or JSON representation is a durable stage/receipt capability.
 mod plan;
+mod read;
 #[cfg(test)]
 mod tests;
 
@@ -292,6 +293,16 @@ impl WasmMetadataState {
         )
         .map_err(error)
     }
+    /// Dependency/namespace metadata only. This view is not a verified
+    /// materialization or permission to publish content.
+    #[wasm_bindgen(js_name=namespaceViewJson)]
+    pub fn namespace_view_json(&self) -> std::result::Result<String, JsValue> {
+        let view = self.state.metadata_view().map_err(error)?;
+        metadata_json(
+            &value!({"namespace":view.namespace(),"content_bindings":view.content_bindings()}),
+        )
+        .map_err(error)
+    }
     #[wasm_bindgen(js_name=verificationSession)]
     pub fn verification_session(
         &self,
@@ -506,6 +517,38 @@ impl WasmAuthoredMetadataBatch {
             .map_err(error)
     }
 }
+/// Validate exact accepted plaintext before returning any raw chunk. This
+/// performs no authentication: the expected record must already be bound to the
+/// immutable authenticated/local source ledger by the trusted host.
+fn checked_chunk_payload(
+    scope: &Scope,
+    key: &UpdateId,
+    expected: &meta::GraphRecord,
+    exact: &[u8],
+) -> Result<Vec<u8>> {
+    let (actual_scope, actual_id, record) = domain(meta::GraphRecord::from_authored_exact(exact))?;
+    if &actual_scope != scope || &actual_id != key || &record != expected {
+        return Err("chunk plaintext differs from immutable descriptor".into());
+    }
+    let payload = domain(files::Payload::decode(exact))?;
+    let files::Body::Chunk { bytes } = payload.body else {
+        return Err("requested payload is not a chunk".into());
+    };
+    if bytes.len() > zorid_file_sync::MAX_CHUNK_BYTES {
+        return Err("chunk exceeds bounded read size".into());
+    }
+    let meta::GraphRecordBody::Chunk {
+        bytes: length,
+        digest,
+    } = expected.body()
+    else {
+        return Err("expected descriptor is not a chunk".into());
+    };
+    if bytes.len() != *length as usize || Sha256Digest::of(&bytes) != *digest {
+        return Err("chunk bytes differ from immutable descriptor".into());
+    }
+    Ok(bytes)
+}
 #[wasm_bindgen]
 pub struct WasmBinaryVerificationSession {
     session: binary::AllBinaryVerificationSession,
@@ -525,16 +568,8 @@ impl WasmBinaryVerificationSession {
         if request.manifest_index() != manifest_index || request.sequence() != sequence {
             return Err("verification request changed".into());
         }
-        // Strict decode derives both commitments from EXACT supplied plaintext.
-        // Compare before exposing any raw chunk to the resumable hasher.
-        let (scope, key, record) = domain(meta::GraphRecord::from_authored_exact(exact))?;
-        if &scope != request.scope() || &key != request.id() || &record != request.expected() {
-            return Err("chunk plaintext differs from immutable descriptor".into());
-        }
-        let payload = domain(files::Payload::decode(exact))?;
-        let files::Body::Chunk { bytes } = payload.body else {
-            return Err("requested payload is not a chunk".into());
-        };
+        let bytes =
+            checked_chunk_payload(request.scope(), request.id(), request.expected(), exact)?;
         domain(self.session.provide_chunk(manifest_index, sequence, &bytes))?;
         Ok(bytes)
     }
