@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { stageDesktop, desktopFiles, requiredRendererFiles, requiredRendererDirectories } from '../scripts/stage-desktop.mjs';
 
 async function fixture(t) {
@@ -124,4 +125,36 @@ test('signed packaging configuration is the default and unsigned mode is explici
   }
   const conflicting = spawnSync(process.execPath, ['-e', inspect, config], { env: { ...process.env, ZORID_UNSIGNED_BUILD: '0', CSC_NAME: 'fixture identity', CSC_KEYCHAIN: '/fixture/release.keychain-db', CSC_LINK: '/fixture/certificate.p12' }, encoding: 'utf8' });
   assert.notEqual(conflicting.status, 0); assert.match(conflicting.stderr, /conflicts with the explicit/);
+});
+
+test('builder dependency collector excludes project dependencies after staged app fallback', async t => {
+  const require = createRequire(import.meta.url);
+  const builderRequire = createRequire(require.resolve('electron-builder/package.json'));
+  const { FileMatcher, getNodeModuleFileMatcher } = builderRequire('app-builder-lib/out/fileMatcher.js');
+  const { NodeModuleCopyHelper } = builderRequire('app-builder-lib/out/util/NodeModuleCopyHelper.js');
+  const f = await fixture(t);
+  await f.write('node_modules/fixture-dependency/index.js', 'module.exports = {};');
+  await f.write('node_modules/fixture-dependency/native/binding.node', 'original fixture');
+  const configFile = path.resolve(import.meta.dirname, '../electron-builder.cjs');
+  const configResult = spawnSync(process.execPath, ['-e', 'console.log(JSON.stringify(require(process.argv[1])))', configFile], {
+    env: { ...process.env, ZORID_UNSIGNED_BUILD: '1' }, encoding: 'utf8',
+  });
+  assert.equal(configResult.status, 0, configResult.stderr);
+  const config = JSON.parse(configResult.stdout);
+  const staged = await stageDesktop(f.root);
+  const destination = path.join(f.root, 'output');
+  const packager = { config, appInfo: { type: 'commonjs' }, getWorkspaceRoot: async () => f.root };
+  async function collect(patterns) {
+    const dependencyMatcher = getNodeModuleFileMatcher(staged.appDirectory, destination, value => value, {}, { config: { files: patterns }, debugLogger: { isEnabled: false } });
+    const source = path.join(f.root, 'node_modules/fixture-dependency');
+    const matcher = new FileMatcher(source, path.join(destination, 'node_modules/fixture-dependency'), value => value, dependencyMatcher.patterns);
+    return new NodeModuleCopyHelper(matcher, packager).collectNodeModules(
+      { name: 'fixture-dependency', dir: source }, [], 'node_modules/fixture-dependency',
+    );
+  }
+  assert.ok((await collect(['**/*'])).some(file => file.endsWith('binding.node')), 'control reproduces unwanted native dependency collection');
+  assert.deepEqual(await collect(config.files), []);
+  const runtimeFilter = new FileMatcher(staged.appDirectory, destination, value => value, config.files).createFilter();
+  const runtimeFile = path.join(staged.appDirectory, 'desktop/main.cjs');
+  assert.equal(runtimeFilter(runtimeFile, await fs.stat(runtimeFile)), true);
 });

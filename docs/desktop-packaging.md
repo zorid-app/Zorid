@@ -14,6 +14,8 @@ The corresponding source for the same version tag must accompany release binarie
 
 `.release/inputs.json` records every staged application path and SHA-256 hash. The after-pack hook checks the ASAR's exact file inventory and byte contents, including renderer assets and notices. Package metadata is checked semantically because electron-builder rewrites its formatting. `pnpm run package:verify <path/to/Zorid.app>` repeats this check against a mounted DMG app or an unpacked bundle. This checks included application resources, not Apple signing/notarization or native rendering behavior.
 
+Electron Builder's separate dependency collector can fall back from the minimal staged app to the repository's production dependencies. The packaging configuration explicitly excludes all `node_modules` paths from that collector. A regression test exercises the pinned collector against an original fixture containing a native dependency; the unfiltered control collects it and the release configuration collects no dependency files. The exact ASAR verifier remains mandatory and rejects any unexpected files.
+
 ## Signing and notarization
 
 The release configuration requires explicit `CSC_NAME` and `CSC_KEYCHAIN`, rejects blank/ad-hoc identities and conflicting `CSC_LINK`, selects distribution signing, requires code signing, enables hardened runtime, and signs the DMG. It never reads a certificate from the repository. The workflow creates the temporary keychain and supplies credentials. Built-in automatic notarization is disabled so that the workflow can explicitly submit, wait, staple and validate both artifacts in order:
