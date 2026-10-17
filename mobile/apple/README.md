@@ -128,3 +128,27 @@ metadata file described above; the private API key comes from the corresponding
 `.p8` file. iOS P12, password and provisioning profile paths remain pending their
 creation. The Apple team identifier is present locally but is not reproduced in
 messages or source. Existing repository-wide `APPLE_API_*` secrets remain untouched.
+
+## Agreement acceptance follow-up — 2026-10-17, 19:16 UTC
+
+The user reported signing the agreement. A refreshed, signed-in Developer account
+page independently showed the Apple Developer Program License Agreement issued
+October 13, 2026 and accepted October 17, 2026. No agent accepted legal terms.
+
+Fresh-JWT retries at 19:14:30, 19:15:34 and approximately 19:16:10 UTC still returned
+the same agreement HTTP 403 for all four original endpoints. The signed-in ASC
+Apps/Business pages also retained the updated-license warning; selecting New App
+opened an agreement-update blocker dialog instead of the creation form. The
+visible app grid contained no Zorid app, but the authoritative filtered API check
+remains blocked. No creation request was submitted and no invitation was sent.
+
+The confirmed acceptance plus ASC's older warning suggests propagation delay;
+this is an inference, not a verified recovery. Do not ask the user to sign again
+based only on the stale ASC warning. No banking/tax action was taken or proposed
+as a workaround for free TestFlight. Continue holding delivery secret writes
+until Apple reads and app/profile/signing verification succeed.
+
+Final retry in this pass: 19:17:39 UTC, all four reads still returned
+`FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED`. Remote changes in this pass:
+none. Safe next action is a fresh diagnostic retry after Apple updates its state;
+there is no app/invitation creation attempt to repeat or clean up.
