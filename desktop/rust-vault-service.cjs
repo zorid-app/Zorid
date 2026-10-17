@@ -23,6 +23,18 @@ function failure(code, uncertain = false) {
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const identity = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const decimal = value => typeof value === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value) <= 18446744073709551615n;
+function reconciliationStatus(value) {
+  const count=value=>Number.isSafeInteger(value)&&value>=0;
+  const relative=value=>value===null||typeof value==='string'&&Buffer.byteLength(value,'utf8')<=2048&&value.length>0
+    &&!value.startsWith('/')&&!value.includes('\\')&&!/[\u0000-\u001f\u007f]/.test(value)&&!/^[A-Za-z]:/.test(value)&&!/^\.zorid(?:\/|$)/i.test(value)&&!value.split('/').some(part=>!part||part==='.'||part==='..');
+  return object(value)&&Object.keys(value).every(key=>['scanId','complete','scanComplete','finished','observed','imported','namespaceApplied','issueCount','issuesTruncated','issues','failure'].includes(key))&&identity(value.scanId)&&typeof value.complete==='boolean'&&typeof value.scanComplete==='boolean'&&typeof value.finished==='boolean'
+    &&[value.observed,value.imported,value.namespaceApplied,value.issueCount].every(count)
+    &&typeof value.issuesTruncated==='boolean'&&Array.isArray(value.issues)&&value.issues.length<=32
+    &&value.issueCount>=value.issues.length&&value.issuesTruncated===(value.issueCount>value.issues.length)
+    &&value.issues.every(issue=>object(issue)&&Object.keys(issue).every(key=>key==='path'||key==='code')&&relative(issue.path)&&['scan_limit','recovery_retained','changed_during_scan','reconciliation_blocked'].includes(issue.code))
+    &&(!value.complete||value.scanComplete&&value.finished&&value.issueCount===0)
+    &&(value.failure===undefined||value.failure==='scan_failed'&&!value.complete);
+}
 function entry(value) {
   return object(value) && identity(value.id) && identity(value.revision) && typeof value.path === 'string' && value.path.length > 0
     && ['file', 'folder'].includes(value.kind) && typeof value.deleted === 'boolean';
@@ -179,7 +191,7 @@ function successful(command, result, bytes, expectedBytes) {
     case 'changes_after': return changePage(command, result);
     case 'list': return Array.isArray(result.entries) && result.entries.every(value => entry(value) && !value.deleted)
       && new Set(result.entries.map(value => value.id)).size === result.entries.length;
-    case 'rescan': return identity(result.scan_id) && typeof result.complete === 'boolean' && typeof result.finished === 'boolean'
+    case 'rescan': return (result.reconciliation===undefined||reconciliationStatus(result.reconciliation)&&result.reconciliation.scanId===result.scan_id&&result.reconciliation.complete===result.complete&&result.reconciliation.imported===result.imported) && identity(result.scan_id) && typeof result.complete === 'boolean' && typeof result.finished === 'boolean'
       && Number.isSafeInteger(result.observed) && result.observed >= 0 && Number.isSafeInteger(result.imported) && result.imported >= 0
       && Array.isArray(result.missing) && result.missing.every(value => typeof value === 'string')
       && Array.isArray(result.issues) && result.issues.every(value => object(value) && (value.path === null || typeof value.path === 'string') && value.code === 'scan_incomplete');
@@ -238,10 +250,13 @@ class RustVaultService {
         || (result.max_checkpoint_body !== undefined && result.max_checkpoint_body !== MAX_CHECKPOINT_BODY)
         || !Array.isArray(result.capabilities) || result.capabilities.length > 64
         || !result.capabilities.every(value => typeof value === 'string' && /^[a-z_]{1,64}$/.test(value))
-        || (result.capabilities.includes('checkpoint_cas') && result.max_checkpoint_body !== MAX_CHECKPOINT_BODY)) {
+        || (result.capabilities.includes('checkpoint_cas') && result.max_checkpoint_body !== MAX_CHECKPOINT_BODY)
+        || (result.reconciliation!==undefined&&result.reconciliation!==null&&!reconciliationStatus(result.reconciliation))
+        || (initializeLocal&&(!result.capabilities.includes('reconciliation_status')||!reconciliationStatus(result.reconciliation)))) {
         this.abort(failure('invalid_handshake'));
         throw this.fatal;
       }
+      this.reconciliation=result.reconciliation?structuredClone(result.reconciliation):null;
       this.capabilities = Object.freeze([...(result.capabilities ?? [])]);
     });
     // The host deliberately redacts diagnostics. Do not forward even unexpected
@@ -420,4 +435,4 @@ class RustVaultService {
     return this.closePromise;
   }
 }
-module.exports = { RustVaultService };
+module.exports = { RustVaultService, reconciliationStatus };

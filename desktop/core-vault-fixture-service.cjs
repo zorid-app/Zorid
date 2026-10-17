@@ -40,7 +40,7 @@ class CoreVaultFixtureService {
       const service = new CoreVaultFixtureService(host, { pollMs, rescanMs, familyMode });
       if (familyMode) {
         if(options.initializeLocal){
-          if(!host.capabilities.includes('local_family_status'))throw error('unsupported_host_capability');
+          if(!host.capabilities.includes('local_family_status')||!host.capabilities.includes('reconciliation_status')||!host.reconciliation)throw error('unsupported_host_capability');
           await host.localFamilyStatus();
         }else{
           if(!host.capabilities.includes('fixture_family_status'))throw error('unsupported_host_capability');
@@ -68,6 +68,7 @@ class CoreVaultFixtureService {
     this.hints = new Set();
     this.needsScan = false;
     this.closed = false;
+    this.reconciliation=host.reconciliation?structuredClone(host.reconciliation):null;
   }
   live() { if (this.closed) throw error('vault_closed'); }
   adopt(snapshot) {
@@ -162,13 +163,34 @@ class CoreVaultFixtureService {
       }
     }
   }
+  updateReconciliation(status) {
+    if(!status)return;
+    this.reconciliation=structuredClone(status);
+    this.notify({type:'reconciliation',reconciliation:structuredClone(status)});
+  }
+  async scanNow() {
+    try {
+      const scan=await this.host.rescan();
+      this.lastScan=Date.now();
+      this.updateReconciliation(scan.reconciliation);
+      if(!scan.complete)this.notify({type:'error',code:'scan_incomplete',message:'Native vault scan is incomplete; existing files are retained.'});
+      return scan;
+    } catch(reason) {
+      if(this.reconciliation)this.updateReconciliation({...this.reconciliation,complete:false,failure:'scan_failed'});
+      throw reason;
+    }
+  }
+  async retryReconciliation() {
+    this.live();
+    await this.scanNow();
+    await this.poll();
+    return this.reconciliation?structuredClone(this.reconciliation):null;
+  }
   async pollNow() {
     const hints = [...this.hints]; this.hints.clear();
     if (this.needsScan || (this.familyMode && hints.length) || Date.now() - this.lastScan >= this.rescanMs) {
       this.needsScan = false;
-      const scan = await this.host.rescan();
-      this.lastScan = Date.now();
-      if (!scan.complete) this.notify({ type: 'error', code: 'scan_incomplete', message: 'Native vault scan is incomplete; existing files are retained.' });
+      await this.scanNow();
     } else if (!this.familyMode && hints.length) {
       const report = await this.host.reconcile(hints);
       if (report.blocked.length) this.notify({ type: 'error', code: 'reconciliation_blocked', message: 'Native vault reconciliation retained conflicting data.' });

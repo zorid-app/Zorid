@@ -2,7 +2,7 @@
 //! to NativeVault. No listener, daemon, filesystem writes or alternate store here.
 mod family;
 use family::WireFamilyCommand;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -678,13 +678,15 @@ fn execute(
                         zorid_native::ExternalFileMode::Auto,
                     )
                     .map_err(native_fault)?;
-                let issues: Vec<_> = report
+                let reconciliation = reconciliation_status(&report);
+                let issues: Vec<_> = reconciliation
                     .issues
-                    .into_iter()
+                    .iter()
                     .map(|issue| json!({"path":issue.path,"code":"scan_incomplete"}))
                     .collect();
                 json!({"scan_id":report.run.scan_id,"complete":report.complete,"finished":report.run.finished,
-                    "observed":report.run.observed,"imported":report.run.imported,"missing":[],"issues":issues})
+                    "observed":report.run.observed,"imported":report.imported.len(),"missing":[],"issues":issues,
+                    "reconciliation":reconciliation})
             } else {
                 let report = vault.rescan().map_err(native_fault)?;
                 let issues: Vec<_> = report
@@ -707,7 +709,69 @@ fn execute(
     };
     Ok((result, vec![]))
 }
-fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<(), Value> {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReconciliationStatus {
+    scan_id: OperationId,
+    complete: bool,
+    scan_complete: bool,
+    finished: bool,
+    observed: u32,
+    imported: usize,
+    namespace_applied: usize,
+    issue_count: usize,
+    issues_truncated: bool,
+    issues: Vec<ReconciliationIssue>,
+}
+#[derive(Serialize)]
+struct ReconciliationIssue {
+    path: Option<String>,
+    code: &'static str,
+}
+fn reconciliation_status(report: &zorid_native::ExternalReconcileReport) -> ReconciliationStatus {
+    // Never forward native error strings, arbitrary absolute paths or an
+    // unbounded issue vector to the renderer/startup header.
+    let issues: Vec<_> = report
+        .issues
+        .iter()
+        .take(32)
+        .map(|issue| {
+            let code = if issue.reason.contains("budget") {
+                "scan_limit"
+            } else if issue.reason.contains("retained for recovery") {
+                "recovery_retained"
+            } else if ["changed", "disappeared", "reappeared"]
+                .iter()
+                .any(|word| issue.reason.contains(word))
+            {
+                "changed_during_scan"
+            } else {
+                "reconciliation_blocked"
+            };
+            ReconciliationIssue {
+                path: issue
+                    .path
+                    .as_ref()
+                    .filter(|path| path.as_str().len() <= 2048)
+                    .map(|path| path.as_str().to_owned()),
+                code,
+            }
+        })
+        .collect();
+    ReconciliationStatus {
+        scan_id: report.run.scan_id.clone(),
+        complete: report.complete,
+        scan_complete: report.run.complete,
+        finished: report.run.finished,
+        observed: report.run.observed,
+        imported: report.imported.len(),
+        namespace_applied: report.namespace.len(),
+        issue_count: report.issues.len(),
+        issues_truncated: report.issues.len() > issues.len(),
+        issues,
+    }
+}
+fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<ReconciliationStatus, Value> {
     if vault.family_status().map_err(native_fault)?.scope.is_none() {
         let identity = vault.identity().map_err(native_fault)?;
         let scope: zorid_native::FamilyScope = serde_json::from_value(json!({
@@ -724,10 +788,9 @@ fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<(), Value> {
             zorid_native::ExternalFileMode::Auto,
         )
         .map_err(native_fault)?;
-    if !report.complete {
-        return Err(fault("scan_incomplete"));
-    }
-    Ok(())
+    // Incomplete coverage/recovery is diagnostic state, not a failed database.
+    // The UI must keep this visible and never present an empty ready vault.
+    Ok(reconciliation_status(&report))
 }
 fn run() -> io::Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -789,19 +852,24 @@ fn run() -> io::Result<()> {
     } else {
         None
     };
-    if initialize_local {
-        if let Err(error) = initialize_desktop_vault(&mut vault) {
-            write_frame(
-                &mut output,
-                &json!({"version":1,"request_id":"0","ok":false,"error":error}),
-                &[],
-            )?;
-            return Ok(());
+    let reconciliation = if initialize_local {
+        match initialize_desktop_vault(&mut vault) {
+            Ok(status) => Some(status),
+            Err(error) => {
+                write_frame(
+                    &mut output,
+                    &json!({"version":1,"request_id":"0","ok":false,"error":error}),
+                    &[],
+                )?;
+                return Ok(());
+            }
         }
-    }
+    } else {
+        None
+    };
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"capabilities":["local_family_status","file_command","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"reconciliation":reconciliation,"capabilities":["reconciliation_status","local_family_status","file_command","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
@@ -873,6 +941,41 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reconciliation_diagnostics_bound_and_sanitize_issues_and_use_committed_import_count() {
+        let report = zorid_native::ExternalReconcileReport {
+            complete: false,
+            run: zorid_store::ScanRun {
+                scan_id: OperationId::new("scan").unwrap(),
+                max_entries: 100,
+                finished: true,
+                complete: true,
+                observed: 40,
+                imported: 99,
+                issue: None,
+            },
+            imported: vec![],
+            namespace: vec![],
+            issues: (0..40)
+                .map(|_| zorid_native::ScanIssue {
+                    path: Some(VaultPath::new("retained.md").unwrap()),
+                    reason: "external physical branch retained for recovery /private/secret TOKEN"
+                        .into(),
+                })
+                .collect(),
+        };
+        let status = serde_json::to_value(reconciliation_status(&report)).unwrap();
+        assert_eq!(
+            status["imported"], 0,
+            "scan observations are not committed imports"
+        );
+        assert_eq!(status["issueCount"], 40);
+        assert_eq!(status["issuesTruncated"], true);
+        assert_eq!(status["issues"].as_array().unwrap().len(), 32);
+        assert_eq!(status["issues"][0]["code"], "recovery_retained");
+        assert!(!status.to_string().contains("secret"));
+    }
+
     // Responses intentionally have a different schema from inbound requests.
     // Decode only the bounded frame here; never weaken read_frame's request gate.
     fn response_frame(input: &mut &[u8]) -> (Value, Vec<u8>) {

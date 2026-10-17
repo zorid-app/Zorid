@@ -91,3 +91,16 @@ test('text plans reject unpaired UTF16 surrogates and preserve valid supplementa
   await assert.rejects(core.planWrite('a.md', Buffer.from('x'), { operationId: 'op', expectedBytes: new Uint8Array(16 * 1024 * 1024 + 1) }), { code: 'invalid_body' });
   assert.equal(reads, 1);
 });
+
+test('incomplete scan diagnostics persist through failure and clear only with a later complete report',async()=>{
+  const status={scanId:'scan',complete:false,scanComplete:true,finished:true,observed:1,imported:1,namespaceApplied:0,issueCount:1,issuesTruncated:false,issues:[{path:'retained.md',code:'recovery_retained'}]};
+  const core=service({reconciliation:status,rescan:async()=>({complete:false,reconciliation:status}),changesAfter:async()=>({changes:[],next_cursor:'0',head_cursor:'0',has_more:false})});
+  const events=[];core.listeners.add(event=>events.push(event));
+  const incomplete=await core.retryReconciliation();assert.equal(incomplete.complete,false);assert.equal(incomplete.imported,1);
+  assert.equal(events[0].type,'reconciliation');assert.equal(core.reconciliation.issueCount,1);
+  core.host.rescan=async()=>{throw failure('host_timeout');};
+  await assert.rejects(core.retryReconciliation(),{code:'host_timeout'});assert.equal(core.reconciliation.complete,false);assert.equal(core.reconciliation.failure,'scan_failed');
+  const complete={...status,scanId:'later',complete:true,issueCount:0,issues:[]};
+  core.host.rescan=async()=>({complete:true,reconciliation:complete});
+  await core.retryReconciliation();assert.equal(core.reconciliation.complete,true);assert.equal(core.reconciliation.failure,undefined);
+});

@@ -10,15 +10,22 @@ is integrated in this candidate as ecdf215+81041d9.
 Normal desktop selection always opens the Rust host. No ZORID_EDITOR_RUST,
 relay config or fixed fixture root is required. The executable is a trusted
 absolute override, development target/debug or target/release build, or packaged
-resources/native/zorid-desktop-host. Missing executable, unsupported schema or
-incomplete import is an explicit error; there is no filesystem adapter fallback.
+resources/native/zorid-desktop-host. Missing executable, unsupported schema and failed native operations are explicit
+errors; there is no filesystem adapter fallback. Incomplete successful scans
+keep the host alive with typed diagnostics, distinct from a failed database.
 Existing unreleased databases are not migrated or deleted.
 
 Trusted --initialize-local startup initializes storage, reuses an enrolled scope
 or derives local realm/vault IDs from persistent local_store_id, then calls the
 shared native reconcile_external(ScanOptions::default(), Auto). Auto is owned by
 native core: known binary extensions force binary; otherwise valid UTF8 without
-NUL is text. Bytes and BOM remain unchanged. Startup requires report.complete.
+NUL is text. Bytes and BOM remain unchanged. Startup reports both discovery
+coverage and import completion; enrollment alone never establishes readiness.
+Incomplete status remains visible in the renderer. Usable authoritative notes
+remain available; an incomplete empty authority must show import/recovery state.
+Diagnostic issue lists are capped at32 with bounded relative paths and fixed
+codes; raw native error strings are never forwarded. Imported counts use actual
+committed imports; namespace commits are reported separately.
 The bounded periodic native scan also observes externally created files. Local
 leased file commands operate without a relay runner; network fixture commands
 still require protected startup credentials. Future hosted enrollment must use
@@ -51,3 +58,20 @@ startup regression is source-only pending the combined schema9 build. It covers
 preexisting BOM text/binary/empty folder import, credential-free leased creation
 and same-authority restart. Packaging verification and actual normal multiwindow
 Electron create/save/rename/folder/trash checks remain separate gates.
+
+Followup owner /root/desktop_default_sol (2026-10-17): host/service/bridge typed
+startup and retry diagnostics; /root/recovery_ui_sol owns import-status module,
+/root/default_lifecycle_review_sol owns minimal workspace wiring and browser
+branch integration. Platform seam commit caa4e7e has3 focused checks. Backend
+focused Node checks57/57 pass; native regression sources cover bounded incomplete
+first import/restart, retained usable notes, sanitized bounded diagnostics and
+actual committed import count, pending aggregate Rust build slot. Scanner
+progress beyond256 retained directories remains a separate native-owner gap;
+repeated retry is not claimed to resolve that limit.
+
+Independent /root/package_sol source review accepts host serialization/counts,
+JS validation, authenticated queued retry and copied per-vault status. Activation
+depends on native-owner typed fatal-error propagation: external reconciliation
+must not catch database corruption/schema/unsafe-root errors as ordinary scan
+issues. Expected per-path contention/unsupported entries remain diagnostics.
+Do not infer that accepting an Ok incomplete report establishes this dependency.

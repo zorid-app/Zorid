@@ -30,7 +30,7 @@ class WindowBroker {
     return record;
   }
   info(record) { this.assertLive(record); return { id: record.id, initialState: record.initialState }; }
-  describe(record) { this.assertLive(record); return record.vault ? { path: record.vault.service.root, name: path.basename(record.vault.service.root) } : null; }
+  describe(record) { this.assertLive(record); return record.vault ? { path: record.vault.service.root, name: path.basename(record.vault.service.root), ...(record.vault.service.reconciliation?{reconciliation:structuredClone(record.vault.service.reconciliation)}:{}) } : null; }
   async select(record, directory) {
     this.assertLive(record);
     const generation = ++record.generation;

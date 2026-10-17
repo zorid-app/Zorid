@@ -463,6 +463,8 @@ fn default_local_startup_imports_bytes_and_mutates_without_relay_credentials() {
     let scan = host.request(json!({"method":"rescan"}), &[]).0;
     assert_eq!(scan["ok"], true, "{scan}");
     assert_eq!(scan["result"]["complete"], true, "{scan}");
+    assert_eq!(scan["result"]["imported"], 1, "{scan}");
+    assert_eq!(scan["result"]["reconciliation"]["imported"], 1);
     assert_eq!(
         host.request(json!({"method":"read_path","path":"external.txt"}), &[])
             .1,
@@ -502,4 +504,70 @@ fn default_local_startup_imports_bytes_and_mutates_without_relay_credentials() {
         b"Local save"
     );
     reopened.close();
+}
+
+#[test]
+fn incomplete_discovery_keeps_host_live_without_claiming_first_import_ready_on_restart() {
+    let root = tempfile::tempdir().unwrap();
+    for index in 0..257 {
+        std::fs::create_dir(root.path().join(format!("folder-{index:03}"))).unwrap();
+    }
+    std::fs::write(
+        root.path().join("not-yet-imported.md"),
+        b"Retain exact disk bytes",
+    )
+    .unwrap();
+    let mut scope = Value::Null;
+    for _ in 0..2 {
+        let mut host = Host::spawn_options(root.path(), None, true);
+        let startup = host.recv().0;
+        assert_eq!(startup["ok"], true, "{startup}");
+        let diagnostic = &startup["result"]["reconciliation"];
+        assert_eq!(diagnostic["complete"], false, "{diagnostic}");
+        assert_eq!(diagnostic["scanComplete"], false);
+        assert!(diagnostic["issueCount"].as_u64().unwrap() > 0);
+        assert!(diagnostic["issues"].as_array().unwrap().len() <= 32);
+        let current = host.request(json!({"method":"local_family_status"}), &[]).0["result"]
+            ["family"]["scope"]
+            .clone();
+        if scope.is_null() {
+            scope = current;
+        } else {
+            assert_eq!(scope, current);
+        }
+        let listed = host.request(json!({"method":"list_snapshot"}), &[]).0;
+        assert_eq!(listed["ok"], true);
+        assert!(listed["result"]["entries"].as_array().unwrap().is_empty());
+        host.close();
+    }
+    assert_eq!(
+        std::fs::read(root.path().join("not-yet-imported.md")).unwrap(),
+        b"Retain exact disk bytes"
+    );
+}
+
+#[test]
+fn incomplete_later_discovery_keeps_previously_imported_notes_readable() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("usable.md"),
+        b"Existing authority remains usable",
+    )
+    .unwrap();
+    let mut host = Host::spawn_options(root.path(), None, true);
+    assert_eq!(host.recv().0["result"]["reconciliation"]["complete"], true);
+    host.close();
+    for index in 0..257 {
+        std::fs::create_dir(root.path().join(format!("folder-{index:03}"))).unwrap();
+    }
+    let mut host = Host::spawn_options(root.path(), None, true);
+    let startup = host.recv().0;
+    assert_eq!(startup["ok"], true, "{startup}");
+    assert_eq!(startup["result"]["reconciliation"]["complete"], false);
+    assert_eq!(
+        host.request(json!({"method":"read_path","path":"usable.md"}), &[])
+            .1,
+        b"Existing authority remains usable"
+    );
+    host.close();
 }

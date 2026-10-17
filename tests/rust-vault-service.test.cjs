@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { tmpdir } = require('node:os');
-const { RustVaultService } = require('../desktop/rust-vault-service.cjs');
+const { RustVaultService, reconciliationStatus } = require('../desktop/rust-vault-service.cjs');
 
 // Actual subprocess tests of the JS transport. This intentionally tiny fake host
 // tests framing/lifecycle only; Rust process.rs separately executes NativeVault.
@@ -19,7 +19,9 @@ function send(header, body = Buffer.alloc(0)) {
  // Split prefix and frame boundaries to exercise incremental parsing.
  process.stdout.write(prefix.subarray(0,3)); process.stdout.write(prefix.subarray(3)); process.stdout.write(bytes); process.stdout.write(body);
 }
-send({version:1,request_id:'0',ok:true,result:{transport:'zorid-native-stdio',max_header:1048576,max_body:16777216,capabilities:[]}});
+const reconciliation=mode.startsWith('reconciliation_')?{scanId:'scan',complete:false,scanComplete:false,finished:true,observed:12,imported:0,namespaceApplied:0,issueCount:1,issuesTruncated:false,issues:[{path:null,code:'scan_limit'}]}:null;
+if(mode==='reconciliation_bad_path')reconciliation.issues[0].path='/private/secret';
+send({version:1,request_id:'0',ok:true,result:{reconciliation,transport:'zorid-native-stdio',max_header:1048576,max_body:16777216,capabilities:reconciliation?['reconciliation_status']:[]}});
 let buffer=Buffer.alloc(0);
 process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(buffer.length>=8){
  const h=buffer.readUInt32BE(0),b=buffer.readUInt32BE(4); if(buffer.length<8+h+b)return;
@@ -253,4 +255,22 @@ test('family journal still rejects empty incremental events and malformed origin
     const host = await fixture(t, mode);
     await assert.rejects(host.changesAfter('0', 100), { code:'invalid_response', commitUncertain:true });
   }
+});
+
+test('incomplete startup is a validated live host and legacy startup cannot silently omit required diagnostics',async t=>{
+  const host=await fixture(t,'reconciliation_incomplete',{initializeLocal:true});
+  assert.equal(host.reconciliation.complete,false);assert.equal(host.reconciliation.issues[0].code,'scan_limit');
+  assert.equal((await host.status()).pending_outbox,'0');
+  await assert.rejects(fixture(t,'normal',{initializeLocal:true}),{code:'invalid_handshake'});
+  await assert.rejects(fixture(t,'reconciliation_bad_path',{initializeLocal:true}),{code:'invalid_handshake'});
+});
+test('reconciliation diagnostics reject false completeness, unbounded issues and unsafe paths',()=>{
+  const status={scanId:'scan',complete:false,scanComplete:true,finished:true,observed:2,imported:1,namespaceApplied:0,issueCount:1,issuesTruncated:false,issues:[{path:'folder/note.md',code:'recovery_retained'}]};
+  assert.equal(reconciliationStatus(status),true);
+  assert.equal(reconciliationStatus({...status,complete:true}),false);
+  assert.equal(reconciliationStatus({...status,issues:Array(33).fill(status.issues[0]),issueCount:33}),false);
+  for(const path of ['/private/secret','../secret','C:/secret','.zorid/private','x\\secret','line\nsecret'])assert.equal(reconciliationStatus({...status,issues:[{path,code:'reconciliation_blocked'}]}),false,path);
+  assert.equal(reconciliationStatus({...status,issuesTruncated:true}),false);
+  assert.equal(reconciliationStatus({...status,details:'/private/secret'}),false);
+  assert.equal(reconciliationStatus({...status,issues:[{...status.issues[0],reason:'/private/secret'}]}),false);
 });

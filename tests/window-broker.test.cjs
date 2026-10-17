@@ -156,3 +156,12 @@ test('permanent removal rechecks queued grants and broadcasts only successful sc
   assert.deepEqual(a.window.messages, []);
   broker.dispose();
 });
+
+test('reconciliation retry stays root scoped and diagnostics are copied when describing a vault',async()=>{
+  const {broker,a,b}=fixture();await broker.select(a,'/one');await broker.select(b,'/two');
+  const status={complete:false};a.vault.service.reconciliation=status;
+  const described=broker.describe(a);described.reconciliation.complete=true;assert.equal(status.complete,false);
+  let retries=0;a.vault.service.retryReconciliation=async()=>{retries++;return status;};
+  await broker.dispatch(a,'/one','retryReconciliation',[]);assert.equal(retries,1);
+  assert.throws(()=>broker.dispatch(a,'/two','retryReconciliation',[]),/vault|grant|authorized/i);assert.equal(retries,1);
+});

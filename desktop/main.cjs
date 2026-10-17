@@ -93,7 +93,7 @@ function registerIPC() {
     if (!editorCore) throw new Error('No Rust editor context');
     return editorCore.release(broker, record, event, expectedRoot, admissionId);
   }));
-  for (const method of ['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash', 'remove']) {
+  for (const method of ['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash', 'remove', 'retryReconciliation']) {
     handle(method, (record, event, expectedRoot, ...args) => broker.dispatch(record, expectedRoot, method, args, () => broker.authenticate(event)));
   }
 }
