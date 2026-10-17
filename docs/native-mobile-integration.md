@@ -437,3 +437,69 @@ adapter UI notification, d77016cb guarded native skeleton dismissal, c81c8812
 PDF password/error/ready callback. Workspace consumer remains unwired at this
 checkpoint; these changes are not present in installed build4 and do not close
 the known bounded eight-second password/error masking gap.
+
+
+## Containment hotfix runtime checkpoint — 2026-10-17 21:39 UTC
+
+Source51d8b84f imports reviewed c110a9f2: the navigation UIBarButtonItem now
+holds UIHostingConfiguration.makeContentView on iOS16+, with framework-owned
+hosting and configuration updates. iOS15 uses a connected UIKit button capsule.
+The shared Liquid Glass surface remains on iOS26. There is no app-managed
+UIHostingController child in the navigation-bar custom-view path.
+
+Simulator build5 first attempt71295 passed Swift compilation but failed linking
+with ld write errno28 (disk full). Owner removed only regenerable dependency
+caches in this worktree's mobile/rust/target: host debug and both iOS debug/deps.
+Both already-validated libzorid_mobile_ffi.a files, sources, official toolchain,
+logs and vaults remain. Future Cargo checks must rebuild missing dependencies;
+the hotfix Xcode-only retry reused the retained unchanged static libraries. Disk
+then showed5.2GiB available (do not attribute all global free-space change to this
+cleanup). Retry50983 passed0 BUILD SUCCEEDED; install/launch30708 passed0 on the
+same booted Simulator, app PID13562. No phone installation preceded runtime proof.
+
+Actual Orca/runtime evidence for build5:
+- Saved43-byte Markdown note opened and displayed exact body; native Back
+  returned to Files. Screenshot /private/tmp/mobile-v5-after-file-open.png.
+- Folder drill-in, Nested.md open, Back to folder and Forward to the same saved
+  note passed. Forward was temporarily disabled during host restoration; the
+  harness was corrected to await enabled state before tapping. One AX query
+  failed transiently; re-observation showed the same live PID, without restarting.
+- Typing appended ` Hotfix input.` to the disposable nested note. Native Back
+  returned to the folder; resolving the current app container and reading the
+  Markdown confirmed exact67-byte content ending in that string.
+- One tap on the image inside Orca-interactions.md opened the existing image
+  viewer; screenshot /private/tmp/mobile-v5-image-viewer.png.
+- No Previous/Next/Done accessory appeared in the observed focused/typing AX
+  state. The software keyboard was not shown in that harness state, so custom
+  floating toolbar and foreground recovery are still unverified here.
+- Fixed Settings bottom tab and absence of +/root history controls were observed
+  in native AX. Full customization persistence, shadow clipping across scroll,
+  reduce-motion/loading timing and long-document bottom clearance remain gates.
+- Sanitized phase logs: open~1.46–1.55s, listing~150–220ms, editorReady~5–6s
+  in these Simulator runs. They are observations, not a complete latency profile.
+- PDF-opening automation needs a stable navigation frame before tapping; its
+  initial transition snapshot is not evidence of successful PDF rendering.
+
+Phone hotfix build87290 stopped70 before compilation because the paired device
+was unavailable. Generic iOS destination retry40602 then passed0 BUILD SUCCEEDED
+for App-Dev/Debug-Dev/build5 using cached Automatic development provisioning.
+Strict deep codesign, app.zorid.notes.dev, development environment and build5
+assertions passed. Existing cache/artifact path now contains build5 (the old
+physical build3/4 at that path has been overwritten):
+/private/tmp/zorid-ios-native-v2-device-20261017/DerivedData/Build/Products/
+Debug-Dev-iphoneos/App.app. Private build log:
+/private/tmp/mobile-native-v4-device-generic-build.log.
+
+Latest device inventory remains paired/DeveloperMode enabled but tunnel
+unavailable and developer services false. Build5 has NOT been installed on the
+iPhone. A reconnect/unlock request is pending; installation is already authorized
+when the actual connection returns. All Xcode processes are terminal; coordinator
+was told the build slot is released, Simulator stays booted. Build4 remains
+unaccepted; the Simulator hotfix proof does not establish device-runtime parity.
+
+Sync source worker separately prepared bbe26f1d on
+tingkai-c/mobile-host-fixture-sync at approved Stage4 candidate39a306e7, preserving
+the Apple setup branch. Only the three named host files were changed; no Rust
+checks have run yet. Coordinator must acknowledge the bounded Rust check slot
+and cache target before execution. Mobile FFI/Swift sync and real-phone remote
+TLS/enrollment/Keychain remain later work; no sync-runtime completion is claimed.
