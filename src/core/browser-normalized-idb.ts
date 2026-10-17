@@ -17,7 +17,11 @@ export type NormalizedStore = keyof typeof browserNormalizedKeyPaths;
 export type MetadataStore = Exclude<NormalizedStore, 'sync_source_payloads' | 'sync_source_wires'>;
 export type MutableMetadataStore = 'binary_stages' | 'binary_reads' | 'sync_materialization_refs';
 export const browserNormalizedStores = Object.freeze(Object.keys(browserNormalizedKeyPaths) as NormalizedStore[]);
-export const normalizedLimits = Object.freeze({ payload: 1024 * 1024, wire: 1052720, metadataRow: 128 * 1024, metadataPage: 1024 * 1024, pageItems: 1000 });
+// Portable GraphRecord cap (1 MiB plaintext + 4 KiB descriptor), plus room
+// for decimal-string manifest/page lengths and the bounded source-row envelope.
+// This is a metadata transport budget, not an increased payload/file limit.
+const metadataRow = 1024 * 1024 + 4096 + 64 * 1024;
+export const normalizedLimits = Object.freeze({ payload: 1024 * 1024, wire: 1052720, metadataRow, metadataPage: 2 * metadataRow, pageItems: 1000 });
 export type MetadataValue = null | boolean | number | string | MetadataValue[] | { [key: string]: MetadataValue };
 export interface SourceKey { realmId: string; vaultId: string; updateId: string }
 export interface SourceHeader extends SourceKey { descriptor: MetadataValue }
@@ -93,7 +97,7 @@ function metadata(value: unknown, maxBytes = normalizedLimits.metadataRow): { va
   let nodes = 0, characters = 0;
   const text = (value: string) => { characters += value.length; if (characters > maxBytes) throw failure('storage_metadata_too_large'); return value; };
   const visit = (item: unknown, depth: number): MetadataValue => {
-    if (++nodes > 65536 || depth > 64) throw failure('invalid_storage_metadata');
+    if (++nodes > maxBytes + 1 || depth > 64) throw failure('invalid_storage_metadata');
     if (typeof item === 'string') return text(item);
     if (item === null || typeof item === 'boolean') return item;
     if (typeof item === 'number' && Number.isFinite(item)) return item;

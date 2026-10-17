@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   createBrowserNormalizedSchema, browserNormalizedStores, browserNormalizedKeyPaths, normalizedTransact,
   addImmutableSource, getExactSource, addImmutableMetadata, putNormalizedMetadata, boundedMetadataPage,
@@ -172,7 +173,7 @@ test('metadata pagination is byte/count bounded and never fetches source body st
   const f=fixture();for(let i=0;i<4;i++)f.seed('sync_graph_records',['realm','vault',String(i)],{realmId:'realm',vaultId:'vault',updateId:String(i),label:'é'.repeat(8)});
   const page=await f.run<any>(['sync_graph_records'],(tx,done,abort)=>boundedMetadataPage(tx,'sync_graph_records',{limit:2,maxBytes:1024},done,abort),'readonly');
   assert.equal(page.items.length,2);assert.equal(page.complete,false);assert.deepEqual(page.lastKey,['realm','vault','1']);
-  const next=await f.run<any>(['sync_graph_records'],(tx,done,abort)=>boundedMetadataPage(tx,'sync_graph_records',{limit:2,maxBytes:1024,range:{lower:page.lastKey,open:true} as IDBKeyRange},done,abort),'readonly');
+  const next=await f.run<any>(['sync_graph_records'],(tx,done,abort)=>boundedMetadataPage(tx,'sync_graph_records',{limit:2,maxBytes:1024,range:{lower:page.lastKey,open:true} as unknown as IDBKeyRange},done,abort),'readonly');
   assert.equal(next.items.length,2);assert.equal(next.complete,true);
   const byteBound=await f.run<any>(['sync_graph_records'],(tx,done,abort)=>boundedMetadataPage(tx,'sync_graph_records',{limit:100,maxBytes:page.bytes-1},done,abort),'readonly');
   assert.equal(byteBound.items.length,1);assert.ok(byteBound.bytes<=page.bytes-1);
@@ -185,4 +186,54 @@ test('body bytes, huge metadata and malformed sequence ordering cannot hide in m
   }
   await assert.rejects(f.run(['binary_stage_chunks'],(tx,done,abort)=>addImmutableMetadata(tx,'binary_stage_chunks',{clientId:'c',stageId:'s',sequenceOrder:'01'},done,abort)),{code:'invalid_decimal_u64'});
   await assert.rejects(f.run(['sync_source_headers'],(tx,done,abort)=>boundedMetadataPage(tx,'sync_source_payloads' as any,{limit:1,maxBytes:100},done,abort),'readonly'),{code:'invalid_metadata_store'});
+});
+
+/** Largest whole-event batch fitting the existing files-v2 1 MiB plaintext cap.
+ * All creates use distinct identities; manifests have <=128 bounded page refs.
+ * The page bodies are legitimately missing dependencies, not invented proofs.
+ * This is a storage-boundary fixture, not a Rust planner/runtime verification. */
+function upperEventDescriptor(){
+  const digest=Array(32).fill(0);
+  const event=(index:number,pages=128)=>({id:`create-${index}`,identity:{entry_id:`file-${index}`,bootstrap_id:`create-${index}`},parents:[],effect:{kind:'create',entry_kind:'file',location:{parent:null,name:`file-${index}.bin`},content:{kind:'binary',manifest:{bytes:pages,digest,pages:Array.from({length:pages},(_,page)=>({id:`page-${index}-${page}-`.padEnd(128,'x'),bytes:1,digest}))}}}});
+  const events:ReturnType<typeof event>[]=[];
+  const payload={family:'files',format_version:2,scope:{realm_id:'realm',vault_id:'vault'},id:'upper-batch',body:{kind:'events',events}};
+  const encoded=()=>new TextEncoder().encode(JSON.stringify(payload));
+  while(events.length<128){
+    const index=events.length;events.push(event(index));
+    if(encoded().byteLength<=normalizedLimits.payload)continue;
+    events.pop();let low=0,high=127;
+    while(low<high){const count=Math.ceil((low+high)/2);events.push(event(index,count));const fits=encoded().byteLength<=normalizedLimits.payload;events.pop();if(fits)low=count;else high=count-1;}
+    if(low)events.push(event(index,low));break;
+  }
+  const bytes=encoded();
+  const sha=(bytes:Uint8Array|string)=>[...createHash('sha256').update(bytes).digest()];
+  const record={payload_bytes:bytes.byteLength,payload_digest:sha(bytes),body:structuredClone(payload.body)};
+  // Independent fixture oracle in the portable struct's declared field order,
+  // before transport string conversion. The storage normalizer never hashes or
+  // reconstructs this supplied commitment. Rust/WASM validation is a later gate.
+  const summary=sha(JSON.stringify(record));
+  for(const event of record.body.events){const manifest=event.effect.content.manifest;(manifest as any).bytes=String(manifest.bytes);for(const page of manifest.pages)(page as any).bytes=String(page.bytes);}
+  return {header:{realmId:'realm',vaultId:'vault',updateId:'upper-batch',descriptor:{kind:'files',scope:payload.scope,update_id:payload.id,record,summary_digest:summary}} as SourceHeader,payload:bytes,summary};
+}
+test('maximum bounded event descriptor fits one normalized metadata row and page',async()=>{
+  const f=fixture(),input=upperEventDescriptor();
+  const rowBytes=new TextEncoder().encode(JSON.stringify(input.header)).byteLength;
+  assert.ok(input.payload.byteLength<=normalizedLimits.payload);
+  assert.ok(rowBytes>1024*1024,'manifest decimal strings plus envelope can exceed the old entire page budget');
+  assert.ok(rowBytes<=normalizedLimits.metadataRow);
+  let nodes=0;const count=(value:any)=>{nodes++;if(value&&typeof value==='object')for(const child of Object.values(value))count(child);};count(input.header);
+  assert.ok(nodes>65536,'valid event metadata exceeds the old unrelated node count');
+  let verified=0;
+  await add(f,input,()=>{verified++;});assert.equal(verified,1);
+  const page=await f.run<any>(['sync_source_headers'],(tx,done,abort)=>boundedMetadataPage(tx,'sync_source_headers',{limit:2,maxBytes:normalizedLimits.metadataPage},done,abort),'readonly');
+  assert.equal(page.items.length,1);assert.equal(page.complete,true);assert.ok(page.bytes<=normalizedLimits.metadataPage);
+  assert.deepEqual(page.items[0].descriptor.summary_digest,input.summary,'canonical key sorting must preserve the supplied Rust commitment');
+});
+test('metadata row cap plus one byte rejects before immutable storage mutation',async()=>{
+  const f=fixture(),row={realmId:'realm',vaultId:'vault',updateId:'over-limit',padding:''};
+  const emptyBytes=new TextEncoder().encode(JSON.stringify(row)).byteLength;
+  row.padding='x'.repeat(normalizedLimits.metadataRow+1-emptyBytes);
+  assert.equal(new TextEncoder().encode(JSON.stringify(row)).byteLength,normalizedLimits.metadataRow+1);
+  await assert.rejects(f.run(['sync_graph_records'],(tx,done,abort)=>addImmutableMetadata(tx,'sync_graph_records',row,done,abort)),{code:'storage_metadata_too_large'});
+  assert.equal(f.row('sync_graph_records',['realm','vault','over-limit']),undefined);
 });
