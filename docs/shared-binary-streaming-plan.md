@@ -473,3 +473,44 @@ one existing fully validating client-sync materialization temporary, then enforc
 file and aggregate retained-output budgets. This explicitly does not claim a
 preallocation or total CRDT decoder memory bound. These12 tests remain unrun;
 there is still no activated store/client streaming consumer.
+
+
+### Candidate/classifier verification
+
+At clean frozen `67493c4` (candidate source `c319e8d`), root granted the next
+exclusive heavy slot after Store lib29/29 and family3/3 completed. Process96342
+exited0 with91/91 file-sync lib tests, including6 candidate and12 reference
+classification cases. Exact command is the same single-job/single-test-thread
+file-sync command above; compile4.45s, tests3.19s. Formatting and diff checks also
+pass. No source edits occurred during this gate. Shared target slot released.
+
+This verifies the additive portable semantics, not active large-file clients,
+store publication or protobuf transport. The next approved source-only mapper
+retains BinaryTarget Create{id,path}/Write{id,expected_revision,
+expected_content_event}, exact expected metadata entries, stable staged IDs and
+one final bounded event emission. Store independently accepted its signature.
+A separately assigned metadata-only core helper is required before activation
+can atomically return Create/Write EntryChanges with correct ancestor revisions;
+fabricating an empty-content legacy request or receipt is prohibited.
+
+
+### Binary event mapper — source freeze
+
+`binary_mutation.rs` implements the jointly agreed mapper-only foundation. It
+checks original BinaryTarget Write revision and selected content event, exact
+current live-entry graph kinds/paths, historical Create identity reuse and logical
+destination occupancy even if binary bytes have not been materialized. The stage
+must contain exactly the Manifest's new chunk/page closure, with no unrelated
+records, activities or repeated IDs. Every observed retained/missing reference
+reserves its ID against stage/final-event allocation. One existing bounded v2
+AuthoredRecord is emitted for the final event; all other payloads remain immutable
+stage source references. The result retains exact expected entries/metadata and
+requires normal private candidate finalization. It does not author core metadata
+EntryChanges, an operation receipt, filesystem authority or a protobuf encoding.
+
+Independent `chunk_metadata_contract` source review approved these checks and the
+behavior-equivalent private AuthoredRecord constructor extraction. Six focused
+mapper regressions are written but unrun. Store activation dependencies remain:
+operation-bound stage lookup, immutable source pins, historical revision/ID
+allocation fences, a metadata-only core helper with ancestor revisions, and one
+atomic metadata/graph/outbox/receipt transaction. No active client path changed.

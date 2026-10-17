@@ -11,6 +11,7 @@ use zorid_sync_protocol::{
 };
 
 pub mod binary_stream;
+pub mod binary_mutation;
 pub mod external_namespace;
 pub mod materialization;
 pub mod metadata;

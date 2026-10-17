@@ -32,6 +32,16 @@ pub struct AuthoredRecord {
     record: GraphRecord,
 }
 impl AuthoredRecord {
+    pub(crate) fn from_payload(payload: v2::Payload) -> Result<Self> {
+        let bytes = payload.encode()?;
+        let (scope, id, record) = GraphRecord::from_authored_exact(&bytes)?;
+        Ok(Self {
+            id,
+            scope,
+            payload: bytes,
+            record,
+        })
+    }
     pub fn id(&self) -> &UpdateId {
         &self.id
     }
@@ -93,14 +103,7 @@ impl BinaryManifestBuilder {
             id,
             body,
         };
-        let bytes = payload.encode()?;
-        let (scope, id, record) = GraphRecord::from_authored_exact(&bytes)?;
-        Ok(AuthoredRecord {
-            id,
-            scope,
-            payload: bytes,
-            record,
-        })
+        AuthoredRecord::from_payload(payload)
     }
     pub fn push_chunk(&mut self, id: UpdateId, bytes: &[u8]) -> Result<AuthoredRecord> {
         if bytes.is_empty()
