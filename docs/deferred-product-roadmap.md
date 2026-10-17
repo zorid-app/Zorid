@@ -66,7 +66,22 @@ areas rather than claiming that every upstream edge case has been exhausted.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
 
-### Integration checkpoint — 2026-10-17 00:01 local
+### Integration checkpoint — 2026-10-17 00:24 local
+
+- Latest user direction: prioritize usable complete implementation; production-grade
+  testing is not required now. Keep one combined build and short real client/sync
+  checks plus targeted data-loss/security regressions; defer exhaustive test expansion.
+- Combined browser candidate `48bacf9` in `core-browser-combined` assembles current
+  main plus rebind/witness helpers, WASM `00065a2`, storage `76a30d3`, worker
+  `e79ad2f`/`fbcbdc6`, and relay launcher `8df30f7`, with no conflicts. Build and
+  actual HTTP verification pending. `browser_sync_plan` owns minimal runtime smoke
+  page using real BrowserCoreRuntime rather than direct-IDB fixture substitution.
+- Electron source candidates `3ef94f8` + `dadf4a5` are independently reviewed and
+  syntax-checked, awaiting combined native core and relay execution. No more
+  per-component mock-test/review gates planned.
+- Editor terminal inspection shows interrupted/paused session and test Electron
+  PID15065 still open; no compiler process observed. Requested fixture cleanup
+  and slot release via Orca `msg_ddca4dd55c60`; root has not started a heavy build.
 
 - Execution adjustment after user's testing/velocity question: finish native
   family persistence + standalone CLI and browser storage + worker/relay flows;
