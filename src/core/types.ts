@@ -29,6 +29,8 @@ export interface VaultAdapter {
   /** Binary APIs preserve every byte; implementations must not retain mutable caller buffers. */
   readBinary?(path: string): Promise<Uint8Array>;
   writeBinary?(path: string, data: Uint8Array): Promise<void>;
+  /** Explicit atomic create; reject an existing destination without overwriting it. */
+  createBinary?(path: string, data: Uint8Array): Promise<void>;
   mkdir(path: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   trash(path: string): Promise<void>;

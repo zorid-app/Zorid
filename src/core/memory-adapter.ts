@@ -62,6 +62,14 @@ export class MemoryAdapter implements VaultAdapter {
     this.files.set(path, content);
     this.recordFile(path, content);
   }
+  async createBinary(rawPath: string, data: Uint8Array): Promise<void> {
+    const path = normalizePath(rawPath);
+    this.requireParent(path);
+    if (this.records.has(path)) throw new Error(`Path already exists: ${path}`);
+    const content = new Uint8Array(data);
+    this.files.set(path, content);
+    this.recordFile(path, content);
+  }
   async mkdir(rawPath: string): Promise<void> {
     const path = normalizePath(rawPath);
     this.requireParent(path);

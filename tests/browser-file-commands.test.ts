@@ -5,6 +5,10 @@ import type { BrowserFileCommandBackend, BrowserFileCommandInput } from '../src/
 import type { BrowserVaultIntent, BrowserVaultRead } from '../src/core/browser-vault.ts';
 import type { Checkpoint } from '../src/core/durable-checkpoints.ts';
 import { BrowserVaultError } from '../src/core/browser-vault.ts';
+import { Vault } from '../src/core/vault.ts';
+import { defaultBrowserAdapter } from '../src/platform/browser-default.ts';
+import type { BrowserCoreRuntime } from '../src/platform/browser-core-runtime.ts';
+import type { BrowserClientContext } from '../src/platform/browser-client-admission.ts';
 // Phase-aware transport fake; Rust and IndexedDB behavior are covered by their own fixtures.
 function fixture() {
     const heads = new Map<string, Checkpoint>(), rows = new Map<string, BrowserVaultIntent>(), files = new Map<string, BrowserVaultRead>(), events: string[] = [];
@@ -73,3 +77,23 @@ test('stored command/intent disagreement prevents ACK or another mutation', asyn
 test('move/delete/mkdir planning and active fence preserve namespace safety', async () => { const f = fixture(); f.files.set('Note.md', existing()); await f.consumer().execute({ kind: 'move', operationId: 'move', entryId: 'unused', path: 'Note.md', destination: 'Moved.md' }); await f.consumer().execute({ kind: 'delete', operationId: 'delete', entryId: 'unused', path: 'Note.md', force: false }); await f.consumer().execute({ kind: 'mkdir', operationId: 'mkdir', entryId: 'folder', path: 'Folder' }); assert.deepEqual(JSON.parse(f.rows.get('delete')!.request_json).mutation, { type: 'delete', id: 'old-entry', expected: 'old-revision', recursive: false }); const closed = createBrowserFileCommands(f.backend, () => { throw new BrowserVaultError('storage_closed', 'closed'); }); await assert.rejects(closed.execute({ ...create, operationId: 'closed' }), { code: 'storage_closed' }); });
 test('recovery ACKs newly observed rejection and reports already committed trash prefixes', async () => { const f = fixture(); f.files.set('folder/Note.md', existing('folder/Note.md')); f.failCheckpoint(3); await assert.rejects(f.consumer().execute({ kind: 'trash', operationId: 'trash-op', entryId: 'unused', path: 'folder/Note.md' })); f.reject(); assert.equal(await f.consumer().recover(), true); assert.equal(JSON.parse([...f.heads.values()][0].encodedState!).status, 'rejected'); assert.ok([...f.rows.values()].every(row => row.acknowledged)); });
 test('oversized encoded family commands fail before checkpoint or authorization', async () => { const f = fixture(); await assert.rejects(f.consumer().execute({ kind: 'createBinary', operationId: 'large', entryId: 'entry', path: 'large.bin', data: new Uint8Array(2 * 1024 * 1024) }), { code: 'request_limit' }); assert.equal(f.heads.size, 0); assert.equal(f.rows.size, 0); });
+
+test('Vault binary create rejects a peer created after its inventory check without adopting it as a write', async () => {
+    const f = fixture(), commands = f.consumer();
+    let race = false;
+    const runtime = {
+        async inventory() {
+            const snapshot = structuredClone([...f.files.values()]);
+            if (race) { race = false; f.files.set('race.bin', existing('race.bin')); }
+            return snapshot;
+        },
+    } as unknown as BrowserCoreRuntime;
+    const context = { durableWrites: {}, recoverCommands: () => commands.recover(), fileCommand: (input: BrowserFileCommandInput) => commands.execute(input) } as unknown as BrowserClientContext;
+    const adapter = defaultBrowserAdapter(runtime, context), vault = new Vault(adapter);
+    await vault.initialize(); race = true;
+    const source = new Uint8Array([0, 255, 128]), creating = vault.createBinary('race.bin', source); source.fill(9);
+    await assert.rejects(creating, { code: 'revision_conflict' });
+    assert.deepEqual(f.files.get('race.bin')!.bytes, new TextEncoder().encode('old'));
+    assert.equal(f.rows.size, 0, 'the peer must not be adopted into a write command');
+    assert.equal(f.heads.size, 0);
+});

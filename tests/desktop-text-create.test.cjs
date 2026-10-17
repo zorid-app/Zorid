@@ -107,3 +107,16 @@ test('retained original text-create checkpoint resumes and remains readable on a
   await desktopTextCreates(f.service,f.checkpoints).recover();assert.equal(f.entries.get(request.path).bytes.toString(),request.content);
   await desktopTextCreates(f.service,f.checkpoints).recover();assert.equal(f.calls.length,1);
 });
+
+test('binary create checkpoints an explicit absence-bound create and never overwrites a peer at commit',async()=>{
+  const f=fixture(),consumer=desktopTextCreates(f.service,f.checkpoints),data=new Uint8Array([0,255,128]);
+  f.before(()=>f.put('peer','race.bin','file',Buffer.from([7,8])));
+  const creating=consumer.execute(input('createBinary','race.bin',{data}));data.fill(9);
+  await assert.rejects(creating,{code:'invalid_request'});
+  assert.deepEqual([...f.entries.get('race.bin').bytes],[7,8]);
+  const head=f.heads.get('file-command/v1/op-createBinary-race-bin'),state=JSON.parse(head.encodedState),step=state.commands[0];
+  assert.equal(state.state,'rejected');assert.equal(step.family.create_mode,'binary');
+  assert.deepEqual(step.family.request.mutation,{type:'create',id:'id-createBinary-race-bin',path:'race.bin',kind:'file'});
+  assert.deepEqual([...Buffer.from(step.body_base64,'base64')],[0,255,128]);
+  await desktopTextCreates(f.service,f.checkpoints).recover();assert.equal(f.calls.length,1);
+});

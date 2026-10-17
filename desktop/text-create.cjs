@@ -22,7 +22,7 @@ function desktopTextCreates(service,checkpoints){
       request.body_base64=text(input.content);
       if(input.expectedContent!==undefined)request.expected_base64=text(input.expectedContent);
       if(input.expectedEntryId!==undefined||input.expectedRevision!==undefined){if(!identity(input.expectedEntryId)||!identity(input.expectedRevision))throw failure('invalid_file_request');request.expectedEntryId=input.expectedEntryId;request.expectedRevision=input.expectedRevision;}
-    }else if(request.kind==='writeBinary')request.body_base64=binary(input.data);
+    }else if(request.kind==='createBinary'||request.kind==='writeBinary')request.body_base64=binary(input.data);
     else if(request.kind==='move')request.destination=normalizePath(input.destination);
     else if(request.kind==='delete'){if(typeof input.force!=='boolean')throw failure('invalid_file_request');request.force=input.force;}
     else if(!['mkdir','trash'].includes(request.kind))throw failure('invalid_file_request');
@@ -32,8 +32,8 @@ function desktopTextCreates(service,checkpoints){
   const command=(operationId,mutation,mode=null,body='')=>({family:{version:1,request:{operation_id:operationId,mutation},create_mode:mode},body_base64:body});
   async function plan(request){
     const current=await service.host.readPath(request.path),commands=[];
-    const create=(path,kind,id=request.entryId,op=request.operationId)=>command(op,{type:'create',id,path,kind},kind==='file'?(request.kind==='writeBinary'?'binary':'text'):null,kind==='file'?request.body_base64:'');
-    if(request.kind==='mkdir'||request.kind==='createText'){
+    const create=(path,kind,id=request.entryId,op=request.operationId)=>command(op,{type:'create',id,path,kind},kind==='file'?(request.kind.endsWith('Binary')?'binary':'text'):null,kind==='file'?request.body_base64:'');
+    if(request.kind==='mkdir'||request.kind==='createText'||request.kind==='createBinary'){
       if(current)throw failure('revision_conflict');
       return [create(request.path,request.kind==='mkdir'?'folder':'file')];
     }

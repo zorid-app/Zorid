@@ -145,6 +145,10 @@ test('binary failures preserve published metadata and allow subsequent operation
       if (this.failWrite) throw new Error('disk full');
       await super.writeBinary(path, data);
     }
+    override async createBinary(path: string, data: Uint8Array): Promise<void> {
+      if (this.failWrite) throw new Error('disk full');
+      await super.createBinary(path, data);
+    }
     override async stat(path: string): Promise<VaultEntry | null> {
       if (this.failStat) throw new Error('cannot stat');
       return super.stat(path);
@@ -181,9 +185,12 @@ test('unsupported binary APIs fail clearly, and fallback stat remains compatible
   };
   const vault = new Vault(adapter); await vault.initialize();
   await assert.rejects(vault.readBinary('file.bin'), /does not support binary reads/);
-  await assert.rejects(vault.createBinary('new.bin', bytes(2)), /does not support binary writes/);
+  await assert.rejects(vault.createBinary('new.bin', bytes(2)), /does not support explicit binary creation/);
   await assert.rejects(vault.modifyBinary('file.bin', bytes(2)), /does not support binary writes/);
   adapter.readBinary = path => backing.readBinary(path); adapter.writeBinary = (path, data) => backing.writeBinary(path, data);
+  await assert.rejects(vault.createBinary('new.bin', bytes(2)), /does not support explicit binary creation/);
+  assert.equal(await backing.stat('new.bin'), null);
+  adapter.createBinary = (path, data) => backing.createBinary(path, data);
   await vault.createBinary('new.bin', bytes(3, 4)); await vault.modifyBinary('file.bin', bytes(5, 6, 7));
   assert.deepEqual(await vault.readBinary('new.bin'), bytes(3, 4));
   assert.equal(vault.entries.get('file.bin')!.size, 3);

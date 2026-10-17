@@ -48,6 +48,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
     commands={durableNamespace:true,
       write:(path,content)=>execute({kind:'writeText',path,content}),
       compareAndWrite:(path,expectedContent,content,expectedIdentity)=>execute({kind:'writeText',path,expectedContent,content,...(expectedIdentity?{expectedEntryId:expectedIdentity.entryId,expectedRevision:expectedIdentity.revision}:{})}),
+      createBinary:(path,data)=>execute({kind:'createBinary',path,data}),
       writeBinary:(path,data)=>execute({kind:'writeBinary',path,data}),
       mkdir:path=>execute({kind:'mkdir',path}),rename:(path,destination)=>execute({kind:'move',path,destination}),
       trash:path=>execute({kind:'trash',path}),remove:(path,force)=>execute({kind:'delete',path,force}),

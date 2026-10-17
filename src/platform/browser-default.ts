@@ -37,6 +37,7 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
     createText:(path,content)=>execute({kind:'createText',path,content}),
     write:(path,content)=>execute({kind:'writeText',path,content}),
     compareAndWrite:(path,expectedContent,content,expectedIdentity)=>execute({kind:'writeText',path,content,expectedContent,...(expectedIdentity?{expectedEntryId:expectedIdentity.entryId,expectedRevision:expectedIdentity.revision}:{})}),
+    createBinary:(path,data)=>execute({kind:'createBinary',path,data}),
     writeBinary:(path,data)=>execute({kind:'writeBinary',path,data}),
     mkdir:path=>execute({kind:'mkdir',path}),rename:(path,destination)=>execute({kind:'move',path,destination}),
     trash:path=>execute({kind:'trash',path}),remove:(path,force)=>execute({kind:'delete',path,force}),

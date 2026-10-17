@@ -352,7 +352,7 @@ export class Vault {
     const bytes = new Uint8Array(data);
     return this.enqueue(async () => {
       const path = normalizePath(rawPath);
-      if (!this.adapter.writeBinary) throw new Error('Vault adapter does not support binary writes');
+      if (!this.adapter.createBinary) throw new Error('Vault adapter does not support explicit binary creation');
       // Check fresh directory metadata without reading unrelated notes. Other changed
       // files remain watcher work; publishing a partial vault refresh would be unsafe.
       const inventory = new Map<string, VaultEntry>();
@@ -370,7 +370,7 @@ export class Vault {
         await this.refresh();
         this.requireDestination(path);
       }
-      await this.adapter.writeBinary(path, bytes);
+      await this.adapter.createBinary(path, bytes);
       const entry = await this.publishBinary(path);
       this.emit('create', { path, entry });
       return entry;
