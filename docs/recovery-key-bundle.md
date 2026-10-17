@@ -86,8 +86,24 @@ backup scheduling, production enrollment/recovery UI, recovery-secret custody,
 mobile/browser integration and independent security review remain open.
 
 Independent implementation source review: `recovery_review` approved all five
-changed paths with no scoped blocker. Runtime verification: not run; coordinator
-owns the serialized heavy build slot. No deployment, migration or production key lifecycle is claimed.
+changed paths with no scoped blocker, then approved the narrow nonce/tag fixed-
+array conversion followup after the first run exposed deprecated API warnings.
+
+Focused runtime verification on macOS, source `7a54d70` plus that reviewed
+conversion followup, using the coordinator-granted idle target
+`/Users/ctk/orca/workspaces/Zorid/core-native-sync-integration/target`:
+
+- `cargo test --locked --offline -p zorid-crypto -j1 -- --test-threads=1`:
+  exit 0, 15 tests + 1 compile-fail doc test. Final rerun warning-free.
+- `cargo test --locked --offline -p zorid-crypto --no-default-features -j1 -- --test-threads=1`:
+  exit 0, 13 tests + 1 compile-fail doc test.
+- `cargo test --locked --offline -p zorid-cli --test recovery -j1 -- --test-threads=1`:
+  exit 0, 1 actual restored-relay/independent CLI fixture (1.12s).
+
+All commands used `CARGO_TARGET_DIR` above and ran sequentially. Server/child
+processes stopped at fixture completion and the heavy slot was released.
+No deployment, migration, full namespace restoration or production key lifecycle
+is claimed.
 
 ## Reference provenance
 

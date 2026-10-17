@@ -85,7 +85,7 @@ pub fn seal_recovery_bundle(
     let mut body = Zeroizing::new(*vault_key.expose_secret());
     let aad = aad(&header);
     let tag = cipher
-        .encrypt_inout_detached(XNonce::from_slice(&nonce), &aad, body.as_mut_slice().into())
+        .encrypt_inout_detached(&XNonce::from(nonce), &aad, body.as_mut_slice().into())
         .map_err(|_| CryptoError::EncryptionFailed)?;
     header.extend_from_slice(&nonce);
     header.extend_from_slice(body.as_ref());
@@ -128,12 +128,18 @@ pub fn open_recovery_bundle(
         .map_err(|_| CryptoError::AuthenticationFailed)?;
     let mut body = Zeroizing::new([0; KEY_BYTES]);
     body.copy_from_slice(&wire[pos + NONCE_BYTES..pos + NONCE_BYTES + KEY_BYTES]);
+    let nonce: [u8; NONCE_BYTES] = wire[pos..pos + NONCE_BYTES]
+        .try_into()
+        .map_err(|_| ProtocolError::InvalidFrame)?;
+    let tag: [u8; TAG_BYTES] = wire[pos + NONCE_BYTES + KEY_BYTES..]
+        .try_into()
+        .map_err(|_| ProtocolError::InvalidFrame)?;
     cipher
         .decrypt_inout_detached(
-            XNonce::from_slice(&wire[pos..pos + NONCE_BYTES]),
+            &XNonce::from(nonce),
             &aad(&wire[..pos]),
             body.as_mut_slice().into(),
-            Tag::from_slice(&wire[pos + NONCE_BYTES + KEY_BYTES..]),
+            &Tag::from(tag),
         )
         .map_err(|_| CryptoError::AuthenticationFailed)?;
     // Move the zeroizing owner into VaultKey without making another plaintext copy.
