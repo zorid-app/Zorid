@@ -5,6 +5,9 @@
 <label>Private fixture credential file <input id="credentials" type="file" accept="application/json,.json"></label>
 <button id="configure">Import and connect</button><button id="sync">Sync once</button><button id="list">List files</button><button id="recover">Reconcile settled intents</button><button id="reload">Reload client</button>
 <label>Path <input id="path" value="note.md"></label>
+<button id="folder">Create folder at path</button>
+<label>Move destination <input id="destination" value="moved-note.md"></label><button id="move">Move selected path</button>
+<label><input id="recursive" type="checkbox"> Recursive folder deletion</label><button id="delete">Delete selected path</button>
 <label>Text<textarea id="text">Hello from browser</textarea></label>
 <button id="save">Create / save text</button>
 <label>Binary file <input id="binary" type="file"></label><button id="save-binary">Create / save binary at path</button>

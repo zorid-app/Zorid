@@ -8,6 +8,7 @@ Build fresh WASM from this exact candidate first. Then, with repository dependen
 available, run from the candidate root:
 
 ```sh
+node node_modules/typescript/bin/tsc -p prototypes/browser-sync-smoke/tsconfig.json
 ZORID_CORE_WASM_DIR="$PWD/prototypes/core-wasm/pkg" ZORID_CORE_BUILD_ID="$(git rev-parse HEAD)" node node_modules/webpack/bin/webpack.js --config prototypes/browser-sync-smoke/webpack.config.cjs
 python3 -m http.server 8767 --bind 127.0.0.1 --directory prototypes/browser-sync-smoke/dist
 ```
@@ -31,3 +32,9 @@ commit and acknowledge its exact receipt. This is not the editor NoteBuffer
 checkpoint acceptance workflow. For text-vs-binary mode, use a fresh path when
 changing kind. File uploads are bounded to 512 KiB for this smoke. Fixture databases
 are retained for reload evidence and are not automatically deleted.
+
+Folder creation, move and delete controls submit the same durable family command
+path as saves. Path selects the existing source; move destination is separate.
+Recursive deletion is explicit. Sync both peers after each operation and inspect
+list/read results; this page does not bypass namespace preconditions. The scoped
+TypeScript config checks the page and actual worker plus their imported modules.

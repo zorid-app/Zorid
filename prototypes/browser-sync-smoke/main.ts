@@ -19,15 +19,20 @@ function action(id:string,run:()=>Promise<unknown>){el<HTMLButtonElement>(id).on
   finally{active=false;}
 };}
 const rows=async()=> (await runtime!.inventory()).map(({entry,presentation})=>({...entry,size:presentation.size_bytes}));
-async function save(bytes:Uint8Array,mode:'text'|'binary'){
-  const path=el<HTMLInputElement>('path').value;
-  const prior=await runtime!.readEntry(path),intentId=crypto.randomUUID();
-  const mutation=prior?{type:'write',id:prior.entry.id,expected:prior.entry.revision,content:Array.from(bytes)}:
-    {type:'create',id:crypto.randomUUID(),path,kind:'file',content:Array.from(bytes)};
-  await runtime!.prepareFamily(intentId,JSON.stringify({version:1,request:{operation_id:intentId,mutation},create_mode:prior?null:mode}));
+async function submit(mutation:unknown,create_mode:'text'|'binary'|null=null){
+  const intentId=crypto.randomUUID();
+  await runtime!.prepareFamily(intentId,JSON.stringify({version:1,request:{operation_id:intentId,mutation},create_mode}));
   const receipt=await runtime!.commit(intentId);
   await runtime!.acknowledge(intentId,{status:'committed',receipt});
-  return {status:'saved',files:await rows()};
+  return {status:'committed',files:await rows()};
+}
+const selected=async()=>{const row=await runtime!.readEntry(el<HTMLInputElement>('path').value);if(!row)throw new Error('missing_path');return row;};
+async function save(bytes:Uint8Array,mode:'text'|'binary'){
+  const path=el<HTMLInputElement>('path').value;
+  const prior=await runtime!.readEntry(path);
+  const mutation=prior?{type:'write',id:prior.entry.id,expected:prior.entry.revision,content:Array.from(bytes)}:
+    {type:'create',id:crypto.randomUUID(),path,kind:'file',content:Array.from(bytes)};
+  return submit(mutation,prior?null:mode);
 }
 action('configure',async()=>{
   const input=el<HTMLInputElement>('credentials'),file=input.files?.[0];
@@ -45,7 +50,10 @@ action('sync',async()=>({sweep:await runtime!.syncOnce(),files:await rows()}));
 action('list',rows);
 action('save',()=>save(new TextEncoder().encode(el<HTMLTextAreaElement>('text').value),'text'));
 action('save-binary',async()=>{const file=el<HTMLInputElement>('binary').files?.[0];if(!file||file.size>512*1024)throw new Error('binary_fixture_limit');return save(new Uint8Array(await file.arrayBuffer()),'binary');});
-action('read',async()=>{const row=await runtime!.readEntry(el<HTMLInputElement>('path').value);if(!row)return {missing:true};const bytes=row.bytes??new Uint8Array();let text:string|undefined;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);el<HTMLTextAreaElement>('text').value=text;}catch{}const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(b=>b.toString(16).padStart(2,'0')).join('');return {entry:row.entry,byteLength:bytes.length,sha256:digest,text,firstBytes:Array.from(bytes.slice(0,64))};});
+action('folder',()=>submit({type:'create',id:crypto.randomUUID(),path:el<HTMLInputElement>('path').value,kind:'folder',content:null}));
+action('move',async()=>{const row=await selected();return submit({type:'move',id:row.entry.id,expected:row.entry.revision,path:el<HTMLInputElement>('destination').value});});
+action('delete',async()=>{const row=await selected();return submit({type:'delete',id:row.entry.id,expected:row.entry.revision,recursive:el<HTMLInputElement>('recursive').checked});});
+action('read',async()=>{const row=await runtime!.readEntry(el<HTMLInputElement>('path').value);if(!row)return {missing:true};const bytes=row.bytes??new Uint8Array();let text:string|undefined;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);el<HTMLTextAreaElement>('text').value=text;}catch{}const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',Uint8Array.from(bytes)))).map(b=>b.toString(16).padStart(2,'0')).join('');return {entry:row.entry,byteLength:bytes.length,sha256:digest,text,firstBytes:Array.from(bytes.slice(0,64))};});
 action('recover',async()=>{let settled=0;for(const intent of await runtime!.intents()){if(intent.acknowledged)continue;if(intent.status==='committed'&&intent.receipt){await runtime!.acknowledge(intent.intent_id,{status:'committed',receipt:intent.receipt});settled++;}else if(intent.status==='rejected'&&intent.error){await runtime!.acknowledge(intent.intent_id,{status:'rejected',error:intent.error});settled++;}}return {settled,files:await rows()};});
 el('reload').onclick=()=>location.reload();
 window.addEventListener('pagehide',()=>runtime?.close());
