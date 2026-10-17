@@ -18,6 +18,20 @@ function setup(t: TestContext, source = sourceOf(), options: Partial<CanvasViewO
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window), requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window) })) {
     previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
+  // Capture only frames requested while dispatching a Canvas resize move.
+  // Shared CodeMirror and other window/global rAF users retain the real scheduler.
+  const requestFrame = dom.window.requestAnimationFrame.bind(dom.window), cancelFrame = dom.window.cancelAnimationFrame.bind(dom.window);
+  const resizeFrames = new Map<number, FrameRequestCallback>();
+  let dispatchingResizeMove = false, frameId = 0, frameTime = 0;
+  dom.window.requestAnimationFrame = callback => {
+    if (!dispatchingResizeMove) return requestFrame(callback);
+    const id = --frameId; resizeFrames.set(id, callback); return id;
+  };
+  dom.window.cancelAnimationFrame = id => { if (id < 0) resizeFrames.delete(id); else cancelFrame(id); };
+  const advanceFrames = () => {
+    const pending = [...resizeFrames]; frameTime += 1000 / 60;
+    for (const [id, callback] of pending) if (resizeFrames.delete(id)) callback(frameTime);
+  };
   Object.defineProperty(dom.window.navigator, 'platform', { value: platform });
   dom.window.Range.prototype.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 300, bottom: 200, width: 300, height: 200, toJSON() { return {}; } });
   dom.window.Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
@@ -27,18 +41,22 @@ function setup(t: TestContext, source = sourceOf(), options: Partial<CanvasViewO
   dom.window.clearInterval = (id?: number) => { if (id !== undefined) timers.delete(id); };
   const runTimers = (count = 1) => { for (let i = 0; i < count; i++) for (const callback of [...timers.values()]) callback(); };
   const view = createCanvasView(host, { document: model, onChange: value => { saves.push(value); }, onError: error => errors.push(error), ...options });
-  t.after(() => { view.destroy(); dom.window.close(); for (const [key, descriptor] of previous) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
+  t.after(() => { view.destroy(); resizeFrames.clear(); dom.window.close(); for (const [key, descriptor] of previous) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } });
   const viewport = host.querySelector<HTMLElement>('.zorid-canvas-viewport')!;
   viewport.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, toJSON() { return {}; } });
   const item = (id = 'a') => host.querySelector<HTMLElement>(`[data-node-id="${id}"]`)!;
   const handle = (direction: string, id = 'a') => item(id).querySelector<HTMLElement>(`[data-resize="${direction}"]`)!;
   const pointer = (target: Element, type: string, x: number, y: number, extra = {}) => {
     const event = new dom.window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y, ...extra });
-    Object.defineProperties(event, { pointerId: { value: 1 }, isPrimary: { value: true }, pointerType: { value: 'mouse' } }); target.dispatchEvent(event); return event;
+    Object.defineProperties(event, { pointerId: { value: 1 }, isPrimary: { value: true }, pointerType: { value: 'mouse' } });
+    dispatchingResizeMove = type === 'pointermove' && viewport.classList.contains('is-resizing');
+    try { target.dispatchEvent(event); } finally { dispatchingResizeMove = false; }
+    if (type === 'pointermove') advanceFrames();
+    return event;
   };
   const world = (target: Element, type: string, x: number, y: number, extra: MouseEventInit = { altKey: true }) => pointer(target, type, 40 + x * Number(viewport.dataset.zoom), 40 + y * Number(viewport.dataset.zoom), extra);
   const select = (id: string, additive = false) => { world(item(id), 'pointerdown', 110, 110, { shiftKey: additive }); world(viewport, 'pointerup', 110, 110); };
-  return { dom, host, model, view, viewport, item, handle, pointer, world, select, saves, errors, source, timers, scheduled, runTimers };
+  return { dom, host, model, view, viewport, item, handle, pointer, world, select, saves, errors, source, timers, scheduled, runTimers, advanceFrames };
 }
 const bounds = (value: { x: number; y: number; width: number; height: number }) => [value.x, value.y, value.width, value.height];
 const styleBounds = (value: HTMLElement) => [value.style.left, value.style.top, value.style.width, value.style.height].map(parseFloat);

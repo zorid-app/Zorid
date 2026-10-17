@@ -252,8 +252,9 @@ html[data-theme="light"] .zorid-canvas-card-menu, .theme-light .zorid-canvas-car
 .zorid-canvas-note-editor .cm-content { min-height: 100%; }
 .zorid-canvas-note-editor[hidden], .zorid-canvas-note-preview[hidden] { display: none; }
 .zorid-canvas-node.is-editing .zorid-canvas-node-frame { cursor: text; }
-.zorid-canvas-note-toolbar { display: none; position: absolute; left: 50%; bottom: calc(100% + 16px); transform: translateX(-50%); z-index: 5; padding: 4px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); background: var(--background-primary); box-shadow: var(--zc-control-shadow); }
-.zorid-canvas-node.is-selected > .zorid-canvas-note-toolbar { display: flex; }
+/* Owned toolbar overlays escape the card stacking context; resizers do not. */
+.zorid-canvas-note-toolbar { display: flex; position: absolute; transform: translate(-50%, calc(-100% - 16px)); z-index: 6; padding: 4px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); background: var(--background-primary); box-shadow: var(--zc-control-shadow); }
+.zorid-canvas-note-toolbar[hidden] { display: none; }
 .zorid-canvas-note-toolbar button { display: flex; align-items: center; justify-content: center; padding: 6px; border: 0; background: transparent; }
 .zorid-canvas-note-toolbar svg { pointer-events: none; }
 .zorid-canvas-note-status:not(:empty) { position: absolute; z-index: 4; left: 4px; right: 4px; bottom: 4px; padding: 6px; border: 1px solid var(--background-modifier-error, var(--color-red)); border-radius: 4px; background: var(--background-primary); color: var(--text-error, var(--text-normal)); font-size: 12px; }

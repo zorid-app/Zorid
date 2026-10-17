@@ -133,11 +133,13 @@ test('Canvas file cards retain the live editor across geometry changes and never
   assert.equal(undo(cm), true); await view.flush(); assert.doesNotMatch(fixture.saved, /New note text/);
 });
 
-test('failed file writes block card removal and retain source; file-card scrolling does not pan Canvas', async t => {
+test('failed file writes block card removal and retain source; scrollable file-card content owns wheel input', async t => {
   const ui = environment(t), fixture = sessionFixture(), errors: unknown[] = [];
   const model = CanvasDocument.parse(JSON.stringify({ nodes: [{ id: 'note', type: 'file', file: 'Courses.md', x: 0, y: 0, width: 300, height: 200 }], edges: [] }));
   const view = createCanvasView(ui.parent, { document: model, onChange() {}, openMarkdownFile: async () => fixture.session, onError: error => errors.push(error) }); t.after(() => view.destroy()); await tick();
   const preview = ui.parent.querySelector<HTMLElement>('.zorid-canvas-note-preview')!, world = ui.parent.querySelector<HTMLElement>('.zorid-canvas-world')!, before = world.style.transform;
+  preview.style.overflowY = 'auto';
+  Object.defineProperties(preview, { clientHeight: { value: 120 }, scrollHeight: { value: 360 }, scrollTop: { value: 40, writable: true } });
   const wheel = new ui.dom.window.WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 40 }); preview.dispatchEvent(wheel); assert.equal(wheel.defaultPrevented, false); assert.equal(world.style.transform, before);
   ui.parent.querySelector<HTMLButtonElement>('[aria-label="Edit note"]')!.click(); await tick(); type(editor(ui.parent), '\nKeep draft'); fixture.fail(new Error('File write failed'));
   assert.throws(() => view.setDocument(CanvasDocument.parse('{"nodes":[],"edges":[]}')), /unsaved changes/);

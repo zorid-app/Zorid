@@ -172,6 +172,8 @@ test('nested controls keep pointer, keyboard, double-click and wheel ownership w
   const ui = setup('![[controls]]\n\nOrdinary card text', { renderMarkdownEmbed() {
     const element = other.window.document.createElement('div');
     element.innerHTML = '<select><option>Zoom</option></select><div contenteditable="plaintext-only" tabindex="0"><span>Editable</span></div><video controls></video>';
+    element.style.overflowY = 'auto';
+    Object.defineProperties(element, { clientHeight: { value: 100 }, scrollHeight: { value: 300 }, scrollTop: { value: 20, writable: true } });
     return { element, destroy() {} };
   } });
   t.after(() => { ui.close(); other.window.close(); });

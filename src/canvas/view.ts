@@ -11,6 +11,7 @@ import { CANVAS_RESIZE_DIRECTIONS, canvasBounds, canvasResizeGrid, canvasResizeR
 import type { CanvasBounds, CanvasResizeDirection } from './resize.ts';
 import { createCanvasResizeAutoPan, fitCanvasMarkdown, indexCanvasResizeSnaps, snapVisibleCanvasCoordinate } from './resize-interactions.ts';
 import type { CanvasResizeAutoPan, CanvasResizeSnapIndex } from './resize-interactions.ts';
+import { canScrollCanvasContent, createCanvasFrameQueue } from './input.ts';
 
 export interface CanvasViewOptions {
   document: CanvasDocument;
@@ -100,6 +101,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const textCards = new Map<string, { original: CanvasNode; text: string; card: CanvasMarkdownCard; listeners: Set<(text: string) => void> }>();
   const attachments = new Map<string, { file: string; subpath: string; owner: { element: HTMLElement; destroy(): void } }>();
   const fileCards = new Map<string, { file: string; subpath: string; card: CanvasMarkdownCard }>();
+  const cardTools = new Map<string, HTMLElement>(); let toolsSequence = 0;
   let drag: { id: number; mode: 'move' | 'pan' | 'select' | 'resize'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
   let resizing: { direction: CanvasResizeDirection; initial: CanvasBounds; minimum: { width: number; height: number }; ratio: number; targets: Map<string, { original: CanvasNode; bounds: CanvasBounds }>; preview: Map<string, CanvasBounds>; edges: string[]; snaps: CanvasResizeSnapIndex; started: boolean; multiple: boolean } | undefined;
   let resizeAutoPan: CanvasResizeAutoPan | undefined;
@@ -160,6 +162,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   function drawNode(id: string): void {
     const node = position(projection.nodes.get(id)!.data), item = nodeEls.get(id)!;
     item.style.left = `${node.x}px`; item.style.top = `${node.y}px`; item.style.width = `${Math.max(1, node.width)}px`; item.style.height = `${Math.max(1, node.height)}px`;
+    const tools = cardTools.get(id); if (tools) { tools.style.left = `${node.x + node.width / 2}px`; tools.style.top = `${node.y}px`; }
     item.classList.toggle('is-dragging', !!drag?.positions.has(id) && !!(drag.dx || drag.dy) || !!resizing?.started && resizing.targets.has(id));
   }
   function endpoint(node: CanvasNode, side: CanvasValue | undefined, other: CanvasNode) {
@@ -204,6 +207,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     scale = Math.max(1 / 16, Math.min(1, (vw - 80) / Math.max(1, width), (vh - 80) / Math.max(1, height))); tx = (vw - width * scale) / 2 - minX * scale; ty = (vh - height * scale) / 2 - minY * scale; transform();
   }
   function paintSelection(): void {
+    for (const [id, tools] of cardTools) tools.hidden = !selectedNodes.has(id);
     for (const [id, item] of nodeEls) { item.classList.toggle('is-selected', selectedNodes.has(id)); item.setAttribute('aria-describedby', selectedNodes.has(id) ? selectedDescription.id : unselectedDescription.id); }
     for (const [id, item] of edgeEls) item.group.classList.toggle('is-selected', selectedEdges.has(id));
     const parts = [selectedNodes.size ? `${selectedNodes.size} ${selectedNodes.size === 1 ? 'card' : 'cards'}` : '', selectedEdges.size ? `${selectedEdges.size} ${selectedEdges.size === 1 ? 'connection' : 'connections'}` : ''].filter(Boolean);
@@ -212,6 +216,13 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (selection !== announcedSelection) { announcedSelection = selection; selectionStatus.textContent = announcement; }
     for (const [id, entry] of [...fileCards, ...textCards]) if (!selectedNodes.has(id)) void entry.card.deactivate().catch(report);
     drawResizeOutline();
+  }
+  function mountCardTools(id: string, item: HTMLElement, card: CanvasMarkdownCard): void {
+    const tools = card.toolbar;
+    if (!tools.id) tools.id = `${pattern.id}-tools-${++toolsSequence}`;
+    tools.dataset.cardId = id; tools.setAttribute('role', 'group'); tools.hidden = !selectedNodes.has(id);
+    item.setAttribute('aria-owns', tools.id);
+    cardTools.set(id, tools); world.append(tools);
   }
   function resizeHandles(host: HTMLElement): void {
     for (const direction of CANVAS_RESIZE_DIRECTIONS) {
@@ -259,7 +270,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     fileCards.set(node.id, entry); return entry.card;
   }
   function ownsInput(target: Element): boolean {
-    return !!target.closest('button,input,textarea,select,a,video,audio,.interactive-child,.zorid-canvas-note-editor') || hasEditableOwner(target);
+    return !!target.closest('button,input,textarea,select,a,video,audio,.interactive-child,.zorid-canvas-note-editor,.zorid-canvas-note-toolbar') || hasEditableOwner(target);
   }
   function hasEditableOwner(target: Element): boolean {
     // Resolve inherited editable state, including plaintext-only and explicit
@@ -347,6 +358,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       const node = projection.nodes.get(id)?.data;
       if (!node || !markdownFile(node) || node.file !== entry.file || String(node.subpath ?? '') !== entry.subpath) { entry.card.destroy(); fileCards.delete(id); }
     }
+    for (const tools of cardTools.values()) tools.remove(); cardTools.clear();
     for (const item of nodeEls.values()) item.remove(); for (const item of edgeEls.values()) { item.group.remove(); item.label.remove(); } nodeEls.clear(); edgeEls.clear();
     for (const id of selectedNodes) if (!projection.nodes.has(id)) selectedNodes.delete(id);
     for (const id of selectedEdges) if (!projection.edges.has(id)) selectedEdges.delete(id);
@@ -355,14 +367,14 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       item.style.setProperty('--canvas-node-color', color(node.color) || 'var(--zc-border)'); item.classList.toggle('is-themed', !!color(node.color));
       const frame = dom.createElement('div'); frame.className = 'zorid-canvas-node-frame';
       const content = dom.createElement('div'); content.className = 'zorid-canvas-node-content';
-      if (node.type === 'text') { const card = textCard(node); content.append(card.element); item.append(card.toolbar); item.classList.toggle('is-editing', card.isEditing()); item.setAttribute('aria-label', 'Text card'); }
+      if (node.type === 'text') { const card = textCard(node); content.append(card.element); mountCardTools(id, item, card); item.classList.toggle('is-editing', card.isEditing()); item.setAttribute('aria-label', 'Text card'); }
       else if (node.type === 'group') {
         const label = dom.createElement('div'); label.className = 'zorid-canvas-group-label'; label.textContent = String(node.label ?? ''); label.hidden = !label.textContent;
         label.style.setProperty('--zc-label-foreground', groupForeground(node.color));
         item.append(label); item.setAttribute('aria-label', `Group: ${label.textContent}`);
       }
       else if (markdownFile(node)) {
-        const card = fileCard(node); content.append(card.element); item.append(card.toolbar); item.classList.toggle('is-editing', card.isEditing());
+        const card = fileCard(node); content.append(card.element); mountCardTools(id, item, card); item.classList.toggle('is-editing', card.isEditing());
         item.setAttribute('aria-label', `Note: ${String(node.file)}`);
         const label = dom.createElement('div'); label.className = 'zorid-canvas-node-label';
         label.textContent = String(node.file).split('/').at(-1)!.replace(/\.md$/i, '') + (node.subpath ? ` › ${String(node.subpath).replace(/^#/, '')}` : '');
@@ -515,6 +527,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     viewport.append(host); openValueEditor(host, label, value, change, () => host.remove(), afterSave);
   }
   function clearDrag(): void {
+    resizeFrame.discard();
     resizeAutoPan?.destroy(); resizeAutoPan = undefined;
     const id = drag?.id; drag = undefined; resizing = undefined; box.remove(); viewport.classList.remove('is-panning', 'is-resizing'); viewport.style.removeProperty('cursor');
     if (id !== undefined && viewport.hasPointerCapture?.(id)) viewport.releasePointerCapture(id);
@@ -588,7 +601,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (drag.mode === 'select') viewport.append(box);
     viewport.setPointerCapture?.(event.pointerId);
   };
-  const pointerMove = (event: PointerEvent) => {
+  const applyPointerMove = (event: PointerEvent) => {
     if (closed || !drag || drag.id !== event.pointerId) return;
     const dx = event.clientX - drag.startX, dy = event.clientY - drag.startY;
     if (drag.mode === 'pan') { tx = drag.x + dx; ty = drag.y + dy; transform(); return; }
@@ -621,7 +634,19 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       paintSelection();
     }
   };
+  const resizeFrame = createCanvasFrameQueue<PointerEvent>({
+    request: callback => win.requestAnimationFrame(callback), cancel: id => win.cancelAnimationFrame(id),
+    apply: applyPointerMove,
+  });
+  const pointerMove = (event: PointerEvent) => {
+    if (closed || !drag || drag.id !== event.pointerId) return;
+    if (drag.mode === 'resize') resizeFrame.push(event); else applyPointerMove(event);
+  };
   const finishDrag = (event: PointerEvent, cancelled = false) => {
+    if (closed || !drag || drag.id !== event.pointerId) return;
+    // The final input may not have reached a frame yet. Commit its geometry,
+    // while cancellation deliberately discards any unpainted input.
+    if (!cancelled && drag.mode === 'resize') resizeFrame.flush();
     if (closed || !drag || drag.id !== event.pointerId) return;
     const ended = drag, resized = resizing; clearDrag();
     if (ended.mode === 'resize' && resized) {
@@ -696,12 +721,18 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     }
   });
   viewport.addEventListener('wheel', event => {
-    if (closed || editor || drag || event.defaultPrevented || ownsInput(event.target as Element)) return;
-    if ((event.target as Element).closest('.zorid-canvas-markdown-card,.zorid-canvas-attachment') && !event.ctrlKey && !event.metaKey && !space) return;
-    event.preventDefault();
+    if (closed || editor || drag || event.defaultPrevented) return;
+    const target = event.target as Element;
+    // Native value controls and explicitly handled embedded-view gestures keep
+    // ownership. Editors and media containers are not blanket wheel barriers.
+    if (target.closest('select,input[type="range"],input[type="number"]')) return;
     const factor = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 800 : 1;
+    const dx = (event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX) * factor;
+    const dy = (!event.shiftKey || event.deltaX ? event.deltaY : 0) * factor;
+    if (!event.ctrlKey && !event.metaKey && !space && canScrollCanvasContent(target, viewport, dx, dy)) return;
+    event.preventDefault();
     if (event.ctrlKey || event.metaKey || space) { const rect = viewport.getBoundingClientRect(); zoom(scale * Math.pow(2, -event.deltaY * factor / 300), event.clientX - rect.left, event.clientY - rect.top); }
-    else { tx -= (event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX) * factor * 0.93; if (!event.shiftKey || event.deltaX) ty -= event.deltaY * factor * 0.93; transform(); }
+    else { tx -= dx * 0.93; ty -= dy * 0.93; transform(); }
   }, { passive: false });
   viewport.onkeydown = event => {
     if (closed || editor || event.defaultPrevented || ownsInput(event.target as Element)) return;
@@ -779,7 +810,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     // Active text editors keep the platform's spelling/selection/clipboard menu.
     if (target.closest('textarea,input,select') || hasEditableOwner(target)) return;
     event.preventDefault(); event.stopPropagation();
-    const nodeId = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId;
+    const nodeId = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId ?? target.closest<HTMLElement>('.zorid-canvas-note-toolbar')?.dataset.cardId;
     const edgeTarget = target.closest<HTMLElement | SVGElement>('[data-edge-id],[data-edge-label-id]');
     const edgeId = edgeTarget?.dataset.edgeId ?? edgeTarget?.dataset.edgeLabelId;
     const owner = document;
