@@ -66,7 +66,7 @@ areas rather than claiming that every upstream edge case has been exhausted.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
 
-### Integration checkpoint — 2026-10-16 23:10 local
+### Integration checkpoint — 2026-10-16 23:50 local
 
 - Main `90aa624` through `ec5b2ee` now contains purpose-separated recovery,
   portable raw-response codecs and text/file-v2 planners. Combined current-native
@@ -74,9 +74,26 @@ areas rather than claiming that every upstream edge case has been exhausted.
   clean-client recovery. Evidence: `portable-family-integration-acceptance.md`.
   Browser admission `cdd6b49` passed 47 focused tests/full TypeScript in its
   reviewed source candidate; actual browser lifecycle proof remains required.
-- Root pinned WASM build session43081 is active at source `f79a294`; native
-  wrapper tests passed15, but browser artifacts/actual runtime remain pending.
-  No other heavy build is authorized concurrently.
+- Root pinned WASM build session43081 exited0 at source `f79a294`; native
+  wrapper tests passed15. Actual Chrome fixture `6f3ade8` passed all10 groups,
+  including authenticated family updates and raw transport decoding. Evidence
+  committed as `a78770b` in `docs/wasm-family-browser-verification.md`. Test tab
+  and loopback server are closed. Reconcile main crypto recovery dependencies
+  and strengthen namespace metadata before the next WASM integration gate.
+- Family-store focused session35255 exited0: 9 new ledger/file-state unit
+  fixtures passed. Schema8 activation, ingress and materialization are unfinished;
+  this does not establish native integration. The heavy build slot is released.
+- CLI candidate `1834b5e` is source-reviewed, pending schema8 APIs and actual
+  process tests. `core_cli` now owns a shared portable mutation adapter proposal;
+  native and browser must consume one Rust mapping for file operations. Native
+  owns transaction/receipt/CAS, browser owns IndexedDB atomic persistence.
+- `client_sync_review` owns portable causal-frontier joining for physical move
+  witnesses. A folder ancestor's move cannot be inserted into a child's own
+  entry frontier. Physical binding commits `1d8a386`, `19d755d`, `db1ea40` are
+  source-reviewed only and still depend on schema8 and the blocked patch below.
+- `browser_adapter_review` reviews browser atomic sync source independently;
+  `desktop_integration` prepares real-browser admission lifecycle fixtures;
+  `recovery_review` audits remaining isolation/protocol/restore acceptance gaps.
 - Physical-binding namespace patch is blocked by automatic approval review,
   which rejected cross-owner authorization evidence. Exact unapplied artifact:
   `/tmp/zorid-namespace-physical-binding.patch`. User approval requested for that
