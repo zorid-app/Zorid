@@ -56,6 +56,7 @@ fn evidence(store: &Store, name: &str, moving: bool) -> NamespaceEvidence {
         content: value.content,
         file_baseline: store.projection_baseline(&id(name)).unwrap(),
         directory_baseline: store.directory_baseline(&id(name)).unwrap(),
+        physical_binding: store.physical_binding(&id(name)).unwrap(),
     }
 }
 fn moving(store: &Store, name: &str, p: &str, operation: &str) -> MutationRequest {
@@ -130,6 +131,10 @@ fn move_restart_exact_retirement_keeps_later_write_pending() {
     let baseline = s.projection_baseline(&id("file")).unwrap().unwrap();
     assert_eq!(baseline.state.path, path("new"));
     assert_eq!(baseline.content, b"original");
+    let binding = s.physical_binding(&id("file")).unwrap().unwrap();
+    assert_eq!(binding.state, baseline.state);
+    assert_eq!(binding.physical.inode, "inode-file");
+    assert_eq!(binding.physical.parent_inode, "root-inode");
     assert_eq!(
         s.read(&id("file")).unwrap().unwrap().content.unwrap(),
         b"later"
@@ -576,4 +581,60 @@ fn schema_six_migration_creates_exact_normalized_namespace_layout() {
     assert_eq!(c.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('namespace_attempts','namespace_members','namespace_member_progress','namespace_member_targets')",[],|r|r.get::<_,i64>(0)).unwrap(),4);
     c.execute_batch("DROP INDEX namespace_member_targets; CREATE INDEX namespace_member_targets ON namespace_members(job_id);").unwrap();
     assert!(Store::open(&db).is_err());
+}
+
+#[test]
+fn namespace_binding_cas_survives_move_and_delete_removes_only_active_binding() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db");
+    let mut s = Store::open(&db).unwrap();
+    seed(&mut s, "file", "old", EntryKind::File);
+    let req = moving(&s, "file", "new", "first-move");
+    let proof = evidence(&s, "file", true);
+    s.apply_namespace(&req, &[proof]).unwrap();
+    let a = s
+        .namespace_for_operation(&req.operation_id)
+        .unwrap()
+        .unwrap();
+    let a = complete_members(&mut s, a);
+    s.finish_namespace(&a.job.job_id).unwrap();
+    let bound = s.physical_binding(&id("file")).unwrap().unwrap();
+    let req = deleting(&s, "file", "delete-bound");
+    let proof = evidence(&s, "file", false);
+    assert_eq!(proof.physical_binding, Some(bound.clone()));
+    s.apply_namespace(&req, &[proof]).unwrap();
+    let a = s
+        .namespace_for_operation(&req.operation_id)
+        .unwrap()
+        .unwrap();
+    let a = complete_members(&mut s, a);
+    let c = rusqlite::Connection::open(&db).unwrap();
+    let mut replaced = bound.clone();
+    replaced.physical.inode = "replacement".into();
+    c.execute(
+        "UPDATE physical_bindings SET inode=?1,record=?2 WHERE entry_id='file'",
+        rusqlite::params![
+            replaced.physical.inode,
+            serde_json::to_string(&replaced).unwrap()
+        ],
+    )
+    .unwrap();
+    assert!(s.finish_namespace(&a.job.job_id).is_err());
+    assert_eq!(
+        s.projection_baseline(&id("file"))
+            .unwrap()
+            .unwrap()
+            .state
+            .path,
+        path("new")
+    );
+    assert!(!s.namespace_attempt(&a.job.job_id).unwrap().completed);
+    c.execute(
+        "UPDATE physical_bindings SET inode=?1,record=?2 WHERE entry_id='file'",
+        rusqlite::params![bound.physical.inode, serde_json::to_string(&bound).unwrap()],
+    )
+    .unwrap();
+    let completed = s.finish_namespace(&a.job.job_id).unwrap();
+    assert!(s.physical_binding(&id("file")).unwrap().is_none());
+    assert_eq!(completed.members[0].evidence.physical_binding, Some(bound));
 }

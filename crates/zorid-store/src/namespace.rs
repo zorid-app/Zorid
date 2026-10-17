@@ -23,6 +23,8 @@ pub struct NamespaceEvidence {
     pub content: Option<Vec<u8>>,
     pub file_baseline: Option<ProjectionBaseline>,
     pub directory_baseline: Option<DirectoryBaseline>,
+    /// Immutable prior physical authority, independent of logical revision.
+    pub physical_binding: Option<PhysicalBinding>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,6 +87,21 @@ fn validate_member(work: ProjectionWork, internal_parent: bool, m: &NamespaceMem
             && (!m.change.after.deleted || e.before.path != m.change.after.path))
     {
         return Err(invalid("invalid namespace member evidence"));
+    }
+    if let Some(binding) = &e.physical_binding {
+        binding.physical.validate()?;
+        let baseline_state = match e.before.kind {
+            EntryKind::File => e.file_baseline.as_ref().map(|b| &b.state),
+            EntryKind::Folder => e.directory_baseline.as_ref().map(|b| &b.state),
+        };
+        if baseline_state != Some(&binding.state)
+            || binding.physical.inode != e.source_identity
+            || binding.physical.parent_inode != e.source_parent_identity
+        {
+            return Err(invalid(
+                "namespace physical binding differs from source evidence",
+            ));
+        }
     }
     match e.before.kind {
         EntryKind::File => {
@@ -561,6 +578,7 @@ fn entry(tx: &Connection, id: &EntryId) -> Result<(EntryState, Option<Vec<u8>>)>
     ))
 }
 fn check_baselines(tx: &Connection, e: &NamespaceEvidence) -> Result<()> {
+    physical_bindings::check_binding(tx, &e.before.id, e.physical_binding.as_ref())?;
     if projection::baseline(tx, &e.before.id)? != e.file_baseline
         || directory_baseline(tx, &e.before.id)? != e.directory_baseline
     {
@@ -836,6 +854,7 @@ impl Store {
         for m in &a.members {
             let after = &m.change.after;
             if a.job.work == ProjectionWork::Delete {
+                physical_bindings::remove_binding(&tx, &after.id)?;
                 tx.execute(
                     "DELETE FROM projection_baselines WHERE entry_id=?1",
                     [after.id.as_str()],
@@ -868,7 +887,48 @@ impl Store {
                     state: after.clone(),
                     identity: physical,
                 };
-                tx.execute("INSERT INTO directory_baselines(entry_id,record) VALUES(?1,?2) ON CONFLICT(entry_id) DO UPDATE SET record=excluded.record",params![after.id.as_str(),serde_json::to_string(&base)?])?;
+                directory::put_baseline(&tx, &base)?;
+            }
+            if a.job.work == ProjectionWork::Move {
+                let inode = if after.kind == EntryKind::File || same_path(a.job.work, m) {
+                    m.evidence.source_identity.clone()
+                } else {
+                    m.directory_stage_identity
+                        .clone()
+                        .ok_or_else(|| invalid("namespace stage identity missing"))?
+                };
+                let parent_inode = if same_path(a.job.work, m) {
+                    m.evidence.source_parent_identity.clone()
+                } else if let Some(parent) = &m.evidence.destination_parent_identity {
+                    parent.clone()
+                } else {
+                    let parent = a
+                        .members
+                        .iter()
+                        .find(|p| {
+                            p.change.after.kind == EntryKind::Folder
+                                && after.path.parent().as_ref() == Some(&p.change.after.path)
+                        })
+                        .ok_or_else(|| invalid("namespace internal destination parent missing"))?;
+                    if same_path(a.job.work, parent) {
+                        parent.evidence.source_identity.clone()
+                    } else {
+                        parent
+                            .directory_stage_identity
+                            .clone()
+                            .ok_or_else(|| invalid("namespace parent stage missing"))?
+                    }
+                };
+                physical_bindings::put_binding(
+                    &tx,
+                    &PhysicalBinding {
+                        state: after.clone(),
+                        physical: PhysicalIdentity {
+                            inode,
+                            parent_inode,
+                        },
+                    },
+                )?;
             }
         }
         projection_jobs::finish(&tx, &a.job)?;

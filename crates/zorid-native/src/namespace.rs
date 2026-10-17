@@ -207,6 +207,7 @@ impl NativeVault {
                 content,
                 file_baseline: self.store.projection_baseline(&before.id)?,
                 directory_baseline: self.store.directory_baseline(&before.id)?,
+                physical_binding: self.store.physical_binding(&before.id)?,
             });
         }
         self.paths.verify()?;
