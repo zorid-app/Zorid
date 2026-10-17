@@ -43,10 +43,12 @@ Adaptations:
   have scoped compatibility adaptations. Unicode string helpers retain upstream
   scalar semantics and regex matching remains stateless.
 
-Status: source-only first extraction slice, no native/WASM build or runtime parity
-claim until the coordinator's serialized proof. The query reducer, complete
-builtin equivalence, bound accounting inside every builtin and final public API
-remain under review. Do not enable consumers from this source milestone alone.
+Status: source-only extraction and query continuation, no native/WASM build or
+runtime parity claim until the coordinator's serialized proof. The reducer owns
+Zorid's filter/group-order/search/sort/limit policy around row-scoped sessions of
+the reused evaluator. Base YAML uses the document crate's same Saphyr mapping
+decoder. Complete builtin equivalence, fine-grained work accounting and the final
+public API remain under review. Do not enable consumers from this source milestone alone.
 
 The small corpus test uses the shared accepted expectations from
 `tests/fixtures/document-semantics/bases/expressions.json`, plus a few explicit

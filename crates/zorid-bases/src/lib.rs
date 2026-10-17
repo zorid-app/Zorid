@@ -3,6 +3,13 @@
 mod expression;
 mod files;
 mod order;
+mod program;
+mod query;
+pub use program::{compile_base, compile_base_source, BaseCompileError, BaseProgram};
+pub use query::{
+    query_base, BaseGroup, BaseQueryResult, BaseRow, BaseSnapshot, GroupOption, QueryCounts,
+    QueryDiagnostic, QueryOptions,
+};
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -245,11 +252,12 @@ fn runtime_file(record: &DetachedRecord) -> Result<expression::BasesFile, Expres
     })
 }
 
-pub fn evaluate_expression(
+pub(crate) fn with_session<T>(
     source: &str,
     record: &DetachedRecord,
     options: &EvaluationOptions,
-) -> Result<EvaluationResult, ExpressionDiagnostic> {
+    run: impl FnOnce(&mut expression::Session<'_>) -> Result<T, ExpressionDiagnostic>,
+) -> Result<T, ExpressionDiagnostic> {
     if options.formulas.len() > 1024 {
         return Err(ExpressionDiagnostic::new("budget", "Too many formulas"));
     }
@@ -286,5 +294,20 @@ pub fn evaluate_expression(
         cancellation: options.cancellation.clone(),
         ..Default::default()
     };
-    expression::evaluate(source, &context)
+    let mut session = expression::Session::new(&context);
+    run(&mut session)
+}
+
+pub fn evaluate_expression(
+    source: &str,
+    record: &DetachedRecord,
+    options: &EvaluationOptions,
+) -> Result<EvaluationResult, ExpressionDiagnostic> {
+    with_session(source, record, options, |session| {
+        let value = session.evaluate(source)?;
+        Ok(EvaluationResult {
+            value,
+            steps_used: session.steps_used(),
+        })
+    })
 }

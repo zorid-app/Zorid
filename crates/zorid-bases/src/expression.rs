@@ -580,25 +580,41 @@ pub(crate) enum RuntimeValue {
     Error(String),
 }
 
+pub(crate) struct Session<'a> {
+    evaluator: Evaluator<'a>,
+    initial_steps: usize,
+}
+impl<'a> Session<'a> {
+    pub(crate) fn new(context: &'a BasesEvaluationContext) -> Self {
+        Self {
+            evaluator: Evaluator::new(context),
+            initial_steps: context.work_limit.unwrap_or(100_000),
+        }
+    }
+    pub(crate) fn steps_used(&self) -> usize {
+        self.initial_steps
+            .saturating_sub(self.evaluator.remaining_work)
+    }
+    pub(crate) fn evaluate(&mut self, source: &str) -> Result<BaseValue, ExpressionDiagnostic> {
+        let ast = parse_cached(source).map_err(|message| {
+            let (code, text) = message
+                .split_once('\0')
+                .unwrap_or(("parse", message.as_str()));
+            ExpressionDiagnostic::new(code, text)
+        })?;
+        let value = self.evaluator.evaluate(ast.as_ref(), &BTreeMap::new());
+        typed_result(value)
+    }
+}
 pub(crate) fn evaluate(
     expression: &str,
     context: &BasesEvaluationContext,
 ) -> Result<EvaluationResult, ExpressionDiagnostic> {
-    let ast = parse_cached(expression).map_err(|message| {
-        let (code, text) = message
-            .split_once('\0')
-            .unwrap_or(("parse", message.as_str()));
-        ExpressionDiagnostic::new(code, text)
-    })?;
-    let mut evaluator = Evaluator::new(context);
-    let value = evaluator.evaluate(ast.as_ref(), &BTreeMap::new());
-    let value = typed_result(value)?;
+    let mut session = Session::new(context);
+    let value = session.evaluate(expression)?;
     Ok(EvaluationResult {
         value,
-        steps_used: context
-            .work_limit
-            .unwrap_or(100_000)
-            .saturating_sub(evaluator.remaining_work),
+        steps_used: session.steps_used(),
     })
 }
 
@@ -1028,17 +1044,24 @@ impl<'a> Evaluator<'a> {
     }
 
     fn member(&mut self, object: &Expr, member: &Member, scope: &Scope) -> RuntimeValue {
-        if let (Expr::Identifier(namespace), Member::Named(property)) = (object, member) {
+        if let Expr::Identifier(namespace) = object {
             if namespace.eq_ignore_ascii_case("formula") {
-                return self.formula(property);
-            }
-            if namespace.eq_ignore_ascii_case("note") {
-                return self
-                    .context
-                    .note
-                    .get(own_key(&self.context.note, property).unwrap_or(property))
-                    .map(|value| self.note_property(property, value))
-                    .unwrap_or(RuntimeValue::Null);
+                let name = match member {
+                    Member::Named(name) => name.clone(),
+                    Member::Computed(expression) => {
+                        let value = self.evaluate(expression, scope);
+                        match value {
+                            RuntimeValue::String(name) => name,
+                            RuntimeValue::Error(_) => return value,
+                            _ => {
+                                return RuntimeValue::Error(
+                                    "access\0Formula key must be text".into(),
+                                )
+                            }
+                        }
+                    }
+                };
+                return self.formula(&name);
             }
         }
         let object = self.evaluate(object, scope);
@@ -2495,6 +2518,7 @@ fn file_property(file: &BasesFile, property: &str, timezone: &BasesTimezone) -> 
     match property {
         "name" => RuntimeValue::String(file.name.clone()),
         "basename" => RuntimeValue::String(file.basename.clone()),
+        "fullname" => RuntimeValue::String(file.path.rsplit('/').next().unwrap_or_default().into()),
         "path" => RuntimeValue::String(file.path.clone()),
         "folder" => RuntimeValue::String(file.folder.clone()),
         "ext" => RuntimeValue::String(file.extension.clone()),
@@ -2960,4 +2984,82 @@ fn value_bytes(value: &RuntimeValue) -> Option<usize> {
         }
     }
     Some(bytes)
+}
+
+pub(crate) fn duration_scalar(
+    value: &BaseValue,
+    clock: i64,
+    timezone: &str,
+) -> Result<f64, ExpressionDiagnostic> {
+    let BaseValue::Duration {
+        years,
+        months,
+        weeks,
+        days,
+        hours,
+        minutes,
+        seconds,
+        milliseconds,
+    } = value
+    else {
+        return Err(ExpressionDiagnostic::new("type", "Expected duration"));
+    };
+    let timezone = BasesTimezone::from_setting(Some(timezone))
+        .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+    let now = DateValue {
+        millis: clock,
+        date_only: false,
+        timezone,
+    };
+    let duration = DurationValue {
+        years: *years,
+        months: *months,
+        weeks: *weeks,
+        days: *days,
+        hours: *hours,
+        minutes: *minutes,
+        seconds: *seconds,
+        milliseconds: *milliseconds,
+    };
+    add_duration(&now, &duration, 1.0)
+        .map(|date| (date.millis as f64) - (clock as f64))
+        .map_err(|message| {
+            let (code, text) = message
+                .split_once('\0')
+                .unwrap_or(("numeric-domain", message.as_str()));
+            ExpressionDiagnostic::new(code, text)
+        })
+}
+
+pub(crate) fn display_date(
+    timestamp: i64,
+    has_time: bool,
+    timezone: &str,
+) -> Result<String, ExpressionDiagnostic> {
+    let timezone = BasesTimezone::from_setting(Some(timezone))
+        .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+    if DateTime::<Utc>::from_timestamp_millis(timestamp).is_none() {
+        return Err(ExpressionDiagnostic::new(
+            "numeric-domain",
+            "Invalid timestamp",
+        ));
+    }
+    try_format_date(
+        &DateValue {
+            millis: timestamp,
+            date_only: !has_time,
+            timezone,
+        },
+        if has_time {
+            "YYYY-MM-DDTHH:mm:ss"
+        } else {
+            "YYYY-MM-DD"
+        },
+    )
+    .map_err(|message| {
+        let (code, text) = message
+            .split_once('\0')
+            .unwrap_or(("unsupported", message.as_str()));
+        ExpressionDiagnostic::new(code, text)
+    })
 }

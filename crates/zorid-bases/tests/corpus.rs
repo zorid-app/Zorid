@@ -156,7 +156,18 @@ fn boolean_paths_preserve_numeric_budget_and_cancellation_errors() {
         path: "a.md".into(),
         ..Default::default()
     };
-    for source in ["!(1/0)", "(1/0)||true", "if(1/0,1,2)", "[1].filter(1/0)"] {
+    for source in [
+        "!(1/0)",
+        "(1/0)||true",
+        "if(1/0,1,2)",
+        "[1].filter(1/0)",
+        "[1].contains(1/0)",
+        "[1].containsAll(1/0)",
+        "(1).isType(1/0)",
+        "/a/.matches(1/0)",
+        "note[1/0]",
+        "[1,2].reduce(if(index==0,1/0,7),0)",
+    ] {
         assert_eq!(
             evaluate_expression(source, &record, &EvaluationOptions::default())
                 .unwrap_err()
