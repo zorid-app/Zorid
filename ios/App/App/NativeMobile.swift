@@ -562,7 +562,9 @@ final class NativeEditorContainer: UIViewController {
     var onNavigate: ((Int) -> Void)?
     private var canGoBack = false
     private var canGoForward = false
-    private var historyHost: UIHostingController<NativeHistoryControls>?
+    private var historyContentView: (UIView & UIContentView)?
+    private var legacyHistoryBack: UIButton?
+    private var legacyHistoryForward: UIButton?
     private var loadingHost: UIHostingController<NativeEditorLoadingView>?
     private var loadingTimeout: DispatchWorkItem?
     private var loadingTimer: NativePhaseTimer?
@@ -782,21 +784,54 @@ final class NativeEditorContainer: UIViewController {
     }
 
     private func installRouteControls() {
-        let host = UIHostingController(rootView: historyControls)
-        historyHost = host
-        addChild(host)
-        host.view.backgroundColor = .clear
-        host.view.clipsToBounds = false
-        host.view.translatesAutoresizingMaskIntoConstraints = false
+        let content: UIView
+        if #available(iOS 16, *) {
+            // This content configuration hosts SwiftUI without an app-managed
+            // child controller. A bar customView belongs to navigation-bar UI,
+            // so parenting a UIHostingController to this container is invalid.
+            let hosted = UIHostingConfiguration { historyControls }.margins(.all, 0).makeContentView()
+            historyContentView = hosted
+            content = hosted
+        } else {
+            let back = legacyRouteButton(symbol: "chevron.left", direction: -1, label: "Back", identifier: "native.editor.back")
+            let forward = legacyRouteButton(symbol: "chevron.right", direction: 1, label: "Forward", identifier: "native.editor.forward")
+            legacyHistoryBack = back
+            legacyHistoryForward = forward
+            let stack = UIStackView(arrangedSubviews: [back, forward])
+            stack.axis = .horizontal
+            stack.spacing = 0
+            stack.layoutMargins = UIEdgeInsets(top: 0, left: 4, bottom: 0, right: 4)
+            stack.isLayoutMarginsRelativeArrangement = true
+            stack.backgroundColor = .secondarySystemBackground
+            stack.layer.cornerRadius = 22
+            content = stack
+        }
+        content.backgroundColor = historyContentView == nil ? .secondarySystemBackground : .clear
+        content.clipsToBounds = false
+        content.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            host.view.widthAnchor.constraint(equalToConstant: 96),
-            host.view.heightAnchor.constraint(equalToConstant: 44)
+            content.widthAnchor.constraint(equalToConstant: 96),
+            content.heightAnchor.constraint(equalToConstant: 44)
         ])
-        let item = UIBarButtonItem(customView: host.view)
+        let item = UIBarButtonItem(customView: content)
         // Our single capsule supplies its own glass, not another nested bar pill.
         if #available(iOS 26, *) { item.hidesSharedBackground = true }
         navigationItem.leftBarButtonItem = item
-        host.didMove(toParent: self)
+    }
+
+    private func legacyRouteButton(symbol: String, direction: Int, label: String, identifier: String) -> UIButton {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setImage(UIImage(systemName: symbol), for: .normal)
+        button.accessibilityLabel = label
+        button.accessibilityIdentifier = identifier
+        button.addAction(UIAction { [weak self] _ in
+            guard let self = self, !self.leaving else { return }
+            self.onNavigate?(direction)
+        }, for: .touchUpInside)
+        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        return button
     }
 
     private func installEditorLoading() {
@@ -854,7 +889,11 @@ final class NativeEditorContainer: UIViewController {
     }
 
     private func updateRouteControls() {
-        historyHost?.rootView = historyControls
+        if #available(iOS 16, *) {
+            historyContentView?.configuration = UIHostingConfiguration { historyControls }.margins(.all, 0)
+        }
+        legacyHistoryBack?.isEnabled = canGoBack && !leaving
+        legacyHistoryForward?.isEnabled = canGoForward && !leaving
         navigationItem.rightBarButtonItem?.isEnabled = !leaving
     }
 
