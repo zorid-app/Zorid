@@ -17,7 +17,7 @@ export interface BaseBufferHost {
   /** Must return the workspace's shared buffer, including existing dirty drafts. */
   getBuffer(path: string): NoteBuffer | Promise<NoteBuffer>;
   validate(): void;
-  onBufferChange?(path: string, buffer: NoteBuffer): void;
+  onBufferChange?(path: string, buffer: NoteBuffer, previousText: string): void;
   rename?: BaseMutationHost['rename'];
 }
 /** No private buffers or direct disk writes: use the same recovery/CAS path as typing. */
@@ -37,7 +37,7 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
         if (buffer.text !== source) throw new Error('The edited buffer changed');
         if (next === source) return;
         buffer.update(next, { validateWrite: () => { options.validate(); validateWrite(); } });
-        options.onBufferChange?.(path, buffer);
+        options.onBufferChange?.(path, buffer, source);
         // Do not replay or roll back a failed write: recovery draft owns that state.
         await buffer.flush();
       });
