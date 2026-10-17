@@ -197,10 +197,9 @@ private enum NativeRecentStore {
 }
 
 private enum NativePage: String, CaseIterable {
-    case recents, files, settings
-    var title: String { switch self { case .recents: return "Recents"; case .files: return "Files"; case .settings: return "Settings" } }
-    var symbol: String { switch self { case .recents: return "clock"; case .files: return "folder"; case .settings: return "gearshape" } }
-    static let configurable: [NativePage] = [.recents, .files]
+    case recents, files
+    var title: String { self == .recents ? "Recents" : "Files" }
+    var symbol: String { self == .recents ? "clock" : "folder" }
 }
 
 // Folder/note identities survive rename; root has no entry ID. Paths are only
@@ -211,22 +210,27 @@ private enum NativeRoute: Equatable {
 }
 
 private struct NativePagePreferences {
-    private static let key = "native.pages.v1"
-    var pages: [NativePage]
+    private static let key = "native.notes.mode.v1"
+    private static let legacyKey = "native.pages.v1"
     var selected: NativePage
 
-    init() {
-        let defaults = UserDefaults.standard
-        let saved = (defaults.stringArray(forKey: Self.key) ?? ["recents", "files"]).compactMap(NativePage.init(rawValue:)).filter { $0 != .settings }
-        pages = saved.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
-        let prior = defaults.string(forKey: Self.key + ".selected").flatMap(NativePage.init(rawValue:))
-        if let prior = prior, prior == .settings || pages.contains(prior) { selected = prior }
-        else { selected = pages.first ?? .settings }
+    init(defaults: UserDefaults = .standard) {
+        if let saved = defaults.string(forKey: Self.key) {
+            selected = NativePage(rawValue: saved) ?? .recents
+        } else if defaults.stringArray(forKey: Self.legacyKey)?.isEmpty == true {
+            selected = .recents
+        } else {
+            // Settings is a sheet now. Invalid/legacy Settings selections fall
+            // back to Recents; both note modes are always available.
+            selected = defaults.string(forKey: Self.legacyKey + ".selected").flatMap(NativePage.init(rawValue:)) ?? .recents
+        }
+        persist(to: defaults)
     }
 
-    func persist() {
-        UserDefaults.standard.set(pages.map(\.rawValue), forKey: Self.key)
-        UserDefaults.standard.set(selected.rawValue, forKey: Self.key + ".selected")
+    func persist(to defaults: UserDefaults = .standard) {
+        defaults.set(selected.rawValue, forKey: Self.key)
+        defaults.removeObject(forKey: Self.legacyKey)
+        defaults.removeObject(forKey: Self.legacyKey + ".selected")
     }
 }
 
@@ -241,6 +245,7 @@ private final class NativePagesCoordinator {
     private var editorOpenGeneration = 0
     private var busy = false
     private var editorActive = false
+    private var chooseVaultRequested = false
     private var visible = false
     private var refreshRequested = false
     private var refreshWork: DispatchWorkItem?
@@ -276,8 +281,8 @@ private final class NativePagesCoordinator {
         // Cancel admission, not the in-flight Rust read/host ownership. Its reply
         // must still clear loading (or close a failed host), without pushing.
         editorOpenGeneration += 1
-        // A reachable Settings tab/new native selection wins over a staged
-        // history destination while its read is still in flight.
+        // A new mode or Settings presentation wins over a staged history
+        // destination while its read is still in flight.
         pendingHistoryIndex = nil
         awaitingNoteActivation = false
         record(route)
@@ -368,6 +373,7 @@ private final class NativePagesCoordinator {
     // change-notification seam; root-only vnode watches miss nested file writes.
     func scheduleAutomaticRefresh() {
         guard pageActive else { return }
+        if chooseVaultRequested { finishChooseVault(); return }
         refreshRequested = true
         guard !busy, refreshWork == nil else { return }
         let ticket = refreshGeneration
@@ -389,6 +395,7 @@ private final class NativePagesCoordinator {
     }
 
     private func drainAutomaticRefresh() {
+        if chooseVaultRequested { finishChooseVault(); return }
         if refreshRequested { scheduleAutomaticRefresh() }
     }
 
@@ -570,7 +577,16 @@ private final class NativePagesCoordinator {
     }
 
     func chooseVault() {
-        guard pageActive, !busy, !editorActive else { return }
+        guard !editorActive else { return }
+        // A full-screen Settings sheet may finish dismissal before UIKit sends
+        // viewDidAppear. Retain intent until the page is active and reads drain.
+        chooseVaultRequested = true
+        finishChooseVault()
+    }
+
+    private func finishChooseVault() {
+        guard chooseVaultRequested, pageActive, !busy, !editorActive else { return }
+        chooseVaultRequested = false
         cancelQueuedRefresh()
         busy = true
         generation += 1
@@ -605,7 +621,7 @@ private final class NativePagesModel: ObservableObject {
     var currentRoute: NativeRoute { .page(preferences.selected, folderId: preferences.selected == .files ? folderId : nil) }
 
     func setRouteAvailability(back: Bool, forward: Bool) { canGoBack = back; canGoForward = forward }
-    func supports(_ page: NativePage) -> Bool { page == .settings || preferences.pages.contains(page) }
+    func supports(_ page: NativePage) -> Bool { NativePage.allCases.contains(page) }
     func applyRoute(page: NativePage, folder: NativeFileEntry?) {
         preferences.selected = page
         preferences.persist()
@@ -667,14 +683,9 @@ private final class NativePagesModel: ObservableObject {
         render()
         onRouteChanged?(currentRoute)
     }
-    func toggle(_ page: NativePage) {
-        guard page != .settings else { return }
-        if preferences.pages.contains(page) {
-            preferences.pages.removeAll { $0 == page }
-            if preferences.selected == page { preferences.selected = preferences.pages.first ?? .settings }
-        } else { preferences.pages.append(page) }
-        preferences.persist()
-        render()
+    func beginSettingsPresentation() {
+        // Opening a sheet is newer UI intent too. Cancel any staged route/file
+        // admission without changing the current Notes mode or route history.
         onRouteChanged?(currentRoute)
     }
     func enter(_ folder: NativeFileEntry) {
@@ -726,8 +737,7 @@ private final class NativePagesModel: ObservableObject {
         childCounts = [:]
         var historyFailed = false
         if let listing = listing {
-            if preferences.selected == .settings { rows = [] }
-            else if preferences.selected == .recents {
+            if preferences.selected == .recents {
                 do { rows = try NativeRecentStore.entries(vaultId: vault.id, listing: listing) }
                 catch { historyFailed = true }
             } else {
@@ -869,14 +879,17 @@ private struct NativePagesView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Namespace private var glassNamespace
     @AccessibilityFocusState private var focus: Focus?
+    @State private var showingSettings = false
+    @State private var chooseVaultAfterDismiss = false
 
-    private enum Focus: Hashable { case compose, heading, entry(String) }
+    private enum Focus: Hashable { case settings, compose, heading, folderHeading, entry(String) }
+    private var currentHeadingFocus: Focus { model.isInFolder ? .folderHeading : .heading }
     private var motion: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9) }
 
-    private var selectedPage: Binding<NativePage> {
+    private var selectedMode: Binding<NativePage> {
         Binding(get: { model.preferences.selected }, set: { page in
             withAnimation(motion) { model.select(page) }
-            focus = page == .settings ? nil : .heading
+            focus = .heading
         })
     }
 
@@ -885,23 +898,20 @@ private struct NativePagesView: View {
             // Draw glass above the opaque TabView sibling so its diffuse shadow
             // can cross the header boundary rather than being overpainted there.
             topBar.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12).zIndex(1)
-            TabView(selection: selectedPage) {
-                ForEach(model.preferences.pages + [.settings], id: \.self) { page in
-                    Group {
-                        if page == model.preferences.selected {
-                            if page == .settings { settingsContent }
-                            else { pageContent }
-                        } else { Color(uiColor: .systemBackground) }
-                    }
-                        .tag(page)
-                        .tabItem {
-                            Label(page.title, systemImage: page.symbol)
-                                .accessibilityIdentifier("native.pages.tab.\(page.rawValue)")
-                        }
+            TabView {
+                pageContent.tabItem {
+                    Label("Notes", systemImage: "note.text")
+                        .accessibilityIdentifier("native.pages.tab.notes")
                 }
             }
         }
         .background(Color(uiColor: .systemBackground))
+        .sheet(isPresented: $showingSettings, onDismiss: {
+            if chooseVaultAfterDismiss {
+                chooseVaultAfterDismiss = false
+                chooseVault()
+            } else { focus = .settings }
+        }) { settingsContent }
     }
 
     private var pageContent: some View {
@@ -912,13 +922,41 @@ private struct NativePagesView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 20)
                 .accessibilityIdentifier("native.pages.vault-name")
-            Text(model.heading)
-                .font(.title2.weight(.semibold))
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("native.pages.heading")
-                .accessibilityFocused($focus, equals: .heading)
-                .padding(.horizontal, 20)
+            Menu {
+                Picker("Notes view", selection: selectedMode) {
+                    ForEach(NativePage.allCases, id: \.self) { page in
+                        Label(page.title, systemImage: page.symbol)
+                            .tag(page)
+                            .accessibilityIdentifier("native.pages.mode.\(page.rawValue)")
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                HStack(spacing: 8) {
+                    Text(model.preferences.selected.title).font(.title2.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Image(systemName: "chevron.down").font(.body.weight(.semibold))
+                        .accessibilityHidden(true)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Notes view")
+            .accessibilityValue(model.preferences.selected.title)
+            .accessibilityHint("Choose Recents or Files")
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("native.pages.heading")
+            .accessibilityFocused($focus, equals: .heading)
+            .padding(.horizontal, 20)
+            if model.isInFolder {
+                Text(model.heading).font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("native.files.heading")
+                    .accessibilityFocused($focus, equals: .folderHeading)
+                    .padding(.horizontal, 20)
+            }
             if !model.status.isEmpty {
                 Text(model.status)
                     .font(.footnote)
@@ -928,7 +966,7 @@ private struct NativePagesView: View {
                     .padding(.horizontal, 20)
             }
             if model.isInFolder {
-                Button { withAnimation(motion) { model.parentFolder() }; focus = .heading } label: {
+                Button { withAnimation(motion) { model.parentFolder() }; focus = currentHeadingFocus } label: {
                     Label("Parent folder", systemImage: "chevron.left").frame(minHeight: 44)
                 }
                 .padding(.horizontal, 20)
@@ -954,19 +992,29 @@ private struct NativePagesView: View {
                 NativeHistoryControls(backEnabled: model.canGoBack && !model.loading,
                                       forwardEnabled: model.canGoForward && !model.loading,
                                       identifierPrefix: "native.pages", navigate: navigate)
-            }
-            Spacer(minLength: 0)
-            if model.preferences.selected != .settings {
-                Button { open(nil) } label: {
-                    Image(systemName: "square.and.pencil").padding(12).frame(minWidth: 44, minHeight: 44)
+            } else {
+                Button {
+                    model.beginSettingsPresentation()
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape").padding(12).frame(minWidth: 44, minHeight: 44)
                 }
                 .buttonStyle(.plain)
-                .modifier(PageControlSurface(id: "compose", namespace: glassNamespace))
-                .accessibilityLabel("New note")
-                .accessibilityIdentifier("native.pages.new-note")
-                .disabled(!model.canCreateNote)
-                .accessibilityFocused($focus, equals: .compose)
+                .modifier(PageControlSurface(id: "settings", namespace: glassNamespace))
+                .accessibilityLabel("Settings")
+                .accessibilityIdentifier("native.pages.settings")
+                .accessibilityFocused($focus, equals: .settings)
             }
+            Spacer(minLength: 0)
+            Button { open(nil) } label: {
+                Image(systemName: "square.and.pencil").padding(12).frame(minWidth: 44, minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .modifier(PageControlSurface(id: "compose", namespace: glassNamespace))
+            .accessibilityLabel("New note")
+            .accessibilityIdentifier("native.pages.new-note")
+            .disabled(!model.canCreateNote)
+            .accessibilityFocused($focus, equals: .compose)
         }
         .font(.system(size: 17))
         .foregroundColor(.primary)
@@ -1007,7 +1055,7 @@ private struct NativePagesView: View {
                         Button {
                             if entry.kind == .folder {
                                 withAnimation(motion) { model.enter(entry) }
-                                focus = .heading
+                                focus = currentHeadingFocus
                             } else { open(entry) }
                         } label: {
                             HStack(spacing: 14) {
@@ -1054,32 +1102,37 @@ private struct NativePagesView: View {
                 if let id = model.focusedEntryId {
                     proxy.scrollTo(id, anchor: .center)
                     DispatchQueue.main.async { focus = .entry(id) }
-                } else { focus = .heading }
+                } else { focus = currentHeadingFocus }
             }
         }
     }
 
     private var settingsContent: some View {
-        Form {
-            Section(header: Text("Settings").accessibilityAddTraits(.isHeader)) {
-                Text("\(model.vault.name) · On this device")
-                Button("Choose vault", action: chooseVault)
+        NavigationView {
+            Form {
+                Section {
+                    Text("\(model.vault.name) · On this device")
+                    Button("Choose vault") {
+                        // Finish the native modal dismissal before closing the
+                        // unleased page host and popping to the vault picker.
+                        chooseVaultAfterDismiss = true
+                        showingSettings = false
+                    }
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("native.settings.choose-vault")
-                    .disabled(model.loading)
+                }
             }
-            Section(header: Text("Pages"), footer: Text("Settings always stays in the tab bar. Enabled pages keep their order; re-enabled pages appear last.")) {
-                ForEach(NativePage.configurable, id: \.self) { page in
-                    Toggle(isOn: Binding(get: { model.preferences.pages.contains(page) }, set: { included in
-                        guard included != model.preferences.pages.contains(page) else { return }
-                        withAnimation(motion) { model.toggle(page) }
-                    })) { Label(page.title, systemImage: page.symbol) }
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("native.pages.configure.\(page.rawValue)")
+            .accessibilityIdentifier("native.settings")
+            .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingSettings = false }
+                        .frame(minWidth: 44, minHeight: 44)
+                        .accessibilityIdentifier("native.settings.done")
                 }
             }
         }
-        .accessibilityIdentifier("native.settings")
+        .navigationViewStyle(.stack)
     }
 
 }
