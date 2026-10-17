@@ -90,3 +90,33 @@ Browser A database suffix `a2c5692f-b739-4d11-b152-f896b97989f7`, client
 `936a7a24-d28c-451f-8e35-0f2a0b3bbb4d`; browser B database suffix
 `fde725e6-d973-4b54-a9aa-b9127e2cb344`, client
 `49993312-25d9-4dd1-b7c9-ded0da898753`.
+
+## Rebuilt desktop creation and standalone CLI interop — 2026-10-17
+
+Native candidate `292cd27` built CLI and desktop host (worker83593 exit0).
+Fresh `/private/tmp/zorid-cli-family-20261017-0936` was initialized/enrolled by
+standalone CLI, then received all14 relay records. Final pending projection and
+dependencies were zero. Physical `note.md` and `moved-note.md` were absent;
+`asset.bin` and `FreshFolder/child.md` matched the hashes above. This covers the
+previous stale-file repro with fresh schema8 storage, not a migration.
+
+Normal Electron candidate `a29605b` used its rebuilt hashed renderer
+`main.0fbcd7e6f6d793c5e158.js` (SHA256
+`246e46f6dad2c9fab01a29667b10a035032555d73ed1943c7d86c3a722e97055`).
+Verified OS process58254 launched the isolated create-test profile and spawned
+host62613 from `core-native-cli-combined/target-native-family-create/debug/`;
+host SHA256 `1ae9bd653cb4603f8712db6919e6b5d00e3046c6e5cdb983225b93719f0f88a1`.
+The earlier closed-window process33670 was cleaned up separately; UI selection
+was confirmed on vault0936 before editing. An unrelated folder was briefly
+selected in the picker; no file mutation was performed there.
+
+Actual New note button created `Untitled.md`; typing
+`Created in rebuilt desktop through Rust.` saved exact40 bytes to disk and
+cleared the Saving indicator. Standalone CLI synced while Electron stayed open:
+server accepted3, cursor17, final pending authored/dependency/projection all0.
+Browser received3 and read exact40 bytes, SHA256
+`58e53ce2a4cf3a1f0fa49cb3e99aae08a6a73ac84c6264c03b963aa888617634`.
+Normal Cmd-Q then exited test launch92846 with code0. This proves desktop
+create/save plus CLI upload/browser receive; simultaneous conflicting writes,
+crash injection, external edits and complete milestone acceptance remain open.
+Native/desktop candidate integration to main is still pending.
