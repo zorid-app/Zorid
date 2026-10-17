@@ -51,6 +51,14 @@ test('normal assets require complete family, recovery, sync exports and returned
     await assert.rejects(createCoreWasmAssets({enabled:true,directory}),/missing method WasmVaultKey.openSyncUpdate/);
   });
 });
+test('normal assets require actual RPC exports and returned page methods',async()=>{
+  await fixture(async directory=>{
+    await fs.writeFile(path.join(directory,'zorid_wasm.js'),normalJs.toString().replace('export function validateRpcHello() {}','/* missing RPC validation export */'));
+    await assert.rejects(createCoreWasmAssets({enabled:true,directory}),/missing export validateRpcHello/);
+    await fs.writeFile(path.join(directory,'zorid_wasm.js'),normalJs.toString().replace('wire() {}','/* missing returned page method */'));
+    await assert.rejects(createCoreWasmAssets({enabled:true,directory}),/missing method WasmRpcPage.wire/);
+  },normalJs);
+});
 test('normal JS and WASM share a content version; changing either changes both URLs',async()=>{
   await fixture(async directory=>{
     const first=await createCoreWasmAssets({enabled:true,directory});
@@ -103,4 +111,11 @@ test('required exports cover every declared browser storage and transport bindin
       for(const member of declaration.members)assert.ok(requiredExports.includes(member.name.text),`missing asset contract ${name}.${member.name.text}`);
     }
   }
+});
+test('required RPC page methods cover the declared browser transport return handle',async()=>{
+  const ts=require('typescript'),file='src/platform/browser-sync-worker.ts';
+  const source=ts.createSourceFile(file,await fs.readFile(path.join(__dirname,'..',file),'utf8'),ts.ScriptTarget.Latest,true);
+  const declaration=source.statements.find(node=>ts.isInterfaceDeclaration(node)&&node.name.text==='BrowserRpcPage');
+  assert.ok(declaration);
+  for(const member of declaration.members)assert.ok(requiredMethods.WasmRpcPage.includes(member.name.text),`missing RPC page method ${member.name.text}`);
 });
