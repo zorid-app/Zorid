@@ -145,8 +145,8 @@ test('edge-only selection deletion preserves all nodes and unrelated dangling da
 test('background box selection and empty Delete use real event handlers without accidental writes', async () => {
   const ui = setup(); ui.viewport.focus(); ui.key('Delete'); await ui.view.flush(); assert.equal(ui.saves.length, 0);
   ui.pointer(ui.viewport, 'pointerdown', 45, 45); ui.pointer(ui.viewport, 'pointermove', 60, 60); ui.pointer(ui.viewport, 'pointerup', 60, 60);
-  assert.equal(ui.item('a').getAttribute('aria-selected'), 'true'); assert.equal(ui.item('b').getAttribute('aria-selected'), 'false');
-  assert.equal(ui.saves.length, 0); ui.key('Escape'); assert.equal(ui.item('a').getAttribute('aria-selected'), 'false'); ui.close();
+  assert.equal(ui.item('a').classList.contains('is-selected'), true); assert.equal(ui.item('b').classList.contains('is-selected'), false);
+  assert.equal(ui.saves.length, 0); ui.key('Escape'); assert.equal(ui.item('a').classList.contains('is-selected'), false); ui.close();
 });
 
 test('add card and blur preserve empty canvas history; Escape leaves Live editing after saving', async () => {
@@ -353,7 +353,7 @@ test('menu transport rejection reports the failure without modifying the documen
 test('web page creation selects its new node and label edits follow an unchanged record after array insertion', async () => {
   const ui = setup(), menu = menuDriver(ui);
   await menu.open(ui.viewport); await menu.choose('add-web-page'); ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'https://selected.test/'; await ui.view.flush();
-  const link = ui.document.nodes.at(-1)!; assert.equal(ui.item(link.id).getAttribute('aria-selected'), 'true');
+  const link = ui.document.nodes.at(-1)!; assert.equal(ui.item(link.id).classList.contains('is-selected'), true);
   await menu.open(ui.container.querySelector('[data-edge-id="ab"] path')!); await menu.choose('edit-label');
   ui.container.querySelector<HTMLTextAreaElement>('textarea')!.value = 'Changed original';
   ui.document.setRoot('edges', [{ id: 'fresh', fromNode: 'a', toNode: 'b', label: 'Keep' }, ...ui.document.edges]); await ui.view.flush();
@@ -382,7 +382,7 @@ test('icon controls preserve ordered groups and create a centered default card i
   }
   ui.container.querySelector<HTMLButtonElement>('[aria-label="Add card"]')!.click();
   const card = ui.document.nodes.at(-1)!; assert.deepEqual([card.x, card.y, card.width, card.height], [335, 280, 250, 60]);
-  assert.equal(ui.item(card.id).getAttribute('aria-selected'), 'true'); const input = await liveInput(ui); assert.ok(ui.dom.window.document.activeElement === input, 'new card focuses the shared Live editor');
+  assert.equal(ui.item(card.id).classList.contains('is-selected'), true); const input = await liveInput(ui); assert.ok(ui.dom.window.document.activeElement === input, 'new card focuses the shared Live editor');
   await ui.view.flush(); ui.view.undo(); await ui.view.flush(); assert.equal(ui.document.toString(), fixture); ui.close();
 });
 

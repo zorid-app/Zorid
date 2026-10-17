@@ -183,5 +183,5 @@ test('Canvas respects embed-prevented input even outside native controls', t => 
   const before = ui.host.querySelector<HTMLElement>('.zorid-canvas-world')!.style.transform;
   paragraph.dispatchEvent(new ui.dom.window.WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 20 }));
   assert.equal(ui.host.querySelector<HTMLElement>('.zorid-canvas-world')!.style.transform, before);
-  assert.equal(ui.card().getAttribute('aria-selected'), 'false'); assert.equal(ui.card().querySelector('.cm-editor'), null); assert.deepEqual(ui.saves, []);
+  assert.equal(ui.card().classList.contains('is-selected'), false); assert.equal(ui.card().querySelector('.cm-editor'), null); assert.deepEqual(ui.saves, []);
 });
