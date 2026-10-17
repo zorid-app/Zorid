@@ -9,7 +9,7 @@ import type { BaseQueryOptions, BaseQueryResult, BaseQueryDiagnostic } from './q
 import type { BaseViewConfig } from './document.ts';
 
 function invalid(message = 'The shared Base response does not match the saved snapshot.'): never { throw new Error(message); }
-export function projectSharedBaseResult(raw: DocumentBaseResult, version: number, entries: readonly VaultEntry[]): BaseQueryResult {
+export function projectSharedBaseResult(raw: DocumentBaseResult, version: number, entries: readonly VaultEntry[], timezone = 'UTC'): BaseQueryResult {
   const result = structuredClone(raw);
   let dataBudget = 400000;
   const freezeData = (item: unknown, depth = 0): void => {
@@ -24,7 +24,7 @@ export function projectSharedBaseResult(raw: DocumentBaseResult, version: number
     switch (input.type) {
       case 'null': return BASE_NULL;
       case 'boolean': case 'number': case 'string': return Object.freeze({ ...input });
-      case 'date': return Object.freeze({ ...input });
+      case 'date': return Object.freeze({ ...input, ...(!input.hasTime ? { presentationTimezone: timezone } : {}) });
       // Existing presentation values express weeks as calendar days. No query
       // arithmetic or grouping is repeated here.
       case 'duration': return Object.freeze({ ...input, days: input.days + input.weeks * 7 });
@@ -102,12 +102,13 @@ export class SharedBaseQueryRunner {
       const metadata = await run.pin.metadata(input.definition.entryId); check();
       const definition = metadata.value.entry;
       if (definition.id !== input.definition.entryId || definition.revision !== input.definition.revision || definition.path !== input.definition.path) return invalid('The Base definition changed. Refresh before editing.');
-      const options = { viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone: 'UTC', maxRows: 1000,
+      const timezone = 'UTC';
+      const options = { viewIndex: input.viewIndex, searchTerms: input.query.searchTerms, ignorePaths, clockMs, timezone, maxRows: 1000,
         currentEntryId: input.current.entryId, maxSteps: input.query.maxSteps };
       const report = await run.pin.base({ id: definition.id, viewName: input.viewName, options }); check();
       if (report.value.definition.id !== definition.id || report.value.definition.revision !== definition.revision || report.value.definition.path !== definition.path
         || JSON.stringify(report.value.result.snapshotId) !== JSON.stringify(run.pin.snapshot)) return invalid();
-      return projectSharedBaseResult(report.value.result, input.version, input.entries);
+      return projectSharedBaseResult(report.value.result, input.version, input.entries, timezone);
     } finally { run.active = false; await this.close(run); }
   }
 }

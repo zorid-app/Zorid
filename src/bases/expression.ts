@@ -7,7 +7,12 @@ export class BaseExpressionError extends Error {
     super(message); this.name = 'BaseExpressionError'; this.code = code; this.offset = offset;
   }
 }
-export interface BaseDateValue { readonly type: 'date'; readonly timestamp: number; readonly hasTime: boolean }
+export interface BaseDateValue {
+  readonly type: 'date'; readonly timestamp: number; readonly hasTime: boolean;
+  /** Calendar display for shared date-only values; absent on legacy local dates.
+   * This metadata never changes the instant or evaluator arithmetic. */
+  readonly presentationTimezone?: string;
+}
 export interface BaseDurationValue {
   readonly type: 'duration'; readonly years: number; readonly months: number; readonly days: number;
   readonly hours: number; readonly minutes: number; readonly seconds: number; readonly milliseconds: number;
@@ -89,6 +94,18 @@ export function baseValueIsTruthy(value: BaseExpressionValue): boolean {
 }
 function dateString(value: BaseDateValue): string {
   const date = new Date(value.timestamp), pad = (n: number) => String(n).padStart(2, '0');
+  if (!value.hasTime && value.presentationTimezone) {
+    const zone = value.presentationTimezone;
+    const offset = /^([+-])(\d{2}):(\d{2})$/.exec(zone);
+    if (zone === 'UTC' || offset) {
+      const minutes = offset ? (Number(offset[2]) * 60 + Number(offset[3])) * (offset[1] === '-' ? -1 : 1) : 0;
+      const display = new Date(value.timestamp + minutes * 60000);
+      return `${String(display.getUTCFullYear()).padStart(4, '0')}-${pad(display.getUTCMonth() + 1)}-${pad(display.getUTCDate())}`;
+    }
+    const parts = new Intl.DateTimeFormat('en-US-u-ca-iso8601-nu-latn', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+    const part = (name: Intl.DateTimeFormatPartTypes) => parts.find(item => item.type === name)!.value;
+    return `${part('year').padStart(4, '0')}-${part('month')}-${part('day')}`;
+  }
   const day = `${String(date.getFullYear()).padStart(4, '0')}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   return value.hasTime ? `${day}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` : day;
 }

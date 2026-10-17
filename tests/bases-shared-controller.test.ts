@@ -6,6 +6,7 @@ import type { VaultEntry } from '../src/core/types.ts';
 import type { DocumentBaseResult, DocumentPin, DocumentPinId, DocumentService } from '../src/core/document-semantics.ts';
 import { BaseController } from '../src/bases/controller.ts';
 import { BaseDocument } from '../src/bases/document.ts';
+import { baseDate, baseValueToString } from '../src/bases/expression.ts';
 import { projectSharedBaseResult } from '../src/bases/shared-query.ts';
 const snapshot = { localStoreId: 'store', generationEpoch: 'epoch', generation: '1', versions: { schema: 1, extraction: 'md1', resolver: 'r1', query: 'q1' } };
 const source = { localStoreId: 'store', watermark: '1' };
@@ -66,7 +67,7 @@ test('shared projection retains Rust row/group order, typed values and exact sha
   diagnostics: [{ phase: 'value', entryId: 'b', path: 'B.md', property: null, code: 'numeric-domain', message: 'Invalid number' }] };
   const actual = projectSharedBaseResult(r, 7, []);
   assert.deepEqual(actual.rows.map(row => row.path), ['B.md', 'A.md']); assert.deepEqual(actual.groups[0].rows.map(row => row.path), ['A.md', 'B.md']);
-  assert.deepEqual(actual.rows[0].values.date, { type: 'date', timestamp: 123, hasTime: false });
+  assert.deepEqual(actual.rows[0].values.date, { type: 'date', timestamp: 123, hasTime: false, presentationTimezone: 'UTC' });
   assert.deepEqual(Object.keys((actual.rows[0].values.nested as any).value), ['z', 'a', '__proto__']); assert.equal((actual.rows[0].values.nested as any).value.__proto__.value, 3); assert.equal((actual.rows[0].values.error as any).error.code, 'unavailable');
   assert.equal((actual.rows[0].values.file as any).name, 'B.md'); assert.deepEqual((actual.rows[0].values.link as any).sharedValue.target, { entryId: 'target-id', revision: 'target-revision' }); assert.ok(Object.isFrozen(actual.view)); assert.equal(actual.diagnostics[0].code, 'numeric-domain'); assert.ok(Object.isFrozen(actual.rows[0].values));
 });
@@ -82,4 +83,20 @@ test('dispose during a shared query closes its pin and ignores completion', asyn
   const f = await fixture(), before = f.controller.state;
   const gate = f.hold(), pending = f.controller.refresh(); await until(() => f.calls.length === 2);
   f.controller.dispose(); await until(() => f.pins[1].closed === 1); gate.resolve(result()); await pending; assert.equal(f.controller.state, before);
+});
+
+test('shared date-only display uses invocation timezone without shifting timestamps or legacy local dates', () => {
+  const previous = process.env.TZ;
+  process.env.TZ = 'America/Los_Angeles';
+  try {
+    const timestamp = Date.UTC(2024, 0, 15);
+    const project = (instant: number, timezone: string) => projectSharedBaseResult({ ...result(), rows: [{ entryId: 'One.md', revision: 'r1', path: 'One.md', values: { date: { type: 'date', timestamp: instant, hasTime: false } } }] }, 1, [], timezone).rows[0].values.date;
+    const shared = project(timestamp, 'UTC');
+    assert.equal(baseValueToString(shared), '2024-01-15');
+    assert.equal((shared as { timestamp: number }).timestamp, timestamp);
+    assert.equal(baseValueToString(project(Date.UTC(2024, 0, 15, 5), 'America/New_York')), '2024-01-15');
+    assert.equal(baseValueToString(project(Date.UTC(2024, 0, 14, 22), '+02:00')), '2024-01-15');
+    assert.equal(baseValueToString(baseDate(timestamp, false)), '2024-01-14');
+    assert.equal(baseValueToString(baseDate(new Date(2024, 0, 15), false)), '2024-01-15');
+  } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
 });
