@@ -116,6 +116,11 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- User requests a persistent future-improvements list. See
+  [future-improvements.md](future-improvements.md): bounded parallel indexing/scan
+  work in the same Rust core, deferred P2P, server-push catch-up, stale-editor
+  automatic merge after all stages, and later serialization evaluation. Other
+  required roadmap milestones remain scheduled; this list does not remove them.
 - Direct user approval (2026-10-17): after automatic approval review rejected
   selecting the new browser storage host as default before combined verification,
   the user quoted that rejection and replied "Approve". This authorizes the
