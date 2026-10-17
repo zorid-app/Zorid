@@ -449,6 +449,7 @@ pub(crate) struct BasesEvaluationContext<'a> {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BasesFile {
     pub witness: Option<super::RecordWitness>,
+    pub metadata_unavailable: bool,
     pub path: String,
     pub name: String,
     pub basename: String,
@@ -898,7 +899,15 @@ impl<'a> Evaluator<'a> {
         if let Some(value) = scope.get(name) {
             return value.clone();
         }
-        match name.to_lowercase().as_str() {
+        let lower = name.to_lowercase();
+        if self.context.file.metadata_unavailable
+            && !matches!(lower.as_str(), "file" | "this" | "formula")
+        {
+            return RuntimeValue::Error(
+                "unavailable\0Property metadata is unavailable for this revision".into(),
+            );
+        }
+        match lower.as_str() {
             "note" => RuntimeValue::Object(
                 self.context
                     .note
@@ -918,6 +927,7 @@ impl<'a> Evaluator<'a> {
                 .this_file
                 .as_ref()
                 .map(|file| {
+                    if file.metadata_unavailable { return RuntimeValue::Error("unavailable\0Current property metadata is unavailable for this revision".into()); }
                     let mut values = file.properties.clone();
                     values.insert("file".into(), RuntimeValue::File(Box::new(file.clone())));
                     RuntimeValue::Object(values)
@@ -1644,6 +1654,11 @@ impl<'a> Evaluator<'a> {
         name: &str,
         arguments: &[RuntimeValue],
     ) -> RuntimeValue {
+        if file.metadata_unavailable && matches!(name, "hasProperty" | "hasTag") {
+            return RuntimeValue::Error(
+                "unavailable\0Property metadata is unavailable for this revision".into(),
+            );
+        }
         match name {
             "hasLink" => {
                 let Some(graph) = self.context.relationships else {
@@ -1736,6 +1751,11 @@ impl<'a> Evaluator<'a> {
                 .unwrap_or(RuntimeValue::Null),
             RuntimeValue::Date(value) => date_property(&value, property),
             RuntimeValue::File(value) => {
+                if value.metadata_unavailable && property.eq_ignore_ascii_case("tags") {
+                    return RuntimeValue::Error(
+                        "unavailable\0Property metadata is unavailable for this revision".into(),
+                    );
+                }
                 if ["links", "embeds", "backlinks"].contains(&property.to_lowercase().as_str())
                     && !self
                         .context

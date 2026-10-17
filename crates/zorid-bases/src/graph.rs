@@ -18,6 +18,15 @@ pub struct FilePresentationFacts {
     pub ctime_ms: Option<i64>,
     pub mtime_ms: Option<i64>,
 }
+/// Current revision extraction evidence, including unavailable source and parser diagnostics.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetadataIssue {
+    pub witness: RecordWitness,
+    pub exclusion: Option<zorid_index::Exclusion>,
+    pub diagnostics: Vec<zorid_document::Diagnostic>,
+    pub properties_unavailable: bool,
+}
 fn index_error(error: zorid_index::IndexError) -> ExpressionDiagnostic {
     let code = if matches!(
         error,
@@ -54,6 +63,7 @@ impl BaseSnapshot {
             }
         }
         let mut records = Vec::new();
+        let mut metadata_issues = Vec::new();
         let mut bytes = 0usize;
         for record in generation.records() {
             if records.len() >= crate::MAX_QUERY_SCANNED {
@@ -65,6 +75,26 @@ impl BaseSnapshot {
             let entry = record.witness().entry();
             let facts = by_id.get(&entry.id);
             let metadata = record.metadata();
+            let properties_unavailable = record.exclusion().is_some_and(|e| e.limits_coverage())
+                || metadata.is_some_and(|m| {
+                    matches!(
+                        m.frontmatter.state,
+                        zorid_document::FrontmatterState::Invalid
+                            | zorid_document::FrontmatterState::Unclosed
+                    )
+                });
+            if record.exclusion().is_some() || metadata.is_some_and(|m| !m.diagnostics.is_empty()) {
+                metadata_issues.push(MetadataIssue {
+                    witness: RecordWitness {
+                        entry_id: entry.id.clone(),
+                        revision: entry.revision.clone(),
+                    },
+                    exclusion: record.exclusion().cloned(),
+                    diagnostics: metadata.map(|m| m.diagnostics.clone()).unwrap_or_default(),
+                    properties_unavailable,
+                });
+            }
+
             let row = DetachedRecord {
                 witness: Some(RecordWitness {
                     entry_id: entry.id.clone(),
@@ -114,6 +144,7 @@ impl BaseSnapshot {
             snapshot_id: generation.id().clone(),
             records,
             relationships: Some(relationships),
+            metadata_issues,
         })
     }
 }
@@ -123,6 +154,48 @@ pub fn query_generation(
     facts: &[FilePresentationFacts],
     options: &QueryOptions,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
+    let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
+    if options.max_steps == 0
+        || options.max_steps > crate::MAX_QUERY_STEPS
+        || options.max_scanned > crate::MAX_QUERY_SCANNED
+        || options.max_rows > crate::MAX_QUERY_ROWS
+        || options.max_groups > crate::MAX_QUERY_GROUPS
+        || options.max_output_bytes > crate::MAX_QUERY_OUTPUT_BYTES
+        || options.evaluation.max_steps == 0
+        || options.evaluation.max_steps > crate::MAX_EXPRESSION_STEPS
+    {
+        return Err(budget("Query ceilings exceed supported maximum"));
+    }
+    let mut records = 0usize;
+    let mut work = 0usize;
+    let mut edges = 0usize;
+    for record in generation.records() {
+        if options
+            .evaluation
+            .cancellation
+            .as_ref()
+            .is_some_and(|c| c.stop_reason().is_some())
+        {
+            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+        }
+        records += 1;
+        work = work.saturating_add(1);
+        if let Some(metadata) = record.metadata() {
+            work = work.saturating_add(
+                metadata.properties.len().saturating_mul(2)
+                    + metadata.tags.len()
+                    + metadata.links.len(),
+            );
+            edges = edges.saturating_add(metadata.links.len());
+        }
+        if records > options.max_scanned
+            || work > options.max_steps
+            || edges > MAX_RELATIONSHIP_EDGES
+        {
+            return Err(budget("Generation preparation exceeds query budget"));
+        }
+    }
+    let snapshot = BaseSnapshot::from_generation(generation, facts)?;
     if options
         .evaluation
         .cancellation
@@ -131,11 +204,7 @@ pub fn query_generation(
     {
         return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
     }
-    crate::query_base(
-        program,
-        &BaseSnapshot::from_generation(generation, facts)?,
-        options,
-    )
+    crate::query_base(program, &snapshot, options)
 }
 #[derive(Default)]
 struct FileRelations {
@@ -147,9 +216,13 @@ pub(crate) struct PreparedRelationships<'a> {
     graph: &'a ResolutionSnapshot,
     resolver: Resolver<'a>,
     files: HashMap<EntryId, FileRelations>,
+    unavailable: HashSet<EntryId>,
 }
 impl<'a> PreparedRelationships<'a> {
-    pub(crate) fn new(graph: &'a ResolutionSnapshot) -> Result<Self, ExpressionDiagnostic> {
+    pub(crate) fn new(
+        graph: &'a ResolutionSnapshot,
+        issues: &[MetadataIssue],
+    ) -> Result<Self, ExpressionDiagnostic> {
         let mut files: HashMap<EntryId, FileRelations> = HashMap::new();
         let mut incoming = HashSet::new();
         for edge in graph.edges() {
@@ -194,12 +267,21 @@ impl<'a> PreparedRelationships<'a> {
             graph,
             resolver: graph.resolver(),
             files,
+            unavailable: issues
+                .iter()
+                .filter(|i| i.properties_unavailable)
+                .map(|i| i.witness.entry_id.clone())
+                .collect(),
         })
     }
     pub(crate) fn complete(&self) -> bool {
         self.graph.complete()
     }
     pub(crate) fn attach(&self, file: &mut BasesFile) {
+        file.metadata_unavailable = file
+            .witness
+            .as_ref()
+            .is_some_and(|w| self.unavailable.contains(&w.entry_id));
         if let Some(edges) = file
             .witness
             .as_ref()

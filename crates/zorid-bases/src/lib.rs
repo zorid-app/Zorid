@@ -3,7 +3,7 @@
 mod expression;
 mod files;
 mod graph;
-pub use graph::{query_generation, FilePresentationFacts, MAX_RELATIONSHIP_EDGES};
+pub use graph::{query_generation, FilePresentationFacts, MetadataIssue, MAX_RELATIONSHIP_EDGES};
 mod order;
 mod program;
 mod query;

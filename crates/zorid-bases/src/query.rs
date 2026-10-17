@@ -21,6 +21,7 @@ pub struct BaseSnapshot {
     pub(crate) snapshot_id: crate::IndexSnapshotId,
     pub(crate) records: Vec<DetachedRecord>,
     pub(crate) relationships: Option<zorid_index::ResolutionSnapshot>,
+    pub(crate) metadata_issues: Vec<crate::MetadataIssue>,
 }
 impl BaseSnapshot {
     pub fn detached(snapshot_id: crate::IndexSnapshotId, records: Vec<DetachedRecord>) -> Self {
@@ -28,6 +29,7 @@ impl BaseSnapshot {
             snapshot_id,
             records,
             relationships: None,
+            metadata_issues: Vec::new(),
         }
     }
     pub fn snapshot_id(&self) -> &crate::IndexSnapshotId {
@@ -137,6 +139,8 @@ pub struct BaseQueryResult {
     pub diagnostics: Vec<QueryDiagnostic>,
     pub steps_used: usize,
     pub relationships_available: bool,
+    pub metadata_issues: Vec<crate::MetadataIssue>,
+    pub metadata_complete: bool,
 }
 
 const FILE_PROPERTIES: &[&str] = &[
@@ -362,7 +366,7 @@ pub fn query_base(
     let relationships = snapshot
         .relationships
         .as_ref()
-        .map(crate::graph::PreparedRelationships::new)
+        .map(|graph| crate::graph::PreparedRelationships::new(graph, &snapshot.metadata_issues))
         .transpose()?;
     let relationship_available = relationships.as_ref().is_some_and(|graph| graph.complete());
     let mut discovery = 0usize;
@@ -763,6 +767,11 @@ pub fn query_base(
         diagnostics,
         steps_used,
         relationships_available: relationship_available,
+        metadata_issues: snapshot.metadata_issues.clone(),
+        metadata_complete: !snapshot
+            .metadata_issues
+            .iter()
+            .any(|i| i.properties_unavailable),
     };
     if serde_json::to_vec(&result)
         .map_err(|error| ExpressionDiagnostic::new("output", error.to_string()))?
