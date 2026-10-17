@@ -106,14 +106,25 @@ ChunkRef raw-data hashes, Manifest whole-file hashes, existing domain PageRef
 commitments, and exact accepted payload/header commitments. Existing domain page
 digests pass through unchanged; protobuf representation does not redefine them.
 
-Dependency verification: `pnpm install --frozen-lockfile --ignore-scripts` passed
-in the isolated worktree (1 second). The base lock contained two YAML documents;
-pnpm 12 rejected it as broken. Root approved removing the invalid package-manager
-bootstrap document and retaining the original project document. A structural
-comparison verified every original importer/package/snapshot value remains
-unchanged; additions are only the protobuf generator/runtime dependency closure.
-The narrow `pnpm-workspace.yaml` `packages: ['.']` addition is root-owned/approved.
-No lifecycle scripts or shared node_modules modifications occurred.
+Dependency verification correction: the original isolated `pnpm install
+--frozen-lockfile --ignore-scripts` passed under Homebrew pnpm **9.15.2**, not the
+pinned 12.14.0. The shell resolves a different executable in the worktree than in
+main. The earlier claim that the leading env lock document was invalid was wrong.
+It is required metadata for the pinned pnpm 12 package manager. This mistake was
+found when root's actual main install failed with
+`ERR_PNPM_FROZEN_LOCKFILE_WITH_OUTDATED_LOCKFILE` for packageManagerDependencies.
+
+The narrow correction restores the original env document unchanged ahead of the
+updated project lock document. Every original project dependency entry remains
+unchanged; additions are only the protobuf generator/runtime closure. The package
+manager pin stays `pnpm@12.14.0`; no `pmOnFail: ignore` or pin bypass is introduced.
+The `pnpm-workspace.yaml` `packages: ['.']` addition remains root-approved.
+
+Official [pnpm lockfile documentation](https://pnpm.io/lockfile), checked
+2026-10-17, specifies the env document first and project dependency document last.
+Tools reading this lock must use a multi-document parser and inspect the last
+document for project dependencies. Future checks must record the executable and
+actual `--version` from the same working directory as the install.
 
 ## Foundation verification — 2026-10-17
 
@@ -143,3 +154,24 @@ No domain crate, runtime adapter, existing sync codec, encryption or transport
 implementation changed. Required-feature tests show raw decoder visibility, not
 production validation/adapter activation. Native UI/mobile/runtime streaming and
 versioned sync adoption remain separate unverified work.
+
+## Pinned pnpm verification correction — 2026-10-17
+
+Exact environment findings: in `/Users/ctk/Projects/Zorid`, `command -v pnpm`
+resolves `/Users/ctk/.local/share/pnpm/pnpm` and reports `12.14.0`; in this isolated
+worktree it resolves `/opt/homebrew/bin/pnpm` and reports `9.15.2`. Both shells use
+Node `v26.10.0`. The earlier worktree `.modules.yaml` confirms `pnpm@9.15.2`.
+The explicit 12.14.0 executable must be used for the corrected proof.
+No changes to main, its node_modules, global executables or package-manager policy
+are authorized by this correction. Verification below used isolated modules
+and disabled lifecycle scripts.
+
+Corrected proof: `CI=true /Users/ctk/.local/share/pnpm/pnpm install
+--frozen-lockfile --ignore-scripts` passed under explicit pnpm 12.14.0 in the
+isolated worktree (handle 19157, 6.8 seconds, lifecycle scripts disabled). The
+output says the lockfile passed supply-chain policies and resolution was skipped.
+`node --test tests/protobuf-interop.test.mjs` passed 4/4 again. A repeated explicit
+pnpm 12 frozen install also passes and preserves lockfile bytes exactly. The
+corrective lock is byte-for-byte equal to root's owned auto-prepended lock, and
+structural checks establish original env-document and foundation project-document
+contents unchanged. No Rust/build commands or shared module changes occurred.
