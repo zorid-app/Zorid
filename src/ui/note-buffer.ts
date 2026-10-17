@@ -49,6 +49,13 @@ export class NoteBuffer {
     if(vault.adapter?.durableWrites)this.durable=new DurableNoteState(vault,vault.adapter.durableWrites,()=>this.syncDurable());
   }
 
+  /** The committed baseline of this loaded draft, never a fresh path lookup. */
+  get savedDurableWitness():Readonly<{entryId:string;revision:string;path:string}>|undefined {
+    if(!this.loaded||!this.durable?.ready)return undefined;
+    const base=this.durable.base;
+    return Object.freeze({entryId:base.entryId,revision:base.revision,path:base.path});
+  }
+
   private syncDurable():void {
     if(!this.durable)return;
     if(this.durable.ready){this.text=this.durable.text;this.savedText=this.durable.base.content;this.path=this.durable.base.path;}

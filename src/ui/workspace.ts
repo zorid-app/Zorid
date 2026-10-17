@@ -758,12 +758,12 @@ export class Workspace {
                 for(const embeds of new Set([...this.canvasMarkdownEmbeds,...this.loadedViews().flatMap(owner=>owner.embeds?[owner.embeds]:[])]))embeds.invalidate(target);
                 for(const owner of this.loadedViews())if(owner.viewPath===target){owner.editor?.setValue(buffer.text);owner.properties?.refresh();owner.refreshPreview?.();}
               },
-              rename:async(source,destination,validateResult)=>{
+              rename:async(source,destination,validateResult,expectedWitness)=>{
                 validate();validateResult();const token=this.treeEntryToken(source);
                 // Calling Workspace.flush here would await this accepted Base
                 // operation itself. Flush the shared buffers before Vault's queue.
                 for(const buffer of this.buffers.values())await buffer.flush();
-                await vault.rename(source,destination,()=>{validate();validateResult();if(!token||this.treeEntryToken(source)!==token)throw new Error('The moved file is no longer current.');this.requireAvailableTreePath(vault,destination,source);});
+                await vault.rename(source,destination,()=>{validate();validateResult();if(!token||this.treeEntryToken(source)!==token)throw new Error('The moved file is no longer current.');this.requireAvailableTreePath(vault,destination,source);},expectedWitness);
               }},
             openFile:(target,event)=>this.run(()=>{validate();return this.openNote(target,('button'in event&&event.button===1)||event.metaKey||event.ctrlKey,owner());}),
             loadThumbnail:async request=>{
