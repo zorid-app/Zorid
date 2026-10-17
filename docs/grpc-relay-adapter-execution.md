@@ -77,3 +77,22 @@ implementation were inspected directly.
 Independent reviewer `/root/default_lifecycle_review_sol/browser_client_slots`
 approved this narrow correction against installed source; no behavior change or
 further scoped source blocker found. Formatting and whitespace checks pass.
+
+## Fixture launcher alignment
+
+Root reports serialized aggregate gate `51477` passing 16 server checks after the
+Layer correction (library/admission, native RPC, HTTP reference and isolation).
+This is root-run integrated evidence, not a worker-run build or actual browser/CLI
+convergence claim. The example launcher was still HTTP1/version1; focused follow-up
+changes it to the same production `rpc::router`/`rpc::serve_loopback` used above.
+Fresh private credentials now carry `version:2, transport:"grpc"`; the private
+manifest adds the same explicit choice and `transport_major:2`. Existing fixture
+accounts/devices, vault key generation, create-new paths, zeroized serialized
+secrets, 0700 directory/0600 file permissions and sanitized output are preserved.
+No automatic fallback or new legacy credential generation is added. Worker builds
+remain paused; root owns example compilation and actual joint-client proof.
+Independent source review by `/root/protobuf_schema_sol/schema_review` passes
+this launcher/docs follow-up: production RPC validation and serving match; exact
+native credential fields and explicit transport align; fixture permissions and
+secret handling are preserved. `rustfmt` and `git diff --check` pass. No builds
+or runtime tests were run for this follow-up.
