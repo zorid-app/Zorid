@@ -1,7 +1,7 @@
 # Portable vault mutation contract
 
 This crate contains logical paths, stable IDs, entry metadata, byte-preserving
-mutation requests, committed event batches and pure validation helpers. It has
+mutation requests, committed event batches and a pure mutation planner. It has
 no filesystem, database, threading, clock, random-number or network dependency.
 It does not implement sync, encryption, CRDTs, storage, or an editor. Its serde
 shape is an initial local boundary, **not a negotiated remote protocol**.
@@ -56,13 +56,16 @@ the contract and pure precondition checks.
    records until the supported retry horizon and expired-operation behavior are
    explicitly defined; the initial adapter should retain them.
 4. Check identity/liveness/revision using `validate_target` for existing entries.
-   Also enforce file/folder kind, destination occupancy under native path aliases,
-   an existing live folder parent, no folder move into itself/descendants, unused
-   create IDs (including retained tombstones), and recursive-delete requirements.
-   Revalidate the complete affected subtree in this same transaction. A move must
-   keep every descendant ID and update its path/revision. A recursive delete must
-   retain every descendant as a tombstone. Changed old/new ancestor folder
-   revisions belong to the same batch. Existing tombstones do not occupy paths.
+   `plan_mutation(request, entries, next_revision)` performs this check, enforces
+   file/folder kind, exact destination occupancy, an existing live folder parent,
+   no folder move into descendants, unused create IDs (including tombstones), and
+   recursive-delete requirements. Pass the complete fresh metadata snapshot and
+   a never-reused revision. Native path aliases still require an adapter check.
+   The plan keeps live descendant IDs while changing paths/revisions during moves,
+   retains deleted descendants as tombstones, and bumps old/new ancestor folder
+   revisions in the same batch. Existing tombstones do not occupy paths and their
+   historical paths are not rewritten by later folder moves. A same-path move is
+   a valid revision-advancing mutation, not an empty commit.
 5. Atomically persist entry changes, authoritative bytes/CRDT state or durable blob
    references, an ordered change journal, pending projection/reconciliation work,
    required outgoing sync intent, and the exact request/result idempotency record.
@@ -117,6 +120,14 @@ bytes, stale and replaced identities, subtree revision checks, idempotent replay
 and large sequence precision. They do not establish transaction durability,
 multi-process safety, WASM compilation, filesystem recovery or sync correctness.
 Those require adapter and integrated-client tests.
+
+The first planner takes a full metadata snapshot (including retained tombstones),
+builds ordered indexes and returns changes sorted by stable ID. It validates the
+snapshot hierarchy rather than planning against orphaned/duplicate live paths.
+It does not load file bodies. This keeps native and browser mutation semantics
+identical, at O(n log n + d log n) cost plus path lengths; indexed planning for
+large vaults is a later optimization behind the same semantic tests. The returned
+metadata batch must be committed with the original request bytes by the adapter.
 
 Serde representation uses the official [container attributes](https://serde.rs/container-attrs.html)
 and [enum representations](https://serde.rs/enum-representations.html). No OS `Path`

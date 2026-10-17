@@ -8,6 +8,7 @@
 mod identity;
 mod mutation;
 mod path;
+mod plan;
 
 pub use identity::{EntryId, OperationId, Revision};
 pub use mutation::{
@@ -15,6 +16,7 @@ pub use mutation::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation,
 };
 pub use path::VaultPath;
+pub use plan::plan_mutation;
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
