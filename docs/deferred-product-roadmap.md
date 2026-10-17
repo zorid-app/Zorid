@@ -118,6 +118,28 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 Current authoritative update — 2026-10-17 20:42 UTC. The bullets below
 this update are historical checkpoints where their status differs:
+- New actual browser evidence: WASM63741 exit0 (official1.95, release/j1,
+  2m35s). BinarySHA2566c67442d272195269eb2d92e723c3fc8fd92e237c33c9368e046a92134903256.
+  Chrome real-worker Markdown49/49 +4 malformed checks PASS, downloaded actual
+  results independently pass verify.mjs. Real-worker Base51/51 +5 request checks
+  PASS after explicit missing-graph unavailable fixture decisionf76fa1bf
+  (root88a5ee9f); historical TS unsupported observation preserved. No engine
+  change or WASM rebuild for that fixture correction. Reports/results retained
+  tmp/stage4-browser-document-{report,results}.json and
+  tmp/stage4-browser-base-{report,results}-run2.json; failed run1 retained too.
+- Current native query12117 passes3 tests including all10 accepted queries and
+  resource/missing-witness/YAML checks. Current portable index18432 passes
+  contracts7, generations15, metadata restore2 (tmp/stage4-index-run3.log).
+- Actual production worker/IndexedDB harness does NOT yet pass: browser
+  database zorid-core-vault:document-index-94d2dfce-0645-4e09-9a8e-b7c4dbe6fb9c
+  failed during Rust generation publication with storage_corrupt / could not
+  refresh committed state. Report tmp/stage4-browser-index-actual-run1.json.
+  Browser owner is diagnosing; independent reviewer checks source/control
+  validation. Preserve database/failure evidence; no resets, weakening source
+  validation, or passing corpus results substituted for persistence proof.
+  Bundle tmp/stage4-browser-index-app-d89dbd56 uses exact content-addressed pair.
+  Local fixture servers22178(port8765) and48874(port8766) remain live; root Chrome
+  tab1268039028 holds failing harness. No Rust compiler live at this checkpoint.
 - Actual desktop transport now passes: run33242 exit0 in1.86s with freshly
   built CLI `target/stage4-verified/debug/zorid` and desktop host; log
   tmp/stage4-desktop-actual-run3.log. Earlier run2 reached Base then failed a
