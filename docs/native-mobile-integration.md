@@ -150,3 +150,19 @@ workflow pushed/dispatched, runner build or deployment performed. This configure
 the protected destination for the committed manual workflow; it does not establish
 that workflow/build/sign/upload succeeds. Latest fresh Apple four-endpoint retry
 still returned403 agreement-required after the user acceptance was verified.
+
+## User shell design steering — 2026-10-17
+
+User supplied `/Users/ctk/Downloads/IMG_1738.PNG` as visual direction: dark native
+home, top-left settings/avatar control, horizontal pill-style tab row. Users add,
+remove and choose their native page tabs. Full requested default-page inventory:
+Recents, Home, Files, Tasks, Calendar. Implement **Recents and Files only now**;
+Home/Tasks/Calendar stay deferred. Both lists/pages must be native UIKit pages,
+with current Rust metadata/snapshot APIs as data authority; no new Swift Markdown,
+Base or index semantics. Existing shared web editor remains the note editor.
+
+This supersedes the minimal launch-picker/direct-editor prototype as the desired
+shell presentation. Vault creation/selection remains native onboarding/settings.
+Optional question pending: tapping a note pushes editor and returns to the native
+page, or opens note as another top-row tab. Until answered, default push/return;
+keep the layout adaptable. No screenshot-proprietary source/assets copied.
