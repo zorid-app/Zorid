@@ -226,3 +226,33 @@ Measure memory as file/history bytes grow; verify ordinary Text/rename operation
 beside a large Binary do not enumerate byte stores. Actual browser import/export,
 offline relay/reopen, two tabs and bounded-preview behavior require later serialized
 production/runtime gates. This preparation claims none of them.
+
+### Common consumer source — 2026-10-17
+
+Owner `/root/default_lifecycle_review_sol`, isolated `browser-binary-streaming`
+branch (base `6bda1b8`, additive capability `40b1104`). New
+`src/core/binary-transfer.ts` defines sequential bounded sources and private sinks;
+Blob input uses slices. Source short pulls coalesce into one negotiated chunk.
+Failed operations preserve the original request and known stage; post-commit
+publication failures preserve the exact returned receipt. No automatic abort or
+commit of an unauthorized stage occurs. Factory consumers remain responsible for
+durable checkpoint phases and native/browser admission.
+
+`VaultAdapter.binaryStreams` and authoritative `VaultEntry.entryId` are optional.
+Vault stream methods resolve metadata identity, pin revision/content event for
+write CAS, and queue only metadata observation/publication; chunk/source/sink
+waits leave unrelated edits available. Stream publication rejects a replacement
+entry at the same path. Existing array APIs select streaming when available and
+reject inputs/reads above its declared small-read limit. Large Markdown binary
+entries remain listed without whole-file text decoding/indexing during
+publication or reload. Explicit stream callers supply a bounded source or private
+sink; no UI upload/export workflow is activated by this source batch.
+
+Focused checks: `node --test --test-concurrency=1
+ tests/binary-transfer.test.ts tests/vault-binary-streams.test.ts
+ tests/core-binary.test.ts` passed 29/29; targeted strict TypeScript and
+`git diff --check` passed. Tests cover lost begin/commit responses, exact retained
+operation/receipt, short source pulls, private-sink abort/EOF, peer edits,
+replacement identity, adapter retirement, small limits, no large Markdown read,
+and unrelated text edits during a stalled source. This is simulated consumer
+verification, not an actual browser/native streaming or production resource gate.

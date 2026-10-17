@@ -1,7 +1,10 @@
+import type {BinaryStreams} from './binary-streams.ts';
 import type { DurableWrites } from './durable-writes.ts';
 
 export interface VaultEntry {
   path: string;
+  /** Authoritative stable identity, required for admitted binary streaming. */
+  entryId?: string;
   type: 'file' | 'folder';
   /** Creation time in milliseconds, only when the adapter can provide it. */
   ctime?: number;
@@ -13,6 +16,8 @@ export interface VaultEntry {
 
 /** Paths are relative to the vault. Implementations must enforce the vault boundary. */
 export interface VaultAdapter {
+  /** Optional admitted bounded stage/pinned-read authority. */
+  readonly binaryStreams?: BinaryStreams;
   /** Optional durable text-save protocol; commit/publication run through Vault. */
   readonly durableWrites?: DurableWrites;
   /** Namespace commits are durable independently of optional backlink rewrites. */

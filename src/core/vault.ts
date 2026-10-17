@@ -1,3 +1,6 @@
+import {binaryLength,writeBinarySource,readBinarySink} from './binary-transfer.ts';
+import type {BinarySource,BinarySink} from './binary-transfer.ts';
+import type {BinaryStreams,BinaryReadRef} from './binary-streams.ts';
 import { MetadataCache } from './metadata.ts';
 import { isMarkdown, normalizePath, parentPath } from './types.ts';
 import type { VaultAdapter, VaultChange, VaultEntry, VaultEvent } from './types.ts';
@@ -97,7 +100,7 @@ export class Vault {
     }
     const metadata = new MetadataCache(), contents = new Map<string, string>();
     metadata.setFiles([...entries.values()].filter(entry => entry.type === 'file').map(entry => entry.path));
-    const notes = [...entries.values()].filter(entry => entry.type === 'file' && isMarkdown(entry.path));
+    const notes = [...entries.values()].filter(entry => entry.type === 'file' && this.indexableMarkdown(this.adapter,entry));
     await mapConcurrent(notes, async entry => {
       const content = await this.adapter.read(entry.path);
       contents.set(entry.path, content);
@@ -262,7 +265,7 @@ export class Vault {
     if (snapshots.some(entry => !entry)) return false;
     const entries = new Map(snapshots.map(entry => [entry!.path, entry!]));
     // Always read Markdown content: timestamps and byte lengths can remain unchanged.
-    const contents = new Map(await mapConcurrent(paths.filter(isMarkdown), async path =>
+    const contents = new Map(await mapConcurrent(paths.filter(path=>this.indexableMarkdown(this.adapter,entries.get(path)!)), async path =>
       [path, await this.adapter.read(path)] as const));
     const changes: VaultChange[] = [];
     for (const [path, entry] of entries) {
@@ -277,7 +280,11 @@ export class Vault {
     // No await or event dispatch may split publication of a batch. Parse first so a
     // failed read or parse leaves entries, contents and the metadata index unchanged.
     this.metadata.indexBatch([...contents].filter(([path, content]) => this.contents.get(path) !== content));
-    for (const [path, entry] of entries) this.entries.set(path, entry);
+    for (const [path, entry] of entries) {
+      if(isMarkdown(path)&&!contents.has(path)){this.contents.delete(path);this.metadata.remove(path);}
+      this.entries.set(path, entry);
+    }
+    this.metadata.setFiles([...this.entries.values()].filter(entry=>entry.type==='file').map(entry=>entry.path));
     for (const [path, content] of contents) this.contents.set(path, content);
     for (const change of changes) this.emit('modify', change);
     return true;
@@ -319,28 +326,61 @@ export class Vault {
     return this.adapter.read(path);
   }
 
+  private indexableMarkdown(adapter:VaultAdapter,entry:VaultEntry):boolean {
+    return isMarkdown(entry.path)&&(!adapter.binaryStreams||Number.isSafeInteger(entry.size)&&entry.size>=0&&BigInt(entry.size)<=binaryLength(adapter.binaryStreams.limits.smallReadBytes));
+  }
+
+  private binaryBinding(): {adapter:VaultAdapter;streams:BinaryStreams;validate:()=>void} {
+    const adapter=this.adapter,streams=adapter.binaryStreams;
+    if(!streams)throw durableFailure('binary_streams_unavailable','This adapter has no binary stream capability');
+    return {adapter,streams,validate:()=>{if(this.adapter!==adapter||adapter.binaryStreams!==streams)throw durableFailure('intent_identity_mismatch','Binary transfer belongs to a different adapter');}};
+  }
+
+  private async binaryIdentity(adapter:VaultAdapter,path:string):Promise<{entryId:string;expectedRevision:string}> {
+    const entry=adapter.stat?await adapter.stat(path):(await adapter.list()).find(item=>normalizePath(item.path)===path);
+    if(!entry||entry.type!=='file'||normalizePath(entry.path)!==path)throw durableFailure('not_found','Binary file does not exist');
+    if(!entry.entryId||!entry.revision)throw durableFailure('binary_identity_unavailable','Adapter did not provide authoritative binary identity');
+    return {entryId:entry.entryId,expectedRevision:entry.revision};
+  }
+
+  readBinaryStream(rawPath:string,sink:BinarySink,options:{validate?:()=>void;maxBytes?:string}={}):Promise<BinaryReadRef> {
+    const binding=this.binaryBinding(),path=normalizePath(rawPath);
+    const validate=()=>{binding.validate();options.validate?.();binding.validate();};
+    const identity=this.enqueue(async()=>{validate();this.requireFile(path);const value=await this.binaryIdentity(binding.adapter,path);validate();return value;});
+    return identity.then(value=>readBinarySink(binding.streams,value,sink,{...options,validate}),async error=>{try{await sink.abort(error);}catch{}throw error;});
+  }
+
   async readBinary(rawPath: string, validate?: () => void): Promise<Uint8Array> {
-    await this.pending;
-    validate?.();
-    const path = normalizePath(rawPath);
-    this.requireFile(path);
+    const adapter=this.adapter,streams=adapter.binaryStreams;
+    if(streams){
+      const chunks:Uint8Array[]=[];let length=0,finished=false;
+      await this.readBinaryStream(rawPath,{write:async bytes=>{chunks.push(bytes);length+=bytes.length;},finish:async()=>{finished=true;},abort:async()=>{chunks.length=0;length=0;}},{validate:()=>{if(this.adapter!==adapter||adapter.binaryStreams!==streams)throw durableFailure('intent_identity_mismatch','Binary adapter changed');validate?.();},maxBytes:streams.limits.smallReadBytes});
+      if(!finished)throw durableFailure('binary_read_incomplete','Binary read did not finish');
+      const result=new Uint8Array(length);let offset=0;for(const chunk of chunks){result.set(chunk,offset);offset+=chunk.length;}return result;
+    }
+    await this.pending;validate?.();const path=normalizePath(rawPath);this.requireFile(path);
     if (!this.adapter.readBinary) throw new Error('Vault adapter does not support binary reads');
     return new Uint8Array(await this.adapter.readBinary(path));
   }
 
   /** Publish only this written file; attachment bytes never go through Markdown decoding. */
-  private async publishBinary(path: string): Promise<VaultEntry> {
-    const content = isMarkdown(path) ? await this.adapter.read(path) : undefined;
-    const entry = this.adapter.stat
-      ? await this.adapter.stat(path)
-      : (await this.adapter.list()).find(item => normalizePath(item.path) === path);
+  private async publishBinary(path: string, adapter=this.adapter, validate:()=>void=()=>{},expectedEntryId?:string): Promise<VaultEntry> {
+    validate();const entry = adapter.stat
+      ? await adapter.stat(path)
+      : (await adapter.list()).find(item => normalizePath(item.path) === path);
     if (!entry || entry.type !== 'file' || normalizePath(entry.path) !== path) {
       throw new Error(`Written file is no longer available: ${path}`);
     }
+    if(expectedEntryId!==undefined&&entry.entryId!==expectedEntryId)throw durableFailure('revision_conflict','Committed binary moved or was replaced before publication');
+    validate();const content=this.indexableMarkdown(adapter,entry)?await adapter.read(path):undefined;
+    validate();if(expectedEntryId!==undefined&&this.entries.get(path)?.type==='folder'){
+      for(const name of this.entries.keys())if(name.startsWith(path+'/')){this.entries.delete(name);this.contents.delete(name);this.metadata.remove(name);}
+    }
+    if(content===undefined&&isMarkdown(path)){this.contents.delete(path);this.metadata.remove(path);}
     if (content !== undefined) {
       this.metadata.index(path, content);
       this.contents.set(path, content);
-    } else if (!this.entries.has(path)) {
+    } else {
       this.metadata.setFiles([...this.entries.values()].filter(item => item.type === 'file').map(item => item.path).concat(path));
     }
     const updated = { ...entry, path };
@@ -348,7 +388,53 @@ export class Vault {
     return updated;
   }
 
+  private smallBinarySource(data:Uint8Array):BinarySource {
+    const streams=this.adapter.binaryStreams;
+    if(!streams||BigInt(data.byteLength)>binaryLength(streams.limits.smallReadBytes))throw durableFailure('stream_required','Use a binary source for this file size');
+    // Preserve existing convenience API ownership: snapshot before any await.
+    const snapshot=new Uint8Array(data);let offset=0;
+    return {length:String(snapshot.length),read:async max=>{if(offset===snapshot.length)return null;const end=Math.min(snapshot.length,offset+max),bytes=snapshot.slice(offset,end);offset=end;return bytes;}};
+  }
+
+  private binaryPublicationFailure(error:unknown,committed:{ref:import('./binary-streams.ts').BinaryStageRef;receipt:string}):Error {
+    return Object.assign(durableFailure('binary_publication_failed','Binary commit succeeded; publication must be reconciled without creating another operation'),{cause:error,binaryCommitted:Object.freeze({ref:Object.freeze({...committed.ref}),receipt:committed.receipt})});
+  }
+
+  createBinaryStream(rawPath:string,source:BinarySource,options:{validate?:()=>void}={}):Promise<VaultEntry> {
+    const binding=this.binaryBinding(),path=normalizePath(rawPath),operationId=crypto.randomUUID(),entryId=crypto.randomUUID();
+    const validate=()=>{binding.validate();options.validate?.();binding.validate();};
+    const ready=this.enqueue(async()=>{
+      validate();const inventory=new Map<string,VaultEntry>();for(const item of await binding.adapter.list()){const name=normalizePath(item.path);if(inventory.has(name))throw new Error(`Adapter returned duplicate path: ${name}`);inventory.set(name,item);}validate();
+      if(inventory.has(path))throw new Error(`Path already exists: ${path}`);
+      const parent=parentPath(path);if(parent&&inventory.get(parent)?.type!=='folder')throw new Error(`Parent folder does not exist: ${parent}`);
+      // Reconcile only required parents from this captured metadata inventory.
+      // No async whole-vault refresh may mutate caches after adapter retirement.
+      for(let name=parent;name;name=parentPath(name)){const folder=inventory.get(name);if(!folder||folder.type!=='folder')throw new Error(`Parent folder does not exist: ${name}`);this.contents.delete(name);this.metadata.remove(name);this.entries.set(name,{...folder,path:name});}
+    });
+    return (async()=>{
+      await ready;validate();const committed=await writeBinarySource(binding.streams,{operationId,target:{kind:'create',entryId,path}},source,validate);
+      try{return await this.enqueue(async()=>{validate();const entry=await this.publishBinary(path,binding.adapter,validate,entryId);validate();this.emit('create',{path,entry});return entry;});}
+      catch(error){throw this.binaryPublicationFailure(error,committed);}
+    })();
+  }
+
+  modifyBinaryStream(rawPath:string,source:BinarySource,options:{validate?:()=>void}={}):Promise<void> {
+    const binding=this.binaryBinding(),path=normalizePath(rawPath),operationId=crypto.randomUUID();
+    const validate=()=>{binding.validate();options.validate?.();binding.validate();};
+    const target=this.enqueue(async()=>{
+      validate();this.requireFile(path);const identity=await this.binaryIdentity(binding.adapter,path);validate();
+      const pin=await binding.streams.openRead(identity);try{validate();if(pin.entryId!==identity.entryId||pin.entryRevision!==identity.expectedRevision||!pin.selectedContentEvent)throw durableFailure('invalid_binary_read','Pinned binary identity does not match');}finally{await binding.streams.closeRead(pin);}
+      validate();return {kind:'write' as const,...identity,expectedContentEvent:pin.selectedContentEvent};
+    });
+    return (async()=>{
+      const captured=await target;validate();const committed=await writeBinarySource(binding.streams,{operationId,target:captured},source,validate);
+      try{await this.enqueue(async()=>{validate();const entry=await this.publishBinary(path,binding.adapter,validate,captured.entryId);validate();this.emit('modify',{path,entry});});}
+      catch(error){throw this.binaryPublicationFailure(error,committed);}
+    })();
+  }
+
   createBinary(rawPath: string, data: Uint8Array): Promise<VaultEntry> {
+    if(this.adapter.binaryStreams)return this.createBinaryStream(rawPath,this.smallBinarySource(data));
     const bytes = new Uint8Array(data);
     return this.enqueue(async () => {
       const path = normalizePath(rawPath);
@@ -378,6 +464,7 @@ export class Vault {
   }
 
   modifyBinary(rawPath: string, data: Uint8Array, options: { validate?: () => void } = {}): Promise<void> {
+    if(this.adapter.binaryStreams)return this.modifyBinaryStream(rawPath,this.smallBinarySource(data),options);
     const bytes = new Uint8Array(data);
     return this.enqueue(async () => {
       options.validate?.();
