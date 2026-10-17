@@ -1,5 +1,8 @@
 //! Filesystem provenance, stored in the SAME authority/transaction as mutations.
 use super::*;
+use crate::physical_bindings::{
+    self, ObservationPhysical, PhysicalIdentity, PublicationKind, PublicationProof,
+};
 use zorid_core::{OperationId, VaultPath};
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
@@ -136,6 +139,8 @@ pub(super) fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<Projectio
 }
 pub(super) fn put_baseline(tx: &Connection, value: &ProjectionBaseline) -> Result<()> {
     validate_baseline(value, value.state.id.as_str())?;
+    // An unbound baseline replacement must never retain stale inode authority.
+    physical_bindings::remove_binding(tx, &value.state.id)?;
     tx.execute("INSERT INTO projection_baselines(entry_id,record) VALUES (?1,?2) ON CONFLICT(entry_id) DO UPDATE SET record=excluded.record",
         params![value.state.id.as_str(), serde_json::to_string(value)?])?;
     Ok(())
@@ -186,6 +191,22 @@ impl Store {
             .collect()
     }
     pub fn begin_projection(&mut self, id: &EntryId) -> Result<ProjectionAttempt> {
+        self.begin_projection_inner(id, None)
+    }
+    /// Native publication records its anchored parent and prior physical binding
+    /// in the same transaction as the attempt, before any filesystem mutation.
+    pub fn begin_projection_bound(
+        &mut self,
+        id: &EntryId,
+        parent_inode: &str,
+    ) -> Result<ProjectionAttempt> {
+        self.begin_projection_inner(id, Some(parent_inode))
+    }
+    fn begin_projection_inner(
+        &mut self,
+        id: &EntryId,
+        parent_inode: Option<&str>,
+    ) -> Result<ProjectionAttempt> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -197,7 +218,17 @@ impl Store {
             )
             .optional()?
         {
-            return attempt(&tx, &OperationId::new(s)?);
+            let value = attempt(&tx, &OperationId::new(s)?)?;
+            if let Some(parent_inode) = parent_inode {
+                let proof = physical_bindings::publication_proof(&tx, &value.attempt_id)?
+                    .ok_or_else(|| {
+                        StoreError::Corrupt("unproven active file publication".into())
+                    })?;
+                if proof.parent_inode != parent_inode {
+                    return Err(StoreError::Corrupt("publication parent changed".into()));
+                }
+            }
+            return Ok(value);
         }
         let (path, deleted, s, bytes): (String, i64, String, Option<Vec<u8>>) = tx.query_row(
             "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND deleted=0",
@@ -226,6 +257,29 @@ impl Store {
             stage_identity: None,
         };
         put_attempt(&tx, &value)?;
+        if let Some(parent_inode) = parent_inode {
+            let expected_binding = physical_bindings::binding(&tx, id)?;
+            if value.baseline.as_ref().map(|b| &b.state)
+                != expected_binding.as_ref().map(|b| &b.state)
+                || expected_binding
+                    .as_ref()
+                    .is_some_and(|b| b.physical.parent_inode != parent_inode)
+            {
+                return Err(StoreError::Corrupt(
+                    "file baseline has no matching physical binding".into(),
+                ));
+            }
+            physical_bindings::put_publication_proof(
+                &tx,
+                &PublicationProof {
+                    attempt_id: value.attempt_id.clone(),
+                    kind: PublicationKind::File,
+                    entry_id: id.clone(),
+                    expected_binding,
+                    parent_inode: parent_inode.into(),
+                },
+            )?;
+        }
         tx.commit()?;
         Ok(value)
     }
@@ -269,6 +323,21 @@ impl Store {
     /// desired DB revision may have advanced: record what actually reached disk,
     /// and leave later projection intents pending. Cancellation retires nothing.
     pub fn finish_projection(&mut self, id: &OperationId, published: bool) -> Result<()> {
+        self.finish_projection_inner(id, published, None)
+    }
+    pub fn finish_projection_bound(
+        &mut self,
+        id: &OperationId,
+        physical: &PhysicalIdentity,
+    ) -> Result<()> {
+        self.finish_projection_inner(id, true, Some(physical))
+    }
+    fn finish_projection_inner(
+        &mut self,
+        id: &OperationId,
+        published: bool,
+        physical: Option<&PhysicalIdentity>,
+    ) -> Result<()> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -282,7 +351,37 @@ impl Store {
             {
                 return Err(StoreError::Corrupt("publication provenance changed".into()));
             }
+            let proof = physical_bindings::publication_proof(&tx, id)?;
+            match (&proof, physical) {
+                (Some(proof), Some(physical))
+                    if proof.kind == PublicationKind::File
+                        && proof.entry_id == value.target.state.id
+                        && proof.parent_inode == physical.parent_inode
+                        && value.stage_identity.as_ref() == Some(&physical.inode) =>
+                {
+                    physical_bindings::check_binding(
+                        &tx,
+                        &value.target.state.id,
+                        proof.expected_binding.as_ref(),
+                    )?;
+                }
+                (None, None) => {}
+                _ => {
+                    return Err(StoreError::Corrupt(
+                        "file publication binding mismatch".into(),
+                    ))
+                }
+            }
             put_baseline(&tx, &value.target)?;
+            if let Some(physical) = physical {
+                physical_bindings::put_binding(
+                    &tx,
+                    &physical_bindings::PhysicalBinding {
+                        state: value.target.state.clone(),
+                        physical: physical.clone(),
+                    },
+                )?;
+            }
             projection_jobs::retire_file(&tx, &value.target.state.id, &value.covered_jobs)?;
         }
         value.phase = if published {
@@ -311,6 +410,26 @@ impl Store {
         base: Option<ProjectionBaseline>,
         content: Vec<u8>,
     ) -> Result<ExternalObservation> {
+        self.record_external_inner(path, base, content, None)
+    }
+    /// A safely opened public path observation. Retained private alternatives
+    /// must use record_external, which conveys no public-path inode authority.
+    pub fn record_external_bound(
+        &mut self,
+        path: &VaultPath,
+        base: Option<ProjectionBaseline>,
+        content: Vec<u8>,
+        proof: &ObservationPhysical,
+    ) -> Result<ExternalObservation> {
+        self.record_external_inner(path, base, content, Some(proof))
+    }
+    fn record_external_inner(
+        &mut self,
+        path: &VaultPath,
+        base: Option<ProjectionBaseline>,
+        content: Vec<u8>,
+        proof: Option<&ObservationPhysical>,
+    ) -> Result<ExternalObservation> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -324,6 +443,7 @@ impl Store {
                 && old.baseline == base
                 && old.content == content
                 && old.resolution.is_none()
+                && physical_bindings::observation_proof(&tx, &old.observation_id)?.as_ref() == proof
             {
                 return Ok(old);
             }
@@ -346,6 +466,9 @@ impl Store {
                 serde_json::to_string(&value)?
             ],
         )?;
+        if let Some(proof) = proof {
+            physical_bindings::put_observation_proof(&tx, &value.observation_id, proof)?;
+        }
         tx.commit()?;
         Ok(value)
     }
@@ -402,6 +525,11 @@ impl Store {
                 "import does not match observation provenance".into(),
             ));
         }
+        let physical = if obs.resolution.is_none() {
+            physical_bindings::check_observation(&tx, id, request.mutation.id())?
+        } else {
+            None
+        };
         let result = Self::apply_transaction(&tx, request)?;
         if obs.resolution.is_none() {
             if baseline(&tx, request.mutation.id())? != obs.baseline {
@@ -417,10 +545,11 @@ impl Store {
             put_baseline(
                 &tx,
                 &ProjectionBaseline {
-                    state,
+                    state: state.clone(),
                     content: obs.content.clone(),
                 },
             )?;
+            physical_bindings::put_observed_binding(&tx, &state, physical.as_ref())?;
             let jobs = projection_jobs::pending(
                 &tx,
                 request.mutation.id(),

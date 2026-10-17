@@ -1,5 +1,8 @@
 //! Folder-create projection, deliberately separate from unimplemented move/delete.
 use super::*;
+use crate::physical_bindings::{
+    self, PhysicalBinding, PhysicalIdentity, PublicationKind, PublicationProof,
+};
 use zorid_core::OperationId;
 
 pub(super) const SCHEMA: &[(&str,&str)] = &[
@@ -69,7 +72,7 @@ fn decode(
     }
     Ok(a)
 }
-fn get(tx: &Connection, id: &OperationId) -> Result<DirectoryAttempt> {
+pub(super) fn get(tx: &Connection, id: &OperationId) -> Result<DirectoryAttempt> {
     let (entry, op, done, s): (String, String, i64, String) = tx.query_row(
         "SELECT entry_id,job_id,completed,record FROM directory_attempts WHERE attempt_id=?1",
         [id.as_str()],
@@ -102,7 +105,7 @@ fn current(tx: &Connection, id: &EntryId) -> Result<EntryState> {
     valid_directory(&state, id.as_str())?;
     Ok(state)
 }
-fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<DirectoryBaseline>> {
+pub(super) fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<DirectoryBaseline>> {
     tx.query_row(
         "SELECT record FROM directory_baselines WHERE entry_id=?1",
         [id.as_str()],
@@ -119,11 +122,12 @@ fn baseline(tx: &Connection, id: &EntryId) -> Result<Option<DirectoryBaseline>> 
     })
     .transpose()
 }
-fn put_baseline(tx: &Connection, b: &DirectoryBaseline) -> Result<()> {
+pub(super) fn put_baseline(tx: &Connection, b: &DirectoryBaseline) -> Result<()> {
     valid_directory(&b.state, b.state.id.as_str())?;
     if !valid_identity(&b.identity) {
         return Err(StoreError::Corrupt("invalid directory identity".into()));
     }
+    physical_bindings::remove_binding(tx, &b.state.id)?;
     tx.execute("INSERT INTO directory_baselines(entry_id,record) VALUES (?1,?2) ON CONFLICT(entry_id) DO UPDATE SET record=excluded.record",params![b.state.id.as_str(),serde_json::to_string(b)?])?;
     Ok(())
 }
@@ -167,6 +171,21 @@ impl Store {
     /// Establishes provenance for an observed existing folder. Identity changes
     /// require later namespace reconciliation; never silently rebind an old one.
     pub fn bind_directory(&mut self, expected: &EntryState, identity: &str) -> Result<()> {
+        self.bind_directory_inner(expected, identity, None)
+    }
+    pub fn bind_directory_bound(
+        &mut self,
+        expected: &EntryState,
+        physical: &PhysicalIdentity,
+    ) -> Result<()> {
+        self.bind_directory_inner(expected, &physical.inode, Some(physical))
+    }
+    fn bind_directory_inner(
+        &mut self,
+        expected: &EntryState,
+        identity: &str,
+        physical: Option<&PhysicalIdentity>,
+    ) -> Result<()> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -183,17 +202,107 @@ impl Store {
                 ));
             }
         }
+        if let Some(physical) = physical {
+            let prior = physical_bindings::binding(&tx, &state.id)?.ok_or_else(|| {
+                StoreError::Corrupt(
+                    "existing directory requires explicit physical enrollment".into(),
+                )
+            })?;
+            if prior.physical != *physical || prior.state.path != state.path {
+                return Err(StoreError::Corrupt(
+                    "directory physical binding changed".into(),
+                ));
+            }
+        }
         put_baseline(
             &tx,
             &DirectoryBaseline {
-                state,
+                state: state.clone(),
                 identity: identity.into(),
             },
         )?;
+        if let Some(physical) = physical {
+            physical_bindings::put_binding(
+                &tx,
+                &PhysicalBinding {
+                    state,
+                    physical: physical.clone(),
+                },
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
+    /// First import establishes logical state, physical baseline, binding and
+    /// exact queue retirement atomically. Existing metadata is never enrolled here.
+    pub fn import_directory_bound(
+        &mut self,
+        request: &MutationRequest,
+        physical: &PhysicalIdentity,
+    ) -> Result<CommitResult> {
+        if !matches!(
+            request.mutation,
+            Mutation::Create {
+                kind: EntryKind::Folder,
+                ..
+            }
+        ) {
+            return Err(StoreError::Corrupt(
+                "expected folder import creation".into(),
+            ));
+        }
+        physical.validate()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existed: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM operations WHERE operation_id=?1)",
+            [request.operation_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let result = Self::apply_transaction(&tx, request)?;
+        if !existed {
+            let state = result
+                .changes
+                .iter()
+                .find(|c| c.after.id == *request.mutation.id())
+                .ok_or_else(|| StoreError::Corrupt("folder import missing state".into()))?
+                .after
+                .clone();
+            put_baseline(
+                &tx,
+                &DirectoryBaseline {
+                    state: state.clone(),
+                    identity: physical.inode.clone(),
+                },
+            )?;
+            physical_bindings::put_binding(
+                &tx,
+                &PhysicalBinding {
+                    state,
+                    physical: physical.clone(),
+                },
+            )?;
+            projection_jobs::retire_local(&tx, &request.operation_id)?;
+        }
+        tx.commit()?;
+        Ok(result)
+    }
     pub fn begin_directory_projection(&mut self, id: &EntryId) -> Result<DirectoryAttempt> {
+        self.begin_directory_projection_inner(id, None)
+    }
+    pub fn begin_directory_projection_bound(
+        &mut self,
+        id: &EntryId,
+        parent_inode: &str,
+    ) -> Result<DirectoryAttempt> {
+        self.begin_directory_projection_inner(id, Some(parent_inode))
+    }
+    fn begin_directory_projection_inner(
+        &mut self,
+        id: &EntryId,
+        parent_inode: Option<&str>,
+    ) -> Result<DirectoryAttempt> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -206,7 +315,19 @@ impl Store {
             )
             .optional()?
         {
-            return get(&tx, &OperationId::new(prior)?);
+            let value = get(&tx, &OperationId::new(prior)?)?;
+            if let Some(parent_inode) = parent_inode {
+                let proof = physical_bindings::publication_proof(&tx, &value.attempt_id)?
+                    .ok_or_else(|| {
+                        StoreError::Corrupt("unproven active directory publication".into())
+                    })?;
+                if proof.parent_inode != parent_inode {
+                    return Err(StoreError::Corrupt(
+                        "directory publication parent changed".into(),
+                    ));
+                }
+            }
+            return Ok(value);
         }
         let job = projection_jobs::pending(&tx, id, ProjectionWork::CreateDirectory)?
             .into_iter()
@@ -223,6 +344,23 @@ impl Store {
             stage_identity: None,
         };
         put(&tx, &a)?;
+        if let Some(parent_inode) = parent_inode {
+            if baseline(&tx, id)?.is_some() || physical_bindings::binding(&tx, id)?.is_some() {
+                return Err(StoreError::Corrupt(
+                    "directory create already has physical baseline".into(),
+                ));
+            }
+            physical_bindings::put_publication_proof(
+                &tx,
+                &PublicationProof {
+                    attempt_id: a.attempt_id.clone(),
+                    kind: PublicationKind::Directory,
+                    entry_id: id.clone(),
+                    expected_binding: None,
+                    parent_inode: parent_inode.into(),
+                },
+            )?;
+        }
         tx.commit()?;
         Ok(a)
     }
@@ -261,6 +399,20 @@ impl Store {
         Ok(a)
     }
     pub fn finish_directory_projection(&mut self, id: &OperationId) -> Result<()> {
+        self.finish_directory_projection_inner(id, None)
+    }
+    pub fn finish_directory_projection_bound(
+        &mut self,
+        id: &OperationId,
+        physical: &PhysicalIdentity,
+    ) -> Result<()> {
+        self.finish_directory_projection_inner(id, Some(physical))
+    }
+    fn finish_directory_projection_inner(
+        &mut self,
+        id: &OperationId,
+        physical: Option<&PhysicalIdentity>,
+    ) -> Result<()> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -284,7 +436,39 @@ impl Store {
             }
         }
         let job = validate_job(&tx, &a)?;
-        put_baseline(&tx, &DirectoryBaseline { state, identity })?;
+        let proof = physical_bindings::publication_proof(&tx, id)?;
+        match (&proof, physical) {
+            (Some(proof), Some(physical))
+                if proof.kind == PublicationKind::Directory
+                    && proof.entry_id == state.id
+                    && proof.parent_inode == physical.parent_inode
+                    && identity == physical.inode =>
+            {
+                physical_bindings::check_binding(&tx, &state.id, proof.expected_binding.as_ref())?;
+            }
+            (None, None) => {}
+            _ => {
+                return Err(StoreError::Corrupt(
+                    "directory publication binding mismatch".into(),
+                ))
+            }
+        }
+        put_baseline(
+            &tx,
+            &DirectoryBaseline {
+                state: state.clone(),
+                identity,
+            },
+        )?;
+        if let Some(physical) = physical {
+            physical_bindings::put_binding(
+                &tx,
+                &PhysicalBinding {
+                    state,
+                    physical: physical.clone(),
+                },
+            )?;
+        }
         projection_jobs::finish(&tx, &job)?;
         a.phase = DirectoryPhase::Complete;
         put(&tx, &a)?;

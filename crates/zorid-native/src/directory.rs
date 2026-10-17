@@ -1,16 +1,30 @@
 use super::*;
 use zorid_store::{DirectoryAttempt, DirectoryPhase};
 impl NativeVault {
-    /// Imports an observed existing folder, or binds legacy imported metadata to
-    /// its first physical identity. An existing baseline cannot be rebound.
+    /// Fresh directory import is atomic with its physical binding. Existing
+    /// metadata without provenance requires explicit enrollment.
     pub(super) fn observe_directory(&mut self, path: &VaultPath) -> Result<Option<CommitResult>> {
         self.namespace_clear(path)?;
         let (parent, name) = self.paths.parent(path)?;
         let folder =
             fs::optional_directory(&parent, &name)?.ok_or(Error::Busy("directory disappeared"))?;
         let identity = fs::identity(&folder)?;
+        let physical = PhysicalIdentity {
+            inode: identity.clone(),
+            parent_inode: fs::identity(&parent)?,
+        };
         self.paths.verify_parent(path, &parent)?;
         let existing = self.store.list()?.into_iter().find(|s| s.path == *path);
+        if let Some(owner) = self.store.physical_owner_at(path)? {
+            if existing
+                .as_ref()
+                .is_none_or(|state| state.id != owner.state.id)
+            {
+                return Err(Error::Busy(
+                    "retained directory owner awaits namespace reconciliation",
+                ));
+            }
+        }
         let mut imported = None;
         let state = if let Some(state) = existing {
             if state.kind != EntryKind::Folder {
@@ -24,6 +38,12 @@ impl NativeVault {
                         "external directory replacement; provenance retained",
                     ));
                 }
+            }
+            let binding = self.store.physical_binding(&state.id)?.ok_or(Error::Busy(
+                "existing directory requires explicit physical enrollment",
+            ))?;
+            if binding.physical != physical || binding.state.path != *path {
+                return Err(Error::Busy("directory binding or parent changed"));
             }
             if self.store.pending_directory_create(&state.id)? {
                 return Err(Error::Busy(
@@ -42,7 +62,11 @@ impl NativeVault {
                     content: None,
                 },
             };
-            let result = self.store.import_directory(&request)?;
+            self.paths.verify_parent(path, &parent)?;
+            if fs::identity(&self.paths.directory(path)?)? != identity {
+                return Err(Error::Busy("directory replaced before import"));
+            }
+            let result = self.store.import_directory_bound(&request, &physical)?;
             let state = result
                 .changes
                 .iter()
@@ -58,7 +82,7 @@ impl NativeVault {
         if fs::identity(&current)? != identity {
             return Err(Error::Busy("directory replaced before import"));
         }
-        self.store.bind_directory(&state, &identity)?;
+        self.store.bind_directory_bound(&state, &physical)?;
         Ok(imported)
     }
     pub(super) fn project_directory(&mut self, id: &EntryId) -> Result<()> {
@@ -87,13 +111,23 @@ impl NativeVault {
             }
             let disk = fs::optional_directory(&parent, &name)?
                 .ok_or(Error::Unsupported("external directory deletion"))?;
-            if fs::identity(&disk)? != base.identity {
+            let binding = self
+                .store
+                .physical_binding(id)?
+                .ok_or(Error::Busy("directory baseline is unproven"))?;
+            if fs::identity(&disk)? != base.identity
+                || binding.physical.inode != base.identity
+                || binding.physical.parent_inode != fs::identity(&parent)?
+            {
                 return Err(Error::Busy("directory identity changed"));
             }
             self.paths.verify_parent(&current.state.path, &parent)?;
             return Ok(());
         }
-        let a = self.store.begin_directory_projection(id)?;
+        self.paths.verify_parent(&current.state.path, &parent)?;
+        let a = self
+            .store
+            .begin_directory_projection_bound(id, &fs::identity(&parent)?)?;
         self.point("directory_prepared");
         self.resume_directory(&a)
     }
@@ -108,6 +142,21 @@ impl NativeVault {
             return Err(Error::Unsupported("directory moved during publication"));
         }
         let (parent, name) = self.paths.parent(&state.path)?;
+        let proof = self
+            .store
+            .publication_proof(&a.attempt_id)?
+            .ok_or(Error::Busy(
+                "unproven directory publication requires recovery",
+            ))?;
+        if proof.kind != PublicationKind::Directory
+            || proof.entry_id != a.target.id
+            || proof.parent_inode != fs::identity(&parent)?
+            || self.store.physical_binding(&a.target.id)? != proof.expected_binding
+        {
+            return Err(Error::Busy(
+                "directory publication binding or parent changed",
+            ));
+        }
         let staged_name = format!("{}.directory", a.attempt_id.as_str());
         if let Some(dest) = fs::optional_directory(&parent, &name)? {
             if a.stage_identity.as_ref() != Some(&fs::identity(&dest)?) {
@@ -117,8 +166,23 @@ impl NativeVault {
             }
             dest.sync_all()?;
             parent.sync_all()?;
+            self.point("directory_before_baseline");
             self.paths.verify_parent(&state.path, &parent)?;
-            self.store.finish_directory_projection(&a.attempt_id)?;
+            let acknowledged = fs::optional_directory(&parent, &name)?.ok_or(Error::Busy(
+                "directory disappeared before recovery acknowledgement",
+            ))?;
+            if a.stage_identity.as_ref() != Some(&fs::identity(&acknowledged)?) {
+                return Err(Error::Busy(
+                    "directory replaced before recovery acknowledgement",
+                ));
+            }
+            self.store.finish_directory_projection_bound(
+                &a.attempt_id,
+                &PhysicalIdentity {
+                    inode: fs::identity(&dest)?,
+                    parent_inode: proof.parent_inode.clone(),
+                },
+            )?;
             return Ok(());
         }
         let identity =
@@ -173,7 +237,13 @@ impl NativeVault {
         if fs::identity(&still_named)? != identity {
             return Err(Error::Busy("directory replaced before acknowledgement"));
         }
-        self.store.finish_directory_projection(&a.attempt_id)?;
+        self.store.finish_directory_projection_bound(
+            &a.attempt_id,
+            &PhysicalIdentity {
+                inode: identity,
+                parent_inode: proof.parent_inode,
+            },
+        )?;
         Ok(())
     }
 }
