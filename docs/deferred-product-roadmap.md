@@ -27,7 +27,8 @@ lifecycle fit. Current Yrs/RustCrypto primitives remain in use; no backend switc
 or migration is approved. Compare complete requirements, including browser/core
 portability, independent CLI, durable ingestion, key recovery/revocation and
 encrypted restore; library encryption alone does not establish protocol safety.
-Evidence/recommendation is pending in `/private/tmp/zorid-etebase-reuse-audit.md`.
+The completed source assessment is in `docs/etebase-reuse-assessment.md`;
+it includes independent Yrs/browser review and no runtime/security-audit claim.
 
 Subsequent user clarification: use Etebase as a reference and selectively reuse
 or adapt its logic into Rust; Obsidian LiveSync must remain a reference too.
