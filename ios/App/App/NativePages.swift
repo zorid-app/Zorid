@@ -2,12 +2,24 @@ import UIKit
 import SwiftUI
 
 // UI metadata only. Rust remains the sole authority for vault entries/content.
+struct NativeFilePresentation: Decodable {
+    let id: String
+    let modifiedMilliseconds: UInt64
+    let sizeBytes: UInt64
+    enum CodingKeys: String, CodingKey {
+        case id
+        case modifiedMilliseconds = "mtime_ms"
+        case sizeBytes = "size_bytes"
+    }
+}
+
 struct NativeFileEntry: Decodable {
     enum Kind: String, Decodable { case file, folder }
     let id: String
     let path: String
     let kind: Kind
     let deleted: Bool
+    var presentation: NativeFilePresentation?
 
     var name: String { Self.pathComponents(path).last ?? path }
     var parent: String { Self.pathComponents(path).dropLast().joined(separator: "/") }
@@ -98,11 +110,21 @@ extension NativeMobileSession {
                     case .failure(let error): completion(.failure(error))
                     case .success(let snapshot):
                         do {
-                            struct Row: Decodable { let state: NativeFileEntry }
+                            struct Row: Decodable { let state: NativeFileEntry; let presentation: NativeFilePresentation? }
                             struct Snapshot: Decodable { let entries: [Row]; let cursor: String }
                             let bytes = try JSONSerialization.data(withJSONObject: snapshot)
                             let decoded = try JSONDecoder().decode(Snapshot.self, from: bytes)
-                            let entries = decoded.entries.map(\.state)
+                            let entries = try decoded.entries.map { row -> NativeFileEntry in
+                                if let metadata = row.presentation {
+                                    guard metadata.id == row.state.id,
+                                          metadata.modifiedMilliseconds <= 9_007_199_254_740_991,
+                                          metadata.sizeBytes <= 9_007_199_254_740_991,
+                                          row.state.kind != .folder || metadata.sizeBytes == 0 else { throw NativePageError.invalidResponse }
+                                }
+                                var entry = row.state
+                                entry.presentation = row.presentation
+                                return entry
+                            }
                             guard !decoded.cursor.isEmpty, entries.allSatisfy({ !$0.deleted && NativeFileEntry.isValidEntryId($0.id) && NativeFileEntry.isValidPath($0.path) }),
                                   Set(entries.map(\.id)).count == entries.count,
                                   Set(entries.map { Data($0.path.utf8) }).count == entries.count else { throw NativePageError.invalidResponse }
@@ -404,6 +426,9 @@ private final class NativePagesModel: ObservableObject {
     @Published private(set) var emptyMessage = ""
     @Published private(set) var focusGeneration = 0
     private var listing: NativeVaultListing?
+    @Published private(set) var expandedFolderIds: Set<String> = []
+    private var rowDepths: [String: Int] = [:]
+    private var childCounts: [String: Int] = [:]
     private(set) var focusedEntryId: String?
     private var restoringFocus = false
 
@@ -465,17 +490,59 @@ private final class NativePagesModel: ObservableObject {
         focusedEntryId = entry?.id
         restoringFocus = true
     }
+    func toggleFolder(_ entry: NativeFileEntry) {
+        guard entry.kind == .folder else { return }
+        if expandedFolderIds.contains(entry.id) { expandedFolderIds.remove(entry.id) }
+        else { expandedFolderIds.insert(entry.id) }
+        render()
+    }
+
+    func depth(for entry: NativeFileEntry) -> Int { rowDepths[entry.id] ?? 0 }
+
+    func metadata(for entry: NativeFileEntry) -> String {
+        if preferences.selected == .recents { return entry.parent.isEmpty ? vault.name : entry.parent }
+        var parts: [String] = []
+        if let milliseconds = entry.presentation?.modifiedMilliseconds {
+            parts.append(DateFormatter.localizedString(from: Date(timeIntervalSince1970: Double(milliseconds) / 1000), dateStyle: .short, timeStyle: .none))
+        }
+        if entry.kind == .folder {
+            let count = childCounts[entry.id] ?? 0
+            parts.append("\(count) \(count == 1 ? "item" : "items")")
+        } else if let bytes = entry.presentation?.sizeBytes, let count = Int64(exactly: bytes) {
+            parts.append(ByteCountFormatter.string(fromByteCount: count, countStyle: .file))
+        }
+        return parts.joined(separator: " · ")
+    }
+
     private func render() {
         rows = []
+        rowDepths = [:]
+        childCounts = [:]
         var historyFailed = false
         if let listing = listing {
             if preferences.selected == .recents {
                 do { rows = try NativeRecentStore.entries(vaultId: vault.id, listing: listing) }
                 catch { historyFailed = true }
             } else {
-                rows = listing.entries.filter { NativeFileEntry.samePath($0.parent, folder) }.sorted {
-                    if $0.kind != $1.kind { return $0.kind == .folder }
-                    return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+                let groups = Dictionary(grouping: listing.entries, by: { Data($0.parent.utf8) }).mapValues { entries in
+                    entries.sorted {
+                        if $0.kind != $1.kind { return $0.kind == .folder }
+                        let order = $0.name.localizedStandardCompare($1.name)
+                        return order == .orderedSame ? $0.path.utf8.lexicographicallyPrecedes($1.path.utf8) : order == .orderedAscending
+                    }
+                }
+                let folders = listing.entries.filter { $0.kind == .folder }
+                expandedFolderIds.formIntersection(Set(folders.map(\.id)))
+                childCounts = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, groups[Data($0.path.utf8)]?.count ?? 0) })
+                // Iterative flattening keeps even deeply nested folders off the
+                // Swift call stack. IDs own expansion; paths only locate children.
+                var pending = (groups[Data(folder.utf8)] ?? []).reversed().map { ($0, 0) }
+                while let (entry, depth) = pending.popLast() {
+                    rows.append(entry)
+                    rowDepths[entry.id] = depth
+                    if entry.kind == .folder && expandedFolderIds.contains(entry.id) {
+                        pending.append(contentsOf: (groups[Data(entry.path.utf8)] ?? []).reversed().map { ($0, depth + 1) })
+                    }
                 }
             }
         }
@@ -714,40 +781,60 @@ private struct NativePagesView: View {
                         .accessibilityIdentifier("native.pages.empty")
                 }
                 ForEach(model.rows, id: \.id) { entry in
-                    Button {
-                        if entry.kind == .folder {
-                            withAnimation(motion) { model.enter(entry) }
-                            focus = .heading
-                        } else { open(entry) }
-                    } label: {
-                        HStack(spacing: 16) {
-                            Image(systemName: entry.kind == .folder ? "folder" : "doc.text")
-                                .foregroundColor(.secondary)
-                                .accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.name).font(.body).foregroundColor(.primary)
-                                if model.preferences.selected == .recents {
-                                    Text(entry.parent.isEmpty ? model.vault.name : entry.parent)
-                                        .font(.caption).foregroundColor(.secondary)
+                    HStack(spacing: 0) {
+                        if model.preferences.selected == .files {
+                            if entry.kind == .folder {
+                                Button {
+                                    withAnimation(motion) { model.toggleFolder(entry) }
+                                } label: {
+                                    Image(systemName: model.expandedFolderIds.contains(entry.id) ? "chevron.down" : "chevron.right")
+                                        .font(.body.weight(.semibold)).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                                 }
-                            }
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary).accessibilityHidden(true)
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(model.expandedFolderIds.contains(entry.id) ? "Collapse" : "Expand") \(entry.name)\(entry.parent.isEmpty ? "" : ", in " + entry.parent)")
+                                .accessibilityValue(model.expandedFolderIds.contains(entry.id) ? "Expanded" : "Collapsed")
+                                .accessibilityIdentifier("native.folder.expand.\(entry.id)")
+                            } else { Color.clear.frame(width: 44, height: 44).accessibilityHidden(true) }
                         }
-                        .frame(minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
+                        Button {
+                            if entry.kind == .folder {
+                                withAnimation(motion) { model.enter(entry) }
+                                focus = .heading
+                            } else { open(entry) }
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: entry.kind == .folder ? "folder.fill" : "doc.text")
+                                    .font(.title2)
+                                    .foregroundColor(entry.kind == .folder ? .accentColor : .secondary)
+                                    .frame(minWidth: 28, minHeight: 44).accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(entry.name).font(.body).foregroundColor(.primary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    let metadata = model.metadata(for: entry)
+                                    if !metadata.isEmpty {
+                                        Text(metadata).font(.caption).foregroundColor(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(!entry.parent.isEmpty
+                                            ? "\(entry.name), \(entry.parent)" : entry.name)
+                        .accessibilityValue(entry.kind == .folder ? "Folder, \(model.metadata(for: entry))" : model.metadata(for: entry))
+                        .accessibilityHint(entry.kind == .folder ? "Opens folder contents" : "Opens in the editor. Return here when finished.")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityIdentifier("native.entry.\(entry.id)")
+                        .accessibilityFocused($focus, equals: .entry(entry.id))
                     }
-                    .buttonStyle(.plain)
-                    .listRowSeparator(.hidden)
+                    .padding(.leading, CGFloat(min(model.depth(for: entry), 8)) * 12)
+                    .listRowSeparator(model.preferences.selected == .files ? .visible : .hidden)
                     .id(entry.id)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(model.preferences.selected == .recents && !entry.parent.isEmpty
-                                        ? "\(entry.name), \(entry.parent)" : entry.name)
-                    .accessibilityValue(entry.kind == .folder ? "Folder" : "")
-                    .accessibilityHint(entry.kind == .folder ? "Opens folder" : "Opens in the editor. Return here when finished.")
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityIdentifier("native.entry.\(entry.id)")
-                    .accessibilityFocused($focus, equals: .entry(entry.id))
                 }
             }
             .listStyle(.plain)
