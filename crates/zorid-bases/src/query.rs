@@ -126,6 +126,7 @@ pub struct BaseGroup {
     pub entry_ids: Vec<crate::EntryId>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupOption {
     pub key_id: String,
     pub key: BaseValue,

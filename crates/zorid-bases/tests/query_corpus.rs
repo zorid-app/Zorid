@@ -181,3 +181,33 @@ fn opaque_group_ids_count_toward_the_existing_output_byte_ceiling() {
         "budget"
     );
 }
+
+#[test]
+fn group_identity_wire_fields_are_camel_case_and_null_only_for_ungrouped() {
+    let corpus: Corpus = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/document-semantics/bases/accepted-queries.json"
+    ))
+    .unwrap();
+    for case in corpus.cases.into_iter().filter(|case| {
+        ["group-search-limit-pipeline", "default-natural-order"].contains(&case.id.as_str())
+    }) {
+        let program = compile_base(case.request.configuration).unwrap();
+        let result = query_base(&program, &case.request.snapshot, &case.request.options).unwrap();
+        let encoded = serde_json::to_value(&result).unwrap();
+        if case.id == "group-search-limit-pipeline" {
+            assert!(!result.group_options.is_empty());
+            for option in encoded["groupOptions"].as_array().unwrap() {
+                assert!(option["keyId"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("base-key-v1:"));
+                assert!(option.get("key_id").is_none());
+            }
+        } else {
+            assert_eq!(result.groups.len(), 1);
+            assert!(encoded["groups"][0]["key"].is_null());
+            assert!(encoded["groups"][0]["keyId"].is_null());
+            assert!(encoded["groups"][0].get("key_id").is_none());
+        }
+    }
+}
