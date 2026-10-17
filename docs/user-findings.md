@@ -229,3 +229,16 @@ unchanged. This source is not yet main-integrated or verified on phone. Owner
 relays new user steering: combine Recents/Files into one Notes page with heading
 mode menu; Settings gear top-left on home root only. NativePages.swift assignment
 remains isolated; root main/Stage4 seams unchanged.
+
+### 2026-10-17 — mobile integration witnessed-rename guard
+
+Independent pinned premerge review (msg017f3ce836d1, main308fc9ba against native
+7cfabf0b) found mobile adapter rename drops the optional expected identity/revision
+introduced by shared Base edits. A queued metadata race could select a replacement
+or newer source instead of rejecting. This concerns the not-yet-integrated mobile
+composition; canonical desktop/browser guards remain verified. Native owner has
+named scope mobile-native.ts +focused tests to capture the immutable witness,
+reject missing/replaced/revised source before move planning, retain persisted retry
+identity and preserve no-witness rename. Source review and focused race checks
+must pass before build6. Exclusive native slot remains with owner; root main has
+no mobile source change. Finding remains pending exact fix/review/runtime evidence.
