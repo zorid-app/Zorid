@@ -116,6 +116,18 @@ Cargo resolved 17 cached dependency entries in this isolated worktree; the
 coordinator owns the root lockfile reconciliation. Tested isolated lock SHA256:
 `7e87159c99304f7bf33807f58a955bdcbb67a607a8ed4f23b6a23d309c20d773`.
 
+The independently reviewed per-member journal optimization at `0b0cf86` passed
+144 tests (61 native, 83 store) in session69584, exit0, using the same bounded
+command and isolated target. Session6452 first passed all 61 native tests but
+failed the new corruption fixture while injecting a reordered member index:
+SQLite correctly enforced its foreign key before the validation assertion ran.
+The narrow test correction disables foreign keys only on that fixture's separate
+corruption-injection connection, outside a transaction. The SQL injection then
+succeeds and the unchanged metadata API rejection assertion passes. Production
+constraints were not changed. The final pass includes immutable-evidence update
+protection, metadata-only access, selected-member progress isolation, missing
+retention diagnostics and a child arriving during directory capture.
+
 No browser/Electron/CLI subprocess namespace convergence or received namespace
-sync claim follows from these native/store results. The approved per-member
-journal optimization requires another source review and relevant runtime pass.
+sync claim follows from these native/store results. Managed-text namespace
+linkage and received physical-binding integration remain separate work.

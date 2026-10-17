@@ -534,6 +534,9 @@ fn metadata_rejects_missing_progress_reordered_members_and_budget_mismatch() {
         let proof = evidence(&s, "file", true);
         s.apply_namespace(&req, &[proof]).unwrap();
         let c = rusqlite::Connection::open(&db).unwrap();
+        // Deliberately bypass SQL referential integrity to exercise validation
+        // of damaged persisted member indexes, not SQLite's write constraint.
+        c.pragma_update(None, "foreign_keys", false).unwrap();
         c.execute(sql, []).unwrap();
         assert!(s.namespace_attempt_metadata(true).is_err(), "{sql}");
     }
