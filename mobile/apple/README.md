@@ -152,3 +152,65 @@ Final retry in this pass: 19:17:39 UTC, all four reads still returned
 `FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED`. Remote changes in this pass:
 none. Safe next action is a fresh diagnostic retry after Apple updates its state;
 there is no app/invitation creation attempt to repeat or clean up.
+
+## Team/issuer and new individual-key audit — 2026-10-17, 19:43–19:47 UTC
+
+Follow-up fresh-JWT team-key diagnostics still returned all four agreement 403s.
+Read-only UI comparisons, performed without emitting raw credential identifiers,
+confirmed:
+
+- The Developer account team matches `APPLE_TEAM_ID` in local metadata.
+- ASC Integrations shows the same issuer as the local team-key metadata.
+- The local key is present in that team's active key list, with **Developer** role.
+  That role does not establish permission to invite/manage ASC team users; this
+  must be checked separately after the agreement gate clears.
+- The new key downloaded by the user matches the individual API key on the
+  signed-in Account Holder profile. It is a different key type, not a replacement
+  team issuer/key pair.
+
+A secure copy of that user-provided individual key is now retained at
+`~/certificates/apple/apps/zorid/individual-api/current.p8`, with its key identifier,
+key type and filename in adjacent `metadata.txt`. Directory permissions are 0700,
+files 0600. The original download remains untouched. No key contents or raw
+identifiers are recorded here. The existing team credentials are unchanged.
+
+The helper now supports `APP_STORE_CONNECT_KEY_TYPE=individual` in local metadata,
+using `sub=user` and omitting `iss`, while preserving the default team-key flow.
+`APP_STORE_CONNECT_KEY_FILENAME` optionally specifies the local key filename.
+Run the new key's read-only diagnostics with:
+
+```sh
+ZORID_APPLE_API_DIRECTORY="$HOME/certificates/apple/apps/zorid/individual-api" \
+  mise exec ruby@3.2.8 -- ruby mobile/apple/asc.rb diagnostics
+```
+
+Actual individual-key results: apps, requested user and requested invitation
+returned the same agreement-required 403; bundle IDs returned 401 `NOT_AUTHORIZED`.
+Apple explicitly documents that [individual keys cannot use Provisioning endpoints](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api).
+The [individual JWT format](https://developer.apple.com/documentation/appstoreconnectapi/generating-tokens-for-api-requests)
+uses `sub=user` rather than the team issuer. Do not combine this individual private
+key with the existing team issuer in CI. The agreed seven-secret team-key contract
+is unchanged, and delivery secret writes remain on hold.
+
+Local verification validated both JWTs' ES256 signatures, audience, lifetime,
+header-to-metadata match and mutually exclusive team/individual claims without
+printing tokens. Independent source review found no auth/logging defects.
+
+The owner relayed new user authorization to accept the exact agreement the user
+had read. Fresh Developer UI still shows the October 13 License Agreement
+**accepted October 17**; no pending acceptance control was present. ASC Business
+still reports an updated-license warning and Free Apps status Active (New
+Agreement). No acceptance control for that agreement was present there either.
+No legal acceptance was attempted through an invented endpoint or an unrelated
+Paid Apps, tax or bank flow. The contradiction is now reproduced with matching
+team/issuer context and two key types, so a simple credential-context mismatch is
+not supported by the evidence. Apple-side agreement synchronization/support is a
+remaining possibility; it is not a proven diagnosis or a reason to ask the user
+to sign the already accepted agreement again.
+
+Remote Apple/GitHub changes in this audit: **none**. New local action: secure
+retention of the user-provided individual credential. Bundle/app/group/tester,
+certificate/profile readiness and CI secret population remain pending. No builds,
+simulators, archives or uploads were launched.
+
+Final dual-key recheck: 19:47:35 UTC, unchanged results for both key types.

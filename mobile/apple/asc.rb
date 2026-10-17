@@ -18,10 +18,18 @@ class ASC
       [key.strip, value.strip] if value
     end.to_h
     key_id = metadata.fetch('APP_STORE_CONNECT_KEY_ID')
-    issuer = metadata.fetch('APP_STORE_CONNECT_ISSUER_ID')
-    key = OpenSSL::PKey.read(File.read(File.join(directory, "AuthKey_#{key_id}.p8")))
+    key_type = metadata.fetch('APP_STORE_CONNECT_KEY_TYPE', 'team')
+    raise 'Unsupported key type' unless %w[team individual].include?(key_type)
+    key_filename = metadata.fetch('APP_STORE_CONNECT_KEY_FILENAME', "AuthKey_#{key_id}.p8")
+    key = OpenSSL::PKey.read(File.read(File.join(directory, key_filename)))
     now = Time.now.to_i
-    @token = JWT.encode({iss: issuer, iat: now - 5, exp: now + 600, aud: 'appstoreconnect-v1'}, key, 'ES256', {kid: key_id, typ: 'JWT'})
+    payload = {iat: now - 5, exp: now + 600, aud: 'appstoreconnect-v1'}
+    if key_type == 'individual'
+      payload[:sub] = 'user'
+    else
+      payload[:iss] = metadata.fetch('APP_STORE_CONNECT_ISSUER_ID')
+    end
+    @token = JWT.encode(payload, key, 'ES256', {kid: key_id, typ: 'JWT'})
   end
 
   def request(method, path, body = nil)
@@ -127,16 +135,18 @@ class ASC
   end
 end
 
-begin
-  client = ASC.new
-  case ARGV
-  when ['diagnostics'] then exit(client.diagnostics ? 0 : 1)
-  when ['status'] then client.status
-  when ['register-bundle'] then client.register_bundle
-  else abort 'Usage: asc.rb diagnostics | status | register-bundle'
+if $PROGRAM_NAME == __FILE__
+  begin
+    client = ASC.new
+    case ARGV
+    when ['diagnostics'] then exit(client.diagnostics ? 0 : 1)
+    when ['status'] then client.status
+    when ['register-bundle'] then client.register_bundle
+    else abort 'Usage: asc.rb diagnostics | status | register-bundle'
+    end
+  rescue StandardError => error
+    # Do not print exceptions from crypto/HTTP libraries that could contain credentials.
+    warn(error.message.start_with?('ASC ', 'Unexpected pagination') ? error.message : "Apple helper failed (#{error.class}); inspect credentials locally without logging their contents.")
+    exit 1
   end
-rescue StandardError => error
-  # Do not print exceptions from crypto/HTTP libraries that could contain credentials.
-  warn(error.message.start_with?('ASC ', 'Unexpected pagination') ? error.message : "Apple helper failed (#{error.class}); inspect credentials locally without logging their contents.")
-  exit 1
 end
