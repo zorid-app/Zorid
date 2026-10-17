@@ -117,3 +117,12 @@ User confirms ownership of zorid.app and proposes it as the main-site entry, wit
 ## Integration velocity and test scope — 2026-10-17
 
 User questions whether excessive testing is delaying completion and asks for honest status. Coordinator acknowledged overly fragmented validation. Prioritize completing native/CLI and browser/relay flows, then batch meaningful integration checks. Keep regression tests for concrete data-loss, isolation, ordering and recovery bugs; avoid repeated unchanged component checks or new standalone audit projects. This does not reduce the original end-to-end acceptance requirements.
+
+## Canvas and Bases UX scope — 2026-10-17
+
+User replaced the active task with Canvas edit-button hit ownership, consistent
+preview/Live rendering, smooth resizing and trackpad panning over cards, plus
+responsive functional Bases layout and controls. See `canvas-bases-ux-goal.md`.
+Reviewed implementations and scoped tests pass in `canvas-bases-ux-verify`;
+combined build/native checks and main integration remain pending. This does not
+resume the earlier paused NoteBuffer/fenced-Base work.

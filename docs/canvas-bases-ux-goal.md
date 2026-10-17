@@ -25,4 +25,23 @@ Use existing pinned REA evidence and focused artifact inspection; proprietary so
 
 All six outcomes need scoped implementation and meaningful checks. Run focused regressions, TypeScript, and a combined production/native pass of synthetic Canvas/Bases fixtures. Compare editing/preview and wide/narrow layouts visually, and exercise edit-button clicks, resize, wheel behavior and persisted Base actions. Record exact source/build evidence and remaining non-blocking polish. Completion does not require discovering every possible edge case, and does not certify the entire app suite.
 
-Status: source investigation/implementation started; no fixes or native outcomes claimed yet.
+## Validation checkpoint — 2026-10-17
+
+Combined candidate is in Orca worktree `canvas-bases-ux-verify`, based on main
+`050d7ef`. Main remains owned by the shared-core coordinator and unchanged by
+this editor session. Source review found no conflicts in the affected seams.
+
+- Canvas interactions: source `43560c2`; 91 focused tests, TypeScript and diff
+  checks passed. Covers retained toolbar ownership, wheel boundaries and one
+  resize update per animation frame. Actual native hit targets and feel pending.
+- Canvas prose: source `b1b4778`, evidence `81b229a`; 46 focused tests,
+  TypeScript and diff checks passed. Paired rendered geometry remains pending.
+- Bases toolbar: source/test chain `7b0a548`, `69d72b9`, `51d1a63`, `cb35bf8`;
+  39 tests, TypeScript and diff checks passed. Actual-session actions cover
+  filtering, sorting, grouping, property visibility, view switching and guarded
+  persistence/retry. Responsive geometry remains pending.
+
+The bounded test slot was explicitly released to the core coordinator via Orca
+`msg_28c7b931b2aa`. Combined production build and synthetic native verification
+are requested as the next separate resource handoff. No native completion or
+main integration is claimed. The old broad goal remains paused.
