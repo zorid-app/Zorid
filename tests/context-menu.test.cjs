@@ -137,6 +137,7 @@ test('main IPC rejects a foreign sender, child frame and unexpected document bef
     getContentSize() { return [800, 600]; }
     async loadFile() {}
     static getAllWindows() { return [window]; }
+    static getFocusedWindow() { return window; }
   }
   const electron = {
     app: { setName() {}, whenReady: () => ({ then(callback) { ready = callback; } }), getPath: () => '/unused-test-path', on() {} },
@@ -152,6 +153,7 @@ test('main IPC rejects a foreign sender, child frame and unexpected document bef
       if (name === './vault-service.cjs') return { VaultService: {} };
       if (name === './vault-dispatch.cjs') return { dispatchVaultOperation() {} };
       if (name === './context-menu.cjs') return { createContextMenuController };
+      if (name === './menu-hotkeys.cjs') return require('../desktop/menu-hotkeys.cjs');
       if (name === './window-broker.cjs') return require('../desktop/window-broker.cjs');
       return require(name);
     },

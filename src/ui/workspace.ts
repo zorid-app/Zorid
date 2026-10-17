@@ -1,3 +1,5 @@
+import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS } from './hotkeys.ts';
+import { mountHotkeySettings } from './hotkey-settings.ts';
 import {pdfMarkdownLink} from './pdf-link.ts';
 import {createCanvasAttachmentCard} from '../canvas/attachment-card.ts';
 import {createCanvasDocumentInput} from './canvas-document-input.ts';
@@ -68,7 +70,7 @@ interface Pane {
   history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
 }
 interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; autoConvertHtml: boolean; }
-interface Command { name: string; shortcut?: string; icon?: string; action: () => void | Promise<void>; }
+interface Command { id?: string; name: string; shortcut?: string; icon?: string; action: () => void | Promise<void>; }
 export interface WorkspaceViewFactories { pdf?: typeof createPdfView; media?: typeof createMediaView; canvas?: typeof createCanvasView; base?: typeof createBaseSession }
 type EditorFactory = (parent: HTMLElement, options: EditorOptions) => EditorHandle;
 const nameOf = (path: string) => path.split('/').at(-1)!.replace(/\.md$/i, '');
@@ -83,6 +85,9 @@ export class Workspace {
   activePane!: Pane;
   buffers = new Map<string, NoteBuffer>();
   settings: Settings = { theme: 'system', fontSize: 16, readableWidth: true, showInlineTitle: true, defaultMode: 'live', useTab:true, tabSize:4, smartIndentList:true, autoConvertHtml:true, ...DEFAULT_ATTACHMENT_IMPORT_SETTINGS };
+  private hotkeys!: HotkeyPreferences;
+  private hotkeyCleanup?: () => void;
+  private hotkeySettings?: ReturnType<typeof mountHotkeySettings>;
   private editorFactory?: EditorFactory;
   private noteNavigation = new WeakMap<Pane, number>();
   private viewFactories: WorkspaceViewFactories;
@@ -160,6 +165,13 @@ export class Workspace {
         const identity = validateWorkspaceWindowInfo(await native.getWindowInfo());
         this.storageScope = new WorkspaceStorageScope(identity);
       }
+      this.hotkeys = new HotkeyPreferences(localStorage,/Mac/i.test(window.navigator.platform)?'mac':'other');
+      const refreshHotkeys=()=>{this.hotkeys.reload();this.refreshHotkeyLabels();this.hotkeySettings?.refresh();this.syncNativeHotkeys();};
+      const storageHotkeys=(event:StorageEvent)=>{if(event.key===HOTKEY_STORAGE_KEY||event.key===null)refreshHotkeys();};
+      window.addEventListener('storage',storageHotkeys);
+      const releaseCommand=window.zorid?.onCommand?.(id=>{if(id==='close-tab'&&!this.hotkeySurfaceBlocked())this.executeHotkey(id);});
+      this.hotkeyCleanup=()=>{window.removeEventListener('storage',storageHotkeys);releaseCommand?.();this.hotkeySettings?.destroy();};
+      this.syncNativeHotkeys();
       document.addEventListener('keydown', this.keyListener);
       document.addEventListener('contextmenu',this.inputContextListener);
       window.addEventListener('beforeunload', this.unloadListener);
@@ -354,8 +366,8 @@ export class Workspace {
     this.root.classList.toggle('is-macos-desktop',!!window.zorid&&/Mac/i.test(window.navigator.platform));
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
     const top = el('div', 'ribbon-top');
-    top.append(button('search', 'Open quick switcher (⌘O)', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.run(() => this.openGraph())), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), button('terminal', 'Open command palette (⌘P)', () => this.commandPalette()));
-    const bottom = el('div', 'ribbon-bottom'); bottom.append(button('folder', 'Open another vault', () => this.run(() => this.chooseVault())), button('help', 'Help', () => this.help()), button('settings', 'Settings (⌘,)', () => this.showSettings())); ribbon.append(top, bottom);
+    top.append(this.hotkeyButton('search','quick-switcher', 'Open quick switcher', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.run(() => this.openGraph())), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), this.hotkeyButton('terminal','command-palette', 'Open command palette', () => this.commandPalette()));
+    const bottom = el('div', 'ribbon-bottom'); bottom.append(button('folder', 'Open another vault', () => this.run(() => this.chooseVault())), button('help', 'Help', () => this.help()), this.hotkeyButton('settings','settings', 'Settings', () => this.showSettings())); ribbon.append(top, bottom);
     this.sidebar = el('aside', 'sidebar'); this.sidebar.setAttribute('aria-label', 'Left sidebar');
     const title = el('div', 'titlebar'); title.append(button('sidebar', 'Toggle left sidebar', () => this.toggleLeft()));
     const tabs = el('div', 'sidebar-tabs');
@@ -476,7 +488,7 @@ export class Workspace {
       node.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')select();if(event.key==='ArrowRight'||event.key==='ArrowLeft'){event.preventDefault();const index=pane.tabs.indexOf(item);const next=pane.tabs[(index+(event.key==='ArrowRight'?1:pane.tabs.length-1))%pane.tabs.length].id;this.run(()=>this.selectTab(pane,pane.tabs.find(tab=>tab.id===next)!));}};
       strip.append(node);
     }
-    bar.append(button('plus','New tab (⌘T)',()=>this.run(()=>this.newTab(pane)),'tab-add'),button('down','Tab menu',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)));
+    bar.append(this.hotkeyButton('plus','new-tab','New tab',()=>this.run(()=>this.newTab(pane)),'tab-add'),button('down','Tab menu',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)));
     pane.element.querySelector(':scope > .tab-bar')?.remove();pane.element.prepend(bar);
   }
 
@@ -516,7 +528,7 @@ export class Workspace {
     const forward=button('right','Navigate forward',()=>this.run(()=>this.navigate(1,pane)));forward.disabled=pane.historyIndex>=pane.history.length-1;
     toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.md$/,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
-    if(!tab.path||isMarkdown(tab.path))actions.append(button(tab.mode==='reading'?'edit':'book',tab.mode==='reading'?'Switch to Live Edit (⌘E)':'Switch to reading view (⌘E)',()=>this.run(()=>this.toggleReading(pane))));
+    if(!tab.path||isMarkdown(tab.path))actions.append(this.hotkeyButton(tab.mode==='reading'?'edit':'book','toggle-reading',tab.mode==='reading'?'Switch to Live Edit':'Switch to reading view',()=>this.run(()=>this.toggleReading(pane))));
     actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);content.append(toolbar);
     if(tab.kind==='graph'){this.renderGraph(content);pane.viewReady=true;return;}
     if(!tab.path){this.renderEmpty(pane,content);pane.viewReady=true;return;}
@@ -921,7 +933,7 @@ export class Workspace {
   private renderEmpty(pane:Pane,host=pane.element):void{
     const empty=el('div','empty-state');
     const actions=el('div','empty-actions');
-    for(const [label,shortcut,action]of [['Create new file','⌘ N',()=>this.run(()=>this.newNote())],['Go to file','⌘ O',()=>this.quickSwitcher()],['Open command palette','⌘ P',()=>this.commandPalette()]] as const){const row=textButton(label,action,'empty-action');row.append(el('kbd','',shortcut));actions.append(row);}empty.append(actions);host.append(empty);
+    for(const [label,shortcut,action]of [['Create new file','new-note',()=>this.run(()=>this.newNote())],['Go to file','quick-switcher',()=>this.quickSwitcher()],['Open command palette','command-palette',()=>this.commandPalette()]] as const){const row=textButton(label,action,'empty-action');const hint=el('kbd','',this.hotkeys.label(shortcut));hint.dataset.hotkeyCommand=shortcut;hint.hidden=!hint.textContent;row.append(hint);actions.append(row);}empty.append(actions);host.append(empty);
   }
 
   private renderSidebar():void{
@@ -1193,16 +1205,51 @@ export class Workspace {
     await native.newWindow();
   }
 
-  private commands():Command[]{return[
-    ...(workspaceWindowBridge(window.zorid)?[{name:'Open new window',shortcut:'⌘ ⇧ N',action:()=>this.newWindow()}]:[]),
-    {name:'Create new note',shortcut:'⌘ N',action:()=>this.newNote()}, {name:'Open quick switcher',shortcut:'⌘ O',action:()=>this.quickSwitcher()},
-    {name:'Open command palette',shortcut:'⌘ P',action:()=>this.commandPalette()}, {name:'Open settings',shortcut:'⌘ ,',action:()=>this.showSettings()},
-    {name:'Toggle reading view',shortcut:'⌘ E',action:()=>this.toggleReading()},
-    {name:'Split right',action:()=>this.split()}, {name:'Split down',action:()=>this.split('bottom')}, {name:'Toggle left sidebar',action:()=>this.toggleLeft()}, {name:'Toggle right sidebar',action:()=>this.toggleRight()},
-    {name:'Search in all files',shortcut:'⌘ ⇧ F',action:()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector<HTMLInputElement>('input')?.focus();}},
-    {name:"Daily notes: Open today's daily note",action:()=>this.dailyNote()}, {name:'Graph view: Open graph view',action:()=>this.openGraph()},
-    {name:'Create new folder',action:()=>this.newFolder()}, {name:'Open another vault',action:()=>this.chooseVault()},
-  ];}
+  private commands():Command[]{
+    return WORKSPACE_HOTKEY_COMMANDS.filter(command=>command.id!=='new-window'||workspaceWindowBridge(window.zorid)).map(command=>({
+      id:command.id,name:command.name,shortcut:this.hotkeys.label(command.id),action:()=>this.executeHotkey(command.id),
+    }));
+  }
+  private syncNativeHotkeys():void{
+    void window.zorid?.setMenuHotkeys?.(['new-window','close-tab'].map(id=>({id:id as 'new-window'|'close-tab',shortcut:this.hotkeys.label(id)}))).catch(error=>notice(error instanceof Error?error.message:String(error)));
+  }
+  private hotkeyButton(glyph:string,id:string,label:string,action:(event:MouseEvent)=>void,className=''):HTMLButtonElement{
+    const node=button(glyph,label,action,className);node.dataset.hotkeyCommand=id;node.dataset.hotkeyName=label;this.updateHotkeyLabel(node);return node;
+  }
+  private updateHotkeyLabel(node:HTMLElement):void{
+    const hint=this.hotkeys.label(node.dataset.hotkeyCommand!);
+    if(node.tagName==='KBD'){node.textContent=hint;node.hidden=!hint;return;}
+    const label=node.dataset.hotkeyName!+(hint?` (${this.hotkeys.platform==='mac'?hint.replaceAll(' ',''):hint})`:'');node.title=label;node.setAttribute('aria-label',label);
+  }
+  private refreshHotkeyLabels():void{
+    const roots=new Set<HTMLElement>([this.root,...this.loadedViews().flatMap(pane=>pane.content?[pane.content]:[])]);
+    for(const root of roots)for(const node of root.querySelectorAll<HTMLElement>('[data-hotkey-command]'))this.updateHotkeyLabel(node);
+  }
+  private executeHotkey(id:string):void{
+    if(id==='new-window'){if(workspaceWindowBridge(window.zorid))this.run(()=>this.newWindow());return;}
+    if(!this.vault)return;
+    if(id.startsWith('tab-')){
+      const number=Number(id.slice(4));if(number!==9&&matchMedia('(max-width: 700px)').matches)return;
+      const pane=this.activePane,tab=pane.tabs[number===9?pane.tabs.length-1:number-1],generation=this.vaultGeneration,previousActive=pane.active,previousPath=this.current(pane)?.path,version=pane.renderVersion,activation=this.paneActivationRevision;
+      const request=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,request);
+      if(tab)this.run(async()=>{
+        if(request!==this.navigationIntent.get(pane)||activation!==this.paneActivationRevision)return;
+        if(pane.active===tab.id){this.focusPane(pane);return;}
+        await this.flushPane(pane);
+        if(request!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab)||pane.active!==previousActive||this.current(pane)?.path!==previousPath||pane.renderVersion!==version||activation!==this.paneActivationRevision)return;
+        pane.active=tab.id;this.activate(pane);await this.renderPane(pane);
+        if(request===this.navigationIntent.get(pane)&&pane.active===tab.id&&activation===this.paneActivationRevision)this.focusPane(pane);this.saveSession();
+      });return;
+    }
+    const actions:Record<string,()=>unknown|Promise<unknown>>={
+      'new-note':()=>this.newNote(),'new-tab':()=>this.newTab(),'close-tab':()=>this.closeTab(this.activePane,this.current()),save:()=>this.flush(),
+      'quick-switcher':()=>this.quickSwitcher(),'command-palette':()=>this.commandPalette(),settings:()=>this.showSettings(),'toggle-reading':()=>this.toggleReading(),
+      'split-right':()=>this.split(),'split-down':()=>this.split('bottom'),'toggle-left':()=>this.toggleLeft(),'toggle-right':()=>this.toggleRight(),
+      'search-all':()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector<HTMLInputElement>('input')?.focus();},
+      'daily-note':()=>this.dailyNote(),graph:()=>this.openGraph(),'new-folder':()=>this.newFolder(),'open-vault':()=>this.chooseVault(),
+    };
+    if(actions[id])this.run(actions[id]);
+  }
 
   commandPalette():void{this.suggest('Type a command…',()=>this.commands());}
   quickSwitcher():void{this.suggest('Type a file name…',()=>[...this.vault.entries.values()].filter(entry=>entry.type==='file').map(entry=>({name:nameOf(entry.path),shortcut:parentOf(entry.path),action:()=>this.openNote(entry.path)})));}
@@ -1259,7 +1306,7 @@ export class Workspace {
   showSettings():void{
     const{content,close}=modal('Settings');content.classList.add('settings-modal');const nav=el('nav','settings-nav');const body=el('div','settings-content');const closeButton=button('close','Close settings',close,'settings-close');content.append(nav,body,closeButton);
     const render=(section:string)=>{
-      nav.querySelectorAll('button').forEach(node=>node.classList.toggle('is-active',node.textContent===section));body.replaceChildren(el('h2','',section));
+      this.hotkeySettings?.destroy();this.hotkeySettings=undefined;nav.querySelectorAll('button').forEach(node=>node.classList.toggle('is-active',node.textContent===section));body.replaceChildren(el('h2','',section));
       const row=(name:string,description:string,control:HTMLElement)=>{const wrapper=el('div','setting-row');const info=el('div','setting-info');info.append(el('div','setting-name',name),el('div','setting-description',description));wrapper.append(info,control);body.append(wrapper);};
       const toggle=(checked:boolean,change:(value:boolean)=>void)=>{const input=el('input','toggle');input.type='checkbox';input.checked=checked;input.onchange=()=>{change(input.checked);this.saveSettings();};return input;};
       const selectControl=(name:string,value:string,choices:readonly(readonly[string,string])[],change:(value:string)=>void)=>{
@@ -1279,7 +1326,7 @@ export class Workspace {
         const tabSize=el('input');tabSize.type='number';tabSize.min='1';tabSize.max='32';tabSize.value=String(this.settings.tabSize);tabSize.setAttribute('aria-label','Tab size');
         tabSize.onchange=()=>{const value=Number(tabSize.value);if(!Number.isInteger(value)||value<1||value>32){tabSize.value=String(this.settings.tabSize);return;}this.settings.tabSize=value;configureLists();this.saveSettings();};row('Tab size','Number of spaces used to display a tab.',tabSize);
         const smart=toggle(this.settings.smartIndentList,value=>{this.settings.smartIndentList=value;configureLists();});smart.setAttribute('aria-label','Smart indent lists');row('Smart indent lists','Continue list items when pressing Enter.',smart);
-      }else if(section==='Hotkeys'){for(const command of this.commands())if(command.shortcut)row(command.name,'',el('kbd','',command.shortcut));}
+      }else if(section==='Hotkeys'){this.hotkeySettings=mountHotkeySettings(body,this.hotkeys,()=>{this.refreshHotkeyLabels();this.syncNativeHotkeys();});}
       else if(section==='Files and links'){
         row('Vault',this.platform.label,textButton('Open another',()=>{close();this.run(()=>this.chooseVault());}));row('Deleted files','Deleted files are moved to a .trash folder in the vault.',el('span','','Vault trash'));row('Internal links','Resolved links are updated when files are renamed.',el('span','','Automatic'));
         const wiki=toggle(!this.settings.useMarkdownLinks,value=>{this.settings.useMarkdownLinks=!value;});wiki.setAttribute('aria-label','Use Wikilinks');row('Use Wikilinks','Use [[links]] for imported attachments.',wiki);
@@ -1301,36 +1348,32 @@ export class Workspace {
   private applySettings():void{const theme=this.settings.theme==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):this.settings.theme;document.documentElement.dataset.theme=theme;document.documentElement.style.setProperty('--font-text-size',`${this.settings.fontSize}px`);}
   private saveSettings():void{localStorage.setItem('zorid:settings',JSON.stringify(this.settings));this.applySettings();}
   private saveSession():void{if(!this.platform||this.restoringLayout)return;this.panes.forEach(pane=>this.capturePaneState(pane));localStorage.setItem(this.sessionKey(),JSON.stringify({...this.sessionState,rightHidden:this.root.classList.contains('right-hidden'),leftHidden:this.root.classList.contains('left-hidden'),autoRevealFiles:this.autoRevealFiles,layout:this.splitLayout?.serialize(),activePaneId:this.activePane?.id,panes:this.panes.map(p=>({...p.persisted,id:p.id,tabs:p.tabs,active:p.tabs.findIndex(t=>t.id===p.active)})),collapsed:[...this.collapsed],bookmarks:[...this.bookmarks]}));}
-  private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','','Create a note with ⌘N. Link to another note with [[note name]]. Use ⌘O to find a file and ⌘P to find a command.'));
+  private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','',`Link to another note with [[note name]]. Customize workspace shortcuts in Settings → Hotkeys. Create note: ${this.hotkeys.label('new-note')||'not assigned'}. Find file: ${this.hotkeys.label('quick-switcher')||'not assigned'}. Command palette: ${this.hotkeys.label('command-palette')||'not assigned'}.`));
+  }
+  private hotkeySurfaceBlocked(): boolean {
+    return !!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
   }
   private onKey(event:KeyboardEvent):void{
-    if(event.defaultPrevented||event.isComposing||document.querySelector('.modal-overlay'))return;
-    const shortcut=resolveWorkspaceShortcut(event,{platform:/Mac/i.test(window.navigator.platform)?'mac':'other',tabCount:this.activePane?.tabs.length??0,isPhone:matchMedia('(max-width: 700px)').matches,canOpenWindow:!!workspaceWindowBridge(window.zorid)});
-    if(shortcut.handled){
-      event.preventDefault();event.stopPropagation();const action=shortcut.action;
-      if(action?.type==='new-window')this.run(()=>this.newWindow());
-      else if(this.vault&&action?.type==='new-file')this.run(()=>this.newNote());
-      else if(this.vault&&action?.type==='new-tab')this.run(()=>this.newTab());
-      else if(this.vault&&action?.type==='select-tab'){
-        const pane=this.activePane,tab=pane.tabs[action.index],generation=this.vaultGeneration,previousActive=pane.active,previousPath=this.current(pane)?.path,version=pane.renderVersion,activation=this.paneActivationRevision;
-        const request=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,request);
-        if(tab)this.run(async()=>{
-          if(request!==this.navigationIntent.get(pane)||activation!==this.paneActivationRevision)return;
-          if(pane.active===tab.id){this.focusPane(pane);return;}
-          await this.flushPane(pane);
-          if(request!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab)||pane.active!==previousActive||this.current(pane)?.path!==previousPath||pane.renderVersion!==version||activation!==this.paneActivationRevision)return;
-          pane.active=tab.id;this.activate(pane);await this.renderPane(pane);
-          if(request===this.navigationIntent.get(pane)&&pane.active===tab.id&&activation===this.paneActivationRevision)this.focusPane(pane);this.saveSession();
-        });
+    if(event.defaultPrevented||event.isComposing||event.getModifierState('AltGraph')||this.hotkeySurfaceBlocked())return;
+    let id=this.hotkeys.resolve(event);
+    // Retain legacy virtual-key defaults for non-US numbered keys, without
+    // reviving a command whose default binding was explicitly changed/removed.
+    if(!id){
+      const legacy=resolveWorkspaceShortcut(event,{platform:this.hotkeys.platform,tabCount:this.activePane?.tabs.length??0,canOpenWindow:!!workspaceWindowBridge(window.zorid)});
+      if(legacy.handled){
+        const logical=/^[1-9]$/.test(event.key)?Number(event.key):0,code=event.which||event.keyCode||0,virtual=Number.isInteger(code)&&code>=49&&code<=57?code-48:0;
+        const digit=logical&&virtual?Math.min(logical,virtual):logical||virtual;
+        const candidate=digit?`tab-${digit}`:legacy.action?.type==='new-file'?'new-note':legacy.action?.type==='new-tab'?'new-tab':legacy.action?.type==='new-window'?'new-window':null;
+        if(candidate&&!this.hotkeys.customized(candidate)&&this.hotkeys.bindings(candidate).every(binding=>!this.hotkeys.conflicts(candidate,binding).length))id=candidate;
       }
-      return;
     }
-    if(!this.vault)return;
-    if(!(event.metaKey||event.ctrlKey))return;const key=event.key.toLowerCase();let action:(()=>unknown)|undefined;
-    if(key==='o')action=()=>this.quickSwitcher();else if(key==='p')action=()=>this.commandPalette();else if(key===',')action=()=>this.showSettings();else if(key==='e')action=()=>this.toggleReading();else if(key==='f'&&!event.shiftKey&&this.activePane.pdfView)action=()=>this.activePane.pdfView?.showSearch();else if(key==='s')action=()=>this.flush();else if(key==='w')action=()=>this.closeTab(this.activePane,this.current());else if(key==='f'&&event.shiftKey)action=()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector('input')?.focus();};
-    if(action){event.preventDefault();this.run(action);}
+    if(id){event.preventDefault();event.stopPropagation();this.executeHotkey(id);return;}
+    // PDF search remains a focused-view command, sharing the editor's reserved
+    // primary-F chord rather than becoming a global configurable command.
+    const primary=this.hotkeys.platform==='mac'?event.metaKey&&!event.ctrlKey:event.ctrlKey&&!event.metaKey;
+    if(primary&&!event.shiftKey&&!event.altKey&&!event.repeat&&event.key.toLowerCase()==='f'&&this.activePane?.pdfView){event.preventDefault();this.activePane.pdfView.showSearch();}
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
   async flush():Promise<void>{for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
+  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
 }

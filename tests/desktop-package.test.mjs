@@ -33,6 +33,7 @@ async function fixture(t) {
 test('desktop staging includes runtime assets/notices and excludes source, maps, vaults and dependencies', async t => {
   const f = await fixture(t), result = await stageDesktop(f.root);
   const inputs = JSON.parse(await fs.readFile(result.inputManifest));
+  assert.ok(inputs.files['desktop/menu-hotkeys.cjs']);
   assert.ok(inputs.files['dist/main.123abc.js.LICENSE.txt']);
   assert.ok(inputs.files['dist/lib/pdfjs/build/pdf.worker.mjs']);
   assert.ok(inputs.files['licenses/electron/LICENSES.chromium.html']);

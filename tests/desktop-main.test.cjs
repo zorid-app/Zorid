@@ -33,6 +33,7 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   const nativeRequire = name => {
     if (name === 'electron') return electron;
     if (name === 'node:fs/promises') return { readFile: async () => '{"path":"/first"}', mkdir: async () => {}, writeFile: async () => {} };
+    if (name === './menu-hotkeys.cjs') return require('../desktop/menu-hotkeys.cjs');
     if (name === './window-broker.cjs') return { WindowBroker };
     if (name === './context-menu.cjs') return { createContextMenuController: () => ({ close() {}, popup() {} }) };
     if (name === './vault-service.cjs') return { VaultService: { open: async root => {
@@ -63,7 +64,11 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.throws(() => handlers.get('zorid:remove')({sender:windows[0].webContents,senderFrame:{url:windows[0].webContents.mainFrame.url}}, '/first', 'Child.md', true), /Untrusted/);
   assert.deepEqual(removals, [['/first','Owned.md',false],['/second','Folder',true]]);
   const newWindowMenu = template.find(item => item.label === 'File').submenu[0];
-  assert.equal(newWindowMenu.accelerator, 'CmdOrCtrl+Shift+N');
+  assert.equal(newWindowMenu.accelerator, undefined);
+  invoke(windows[0], 'setMenuHotkeys', [{id:'new-window',shortcut:'⌘ ⌥ N'},{id:'close-tab',shortcut:''}]);
+  assert.equal(template.find(item=>item.label==='File').submenu[0].label,'New window (⌘ ⌥ N)');
+  assert.throws(()=>invoke(windows[0],'setMenuHotkeys',[{id:'new-window',shortcut:'X'},{id:'quit',shortcut:'Q'}]),/Invalid/);
+  assert.throws(()=>handlers.get('zorid:setMenuHotkeys')({sender:windows[0].webContents,senderFrame:{}},[]),/Untrusted/);
   newWindowMenu.click(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(windows.length, 3); assert.equal(invoke(windows[2], 'getVault').path, '/first');
   const savedURL = windows[0].webContents.mainFrame.url;

@@ -6,7 +6,7 @@ import { desktopNotices } from './desktop-notices.mjs';
 
 export const desktopFiles = [
   'desktop/main.cjs', 'desktop/preload.cjs', 'desktop/vault-service.cjs',
-  'desktop/vault-dispatch.cjs', 'desktop/window-broker.cjs', 'desktop/context-menu.cjs',
+  'desktop/vault-dispatch.cjs', 'desktop/window-broker.cjs', 'desktop/context-menu.cjs', 'desktop/menu-hotkeys.cjs',
 ];
 export const requiredRendererFiles = [
   'dist/index.html', 'dist/lib/mathjax/LICENSE', 'dist/lib/mathjax/tex-chtml-nofont.js',

@@ -43,6 +43,7 @@ async function until(predicate: () => boolean | Promise<boolean>, label: string)
 
 async function setup(t: TestContext, adapter = new MemoryAdapter(), id = 'test:vault', stored: Record<string, unknown> = {}, views: WorkspaceViewFactories = {}) {
   const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', { url: 'https://zorid.test/', pretendToBeVisual:true });
+  Object.defineProperty(dom.window.navigator, 'platform', { value: 'MacIntel' });
   const saved = new Map<string, PropertyDescriptor | undefined>();
   const matchMedia = (query: string) => ({ matches: false, media: query, onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; } });
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage, HTMLElement: dom.window.HTMLElement, Node: dom.window.Node, MutationObserver: dom.window.MutationObserver, Window:dom.window.Window, Text:dom.window.Text, navigator:dom.window.navigator, getComputedStyle:dom.window.getComputedStyle.bind(dom.window), requestAnimationFrame:dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame:dom.window.cancelAnimationFrame.bind(dom.window), matchMedia })) {
