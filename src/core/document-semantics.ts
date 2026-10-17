@@ -144,8 +144,8 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
 }
 
 export interface DocumentIndexProgress {readonly phase:'initialize'|'rebuild'|'indexing'|'publish';readonly prepared?:number;readonly total?:number}
-export interface CatchUpDocumentOptions {readonly isCurrent:()=>boolean;readonly onProgress?:(progress:DocumentIndexProgress)=>void;readonly maxPumps?:number;readonly maxRestarts?:number}
-interface Maintenance {stage?:DocumentStage;running?:Promise<DocumentStatus>;rebuildAttempted:boolean;listeners:Set<CatchUpDocumentOptions>}
+export interface CatchUpDocumentOptions {readonly isCurrent:()=>boolean;readonly onProgress?:(progress:DocumentIndexProgress)=>void;readonly maxPumps?:number;readonly maxRestarts?:number;readonly rebuild?:boolean}
+interface Maintenance {stage?:DocumentStage;running?:Promise<DocumentStatus>;rebuildAttempted:boolean;rebuilding:boolean;explicitRebuild:boolean;listeners:Set<CatchUpDocumentOptions>}
 const maintenance=new WeakMap<DocumentService,Maintenance>();
 const cancelled=()=>new DocumentSemanticsError('document_request_cancelled');
 const staleCodes=new Set(['stale_source','stale_index','source_changed','index_source_changed','index_head_changed']);
@@ -157,21 +157,24 @@ export async function catchUpDocumentIndex(service:DocumentService,options:Catch
   if(!options.isCurrent())throw cancelled();
   const pumps=options.maxPumps??8,restarts=options.maxRestarts??1;
   if(!Number.isInteger(pumps)||pumps<1||pumps>128||!Number.isInteger(restarts)||restarts<0||restarts>2)throw new DocumentSemanticsError('invalid_request');
-  let state=maintenance.get(service);if(!state){state={rebuildAttempted:false,listeners:new Set()};maintenance.set(service,state);}
-  const owned=state;owned.listeners.add(options);
+  let state=maintenance.get(service);if(!state){state={rebuildAttempted:false,rebuilding:false,explicitRebuild:false,listeners:new Set()};maintenance.set(service,state);}
+  const owned=state;owned.listeners.add(options);if(options.rebuild&&!owned.rebuilding)owned.explicitRebuild=true;
   const active=()=>{if(![...owned.listeners].some(listener=>listener.isCurrent()))throw cancelled();};
   const progress=(value:DocumentIndexProgress)=>{for(const listener of owned.listeners)if(listener.isCurrent())listener.onProgress?.(value);};
   const step=async<T>(action:()=>Promise<T>):Promise<T>=>{active();const result=await action();active();return result;};
+  const reset=async()=>{owned.rebuilding=true;try{progress({phase:'rebuild'});active();await service.rebuild();owned.stage=undefined;active();}finally{owned.rebuilding=false;}};
   if(!owned.running){
     owned.running=(async()=>{
       let attempts=0,used=0;
-      for(;;){
+      maintenanceLoop:for(;;){
         try{
+          if(owned.explicitRebuild){owned.explicitRebuild=false;owned.rebuildAttempted=true;await reset();}
           let status=await step(()=>service.status());
-          if(status.current){if(owned.stage){active();await service.discard(owned.stage.stageId);owned.stage=undefined;active();}owned.rebuildAttempted=false;return status;}
+          if(owned.explicitRebuild)continue maintenanceLoop;
+          if(status.current){if(owned.stage){active();await service.discard(owned.stage.stageId);owned.stage=undefined;active();}if(owned.explicitRebuild)continue maintenanceLoop;owned.rebuildAttempted=false;return status;}
           if(status.rebuildRequired){
             if(owned.rebuildAttempted)throw new DocumentSemanticsError('rebuild_required');
-            owned.rebuildAttempted=true;progress({phase:'rebuild'});active();await service.rebuild();owned.stage=undefined;active();
+            owned.rebuildAttempted=true;await reset();
             status=await step(()=>service.status());
             if(status.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');
           }
@@ -182,15 +185,15 @@ export async function catchUpDocumentIndex(service:DocumentService,options:Catch
               // Assign the returned checkpoint before checking caller liveness;
               // a cancelled subscriber cannot lose the helper's known stage.
               active();owned.stage=await service.pump(owned.stage.stageId);active();used++;
-              const p=owned.stage.progress;progress({phase:'indexing',...(p?{prepared:p.prepared,total:p.total}:{})});
+              const p=owned.stage.progress;progress({phase:'indexing',...(p?{prepared:p.prepared,total:p.total}:{})});if(owned.explicitRebuild)continue maintenanceLoop;
             }
             if(owned.stage.progress?.ready){
               progress({phase:'publish'});active();await service.publish(owned.stage.stageId);owned.stage=undefined;active();
-              const result=await step(()=>service.status());if(result.current)owned.rebuildAttempted=false;return result;
+              const result=await step(()=>service.status());if(owned.explicitRebuild)continue maintenanceLoop;if(result.current)owned.rebuildAttempted=false;return result;
             }
             await step(()=>new Promise<void>(resolve=>setTimeout(resolve,0)));
           }
-          return await step(()=>service.status());
+          const result=await step(()=>service.status());if(owned.explicitRebuild)continue maintenanceLoop;return result;
         }catch(error){
           const code=documentErrorCode(error);
           if(code&&staleCodes.has(code)&&attempts<restarts){
@@ -200,7 +203,7 @@ export async function catchUpDocumentIndex(service:DocumentService,options:Catch
           // Corruption reported by a bounded operation is handled once by the
           // same visible policy as a status report; source motion never resets.
           if(code&&rebuildCodes.has(code)&&!owned.rebuildAttempted){
-            owned.rebuildAttempted=true;progress({phase:'rebuild'});active();await service.rebuild();owned.stage=undefined;active();continue;
+            owned.rebuildAttempted=true;await reset();continue;
           }
           throw error;
         }
