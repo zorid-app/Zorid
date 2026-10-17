@@ -19,6 +19,9 @@ mod family_namespace;
 #[cfg(test)]
 #[path = "family_namespace_tests.rs"]
 mod family_namespace_tests;
+#[cfg(test)]
+#[path = "family_observation_tests.rs"]
+mod family_observation_tests;
 #[path = "host_intents.rs"]
 mod host_intents;
 #[path = "namespace.rs"]
@@ -510,7 +513,9 @@ impl NativeVault {
                 expected_binding,
             },
         )?;
+        let enrolled = self.store.family_is_enrolled()?;
         let managed = match &state {
+            Some(state) if enrolled => self.store.family_text_state(&state.id)?.is_some(),
             Some(state) => self.store.text_state(&state.id)?.is_some(),
             None => false,
         };
@@ -532,6 +537,19 @@ impl NativeVault {
                     "unresolved projection; external observation retained",
                 ));
             }
+        }
+        if enrolled {
+            if state.is_none() || base.is_none() {
+                return Err(Error::Unsupported(
+                    "new external files require explicit family mode enrollment",
+                ));
+            }
+            self.verify_observed_file(path, parent, &physical, &observation.content)?;
+            self.paths.verify_parent(path, parent)?;
+            return Ok(Some(
+                self.store
+                    .import_family_observation(&observation.observation_id)?,
+            ));
         }
         if managed {
             self.verify_observed_file(path, parent, &physical, &observation.content)?;

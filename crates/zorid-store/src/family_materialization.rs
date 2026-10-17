@@ -546,7 +546,7 @@ impl Store {
     }
 }
 
-fn history(
+pub(super) fn history(
     tx: &Connection,
     id: &EntryId,
     revision: &Revision,

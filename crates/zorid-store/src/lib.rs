@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 
 mod checkpoints;
 mod family_commands;
+mod family_observations;
 mod family_ingress;
 mod family_materialization;
 pub use family_materialization::{FamilyContentWitness, FamilyMaterialization, FamilyPublication};
