@@ -1,3 +1,6 @@
+import { nativeEditorCommands } from './native-editor-commands.ts';
+import type { NativeEditorAction, NativeEditorState } from './native-editor-commands.ts';
+export type { NativeEditorAction, NativeEditorState } from './native-editor-commands.ts';
 import { Annotation, Compartment, EditorSelection, EditorState, Transaction } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap, selectParentSyntax, history, historyKeymap, isolateHistory } from '@codemirror/commands';
@@ -48,6 +51,8 @@ export interface EditorCommandTarget {
 }
 
 export interface EditorHandle {
+  nativeAction?(action: NativeEditorAction): boolean;
+  nativeState?(): NativeEditorState;
   /** Capture one note/child selection before a modal takes focus. */
   captureCommandTarget?(isCurrent: () => boolean): EditorCommandTarget | null;
   getValue(): string;
@@ -63,6 +68,9 @@ export interface EditorHandle {
   fold?(action: EditorFoldAction): boolean;
 }
 export interface EditorOptions {
+  onNativeEditorState?: (state: NativeEditorState) => void;
+  /** Native actions require the owning active pane/runtime/generation to remain current. */
+  isCurrent?: () => boolean;
   value: string; mode: 'live' | 'source'; paths: () => string[];
   onChange: (value: string) => void; open: (target: string, kind?: 'wiki' | 'markdown', event?: MouseEvent) => void;
   isUnresolved?: LiveInlineOptions['isUnresolved'];
@@ -80,13 +88,15 @@ const markdownHighlightStyle = HighlightStyle.define(defaultHighlightStyle.specs
   spec.tag === tags.heading ? { ...spec, textDecoration: 'none' } : spec));
 
 export function createEditor(parent: HTMLElement, options: EditorOptions): EditorHandle {
+  let native: ReturnType<typeof nativeEditorCommands> | undefined;
+  const nativeUpdates = options.onNativeEditorState ? EditorView.updateListener.of(() => native?.update()) : [];
   const listConfiguration = new Compartment();
   const wiki = wikiCompletion({ ...options.wiki, paths: options.paths });
   const view = new EditorView({
     parent,
     state: EditorState.create({ doc: options.value, extensions: [
       EditorState.allowMultipleSelections.of(true),
-      history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
+      nativeUpdates, history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap.filter(binding => binding.run !== selectParentSyntax), ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, wiki, editorCommandHotkeys(options.hotkeys),
       markdownFolding(),
@@ -105,7 +115,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       ...(options.transfers ? [editorTransfers(options.transfers)] : []),
       editorContextMenu(),
       ...(options.mode === 'live' ? [liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed}),
-        liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner)], renderedCalloutRanges), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
+        liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner), nativeUpdates], renderedCalloutRanges), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
         liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges}),
         ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed, {excludes: renderedCalloutRanges})] : []),
         liveInline({open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover,excludes: renderedCalloutRanges})] : []),
@@ -114,7 +124,9 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
   if (options.mode === 'live' && bodyStart(view.state)) view.dispatch({ selection: { anchor: bodyStart(view.state) } });
   const disposeEmptyFocus = installEmptyNoteFocus(view, parent);
   let destroyed = false;
+  if (options.onNativeEditorState) native = nativeEditorCommands(view, {onNativeEditorState:options.onNativeEditorState,isCurrent:options.isCurrent});
   return {
+    ...(native ? {nativeAction: native.action, nativeState: native.state} : {}),
     captureCommandTarget(isCurrent) {
       const document = view.dom.ownerDocument, focused = document.activeElement;
       const target = activeTableEditor(view) ?? view;
@@ -182,7 +194,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       view.dispatch({ changes: textChanges(previous, value),
         annotations: [externalChange.of(true), propertyUpdate.of(true), Transaction.addToHistory.of(false), isolateHistory.of('full')] });
     },
-    focus: () => (activeTableEditor(view) ?? view).focus(), destroy() { destroyed = true; disposeEmptyFocus(); view.destroy(); },
+    focus: () => (activeTableEditor(view) ?? view).focus(), destroy() { if(destroyed)return; destroyed = true; native?.destroy(); disposeEmptyFocus(); view.destroy(); },
     insert(text) { const target = activeTableEditor(view) ?? view; target.dispatch({ ...target.state.replaceSelection(text), annotations: Transaction.userEvent.of('input') }); target.focus(); },
   };
 }
