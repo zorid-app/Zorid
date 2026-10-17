@@ -111,3 +111,7 @@ User asks to reuse an easy-to-set-up authentication solution. Discussion open; n
 ## Domain layout — 2026-10-17
 
 User confirms ownership of zorid.app and proposes it as the main-site entry, with a separate subdomain for hosted syncing. Proposed names discussed: app.zorid.app for the browser client, sync.zorid.app for the Rust sync API, auth.zorid.app for login. Exact subdomain names remain proposals; no DNS, hosting, credential or deployment changes authorized/performed. Keep self-hosted endpoint configuration and explicit browser-origin boundaries.
+
+## Integration velocity and test scope — 2026-10-17
+
+User questions whether excessive testing is delaying completion and asks for honest status. Coordinator acknowledged overly fragmented validation. Prioritize completing native/CLI and browser/relay flows, then batch meaningful integration checks. Keep regression tests for concrete data-loss, isolation, ordering and recovery bugs; avoid repeated unchanged component checks or new standalone audit projects. This does not reduce the original end-to-end acceptance requirements.

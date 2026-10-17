@@ -68,6 +68,27 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17 00:01 local
 
+- Execution adjustment after user's testing/velocity question: finish native
+  family persistence + standalone CLI and browser storage + worker/relay flows;
+  batch validation around those consumers. Keep actual bug regressions and all
+  milestone requirements, but stop unnecessary repeated component gates.
+- Current resource handoff: editor coordinator owns bounded Canvas/Bases tests
+  and TypeScript via Orca `msg_4c1acfc31c9b`; root's last WASM session45875 exited0
+  with21 wrapper tests. No core heavy checks until editor explicitly releases.
+  New user-authorized Canvas/Bases UX work is active; NoteBuffer remains paused.
+- Actual two-tab fixture `ecbffdf` passed four Chrome checks including competing
+  same-revision edits and actual owner-tab closure/reacquisition. Evidence
+  `bb296d8` extends `browser-admission-verification.md`; disposable resources closed.
+- `8f9a89b`/`d76d88b` integrate complete-text and shared classification helpers;
+  combined current-main session74219 passed96 tests. `04af75f` adds exact durable
+  FamilyCommand/mode identity (reviewed candidate passed14 focused tests).
+- Next coherent browser batch: `mobile_readiness` owns atomic storage and intent
+  routing; `wasm_integration_prep` owns shared planner bindings;
+  `browser_sync_transport` owns admission-aware worker/runtime RPC and HTTP flow
+  in `core-browser-sync-worker`. Network waits remain outside IDB transactions.
+  Native store/schema8 and actual CLI/recovery/protocol fixtures form the other
+  integration batch. No full network-convergence claim yet.
+
 - Main `1362e6f` adds the reviewed shared mutation planner; `01bf40a` bounds
   retained binary expansion before allocation. Combined current-main session96859
   passed39 file-sync unit tests plus11 mutation fixtures. Native/browser consumers
