@@ -88,7 +88,7 @@ fn parents(id: &UpdateId, values: &[UpdateId], create: bool) -> Result<()> {
     Ok(())
 }
 impl EntryEvent {
-    fn graph(&self) -> Result<GraphEvent> {
+    pub(super) fn graph(&self) -> Result<GraphEvent> {
         let create = matches!(self.effect, Effect::Create { .. });
         parents(&self.id, &self.parents, create)?;
         if create != (self.id == self.identity.bootstrap_id) {
@@ -178,7 +178,7 @@ impl Body {
             _ => &[],
         }
     }
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         match self {
             Self::Events { events } | Self::ObservedDelete { events } => {
                 if events.is_empty() || events.len() > super::MAX_BATCH_EVENTS {
@@ -293,7 +293,7 @@ impl StoredActivity {
             payload_bytes: size as u32,
         })
     }
-    fn graph(&self, scope: &Scope) -> Result<GraphEvent> {
+    pub(super) fn graph(&self, scope: &Scope) -> Result<GraphEvent> {
         if self.identity.realm_id != scope.realm_id || self.identity.vault_id != scope.vault_id {
             return Err(Error::IdentityMismatch);
         }
@@ -409,281 +409,8 @@ impl State {
         self.view_and_ancestry().map(|(view, _)| view)
     }
     pub(super) fn view_and_ancestry(&self) -> Result<(VaultView, super::GraphAncestry)> {
-        if self.records.len() + self.activities.len() > super::MAX_RECORDS {
-            return Err(Error::TooLarge);
-        }
-        let mut size = 0usize;
-        let mut events = BTreeMap::new();
-        let mut owners = BTreeMap::<UpdateId, EntryId>::new();
-        let mut bind_owner = |bootstrap: &UpdateId, entry: &EntryId| -> Result<()> {
-            if let Some(prior) = owners.insert(bootstrap.clone(), entry.clone()) {
-                if prior != *entry {
-                    return Err(Error::IdentityMismatch);
-                }
-            }
-            Ok(())
-        };
-        let mut content_bindings = BTreeMap::new();
-        let mut namespace_roots = BTreeSet::new();
-        let mut text_roots = BTreeSet::new();
-        for (id, p) in &self.records {
-            if id != &p.id || p.scope != self.scope {
-                return Err(Error::InvalidState);
-            }
-            size = size.checked_add(p.encode()?.len()).ok_or(Error::TooLarge)?;
-            if size > super::MAX_STATE_BYTES {
-                return Err(Error::TooLarge);
-            }
-            for e in p.body.events() {
-                bind_owner(&e.identity.bootstrap_id, &e.identity.entry_id)?;
-                namespace_roots.insert(e.identity.bootstrap_id.clone());
-                // Event IDs cannot alias a different envelope/chunk ID, even if
-                // the other record currently contains no causal events.
-                if (self.records.contains_key(&e.id) && e.id != p.id)
-                    || self.activities.contains_key(&e.id)
-                {
-                    return Err(Error::DuplicateMismatch);
-                }
-                if events.insert(e.id.clone(), e.graph()?).is_some() {
-                    return Err(Error::DuplicateMismatch);
-                }
-                if events.len() > super::MAX_EVENTS {
-                    return Err(Error::TooLarge);
-                }
-                if let Effect::Create {
-                    content: Some(seed),
-                    ..
-                } = &e.effect
-                {
-                    let binding = match seed {
-                        ContentSeed::Binary { .. } => ContentBinding::Binary,
-                        ContentSeed::Text {
-                            text_bootstrap_id,
-                            text_format,
-                        } => {
-                            bind_owner(text_bootstrap_id, &e.identity.entry_id)?;
-                            text_roots.insert(text_bootstrap_id.clone());
-                            ContentBinding::Text {
-                                text_bootstrap_id: text_bootstrap_id.clone(),
-                                text_format: *text_format,
-                            }
-                        }
-                    };
-                    content_bindings.insert(e.identity.entry_id.clone(), binding);
-                }
-            }
-        }
-        for (id, a) in &self.activities {
-            if id != &a.update_id || self.records.contains_key(id) {
-                return Err(Error::DuplicateMismatch);
-            }
-            bind_owner(&a.namespace.bootstrap_id, &a.identity.entry_id)?;
-            bind_owner(&a.identity.bootstrap_id, &a.identity.entry_id)?;
-            namespace_roots.insert(a.namespace.bootstrap_id.clone());
-            text_roots.insert(a.identity.bootstrap_id.clone());
-            size = size
-                .checked_add(
-                    serde_json::to_vec(a)
-                        .map_err(|_| Error::InvalidState)?
-                        .len(),
-                )
-                .ok_or(Error::TooLarge)?;
-            if size > super::MAX_STATE_BYTES {
-                return Err(Error::TooLarge);
-            }
-            if events.insert(id.clone(), a.graph(&self.scope)?).is_some() {
-                return Err(Error::DuplicateMismatch);
-            }
-        }
-        // Bootstrap reservations have roles, not merely entry ownership. A
-        // text root may equal its namespace Create, but never an ordinary event.
-        for (bootstrap, entry) in &owners {
-            if let Some(p) = self.records.get(bootstrap) {
-                if !p.body.events().iter().any(|e| {
-                    &e.id == bootstrap
-                        && &e.identity.entry_id == entry
-                        && matches!(e.effect, Effect::Create { .. })
-                }) {
-                    return Err(Error::IdentityMismatch);
-                }
-            }
-            if let Some(e) = events.get(bootstrap) {
-                if &e.identity.entry_id != entry
-                    || e.identity.bootstrap_id != *bootstrap
-                    || !matches!(
-                        e.effect,
-                        GraphEffect::Create { .. } | GraphEffect::CreateText { .. }
-                    )
-                {
-                    return Err(Error::IdentityMismatch);
-                }
-                if text_roots.contains(bootstrap)
-                    && !matches!(&e.effect,GraphEffect::CreateText {binding,..} if binding.text_bootstrap_id == *bootstrap)
-                {
-                    return Err(Error::IdentityMismatch);
-                }
-            }
-        }
-        for event in events.values() {
-            for parent in &event.parents {
-                if !events.contains_key(parent)
-                    && (self.records.contains_key(parent)
-                        || (text_roots.contains(parent) && !namespace_roots.contains(parent)))
-                {
-                    return Err(Error::InvalidCausality);
-                }
-            }
-        }
-        // Missing dependencies are pending; IDs already occupied by another kind
-        // are contradictions, not missing binary downloads.
-        for payload in self.records.values() {
-            if let Body::Page { page } = &payload.body {
-                for chunk in &page.chunks {
-                    if events.contains_key(&chunk.id)
-                        || owners.contains_key(&chunk.id)
-                        || self
-                            .records
-                            .get(&chunk.id)
-                            .is_some_and(|p| !matches!(p.body, Body::Chunk { .. }))
-                    {
-                        return Err(Error::InvalidContent);
-                    }
-                }
-            }
-            for event in payload.body.events() {
-                let manifest = match &event.effect {
-                    Effect::Create {
-                        content: Some(ContentSeed::Binary { manifest }),
-                        ..
-                    } => Some(manifest),
-                    Effect::SetContent { content } => Some(content),
-                    _ => None,
-                };
-                if let Some(manifest) = manifest {
-                    for page in &manifest.pages {
-                        if events.contains_key(&page.id)
-                            || owners.contains_key(&page.id)
-                            || self
-                                .records
-                                .get(&page.id)
-                                .is_some_and(|p| !matches!(p.body, Body::Page { .. }))
-                        {
-                            return Err(Error::InvalidContent);
-                        }
-                    }
-                }
-            }
-        }
-        // Unresolved references reserve roles too: a missing ID cannot promise
-        // both an event and a chunk/page, or events belonging to two entries.
-        #[derive(PartialEq, Eq)]
-        enum Role {
-            Event(EntryIdentity),
-            Page,
-            Chunk,
-            Envelope,
-            TextBootstrap(EntryId),
-        }
-        let mut roles = BTreeMap::new();
-        let mut expected_pages = BTreeMap::new();
-        let mut expected_chunks = BTreeMap::new();
-        let mut reserve = |id: &UpdateId, role: Role| -> Result<()> {
-            if let Some(prior) = roles.insert(id.clone(), role) {
-                let current = &roles[id];
-                if prior != *current {
-                    return Err(
-                        if matches!((&prior, current), (Role::Event(_), Role::Event(_))) {
-                            Error::IdentityMismatch
-                        } else {
-                            Error::InvalidContent
-                        },
-                    );
-                }
-            }
-            Ok(())
-        };
-        for event in events.values() {
-            reserve(&event.id, Role::Event(event.identity.clone()))?;
-            reserve(
-                &event.identity.bootstrap_id,
-                Role::Event(event.identity.clone()),
-            )?;
-            for parent in &event.parents {
-                reserve(parent, Role::Event(event.identity.clone()))?;
-            }
-        }
-        for root in &text_roots {
-            if !namespace_roots.contains(root) {
-                reserve(root, Role::TextBootstrap(owners[root].clone()))?;
-            }
-        }
-        for payload in self.records.values() {
-            let role = match &payload.body {
-                Body::Page { .. } => Role::Page,
-                Body::Chunk { .. } => Role::Chunk,
-                _ => events
-                    .get(&payload.id)
-                    .map(|e| Role::Event(e.identity.clone()))
-                    .unwrap_or(Role::Envelope),
-            };
-            reserve(&payload.id, role)?;
-            if let Body::Page { page } = &payload.body {
-                for chunk in &page.chunks {
-                    if expected_chunks
-                        .insert(chunk.id.clone(), chunk)
-                        .is_some_and(|prior| prior != chunk)
-                    {
-                        return Err(Error::InvalidContent);
-                    }
-                    reserve(&chunk.id, Role::Chunk)?;
-                }
-            }
-            for event in payload.body.events() {
-                let manifest = match &event.effect {
-                    Effect::Create {
-                        content: Some(ContentSeed::Binary { manifest }),
-                        ..
-                    } => Some(manifest),
-                    Effect::SetContent { content } => Some(content),
-                    _ => None,
-                };
-                if let Some(manifest) = manifest {
-                    for page in &manifest.pages {
-                        if expected_pages
-                            .insert(page.id.clone(), page)
-                            .is_some_and(|prior| prior != page)
-                        {
-                            return Err(Error::InvalidContent);
-                        }
-                        reserve(&page.id, Role::Page)?;
-                    }
-                }
-            }
-        }
-        // Validate references even for orphan pages not yet reachable from a
-        // manifest. Otherwise known contradictory chunks could be committed.
-        for (id, expected) in expected_pages {
-            if let Some(payload) = self.records.get(&id) {
-                let Body::Page { page } = &payload.body else {
-                    return Err(Error::InvalidContent);
-                };
-                if page.reference(id)? != *expected {
-                    return Err(Error::InvalidContent);
-                }
-            }
-        }
-        for (id, expected) in expected_chunks {
-            if let Some(payload) = self.records.get(&id) {
-                let Body::Chunk { bytes } = &payload.body else {
-                    return Err(Error::InvalidContent);
-                };
-                if bytes.len() != expected.bytes as usize
-                    || Sha256Digest::of(bytes) != expected.digest
-                {
-                    return Err(Error::InvalidContent);
-                }
-            }
-        }
+        let metadata = crate::metadata::MetadataState::from_legacy(self)?;
+        let (events, mut content_bindings) = metadata.legacy_graph_inputs()?;
         let (namespace, ancestry) =
             super::derive_graph_with_ancestry(&self.binary_records(), events)?;
         content_bindings.retain(|id, _| namespace.entries.contains_key(id));

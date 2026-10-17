@@ -10,8 +10,10 @@ use zorid_sync_protocol::{
     ExpectedContext, RealmId, UpdateId, VaultId, MAX_PLAINTEXT_BYTES, MAX_WIRE_BYTES,
 };
 
+pub mod binary_stream;
 pub mod external_namespace;
 pub mod materialization;
+pub mod metadata;
 pub mod mutation;
 pub mod v2;
 
@@ -616,6 +618,12 @@ fn derive_graph_with_ancestry(
     state: &State,
     events: BTreeMap<UpdateId, GraphEvent>,
 ) -> Result<(VaultView, GraphAncestry)> {
+    derive_graph_with_status(events, |manifest| content_status(state, manifest))
+}
+fn derive_graph_with_status(
+    events: BTreeMap<UpdateId, GraphEvent>,
+    mut resolve_content: impl FnMut(&Manifest) -> Result<ContentStatus>,
+) -> Result<(VaultView, GraphAncestry)> {
     let mut identities = BTreeMap::new();
     for event in events.values() {
         if let Some(prior) =
@@ -682,7 +690,7 @@ fn derive_graph_with_ancestry(
                     if verification_bytes > MAX_MANIFEST_VERIFY_BYTES {
                         return Err(Error::TooLarge);
                     }
-                    content_cache.insert(key, content_status(state, content)?);
+                    content_cache.insert(key, resolve_content(content)?);
                 }
             }
             _ => {}
@@ -1208,3 +1216,6 @@ fn insert(state: &State, payload: &Payload, version: Revision) -> Result<State> 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod binary_stream_tests;
