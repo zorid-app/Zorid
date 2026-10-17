@@ -84,6 +84,22 @@ impl Drop for Server {
     }
 }
 fn cli(vault: &Path, args: &[&str]) -> Output {
+    // Diagnostics contain only this finite command vocabulary, never argument
+    // values, vault/config paths, bearer tokens or captured child output.
+    let command_name = match args.first().copied() {
+        Some("init") => "init",
+        Some("create") => "create",
+        Some("read") => "read",
+        Some("write") => "write",
+        Some("move") => "move",
+        Some("delete") => "delete",
+        Some("list") => "list",
+        Some("sync") if args.contains(&"once") => "sync once",
+        Some("sync") if args.contains(&"status") => "sync status",
+        Some("sync") if args.contains(&"fixture-enroll") => "sync fixture-enroll",
+        Some("sync") if args.contains(&"watch") => "sync watch",
+        _ => "other",
+    };
     let mut child = Command::new(env!("CARGO_BIN_EXE_zorid"))
         .arg("--vault")
         .arg(vault)
@@ -120,7 +136,7 @@ fn cli(vault: &Path, args: &[&str]) -> Output {
             let _ = child.wait();
             let _ = out.join();
             let _ = err.join();
-            panic!("fixture CLI deadline exceeded");
+            panic!("fixture CLI deadline exceeded: {command_name}");
         }
         std::thread::sleep(Duration::from_millis(10));
     };
