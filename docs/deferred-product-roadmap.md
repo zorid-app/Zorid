@@ -78,7 +78,8 @@ sequence below; completion of the first goal must not close those requirements.
   actual encrypted text sync transport; namespace owner builds physical explicit
   member moves/deletes in core-native-namespace with schema7. Shared contracts
   include stable entry-key checkpoints and best-effort typing mirror arbitration.
-  Markdown/Bases migration is discussion only, not a current implementation task.
+  User now accepts shared Rust metadata/index/Base semantics as the next milestone;
+  preparation can run alongside this gate, implementation follows its acceptance.
 - Actual web/Electron selection, durable editor handshake, complete moves/deletes,
   binary transfer and cross-client encrypted convergence/restore remain required.
   P2P, complete recovery/admin and native mobile remain later milestones.
@@ -396,8 +397,21 @@ Implementation waves and parallel ownership (latest requested plan):
    Run these as successive integration checks (text first, then file lifecycle,
    then binary/unknown content), not one final large merge. Prove a basic encrypted
    backup/restore round trip before introducing real user data; automated backup
-   scheduling and administration can follow in wave 4.
-4. **Parallel expansion after the integrated gate.** Separate owners add P2P
+   scheduling and administration can follow in wave 5.
+4. **Shared document semantics in Rust (accepted 2026-10-16).** After wave3
+   acceptance, implement portable Markdown metadata extraction (properties, tags,
+   headings, links and task records), revision-aware rebuildable indexes and
+   backlink/search queries, then Base definition parsing/expression/query semantics.
+   Current TypeScript behavior inventory, shared fixtures and API contracts can
+   be prepared in parallel with wave3; do not replace app parsers during its
+   storage/recovery integration. Migrate web/WASM, desktop and standalone CLI
+   consumers incrementally against the same behavior fixtures. Keep live editor
+   syntax parsing, Markdown rendering and Base views in the web editor. Files
+   remain authoritative and invalid source remains saveable/syncable; indexes
+   are disposable local state. See `docs/shared-document-semantics-plan.md` for
+   acceptance, ownership and implementation order. Native mobile document/query
+   feature integration consumes this shared layer rather than duplicating it.
+5. **Parallel expansion after the integrated gate.** Separate owners add P2P
    discovery/authentication/relay fallback; retained encrypted history and
    coordinated off-host backups; hosted/self-hosted onboarding and administration
    UI; and native iOS/Android shells. Core owner coordinates checkpoint retention,
@@ -405,7 +419,9 @@ Implementation waves and parallel ownership (latest requested plan):
    design begins in wave 1 even though full recovery UX lands here. P2P must work
    alongside server delivery without duplicate mutation. Mobile must prove native
    bindings, keyboard/selection, permissions, lifecycle and process-death recovery.
-5. **Release and migration gate.** Verify account/vault isolation, enrollment and
+   Independent P2P/backend operations and native shell scaffolding may overlap
+   wave4 after wave3 passes; native metadata/Base features depend on wave4.
+6. **Release and migration gate.** Verify account/vault isolation, enrollment and
    key recovery, revocation-safe clean-server restoration, compatible upgrades,
    rollback and migration of existing vaults. Restore backups of accounts,
    permissions, ciphertext and recovery-critical configuration, not just notes.
