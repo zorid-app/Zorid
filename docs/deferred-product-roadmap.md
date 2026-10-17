@@ -68,6 +68,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17 00:24 local
 
+- Browser batch is now integrated through `3185253` after successful combined
+  WASM/TypeScript/webpack builds and actual two-browser encrypted relay roundtrip
+  plus concurrent-edit byte convergence. See `browser-relay-verification.md`.
+  Next run binary/move/delete/reload on the same live fixture. Native activation
+  remains approval-blocked. Physical hooks source `9e93426`, native wrapper
+  `a1c0a13` + `acd8a96`, and Electron `3ef94f8` + `dadf4a5` remain isolated.
+- Root reclaimed idle compile slot via `msg_f56012597044` after observing paused
+  editor and no compiler; all root builds now finished. Loopback relay60287 and
+  static server52832 remain for actual-browser continuation, not heavy builds.
+
 - Latest user direction: prioritize usable complete implementation; production-grade
   testing is not required now. Keep one combined build and short real client/sync
   checks plus targeted data-loss/security regressions; defer exhaustive test expansion.
