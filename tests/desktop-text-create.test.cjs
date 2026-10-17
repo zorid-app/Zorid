@@ -22,7 +22,7 @@ function fixture(){
     const serialized=JSON.stringify(request);calls.push(serialized);
     let stored=receipts.get(request.operationId);
     if(stored){assert.equal(stored.serialized,serialized);return stored.result;}
-    if(files.has(request.path))throw Object.assign(new Error('exists'),{code:'revision_conflict',commitUncertain:false});
+    if(files.has(request.path))throw Object.assign(new Error('exists'),{code:'invalid_request',commitUncertain:false});
     const result={commit:{operation_id:request.operationId},projection:{state:'pending'}};
     files.set(request.path,Buffer.from(bytes));receipts.set(request.operationId,{serialized,result});
     if(loseReply){loseReply=false;throw Object.assign(new Error('lost'),{code:'host_timeout',commitUncertain:true});}
@@ -49,8 +49,15 @@ test('checkpoint failure prevents creation and invalid text does not create reco
 });
 test('text create never overwrites an existing path and persists terminal rejection',async()=>{
   const f=fixture();f.files.set(request.path,Buffer.from('keep'));
-  await assert.rejects(desktopTextCreates(f.service,f.checkpoints).create(request),{code:'revision_conflict'});
+  await assert.rejects(desktopTextCreates(f.service,f.checkpoints).create(request),{code:'invalid_request'});
   assert.equal(f.files.get(request.path).toString(),'keep');
   assert.equal(JSON.parse(f.heads.get('create-text/v1/operation').encodedState).state,'rejected');
   await desktopTextCreates(f.service,f.checkpoints).recover();assert.equal(f.calls.length,1);
+});
+
+test('sanitized not_found create rejection does not poison startup recovery',async()=>{
+  const f=fixture();f.service.host.createText=async()=>{throw Object.assign(new Error('parent'),{code:'not_found',commitUncertain:false});};
+  await assert.rejects(desktopTextCreates(f.service,f.checkpoints).create(request),{code:'not_found'});
+  await desktopTextCreates(f.service,f.checkpoints).recover();
+  assert.equal(JSON.parse(f.heads.get('create-text/v1/operation').encodedState).state,'rejected');
 });

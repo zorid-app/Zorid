@@ -5,7 +5,9 @@ const {checkpointBytes}=require('./durable-checkpoints.cjs');
 const prefix='create-text/v1/';
 const identity=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(value);
 const failure=code=>Object.assign(new Error('Text creation could not finish; its exact request is retained.'),{code});
-const terminal=new Set(['invalid_path','invalid_identifier','invalid_mutation','invalid_text','invalid_family_command','entry_not_found','entry_deleted','revision_conflict','idempotency_conflict']);
+// Include the desktop host's sanitized ContractError codes, not just the
+// lower-level store enum names. Corruption/I/O remain pending and uncertain.
+const terminal=new Set(['invalid_request','not_found','invalid_path','invalid_identifier','invalid_mutation','invalid_text','invalid_family_command','entry_not_found','entry_deleted','revision_conflict','idempotency_conflict']);
 
 /** Main-owned create consumer. The durable checkpoint is explicit authorization
  * for this exact user-requested Create/Text, never an overwrite or inferred mode.
