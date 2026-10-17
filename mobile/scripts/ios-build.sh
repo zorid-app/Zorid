@@ -7,8 +7,9 @@ fail() { printf '%s\n' "$*" >&2; exit 1; }
 MODE="${1:-simulator}"
 case "$MODE" in
   simulator) TARGET=aarch64-apple-ios-sim; PROFILE=debug; CONFIG=Debug; SDK=iphonesimulator; DEST='generic/platform=iOS Simulator' ;;
+  development) TARGET=aarch64-apple-ios; PROFILE=debug; CONFIG=Debug; SDK=iphoneos; DEST='generic/platform=iOS' ;;
   device) TARGET=aarch64-apple-ios; PROFILE=release; CONFIG=Release; SDK=iphoneos; DEST='generic/platform=iOS' ;;
-  *) fail 'Usage: ios-build.sh [simulator|device]' ;;
+  *) fail 'Usage: ios-build.sh [simulator|device|development]' ;;
 esac
 [[ "$(uname -s)" == Darwin ]] || fail 'iOS builds require macOS and full Xcode.'
 for cmd in pnpm xcrun python3; do command -v "$cmd" >/dev/null || fail "Missing command: $cmd"; done
@@ -39,6 +40,20 @@ XCODE_MAJOR="$(xcrun xcodebuild -version | python3 -c 'import sys; print(sys.std
 
 : "${IOS_BUILD_NUMBER:?Set an unused, increasing IOS_BUILD_NUMBER (1..9999).}"
 [[ "$IOS_BUILD_NUMBER" =~ ^[1-9][0-9]{0,3}$ ]] || fail 'IOS_BUILD_NUMBER must be an integer from 1 through 9999.'
+if [[ "$MODE" == development ]]; then
+  : "${IOS_OUTPUT_DIR:?Set a fresh IOS_OUTPUT_DIR outside the repository.}"
+  : "${IOS_TEAM_ID:?Set the nonsecret development IOS_TEAM_ID.}"
+  : "${IOS_DEVICE_ID:?Set the paired iPhone hardware UDID (one device only).}"
+  [[ "$IOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || fail 'IOS_TEAM_ID must be a ten-character Apple team ID.'
+  [[ "$IOS_DEVICE_ID" =~ ^([A-Fa-f0-9]{40}|[A-Fa-f0-9]{8}-[A-Fa-f0-9]{16})$ ]] || fail 'IOS_DEVICE_ID must be one hardware UDID, not a name or list.'
+  case "${IOS_ALLOW_PROVISIONING_UPDATES:-0}" in 0|1) ;; *) fail 'IOS_ALLOW_PROVISIONING_UPDATES must be 0 or 1.' ;; esac
+  # Resolve existing ancestors/symlinks before creating any output. Never reuse a stale build.
+  IOS_OUTPUT_DIR="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).expanduser().resolve())' "$IOS_OUTPUT_DIR")"
+  PHYSICAL_ROOT="$(pwd -P)"
+  case "$IOS_OUTPUT_DIR/" in "$PHYSICAL_ROOT/"*) fail 'Development output must be outside the repository.' ;; esac
+  [[ ! -e "$IOS_OUTPUT_DIR" ]] || fail 'Development output already exists; choose a fresh IOS_OUTPUT_DIR.'
+  DEST="platform=iOS,id=$IOS_DEVICE_ID"
+fi
 OUTPUT="${IOS_OUTPUT_DIR:-${TMPDIR:-/tmp}/zorid-ios-output}"
 mkdir -p "$OUTPUT"
 OUTPUT="$(cd "$OUTPUT" && pwd)"
@@ -65,10 +80,26 @@ CARGO_ARGS=(build --locked --manifest-path mobile/rust/Cargo.toml --target "$TAR
 [[ "$PROFILE" != release ]] || CARGO_ARGS+=(--release)
 "$CARGO_BIN" "${CARGO_ARGS[@]}"
 [[ -f "$CARGO_TARGET_DIR/$TARGET/$PROFILE/libzorid_mobile_ffi.a" ]] || fail 'Missing zorid_mobile_ffi static library.'
-XCODE_ARGS=(-project ios/App/App.xcodeproj -scheme App -configuration "$CONFIG" -sdk "$SDK" -destination "$DEST" -derivedDataPath "$OUTPUT/DerivedData" -jobs 1 "ARCHS=arm64" "CURRENT_PROJECT_VERSION=$IOS_BUILD_NUMBER" 'MARKETING_VERSION=0.1.0' 'PRODUCT_BUNDLE_IDENTIFIER=app.zorid.notes')
-if [[ "$MODE" == simulator ]]; then
-  xcrun xcodebuild "${XCODE_ARGS[@]}" CODE_SIGNING_ALLOWED=NO build
+XCODE_ARGS=(-project ios/App/App.xcodeproj -scheme App -configuration "$CONFIG" -sdk "$SDK" -destination "$DEST" -derivedDataPath "$OUTPUT/DerivedData" -jobs 1 "ARCHS=arm64" "CURRENT_PROJECT_VERSION=$IOS_BUILD_NUMBER" 'MARKETING_VERSION=0.1.0' )
+if [[ "$MODE" == development ]]; then
+  # Command-line overrides only: preserve the project's OTHER_LDFLAGS and native source.
+  # Override both general and SDK-specific paths so no iphoneos Release library is selected.
+  XCODE_ARGS+=(
+    'PRODUCT_BUNDLE_IDENTIFIER=app.zorid.notes.dev'
+    "DEVELOPMENT_TEAM=$IOS_TEAM_ID" CODE_SIGN_STYLE=Automatic 'CODE_SIGN_IDENTITY=Apple Development'
+    'PROVISIONING_PROFILE_SPECIFIER=' 'PROVISIONING_PROFILE='
+    'LIBRARY_SEARCH_PATHS="$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/debug"'
+    'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]="$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/debug"'
+  )
+  if [[ "${IOS_ALLOW_PROVISIONING_UPDATES:-0}" == 1 ]]; then
+    XCODE_ARGS+=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration)
+  fi
+  xcrun xcodebuild "${XCODE_ARGS[@]}" build
+  printf 'Development app (app.zorid.notes.dev): %s\n' "$OUTPUT/DerivedData/Build/Products/Debug-iphoneos/App.app"
+  printf '%s\n' 'Build finished; installation and launch are separate explicit ios-run.sh actions.'
+elif [[ "$MODE" == simulator ]]; then
+  xcrun xcodebuild "${XCODE_ARGS[@]}" PRODUCT_BUNDLE_IDENTIFIER=app.zorid.notes CODE_SIGNING_ALLOWED=NO build
   printf 'Unsigned simulator app: %s\n' "$OUTPUT/DerivedData/Build/Products/Debug-iphonesimulator/App.app"
 else
-  xcrun xcodebuild "${XCODE_ARGS[@]}" "DEVELOPMENT_TEAM=$IOS_TEAM_ID" CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=$IOS_SIGNING_IDENTITY" "PROVISIONING_PROFILE_SPECIFIER=$IOS_PROFILE_UUID" -archivePath "$OUTPUT/App.xcarchive" archive
+  xcrun xcodebuild "${XCODE_ARGS[@]}" PRODUCT_BUNDLE_IDENTIFIER=app.zorid.notes "DEVELOPMENT_TEAM=$IOS_TEAM_ID" CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=$IOS_SIGNING_IDENTITY" "PROVISIONING_PROFILE_SPECIFIER=$IOS_PROFILE_UUID" -archivePath "$OUTPUT/App.xcarchive" archive
 fi

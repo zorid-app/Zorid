@@ -110,6 +110,106 @@ shell command strings; defaults come from the selected Xcode SDK. `DEVELOPER_DIR
 selects Xcode without changing global xcode-select state. No nightly/build-std,
 WASM target, cross compiler package, CocoaPods or fastlane install is performed.
 
+## Paired physical iPhone: development build, install, launch
+
+This path is separate from TestFlight. Source is prepared for owner recovery
+`aff0665c`; the owner's reported Rust host/ABI/simulator staticlib results do not
+prove a physical-device Debug build, web bundle, Xcode signing, installation or
+launch. Delivery worker performed syntax/source review only, with no build,
+provisioning mutation, device installation or simulator/device run. The native
+owner controls the single build slot and runs these commands after integration.
+
+Use `mobile/scripts/ios-run.sh` with three separate explicit actions: `build`
+(default), `install`, and `launch`. `build` only builds. `install` uses the existing
+build output without rebuilding or launching; `launch` requests launch of that
+bundle without reinstalling. All actions require one `IOS_DEVICE_ID`: the paired
+iPhone's hardware UDID, accepted by both Xcode destination selection and devicectl
+(40 hexadecimal digits, or 8 hexadecimal digits followed by a hyphen and 16 more).
+Names, lists, and CoreDevice UUIDs are rejected.
+No action discovers/selects the first device, targets all devices, erases data,
+uninstalls an app, or terminates a running app. Installing another development
+build may update the existing **development** app; retain development test data
+only with the usual care for unreleased schemas.
+
+Development bundle ID is fixed to **`app.zorid.notes.dev`**. It has a separate app
+sandbox from production `app.zorid.notes`, protecting production's installed data.
+The current Info.plist has a literal display name, so this source-only script
+keeps **Zorid** as the icon name; two installed icons may have the same name.
+No project/Info.plist edits are required. Capacitor runtime config still comes
+from the checked-in config; the native bundle override and installed app identity
+are `.dev`. Future app groups/keychain groups or other shared-container features
+must be reviewed before assuming this separate ID alone isolates such features.
+
+Prerequisites: unlock/trust/pair the phone, enable iPhone Developer Mode as needed,
+select full Xcode 26+, and use a signed-in Xcode Apple Account with the intended
+team or existing valid development identity/profile. Apple worker coordinates
+team/device/account readiness; an ASC API key is neither needed nor passed to
+this path. Account restrictions or outstanding agreements may still prevent
+creating development signing assets. Do not paste account credentials into commands.
+Find/verify the specific phone UDID in Xcode's Devices and Simulators UI; verify it
+with the owner before a run. No IDs are hardcoded in scripts or documentation.
+
+Use the explicit official `CARGO`/`RUSTC` executable paths documented above and
+installed `aarch64-apple-ios` target libraries. Set the nonsecret `IOS_TEAM_ID`,
+`IOS_DEVICE_ID`, `IOS_BUILD_NUMBER` and a **new, nonexistent** external output path:
+
+```sh
+export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+# Set IOS_TEAM_ID and IOS_DEVICE_ID to the Apple-worker/owner-confirmed values.
+export IOS_TEAM_ID IOS_DEVICE_ID
+export IOS_BUILD_NUMBER=1
+export IOS_OUTPUT_DIR="$HOME/Library/Caches/zorid-iphone-dev-1"
+bash mobile/scripts/ios-run.sh build
+```
+
+By default Xcode uses existing available development signing assets without the
+provisioning update/device-registration flags. If those assets are missing, the
+explicit owner-authorized command below permits Xcode automatic signing to create
+or update development signing resources and register the selected phone. Use a
+fresh output path even after a failed build; preserve prior evidence rather than
+removing/reusing an output automatically:
+
+```sh
+export IOS_OUTPUT_DIR="$HOME/Library/Caches/zorid-iphone-dev-2"
+IOS_ALLOW_PROVISIONING_UPDATES=1 bash mobile/scripts/ios-run.sh build
+```
+
+`IOS_ALLOW_PROVISIONING_UPDATES` accepts only `0` (default) or `1`. Only `1` adds
+both `-allowProvisioningUpdates` and `-allowProvisioningDeviceRegistration` to
+this explicit build. The scripts do not log in or accept agreements, import a
+private key, use an API key/password argument, or change the project signing
+settings on disk. Xcode uses its signed-in Apple Account/local keychain.
+
+Build sequence is the production `webpack --env target=desktop` bundle plus
+`cap copy ios`, then `cargo build --locked --manifest-path mobile/rust/Cargo.toml
+--target aarch64-apple-ios -j1` **without `--release`**, and Xcode App project/scheme
+Debug/iphoneos, arm64, `-jobs 1`, selected phone destination, automatic signing and
+explicit development team. Both general and `iphoneos` SDK-specific
+`LIBRARY_SEARCH_PATHS` are overridden to
+`mobile/rust/target/aarch64-apple-ios/debug`; the existing project's iphoneos
+Release path cannot accidentally supply this library. `OTHER_LDFLAGS` stays under
+native project ownership. Output is
+`$IOS_OUTPUT_DIR/DerivedData/Build/Products/Debug-iphoneos/App.app`, with version
+0.1.0 and supplied build number. This is not a distribution archive or IPA.
+
+After the owner confirms the build, retain the same output/device variables and
+run the separate requested steps:
+
+```sh
+bash mobile/scripts/ios-run.sh install
+bash mobile/scripts/ios-run.sh launch
+```
+
+Before either device action, the wrapper checks the built Info.plist for exact
+`.dev` bundle ID, `iPhoneOS` platform and an existing app executable. Install uses
+`xcrun devicectl device install app --device "$IOS_DEVICE_ID" <built-app>`; launch
+uses `xcrun devicectl device process launch --device "$IOS_DEVICE_ID"
+app.zorid.notes.dev`. A failed install or launch exits nonzero; it does not erase,
+uninstall, retry against another phone, or claim success. The owner must record
+actual signing/install/launch output and visible app behavior separately. A locked
+phone, untrusted developer identity, missing Developer Mode or unavailable
+provisioning requires resolving that prerequisite before retrying.
+
 ## Signed device export and explicit upload
 
 Use a fresh external output directory for every archive. All environment values
@@ -175,8 +275,11 @@ permissions and symlinks before a separate native verification pass.
 archive as GitHub artifacts, release the App Store app, invite testers or assign
 TestFlight groups.
 
-Create/configure environment `ios-testflight` with deployment branches restricted
-to `main` before first upload; use repository environment protections as desired.
+Owner-reported remote setup (2026-10-17): `ios-build` and `ios-testflight` were
+created and read back with custom deployment policies listing exactly branch
+`main`; no secrets, workflow push or dispatch accompanied that setup. Delivery
+worker did not independently requery these environments. Preserve that policy
+before first upload; use repository environment protections as desired.
 `ios-build` is the credential-free build environment. Configure signing secrets
 only in `ios-testflight`, never in a PR-accessible environment or root YAML.
 No credential is passed as a workflow_dispatch input. Dependency installation
@@ -248,3 +351,14 @@ Current official guidance checked 2026-10-17:
   documents copying web assets and runtime configuration.
 - [GitHub artifact permission behavior](https://github.com/actions/upload-artifact#permission-loss)
   explains why the simulator bundle is tarred before artifact storage.
+
+Physical-device references checked 2026-10-17:
+
+- [Apple: Xcode command-line tools](https://developer.apple.com/documentation/xcode/xcode-command-line-tool-reference)
+  identifies Xcode's `devicectl` and `xcodebuild` tools.
+- [Apple: signing workflow](https://help.apple.com/xcode/mac/current/en.lproj/dev60b6fbbc7.html)
+  describes automatic development signing assets.
+- [Apple: automatic signing controls](https://developer.apple.com/help/account/access/automatic-signing-controls)
+  explains team restrictions on registering App IDs and devices.
+- [Apple: command-line provisioning flags](https://help.apple.com/xcode/mac/current/en.lproj/dev86f8cf93d.html)
+  documents the explicit update and device-registration flags.
