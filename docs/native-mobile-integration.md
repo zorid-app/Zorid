@@ -344,3 +344,58 @@ combined158 focused adapter/commands/navigation/lifecycle checks PASS. Native
 independent review closed earlier save/recovery/lifecycle findings at source
 level, not runtime parity. Simulator bootstatus67270 reached boot terminal after
 2m01s; app install/launch is still tracked by the same process, no restart.
+
+
+## Runtime and follow-up checkpoint — 2026-10-17 21:06 UTC
+
+Owner remains native-mobile-recovery / tingkai-c/native-mobile-recovery, sole
+main integration remains the shared-core coordinator. No mobile push/integration
+was performed. Simulator install/launch process67270 finished exit0; the owned
+iPhone17 Simulator1274C6C8-5F07-4A30-8B8C-415B286E6801 stays booted under the
+latest user instruction. Its current app artifact is source64019928, before
+route-history, accessory-removal and foreground fixes.
+
+Observed with Orca automation: Recents and Files are native bottom tabs; Files
+folder chevron expands inline independently of folder-body drill-in; direct
+child list and metadata display, tapping Nested.md opens only document editor
+content with native navigation. Tapping the body brings up the software keyboard
+and the custom formatting toolbar. The older extra WebKit Previous/Next/Done
+accessory remains visible in this artifact. Native Back returned to the file
+page. Resolving the current Simulator container after reinstall and reading the
+disposable vault file confirmed exact53-byte UTF-8 content:
+`Nested file navigation fixture.\nToolbar verification.`
+This proves this save path, not undo/redo, lifecycle or media playback.
+
+Physical development artifact source d6ed276f built successfully (15167 exit0)
+using App-Dev/Debug-Dev, official Rust1.95 with cached unchanged staticlib,
+production webpack/cap copy, Xcode26.3 and cached Automatic signing. Artifact:
+/private/tmp/zorid-ios-native-v2-device-20261017/DerivedData/Build/Products/
+Debug-Dev-iphoneos/App.app. Verification/install/launch50642 exit0: strict deep
+codesign check, bundle app.zorid.notes.dev, development environment and Zorid Dev
+display-name assertions, exact paired iPhone install and launch succeeded.
+Build log /private/tmp/mobile-native-v2-device-build.log is private; no credentials
+are recorded in this document. This artifact includes native route history and
+seamless editor appearance, but predates the pending keyboard/UI fixes.
+
+User reports retained-focus foreground toolbar disappearance, focus layout jump,
+slow vault opening and abrupt clipping of top-control shadows. The screenshot
+clarification is explicitly shadow clipping, not Parent-folder spacing or shadow
+intensity. Latest requested UI: remove +; fixed Settings bottom tab owns page
+configuration; connected Liquid Glass back/forward capsule top-left, hidden on
+root pages; skeletons during native and embedded attachment loading. Native
+worker owns those Swift files; loading-state worker has coordinator permission
+only for additive attachment loading attributes/cleanup, with mobile-only CSS.
+
+Committed source a6672528 imports public WK inputAccessoryView=nil plus live
+keyboardLayoutGuide geometry. Adapter0e2189e1 adds typed foreground state request
+(coalesced across lifecycle ACK, stale generation suppressed),132 focused tests
+reported by worker. Owner2d232466 wires optional callback to the current active
+editor state even during WebKit DOM visibility lag. Focused workspace navigation/
+lifecycle25 tests passed exit0, full tsc exit0, diff-check passed. These source
+changes still require updated native compilation and actual runtime verification.
+
+Apple remains blocked by agreement-state403 after the one fresh dual-key pass
+at20:39:59UTC; support request already submitted privately. No TestFlight app,
+internal tester, distribution provisioning, secrets or upload readiness is claimed.
+Sync next step is read-only exact contract planning under coordinator permission,
+not permission to edit shared host Rust or relax literal-loopback restrictions.
