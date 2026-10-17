@@ -1747,6 +1747,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zorid-file-sync"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "zorid-client-sync",
+ "zorid-core",
+ "zorid-crypto",
+ "zorid-sync-protocol",
+]
+
+[[package]]
 name = "zorid-native"
 version = "0.1.0"
 dependencies = [
@@ -1781,6 +1794,7 @@ dependencies = [
 name = "zorid-sync-protocol"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
 ]
