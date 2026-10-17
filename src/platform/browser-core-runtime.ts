@@ -6,7 +6,8 @@ import { boundedUtf8, checkpointKey, snapshotCheckpointChange } from '../core/ch
 
 export interface BrowserCoreRuntimeOptions {
   database: string;
-  /** Stable for reload recovery of this tab incarnation; never shared across tabs. */
+  /** Explicit canonical fixture UUID, retained across restart. Duplicate active
+   * consumers fail closed in the worker; production slot allocation is separate. */
   clientId: string;
   /** Same-origin generated production ESM asset; no prototype URL fallback. */
   wasmModuleUrl: string;
@@ -24,11 +25,23 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
   get checkpoints():DurableCheckpoints|undefined{return this.checkpointProvider;}
   private worker: Worker;
   private pending = new Map<string, Pending>();
+  private dispatchTail: Promise<void> = Promise.resolve();
+  private queuedCalls = 0;
+  private admissionGuard?: () => void;
   private listeners = new Set<(paths?: readonly string[]) => void>();
   private closed = false;
+  private releasing = false;
+  private releasePending?: Promise<void>;
   private recovery = new Set<string>();
   private timeoutMs: number;
-  private visibility = () => { if (!this.closed && document.visibilityState === 'visible') void this.call('refresh').catch(error => this.fail(error)); };
+  private visibility = () => {
+    if (!this.closed && !this.releasing && document.visibilityState === 'visible') void this.call('refresh').catch(error => {
+      // Refresh is only a hint. Intentional release may cancel an already queued
+      // hint; capacity pressure must not terminate an otherwise healthy writer.
+      if (error?.code === 'client_queue_full' || this.releasing && error?.code === 'client_not_admitted') return;
+      this.fail(error);
+    });
+  };
   private constructor(options: BrowserCoreRuntimeOptions) {
     this.timeoutMs = options.timeoutMs ?? 20000;
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > 120000) throw new BrowserVaultError('invalid_timeout', 'Worker timeout must be 1–120000 milliseconds');
@@ -49,12 +62,14 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
     this.worker.onmessageerror = () => this.fail(new BrowserVaultError('outcome_unknown', 'Browser worker response could not be decoded; recover the original intent'));
   }
   static async open(options: BrowserCoreRuntimeOptions): Promise<BrowserCoreRuntime> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(options.clientId)) throw new BrowserVaultError('invalid_client_identity', 'Fixture client must be a canonical UUID retained across restart');
     if (options.allowNewVault !== true) throw new BrowserVaultError('explicit_vault_required', 'New core vault opening requires explicit opt-in');
     const moduleUrl = new URL(options.wasmModuleUrl, location.href);
     if (moduleUrl.origin !== location.origin) throw new BrowserVaultError('invalid_wasm_url', 'WASM runtime must be a same-origin application asset');
     const runtime = new BrowserCoreRuntime(options);
     try {
-      // The worker recovers only this named client's pending intents, using Rust
+      // The worker exclusively claims this authority/client before recovering
+      // this named client's pending intents, using Rust
       // receipt lookup, before this Promise exposes a ready adapter.
       const clientId = options.clientId;
       const opened = await runtime.call<{recovery:string[];authorityId:string}>('open', {...options, wasmModuleUrl:moduleUrl.href});
@@ -80,22 +95,62 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
       return runtime;
     } catch (error) { runtime.close(); throw error; }
   }
+  private assertDispatch(operation: string): void {
+    if (this.closed) throw new BrowserVaultError('storage_closed', 'Browser worker is closed');
+    if (this.releasing && operation !== 'release-client') throw new BrowserVaultError('client_not_admitted', 'Browser consumer is releasing its ownership');
+    if (operation !== 'release-client') this.admissionGuard?.();
+  }
+  /** One owner guard per opened runtime. Checked again after transport queue
+   * waits, immediately before posting the request; not only at facade entry. */
+  installAdmissionGuard(guard: () => void): void {
+    this.assertActive();
+    if (this.admissionGuard || typeof guard !== 'function') throw new BrowserVaultError('client_already_admitted', 'Runtime already has a consumer guard');
+    this.admissionGuard = guard;
+  }
   private call<T>(operation: string, payload?: unknown): Promise<T> {
-    if (this.closed) return Promise.reject(new BrowserVaultError('storage_closed', 'Browser worker is closed'));
-    const id = crypto.randomUUID();
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new BrowserVaultError('outcome_unknown', 'Worker response timed out; exact prepared intent remains recoverable', {request_id:id, operation}));
-      }, this.timeoutMs);
-      this.pending.set(id, {resolve: value => resolve(value as T), reject, timer, operation});
-      try { this.worker.postMessage({id, operation, payload}); }
-      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
+    let snapshot: unknown;
+    try {
+      this.assertDispatch(operation);
+      // Bound retained structured-clone payloads while the worker is stalled.
+      if (this.queuedCalls >= 8) throw new BrowserVaultError('client_queue_full', 'Browser consumer request queue is full; retain the original operation');
+      snapshot = structuredClone(payload);
+    } catch (error) { return Promise.reject(error); }
+    this.queuedCalls++;
+    const result = this.dispatchTail.then(() => {
+      this.assertDispatch(operation);
+      const id = crypto.randomUUID();
+      return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          // The worker might still execute a timed-out request. Terminate and
+          // fence all queued calls, rather than advancing behind unknown work.
+          this.fail(new BrowserVaultError('outcome_unknown', 'Worker response timed out; recover the exact durable operation in a new runtime', {request_id:id,operation}));
+        }, this.timeoutMs);
+        this.pending.set(id, {resolve: value => resolve(value as T), reject, timer, operation});
+        try { this.worker.postMessage({id, operation, payload:snapshot}); }
+        catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
+      });
     });
+    this.dispatchTail = result.then(() => undefined, () => undefined);
+    return result.finally(() => { this.queuedCalls--; });
   }
   private fail(error: BrowserVaultError): void {
     for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(error); }
     this.pending.clear(); this.close();
+  }
+  assertActive(): void {
+    if (this.closed || this.releasing || !this.authorityScope) throw new BrowserVaultError('client_ownership_lost', 'Browser consumer no longer owns its worker');
+  }
+  /** Call only after the consumer drain and scoped durable flush. An uncertain
+   * host reply permits exact release retry while transport is alive. Timeout or
+   * worker loss instead requires recovery in a new runtime; never further writes. */
+  releaseClient(): Promise<void> {
+    if (this.releasePending) return this.releasePending;
+    if (this.closed) return Promise.reject(new BrowserVaultError('client_ownership_lost', 'Worker release cannot be confirmed after transport loss'));
+    this.releasing = true;
+    document.removeEventListener('visibilitychange', this.visibility);
+    this.releasePending = this.call<void>('release-client').then(() => this.close())
+      .finally(() => { this.releasePending = undefined; });
+    return this.releasePending;
   }
   inventory(): Promise<BrowserVaultRead[]> { return this.call('inventory'); }
   readEntry(path: string): Promise<BrowserVaultRead | null> { return this.call('read', path); }

@@ -1,6 +1,8 @@
 import type { PlatformVault } from './index.ts';
 import { BrowserCoreAdapter } from './browser-core.ts';
 import { BrowserCoreRuntime } from './browser-core-runtime.ts';
+import { admitBrowserFixtureClient } from './browser-client-admission.ts';
+import type { BrowserClientContext } from './browser-client-admission.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 
 export interface BrowserCoreFixtureConfig {
@@ -29,10 +31,15 @@ export function browserCoreFixtureConfig(enabled: boolean, url: URL, buildId: st
 }
 
 /** Root startup must invoke this only in its web branch with a build-time gate. */
-export async function openBrowserCoreFixture(config: BrowserCoreFixtureConfig): Promise<PlatformVault> {
+export async function openBrowserCoreFixture(config: BrowserCoreFixtureConfig): Promise<PlatformVault & {consumer:BrowserClientContext}> {
   const runtime = await BrowserCoreRuntime.open({database:config.database,clientId:config.clientId,
     wasmModuleUrl:config.wasmModuleUrl,allowNewVault:true});
+  let consumer: BrowserClientContext;
+  try { consumer = admitBrowserFixtureClient(runtime, {fixture:true,assertOwner:()=>runtime.assertActive()}); }
+  catch (error) { runtime.close(); throw error; }
   const marker = document.createElement('meta'); marker.name = 'zorid-core-fixture-build'; marker.content = config.buildId;
   document.head.querySelector('meta[name="zorid-core-fixture-build"]')?.remove(); document.head.append(marker);
-  return {adapter:new BrowserCoreAdapter(runtime),label:'Core fixture',id:config.platformId};
+  // Expose the admitted context to explicit fixtures only. Do not install the
+  // durable editor capability before NoteBuffer/lifecycle acceptance.
+  return {adapter:new BrowserCoreAdapter(runtime),consumer,label:'Core fixture',id:config.platformId};
 }

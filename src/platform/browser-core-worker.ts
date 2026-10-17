@@ -1,15 +1,24 @@
 import { openBrowserVault, BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserVault, BrowserVaultWasm } from '../core/browser-vault.ts';
 import { afterDurableCommit } from './browser-core-events.ts';
+import { claimBrowserClient } from './browser-client-lease.ts';
+import type { BrowserClientLease } from './browser-client-lease.ts';
 
 // DOM builds and worker builds share this file without mixing lib.dom/lib.webworker.
 const port = self as unknown as {onmessage: ((event: MessageEvent) => void) | null; postMessage(value: unknown): void};
 let vault: BrowserVault | undefined, clientId = '', channel: BroadcastChannel | undefined;
 let sequence = '0', queue: Promise<unknown> = Promise.resolve();
 let recovery = new Set<string>();
+let lease: BrowserClientLease | undefined, released = false;
+function assertOwner(): void {
+  if (released || !lease) throw new BrowserVaultError('client_ownership_lost', 'Worker no longer owns this consumer');
+  lease.assertActive();
+}
 async function refresh(): Promise<void> {
-  if (!vault) return;
+  if (!vault || released) return;
+  assertOwner();
   const next = await vault.changesSince(sequence);
+  assertOwner();
   if (next.sequence !== sequence) { port.postMessage({event:'change',paths:next.paths}); sequence = next.sequence; }
 }
 async function execute(intentId: string): Promise<string> {
@@ -28,10 +37,17 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     await wasm.default();
     vault = await openBrowserVault({name:payload.database, wasm}); clientId = payload.clientId;
     try {
+      // Open only reads the persisted authority. No intent replay/checkpoint access
+      // occurs before this lifetime lease; no IDB transaction spans the wait.
+      lease = await claimBrowserClient(self.navigator.locks, {vaultId:vault.authorityId,clientId}, error => {
+        channel?.close(); vault?.close();
+        try { port.postMessage({event:'storage-error',code:error.code}); } catch { /* Worker transport already failed. */ }
+      });
+      assertOwner();
       channel = new BroadcastChannel(`zorid-core:${payload.database}`);
       let recoveredCommit = false;
       for (const intent of await vault.intents(clientId)) if (!intent.acknowledged && ['commit_requested','committed'].includes(intent.status)) {
-        try { await vault.executeIntent(clientId, intent.intent_id); recoveredCommit = true; }
+        try { assertOwner(); await vault.executeIntent(clientId, intent.intent_id); recoveredCommit = true; }
         catch (error) { if (!(error instanceof BrowserVaultError && error.source === 'rust')) throw error; }
       }
       sequence = JSON.parse(await vault.snapshot()).sequence;
@@ -41,10 +57,23 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         queue = queue.then(refresh).catch(error => port.postMessage({event:'storage-error', code:error.code ?? 'storage_failure'}));
       };
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
+      assertOwner();
       return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery]};
-    } catch (error) { channel?.close(); channel = undefined; vault.close(); vault = undefined; throw error; }
+    } catch (error) {
+      channel?.close(); channel = undefined; vault.close(); vault = undefined;
+      if (lease) { try { await lease.release(); } catch { /* Original open failure remains uncertain. */ } }
+      throw error;
+    }
   }
   if (!vault) throw new BrowserVaultError('not_open', 'Open worker vault first');
+  if (operation === 'release-client') {
+    if (released) return; // Exact retry after a lost release acknowledgement.
+    assertOwner();
+    // Serialized behind all earlier dispatches, including timed-out RPCs/hints.
+    channel?.close(); channel = undefined; vault.close();
+    await lease!.release(); released = true; return;
+  }
+  assertOwner();
   switch (operation) {
     case 'inventory': return vault.inventory();
     case 'read': return vault.readEntry(payload);
@@ -74,6 +103,12 @@ port.onmessage = ({data}) => {
       const failure = error instanceof BrowserVaultError ? error : new BrowserVaultError('storage_failure', error instanceof Error ? error.message : String(error));
       try { port.postMessage({id, ok:false, error:{code:failure.code, message:failure.message, details:failure.details, source:failure.source}}); }
       catch { /* Lost response remains outcome_unknown; do not poison later dispatch. */ }
+      if (['storage_closed','storage_corrupt','client_ownership_lost'].includes(failure.code)) {
+        // For example, IDB versionchange can close the database while the worker
+        // is still alive. Revoke the runtime rather than retain an admitted scope.
+        channel?.close(); vault?.close();
+        try { port.postMessage({event:'storage-error',code:failure.code}); } catch { /* Transport is already lost. */ }
+      }
     }
   });
 };
