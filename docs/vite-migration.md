@@ -30,14 +30,14 @@ sequence: Vite → Bases/tasks/calendar → Stage5; mobile UX continues in paral
 | Gate | Result |
 | --- | --- |
 | Pinned dependencies | Vite8.3.4/directAcorn8.17.0; existing app resolutions preserved; isolated frozen install0 |
-| Vendor identity |232PDF+72math exact old/new paths/order/sizes/hashes; existing Prism manifest retained |
+| Vendor identity |232PDF+72math exact old/new extraction paths/order/sizes/hashes; all307 PDF/math/Prism assets byte-equal in actual Vite output |
 | Asset/worker/CSP/staging checks |34/34 pass; two additional dev MIME/source-invalidation checks pass |
 | Combined native/shared source | Full TypeScript0,272/272 focused checks; independent source audit passes |
 | Native renderer build | Final production build1.05s, success; not a benchmark or speedup claim |
 | Actual Electron file renderer | Loaded candidate dist; note editor/math/code; save exact146 bytes including raw math/code, then test app37382 closed0 |
 | Actual production browser | Default Rust/WASM startup, create, rename, save, reload; persisted89-character note; rendered math1 and actual Prism keyword/number/operator tokens; no observed warn/error logs |
 | Actual dev browser | Default Rust/WASM startup, create/save/reload; persisted64-character note; math1 and Prismkeyword1; no observed warn/error logs |
-| Real desktop staging | Pending: new protobuf/Connect package distributions omit root license text; pinned notice audit assigned. Existing strict notice guard retained |
+| Real desktop staging/archive | PASS347files, actual arm64Rusthost; ASAR verified against exact input manifest. Pinned official RPC notices independently source-reviewed; strict notice guard retained |
 | iOS renderer | Pending composed Vite/focus/refresh build, owner slot granted; compile and actual native open/save/localassets must be reported separately |
 
 Root test browser tabs are closed, servers10517/18756 stopped130, Electronclosed0.
