@@ -1,4 +1,4 @@
-//! Folder-create projection, deliberately separate from unimplemented move/delete.
+//! Folder-create publication, including proven handoff to family namespace work.
 use super::*;
 use crate::physical_bindings::{
     self, PhysicalBinding, PhysicalIdentity, PublicationKind, PublicationProof,
@@ -28,6 +28,7 @@ pub enum DirectoryPhase {
     Staged,
     Published,
     Complete,
+    Cancelled,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +39,14 @@ pub struct DirectoryAttempt {
     pub target: EntryState,
     pub phase: DirectoryPhase,
     pub stage_identity: Option<String>,
+}
+impl DirectoryAttempt {
+    pub fn completed(&self) -> bool {
+        matches!(
+            self.phase,
+            DirectoryPhase::Complete | DirectoryPhase::Cancelled
+        )
+    }
 }
 fn valid_directory(state: &EntryState, id: &str) -> Result<()> {
     if state.id.as_str() != id || state.deleted || state.kind != EntryKind::Folder {
@@ -60,11 +69,14 @@ fn decode(
     if a.attempt_id.as_str() != id
         || a.job_id.as_str() != job
         || !matches!(completed, 0 | 1)
-        || (a.phase == DirectoryPhase::Complete) != (completed == 1)
+        || a.completed() != (completed == 1)
         || a.stage_identity
             .as_ref()
             .is_some_and(|s| !valid_identity(s))
-        || (a.phase != DirectoryPhase::Prepared && a.stage_identity.is_none())
+        || (matches!(
+            a.phase,
+            DirectoryPhase::Staged | DirectoryPhase::Published | DirectoryPhase::Complete
+        ) && a.stage_identity.is_none())
     {
         return Err(StoreError::Corrupt(
             "invalid directory attempt columns".into(),
@@ -88,11 +100,11 @@ fn put(tx: &Connection, a: &DirectoryAttempt) -> Result<()> {
         a.attempt_id.as_str(),
         a.target.id.as_str(),
         a.job_id.as_str(),
-        i64::from(a.phase == DirectoryPhase::Complete),
+        i64::from(a.completed()),
         &s,
     )?;
     validate_job(tx, a)?;
-    tx.execute("INSERT INTO directory_attempts(attempt_id,entry_id,job_id,completed,record) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(attempt_id) DO UPDATE SET completed=excluded.completed,record=excluded.record",params![a.attempt_id.as_str(),a.target.id.as_str(),a.job_id.as_str(),a.phase==DirectoryPhase::Complete,s])?;
+    tx.execute("INSERT INTO directory_attempts(attempt_id,entry_id,job_id,completed,record) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(attempt_id) DO UPDATE SET completed=excluded.completed,record=excluded.record",params![a.attempt_id.as_str(),a.target.id.as_str(),a.job_id.as_str(),a.completed(),s])?;
     Ok(())
 }
 fn current(tx: &Connection, id: &EntryId) -> Result<EntryState> {
@@ -137,6 +149,96 @@ pub(super) fn put_baseline(tx: &Connection, b: &DirectoryBaseline) -> Result<()>
     tx.execute("INSERT INTO directory_baselines(entry_id,record) VALUES (?1,?2) ON CONFLICT(entry_id) DO UPDATE SET record=excluded.record",params![b.state.id.as_str(),serde_json::to_string(b)?])?;
     Ok(())
 }
+/// Each caller first validates its own publication authority. This shared finish
+/// acknowledges only the attempt's historical target and original create job.
+fn finish_attempt(
+    tx: &Connection,
+    mut a: DirectoryAttempt,
+    physical: Option<&PhysicalIdentity>,
+) -> Result<()> {
+    // Publication proves this attempt's saved target, even when unrelated
+    // child metadata has advanced the folder's current revision.
+    let state = a.target.clone();
+    let identity = a
+        .stage_identity
+        .clone()
+        .ok_or_else(|| StoreError::Corrupt("missing published directory identity".into()))?;
+    if let Some(old) = baseline(tx, &state.id)? {
+        if old.identity != identity || old.state.path != state.path {
+            return Err(StoreError::Corrupt("directory provenance changed".into()));
+        }
+    }
+    let job = validate_job(tx, &a)?;
+    let proof = physical_bindings::publication_proof(tx, &a.attempt_id)?;
+    match (&proof, physical) {
+        (Some(proof), Some(physical))
+            if proof.kind == PublicationKind::Directory
+                && proof.entry_id == state.id
+                && proof.parent_inode == physical.parent_inode
+                && identity == physical.inode =>
+        {
+            physical_bindings::check_binding(tx, &state.id, proof.expected_binding.as_ref())?;
+        }
+        (None, None) => {}
+        _ => {
+            return Err(StoreError::Corrupt(
+                "directory publication binding mismatch".into(),
+            ))
+        }
+    }
+    family_materialization::check_publication(tx, &state, None)?;
+    put_baseline(
+        tx,
+        &DirectoryBaseline {
+            state: state.clone(),
+            identity,
+        },
+    )?;
+    if let Some(physical) = physical {
+        physical_bindings::put_binding(
+            tx,
+            &PhysicalBinding {
+                state,
+                physical: physical.clone(),
+            },
+        )?;
+    }
+    projection_jobs::finish(tx, &job)?;
+    a.phase = DirectoryPhase::Complete;
+    put(tx, &a)?;
+    Ok(())
+}
+
+fn check_namespace_handoff(
+    tx: &Connection,
+    expected: &DirectoryAttempt,
+) -> Result<DirectoryAttempt> {
+    let a = get(tx, &expected.attempt_id)?;
+    if a.completed() || a != *expected {
+        return Err(StoreError::Corrupt(
+            "namespace directory attempt changed".into(),
+        ));
+    }
+    namespace::check_projection_handoff(tx, &a.target.id)?;
+    let proof = physical_bindings::publication_proof(tx, &a.attempt_id)?
+        .ok_or_else(|| StoreError::Corrupt("namespace directory has no physical proof".into()))?;
+    // Directory creation starts with no physical baseline; neither cancellation
+    // nor publication may overwrite provenance acquired after preparation.
+    if proof.kind != PublicationKind::Directory
+        || proof.entry_id != a.target.id
+        || proof.expected_binding.is_some()
+        || baseline(tx, &a.target.id)?.is_some()
+        || projection::baseline(tx, &a.target.id)?.is_some()
+        || validate_job(tx, &a)?.completed
+    {
+        return Err(StoreError::Corrupt(
+            "namespace directory provenance changed".into(),
+        ));
+    }
+    physical_bindings::check_binding(tx, &a.target.id, proof.expected_binding.as_ref())?;
+    Ok(a)
+}
+
 impl Store {
     pub fn pending_directory_create(&self, id: &EntryId) -> Result<bool> {
         Ok(
@@ -171,7 +273,7 @@ impl Store {
             .collect::<Result<_>>()?;
         Ok(all
             .into_iter()
-            .filter(|a| include_completed || a.phase != DirectoryPhase::Complete)
+            .filter(|a| include_completed || !a.completed())
             .collect())
     }
     /// Establishes provenance for an observed existing folder. Identity changes
@@ -384,7 +486,7 @@ impl Store {
         phase: DirectoryPhase,
         identity: Option<String>,
     ) -> Result<DirectoryAttempt> {
-        if phase == DirectoryPhase::Complete {
+        if matches!(phase, DirectoryPhase::Complete | DirectoryPhase::Cancelled) {
             return Err(StoreError::Corrupt(
                 "use finish_directory_projection".into(),
             ));
@@ -393,7 +495,7 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut a = get(&tx, id)?;
-        if a.phase == DirectoryPhase::Complete {
+        if a.completed() {
             return Err(StoreError::Corrupt("directory attempt complete".into()));
         }
         if !is_visible(&tx, &a.target.id)? {
@@ -436,8 +538,8 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut a = get(&tx, id)?;
-        if a.phase == DirectoryPhase::Complete {
+        let a = get(&tx, id)?;
+        if a.completed() {
             return Ok(());
         }
         let current_state = current(&tx, &a.target.id)?;
@@ -446,56 +548,64 @@ impl Store {
                 "folder moved before publication completion".into(),
             ));
         }
-        // Publication proves this attempt's saved target, even when unrelated
-        // child metadata has advanced the folder's current revision.
-        let state = a.target.clone();
-        let identity = a
-            .stage_identity
-            .clone()
-            .ok_or_else(|| StoreError::Corrupt("missing published directory identity".into()))?;
-        if let Some(old) = baseline(&tx, &state.id)? {
-            if old.identity != identity || old.state.path != state.path {
-                return Err(StoreError::Corrupt("directory provenance changed".into()));
-            }
+        finish_attempt(&tx, a, physical)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Verify the saved create attempt before native checks or restores its old
+    /// location. Final handoff repeats these checks in its write transaction.
+    pub fn check_directory_for_namespace(&self, expected: &DirectoryAttempt) -> Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        check_namespace_handoff(&tx, expected)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Persist an empty private directory's exact inode before native publishes
+    /// it at the original create path for a subsequent namespace move.
+    pub fn stage_directory_for_namespace(
+        &mut self,
+        expected: &DirectoryAttempt,
+        identity: &str,
+    ) -> Result<DirectoryAttempt> {
+        if !valid_identity(identity) {
+            return Err(StoreError::Corrupt(
+                "invalid namespace directory stage identity".into(),
+            ));
         }
-        let job = validate_job(&tx, &a)?;
-        let proof = physical_bindings::publication_proof(&tx, id)?;
-        match (&proof, physical) {
-            (Some(proof), Some(physical))
-                if proof.kind == PublicationKind::Directory
-                    && proof.entry_id == state.id
-                    && proof.parent_inode == physical.parent_inode
-                    && identity == physical.inode =>
-            {
-                physical_bindings::check_binding(&tx, &state.id, proof.expected_binding.as_ref())?;
-            }
-            (None, None) => {}
-            _ => {
-                return Err(StoreError::Corrupt(
-                    "directory publication binding mismatch".into(),
-                ))
-            }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut a = check_namespace_handoff(&tx, expected)?;
+        if !matches!(a.phase, DirectoryPhase::Prepared | DirectoryPhase::Staged)
+            || a.stage_identity.as_ref().is_some_and(|old| old != identity)
+        {
+            return Err(StoreError::Corrupt(
+                "namespace directory stage changed".into(),
+            ));
         }
-        family_materialization::check_publication(&tx, &state, None)?;
-        put_baseline(
-            &tx,
-            &DirectoryBaseline {
-                state: state.clone(),
-                identity,
-            },
-        )?;
-        if let Some(physical) = physical {
-            physical_bindings::put_binding(
-                &tx,
-                &PhysicalBinding {
-                    state,
-                    physical: physical.clone(),
-                },
-            )?;
-        }
-        projection_jobs::finish(&tx, &job)?;
-        a.phase = DirectoryPhase::Complete;
+        a.stage_identity = Some(identity.into());
+        a.phase = DirectoryPhase::Staged;
         put(&tx, &a)?;
+        tx.commit()?;
+        Ok(a)
+    }
+    /// Some acknowledges the saved stage at its original path. None cancels a
+    /// native-proven unpublished stage without retiring any baseline or job.
+    pub fn finish_directory_for_namespace(
+        &mut self,
+        expected: &DirectoryAttempt,
+        published: Option<&PhysicalIdentity>,
+    ) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut a = check_namespace_handoff(&tx, expected)?;
+        if let Some(physical) = published {
+            finish_attempt(&tx, a, Some(physical))?;
+        } else {
+            a.phase = DirectoryPhase::Cancelled;
+            put(&tx, &a)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -549,6 +659,7 @@ pub(super) fn migrate_job_schema(tx: &Connection) -> Result<()> {
             || old.target.id.as_str() != entry
             || old.operation_id.as_str() != operation
             || !matches!(completed, 0 | 1)
+            || old.phase == DirectoryPhase::Cancelled
             || (old.phase == DirectoryPhase::Complete) != (completed == 1)
             || !old
                 .sequence
