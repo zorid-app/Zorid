@@ -235,7 +235,10 @@ export function browserSync(host:BrowserSyncHost,assertActive:()=>void=()=>{}):{
       if(previous?.fingerprint===fingerprint){
         if(previous.status!==status||!equal(previous.reason,summary))throw fail('storage_corrupt','Retained visibility contradicts Rust classification');
         if(status==='normal' && (!previous.entry||previous.entry.id!==id||previous.entry.path!==outcome.path||previous.entry.kind!==outcome.kind||previous.entry.deleted||!previous.presentation||previous.presentation.id!==id||previous.presentation.size_bytes!==(content?.bytes.length??0)||![previous.presentation.ctime_ms,previous.presentation.mtime_ms].every(value=>Number.isSafeInteger(value)&&value>=0)||(content && (!previous.bytes||!bytesEqual(previous.bytes,new Uint8Array(content.bytes))))))throw fail('storage_corrupt','Retained bytes or presentation contradict Rust materialization');
-        result.push(previous);continue;
+        // Forced local plans may update an ancestor's metadata revision while
+        // its namespace/content classification stays identical. Keep the read
+        // snapshot immutable so that this later change can be detected.
+        result.push(clone(previous));continue;
       }
       if(status!=='normal'){
         result.push({id,status,fingerprint,entry:previous?.entry??null,bytes:previous?.bytes??null,presentation:previous?.presentation??null,reason:summary,witness:previous?.witness??null});continue;
@@ -270,7 +273,9 @@ export function browserSync(host:BrowserSyncHost,assertActive:()=>void=()=>{}):{
     }
     for(const row of rows)if(row.status==='normal'&&row.entry){const key=json([row.id,row.entry.revision]);if(s.publications.has(key)&&!equal(s.publications.get(key)!.row,row))throw fail('sync_revision_collision','Publication revision already belongs to different immutable content');if(!s.publications.has(key)){const publication={key,row:clone(row)};s.publications.set(key,publication);tx.objectStore('sync_publications').add(publication);}}
     checkPublicationBudget(s.publications);saveStates(tx,s);saveCounts(tx,s);
-    for(const row of rows)if(s.retained.get(row.id)?.fingerprint!==row.fingerprint)tx.objectStore('sync_materializations').put(row);
+    // A classifier fingerprint excludes host metadata revisions. Core plans
+    // also bump ancestors, so compare the complete persisted publication row.
+    for(const row of rows)if(!equal(s.retained.get(row.id),row))tx.objectStore('sync_materializations').put(row);
     return host.publish(tx,rows,origin,forced,s.published);
   }
   const api:BrowserSync={
