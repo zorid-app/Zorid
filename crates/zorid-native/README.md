@@ -1,9 +1,9 @@
-# Native vault adapter: first filesystem slice
+# Native vault adapter
 
 `NativeVault` embeds the Rust core and SQLite authority in each caller process.
 The CLI does not need Electron, a daemon, IPC, or a running core service. This
-slice supports regular-file create/write and importing explicit filesystem path
-hints, including unknown extensions, binary bytes, hidden files, and Unicode
+adapter supports regular-file create/write, physical folder creation, explicit
+filesystem path imports, and a bounded recursive rescan, including unknown extensions, binary bytes, hidden files, and Unicode
 paths. Existing parent directories are imported as logical folders.
 
 `open` / `open_with_options` initialize private `.zorid` metadata in an existing
@@ -14,7 +14,9 @@ is durable local authority; `projection: pending` preserves that receipt when
 filesystem work subsequently fails. Retry the identical request/operation ID.
 `reconcile(&[VaultPath])` rereads explicit path hints; `recover()` repairs durable
 projection attempts and unprojected file revisions. Opening alone does not run a
-scanner or recovery. `status()` returns metadata summaries, never body bytes.
+scanner or recovery. `rescan()` explicitly recovers prior projection work, then
+walks the vault with finite limits. `status()` returns metadata summaries and the
+latest scan state, never body bytes.
 
 ## Authority, locking, and crash recovery
 
@@ -54,6 +56,43 @@ are retained, and recovery checks even completed attempts for late writes throug
 an external application's old open handle. No retained file or alternative is
 garbage-collected in this slice. This is byte preservation, not semantic merging.
 
+## Folder creation and recursive rescan
+
+Folder creation has a separate operation-scoped attempt. It creates and syncs a
+private empty directory, persists its identity, and publishes with no-replace
+rename. An external directory at the destination is never adopted as our staged
+inode. Completion records directory provenance and retires exactly the original
+folder-create intent, leaving child operations pending. Folder revision changes
+caused by later descendant edits do not invalidate an exact operation retry.
+
+`rescan_with_options(ScanOptions)` defaults to 10,000 observed entries, 64 MiB of
+captured file bytes, depth 128, and a five-second soft scan budget. `max_entries`
+must be 1..=100,000; bounded counters fit losslessly in JSON numbers. Zero byte
+budget permits empty files/directories; depth zero does not descend below root;
+zero duration records an incomplete pass without recovery/scanning. Time is
+checked between filesystem calls, not a guarantee that blocking I/O is cancelled.
+Prior projection recovery precedes the timed scan for nonzero duration.
+
+Scans include hidden names and unknown/binary files, skipping only the reserved
+root `.zorid` directory. A nested `.zorid` is ordinary user content. Symlinks,
+special files, filesystem aliases and unrepresentable names are reported without
+traversal. Captured bodies use the existing data/external-observation authority;
+scan tables contain bounded metadata, not another copy of each file body.
+
+Each directory records incomplete coverage before enumeration and complete
+coverage only after stable identity and namespace checks. Read errors, replacement,
+limits and process death leave incomplete records. A complete rescan may report
+formerly materialized paths that are now absent, but still retains their DB bytes
+and history. Absence finalization rechecks against the original covered parent
+identity. All absence facts and the finished complete marker commit in one
+transaction; an interrupted/failed finalization exposes neither draft absences nor
+a completed run. No scan authors deletions or guesses external renames.
+
+This is a bounded pass, not paginated enumeration: a directory wider than the
+remaining entry budget stays incomplete and requires a larger limit. Increasing
+the bound or repeating a full scan is explicit; there is no hidden infinite retry.
+Completed/unfinished scan history and retained recovery files are not yet pruned.
+
 ## Filesystem security boundary
 
 Implemented targets are macOS and Linux; other targets return `Unsupported`.
@@ -78,11 +117,12 @@ filesystem semantics, Windows support, or encrypted-at-rest local storage.
 
 ## Remaining delivery work
 
-Physical folder creation, rename/move/subtrees, and deletion reconciliation are
-explicitly unsupported. An external deletion is retained as a blocked condition,
-never silently recreated. There is no startup/watcher scanner, merge UI, backup,
-retention/GC, bounded history pagination, blob streaming, network sync, Electron
-bridge, browser projection, or mobile adapter here. Metadata and provenance are
+Rename/move/subtrees and deletion reconciliation remain explicitly unsupported.
+An external deletion is retained as a pending absence observation after complete
+scan coverage, never silently recreated or converted into a logical tombstone.
+There is no automatic startup/watcher scheduling, merge UI, backup, retention/GC,
+bounded history pagination, blob streaming, network sync, Electron bridge, browser
+projection, or mobile adapter here. Metadata and provenance are
 currently read as whole snapshots; large vault scalability needs separate work.
 
 Focused fixtures use temporary directories and real child processes, never user
@@ -91,3 +131,13 @@ vaults. Run in the coordinator's serialized build slot:
 ```sh
 cargo test -p zorid-store -p zorid-native -j1 -- --test-threads=1
 ```
+
+
+Committed UI reads are available through `read_path`, `list_snapshot` and
+`changes_after`, delegating to the Store's coherent database snapshots. They return
+committed bytes/presentation even while physical projection is pending; they do
+not perform a filesystem rescan or pretend physical stat is committed metadata.
+Presentation times are local replica display times (legacy zero means unknown),
+not source filesystem dates. The decimal local cursor is independent of sync and
+command receipt sequences. Consumers must reload on bootstrap events and use
+opaque entry revisions for compare-and-write.

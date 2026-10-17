@@ -599,3 +599,501 @@ fn reused_operation_id_rejects_before_any_external_import() {
     assert_eq!(disk(root), b"external");
     assert_eq!(v.read(&id()).unwrap().unwrap().content.unwrap(), b"base");
 }
+
+fn folder_request() -> MutationRequest {
+    MutationRequest {
+        operation_id: OperationId::new("mkdir").unwrap(),
+        mutation: Mutation::Create {
+            id: EntryId::new("folder").unwrap(),
+            path: VaultPath::new("folder").unwrap(),
+            kind: EntryKind::Folder,
+            content: None,
+        },
+    }
+}
+fn scan_child(root: &Path, mode: &str) -> Command {
+    let mut c = Command::new(std::env::current_exe().unwrap());
+    c.args(["--exact", "tests::directory_scan_worker", "--nocapture"])
+        .env("ZORID_SCAN_TEST_ROOT", root)
+        .env("ZORID_SCAN_TEST_MODE", mode)
+        .stdout(Stdio::null());
+    c
+}
+#[test]
+fn directory_scan_worker() {
+    let Some(root) = std::env::var_os("ZORID_SCAN_TEST_ROOT") else {
+        return;
+    };
+    let mode = std::env::var("ZORID_SCAN_TEST_MODE").unwrap();
+    let mut vault = NativeVault::open_existing(&root).unwrap();
+    if mode == "folder_crash" {
+        vault.fault = Some(|point| {
+            if point == std::env::var("ZORID_SCAN_TEST_PHASE").unwrap() {
+                std::process::exit(79)
+            }
+        });
+        vault.apply(&folder_request()).unwrap();
+        panic!("folder crash hook not reached");
+    }
+    if mode == "scan_finalize_crash" {
+        vault.fault = Some(|point| {
+            if point == "scan_before_finish" {
+                std::process::exit(81)
+            }
+        });
+        vault.rescan().unwrap();
+        panic!("scan finalize hook not reached");
+    }
+    if mode == "scan_crash" {
+        vault.fault = Some(|point| {
+            if point == "scan_observation_committed" {
+                std::process::exit(80)
+            }
+        });
+        vault.rescan().unwrap();
+        panic!("scan crash hook not reached");
+    }
+    if mode == "scan" {
+        let r = vault.rescan().unwrap();
+        assert!(r.run.complete, "{r:?}");
+        std::process::exit(0);
+    }
+    if mode == "mkdir" {
+        vault.apply(&folder_request()).unwrap();
+        std::process::exit(0);
+    }
+}
+#[test]
+fn physical_folder_create_and_replay_after_child_revision_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    let first = v.apply(&folder_request()).unwrap();
+    assert!(matches!(first.projection, ProjectionStatus::Projected));
+    assert!(root.join("folder").is_dir());
+    let mut file = create();
+    if let Mutation::Create { path, .. } = &mut file.mutation {
+        *path = VaultPath::new("folder/note.unknown").unwrap();
+    }
+    v.apply(&file).unwrap();
+    let retry = v.apply(&folder_request()).unwrap();
+    assert_eq!(retry.commit, first.commit);
+    assert!(matches!(retry.projection, ProjectionStatus::Projected));
+    assert_eq!(v.status().unwrap().pending_projection, "0");
+    assert_eq!(v.status().unwrap().pending_outbox, "2");
+}
+#[test]
+fn folder_create_process_death_recovers_every_publication_phase() {
+    for phase in [
+        "committed",
+        "directory_prepared",
+        "directory_stage_written",
+        "directory_staged",
+        "directory_published_before_record",
+        "directory_before_baseline",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        drop(NativeVault::open(root).unwrap());
+        assert_eq!(
+            scan_child(root, "folder_crash")
+                .env("ZORID_SCAN_TEST_PHASE", phase)
+                .status()
+                .unwrap()
+                .code(),
+            Some(79)
+        );
+        let mut v = NativeVault::open_existing(root).unwrap();
+        let r = v.recover().unwrap();
+        assert!(r.blocked.is_empty(), "{phase}: {r:?}");
+        assert!(root.join("folder").is_dir());
+        assert_eq!(v.status().unwrap().pending_projection, "0");
+        assert_eq!(v.status().unwrap().pending_outbox, "1");
+    }
+}
+#[test]
+fn external_folder_destination_cannot_be_adopted_as_our_staged_inode() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    drop(NativeVault::open(root).unwrap());
+    assert_eq!(
+        scan_child(root, "folder_crash")
+            .env("ZORID_SCAN_TEST_PHASE", "directory_staged")
+            .status()
+            .unwrap()
+            .code(),
+        Some(79)
+    );
+    stdfs::create_dir(root.join("folder")).unwrap();
+    stdfs::write(root.join("folder/external"), b"unique").unwrap();
+    let mut v = NativeVault::open_existing(root).unwrap();
+    let r = v.recover().unwrap();
+    assert!(!r.blocked.is_empty());
+    assert_eq!(
+        stdfs::read(root.join("folder/external")).unwrap(),
+        b"unique"
+    );
+    assert_eq!(v.status().unwrap().directory_attempts.len(), 1);
+    assert_eq!(v.status().unwrap().pending_projection, "1");
+    let r = v.rescan().unwrap();
+    assert!(!r.run.complete);
+    assert!(r.missing.is_empty());
+    assert_eq!(
+        stdfs::read(root.join("folder/external")).unwrap(),
+        b"unique"
+    );
+}
+#[test]
+fn recursive_rescan_imports_offline_edits_and_nested_hidden_binary_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    drop(v);
+    stdfs::write(root.join(path().as_str()), b"offline edit").unwrap();
+    stdfs::create_dir_all(root.join(".hidden/nested/.zorid")).unwrap();
+    stdfs::write(
+        root.join(".hidden/nested/.zorid/任意.unknown"),
+        [0, 255, 128],
+    )
+    .unwrap();
+    let mut v = NativeVault::open_existing(root).unwrap();
+    let report = v.rescan().unwrap();
+    assert!(report.run.complete, "{report:?}");
+    assert_eq!(
+        v.read(&id()).unwrap().unwrap().content.unwrap(),
+        b"offline edit"
+    );
+    let state = v
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.path.as_str() == ".hidden/nested/.zorid/任意.unknown")
+        .unwrap();
+    assert_eq!(
+        v.read(&state.id).unwrap().unwrap().content.unwrap(),
+        vec![0, 255, 128]
+    );
+    assert!(!v
+        .list()
+        .unwrap()
+        .iter()
+        .any(|s| s.path.as_str().starts_with(".zorid/")));
+    assert_eq!(v.status().unwrap().pending_projection, "0");
+    let repeat = v.rescan().unwrap();
+    assert!(repeat.run.complete);
+    assert_eq!(repeat.run.imported, 0);
+}
+#[test]
+fn interrupted_scan_leaves_incomplete_record_and_restart_has_no_duplicate_import() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    drop(NativeVault::open(root).unwrap());
+    stdfs::write(root.join("a"), b"one").unwrap();
+    stdfs::write(root.join("b"), b"two").unwrap();
+    assert_eq!(
+        scan_child(root, "scan_crash").status().unwrap().code(),
+        Some(80)
+    );
+    let db = Store::open(root.join(".zorid/vault.sqlite")).unwrap();
+    let interrupted = db.latest_scan().unwrap().unwrap();
+    assert!(!interrupted.finished && !interrupted.complete);
+    assert_eq!(db.list().unwrap().len(), 1);
+    drop(db);
+    let mut v = NativeVault::open_existing(root).unwrap();
+    let report = v.rescan().unwrap();
+    assert!(report.run.complete, "{report:?}");
+    assert_eq!(report.run.imported, 1);
+    assert_eq!(v.list().unwrap().len(), 2);
+    assert_eq!(v.status().unwrap().pending_outbox, "2");
+    let db = Store::open(root.join(".zorid/vault.sqlite")).unwrap();
+    assert!(!db.scan_run(&interrupted.scan_id).unwrap().finished);
+}
+#[test]
+fn complete_scan_records_absence_without_deleting_or_recreating() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    stdfs::remove_file(root.join(path().as_str())).unwrap();
+    let report = v.rescan().unwrap();
+    assert!(report.run.complete, "{report:?}");
+    assert_eq!(report.missing, vec![path()]);
+    assert!(!root.join(path().as_str()).exists());
+    assert_eq!(v.read(&id()).unwrap().unwrap().content.unwrap(), b"base");
+    let db = Store::open(root.join(".zorid/vault.sqlite")).unwrap();
+    assert!(db
+        .scan_observations(&report.run.scan_id)
+        .unwrap()
+        .iter()
+        .any(|o| o.kind == zorid_store::ScanObservationKind::Absent));
+    assert_eq!(db.pending_counts().unwrap(), (1, 0));
+}
+#[test]
+fn scan_limits_and_unreadable_directories_never_produce_absence() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    stdfs::remove_file(root.join(path().as_str())).unwrap();
+    stdfs::write(root.join("a"), b"one").unwrap();
+    stdfs::write(root.join("b"), b"two").unwrap();
+    let r = v
+        .rescan_with_options(ScanOptions {
+            max_entries: 1,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!r.run.complete);
+    assert!(r.missing.is_empty());
+    let r = v
+        .rescan_with_options(ScanOptions {
+            max_duration: Duration::ZERO,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!r.run.complete && r.missing.is_empty());
+    stdfs::create_dir(root.join("unreadable")).unwrap();
+    stdfs::write(root.join("unreadable/keep"), b"precious").unwrap();
+    stdfs::set_permissions(root.join("unreadable"), stdfs::Permissions::from_mode(0)).unwrap();
+    let r = v.rescan().unwrap();
+    stdfs::set_permissions(
+        root.join("unreadable"),
+        stdfs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    assert!(!r.run.complete, "{r:?}");
+    assert!(r.missing.is_empty());
+    assert_eq!(v.read(&id()).unwrap().unwrap().content.unwrap(), b"base");
+    assert_eq!(
+        stdfs::read(root.join("unreadable/keep")).unwrap(),
+        b"precious"
+    );
+    let db = Store::open(root.join(".zorid/vault.sqlite")).unwrap();
+    assert!(!db
+        .scan_observations(&r.run.scan_id)
+        .unwrap()
+        .iter()
+        .any(|o| o.kind == zorid_store::ScanObservationKind::Absent));
+}
+#[test]
+fn zero_byte_and_depth_limits_are_incomplete_and_preserve_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    stdfs::write(root.join("empty"), []).unwrap();
+    stdfs::write(root.join("nonempty"), b"data").unwrap();
+    let r = v
+        .rescan_with_options(ScanOptions {
+            max_total_bytes: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!r.run.complete);
+    assert!(v.list().unwrap().iter().any(|s| s.path.as_str() == "empty"));
+    assert!(!v
+        .list()
+        .unwrap()
+        .iter()
+        .any(|s| s.path.as_str() == "nonempty"));
+    stdfs::create_dir(root.join("nested")).unwrap();
+    stdfs::write(root.join("nested/child"), b"child").unwrap();
+    let r = v
+        .rescan_with_options(ScanOptions {
+            max_depth: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!r.run.complete);
+    assert!(!v
+        .list()
+        .unwrap()
+        .iter()
+        .any(|s| s.path.as_str() == "nested/child"));
+    assert_eq!(stdfs::read(root.join("nested/child")).unwrap(), b"child");
+}
+#[test]
+fn concurrent_process_rescans_and_mkdir_keep_one_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    drop(NativeVault::open(root).unwrap());
+    stdfs::write(root.join("external"), b"bytes").unwrap();
+    let mut a = scan_child(root, "scan").spawn().unwrap();
+    let mut b = scan_child(root, "scan").spawn().unwrap();
+    assert!(a.wait().unwrap().success());
+    assert!(b.wait().unwrap().success());
+    let mut a = scan_child(root, "mkdir").spawn().unwrap();
+    let mut b = scan_child(root, "mkdir").spawn().unwrap();
+    assert!(a.wait().unwrap().success());
+    assert!(b.wait().unwrap().success());
+    let v = NativeVault::open_existing(root).unwrap();
+    assert_eq!(v.list().unwrap().len(), 2);
+    assert_eq!(v.status().unwrap().pending_outbox, "2");
+    assert_eq!(v.status().unwrap().pending_projection, "0");
+}
+
+#[test]
+fn interrupted_scan_finalization_exposes_no_draft_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    drop(v);
+    stdfs::remove_file(root.join(path().as_str())).unwrap();
+    assert_eq!(
+        scan_child(root, "scan_finalize_crash")
+            .status()
+            .unwrap()
+            .code(),
+        Some(81)
+    );
+    let db = Store::open(root.join(".zorid/vault.sqlite")).unwrap();
+    let unfinished = db.latest_scan().unwrap().unwrap();
+    assert!(!unfinished.finished);
+    assert!(!db
+        .scan_observations(&unfinished.scan_id)
+        .unwrap()
+        .iter()
+        .any(|o| o.kind == zorid_store::ScanObservationKind::Absent));
+    drop(db);
+    let mut v = NativeVault::open_existing(root).unwrap();
+    let r = v.rescan().unwrap();
+    assert!(r.run.complete);
+    assert_eq!(r.missing, vec![path()]);
+    assert_eq!(v.read(&id()).unwrap().unwrap().content.unwrap(), b"base");
+}
+#[test]
+fn replaced_completed_parent_cannot_produce_final_absence() {
+    thread_local! {static REPLACE:std::cell::RefCell<Option<std::path::PathBuf>>=const{std::cell::RefCell::new(None)};}
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    stdfs::create_dir(root.join("folder")).unwrap();
+    stdfs::write(root.join("folder/child"), b"precious").unwrap();
+    let mut v = NativeVault::open(root).unwrap();
+    assert!(v.rescan().unwrap().run.complete);
+    stdfs::remove_file(root.join("folder/child")).unwrap();
+    REPLACE.with(|v| *v.borrow_mut() = Some(root.to_owned()));
+    v.fault = Some(|point| {
+        if point == "scan_before_absence_validation" {
+            REPLACE.with(|v| {
+                let root = v.borrow_mut().take().unwrap();
+                stdfs::rename(root.join("folder"), root.join("moved-folder")).unwrap();
+                stdfs::create_dir(root.join("folder")).unwrap();
+            });
+        }
+    });
+    let r = v.rescan().unwrap();
+    assert!(!r.run.complete);
+    assert!(r.missing.is_empty());
+    let db = Store::open(root.join(".zorid/vault.sqlite")).unwrap();
+    assert!(!db
+        .scan_observations(&r.run.scan_id)
+        .unwrap()
+        .iter()
+        .any(|o| o.kind == zorid_store::ScanObservationKind::Absent));
+    let child = v
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.path.as_str() == "folder/child")
+        .unwrap();
+    assert_eq!(
+        v.read(&child.id).unwrap().unwrap().content.unwrap(),
+        b"precious"
+    );
+}
+
+#[test]
+fn recursive_scan_never_traverses_external_symlink() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    stdfs::write(outside.path().join("outside-only"), b"private").unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    symlink(outside.path(), root.join("linked")).unwrap();
+    let r = v.rescan().unwrap();
+    assert!(!r.run.complete);
+    assert!(r.missing.is_empty());
+    assert!(v.list().unwrap().is_empty());
+    assert_eq!(
+        stdfs::read(outside.path().join("outside-only")).unwrap(),
+        b"private"
+    );
+}
+
+#[test]
+fn explicit_directory_hint_imports_and_missing_directory_stays_retained() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    stdfs::create_dir(root.join("existing")).unwrap();
+    let mut v = NativeVault::open(root).unwrap();
+    let path = VaultPath::new("existing").unwrap();
+    let r = v.reconcile(&[path.clone()]).unwrap();
+    assert!(r.blocked.is_empty(), "{r:?}");
+    assert_eq!(r.imported.len(), 1);
+    assert_eq!(v.status().unwrap().pending_projection, "0");
+    stdfs::remove_dir(root.join("existing")).unwrap();
+    let r = v.reconcile(&[path.clone()]).unwrap();
+    assert!(!r.blocked.is_empty());
+    assert!(v.list().unwrap().iter().any(|s| s.path == path));
+    assert!(!root.join("existing").exists());
+}
+
+#[test]
+fn coherent_path_reads_use_committed_bytes_while_projection_is_pending() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    vault.apply(&create()).unwrap();
+    let before = vault.list_snapshot().unwrap();
+    let mut store = Store::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+    let req = write(
+        "database-only",
+        revision(&vault),
+        b"unprojected binary\0\xff",
+    );
+    let receipt = store.apply_at(&req, 1).unwrap();
+    let entry = vault.read_path(&path()).unwrap().unwrap();
+    assert_eq!(entry.state.id, id());
+    assert_eq!(
+        entry.state.revision,
+        receipt
+            .changes
+            .iter()
+            .find(|c| c.after.id == id())
+            .unwrap()
+            .after
+            .revision
+    );
+    assert_eq!(entry.content, Some(b"unprojected binary\0\xff".to_vec()));
+    assert_eq!(entry.presentation.size_bytes, 20);
+    assert_eq!(disk(root.path()), b"base");
+    let page = vault.changes_after(&before.cursor, 100).unwrap();
+    assert_eq!(page.changes.len(), 1);
+    assert_eq!(page.changes[0].entries[0].state, entry.state);
+    vault.recover().unwrap();
+    assert_eq!(vault.list_snapshot().unwrap().cursor, page.next_cursor);
+}
+#[test]
+fn external_scan_imports_update_presentation_and_change_stream_once() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(root.path()).unwrap();
+    let initial = vault.list_snapshot().unwrap();
+    stdfs::create_dir(root.path().join("external")).unwrap();
+    stdfs::write(root.path().join("external/file.unknown"), [0, 255, 17]).unwrap();
+    assert!(vault.rescan().unwrap().run.complete);
+    let after = vault.list_snapshot().unwrap();
+    assert_eq!(after.entries.len(), 2);
+    let file = vault
+        .read_path(&VaultPath::new("external/file.unknown").unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(file.presentation.size_bytes, 3);
+    assert!(file.presentation.ctime_ms > 0);
+    let page = vault.changes_after(&initial.cursor, 100).unwrap();
+    assert_eq!(page.changes.len(), 2);
+    assert_eq!(page.next_cursor, after.cursor);
+    assert!(vault.rescan().unwrap().run.complete);
+    assert_eq!(vault.list_snapshot().unwrap(), after);
+}

@@ -278,3 +278,51 @@ impl Paths {
         open_dir_at(&parent, &name)
     }
 }
+
+pub(crate) fn node_type(parent: &File, name: &str) -> Result<Option<rustix::fs::FileType>> {
+    exact(parent, name)?;
+    match fs::statat(parent, name, fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => Ok(Some(fs::FileType::from_raw_mode(stat.st_mode))),
+        Err(rustix::io::Errno::NOENT) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+pub(crate) fn optional_directory(parent: &File, name: &str) -> Result<Option<File>> {
+    match node_type(parent, name)? {
+        None => Ok(None),
+        Some(fs::FileType::Directory) => Ok(Some(open_dir_at(parent, name)?)),
+        Some(_) => Err(Error::UnsafePath(format!(
+            "expected real directory: {name}"
+        ))),
+    }
+}
+pub(crate) fn directory_names(directory: &File, limit: usize, root: bool) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    for item in Dir::read_from(directory)? {
+        let item = item?;
+        let bytes = item.file_name().to_bytes();
+        if bytes == b"." || bytes == b".." {
+            continue;
+        }
+        let name = std::str::from_utf8(bytes).map_err(|_| {
+            Error::UnsafePath("non-UTF8 directory entry cannot be represented".into())
+        })?;
+        if root && name.eq_ignore_ascii_case(".zorid") {
+            continue;
+        }
+        if names.len() >= limit {
+            return Err(Error::Unsupported("scan entry budget exhausted"));
+        }
+        names.push(name.to_owned());
+    }
+    names.sort();
+    Ok(names)
+}
+pub(crate) fn stage_directory(parent: &File, name: &str) -> Result<String> {
+    exact(parent, name)?;
+    fs::mkdirat(parent, name, Mode::from_raw_mode(0o700))?;
+    let dir = open_dir_at(parent, name)?;
+    dir.sync_all()?;
+    parent.sync_all()?;
+    identity(&dir)
+}

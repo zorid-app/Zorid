@@ -5,7 +5,11 @@ use std::{fmt, time::Duration};
 use zorid_core::{
     CommitResult, EntryId, EntryState, MutationRequest, OperationId, Revision, VaultPath,
 };
-use zorid_store::{ProjectionPhase, StoredEntry};
+pub use zorid_store::{
+    ChangeOrigin, ChangePage, EntryPresentation, ListingSnapshot, LocalChange, PresentedEntry,
+    PresentedState,
+};
+use zorid_store::{DirectoryPhase, ProjectionPhase, ScanRun, StoredEntry};
 
 #[derive(Debug)]
 pub enum Error {
@@ -66,6 +70,41 @@ impl Default for Options {
         }
     }
 }
+#[derive(Debug, Clone)]
+pub struct ScanOptions {
+    pub max_entries: u32,
+    pub max_total_bytes: u64,
+    pub max_depth: u16,
+    pub max_duration: Duration,
+}
+impl Default for ScanOptions {
+    fn default() -> Self {
+        Self {
+            max_entries: 10_000,
+            max_total_bytes: 64 * 1024 * 1024,
+            max_depth: 128,
+            max_duration: Duration::from_secs(5),
+        }
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ScanIssue {
+    pub path: Option<VaultPath>,
+    pub reason: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RescanReport {
+    pub run: ScanRun,
+    pub issues: Vec<ScanIssue>,
+    pub missing: Vec<VaultPath>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FolderAttemptStatus {
+    pub attempt_id: OperationId,
+    pub entry_id: EntryId,
+    pub path: VaultPath,
+    pub phase: DirectoryPhase,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "state", content = "reason", rename_all = "snake_case")]
 pub enum ProjectionStatus {
@@ -89,6 +128,8 @@ pub struct Status {
     pub pending_projection: String,
     pub attempts: Vec<AttemptStatus>,
     pub observations: Vec<ObservationStatus>,
+    pub directory_attempts: Vec<FolderAttemptStatus>,
+    pub scan: Option<ScanRun>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttemptStatus {
@@ -133,6 +174,15 @@ impl NativeVault {
     pub fn read(&self, _: &EntryId) -> Result<Option<StoredEntry>> {
         unsupported()
     }
+    pub fn read_path(&self, _: &VaultPath) -> Result<Option<PresentedEntry>> {
+        unsupported()
+    }
+    pub fn list_snapshot(&self) -> Result<ListingSnapshot> {
+        unsupported()
+    }
+    pub fn changes_after(&self, _: &str, _: u32) -> Result<ChangePage> {
+        unsupported()
+    }
     pub fn status(&self) -> Result<Status> {
         unsupported()
     }
@@ -140,6 +190,12 @@ impl NativeVault {
         unsupported()
     }
     pub fn reconcile(&mut self, _: &[VaultPath]) -> Result<ReconcileReport> {
+        unsupported()
+    }
+    pub fn rescan(&mut self) -> Result<RescanReport> {
+        unsupported()
+    }
+    pub fn rescan_with_options(&mut self, _: ScanOptions) -> Result<RescanReport> {
         unsupported()
     }
     pub fn recover(&mut self) -> Result<ReconcileReport> {

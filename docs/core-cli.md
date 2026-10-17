@@ -6,8 +6,8 @@ vault's SQLite authority and uses the native adapter's cross-process filesystem
 coordination. This initial slice supports macOS and Linux; other platforms return
 `unsupported_platform` until their native adapter exists.
 
-This is not the completed full-vault CLI milestone. Move/delete, physical folder
-creation, search, complete filesystem scanning, E2EE sync and real Electron
+This is not the completed full-vault CLI milestone. Move/delete, search,
+automatic watcher integration, E2EE sync and real Electron
 concurrency verification remain required. This executable never uploads data.
 
 ## Commands
@@ -19,11 +19,14 @@ Build from the workspace once the native adapter is present:
 zorid --vault /path/to/existing-vault init
 zorid --vault /path/to/existing-vault status
 zorid --vault /path/to/existing-vault list
+zorid --vault /path/to/existing-vault mkdir attachments --id folder1 --operation-id mkdir1
 zorid --vault /path/to/existing-vault create note.md --id note1 --operation-id create1 --input ./note.md
 zorid --vault /path/to/existing-vault read --id note1
 zorid --vault /path/to/existing-vault read --id note1 --raw
 zorid --vault /path/to/existing-vault write --id note1 --expected-revision REVISION --operation-id write1 --input -
 zorid --vault /path/to/existing-vault reconcile nested/file.bin note.md
+zorid --vault /path/to/existing-vault rescan
+zorid --vault /path/to/existing-vault rescan --max-entries 500 --max-total-bytes 16777216 --max-depth 32 --max-duration-ms 2000
 zorid --vault /path/to/existing-vault recover
 ```
 
@@ -34,9 +37,34 @@ The adapter's existing-only open runs under its vault lock with SQLite creation
 disabled; an empty or uninitialized database is rejected rather than initialized.
 Opening initialized storage can perform native schema migrations and locking;
 `list` and `read` query the committed core snapshot, not a live directory scan.
-Run explicit `reconcile` with changed paths to import external edits. Supported
+Run explicit `reconcile` with changed paths to import external edits, or `rescan`
+to discover external paths. Supported
 nested imports include existing parent directories. `recover` resumes pending
 projection; it does not discover every external file.
+
+`mkdir` creates one folder through the native mutation/projection pipeline; its
+parent must already exist. It has no recursive `-p` behavior and never replaces a
+file. As with file creation, supply a unique entry ID and operation ID, retain the
+receipt, and inspect projection status. Existing filesystem paths remain subject
+to the native adapter's alias, identity and no-clobber checks.
+
+`rescan` uses bounded native enumeration, imports supported file/folder changes,
+and records durable scan coverage. Defaults are 10,000 entries, 64 MiB total
+examined file bytes, depth 128, and a soft five-second work limit. Optional flags
+override each bound; native validation still applies. The duration is checked
+between operations and is not a hard wall-clock deadline; vault lock waiting has
+its own bound. Incomplete coverage returns `complete: false`, rather than claiming
+all files were inspected. A later scan may continue discovering current state.
+`--max-entries` accepts 1 through 100,000. Zero byte budget allows only empty
+files/directories; zero duration ends scanning incomplete immediately. Depth zero
+examines root entries but records unvisited subdirectories as incomplete. None of
+these limits authorize deletion. Projection recovery precedes bounded scanning.
+Inspect `issues` and `missing`: missing paths are preserved absence observations,
+**not deletions**, and committed bytes remain accessible. No scan result can be
+used as an instruction to remove all unseen entries. The response reports the
+chosen limits (byte/time values as decimal strings), a persisted scan ID and
+bounded counts. Raw scan diagnostics are replaced with `scan_issue` and
+`scan_incomplete` codes, while paths remain metadata.
 
 Create fails rather than replacing an existing file. Input is bytes from `--input
 FILE` or `--input -` (stdin until EOF); it is never decoded as text. This slice has
@@ -54,7 +82,7 @@ exact bytes, no framing or newline; errors remain JSON on stderr. Default `read`
 returns `entry` metadata, `encoding: "base64"`, and `bytes` containing standard
 padded base64. Status exposes counts, never the recovery records' plaintext bytes.
 
-Every create/write requires a caller-generated operation ID. Create additionally
+Every create/write/mkdir requires a caller-generated operation ID. Create/mkdir additionally
 requires an entry ID; write requires the exact expected revision from a prior
 read/list/commit receipt. IDs use the shared core's lexical restrictions. Generate
 unique IDs for new operations and persist the exact request before invoking the
@@ -99,6 +127,10 @@ against disposable temporary directories. Fixtures cover binary stdin and file
 inputs, independent invocation restart/replay, revision and operation-ID
 conflicts, exact raw/base64 reads, external nested imports, no-clobber behavior,
 size rejection, safe error output and committed-but-projection-pending receipts.
+Additional source fixtures cover folder creation/retry with a nested binary file,
+bounded rescan completion, nested discovery and retained bytes after a missing
+file observation. These additions require the native scan/directory slice and
+have not been executed as part of source preparation.
 Source presence alone does not establish these checks passed. The coordinator's
 execution ledger records actual runs. These tests do not establish Electron
 integration, server sync, Windows support or the completed CLI milestone.

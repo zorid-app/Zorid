@@ -2,9 +2,13 @@ use crate::{
     fs::{self, Paths},
     *,
 };
-use std::path::Path;
+use std::{fs::File, path::Path};
 use zorid_core::{EntryKind, Mutation, OperationId};
 use zorid_store::{ProjectionAttempt, ProjectionPhase, Store};
+#[path = "directory.rs"]
+mod directory;
+#[path = "rescan.rs"]
+mod rescan;
 
 pub struct NativeVault {
     paths: Paths,
@@ -69,12 +73,36 @@ impl NativeVault {
         self.paths.verify()?;
         Ok(self.store.read(id)?)
     }
+    pub fn read_path(&self, path: &VaultPath) -> Result<Option<PresentedEntry>> {
+        self.paths.verify()?;
+        Ok(self.store.read_path(path)?)
+    }
+    pub fn list_snapshot(&self) -> Result<ListingSnapshot> {
+        self.paths.verify()?;
+        Ok(self.store.list_snapshot()?)
+    }
+    pub fn changes_after(&self, cursor: &str, limit: u32) -> Result<ChangePage> {
+        self.paths.verify()?;
+        Ok(self.store.changes_after(cursor, limit)?)
+    }
     pub fn status(&self) -> Result<Status> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         let (outbox, projection) = self.store.pending_counts()?;
         Ok(Status {
             pending_outbox: outbox.to_string(),
             pending_projection: projection.to_string(),
+            directory_attempts: self
+                .store
+                .directory_attempts(false)?
+                .into_iter()
+                .map(|a| FolderAttemptStatus {
+                    attempt_id: a.attempt_id,
+                    entry_id: a.target.id,
+                    path: a.target.path,
+                    phase: a.phase,
+                })
+                .collect(),
+            scan: self.store.latest_scan()?,
             attempts: self
                 .store
                 .projection_attempts(false)?
@@ -108,7 +136,13 @@ impl NativeVault {
             let projection = self.project_status(request.mutation.id());
             return Ok(ApplyOutcome { commit, projection });
         }
-        let (path, bytes) = match &request.mutation {
+        let (path, bytes): (VaultPath, &[u8]) = match &request.mutation {
+            Mutation::Create {
+                path,
+                kind: EntryKind::Folder,
+                content: None,
+                ..
+            } => (path.clone(), &[]),
             Mutation::Create {
                 path,
                 kind: EntryKind::File,
@@ -125,11 +159,7 @@ impl NativeVault {
                     .path,
                 content,
             ),
-            _ => {
-                return Err(Error::Unsupported(
-                    "physical folder creation, moves and deletions",
-                ))
-            }
+            _ => return Err(Error::Unsupported("physical moves and deletions")),
         };
         if bytes.len() > self.options.max_file_bytes {
             return Err(Error::Unsupported(
@@ -146,7 +176,22 @@ impl NativeVault {
         {
             let _ = self.resume(&a);
         }
-        let _ = self.observe(&path)?;
+        if matches!(
+            request.mutation,
+            Mutation::Create {
+                kind: EntryKind::Folder,
+                ..
+            }
+        ) {
+            let (parent, name) = self.paths.parent(&path)?;
+            if fs::node_type(&parent, &name)?.is_some() {
+                return Err(Error::Busy(
+                    "folder destination already exists; rescan to import",
+                ));
+            }
+        } else {
+            let _ = self.observe(&path)?;
+        }
         if matches!(request.mutation, Mutation::Create { .. }) {
             self.parent_imports(&path)?;
         }
@@ -165,7 +210,7 @@ impl NativeVault {
         }
     }
     /// Explicit path hints are authoritative only after re-reading the filesystem.
-    /// A watcher/startup scanner can call this API; no scanner is included yet.
+    /// A watcher can call this API; explicit recursive traversal uses rescan().
     pub fn reconcile(&mut self, paths: &[VaultPath]) -> Result<ReconcileReport> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         let mut report = self.recover_locked()?;
@@ -178,12 +223,7 @@ impl NativeVault {
                     continue;
                 }
             }
-            if let Some(state) = self
-                .store
-                .list()?
-                .into_iter()
-                .find(|s| s.path == *path && s.kind == EntryKind::File)
-            {
+            if let Some(state) = self.store.list()?.into_iter().find(|s| s.path == *path) {
                 match self.project(&state.id) {
                     Ok(()) => report.projected.push(state.id),
                     Err(e) => report.blocked.push((path.clone(), e.to_string())),
@@ -199,6 +239,31 @@ impl NativeVault {
     }
     fn recover_locked(&mut self) -> Result<ReconcileReport> {
         let mut report = ReconcileReport::default();
+        for a in self.store.directory_attempts(false)? {
+            match self.resume_directory(&a) {
+                Ok(()) => report.projected.push(a.target.id),
+                Err(e) => report.blocked.push((a.target.path, e.to_string())),
+            }
+        }
+        for state in self
+            .store
+            .list()?
+            .into_iter()
+            .filter(|s| s.kind == EntryKind::Folder)
+        {
+            if self.store.directory_baseline(&state.id)?.is_some()
+                || report.blocked.iter().any(|(p, _)| *p == state.path)
+                || report.projected.contains(&state.id)
+            {
+                continue;
+            }
+            if self.store.pending_directory_create(&state.id)? {
+                match self.project_directory(&state.id) {
+                    Ok(()) => report.projected.push(state.id),
+                    Err(e) => report.blocked.push((state.path, e.to_string())),
+                }
+            }
+        }
         // Retained old inodes can still be edited through external open handles.
         for a in self
             .store
@@ -263,37 +328,35 @@ impl NativeVault {
             parents.push(path);
         }
         parents.reverse();
-        for path in parents {
-            let _dir = self.paths.directory(&path)?;
-            let entries = self.store.list()?;
-            if let Some(state) = entries.iter().find(|s| s.path == path) {
-                if state.kind != EntryKind::Folder {
-                    return Err(Error::UnsafePath(
-                        "filesystem directory collides with logical file".into(),
-                    ));
-                }
-            } else {
-                self.store.import_directory(&MutationRequest {
-                    operation_id: new_op(),
-                    mutation: Mutation::Create {
-                        id: new_id(),
-                        path,
-                        kind: EntryKind::Folder,
-                        content: None,
-                    },
-                })?;
-            }
+        for parent in parents {
+            self.observe_directory(&parent)?;
         }
         Ok(())
     }
     fn observe(&mut self, path: &VaultPath) -> Result<Option<CommitResult>> {
         let (parent, name) = self.paths.parent(path)?;
+        if fs::node_type(&parent, &name)? == Some(rustix::fs::FileType::Directory) {
+            return self.observe_directory(path);
+        }
         let disk = fs::snapshot(&parent, &name, self.options.max_file_bytes)?;
+        self.observe_snapshot(path, &parent, disk)
+    }
+    fn observe_snapshot(
+        &mut self,
+        path: &VaultPath,
+        parent: &File,
+        disk: Option<fs::Snapshot>,
+    ) -> Result<Option<CommitResult>> {
         self.paths.verify_parent(path, &parent)?;
         let state = self.store.list()?.into_iter().find(|s| s.path == *path);
         let Some(disk) = disk else {
             if let Some(state) = &state {
-                if self.store.projection_baseline(&state.id)?.is_some() {
+                let materialized = if state.kind == EntryKind::File {
+                    self.store.projection_baseline(&state.id)?.is_some()
+                } else {
+                    self.store.directory_baseline(&state.id)?.is_some()
+                };
+                if materialized {
                     return Err(Error::Unsupported(
                         "external deletion retained; deletion reconciliation is not implemented",
                     ));
@@ -377,8 +440,8 @@ impl NativeVault {
         let Some(current) = self.store.read(id)? else {
             return Err(Error::Unsupported("physical deletion"));
         };
-        if current.state.kind != EntryKind::File {
-            return Err(Error::Unsupported("folder projection"));
+        if current.state.kind == EntryKind::Folder {
+            return self.project_directory(id);
         }
         if self
             .store
