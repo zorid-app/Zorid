@@ -1,5 +1,40 @@
 # Actual browser relay verification
 
+## Production RPC adapter cross-client proof — 2026-10-17
+
+Root served the actual BrowserCoreRuntime worker/Rust-WASM bundle from isolated
+`grpc-core-integration` source eaea42a, RPC source d488583. WASM11378 and browser
+bundle58735 built successfully. The bundle contains production RPC2 adapters;
+this run still uses the preceding browser-v6 storage engine, not the subsequent
+normalized-v7 streaming candidate. Synthetic credentials remained in private
+fixture files, outside served content. No direct IndexedDB seeding was used.
+
+Actual Chrome created `rpc-note.md`, synced it to the Rust/SQLite relay, and the
+independent CLI received its exact27 bytes. Browser and CLI then independently
+appended different text from that shared baseline before exchanging updates.
+After catch-up both read the exact49-byte merged content; CLI physical bytes
+also matched. SHA256:
+`e1f07ecb09cd36487f7d4e359d2ba03fa3f98b3d4c19adcd29f45eb280df6967`.
+Nonsecret result: `/private/tmp/zorid-rpc-browser-cli-result-1017.json`.
+
+Chrome selected a generated262,163-byte binary through the actual file chooser,
+created `rpc-asset.unknown` and synced five records. Independent CLI catch-up
+received five records; pinned/raw output and the physical file both equal the
+original input byte-for-byte. SHA256:
+`c8420694bde1beb17f817fed43a5e6b12ed74424216947b4e87d1fdc87212a10`.
+Nonsecret result: `/private/tmp/zorid-rpc-browser-binary-result-1017.json`.
+The catch-up report had zero final pending authored/dependency/projection work;
+its broader `synced` flag remains false while unsupported capabilities exist.
+
+A continuation initially returned `sync_transport`; live process inspection
+confirmed that interruption had stopped the fixture relay. Restarting the same
+database and original loopback port completed the pending binary check. This
+does not represent a protocol/data repair. Own Chrome tab was automatically
+closed after interruption, and restarted relay60125 was closed with exit0.
+There is no actual normalized-v7 browser, new Electron, >16MiB browser or mobile
+proof from this run. The new batch remains isolated pending those applicable
+combined gates; current main still uses HTTP1 sync.
+
 Candidate `49082b9` in `core-browser-combined`, integrated on main through
 `3185253`. Source review covered storage, worker, WASM and relay launcher;
 the small runtime page was inspected by the coordinator.

@@ -116,6 +116,36 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- Latest combined checkpoint (2026-10-17): isolated
+  `core-default-integration`, branch `tingkai-c/streaming-core-integration`, is
+  now c2c9b91 after composing the independently reviewed browser source batch
+  frozen at91c17d1. The prototype conflict retained both RPC2 configuration and
+  lazy binary capability admission. Parent browser checks passed100 baseline
+  and52 affected Node checks plus full TypeScript, including the prototype;
+  these use test doubles and do not prove actual normalized browser runtime.
+  Root's combined Rust/WASM library gate90716 is the sole active heavy handle.
+  Browser WASM regeneration, real normalized-IDB streaming, host/CLI process
+  checks, encrypted restore and rebuilt Electron remain before main integration.
+- Native large-file gate47955 is terminal: staged restart/lost-open-ACK/pinned
+  original-source case passed; compound external case hit its120-second soft
+  scan budget, invalidating the fixture's single-pass expectation. Reviewed
+  d69bb27 fixes only the fixture to resume bounded scans with durable progress
+  and duplicate-receipt checks. Root rerun19553 PASSED the compound17MiB case
+  in112.35s using command-only test opt-level1; production budgets unchanged.
+  Store diagnostic follow-up abab33f (root9e97718) avoids rehashing sealed
+  sources merely to query inert stage status; authority operations still verify
+  actual bytes. Its targeted corruption/CAS gate77061 passed. No performance
+  claim follows from these correctness results.
+- Actual Chrome production RPC proof now passes for the preceding browser-v6
+  storage engine: concurrent browser/independent-CLI text edits converge to the
+  exact49-byte result, and a browser-uploaded262,163-byte binary reaches CLI and
+  physical disk with identical SHA256. See browser-relay-verification.md. This
+  supersedes the earlier computer-use connection blocker; it does not prove the
+  new normalized-v7 browser engine. One post-interruption binary catch-up first
+  returned sync_transport because the relay had stopped; process inspection
+  confirmed absence, restarting the same DB/port completed the exact check.
+  Own verification tab is closed; restarted relay60125 exited0 after Ctrl-C.
+  No server deployment, real-vault migration or main transport switch occurred.
 - User requests a persistent future-improvements list. See
   [future-improvements.md](future-improvements.md): bounded parallel indexing/scan
   work in the same Rust core, deferred P2P, server-push catch-up, stale-editor
