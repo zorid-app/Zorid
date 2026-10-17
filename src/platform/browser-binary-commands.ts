@@ -150,7 +150,8 @@ export function createBrowserBinaryCommands(options: BrowserBinaryCommandsOption
     return result;
   }
   async function inspect(row: Awaited<ReturnType<typeof owned>>): Promise<BinaryStageStatus> {
-    active(); return status(await backend.query(row.ref), row.ref, row.state.request);
+    active(); const observed = await backend.query(row.ref); active();
+    return status(observed, row.ref, row.state.request);
   }
   async function settle(row: Awaited<ReturnType<typeof owned>>, observed: BinaryStageStatus): Promise<void> {
     if (observed.outcome) {
@@ -212,7 +213,8 @@ export function createBrowserBinaryCommands(options: BrowserBinaryCommandsOption
       if (!input || !(input.bytes instanceof Uint8Array) || input.bytes.byteLength < 1 || input.bytes.byteLength > limits.maxChunkBytes || !Number.isInteger(input.sequence) || input.sequence < 0 || input.sequence > 0xffffffff) throw fail('request_limit');
       const captured = { sequence: input.sequence, offset: length(input.offset), bytes: input.bytes.slice() }, row = await owned(bound(inputRef));
       if (row.state.phase !== 'receiving') throw fail('invalid_stage_state');
-      active(); const receipt = structuredClone(await backend.append(row.ref, captured));
+      active(); const observed = await backend.append(row.ref, captured); active();
+      const receipt = structuredClone(observed);
       digest(receipt.digest);
       if (receipt.sequence !== captured.sequence || receipt.offset !== captured.offset || receipt.bytes !== captured.bytes.length || length(receipt.acceptedLength) !== String(decimal(captured.offset) + BigInt(captured.bytes.length))) throw fail('invalid_binary_response');
       return receipt;

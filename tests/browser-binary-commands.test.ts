@@ -107,3 +107,11 @@ test('lost durable checkpoint replies load the saved ref/outcome rather than all
   const f=fixture();f.loseCheckpoint(2);await assert.rejects(f.consumer().streams.begin(request),/checkpoint reply lost/);const ref=await f.consumer().streams.begin(request);assert.equal(f.events.filter(value=>value==='begin').length,1);
   await f.consumer().streams.seal(ref,{finalLength:'0'});f.loseCheckpoint(2);await assert.rejects(f.consumer().streams.commit(ref),/checkpoint reply lost/);const receipt=f.state().outcome.receipt;assert.equal(await f.consumer().streams.commit(ref),receipt);assert.equal(f.events.filter(value=>value==='commit').length,1);
 });
+test('deferred append and query cannot return success after consumer retirement',async()=>{
+  for(const operation of ['append','query']as const){const f=fixture(),consumer=f.consumer(),ref=await consumer.streams.begin(request);let release!:()=>void,started!:()=>void;const entered=new Promise<void>(resolve=>{started=resolve;}),wait=new Promise<void>(resolve=>{release=resolve;});
+    if(operation==='append'){const append=f.backend.append;f.backend.append=async(stage,input)=>{started();await wait;return append(stage,input);};}
+    else{const query=f.backend.query;f.backend.query=async stage=>{started();await wait;return query(stage);};}
+    const pending=operation==='append'?consumer.streams.append(ref,{sequence:0,offset:'0',bytes:Uint8Array.of(1)}):consumer.streams.query(ref);
+    await entered;f.retire();release();await assert.rejects(pending,{code:'client_ownership_lost'});assert.equal(f.state().phase,'receiving');
+  }
+});
