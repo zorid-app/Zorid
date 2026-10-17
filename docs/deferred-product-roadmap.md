@@ -11,6 +11,15 @@ Older reference/parity ledgers remain evidence and capability inventories, not
 requirements to reproduce every interaction or visual detail. This does not
 relax correctness, data integrity, accessibility or native verification gates.
 
+Latest development priority: the user confirms there are no app users yet and
+asks to speed development. Treat unreleased schemas/protocols as replaceable;
+prefer fresh disposable fixtures to migration machinery serving only earlier
+development artifacts. Avoid production rollout compatibility layers now. Keep
+explicit format rejection, required protocol-version checks and meaningful
+data-loss/convergence/crash tests. Do not delete or migrate real user vaults.
+Existing full milestone requirements remain intact; this changes sequencing and
+implementation complexity, not the evidence needed to claim completion.
+
 The user requested durable written decisions, execution tracking and a Codex
 built-in goal. An active goal now targets the first integrated Rust core + web +
 Electron + standalone full-vault CLI + E2EE server-sync milestone. This is not a
