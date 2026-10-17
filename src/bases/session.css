@@ -1,4 +1,11 @@
-.bases-session { display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; container-type: inline-size; container-name: bases-pane; }
+/* Inline-size containment must use the host width, never centered intrinsic sizing.
+   Standalone attachment panes are flex hosts; Markdown embeds provide a bounded
+   block viewport. Keep both paths full-width without changing unrelated viewers. */
+.attachment-view.base-attachment-view { align-items: stretch; justify-content: flex-start; }
+.base-embed-session { box-sizing: border-box; width: 100%; min-width: 0; }
+/* Prose-inline widgets otherwise shrink to the contained child's zero width. */
+.cm-live-embed-inline[data-embed-type="base"] { box-sizing: border-box; width: 100%; max-width: 100%; }
+.bases-session { box-sizing: border-box; display: flex; flex-direction: column; flex: 1 1 0%; align-self: stretch; width: 100%; max-width: 100%; min-height: 0; min-width: 0; height: 100%; container-type: inline-size; container-name: bases-pane; }
 .bases-session-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 40px; flex: none; padding: 4px 8px; border-bottom: 1px solid var(--background-modifier-border); font-size: var(--font-ui-small, 13px); }
 .bases-toolbar-view { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 180px; color: var(--text-normal); }
 .bases-toolbar-view .svg-icon { flex: none; }
