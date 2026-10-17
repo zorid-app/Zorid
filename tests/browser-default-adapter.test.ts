@@ -31,3 +31,18 @@ test('ordinary browser selection requires Rust assets rather than falling back t
     await assert.rejects(createPlatformAdapter(),{code:'core_assets_missing'});
   }finally{if(saved)Object.defineProperty(globalThis,'window',saved);else Reflect.deleteProperty(globalThis,'window');}
 });
+
+test('uncertain consumer release retries only release and does not recover commands again',async()=>{
+  const {createBrowserRelease}=await import('../src/platform/browser-default.ts');
+  let commands=0,releases=0,slots=0,completed=0;
+  const release=createBrowserRelease({recoverCommands:async()=>{commands++;return false;},release:async()=>{releases++;if(releases===1)throw new Error('release response lost');}}, {release:async()=>{slots++;}},()=>{completed++;});
+  await assert.rejects(release(),/response lost/);await release();await release();
+  assert.equal(commands,1);assert.equal(releases,2);assert.equal(slots,1);assert.equal(completed,1);
+});
+test('registry release retry after consumer release never invokes the closed consumer',async()=>{
+  const {createBrowserRelease}=await import('../src/platform/browser-default.ts');
+  let commands=0,releases=0,slots=0;
+  const release=createBrowserRelease({recoverCommands:async()=>{assert.equal(releases,0);commands++;return false;},release:async()=>{releases++;}}, {release:async()=>{slots++;if(slots===1)throw new Error('registry write failed');}},()=>{});
+  await assert.rejects(release(),/registry write/);await release();
+  assert.equal(commands,1);assert.equal(releases,1);assert.equal(slots,2);
+});

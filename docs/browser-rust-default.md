@@ -55,3 +55,12 @@ pass. One additional ordinary-selection check confirms missing browser WASM fail
 explicitly instead of falling back to localStorage. Desktop diagnostics backend
 activation remains root-owned and blocked on its separate native fatal-error gate;
 these UI seams do not establish that gate passed.
+
+Independent package_sol review found a wrapper release-retry bug: retrying an
+uncertain worker release or failed slot persistence re-entered command recovery
+on an already fenced/released consumer. The wrapper now records completed
+release phases, coalesces calls and retries only the remaining phase. Two focused
+regressions pass. Legacy raw export is also offered on browser startup failure,
+independent of Rust assets/storage availability, while alternate-vault permission
+remains unchanged. Six affected checks and full source TypeScript pass;
+package_sol source-approved the narrow followup. No actual browser claim yet.

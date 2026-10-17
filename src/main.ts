@@ -2,6 +2,7 @@ import { createPlatformAdapter, pickDesktopVault } from './platform/index.ts';
 import type { PlatformVault } from './platform/index.ts';
 import { Workspace } from './ui/workspace.ts';
 import { renderStartupError } from './ui/startup-error.ts';
+import { legacyBrowserExport } from './platform/browser-legacy-export.ts';
 import './ui/recovery.css';
 import './ui/import-status.css';
 import './ui/styles.css';
@@ -44,7 +45,10 @@ async function start(chooseAnother=false): Promise<void> {
   } catch (error) {
     let canChooseAnother=false;
     try{canChooseAnother=await workspace.cleanupFailedStartup(platform);}catch(cleanupError){console.error('Startup lease cleanup failed',cleanupError);}
+    let exportPrevious:(()=>void)|undefined;
+    if(!window.zorid)try{exportPrevious=legacyBrowserExport();}catch{/* Unavailable preview storage is never overwritten. */}
     renderStartupError(root,error,{
+      ...(exportPrevious?{legacyExport:exportPrevious}:{}),
       retry:()=>window.location.reload(),
       ...(canChooseAnother&&window.zorid?{openAnotherVault:()=>void start(true)}:{}),
     });

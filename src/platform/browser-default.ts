@@ -7,6 +7,7 @@ import { admitBrowserClient } from './browser-client-admission.ts';
 import type { BrowserClientContext } from './browser-client-admission.ts';
 import type { BrowserFileCommandInput } from './browser-file-commands.ts';
 import { openBrowserClientSlot } from './browser-client-slots.ts';
+import type { BrowserClientSlot } from './browser-client-slots.ts';
 import { legacyBrowserExport } from './browser-legacy-export.ts';
 
 export const DEFAULT_BROWSER_DATABASE='zorid-core-vault:default-v1';
@@ -42,6 +43,23 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
   };
 }
 
+/** Keep release phases after unknown acknowledgments. A registry retry must
+ * never re-enter an already released worker, and consumer retry must skip commands. */
+export function createBrowserRelease(consumer:Pick<BrowserClientContext,'recoverCommands'|'release'>,slot:Pick<BrowserClientSlot,'release'>,completed:()=>void):()=>Promise<void>{
+  let commandsSettled=false,consumerReleased=false,released=false,pending:Promise<void>|undefined;
+  return ()=>{
+    if(released)return Promise.resolve();
+    if(pending)return pending;
+    pending=(async()=>{
+      if(!commandsSettled){await consumer.recoverCommands!();commandsSettled=true;}
+      if(!consumerReleased){await consumer.release(()=>{});consumerReleased=true;}
+      await slot.release({restore:false});
+      released=true;completed();
+    })().finally(()=>{pending=undefined;});
+    return pending;
+  };
+}
+
 /** Static assets + IndexedDB + Rust/WASM only. Sync credentials are never a
  * prerequisite, and opening a tab never creates an HTTP sync session. */
 export async function openDefaultBrowserVault():Promise<PlatformVault>{
@@ -58,16 +76,10 @@ export async function openDefaultBrowserVault():Promise<PlatformVault>{
     const adapter=defaultBrowserAdapter(opened,consumer);
     const retire=()=>{active=false;opened.close();slot.retire();};
     window.addEventListener('pagehide',retire,{once:true});
-    let released=false;
+    const release=createBrowserRelease(consumer,slot,()=>{active=false;window.removeEventListener('pagehide',retire);});
     return {adapter,label:'Browser vault',id:`browser:core:${consumer.scope.vaultId}:client:${consumer.scope.clientId}`,
       legacyExport:legacyBrowserExport(),recoverCommands:()=>consumer.recoverCommands!(),
-      async release(){
-        if(released)return;
-        await consumer.recoverCommands!();
-        await consumer.release(()=>{});
-        await slot.release({restore:false});
-        released=true;active=false;window.removeEventListener('pagehide',retire);
-      },
+      release,
     };
   }catch(error){runtime?.close();slot.retire();throw error;}
 }

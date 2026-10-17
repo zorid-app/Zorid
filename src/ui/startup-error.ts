@@ -1,6 +1,6 @@
 import { el, textButton } from './dom.ts';
 
-export function renderStartupError(root:HTMLElement,error:unknown,actions:{retry():void;openAnotherVault?():void}):void {
+export function renderStartupError(root:HTMLElement,error:unknown,actions:{retry():void;openAnotherVault?():void;legacyExport?():void}):void {
   root.className='startup-failed';
   const screen=el('main','startup-error');
   const panel=el('section','startup-error-panel');panel.setAttribute('aria-labelledby','startup-error-heading');
@@ -9,6 +9,7 @@ export function renderStartupError(root:HTMLElement,error:unknown,actions:{retry
   const buttons=el('div','startup-error-actions');
   buttons.append(textButton('Try again',actions.retry,'mod-cta'));
   if(actions.openAnotherVault)buttons.append(textButton('Open another vault',actions.openAnotherVault));
+  if(actions.legacyExport)buttons.append(textButton('Export previous browser vault',actions.legacyExport));
   panel.append(buttons);
   const details=el('details','startup-error-details');details.append(el('summary','','Technical details'));
   const message=error instanceof Error?error.stack||error.message:String(error);

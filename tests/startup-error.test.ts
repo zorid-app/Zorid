@@ -20,5 +20,8 @@ test('startup failure presents plain guidance and collapsed selectable diagnosti
     buttons().find(button=>button.textContent==='Try again')!.click();assert.equal(retried,1);
     renderStartupError(root,'admission failure',{retry:()=>{},openAnotherVault:()=>{opened++;}});
     buttons().find(button=>button.textContent==='Open another vault')!.click();assert.equal(opened,1);
+    let exported=0;renderStartupError(root,'Rust assets unavailable',{retry:()=>{},legacyExport:()=>{exported++;}});
+    buttons().find(button=>button.textContent==='Export previous browser vault')!.click();assert.equal(exported,1);
+    assert.equal(buttons().some(button=>button.textContent==='Open another vault'),false);
   }finally{dom.window.close();if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });
