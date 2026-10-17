@@ -38,7 +38,7 @@ async function publish(name,value) {
 }
 await publish('accepted-expressions.json',projected);
 const queryBaseline=JSON.parse(await readFile(resolve(here,'queries.json'),'utf8'));
-const approvedQueryChanges=new Map([['default-natural-order','current'],['typed-group-keys','proposed'],['empty-or-composed','proposed']]);
+const approvedQueryChanges=new Map([['default-natural-order','current'],['typed-group-keys','proposed'],['empty-or-composed','proposed'],['unsupported-link-metadata','proposed']]);
 const snapshotId={localStoreId:'fixture-store',generationEpoch:'fixture-epoch',generation:'1',versions:{schema:1,extraction:'zorid-markdown-1:metadata-1',resolver:'link-nfc-lower-segment-utf16-v1',query:'literal-lines-exact-v1'}};
 const queryCases=queryBaseline.cases.map(item=>{
   let expectation='current';

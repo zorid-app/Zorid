@@ -5,7 +5,8 @@
   "approvedChangeSources": {
     "default-natural-order": "current",
     "typed-group-keys": "proposed",
-    "empty-or-composed": "proposed"
+    "empty-or-composed": "proposed",
+    "unsupported-link-metadata": "proposed"
   },
   "cases": [
     {
@@ -768,15 +769,18 @@
           {
             "phase": "filter",
             "path": "a.md",
-            "code": "unsupported"
+            "code": "unavailable"
           }
         ]
       },
-      "expectationSource": "current",
+      "expectationSource": "proposed",
       "evidence": [
         "src/bases/query.ts",
         "tests/bases-query.test.ts",
-        "tests/bases-query-review.test.ts"
+        "tests/bases-query-review.test.ts",
+        "docs/stage4-base-contract.md:261",
+        "crates/zorid-bases/src/expression.rs (relationship availability guard)",
+        "crates/zorid-bases/src/graph.rs (complete coverage guard)"
       ]
     },
     {

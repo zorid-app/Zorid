@@ -307,3 +307,15 @@ inputs/oracles coherently; it does not change extraction or derive expectations
 from engine outputs. Graph `expected.values` declares selected row/cell observables;
 undeclared columns are not an oracle. Declared typed lists and link fields remain
 exact, errors freeze codes, and JSON numbers compare by numeric value.
+
+The first actual Chrome Base corpus run reported 50/51 cases and all five request
+checks passing; the single failure was the detached missing-relationship fixture
+still expecting the historical TypeScript `unsupported` code. The generation
+backed contract above already distinguishes absent/incomplete relationship input
+(`unavailable`) from an unimplemented operation (`unsupported`). The original
+`queries.json.current` observation is preserved. Its explicit approved `proposed`
+expectation now selects `unavailable` through the accepted projector whitelist;
+no engine output was used to generate an expectation and no evaluator behavior
+changed. The actual failed browser report/results remain acceptance evidence;
+this fixture correction requires the native detached query corpus and actual
+browser Base corpus to rerun before a pass is recorded.
