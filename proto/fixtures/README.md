@@ -16,3 +16,8 @@ accepted authenticated bytes by re-encoding.
 
 These tests do not activate adapters or validate ownership, stages, authenticated
 sync ingress, filesystem publication, native UI, or mobile behavior.
+
+RPC vectors additionally cover positive uint64 accepted sequences above 2^53,
+present-zero empty snapshots, explicit incomplete false, mandatory empty Control
+messages and exact opaque envelope byte carriage. Tiny illustrative wire bodies
+in semantic codec fixtures are not authenticated ZSE1 frames or sync ingress proof.

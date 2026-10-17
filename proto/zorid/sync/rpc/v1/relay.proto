@@ -1,0 +1,82 @@
+syntax = "proto3";
+package zorid.sync.rpc.v1;
+
+// NEW transport major 2. Existing ZSE1/envelope1 and encrypted plaintext stay
+// unchanged. Standard protobuf merge/unknown semantics; all new required meaning
+// must require a recognized version/feature before acting on a decoded message.
+message InformationalExtension { string key = 1; bytes value = 2; }
+message Control {
+  repeated string required_features = 1;
+  repeated InformationalExtension optional_extensions = 2;
+}
+message RequestContext { optional uint32 transport_major = 1; Control control = 2; }
+message HelloRequest { repeated uint32 offered_transport_majors = 1; Control control = 2; }
+message HelloReply {
+  optional uint32 selected_transport_major = 1;
+  string realm_id = 2;
+  string server_epoch = 3;
+  repeated uint32 envelope_versions = 4;
+  string suite = 5;
+  optional uint64 max_wire_bytes = 6;
+  optional uint64 max_page_wire_bytes = 7;
+  optional uint32 max_page_items = 8;
+  Control control = 9;
+}
+message AppendRequest {
+  RequestContext context = 1;
+  string vault_id = 2;
+  string update_id = 3;
+  // Full original ZSE1 frame; never decode/re-encode header/AAD or reseal retry.
+  bytes exact_wire = 4;
+}
+message AcceptedReply {
+  optional uint32 transport_major = 1;
+  string vault_id = 2;
+  string update_id = 3;
+  string server_epoch = 4;
+  optional uint64 sequence = 5;
+  Control control = 6;
+}
+message Cursor {
+  string server_epoch = 1;
+  // Present zero is the initial cursor. Absent is invalid.
+  optional uint64 after = 2;
+  Control control = 3;
+}
+message PullRequest {
+  RequestContext context = 1;
+  string vault_id = 2;
+  Cursor cursor = 3;
+  // Absent establishes a snapshot; present zero requests its empty bound.
+  optional uint64 through = 4;
+  optional uint32 limit = 5;
+}
+message PullItem { optional uint64 sequence = 1; bytes exact_wire = 2; }
+message PullReply {
+  optional uint32 transport_major = 1;
+  repeated PullItem items = 2;
+  Cursor next = 3;
+  optional uint64 through = 4;
+  // Present false is valid. Absent is invalid.
+  optional bool complete = 5;
+  Control control = 6;
+}
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID_REQUEST = 1;
+  ERROR_CODE_UNSUPPORTED_PROTOCOL = 2;
+  ERROR_CODE_EPOCH_MISMATCH = 3;
+  ERROR_CODE_IMMUTABLE_UPDATE_CONFLICT = 4;
+  ERROR_CODE_RELAY_BUSY = 5;
+  ERROR_CODE_UNAUTHORIZED = 6;
+  ERROR_CODE_FORBIDDEN = 7;
+  ERROR_CODE_TOO_LARGE = 8;
+  ERROR_CODE_INTERNAL = 9;
+}
+// Sanitized status metadata. No token, SQL, ciphertext or human text decisions.
+message ErrorDetail { ErrorCode code = 1; }
+service RelayService {
+  rpc Hello(HelloRequest) returns (HelloReply);
+  rpc Append(AppendRequest) returns (AcceptedReply);
+  rpc Pull(PullRequest) returns (PullReply);
+}

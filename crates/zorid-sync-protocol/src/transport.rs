@@ -26,7 +26,7 @@ impl std::fmt::Display for TransportError {
 }
 impl std::error::Error for TransportError {}
 type Result<T> = std::result::Result<T, TransportError>;
-fn error(code: &'static str) -> TransportError {
+pub(crate) fn error(code: &'static str) -> TransportError {
     TransportError { code }
 }
 pub const MAX_ITEMS: usize = 64;
@@ -90,21 +90,56 @@ pub fn decode_hello(bytes: &[u8], realm: &RealmId, epoch: &ServerEpoch) -> Resul
     let hello: Hello =
         serde_json::from_slice(&bytes).map_err(|_| error("sync_invalid_response"))?;
     extensions(&hello.extensions)?;
+    // Preserve legacy identity-error precedence before transport negotiation.
     if hello.realm_id != *realm || hello.server_epoch != *epoch {
         return Err(error("sync_epoch_or_realm_mismatch"));
     }
-    if crate::negotiate_transport(&hello.transport_versions).is_err()
-        || hello.envelope_versions.len() > 16
-        || !hello.envelope_versions.contains(&1)
-        || hello.suite != "xchacha20poly1305"
-        || hello.max_wire_bytes != MAX_WIRE_BYTES
-        || hello.max_page_bytes != MAX_PAGE_WIRE
-        || hello.max_page_items != MAX_ITEMS
+    crate::negotiate_transport(&hello.transport_versions)
+        .map_err(|_| error("sync_unsupported_protocol"))?;
+    validate_hello_fields(
+        &hello.realm_id,
+        &hello.server_epoch,
+        realm,
+        epoch,
+        &hello
+            .envelope_versions
+            .iter()
+            .map(|v| u32::from(*v))
+            .collect::<Vec<_>>(),
+        &hello.suite,
+        hello.max_wire_bytes as u64,
+        hello.max_page_bytes as u64,
+        hello.max_page_items as u64,
+    )
+}
+/// Shared typed discovery semantics; transport-specific decoders own framing,
+/// version selection and extension validation before reaching this function.
+pub(crate) fn validate_hello_fields(
+    actual_realm: &RealmId,
+    actual_epoch: &ServerEpoch,
+    realm: &RealmId,
+    epoch: &ServerEpoch,
+    envelope_versions: &[u32],
+    suite: &str,
+    max_wire: u64,
+    max_page: u64,
+    max_items: u64,
+) -> Result<()> {
+    if actual_realm != realm || actual_epoch != epoch {
+        return Err(error("sync_epoch_or_realm_mismatch"));
+    }
+    if envelope_versions.len() > 16
+        || !envelope_versions.contains(&1)
+        || suite != "xchacha20poly1305"
+        || max_wire != MAX_WIRE_BYTES as u64
+        || max_page != MAX_PAGE_WIRE as u64
+        || max_items != MAX_ITEMS as u64
     {
         return Err(error("sync_unsupported_protocol"));
     }
     Ok(())
 }
+
 /// Validate an upload acknowledgment against the exact requested target.
 pub fn decode_accepted(
     bytes: &[u8],
@@ -118,6 +153,14 @@ pub fn decode_accepted(
             _ => "sync_invalid_ack",
         })
     })?;
+    validate_accepted(accepted, vault, update, epoch)
+}
+pub(crate) fn validate_accepted(
+    accepted: Accepted,
+    vault: &VaultId,
+    update: &UpdateId,
+    epoch: &ServerEpoch,
+) -> Result<Accepted> {
     accepted
         .check_target(vault, update, epoch)
         .map_err(|_| error("sync_invalid_ack"))?;
@@ -132,28 +175,20 @@ pub fn decode_page(bytes: &[u8], cursor: &Cursor, through: Option<LogPosition>) 
     extensions(&page.extensions)?;
     let next =
         Cursor::decode(page.next.get().as_bytes()).map_err(|_| error("sync_invalid_response"))?;
-    if next.server_epoch != cursor.server_epoch
-        || page.through < cursor.after
-        || through.is_some_and(|bound| bound != page.through)
-        || page.items.len() > MAX_ITEMS
-        || next.after > page.through
-        || next.after < cursor.after
-        || page.complete != (next.after == page.through)
-        || (!page.complete && page.items.is_empty())
-    {
-        return Err(error("sync_invalid_page"));
-    }
+    validate_page_header(
+        &next,
+        page.through,
+        page.complete,
+        page.items.len(),
+        cursor,
+        through,
+    )?;
     let mut after = cursor.after.get();
     let mut total = 0usize;
     let mut items = Vec::with_capacity(page.items.len());
     for item in page.items {
-        let expected = after
-            .checked_add(1)
-            .ok_or_else(|| error("sync_invalid_page"))?;
-        if item.sequence.get() != expected
-            || item.sequence > page.through
-            || item.envelope_base64.len() > 4 * MAX_WIRE_BYTES.div_ceil(3)
-        {
+        after = validate_sequence(item.sequence, after, page.through)?;
+        if item.envelope_base64.len() > 4 * MAX_WIRE_BYTES.div_ceil(3) {
             return Err(error("sync_invalid_page"));
         }
         let wire = STANDARD
@@ -168,20 +203,78 @@ pub fn decode_page(bytes: &[u8], cursor: &Cursor, through: Option<LogPosition>) 
         if total > MAX_PAGE_WIRE {
             return Err(error("sync_limit"));
         }
-        after = expected;
         items.push(Item {
             sequence: item.sequence,
             wire,
         });
+    }
+    validate_page(items, next, page.through, page.complete, cursor, through)
+}
+/// Shared cursor/page invariants over already bounded, transport-decoded bytes.
+/// Receipt/application and durable cursor advancement remain caller obligations.
+pub(crate) fn validate_page(
+    items: Vec<Item>,
+    next: Cursor,
+    page_through: LogPosition,
+    complete: bool,
+    cursor: &Cursor,
+    through: Option<LogPosition>,
+) -> Result<Page> {
+    validate_page_header(&next, page_through, complete, items.len(), cursor, through)?;
+    let mut after = cursor.after.get();
+    let mut total = 0usize;
+    for item in &items {
+        let expected = validate_sequence(item.sequence, after, page_through)?;
+        if item.wire.len() > MAX_WIRE_BYTES {
+            return Err(error("sync_invalid_page"));
+        }
+        total = total
+            .checked_add(item.wire.len())
+            .ok_or_else(|| error("sync_limit"))?;
+        if total > MAX_PAGE_WIRE {
+            return Err(error("sync_limit"));
+        }
+        after = expected;
     }
     if after != next.after.get() {
         return Err(error("sync_invalid_page"));
     }
     Ok(Page {
         items,
-        through: page.through,
-        complete: page.complete,
+        through: page_through,
+        complete,
     })
+}
+
+fn validate_page_header(
+    next: &Cursor,
+    page_through: LogPosition,
+    complete: bool,
+    item_count: usize,
+    cursor: &Cursor,
+    through: Option<LogPosition>,
+) -> Result<()> {
+    if next.server_epoch != cursor.server_epoch
+        || page_through < cursor.after
+        || through.is_some_and(|bound| bound != page_through)
+        || item_count > MAX_ITEMS
+        || next.after > page_through
+        || next.after < cursor.after
+        || complete != (next.after == page_through)
+        || (!complete && item_count == 0)
+    {
+        return Err(error("sync_invalid_page"));
+    }
+    Ok(())
+}
+fn validate_sequence(sequence: LogPosition, after: u64, through: LogPosition) -> Result<u64> {
+    let expected = after
+        .checked_add(1)
+        .ok_or_else(|| error("sync_invalid_page"))?;
+    if sequence.get() != expected || sequence > through {
+        return Err(error("sync_invalid_page"));
+    }
+    Ok(expected)
 }
 
 #[cfg(test)]
@@ -195,6 +288,47 @@ mod tests {
         json!({"items":[{"sequence":sequence,"envelope_base64":STANDARD.encode([1u8,2,3])}],
             "next":Cursor::new(ServerEpoch::new("epoch").unwrap(),LogPosition::new(next.parse().unwrap())),
             "through":through,"complete":complete,"extensions":{}})
+    }
+    #[test]
+    fn legacy_json_error_classification_and_precedence_remain_unchanged() {
+        let realm = RealmId::new("realm").unwrap();
+        let epoch = ServerEpoch::new("epoch").unwrap();
+        let hello = json!({"realm_id":"other","server_epoch":"epoch",
+            "transport_versions":[2],"envelope_versions":[1],"suite":"xchacha20poly1305",
+            "max_wire_bytes":MAX_WIRE_BYTES,"max_page_bytes":MAX_PAGE_WIRE,
+            "max_page_items":MAX_ITEMS,"extensions":{}});
+        assert_eq!(
+            decode_hello(&serde_json::to_vec(&hello).unwrap(), &realm, &epoch)
+                .unwrap_err()
+                .code(),
+            "sync_epoch_or_realm_mismatch"
+        );
+        let initial = Cursor::new(epoch, LogPosition::new(0));
+        let mut bad = page("2", "2", "2", true);
+        bad["items"][0]["envelope_base64"] = json!("!");
+        assert_eq!(
+            decode_page(&serde_json::to_vec(&bad).unwrap(), &initial, None)
+                .unwrap_err()
+                .code(),
+            "sync_invalid_page"
+        );
+        let mut bad = page("1", "1", "1", true);
+        bad["next"]["server_epoch"] = json!("other");
+        bad["items"][0]["envelope_base64"] = json!("!");
+        assert_eq!(
+            decode_page(&serde_json::to_vec(&bad).unwrap(), &initial, None)
+                .unwrap_err()
+                .code(),
+            "sync_invalid_page"
+        );
+        let mut bad = page("1", "1", "1", true);
+        bad["items"][0]["envelope_base64"] = json!(STANDARD.encode(vec![0; MAX_WIRE_BYTES + 1]));
+        assert_eq!(
+            decode_page(&serde_json::to_vec(&bad).unwrap(), &initial, None)
+                .unwrap_err()
+                .code(),
+            "sync_invalid_envelope"
+        );
     }
     #[test]
     fn page_chain_rejects_gaps_wrong_boundary_epoch_and_required_extensions() {

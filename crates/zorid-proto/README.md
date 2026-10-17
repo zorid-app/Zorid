@@ -15,8 +15,8 @@ pnpm proto:check
 The explicit development tool in `tools/proto-codegen` has its own committed Cargo
 lockfile and pinned compiler. It invokes standard `prost-build` and
 `protoc-gen-es` from the same schemas. The generator replaces only its owned
-`crates/zorid-proto/src/generated` and `src/generated/zorid` subtrees after both
-outputs succeed. This tool is not a dependency of ordinary app builds.
+`crates/zorid-proto/src/generated`, native `crates/zorid-sync-rpc/src/generated`
+and `src/generated/zorid` subtrees after all outputs succeed. This tool is not a dependency of ordinary app builds.
 
 Focused checks:
 

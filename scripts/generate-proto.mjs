@@ -8,7 +8,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const check = process.argv.slice(2).includes('--check');
 if (process.argv.slice(2).some(arg => arg !== '--check')) throw new Error('Usage: generate-proto.mjs [--check]');
 const output = mkdtempSync(join(tmpdir(), 'zorid-proto-generate-'));
-const paths = ['crates/zorid-proto/src/generated', 'src/generated/zorid'];
+const paths = ['crates/zorid-proto/src/generated', 'crates/zorid-sync-rpc/src/generated', 'src/generated/zorid'];
 function files(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
     entry.isDirectory() ? files(join(dir, entry.name)) : [join(dir, entry.name)]);

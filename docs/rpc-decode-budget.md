@@ -6,9 +6,10 @@ Owner: `/root/protobuf_schema_sol/schema_review`. Branch
 The examples depend on the coordinator's pending RPC IDL/generated messages and
 `zorid-sync-protocol::rpc` module. No manifest or dependency changes are owned here.
 
-Status: source only. No build, install, harness execution or resource measurement
-has been performed. These tools do not establish safe production resource bounds.
-The coordinator must authorize and serialize execution on the 8 GB machine.
+Status: integrated into the schema-owner feature branch as `962459b`, then
+formatted and measured in the authorized exclusive slot on 2026-10-17. Results
+below describe standard runtime allocations; production acceptance budgets and
+actual predecode concurrency guards still require root/client/server verification.
 
 After integration and generated-source checks, build the Rust example once in the
 coordinator's heavy slot, then invoke its binary separately for each listed case:
@@ -64,3 +65,52 @@ architecture, exact cap, case, measurement and failure outcome before selecting
 budgets. A 1 MiB cap still allows roughly half a million empty repeated messages;
 post-decode count validation does not prevent their allocation. Standard protobuf
 merge/unknown policy does not itself enforce collection allocation limits.
+
+## Measured gate — 2026-10-17
+
+Schema-owner job 67681 passed after a measurement-only fix: the first malformed
+case retained its Prost error object until function scope end, so 200 bytes were
+still live when sampled. Explicitly dropping that error within the measured
+region corrected the harness lifetime; all nine Rust cases then pass with zero
+tracked live bytes after result/error drop. This was not a production leak fix.
+Node's ten fresh-process cases also pass. All cases ran sequentially; no eight-way
+malicious decode or actual Chrome heap measurement was performed.
+
+Rust host measurements used the shell's Homebrew compiler (1.99.0); WASM checks
+separately use explicit official Rust 1.95.0. JS runtime Node v26.10.0 with pinned
+protobuf-es 2.16.0. Full raw observations are preserved in
+[the JSON evidence](verification/rpc-decoder-budget-2026-10-17.json).
+
+| Case | Wire bytes | Rust conservative requested peak | Rust decode ms | Node sampled heap increase | Node decode ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| pull-items | 2,138,207 | 120.00 MiB | 68.24 | 96.32 MiB | 81.09 |
+| append-extensions | 1,056,816 | 72.00 MiB | 35.04 | 44.24 MiB | 50.31 |
+| pull-extensions | 2,138,208 | 144.00 MiB | 72.41 | 96.37 MiB | 107.50 |
+| append-features | 1,056,816 | 36.00 MiB | 38.90 | 23.44 MiB | 33.33 |
+| pull-features | 2,138,208 | 72.00 MiB | 79.61 | 28.91 MiB | 79.80 |
+| hello-packed | 4,096 | 0.02 MiB | 0.09 | 0.13 MiB | 0.25 |
+| reply-packed | 4,096 | 0.02 MiB | 0.09 | 0.17 MiB | 0.32 |
+| pull-truncated | 2,138,206 | 120.00 MiB | 77.54 | 96.35 MiB | 75.05 |
+| pull-unknown-retain | 2,138,208 | see Rust pull-unknown: 0 | 37.53 | 177.97 MiB | 89.62 |
+| pull-unknown-discard | 2,138,208 | see Rust pull-unknown: 0 | 37.53 | 2.70 MiB | 39.03 |
+
+The largest measured conservative Rust allocator peak is about 144 MiB for one
+Pull response with empty optional extension messages. Empty PullItems/truncation
+reach 120 MiB. An Append's empty extensions reach 72 MiB; multiplying that by eight
+predecode permits gives a **576 MiB extrapolation**, excluding framing/input,
+allocator overhead and other work. This is not a measured concurrent process peak.
+All invalid decoded Rust messages reject through production RPC validators.
+
+Node's largest sampled heap increase is about 178 MiB when retaining repeated
+unknown fields; standard unknown discard reduces this fixture to about 2.7 MiB.
+Its largest process maxRSS is about 455 MiB and includes pre-measurement fixture
+construction, so it is not the decoder's peak RSS. Known empty repeated items and
+extensions show about 96 MiB sampled increases. These values exclude the cost of
+holding both a Connect-decoded JS object and Rust/WASM validation concurrently.
+No Connect decoder option change or production memory budget is implemented here.
+
+Root must accept a finite process/aggregate budget or reduce the representation/
+method caps/use a supported standard decoder option before activation. The harness
+proves neither a hard JS allocation bound nor the service's admission enforcement.
+Depth/group adversarial tests and concurrent client/server behavior remain joint
+activation checks; schema-known message nesting itself is finite and nonrecursive.

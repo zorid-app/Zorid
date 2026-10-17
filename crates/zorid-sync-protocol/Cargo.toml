@@ -9,3 +9,4 @@ license = "AGPL-3.0-only"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 base64 = "0.22"
+zorid-proto = { path = "../zorid-proto" }

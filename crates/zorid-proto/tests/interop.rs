@@ -63,3 +63,24 @@ fn truncated_length_delimited_data_is_rejected() {
     bytes.pop();
     assert!(stream::BinaryCommand::decode(bytes.as_slice()).is_err());
 }
+
+#[test]
+fn rpc_fixtures_preserve_u64_presence_and_exact_wire() {
+    use zorid_proto::zorid::sync::rpc::v1 as rpc;
+    let bytes = fixture("rpc-accepted");
+    let accepted = rpc::AcceptedReply::decode(bytes.as_slice()).unwrap();
+    assert_eq!(accepted.sequence, Some(9_007_199_254_740_993));
+    assert!(accepted.control.is_some());
+    assert_eq!(accepted.encode_to_vec(), bytes);
+    let bytes = fixture("rpc-empty-page");
+    let empty = rpc::PullReply::decode(bytes.as_slice()).unwrap();
+    assert_eq!(empty.through, Some(0));
+    assert_eq!(empty.next.as_ref().unwrap().after, Some(0));
+    assert_eq!(empty.complete, Some(true));
+    assert_eq!(empty.encode_to_vec(), bytes);
+    let bytes = fixture("rpc-incomplete-page");
+    let page = rpc::PullReply::decode(bytes.as_slice()).unwrap();
+    assert_eq!(page.complete, Some(false));
+    assert_eq!(page.items[0].exact_wire, [0, 255, 128, 1]);
+    assert_eq!(page.encode_to_vec(), bytes);
+}

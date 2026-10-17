@@ -1,5 +1,6 @@
 //! Bounded ciphertext framing, not an authenticated server or document merger.
 //! Decode before AEAD only establishes structure; header claims remain untrusted.
+pub mod rpc;
 pub mod transport;
 
 use serde::{Deserialize, Serialize};
@@ -271,6 +272,15 @@ impl Accepted {
             return Err(ProtocolError::EpochMismatch);
         }
         Ok(())
+    }
+    pub fn vault_id(&self) -> &VaultId {
+        &self.vault_id
+    }
+    pub fn update_id(&self) -> &UpdateId {
+        &self.update_id
+    }
+    pub fn server_epoch(&self) -> &ServerEpoch {
+        &self.server_epoch
     }
     pub fn sequence(&self) -> LogPosition {
         self.sequence

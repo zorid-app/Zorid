@@ -285,7 +285,7 @@ pub struct ReadOpened {
 pub struct ReadChunkResult {
     #[prost(uint64, tag = "1")]
     pub offset: u64,
-    /// Consumer must enforce <=131072 bytes; zero bytes valid only at EOF.
+    /// Consumer must enforce \<=131072 bytes; zero bytes valid only at EOF.
     #[prost(bytes = "vec", tag = "2")]
     pub data: ::prost::alloc::vec::Vec<u8>,
     #[prost(bool, tag = "3")]
