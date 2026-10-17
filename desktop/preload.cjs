@@ -20,6 +20,26 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
   },
   compareAndWrite: (vault, path, expectedContent, contents) => invoke('compareAndWrite', vault, path, expectedContent, contents),
   getVault: () => invoke('getVault'),
+  onBeforeClose: handler => {
+    if (typeof handler !== 'function') throw new TypeError('Close handler required');
+    let busy = false;
+    const listener = async (_event, token) => {
+      if (busy || typeof token !== 'string') return;
+      busy = true;
+      let ok = false;
+      try { await handler(); ok = true; }
+      catch { /* Main retains the window and shows the bounded failure notice. */ }
+      try { await invoke('completeClose', token, ok); }
+      catch { /* Lost IPC never authorizes native close. */ }
+      finally { busy = false; }
+    };
+    ipcRenderer.on('zorid:prepare-close', listener);
+    void invoke('closeHandlerReady', true).catch(() => {});
+    return () => {
+      ipcRenderer.removeListener('zorid:prepare-close', listener);
+      void invoke('closeHandlerReady', false).catch(() => {});
+    };
+  },
   getDurableContext: vault => durable('getDurableContext', vault),
   durableInvoke: (vault, admissionId, method, args) => durable('durableInvoke', vault, admissionId, method, args),
   releaseDurableContext: (vault, admissionId) => durable('releaseDurableContext', vault, admissionId),

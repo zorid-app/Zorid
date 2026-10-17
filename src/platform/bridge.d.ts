@@ -16,6 +16,8 @@ export interface DesktopBridge {
   dismissContextMenu?(): Promise<void>;
   getPathForFile?(file: File): string;
   getVault(): Promise<DesktopVault | null>;
+  /** Native close is held until this asynchronous save/release callback succeeds. */
+  onBeforeClose?(handler: () => Promise<void>): () => void;
   getDurableContext?(vault: string): Promise<DesktopDurableContext | null>;
   durableInvoke?(vault: string, admissionId: string, method: string, args: readonly unknown[]): Promise<unknown>;
   releaseDurableContext?(vault: string, admissionId: string): Promise<void>;

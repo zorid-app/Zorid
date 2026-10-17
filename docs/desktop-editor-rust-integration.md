@@ -48,8 +48,12 @@ and replace the released capability before resuming edits. Exact release retries
 are idempotent even when the IPC acknowledgment was lost.
 
 A closed renderer leaves persisted recovery state intact; closing its child
-releases the kernel lock. Normal Electron quit waits for child closure after the
-renderer unsaved-state guard. The existing family journal drives read/cache
+releases the kernel lock. Normal Electron close/quit is intercepted for the selected Rust vault. A
+main-created request token invokes the renderer's asynchronous onBeforeClose
+handler; Workspace flushes and releases before acknowledging. Main verifies
+the matching window generation and released admission before closing. A failed
+flush keeps the window open. This does not rely on awaiting beforeunload.
+Application quit also waits for child closure. The existing family journal drives read/cache
 notifications; this mode does not run the legacy disk importer or filesystem
 watcher. No background relay loop is installed by this slice.
 
@@ -66,3 +70,11 @@ acceptance is: open configured vault in the normal editor, edit an existing text
 file, observe a durable native receipt and clean checkpoint, restart with the
 same client UUID, and verify bytes through the independent CLI and relay peer.
 Cancelling vault selection must reacquire the original capability before editing.
+
+
+Combined source candidate: `tingkai-c/desktop-editor-combined`, based on main
+`a4ee10a`; includes host `3ef94f8`, dedicated fixture `dadf4a5`, normal bridge
+`4c80179`, durable consumer `a9237b8` and picker recovery `cf209df`. Both startup
+branches are retained. Async close handshake and Workspace callback complete the
+source integration; native compilation and actual Electron save/close/restart
+remain required before reporting this path usable.

@@ -37,6 +37,7 @@ function createEditorCoreManager(environment=process.env){
   }
   return {
     isCoreRoot,
+    owns(record){return !!record.vault&&services.has(record.vault.service);},
     async open(input){
       if(closed)throw fail('editor_core_closed');
       if(!await isCoreRoot(input))return VaultService.open(input);

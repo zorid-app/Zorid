@@ -2,6 +2,7 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { VaultService } = require('./vault-service.cjs');
 const { WindowBroker } = require('./window-broker.cjs');
@@ -9,6 +10,8 @@ const editorCore = require('./editor-core.cjs').createEditorCoreManager();
 const { createContextMenuController } = require('./context-menu.cjs');
 const { validateMenuHotkeys, workspaceFileMenu } = require('./menu-hotkeys.cjs');
 const menuHotkeys = new WeakMap();
+const closeStates = new WeakMap();
+let quitRequested = false;
 const contextMenus = createContextMenuController(Menu);
 app.setName('Zorid');
 const familyFixture = process.env.ZORID_DESKTOP_FAMILY_FIXTURE === '1';
@@ -33,7 +36,30 @@ function registerIPC() {
     return { id: (await createWindow({ source: record })).id };
   });
   handle('getVault', record => broker.describe(record));
+  handle('closeHandlerReady', (record, _event, ready) => {
+    const state = closeStates.get(record);
+    if (state) state.ready = ready === true;
+  });
+  handle('completeClose', (record, _event, token, ok) => {
+    const state = closeStates.get(record);
+    if (!state?.pending || state.pending.token !== token || state.pending.generation !== record.generation) return;
+    state.pending = null;
+    if (ok !== true) {
+      quitRequested = false;
+      dialog.showMessageBox(record.window, { type: 'error', message: 'The vault could not finish saving.', detail: 'The window remains open. Resolve the save error and try closing again.', buttons: ['Keep open'] });
+      return;
+    }
+    try { editorCore?.requireReleased(record); }
+    catch {
+      quitRequested = false;
+      dialog.showMessageBox(record.window, { type: 'error', message: 'The vault is still in use.', detail: 'Finish saving before closing this window.', buttons: ['Keep open'] });
+      return;
+    }
+    state.allowed = true;
+    setImmediate(() => { if (!record.window.isDestroyed()) { if (quitRequested) app.quit(); else record.window.close(); } });
+  });
   handle('openVault', async (record, event) => {
+    if (closeStates.get(record)?.pending) throw new Error('Finish closing or saving before switching vaults.');
     editorCore?.requireReleased(record);
     const selection = await dialog.showOpenDialog(record.window, { title: 'Open folder as vault', properties: ['openDirectory', 'createDirectory'] });
     if (selection.canceled || !selection.filePaths[0]) return null;
@@ -71,6 +97,21 @@ async function createWindow({ source, primary = false, initialState = 'empty' } 
   }
   const window = new BrowserWindow({ width: 1280, height: 860, minWidth: 640, minHeight: 480, title: 'Zorid', backgroundColor: '#1e1e1e', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 15 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   const record = broker.register(window, { primary, initialState });
+  const closeState = {ready: false, pending: null, allowed: false};
+  closeStates.set(record, closeState);
+  window.on('close', event => {
+    if (!editorCore?.owns(record) || closeState.allowed) return;
+    event.preventDefault();
+    if (closeState.pending) return;
+    if (!closeState.ready) {
+      quitRequested = false;
+      void dialog.showMessageBox(window, {type:'info',message:'The vault is still opening.',detail:'Wait for recovery to finish before closing this window.',buttons:['Keep open']});
+      return;
+    }
+    const token = randomUUID();
+    closeState.pending = {token, generation: record.generation};
+    window.webContents.send('zorid:prepare-close', token);
+  });
   window.on('focus', refreshApplicationMenu);
   window.on('closed', () => { contextMenus.close(window); broker.remove(record); void editorCore?.retire(broker, record).catch(() => {}); });
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -125,6 +166,7 @@ app.whenReady().then(async () => {
   await createWindow({ primary: true, initialState: 'restore' });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow({ primary: true, initialState: 'restore' }).catch(error => dialog.showErrorBox('Could not open window', error.message)); });
 });
+app.on('before-quit', () => { quitRequested = true; });
 app.on('window-all-closed', () => { if (familyFixture || process.platform !== 'darwin') app.quit(); });
 // before-quit can still be cancelled by a renderer's unsaved-note guard.
 let coreClosed = false, coreClosing;
