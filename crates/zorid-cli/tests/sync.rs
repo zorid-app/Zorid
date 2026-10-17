@@ -1,7 +1,9 @@
 #![cfg(unix)]
+#[path = "support/grpc_fixture.rs"]
+mod grpc_fixture;
 use axum::{
     extract::Request,
-    http::{Method, StatusCode},
+    http::StatusCode,
     middleware::{self, Next},
     response::IntoResponse,
 };
@@ -40,24 +42,26 @@ impl Server {
                 .unwrap();
             rt.block_on(async move {
                 let lost = Arc::new(AtomicBool::new(lose_first_ack));
-                let app = zorid_sync_server::http::router(store, &[]).unwrap().layer(
-                    middleware::from_fn(move |request: Request, next: Next| {
-                        let lost = lost.clone();
-                        async move {
-                            let put = request.method() == Method::PUT;
-                            let response = next.run(request).await;
-                            if put
-                                && response.status() == StatusCode::OK
-                                && lost.swap(false, Ordering::SeqCst)
-                            {
-                                // The real relay committed, but the client never receives its ACK.
-                                StatusCode::SERVICE_UNAVAILABLE.into_response()
-                            } else {
-                                response
+                let app =
+                    zorid_sync_server::rpc::router(store, &[])
+                        .unwrap()
+                        .layer(middleware::from_fn(move |request: Request, next: Next| {
+                            let lost = lost.clone();
+                            async move {
+                                let put = grpc_fixture::site(request.uri().path()) == 4;
+                                let response = next.run(request).await;
+                                if put
+                                    && response.status() == StatusCode::OK
+                                    && lost.swap(false, Ordering::SeqCst)
+                                {
+                                    // The real relay committed, but the client never receives its ACK.
+                                    grpc_fixture::discard_response(response).await;
+                                    StatusCode::SERVICE_UNAVAILABLE.into_response()
+                                } else {
+                                    response
+                                }
                             }
-                        }
-                    }),
-                );
+                        }));
                 axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
                     .with_graceful_shutdown(async move {
                         let _ = receiver.await;
@@ -207,7 +211,7 @@ fn credentials(
     fs::write(
         path,
         serde_json::to_vec(
-            &json!({"version":1,"endpoint":format!("http://{}/",server.address),
+            &json!({"version":2,"transport":"grpc","endpoint":format!("http://{}/",server.address),
         "realm_id":"realm","vault_id":"vault","server_epoch":epoch,"key_epoch":1,
         "key_base64":STANDARD.encode([7u8;32]),"bearer_token":token.expose_secret()}),
         )

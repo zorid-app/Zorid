@@ -34,3 +34,6 @@ tempfile = "3"
 zorid-sync-server = { path = "../zorid-sync-server" }
 tokio = { version = "1", features = ["rt", "net", "sync"] }
 axum = "=0.8.9"
+
+prost = "=0.14.4"
+http-body-util = "=0.1.5"
