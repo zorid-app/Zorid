@@ -1,6 +1,8 @@
 //! Portable transaction planning for the first sync-managed plain-text document.
 //! No storage/network/runtime ownership. Every plan requires an atomic host commit.
 //! Local commands/receipts are not a wire format. See docs/client-sync.md.
+pub mod v2;
+
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 use zorid_core::{EntryId, OperationId, Revision};

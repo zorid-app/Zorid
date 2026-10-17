@@ -229,3 +229,68 @@ cargo test -p zorid-client-sync -p zorid-crdt -j1 -- --test-threads=1
 The standalone worker checkout has no root Cargo workspace manifest. The
 coordinator must add this crate to its existing workspace and resolve the pinned
 diff dependency; do not create duplicate heavy target directories to run it.
+
+## Namespace-aware text v2
+
+The additive `zorid_client_sync::v2` module requires encrypted `family: "text"`,
+`format_version: 2`, and `namespace: { bootstrap_id, parents }`. The existing
+`TextIdentity.bootstrap_id` continues to identify the text CRDT bootstrap;
+`namespace.bootstrap_id` independently identifies namespace Create. Enrollment of
+an existing text document allocates an explicit namespace binding to that original
+text bootstrap. It never rewrites an old envelope or infers identity from a path.
+
+Parents are a nonempty, sorted, unique frontier of at most 128 UpdateIds with no
+self-reference. These are structural checks only. The file-v2 planner validates
+immutable content binding, actual parent graph, antichain, and whether an activity
+is admissible. Normal authoring after an observed Delete requires Restore. A
+concurrent old physical observation can remain admissible using its old frontier.
+
+`v2::AuthenticatedText::from_opened` consumes the existing single AEAD-opened
+capability and produces private `TextActivity` evidence. Local v2 planners return a
+private `AuthoredTextPlan` with immutable `plan()` and `activity()` getters; a
+serialized legacy plan cannot mint activity. Activity exposes identity, UpdateId,
+namespace context and exact plaintext bytes for immutable collision checks. It
+represents the same single encrypted update, not a second authored envelope.
+A file planner may persist normalized identity/context plus exact plaintext hash
+and length; the host still retains and checks the global exact encrypted wire.
+
+Hosts must commit both text and namespace plans under their complete state CAS in
+one transaction, together with the original authored intent or received ledger,
+cursor and projection obligation. A text plan alone is not permission to publish
+at a path. Text receive can merge retained CRDT snapshots while namespace state is
+tombstoned, missing dependencies or in recovery. It does not resurrect an entry,
+create a normal file, or produce a received-to-authored echo. Namespace-only moves
+and deletion preserve the text snapshot and actor provenance; local metadata
+revisions remain fresh, host-allocated and globally fenced.
+
+`TextPhysicalBaseline` persists `text`, `namespace`, and `location` together.
+`location.path` is the actual saved physical path; `location.location_event` is
+this entry's observed location lineage. A parent move may change a full path
+without changing this event, so it is not sufficient to reconstruct a historical
+path. The file planner checks event lineage; the filesystem host checks the exact
+saved path, inode and parent provenance. Neither recomputes physical ownership
+from the newest namespace state.
+
+The external v2 planner retains that entire baseline as a precondition. Its
+activity uses the baseline's old namespace frontier; the returned observed branch
+has frontier `[new_update_id]` and preserves its physical location. The merged
+current CRDT and actual observed branch remain distinct. The host persists both
+atomically, and changes physical lineage only after successful publication. The
+ordinary replace-text wrapper still uses explicit current text CAS; it never
+silently retries an old whole-text command against newer content.
+
+Legacy v1 decoding/planning remains explicitly available outside `v2`; the two
+wire decoders reject each other's version. V1 never produces namespace activity.
+After enrolling an existing v1 document into namespace v2, a late authenticated v1
+update has no causal namespace frontier. The host must retain its exact wire and
+an unresolved `legacy_namespace_context` obligation atomically with any accepted
+cursor advance. It must not apply v2 visibility semantics, assign the current or
+Create frontier, or relabel the envelope. Explicit repair/upgrade policy is still
+required to resolve such staged legacy updates. Unenrolled legacy operation is
+separate; this module does not implement storage migration or enrollment UX.
+
+Source regressions cover distinct immutable bootstraps and strict version/field
+rejection; canonical bounded frontiers; deletion-only updates arriving before
+insert dependencies, restart and duplicate receipt; and repeated external edits
+against old physical namespace/path witnesses with concurrent text. Runtime and
+cross-family/native tests remain separate validation gates.
