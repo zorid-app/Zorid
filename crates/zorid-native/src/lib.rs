@@ -5,6 +5,8 @@ use std::{fmt, time::Duration};
 use zorid_core::{
     CommitResult, EntryId, EntryState, MutationRequest, OperationId, Revision, VaultPath,
 };
+mod client_admission;
+pub use client_admission::{ClientAdmissionError, ClientLease, ClientLeaseRef};
 pub use zorid_store::{
     AuthoredTextStatus, AuthorityIdentity, ChangeOrigin, ChangePage, Checkpoint, CheckpointError,
     CheckpointMetadata, CheckpointPage, CheckpointScope, CheckpointWrite, EntryPresentation,
@@ -275,6 +277,18 @@ impl NativeVault {
         _: &[u8],
     ) -> Result<()> {
         unsupported()
+    }
+    pub fn claim_client(
+        &self,
+        _: &OperationId,
+    ) -> std::result::Result<ClientLease, ClientAdmissionError> {
+        Err(ClientAdmissionError::Native(Error::Unsupported("platform")))
+    }
+    pub fn verify_client_lease(
+        &self,
+        _: &ClientLease,
+    ) -> std::result::Result<(), ClientAdmissionError> {
+        Err(ClientAdmissionError::Native(Error::Unsupported("platform")))
     }
     pub fn identity(&self) -> Result<AuthorityIdentity> {
         Err(Error::Unsupported("platform"))

@@ -2,9 +2,13 @@
 //! to NativeVault. No listener, daemon, filesystem writes or alternate store here.
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, Revision, VaultPath};
-use zorid_native::{HostIntentAcknowledgment, HostIntentRef, NativeVault, ProjectionStatus};
+use zorid_native::{
+    ClientAdmissionError, ClientLease, ClientLeaseRef, HostIntentAcknowledgment, HostIntentRef,
+    NativeVault, ProjectionStatus,
+};
 use zorid_store::{Checkpoint, CheckpointError, CheckpointScope, CheckpointWrite};
 
 const MAX_HEADER: usize = 1024 * 1024;
@@ -17,11 +21,18 @@ struct Request {
     version: u32,
     request_id: String,
     command: Command,
+    lease: Option<ClientLeaseRef>,
 }
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
     Identity,
+    ClaimClient {
+        client_id: OperationId,
+    },
+    ReleaseClient {
+        reference: ClientLeaseRef,
+    },
     CheckpointLoad {
         scope: CheckpointScope,
         key: String,
@@ -115,7 +126,7 @@ enum WireMutation {
 }
 
 fn fault(code: &'static str) -> Value {
-    json!({"code":code,"commit_uncertain":matches!(code, "storage_io" | "filesystem_io"),"message":"Native host operation failed; preserve the identical mutation request when acknowledgement is uncertain"})
+    json!({"code":code,"commit_uncertain":matches!(code, "storage_io" | "filesystem_io" | "sync_failed" | "crypto_failed" | "protocol_failed"),"message":"Native host operation failed; preserve the identical mutation request when acknowledgement is uncertain"})
 }
 fn core_code(error: &zorid_core::ContractError) -> &'static str {
     use zorid_core::ContractError::*;
@@ -140,6 +151,9 @@ fn native_fault(error: zorid_native::Error) -> Value {
         Store(zorid_store::StoreError::Corrupt(_)) | Store(zorid_store::StoreError::Json(_)) => {
             "corrupt_storage"
         }
+        Store(zorid_store::StoreError::Sync(_)) => "sync_failed",
+        Store(zorid_store::StoreError::Crypto(_)) => "crypto_failed",
+        Store(zorid_store::StoreError::Protocol(_)) => "protocol_failed",
         Store(_) => "storage_io",
         Io(_) => "filesystem_io",
     })
@@ -251,6 +265,73 @@ fn report(report: zorid_native::ReconcileReport) -> Value {
         .collect();
     json!({"imported":report.imported,"projected":report.projected,"blocked":blocked})
 }
+#[derive(Default)]
+struct ClientLeases {
+    active: BTreeMap<String, ClientLease>,
+    released: BTreeMap<String, ClientLeaseRef>,
+}
+fn admission_fault(error: ClientAdmissionError) -> Value {
+    match error {
+        ClientAdmissionError::Native(error) => native_fault(error),
+        ClientAdmissionError::InvalidClient => fault("invalid_client_id"),
+        ClientAdmissionError::InUse => fault("client_in_use"),
+    }
+}
+impl ClientLeases {
+    fn authorize(
+        &self,
+        vault: &NativeVault,
+        command: &Command,
+        reference: Option<&ClientLeaseRef>,
+    ) -> Result<(), Value> {
+        let client = match command {
+            Command::PrepareIntent { client_id, .. } | Command::ListIntents { client_id, .. } => {
+                Some(client_id)
+            }
+            Command::CommitIntent { reference }
+            | Command::QueryIntent { reference }
+            | Command::AcknowledgeIntent { reference, .. } => Some(&reference.client_id),
+            Command::CheckpointLoad { scope, .. }
+            | Command::CheckpointCas { scope, .. }
+            | Command::CheckpointList { scope, .. }
+            | Command::CheckpointChanges { scope, .. } => Some(&scope.client_id),
+            _ => None,
+        };
+        let Some(reference) = reference else {
+            return if client.is_some() {
+                Err(fault("client_not_admitted"))
+            } else {
+                Ok(())
+            };
+        };
+        let lease = self
+            .active
+            .get(reference.token.as_str())
+            .filter(|lease| lease.reference() == reference)
+            .ok_or_else(|| fault("client_not_admitted"))?;
+        vault.verify_client_lease(lease).map_err(admission_fault)?;
+        if client.is_some_and(|client| client != &reference.client_id) {
+            return Err(fault("client_scope_mismatch"));
+        }
+        match command {
+            Command::CheckpointLoad { scope, .. }
+            | Command::CheckpointCas { scope, .. }
+            | Command::CheckpointList { scope, .. }
+            | Command::CheckpointChanges { scope, .. }
+                if scope.vault_id != reference.local_store_id =>
+            {
+                Err(fault("client_scope_mismatch"))
+            }
+            Command::ClaimClient { .. }
+            | Command::ReleaseClient { .. }
+            | Command::Apply { .. }
+            | Command::Reconcile { .. }
+            | Command::Recover
+            | Command::Rescan => Err(fault("client_operation_unsupported")),
+            _ => Ok(()),
+        }
+    }
+}
 fn checkpoint_fault(error: CheckpointError) -> Value {
     let (code, uncertain) = match error {
         CheckpointError::Conflict => ("checkpoint_conflict", false),
@@ -315,10 +396,39 @@ fn wire_mutation(mutation: WireMutation, body: Vec<u8>) -> Result<Mutation, Valu
 }
 fn execute(
     vault: &mut NativeVault,
+    leases: &mut ClientLeases,
     command: Command,
     body: Vec<u8>,
 ) -> Result<(Value, Vec<u8>), Value> {
     let result = match command {
+        Command::ClaimClient { client_id } => {
+            empty(&body)?;
+            if leases.active.len() >= 32 || leases.active.len() + leases.released.len() >= 1024 {
+                return Err(fault("client_capacity"));
+            }
+            let lease = vault.claim_client(&client_id).map_err(admission_fault)?;
+            let reference = lease.reference().clone();
+            leases
+                .active
+                .insert(reference.token.as_str().to_owned(), lease);
+            json!({"lease":reference})
+        }
+        Command::ReleaseClient { reference } => {
+            empty(&body)?;
+            if leases
+                .active
+                .get(reference.token.as_str())
+                .is_some_and(|lease| lease.reference() == &reference)
+            {
+                leases.active.remove(reference.token.as_str()); // Drop releases kernel ownership; NEVER unlink.
+                leases
+                    .released
+                    .insert(reference.token.as_str().to_owned(), reference.clone());
+            } else if leases.released.get(reference.token.as_str()) != Some(&reference) {
+                return Err(fault("client_not_admitted"));
+            }
+            json!({"released":true,"reference":reference})
+        }
         Command::CheckpointLoad { scope, key } => {
             empty(&body)?;
             return Ok(
@@ -561,10 +671,11 @@ fn run() -> io::Result<()> {
     };
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"capabilities":["checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"capabilities":["claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
+    let mut leases = ClientLeases::default();
     while let Some((header, body)) = read_frame(&mut input)? {
         // Parse directly into typed input: reject duplicate/unknown fields.
         let request: Request = match serde_json::from_slice(&header) {
@@ -584,6 +695,8 @@ fn run() -> io::Result<()> {
         let may_commit = matches!(
             &request.command,
             Command::Apply { .. }
+                | Command::ClaimClient { .. }
+                | Command::ReleaseClient { .. }
                 | Command::CheckpointCas { .. }
                 | Command::PrepareIntent { .. }
                 | Command::CommitIntent { .. }
@@ -593,7 +706,9 @@ fn run() -> io::Result<()> {
                 | Command::Rescan
         );
         let answer = if request.version == 1 {
-            execute(&mut vault, request.command, body)
+            leases
+                .authorize(&vault, &request.command, request.lease.as_ref())
+                .and_then(|()| execute(&mut vault, &mut leases, request.command, body))
         } else {
             Err(fault("unsupported_protocol"))
         };

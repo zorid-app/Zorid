@@ -71,6 +71,22 @@ impl NativeVault {
             f(_name);
         }
     }
+    /// Trusted host fixture ownership, separate from the short vault write lock.
+    pub fn claim_client(
+        &self,
+        client: &OperationId,
+    ) -> std::result::Result<ClientLease, ClientAdmissionError> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        let authority = self.identity()?.local_store_id;
+        crate::client_admission::claim(&self.paths, authority, client)
+    }
+    pub fn verify_client_lease(
+        &self,
+        lease: &ClientLease,
+    ) -> std::result::Result<(), ClientAdmissionError> {
+        let authority = self.identity()?.local_store_id;
+        crate::client_admission::verify(&self.paths, &authority, lease)
+    }
     pub fn identity(&self) -> Result<AuthorityIdentity> {
         self.paths.verify()?;
         Ok(self.store.identity()?)

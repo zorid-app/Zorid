@@ -219,3 +219,47 @@ real integration target also exercises a payload above 16 MiB and verifies that
 checkpoints do not create sync outbox entries. Independent source review approved
 the wrapper/transport after fixing Uint8Array equality and metadata validation.
 All runtime tests remain pending; no checkpoint/editor/startup path is selected.
+
+## Fixture consumer ownership
+
+`admitDesktopFixtureClient(service, {fixture:true, clientId, assertOwner})` is a
+trusted main-process fixture initializer, not an IPC endpoint. Its canonical UUID
+is fixed by the main fixture configuration across restart; each concurrent fixture
+window uses a distinct UUID. Production persistent window-slot allocation remains
+unfinished. The renderer cannot choose an identity or executable through this API.
+The initializer returns an injected `{scope, durableWrites, assertActive, release}`
+context, with scope taken from the native local storage authority.
+
+A host `claim_client` command holds a per-client kernel advisory lock for its whole
+lifetime. Permanent `.zorid/client-<uuid>.lock` inodes are never deleted on release.
+The native guard verifies ownership, private permissions, link count, inode and
+storage authority; symlink or changed-inode guards fail closed. Separate clients
+can coexist and the standalone CLI still opens its own core independently. This
+lease governs consumer recovery ownership, not whole-vault single-writer ownership.
+
+Every host-intent and checkpoint RPC requires the exact live lease envelope and
+matching client/authority. The private child checks its retained guard on every
+protected call; a serialized reference alone is insufficient. The main facade
+checks its captured owner/grant generation at admission and again after queue waits,
+immediately before dispatch. A retired grant cannot authorize a queued commit.
+`release_client` accepts exact repeated releases within the same child; child exit
+releases all guards without TTL or PID guessing. Lost claim acknowledgement remains
+uncertain: close the private child before retrying ownership rather than inventing
+another client identity.
+
+`release(flushGate)` blocks new external calls, drains accepted work, and passes a
+temporary same-scope capability to `flushGate` for durable checkpoint/flush work.
+The editor gate must use that supplied capability. Only after the gate resolves
+and its accepted calls settle does the host release its lease. A failed gate leaves
+ownership active; an uncertain release disables the context and permits only an
+exact release retry. No automatic assumption that a failed write is clean is made:
+the editor gate must reconcile/persist its pending state before resolving. This API
+is not installed in Workspace, WindowBroker or preload; editor lifecycle integration
+and production slot management remain separate gates.
+
+Source verification additions: `tests/desktop-client-admission.test.cjs` covers
+flush/drain, failed flush, uncertain release, superseded admission and post-queue
+grant checks. Native module tests cover exclusive ownership, safe permanent inodes,
+authority changes and unsafe files. The explicit real CLI/host fixture includes
+duplicate-process ownership, crash/reacquire and durable checkpoint recovery. These
+new tests have not yet run; source review and syntax checks are not runtime evidence.

@@ -9,7 +9,7 @@ const path = require('node:path');
 const { tmpdir } = require('node:os');
 const { RustVaultService } = require('../desktop/rust-vault-service.cjs');
 const { VaultService } = require('../desktop/vault-service.cjs');
-const { desktopDurableWrites } = require('../desktop/durable-writes.cjs');
+const { admitDesktopFixtureClient } = require('../desktop/client-admission.cjs');
 
 function cli(root, args, input = Buffer.alloc(0)) {
   const executable = process.env.ZORID_CLI_BIN;
@@ -106,13 +106,22 @@ test('fixture intents survive child restart, preserve CAS and require exact cons
   let service;
   t.after(async () => { if (service) await service.close(); await fs.rm(root, { recursive: true, force: true }); });
   assert.equal((await cli(root, ['init'])).code, 0);
-  const open = () => VaultService.open(root, { coreFixture: { executable } });
+  const clientId = '10000000-0000-4000-8000-000000000001';
+  const open = async () => {
+    const owner = await VaultService.open(root, { coreFixture: { executable } });
+    const lease = await owner.host.claimClient(clientId);
+    const scoped = Object.create(owner);
+    Object.defineProperty(scoped, 'host', { value: owner.host.withClientLease(lease) });
+    Object.defineProperty(scoped, 'closed', { get: () => owner.closed });
+    scoped.close = () => owner.close();
+    return scoped;
+  };
   service = await open();
   const plan = await service.planWrite('binary.dat', Buffer.from([0, 255, 128]), { operationId: 'create-intent', entryId: 'entry' });
-  const prepared = await service.prepareIntent('consumer', plan);
+  const prepared = await service.prepareIntent(clientId, plan);
   assert.equal(prepared.state, 'prepared');
-  assert.equal((await service.prepareIntent('consumer', plan)).token, prepared.token);
-  const reference = { client_id: 'consumer', token: prepared.token };
+  assert.equal((await service.prepareIntent(clientId, plan)).token, prepared.token);
+  const reference = { client_id: clientId, token: prepared.token };
   assert.equal(await service.readEntry('binary.dat'), null, 'prepare is inert');
   await service.close(); service = await open();
   assert.equal((await service.queryIntent(reference)).state, 'prepared');
@@ -129,18 +138,18 @@ test('fixture intents survive child restart, preserve CAS and require exact cons
   assert.equal((await service.queryIntent(reference)).acknowledged, false);
   const ack = { state: 'committed', operation_id: 'create-intent', sequence: committed.receipt.sequence };
   assert.equal((await service.acknowledgeIntent(reference, ack)).acknowledged, true);
-  assert.equal(await service.queryIntent({ client_id: 'other', token: prepared.token }), null);
+  await assert.rejects(service.queryIntent({ client_id: '10000000-0000-4000-8000-000000000002', token: prepared.token }), { code: 'client_scope_mismatch' });
   const before = await service.readEntry('binary.dat');
   const stalePlan = await service.planWrite('binary.dat', Buffer.from('stale write'), { operationId: 'stale', expectedBytes: before.bytes });
-  const stale = await service.prepareIntent('consumer', stalePlan);
+  const stale = await service.prepareIntent(clientId, stalePlan);
   assert.equal((await cli(root, ['write', '--id', before.entry.id, '--expected-revision', before.entry.revision,
     '--operation-id', 'cli-intervenes', '--input', '-'], Buffer.from('CLI wins'))).code, 0);
-  const staleRef = { client_id: 'consumer', token: stale.token };
+  const staleRef = { client_id: clientId, token: stale.token };
   const rejected = await service.commitIntent(staleRef);
   assert.equal(rejected.state, 'rejected'); assert.equal(rejected.error.code, 'revision_conflict');
   assert.equal(await service.read('binary.dat'), 'CLI wins');
   assert.deepEqual(await service.commitIntent(staleRef), rejected, 'terminal rejection does not rebase');
-  const page = await service.listIntents('consumer');
+  const page = await service.listIntents(clientId);
   assert.equal(page.intents.length, 2);
   assert.equal((await service.acknowledgeIntent(staleRef, { state: 'rejected', operation_id: 'stale', code: 'revision_conflict' })).acknowledged, true);
 });
@@ -158,7 +167,7 @@ test('shared desktop write refs survive restart and vault move but reject replac
   await fs.writeFile(path.join(root, 'note.md'), '\ufefforiginal \ud83d\ude80');
   const open = async folder => {
     service = await VaultService.open(folder, { coreFixture: { executable } });
-    return desktopDurableWrites(service, { clientId: 'editor-fixture' });
+    return (await admitDesktopFixtureClient(service, { fixture: true, clientId: '10000000-0000-4000-8000-000000000003', assertOwner() {} })).durableWrites;
   };
   let writes = await open(root);
   const read = await writes.readText('note.md');
@@ -212,7 +221,8 @@ test('checkpoint transport accepts raw state above file limit and keeps exact to
   t.after(async () => { if (service) await service.close(); await fs.rm(root, { recursive: true, force: true }); });
   assert.equal((await cli(root, ['init'])).code, 0);
   service = await VaultService.open(root, { coreFixture: { executable } });
-  const writes = await desktopDurableWrites(service, { clientId: 'large-checkpoint' });
+  const context = await admitDesktopFixtureClient(service, { fixture: true, clientId: '10000000-0000-4000-8000-000000000004', assertOwner() {} });
+  const writes = context.durableWrites;
   const encodedState = 'x'.repeat(16 * 1024 * 1024 + 1);
   const request = { key: 'large', expectedRevision: null, nextRevision: '00000000-0000-0000-0000-000000000011', encodedState };
   assert.equal((await writes.checkpoints.compareAndSwap(request)).encodedState, encodedState);
@@ -223,4 +233,43 @@ test('checkpoint transport accepts raw state above file limit and keeps exact to
   assert.equal(tombstone.deleted, true); assert.equal(tombstone.encodedState, null);
   await assert.rejects(writes.checkpoints.compareAndSwap(request), { code: 'checkpoint_conflict' });
   assert.equal((await writes.checkpoints.load('large')).revision, tombstone.revision);
+});
+
+test('native fixture client leases exclude duplicate processes and survive owner restart safely', { timeout: 30000 }, async t => {
+  const executable = process.env.ZORID_DESKTOP_HOST_BIN;
+  assert.ok(executable && path.isAbsolute(executable));
+  const root = await fs.mkdtemp(path.join(tmpdir(), 'zorid-client-lease-'));
+  const hosts = [];
+  t.after(async () => { for (const host of hosts) await host.close().catch(() => {}); await fs.rm(root, { recursive: true, force: true }); });
+  assert.equal((await cli(root, ['init'])).code, 0);
+  const one = await RustVaultService.open(root, { executable }); hosts.push(one);
+  const two = await RustVaultService.open(root, { executable }); hosts.push(two);
+  const client = '20000000-0000-4000-8000-000000000001', other = '20000000-0000-4000-8000-000000000002';
+  const lease = await one.claimClient(client), scope = { vaultId: lease.local_store_id, clientId: client };
+  await assert.rejects(two.claimClient(client), { code: 'client_in_use' });
+  const otherLease = await two.claimClient(other);
+  await assert.rejects(one.checkpointLoad(scope, 'note'), { code: 'client_not_admitted' });
+  await assert.rejects(one.listIntents(client), { code: 'client_not_admitted' });
+  const scoped = one.withClientLease(lease);
+  await assert.rejects(scoped.listIntents(other), { code: 'client_scope_mismatch' });
+  await assert.rejects(one.withClientLease({ ...lease, token: otherLease.token }).listIntents(client), { code: 'client_not_admitted' });
+  const request = { key: 'note', expectedRevision: null, nextRevision: '20000000-0000-4000-8000-000000000003', encodedState: 'durable recovery' };
+  await scoped.checkpointCompareAndSwap(scope, request);
+  assert.equal((await cli(root, ['create', 'independent.md', '--id', 'independent', '--operation-id', 'independent', '--input', '-'], Buffer.from('CLI remains independent'))).code, 0);
+  await one.releaseClient(lease);
+  await one.releaseClient(lease); // Exact lost-release-ACK retry is harmless.
+  await assert.rejects(scoped.checkpointLoad(scope, 'note'), { code: 'client_not_admitted' });
+  const transferred = await two.claimClient(client);
+  assert.notEqual(transferred.token, lease.token);
+  assert.equal((await two.withClientLease(transferred).checkpointLoad(scope, 'note')).encodedState, request.encodedState);
+  // A process crash releases the kernel guard, with no TTL or PID heuristic.
+  const exited = new Promise(resolve => two.child.once('exit', resolve));
+  two.child.kill('SIGKILL'); await exited;
+  const reacquired = await one.claimClient(client);
+  assert.notEqual(reacquired.token, transferred.token);
+  assert.equal((await one.withClientLease(reacquired).checkpointLoad(scope, 'note')).encodedState, request.encodedState);
+  const lock = path.join(root, '.zorid', `client-${client}.lock`);
+  const inode = (await fs.stat(lock)).ino;
+  await one.releaseClient(reacquired);
+  assert.equal((await fs.stat(lock)).ino, inode, 'release never unlinks the permanent lock inode');
 });

@@ -112,6 +112,8 @@ function successful(command, result, bytes, expectedBytes) {
   if (!command) return bytes.length === 0; // Full startup validation follows.
   if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas'].includes(command.method) && bytes.length) return false;
   switch (command.method) {
+    case 'claim_client': return object(result.lease) && identity(result.lease.local_store_id) && result.lease.client_id === command.client_id && uuid(result.lease.token);
+    case 'release_client': return result.released === true && object(result.reference) && ['local_store_id', 'client_id', 'token'].every(key => result.reference[key] === command.reference[key]);
     case 'checkpoint_load': return result.checkpoint === null ? bytes.length === 0 : checkpointMetadata(result.checkpoint, command.scope) && result.checkpoint.key === command.key && checkpointBody(result.checkpoint, bytes);
     case 'checkpoint_cas': return checkpointMetadata(result.checkpoint, command.scope) && result.checkpoint.key === command.key
       && result.checkpoint.revision === command.next_revision && result.checkpoint.deleted === !command.has_state
@@ -295,14 +297,14 @@ class RustVaultService {
     } catch { this.abort(failure('invalid_response', true)); }
   }
 
-  request(command, bytes = new Uint8Array()) {
+  request(command, bytes = new Uint8Array(), lease = undefined, beforeDispatch = undefined) {
     if (this.closing || this.fatal) return Promise.reject(this.fatal ?? failure('host_closed'));
     let body, header;
     try {
       if (!(bytes instanceof Uint8Array) || bytes.byteLength > (command?.method === 'checkpoint_cas' ? MAX_CHECKPOINT_BODY : MAX_BODY)) throw failure('request_limit');
       const requestId = (++this.sequence).toString();
       // Serialize/copy before enqueue: later caller changes cannot alter a retry.
-      header = Buffer.from(JSON.stringify({ version: 1, request_id: requestId, command }));
+      header = Buffer.from(JSON.stringify({ version: 1, request_id: requestId, command, ...(lease ? { lease } : {}) }));
       const cost = 8 + header.length + bytes.byteLength;
       if (header.length > MAX_HEADER || this.queuedCount >= MAX_REQUESTS || this.queuedBytes + cost > MAX_QUEUED_BYTES) throw failure('request_limit');
       body = Buffer.from(bytes);
@@ -310,6 +312,8 @@ class RustVaultService {
       const operation = this.tail.then(async () => {
         await this.ready;
         if (this.fatal || this.exited) throw this.fatal ?? failure('host_exited');
+        // Reauthorize after queue/ready awaits, immediately before any bytes leave.
+        beforeDispatch?.();
         const response = this.expect(requestId, JSON.parse(header.toString()).command, body);
         const prefix = Buffer.alloc(8);
         prefix.writeUInt32BE(header.length, 0); prefix.writeUInt32BE(body.length, 4);
@@ -325,6 +329,15 @@ class RustVaultService {
     } catch (error) { return Promise.reject(error?.code ? error : failure('invalid_request')); }
   }
 
+  claimClient(clientId) { return this.request({ method: 'claim_client', client_id: clientId }).then(reply => Object.freeze({ ...reply.result.lease })); }
+  releaseClient(reference) { return this.request({ method: 'release_client', reference }).then(reply => reply.result); }
+  withClientLease(reference, beforeRequest = () => {}) {
+    const captured = Object.freeze({ local_store_id: reference.local_store_id, client_id: reference.client_id, token: reference.token });
+    const context = { request: (command, bytes) => { beforeRequest(command); return this.request(command, bytes, captured, () => beforeRequest(command)); } };
+    const methods = ['identity', 'readPath', 'readPresentedById', 'readEntryById', 'listSnapshot', 'listEntries', 'prepareIntent', 'commitIntent', 'queryIntent', 'listIntents', 'acknowledgeIntent',
+      'checkpointLoad', 'checkpointCompareAndSwap', 'checkpointList', 'checkpointChanges'];
+    return Object.freeze(Object.fromEntries(methods.map(name => [name, (...args) => RustVaultService.prototype[name].apply(context, args)])));
+  }
   checkpointLoad(scope, key) { return this.request({ method: 'checkpoint_load', scope, key }).then(checkpointResult); }
   checkpointCompareAndSwap(scope, change) {
     const bytes = checkpointBytes(change.encodedState);
