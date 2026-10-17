@@ -1382,6 +1382,7 @@ mod tests {
                     mutation: Mutation::Delete {
                         id: competitor,
                         expected: revision,
+                        recursive: false,
                     },
                 },
                 None,
