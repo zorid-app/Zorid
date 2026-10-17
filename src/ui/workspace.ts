@@ -1,4 +1,6 @@
 import { mountDocumentBacklinks } from './document-backlinks.ts';
+import { catchUpDocumentIndex, documentErrorCode, DocumentSemanticsError } from '../core/document-semantics.ts';
+import type { DocumentCursor, DocumentPin, DocumentSnapshotId, DocumentSourceId } from '../core/document-semantics.ts';
 import { mountImportStatus } from './import-status.ts';
 import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS, EDITOR_HOTKEY_COMMANDS } from './hotkeys.ts';
 import { mountHotkeySettings } from './hotkey-settings.ts';
@@ -119,6 +121,10 @@ export class Workspace {
   private folderCreationIntent = 0;
   private query = '';
   private searchGeneration = 0;
+  private documentSearchSuspended = false;
+  private documentSearchPins = new Set<DocumentPin>();
+  private documentSearchClosing = new Map<DocumentPin,Promise<void>>();
+  private documentSearchAcquisition:Promise<void> = Promise.resolve();
   private reverseSort = false;
   private autoRevealFiles = false;
   private disposers: (() => void)[] = [];
@@ -216,9 +222,14 @@ export class Workspace {
   private platformDrained=false;
   private async releasePlatform():Promise<void>{
     if(this.platformReleased||!this.platform?.release)return;
+    const searchWasSuspended=this.documentSearchSuspended;
+    this.documentSearchSuspended=true;this.clearDocumentSearch();
+    try{
     if(!this.platformDrained){await this.flush();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
     this.clearDocumentBacklinks();
+    await this.closeDocumentSearchPins();
     await this.platform.release();this.platformReleased=true;
+    }catch(error){this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
   async chooseVault(): Promise<void> {
     if(this.closing)throw new Error('Window close is pending');
@@ -267,6 +278,9 @@ export class Workspace {
   private async replaceVault(platform:PlatformVault,next:Vault,recovered=new Map<string,NoteBuffer>()):Promise<void>{
     // Migration failures must abort before teardown/save can replace legacy recovery.
     this.storageScope.migrateLegacy(localStorage, platform.id);
+    const searchVault=this.vault,searchWasSuspended=this.documentSearchSuspended;
+    this.documentSearchSuspended=true;this.clearDocumentSearch();
+    try{
     this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
     if(!this.platformReleased)await this.flush();
     this.saveSession();
@@ -401,10 +415,12 @@ export class Workspace {
     });
     if (unsubscribe) this.disposers.push(unsubscribe);
     this.renderSidebar(); this.renderRight(); this.saveSession();
+    }catch(error){if(this.vault===searchVault)this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
 
   private disposeShell(): void {
     this.clearDocumentBacklinks();
+    this.documentSearchSuspended=true;this.clearDocumentSearch();
     this.importStatusCleanup?.();this.importStatusCleanup=undefined;
     this.disposeFileListMenu?.(); this.disposeFileListMenu=undefined;
     this.sidebarControls?.destroy(); this.sidebarControls=undefined;
@@ -412,6 +428,7 @@ export class Workspace {
 
   private buildShell(): void {
     this.disposeShell();
+    this.documentSearchSuspended=false;
     this.root.replaceChildren(); this.root.className = 'workspace right-hidden';
     this.root.classList.toggle('is-macos-desktop',!!window.zorid&&/Mac/i.test(window.navigator.platform));
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
@@ -1029,6 +1046,7 @@ export class Workspace {
   }
 
   private renderSidebar():void{
+    this.clearDocumentSearch();
     if(!this.vault)return;
     const activePath=this.activePane&&this.current()?.path;
     if(this.autoRevealFiles&&activePath){let folder=parentOf(activePath);while(folder){this.collapsed.delete(folder);folder=parentOf(folder);}}
@@ -1041,7 +1059,7 @@ export class Workspace {
     this.treeRows=[];
     this.sidebarContent.replaceChildren();
     if(this.treeTab==='search'){
-      const input=el('input','search-box');input.placeholder='Search…';input.value=this.query;input.type='search';input.setAttribute('aria-label','Search all files');input.oninput=()=>{this.query=input.value;this.run(()=>this.search());};this.sidebarContent.append(input,el('div','search-results'));this.run(()=>this.search());return;
+      const input=el('input','search-box');input.placeholder='Search…';input.value=this.query;input.type='search';input.setAttribute('aria-label',this.vault.adapter.documentSemantics?'Search text (case-sensitive)':'Search all files');if(this.vault.adapter.documentSemantics)input.placeholder='Search text (case-sensitive)';input.oninput=()=>{this.query=input.value;this.run(()=>this.search());};this.sidebarContent.append(input,el('div','search-results'));this.run(()=>this.search());return;
     }
     if(this.treeTab==='bookmarks'){
       if(!this.bookmarks.size)this.sidebarContent.append(el('p','sidebar-empty','No bookmarks yet. Use the note menu to bookmark a file.'));
@@ -1114,19 +1132,148 @@ export class Workspace {
     }
   }
 
-  private async search():Promise<void>{
-    const generation=++this.searchGeneration;const results=this.sidebarContent.querySelector('.search-results');if(!results)return;
-    results.replaceChildren();if(!this.query.trim()){results.append(el('p','sidebar-empty','Type to search your vault.'));return;}
-    const query=this.query.toLocaleLowerCase();let count=0;
-    for(const entry of this.vault.entries.values()){
-      if(entry.type!=='file'||!entry.path.endsWith('.md'))continue;
-      const text=await this.vault.read(entry.path);if(generation!==this.searchGeneration)return;
-      const lines=text.split('\n');const matching=lines.map((line,index)=>({line,index})).filter(item=>item.line.toLocaleLowerCase().includes(query));
-      if(!entry.path.toLocaleLowerCase().includes(query)&&!matching.length)continue;
-      count++;const item=el('div','search-result');item.append(textButton(nameOf(entry.path),()=>this.run(()=>this.openNote(entry.path)),'search-result-title'));
-      for(const match of matching.slice(0,4)){const snippet=textButton(match.line.trim().slice(0,180),()=>this.run(()=>this.openNote(entry.path)),'search-snippet');snippet.title=`Line ${match.index+1}`;item.append(snippet);}results.append(item);
+  private clearDocumentSearch():void {
+    this.searchGeneration++;
+    void this.closeDocumentSearchPins().catch(()=>{});
+  }
+
+  private closeDocumentSearchPin(pin:DocumentPin):Promise<void> {
+    const pending=this.documentSearchClosing.get(pin);if(pending)return pending;
+    if(!this.documentSearchPins.has(pin))return Promise.resolve();
+    const closing=Promise.resolve().then(()=>pin.close()).then(()=>{this.documentSearchPins.delete(pin);})
+      .finally(()=>{this.documentSearchClosing.delete(pin);});
+    // Failed acknowledgments retain ownership for the next query/teardown.
+    this.documentSearchClosing.set(pin,closing);return closing;
+  }
+
+  private closeDocumentSearchPins():Promise<void> {
+    return Promise.all([...this.documentSearchPins].map(pin=>this.closeDocumentSearchPin(pin))).then(()=>{});
+  }
+
+  private async openDocumentSearchEntry(id:string,query:string):Promise<void> {
+    const vault=this.vault,pane=this.activePane,tab=this.current(pane),path=tab?.path,activation=this.paneActivationRevision;
+    const current=()=>this.vault===vault&&this.activePane===pane&&this.current(pane)===tab&&tab?.path===path
+      &&this.treeTab==='search'&&this.query===query&&!this.documentSearchSuspended&&!this.platformReleased&&!this.closing;
+    if(!current())return;
+    const writes=vault.adapter.durableWrites;if(!writes)throw new Error('Stable search navigation is unavailable.');
+    const observed=await writes.readTextById(id);if(!current())return;
+    if(!observed||observed.entryId!==id||vault.entries.get(observed.path)?.entryId!==id)throw new Error('The result moved or changed. Refresh search.');
+    // A save can rerender the sidebar. Keep guarding the actual pane, query and
+    // current ID mapping through openNote's post-flush commit gate.
+    await this.openNote(observed.path,false,pane,true,'',activation,()=>current()&&vault.entries.get(observed.path)?.entryId===id);
+  }
+
+  private async search(rebuild=false):Promise<void>{
+    if(this.documentSearchSuspended)return;
+    this.clearDocumentSearch();
+    const generation=this.searchGeneration,vault=this.vault,query=this.query;
+    const results=this.sidebarContent.querySelector<HTMLElement>('.search-results');if(!results)return;
+    const current=()=>generation===this.searchGeneration&&this.vault===vault&&this.query===query&&this.treeTab==='search'
+      &&this.sidebarContent.contains(results)&&!this.documentSearchSuspended&&!this.platformReleased&&!this.closing;
+    results.replaceChildren();
+    const service=vault.adapter.documentSemantics;
+    if(service?!query.length:!query.trim()){results.append(el('p','sidebar-empty','Type to search your vault.'));return;}
+    if(!service){
+      // Adapters without the shared capability retain their existing search.
+      const lower=query.toLocaleLowerCase();let count=0;
+      for(const entry of vault.entries.values()){
+        if(entry.type!=='file'||!entry.path.endsWith('.md'))continue;
+        const text=await vault.read(entry.path);if(!current())return;
+        const lines=text.split('\n');const matching=lines.map((line,index)=>({line,index})).filter(item=>item.line.toLocaleLowerCase().includes(lower));
+        if(!entry.path.toLocaleLowerCase().includes(lower)&&!matching.length)continue;
+        count++;const item=el('div','search-result');item.append(textButton(nameOf(entry.path),()=>this.run(()=>this.openNote(entry.path)),'search-result-title'));
+        for(const match of matching.slice(0,4)){const snippet=textButton(match.line.trim().slice(0,180),()=>this.run(()=>this.openNote(entry.path)),'search-snippet');snippet.title=`Line ${match.index+1}`;item.append(snippet);}results.append(item);
+      }
+      if(!count)results.append(el('p','sidebar-empty','No results found.'));return;
     }
-    if(!count)results.append(el('p','sidebar-empty','No results found.'));
+    const status=el('p','sidebar-empty','Updating the saved-text index…'),rows=el('div'),actions=el('div');
+    status.setAttribute('role','status');status.setAttribute('aria-live','polite');results.append(status,rows,actions);
+    const show=(state:string,message:string)=>{if(!current())return;results.dataset.state=state;status.textContent=message;actions.replaceChildren();};
+    const retry=(label:string,reset=false)=>{if(current())actions.append(textButton(label,()=>{if(current())this.run(()=>this.search(reset));},'search-result-title'));};
+    const sameSource=(a:DocumentSourceId,b:DocumentSourceId)=>a.localStoreId===b.localStoreId&&a.watermark===b.watermark;
+    const sameSnapshot=(a:DocumentSnapshotId,b:DocumentSnapshotId)=>a.localStoreId===b.localStoreId&&a.generationEpoch===b.generationEpoch&&a.generation===b.generation
+      &&a.versions.schema===b.versions.schema&&a.versions.extraction===b.versions.extraction&&a.versions.resolver===b.versions.resolver&&a.versions.query===b.versions.query;
+    let pin:DocumentPin|undefined;
+    try{
+      const maintained=await catchUpDocumentIndex(service,{isCurrent:current,rebuild,onProgress:progress=>{
+        show('indexing',progress.phase==='indexing'&&progress.prepared!==undefined&&progress.total!==undefined
+          ?`Indexing saved text… ${progress.prepared} of ${progress.total}`:'Updating the saved-text index…');
+      }});
+      if(!current())return;
+      if(maintained.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');
+      if(!maintained.snapshot){show('indexing','The saved-text index is still updating.');retry('Continue indexing');return;}
+      // Serialize pending opens. Rapid typing cannot consume all four shared
+      // pin slots with requests that are already obsolete when they resolve.
+      const previous=this.documentSearchAcquisition;let release!:()=>void;
+      this.documentSearchAcquisition=new Promise<void>(resolve=>{release=resolve;});
+      try{
+        await previous;if(!current())return;
+        await this.closeDocumentSearchPins();if(!current())return;
+        pin=await service.open();this.documentSearchPins.add(pin);
+      }finally{release();}
+      if(!current())return;
+      if(pin.snapshot.localStoreId!==maintained.source.localStoreId||pin.source.localStoreId!==pin.snapshot.localStoreId)throw new DocumentSemanticsError('invalid_document_response');
+      show('loading','Searching saved text…');
+      const groups=new Map<string,{element:HTMLElement;path:string;revision:string;snippets:number}>(),cursors=new Set<DocumentCursor>();
+      let cursor:DocumentCursor|null=null,scanComplete=false,coverageComplete=pin.coverageComplete,hits=0,sourceBytes=0,truncated=false;
+      // Each Rust page reads at most 16 MiB/32 documents. Reserve a full page
+      // before continuing so one UI operation never scans more than 64 MiB.
+      for(let pageIndex=0;pageIndex<64&&hits<1000&&sourceBytes<=48*1024*1024;pageIndex++){
+        const page=await pin.search({query,cursor,limit:Math.min(100,1000-hits)});if(!current())return;
+        const value=page.result.value;
+        if(!sameSnapshot(page.result.snapshot,pin.snapshot)||!sameSnapshot(value.snapshot,pin.snapshot)||!sameSource(page.result.source,pin.source)
+          ||page.result.coverageComplete!==pin.coverageComplete||value.coverageComplete!==pin.coverageComplete
+          ||(page.cursor===null)!==value.scanComplete||value.next!==null||value.complete!==(value.scanComplete&&value.coverageComplete)
+          ||value.hits.length>Math.min(100,1000-hits)||!Number.isSafeInteger(value.sourceBytes)||value.sourceBytes<0||value.sourceBytes>16*1024*1024
+          ||!Number.isSafeInteger(value.documents)||value.documents<0||value.documents>32)throw new DocumentSemanticsError('invalid_document_response');
+        hits+=value.hits.length;sourceBytes+=value.sourceBytes;coverageComplete=coverageComplete&&value.coverageComplete;
+        for(const hit of value.hits){
+          if(hit.entry.kind!=='file'||hit.entry.deleted)throw new DocumentSemanticsError('invalid_document_response');
+          let group=groups.get(hit.entry.id);
+          if(!group){
+            if(groups.size>=200){truncated=true;break;}
+            const item=el('div','search-result');
+            const title=textButton(nameOf(hit.entry.path),()=>{if(current())this.run(()=>this.openDocumentSearchEntry(hit.entry.id,query));},'search-result-title');
+            title.dataset.entryId=hit.entry.id;title.title=hit.entry.path;item.append(title);rows.append(item);
+            group={element:item,path:hit.entry.path,revision:hit.entry.revision,snippets:0};groups.set(hit.entry.id,group);
+          }else if(group.path!==hit.entry.path||group.revision!==hit.entry.revision)throw new DocumentSemanticsError('invalid_document_response');
+          if(group.snippets<4){
+            const snippet=textButton(hit.snippet.trim().slice(0,180),()=>{if(current())this.run(()=>this.openDocumentSearchEntry(hit.entry.id,query));},'search-snippet');
+            snippet.title=`Line ${hit.line+1}`;group.element.append(snippet);group.snippets++;
+          }
+        }
+        cursor=page.cursor;scanComplete=value.scanComplete;
+        if(scanComplete||truncated)break;
+        if(cursor===null||cursors.has(cursor))throw new DocumentSemanticsError('invalid_document_response');cursors.add(cursor);
+      }
+      if(!current())return;
+      const observed=await service.status();if(!current())return;
+      if(observed.source.localStoreId!==pin.source.localStoreId)throw new DocumentSemanticsError('invalid_document_response');
+      if(observed.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');
+      const lagged=!observed.current||!sameSource(observed.source,pin.source)||!observed.snapshot||!sameSnapshot(observed.snapshot,pin.snapshot);
+      const incomplete=truncated||!scanComplete||!coverageComplete;
+      const messages=[groups.size?`${groups.size} ${groups.size===1?'file':'files'} found.`:incomplete||lagged?'No matches in the searched saved text.':'No results found.'];
+      if(!scanComplete||truncated)messages.push('Search limit reached; refine your query.');
+      if(!coverageComplete)messages.push('Some files could not be indexed.');
+      if(lagged)messages.push('Results are from an older saved snapshot.');
+      show(incomplete?'incomplete':lagged?'lagged':groups.size?'ready':'empty',messages.join(' '));
+      if(lagged)retry('Refresh search');
+    }catch(error){
+      if(!current())return;
+      const code=documentErrorCode(error),needsRebuild=code==='rebuild_required'||code==='index_rebuild_required';
+      show('unavailable',needsRebuild?'The saved-text index needs to be rebuilt.':code==='snapshot_expired'
+        ?'The saved snapshot expired. Refresh search to try again.':'Saved-text search is unavailable. Refresh to try again.');
+      retry(needsRebuild?'Rebuild index':'Refresh search',needsRebuild);
+    }finally{
+      if(pin){
+        // Retire only this operation's pin; another search may already own one.
+        try{await this.closeDocumentSearchPin(pin);}catch{
+          // A late open after shell disposal has no future refresh to retry it.
+          if(!current())try{await this.closeDocumentSearchPin(pin);}catch{}
+          else{show('unavailable','Search could not release its saved snapshot. Refresh to try again.');retry('Refresh search');}
+        }
+      }
+    }
   }
 
   private clearDocumentBacklinks():void {
@@ -1579,5 +1726,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased)await this.platform?.release?.();this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}
+  async destroy():Promise<void>{const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased)await this.platform?.release?.();this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}catch(error){if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
 }
