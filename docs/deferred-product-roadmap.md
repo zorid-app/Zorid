@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Resource update23:56UTC: native owner returned exclusive heavy slot. Frozen3288c1bb
+Simulator9 passes actual final Remove-disabled check; signed phoneDev9 build63961
+and install75081 exit0, strict signature/version checks pass. Launch failed only
+because device was locked, not an app crash; native owner may retry launch without
+rebuild. Root now owns heavy slot for isolated import5fc59cae host10→ABI5 focused
+checks, official Rust1.95 -j1/offline/locked, existing stage4-verified cache.
+Host test session49920 active, log tmp/native-import-host-test.log; no mobile
+compiler/Simulator build may overlap until root explicitly returns slot.
+
 Native resource update23:48UTC: build8 app/helper cleanup confirmed, phone8 skipped.
 Granted continued exclusive Simulator9→signed phoneDev9 slot to native owner for
 frozen3288c1bb (95df87fa + reviewed minimum-one navigation only). Actual8 Settings,
