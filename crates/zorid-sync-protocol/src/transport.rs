@@ -112,7 +112,12 @@ pub fn decode_accepted(
     update: &UpdateId,
     epoch: &ServerEpoch,
 ) -> Result<Accepted> {
-    let accepted = Accepted::decode(bytes).map_err(|_| error("sync_invalid_ack"))?;
+    let accepted = Accepted::decode(bytes).map_err(|cause| {
+        error(match cause {
+            crate::ProtocolError::UnsupportedRequiredFeature => "sync_unsupported_protocol",
+            _ => "sync_invalid_ack",
+        })
+    })?;
     accepted
         .check_target(vault, update, epoch)
         .map_err(|_| error("sync_invalid_ack"))?;
