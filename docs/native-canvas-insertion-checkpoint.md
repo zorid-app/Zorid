@@ -63,3 +63,20 @@ player remained at 0:00. The pointer-path repair alone therefore does not close
 this finding. The temporary audio insertion was undone, preserving the existing
 card text, and the owned desktop process exited normally. A missing-pointer
 focus path is being repaired and requires another native check.
+
+## Electron 44 missing-pointer correction
+
+The production build of `8032d47` ran with the verified Electron 44.8.0 arm64
+runtime against the same disposable vault. The first accessibility Play action
+changed the Live card's player to Pause while retaining its existing editable
+text field. Clicking the adjacent note editor then left Canvas editing normally.
+This closes the reproduced missing-pointer activation failure for this native
+path; it does not establish every pointer, keyboard or mobile interaction.
+
+The temporary embed was entered using native typing because the automation
+clipboard action timed out or produced no insertion in this pass. That clipboard
+path remains unverified on Electron 44. Cleanup removed only the temporary audio
+suffix after the owned app exited normally; existing text and node geometry were
+preserved. Direct WAV-card controls were available throughout this pass, but the
+previous intermittent decoder error is not proven fixed. Screenshots remained
+mostly white/clipped, so no new pixel-parity claim is made.
