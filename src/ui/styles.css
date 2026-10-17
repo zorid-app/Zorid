@@ -214,6 +214,11 @@ button.search-snippet { white-space: normal; overflow-wrap: anywhere; }
 /* Audio uses percentage width. Give its inline owner a definite available
    width when deleting a preceding newline joins the embed to prose/headings. */
 .cm-live-embed-inline:has(.audio-embed) { width: 100%; max-width: 100%; }
+/* Local audio uses native controls and the generic source-selection hook. Its
+   reference widget has neither an edit overlay nor extra block padding. */
+.cm-live-embed > .audio-embed { display: block; }
+.cm-live-embed-block:has(> .audio-embed) { padding: 0; }
+.cm-live-embed:has(> .audio-embed) > .cm-live-embed-edit { display: none; }
 .cm-live-embed > .markdown-embed { margin: 0; }
 .cm-live-embed-edit { position: absolute; top: 4px; right: 4px; opacity: 0; border: 0; border-radius: 4px; padding: 4px 6px; background: var(--background-secondary); color: var(--text-muted); cursor: pointer; }
 .cm-live-embed:hover > .cm-live-embed-edit, .cm-live-embed:focus-within > .cm-live-embed-edit { opacity: 1; }

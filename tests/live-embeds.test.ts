@@ -360,3 +360,40 @@ test('inline audio gets available width while image embeds keep their existing s
   assert.notEqual(getComputedStyle(imageWrapper).width, '100%'); assert.equal(image.getAttribute('width'), '240');
   assert.equal(view.state.doc.toString(), 'Text ![[Native media tone.wav]] and ![[image.png|240]]');
 });
+
+for (const inline of [false, true]) test(`actual editor ${inline ? 'inline' : 'block'} audio hides the edit overlay and source reveal retains its owner`, t => {
+  const source = `${inline ? 'Audio ' : ''}![[Native media tone.wav]]\n\nAfter audio.`;
+  const { view, host, renders, dom, click } = setup(t, source, true);
+  const style = document.createElement('style');
+  style.textContent = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8') + readFileSync(new URL('../src/ui/media-view.css', import.meta.url), 'utf8');
+  document.head.append(style);
+  const wrapper = host.querySelector<HTMLElement>('.cm-live-embed')!;
+  const owner = renders[0], audio = wrapper.querySelector('audio')!, action = wrapper.querySelector('button')!;
+  assert.equal(getComputedStyle(action).display, 'none', 'source overlay cannot cover native playback controls');
+  assert.equal(getComputedStyle(owner.node).display, 'block');
+  if (inline) assert.equal(getComputedStyle(wrapper).width, '100%');
+  else { assert.equal(getComputedStyle(wrapper).paddingTop, '0px'); assert.equal(getComputedStyle(wrapper).paddingBottom, '0px'); }
+  assert.equal(getComputedStyle(audio).height, '42px'); assert.equal(getComputedStyle(audio).width, '100%');
+  view.dispatch({ selection: { anchor: source.length } });
+  const nativeClick = new dom.window.MouseEvent('click', { button: 0, bubbles: true, cancelable: true });
+  audio.dispatchEvent(nativeClick);
+  assert.equal(nativeClick.defaultPrevented, false); assert.equal(view.state.selection.main.head, source.length);
+  click(wrapper);
+  assert.equal(view.state.doc.sliceString(view.state.selection.main.from, view.state.selection.main.to), '![[Native media tone.wav]]');
+  assert.ok(view.contentDOM.textContent?.includes('![[Native media tone.wav]]'));
+  assert.equal(host.querySelector('audio'), audio, 'source reveal preserves the native player');
+  assert.equal(renders.length, 1); assert.equal(owner.destroys, 0); assert.equal(view.state.doc.toString(), source);
+});
+
+test('audio overlay rules preserve image, PDF and enclosing note actions', t => {
+  const { host, renders } = setup(t, '![[photo.png]]\n\n![[paper.pdf]]\n\n![[Note]]', true);
+  const style = document.createElement('style'); style.textContent = readFileSync(new URL('../src/ui/styles.css', import.meta.url), 'utf8'); document.head.append(style);
+  renders[0].node.className = 'internal-embed image-embed';
+  renders[1].node.className = 'internal-embed pdf-embed';
+  renders[2].node.className = 'internal-embed markdown-embed';
+  const nested = document.createElement('div'); nested.className = 'audio-embed'; renders[2].node.append(nested);
+  for (const wrapper of host.querySelectorAll<HTMLElement>('.cm-live-embed-block')) {
+    assert.notEqual(getComputedStyle(wrapper.querySelector('button')!).display, 'none');
+    assert.equal(getComputedStyle(wrapper).paddingTop, '12px'); assert.equal(getComputedStyle(wrapper).paddingBottom, '12px');
+  }
+});
