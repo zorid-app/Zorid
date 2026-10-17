@@ -68,6 +68,12 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17 00:24 local
 
+- User explicitly APPROVED the prepared native database initialization/visibility
+  activation patch in chat. `data_readiness` resumes isolated schema8 activation
+  and coherent native aggregation. This is source-only fresh-database development,
+  not permission to migrate real vaults. The separate namespace physical-binding
+  patch is not covered by this specific approval and remains unapplied.
+
 - Browser batch is now integrated through `3185253` after successful combined
   WASM/TypeScript/webpack builds and actual two-browser encrypted relay roundtrip
   plus concurrent-edit byte convergence. See `browser-relay-verification.md`.
