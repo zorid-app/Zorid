@@ -124,7 +124,7 @@ export class BrowserSyncWorker {
   private async sweep(session:NonNullable<BrowserSyncWorker['session']>):Promise<BrowserSyncSweep> {
     await session.ready;session.assert();
     const {storage,transport,key,scope,epoch,rpc}=session;
-    const local=<T>(operation:()=>Promise<T>)=>this.host.local(async()=>{session.assert();const value=await operation();session.assert();return value;});
+    const local=<T>(operation:()=>Promise<T>)=>{const guarded=async()=>{session.assert();const value=await operation();session.assert();return value;};return storage.concurrentPreparation===true?guarded():this.host.local(guarded);};
     const result:BrowserSyncSweep={uploaded:0,received:0,complete:false};
     const deadline=Date.now()+30_000;
     const hello=await transport.hello();session.assert();

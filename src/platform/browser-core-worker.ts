@@ -1,3 +1,6 @@
+import {openBrowserStreamingVault} from '../core/browser-streaming-vault.ts';
+import type {BrowserStreamingVault,BrowserStreamingVaultOptions} from '../core/browser-streaming-vault.ts';
+import type {BinaryStreams} from '../core/binary-streams.ts';
 import { BrowserSyncWorker } from './browser-sync-worker.ts';
 import type { BrowserSyncCodec } from './browser-sync-worker.ts';
 import { openBrowserVault, BrowserVaultError } from '../core/browser-vault.ts';
@@ -13,9 +16,12 @@ let sequence = '0', queue: Promise<unknown> = Promise.resolve();
 let recovery = new Set<string>();
 let lease: BrowserClientLease | undefined, released = false;
 let sync:BrowserSyncWorker|undefined;
-let storageFailed=false;
+let storageFailed=false,closing=false;
+let binary:BinaryStreams|undefined;
+const detached=new Set<Promise<unknown>>();
+const streaming=()=>vault&&'validateStorage'in vault?vault as BrowserStreamingVault:undefined;
 function failStorage(code:string):void {
-  if(storageFailed||!['storage_closed','storage_corrupt','client_ownership_lost'].includes(code))return;
+  if(closing||storageFailed||!['storage_closed','storage_corrupt','client_ownership_lost'].includes(code))return;
   storageFailed=true;sync?.revoke();channel?.close();vault?.close();
   try{port.postMessage({event:'storage-error',code});}catch{/* Worker transport already failed. */}
 }
@@ -49,7 +55,8 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     if (moduleUrl.origin !== self.location.origin) throw new BrowserVaultError('invalid_wasm_url', 'WASM must be a same-origin application asset');
     const wasm = await import(/* webpackIgnore: true */ moduleUrl.href) as BrowserVaultWasm & {default(): Promise<unknown>};
     await wasm.default();
-    vault = await openBrowserVault({name:payload.database, wasm}); clientId = payload.clientId;
+    clientId=payload.clientId;
+    vault=payload.legacyFixture===true?await openBrowserVault({name:payload.database,wasm}):await openBrowserStreamingVault({name:payload.database,wasm:wasm as unknown as BrowserStreamingVaultOptions['wasm'],clientId,assertActive:assertOwner});
     try {
       // Open only reads the persisted authority. No intent replay/checkpoint access
       // occurs before this lifetime lease; no IDB transaction spans the wait.
@@ -62,6 +69,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         if(!status.scope)await vault.sync.enroll({realm_id:`local_${vault.authorityId}`,vault_id:`vault_${vault.authorityId}`,key_epoch:1});
         assertOwner();
       }
+      if(streaming()){await streaming()!.validateStorage();await streaming()!.cleanupReadPins();binary=await streaming()!.binaryStreams().catch(error=>{if(payload.initializeLocal!==true&&error instanceof BrowserVaultError&&error.code==='not_enrolled')return undefined;throw error;});assertOwner();}
       sync = new BrowserSyncWorker({storage:vault.sync,wasm:wasm as unknown as BrowserSyncCodec,assertOwner,local,fatal:failStorage,
         changed:async assertSession=>{assertSession();await refresh(assertSession);assertSession();channel?.postMessage({changed:true});}});
       channel = new BroadcastChannel(`zorid-core:${payload.database}`);
@@ -78,7 +86,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       };
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
       assertOwner();
-      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery]};
+      return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{})};
     } catch (error) {
       sync?.revoke(); channel?.close(); channel = undefined; vault.close(); vault = undefined;
       if (lease) { try { await lease.release(); } catch { /* Original open failure remains uncertain. */ } }
@@ -89,6 +97,8 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
   if (operation === 'release-client') {
     if (released) return; // Exact retry after a lost release acknowledgement.
     assertOwner();
+    await Promise.allSettled([...detached]);
+    if(streaming())await streaming()!.cleanupReadPins();
     // Serialized behind all earlier dispatches, including timed-out RPCs/hints.
     sync?.revoke(); channel?.close(); channel = undefined; vault.close();
     await lease!.release(); released = true; return;
@@ -98,6 +108,19 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     case 'inventory': return vault.inventory();
     case 'read': return vault.readEntry(payload);
     case 'read-id':return vault.readEntryById(payload);
+    case 'read-metadata':return streaming()?streaming()!.readMetadata(payload):vault.readEntry(payload);
+    case 'read-metadata-id':return streaming()?streaming()!.readMetadataById(payload):vault.readEntryById(payload);
+    case 'binary-limits':if(streaming()){binary??=await streaming()!.binaryStreams();return binary.limits;}break;
+    case 'binary-begin':if(binary)return binary.begin(payload);break;
+    case 'binary-append':if(binary)return binary.append(payload.ref,payload.input);break;
+    case 'binary-query':if(binary)return binary.query(payload);break;
+    case 'binary-seal':if(binary)return binary.seal(payload.ref,payload.input);break;
+    case 'binary-commit':if(binary)return afterDurableCommit(payload.operationId,await binary.commit(payload),async()=>{await refresh();channel?.postMessage({changed:true});});break;
+    case 'binary-abort':if(binary)return binary.abort(payload);break;
+    case 'binary-open-read':if(streaming())return streaming()!.openBinaryRead(payload.requestedReadId,payload.input);break;
+    case 'binary-read':if(binary)return binary.read(payload.ref,payload.input);break;
+    case 'binary-close-read':if(binary)return binary.closeRead(payload);break;
+    case 'binary-close-request':if(streaming())return streaming()!.closeBinaryReadRequest(payload.requestedReadId,payload.input);break;
     case 'checkpoint-load':return vault.checkpoints(clientId).load(payload);
     case 'checkpoint-cas':return vault.checkpoints(clientId).compareAndSwap(payload);
     case 'checkpoint-list':return vault.checkpoints(clientId).list(payload);
@@ -117,11 +140,19 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     case 'refresh': return refresh();
     default: throw new BrowserVaultError('invalid_operation', 'Unknown browser worker operation');
   }
+  throw new BrowserVaultError('binary_streams_unavailable','This worker has no admitted binary stream capability');
 }
 port.onmessage = ({data}) => {
   const {id, operation, payload} = data;
   // Revoke before queued storage dispatch. Network work never occupies the local-operation tail.
-  if (operation === 'release-client') sync?.revoke();
+  if (operation === 'release-client') {closing=true;sync?.revoke();}
+  if(typeof operation==='string'&&operation.startsWith('binary-')){
+    const task=(async()=>{try{if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');assertOwner();const result=await dispatch(operation,payload);
+      const transfer=operation==='binary-read'&&result&&typeof result==='object'&&'bytes'in result&&result.bytes instanceof Uint8Array&&result.bytes.buffer instanceof ArrayBuffer?[result.bytes.buffer]:undefined;
+      (port.postMessage as (value:unknown,transfer?:Transferable[])=>void)({id,ok:true,result},transfer);
+    }catch(error){const failure=error instanceof BrowserVaultError?error:new BrowserVaultError('storage_failure','Binary worker operation failed');port.postMessage({id,ok:false,error:{code:failure.code,message:failure.message,details:failure.details,source:failure.source}});failStorage(failure.code);}})();
+    detached.add(task);void task.finally(()=>detached.delete(task));return;
+  }
   if (['sync-configure','sync-once','sync-revoke'].includes(operation)) {
     void (async()=>{
       try {

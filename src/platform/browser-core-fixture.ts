@@ -32,7 +32,7 @@ export function browserCoreFixtureConfig(enabled: boolean, url: URL, buildId: st
 
 /** Root startup must invoke this only in its web branch with a build-time gate. */
 export async function openBrowserCoreFixture(config: BrowserCoreFixtureConfig): Promise<PlatformVault & {consumer:BrowserClientContext}> {
-  const runtime = await BrowserCoreRuntime.open({database:config.database,clientId:config.clientId,
+  const runtime = await BrowserCoreRuntime.open({database:config.database,clientId:config.clientId,legacyFixture:true,
     wasmModuleUrl:config.wasmModuleUrl,allowNewVault:true});
   let consumer: BrowserClientContext;
   try { consumer = admitBrowserFixtureClient(runtime, {fixture:true,assertOwner:()=>runtime.assertActive()}); }

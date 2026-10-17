@@ -48,6 +48,8 @@ interface Snapshot {
   retained:Map<string,Retained>; publications:Map<string,Publication>; revisions:Set<string>; reserved:Set<string>; counts:{authored:number;wires:number;publications:number;revisions:number}; hasLegacyIntents:boolean; published:SyncPublication;
 }
 export interface BrowserSync {
+  /** Trusted normalized host prepares outside the worker edit queue; final IDB CAS serializes commits. */
+  readonly concurrentPreparation?:true;
   /** Trusted worker admission; revocation fences new sync transactions, not local editing. */
   bindSession(assertActive:()=>void):BrowserSync;
   /** Explicit empty fixture enrollment. Does not infer identities from paths. */

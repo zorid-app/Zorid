@@ -256,3 +256,50 @@ operation/receipt, short source pulls, private-sink abort/EOF, peer edits,
 replacement identity, adapter retirement, small limits, no large Markdown read,
 and unrelated text edits during a stalled source. This is simulated consumer
 verification, not an actual browser/native streaming or production resource gate.
+
+### Normalized browser host composition — 2026-10-17
+
+Owner `/root/default_lifecycle_review_sol`, isolated
+`tingkai-c/browser-binary-streaming` in Orca checkout
+`/Users/ctk/orca/workspaces/Zorid/browser-binary-streaming`. Root remains the sole
+main integrator. The user explicitly approved the isolated default-host source
+wiring after automatic approval initially rejected it; that approval does not
+establish runtime verification, deployment or real-data migration permission.
+
+The new host selects fresh IndexedDB format 7. Earlier databases are rejected
+and retained, with no clearing, implicit conversion or legacy fallback. Only the
+explicit reference fixture selects the old host. The new authority stores causal
+metadata separately from immutable exact payload/wire rows, shares one storage
+budget with stages, and verifies outside writer transactions. The final strict
+transaction rechecks authority, actual metadata/publication, cursor and exact
+source pins before installing Rust changes, source/outbox rows and the parent
+receipt/journal. Binary authorization preserves its original target, final event
+and revision allocations before preparation. Receiving and sealed stages remain
+inert through restart.
+
+The worker forwards bounded typed arrays without numeric JSON and drains admitted
+binary operations before pin cleanup, storage close and lease release. A stable
+caller read operation ID is distinct from the fresh physical pin token. Exact
+active replay retains the same token; close deletes the active row, and retrying
+an old physical close cannot affect a newly allocated pin. Published reads retain
+an actual publication revision. Hidden recovery reads use a separate private
+`current_retained` witness and never invent a published revision. Four active pins
+and 128 KiB ranges apply across both kinds. Restart rebuilds a private proof from
+retained authority rather than trusting a serialized plan.
+
+Composition dependencies include normalized foundation `27fe7b8`/`506fd1b`, stage
+store `13f1d4e`/`23e647a`, consumer/runtime chain
+`b8ea207`/`15ec509`/`eede9f3`, File import
+`2b5819f`/`8f37382`, WASM metadata/read bindings through `883e257`, recovery helper
+`6799499` and bridge `46c734a`, and engine `d53faf8`. The exact final engine quota
+and opaque-handle ownership fixes and default-adapter terminal-rejection closure
+must be included before the coupled batch is accepted.
+
+Observed source checks: a bounded, serial Node run of eight normalized/stage/
+engine/transfer/Vault/runtime/import files passed 100/100 in 2.386 seconds. The
+checks use explicit transaction fixtures and opaque WASM doubles. A full browser
+source TypeScript check reports zero diagnostics when Connect and the generated
+RPC file resolve to the reviewed `grpc-core-integration` dependency; this branch
+has not installed or changed shared dependencies. No real WASM build, browser
+streaming, actual IndexedDB durability, >16 MiB end-to-end transfer, or resource
+claim follows from those results. Those remain serialized combined gates.
