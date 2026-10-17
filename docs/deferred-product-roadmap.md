@@ -69,6 +69,24 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Actual desktop/CLI race now exercised on fresh lockfixed fixture. Observer
+  /private/tmp/zorid-desktop-cli-race.py saw desktop checkpoint draft token
+  DesktopRaceToken1017 at old revisionf5e0aeec-9d04-47f2-b7eb-4bed68da9e5e;
+  independent CLI write5655dba5-d99b-4b82-a45b-429a8c2e0e54 committed sequence66,
+  revision5f0b715c-a1ab-4907-90a1-11257cfb34e9. Physical file contains CLI body;
+  AX shows desktop draft retained and "Save failed — draft retained". Checkpoint
+  remains exact old baseline + draft; evidence /private/tmp/zorid-race-lockfixed-1017.json
+  and /private/tmp/zorid-race-checkpoint-before-crash.json. Next actual process
+  interruption/restart still pending. Root app session21481, PID37756, host37814
+  live at last observation; fixture note ConcurrentProof.md id
+  a5cd22cf-01d4-4096-9ebe-d9ea5dea5e9a. Do not silently discard draft or claim merge.
+- Browser account-isolation proof completed; see browser-relay-verification.md.
+  Authorized B exact33 bytes, persisted-scope conflict, unauthorized A-scope denial
+  with empty inventory and denial after reload. Both extra tabs closed.
+- User explicitly requests Rust as default desktop core, superseding opt-in
+  rollout sequencing. desktop_integration owns startup/platform/init/host discovery
+  and packaging in isolated branch based0d3db40; root owns rebuilt UI verification.
+  Local operation must work without sync credentials or an available backend.
 - Latest browser receive/reload proof and CLI isolation pass are recorded in
   browser-relay-verification.md; browser account-isolation portion remains.
   External ordinary create/move/delete discovery implementation now assigned to

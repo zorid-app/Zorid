@@ -155,3 +155,19 @@ sync_authorization_failed; two rejected upload processes retained exact sealed
 wire and2 pending updates; cursor stayed0, no remote entries appeared. B-bound
 local vault rejects A config with sync_binding_mismatch. All52 A relay records
 were unchanged. Browser B receive and mixed-credential rejection remain pending.
+
+## Actual browser account isolation — 2026-10-17
+
+Fresh database smoke-a14c24eb-8489-43f6-8462-f4fb206f36bd, client
+02fea6f5-8fa7-441f-90fb-b895fe6fd3f9, imported legitimate account B fixture
+credentials. Actual browser worker/WASM/HTTP received2 records and only B's
+sentinel c52af72c-577a-42be-b197-b59a50007233,33 bytes SHA256
+b8a0553315b015349e7f0ca38ed3ff55b960988ed9b1f88ff23e4172cdefeb30.
+After reload, importing A credentials rejected sync_scope_conflict.
+
+Fresh database smoke-6eab7e2c-a9ce-4682-a01c-f8a7c9d472ac, client
+32106da5-296a-42a5-ac1c-d7ce8df85858, imported the owner-only mixed fixture
+(B bearer token, A scope/key). Sync rejected sync_authorization_failed, inventory
+remained empty. Reload/reimport/retry again rejected sync_authorization_failed.
+Both completed isolation tabs closed. This proves client-visible authorization
+and persistent scope fencing, not a production enrollment/security audit.
