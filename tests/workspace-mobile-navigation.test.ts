@@ -162,3 +162,25 @@ test('retained conflict outside the selected native document has a visible recov
   assert.equal(await recovered.adapter.read(recovered.copies[0]),recoveredDraft);
   assert.equal(f.workspace.activePane.viewPath,'Other.md');assert.equal(status.hidden,true);
 });
+
+
+test('native foreground requests republish current state even before DOM visibility catches up',async t=>{
+  let request:(()=>void|Promise<void>)|undefined;
+  const states:unknown[]=[];
+  const f=await setup(t,{editorOnly:true,initialPath:'A.md',initialEntryId:'id_A_md',nativeEditor:{
+    setState:async state=>{states.push(state);},
+    subscribe:(_action,onStateRequest)=>{request=onStateRequest;return()=>{};}
+  }});
+  const state={focused:true,editable:true,canUndo:true,canRedo:false};
+  f.workspace.activePane.editor!.nativeState=()=>state;
+  Object.defineProperty(f.dom.window.document,'visibilityState',{configurable:true,value:'hidden'});
+  states.length=0;
+  await request!();
+  assert.deepEqual(states,[state],'native foreground is authoritative during WebKit visibility lag');
+  for(const key of ['closing','startupFailed','platformReleased'] as const){
+    (f.workspace as any)[key]=true;await request!();(f.workspace as any)[key]=false;
+  }
+  f.workspace.root.inert=true;await request!();f.workspace.root.inert=false;
+  (f.workspace as any).vaultGeneration++;await request!();
+  assert.deepEqual(states,[state],'quiescent and stale workspaces cannot restore the toolbar');
+});

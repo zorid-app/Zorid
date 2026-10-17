@@ -222,17 +222,18 @@ export class Workspace {
     const platform=this.platform,generation=this.vaultGeneration;
     if(!platform.nativeEditor)return;
     this.hideNativeEditorToolbar();
+    const publishCurrent=()=>{
+      if(this.platform!==platform||this.vaultGeneration!==generation||this.closing||this.root.inert||this.startupFailed||this.platformReleased)return;
+      const state=this.activePane?.editor?.nativeState?.();
+      if(state)this.sendNativeEditorState(state,platform);
+    };
     const unsubscribe=platform.nativeEditor.subscribe(action=>{
       if(this.platform!==platform||this.vaultGeneration!==generation||this.closing||this.root.inert||this.startupFailed||this.platformReleased)return;
       const pane=this.activePane,editor=pane?.editor;
       if(!editor||!pane.viewReady||pane.viewMode==='reading'||pane.runtime?.phase==='disposed'||!pane.content?.isConnected||this.current(pane)?.id!==pane.viewTabId)return;
       editor.nativeAction?.(action);
-    });
-    const resume=()=>{
-      if(document.visibilityState==='hidden'||this.platform!==platform||this.vaultGeneration!==generation||this.closing||this.platformReleased)return;
-      const state=this.activePane?.editor?.nativeState?.();
-      if(state)this.sendNativeEditorState(state,platform);
-    };
+    },publishCurrent);
+    const resume=()=>{if(document.visibilityState!=='hidden')publishCurrent();};
     const appearance=window.matchMedia('(prefers-color-scheme: dark)');
     const updateAppearance=()=>{if(this.platform===platform&&this.vaultGeneration===generation&&this.settings.theme==='system')this.applySettings();};
     document.addEventListener('visibilitychange',resume);window.addEventListener('focus',resume);appearance.addEventListener('change',updateAppearance);
