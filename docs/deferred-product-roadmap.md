@@ -123,9 +123,12 @@ Current authoritative update (older bullets below record preceding stages):
   edges curated. Host process fixture compiles60914; standalone CLI binary/sync
   fixtures compile70839. Native test-only compile95937 found5 stale fixture/
   helper-visibility errors, fixed in independently reviewed27747ff (not yet
-  picked). Root's only active heavy handle is54910: the previously failing2MiB
-  CLI sync/move/delete case on the new Store candidate. Await its terminal result
-  before any other heavy check or source change in that checkout. First combined
+  picked at that checkpoint). Gate54910 now PASSES the previously failing2MiB
+  CLI sync/move/delete case on the new Store candidate in198.06s across multiple
+  CLI invocations. This proves correctness, not fast performance. Root picked
+  native27747ff and CLIa710e5d; isolated HEAD is nowb5f483e. The only active heavy
+  handle is47955, two chunk-generated native >16MiB restart/read/compound cases.
+  Await its terminal result before another heavy check or source edit. First combined
   compile request timed out in permission review without executing; the one
   permitted narrower retry started normally. No remaining approval request.
 - User asks about another parallel session. Recommended independent lane is
