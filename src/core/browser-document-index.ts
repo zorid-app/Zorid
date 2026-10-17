@@ -40,7 +40,7 @@ export interface BrowserDocumentIndex {
   resolve(input:{pinId:string;sourceId:string;destination:string}):Promise<unknown>;
   backlinks(input:{pinId:string;targetId:string;cursor?:string;limit?:number}):Promise<unknown>;
   metadata(input:{pinId:string;id:string}):Promise<unknown>;
-  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number}}):Promise<unknown>;
+  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number;currentEntryId?:string;maxSteps?:number}}):Promise<unknown>;
   rebuild():Promise<void>;close():Promise<void>;
 }
 interface Catalog {rebuilding?:string;version:1;localStoreId:string;head:string|null;generations:Descriptor[];pins:{id:string;clientId:string;generation:string}[]}
@@ -58,10 +58,12 @@ const digest=(value:string):Promise<string>=>byteDigest(new TextEncoder().encode
 function pageLimit(value:unknown):number{if(value===undefined)return 100;if(typeof value!=='number'||!Number.isInteger(value)||value<1||value>1000)throw fail('index_invalid_budget');return value;}
 function baseOptions(input:unknown):string {
   if(input===undefined)input={};if(!input||typeof input!=='object'||Array.isArray(input))throw fail('index_invalid_request');
-  const value=input as Record<string,unknown>,allowed=new Set(['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows']);
+  const value=input as Record<string,unknown>,allowed=new Set(['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps']);
   if(Object.keys(value).some(key=>!allowed.has(key)))throw fail('index_invalid_request');
   const result:Record<string,unknown>={};
-  for(const key of ['viewIndex','maxRows','clockMs'])if(value[key]!==undefined){const n=value[key];if(typeof n!=='number'||!Number.isSafeInteger(n)||(key!=='clockMs'&&n<0))throw fail('index_invalid_request');result[key]=n;}
+  for(const key of ['viewIndex','maxRows','clockMs','maxSteps'])if(value[key]!==undefined){const n=value[key];if(typeof n!=='number'||!Number.isSafeInteger(n)||(key!=='clockMs'&&n<0))throw fail('index_invalid_request');result[key]=n;}
+  if(value.maxSteps!==undefined&&(Number(value.maxSteps)<1||Number(value.maxSteps)>2000000))throw fail('index_invalid_request');
+  if(value.currentEntryId!==undefined){if(!validId(value.currentEntryId))throw fail('index_invalid_request');result.currentEntryId=value.currentEntryId;}
   const clock=value.clockMs===undefined?Date.now():value.clockMs;if(typeof clock!=='number'||!Number.isSafeInteger(clock))throw fail('index_invalid_request');result.clockMs=clock;
   result.maxRows=value.maxRows===undefined?1000:value.maxRows;
   if(value.timezone!==undefined)result.timezone=inputText(value.timezone,256);

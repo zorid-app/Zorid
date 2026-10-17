@@ -10,9 +10,10 @@ function wire(op,value){const bytes=Buffer.from(JSON.stringify({schemaVersion:1,
 function metadata(id='note'){return{snapshot,source,coverageComplete:true,value:{entry:{...entry,id},metadata:{entryId:id,contentRevision:'revision',properties:[{key:'config',value:{Title:'first',title:'second'}}]},exclusion:null}};}
 
 test('semantic requests snapshot bounded known fields without accepting native capabilities',()=>{
-  const input=request('base',{pinId:'1',id:'base',options:{searchTerms:['old'],clockMs:0}}),captured=captureDocumentRequest(input);
+  const input=request('base',{pinId:'1',id:'base',options:{searchTerms:['old'],clockMs:0,currentEntryId:'current-note',maxSteps:17}}),captured=captureDocumentRequest(input);
   input.command.options.searchTerms[0]='changed';
   assert.deepEqual(captured.command.options.searchTerms,['old']);
+  assert.equal(captured.command.options.currentEntryId,'current-note');assert.equal(captured.command.options.maxSteps,17);
   for(const input of [
     request('metadata',{pinId:'1',id:'note',metadata:{}}),
     request('search',{pinId:'1',query:'a\nb',limit:1}),
@@ -20,6 +21,8 @@ test('semantic requests snapshot bounded known fields without accepting native c
     request('search',{pinId:'1',query:'x',limit:1,cursor:{snapshot}}),
     ...['bad:identity','0','01','18446744073709551616'].map(pinId=>request('open',{pinId})),
     request('base',{pinId:'1',id:'base',options:{currentRecord:{}}}),
+    ...[0,-1,1.5,2000001].map(maxSteps=>request('base',{pinId:'1',id:'base',options:{maxSteps}})),
+    request('base',{pinId:'1',id:'base',options:{currentEntryId:'bad:path'}}),
     request('base',{pinId:'1',id:'base',options:{searchTerms:['x'.repeat(4097)]}}),
     request('resume',{snapshot:{...snapshot,generation:'01'}}),
     request('discard',{snapshot:{...snapshot,generation:'01'}}),

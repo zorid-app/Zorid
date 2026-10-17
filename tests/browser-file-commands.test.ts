@@ -109,3 +109,39 @@ test('namespace commands and creation use metadata while text replacement retain
   await f.consumer().execute({...create,operationId:'metadata-create'});assert.equal(reads,0);assert.ok(metadata>3);
   await f.consumer().execute({...create,kind:'writeText',operationId:'body-write',expectedContent:'draft'});assert.equal(reads,1);
 });
+
+
+test('witnessed move rejects malformed, stale, replacement and missing sources before checkpoint or authorization', async () => {
+    for (const expected of [
+        { expectedEntryId: 'old-entry' }, { expectedRevision: 'old-revision' },
+        { expectedEntryId: undefined, expectedRevision: undefined },
+        { expectedEntryId: 'bad/id', expectedRevision: 'old-revision' },
+    ]) {
+        const f = fixture(); f.files.set('Note.md', existing());
+        await assert.rejects(f.consumer().execute({ kind: 'move', operationId: 'move', entryId: 'unused', path: 'Note.md', destination: 'Renamed.md', ...expected } as BrowserFileCommandInput), { code: 'invalid_file_request' });
+        assert.equal(f.heads.size, 0); assert.equal(f.rows.size, 0);
+    }
+    for (const [expectedEntryId, expectedRevision, missing] of [
+        ['replacement', 'old-revision', false], ['old-entry', 'stale-revision', false], ['old-entry', 'old-revision', true],
+    ] as const) {
+        const f = fixture(); if (!missing) f.files.set('Note.md', existing());
+        await assert.rejects(f.consumer().execute({ kind: 'move', operationId: 'move', entryId: 'unused', path: 'Note.md', destination: 'Renamed.md', expectedEntryId, expectedRevision }), { code: 'revision_conflict' });
+        assert.equal(f.heads.size, 0); assert.equal(f.rows.size, 0);
+        assert.equal(f.files.has('Renamed.md'), false);
+    }
+});
+
+test('witnessed move retains its exact identity, revision and retry signature after lost ACK', async () => {
+    const f = fixture(); f.files.set('Note.md', existing()); f.loseCommit(); f.loseAck();
+    const request: BrowserFileCommandInput = { kind: 'move', operationId: 'move', entryId: 'unused', path: 'Note.md', destination: 'Renamed.md', expectedEntryId: 'old-entry', expectedRevision: 'old-revision' };
+    await assert.rejects(f.consumer().execute(request), { code: 'outcome_unknown' });
+    const original = JSON.parse(f.rows.get('move')!.request_json).mutation;
+    assert.deepEqual(original, { type: 'move', id: 'old-entry', expected: 'old-revision', path: 'Renamed.md' });
+    f.files.set('Note.md', { ...existing(), entry: { ...existing().entry, id: 'replacement', revision: 'replacement-revision' } });
+    f.backend.readMetadata = async () => { throw new Error('retained move must not replan from a replacement'); };
+    await assert.rejects(f.consumer().execute({ ...request, expectedRevision: 'replacement-revision' }), { code: 'idempotency_conflict' });
+    assert.equal(await f.consumer().recover(), false);
+    await f.consumer().execute(request);
+    assert.deepEqual(JSON.parse(f.rows.get('move')!.request_json).mutation, original);
+    assert.equal(f.rows.size, 1); assert.equal(f.rows.get('move')!.acknowledged, true);
+});

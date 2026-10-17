@@ -116,7 +116,55 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Latest checkpoint — 2026-10-17 22:25 UTC (supersedes older pending statuses):
+- Stage4 accepted and committed main2604057b; built-in Stage4 goal complete.
+  Root test apps/servers/compilers are stopped. Native owner received canonical
+  commit and next exclusive native validation slot in msg657bb7e41ced; it must
+  announce exact handles and return the slot after terminal. No mobile parity
+  claim; next work is the separately owned mobile reconciliation/build.
+- Root final Stage4 consumer candidate701e107f now cleanly merged into main
+  with final independent acceptance approved. Actual final native Base20/facade7/host13,
+  strict CJS/native/CLI fixture1 and actual browser WASM Markdown49+4 checks,
+  Base54+10 checks+2 context witnesses pass. No Rust delta after99464a78.
+- Normal browser Table/Board/List/Cards, typed groups/date/link/current context,
+  property save/reload and shared search/navigation pass. Rebuilt desktop Table/
+  Board/property save exact63 physical bytes/sharedsearch2/navigation pass. Desktop
+  initially caught undefined optional scalar IPC mismatch; reviewed701e fixes
+  request construction, retains strict decoder. Test Electron59332 closed exit0.
+- Main full TypeScript exits0;92 focused consumer tests pass. Functional source
+  matches verified candidate (only main's newer docs and trailing whitespace
+  differ). Details/evidence: docs/shared-document-semantics-plan.md. No full-repo,
+  mobile parity, measured performance or production security claim.
+- Mobile source f7d78f6d combines reviewed FFI/Swift/adapter/perf/presentation;
+  owner reports240 focused tests +typecheck0. Actual FFI75210/10 accepted, source
+  blobs unchanged in combined branch. Separate signed Dev phone build5/51 source
+  installed80513 exit0 and launched0; simulator keyboard toolbar/PDF2pages and
+  navigation/save observed. Final Stage4 mobile linkage/phone UI remain unproved.
+- Native owner retains ordinary durable identitybbf despite runtime rebind;
+  root replied msg09f79ae8d517 and acknowledged deliveryaa3e8e53a9b5. No duplicate
+  worker. Native source-only work may continue; root must announce canonical
+  consumer commit before granting next native build. Main remains sole root-owned.
+
+
 Current update — 2026-10-17 21:31 UTC (supersedes older pending statuses):
+- Subsequent21:43 checkpoint: native-only fixturehost bbe26f1d passed actual
+  nine-case check54202 (compile1m48s/test0.71s), source integrated maind94c3ae3.
+  Log copied to tmp/stage4-host-fixture-run1.log. This does not prove successful
+  relay/FFI/simulator/phone sync. Root reclaimed compiler slot, no compiler live
+  while current Base group-token source freezes; mobile owns no active Xcode.
+- Current isolated root candidatee97d5bf9 composes Base context+frame-error/null
+  guards, search+released-owner fix, typed-date display, retained-row edit witness
+  +provider atomic rename and deferred pin-close handling. Combined frontend
+  check1925 passes91/91, full TypeScript79631 exit0 (before final pin follow-up).
+  Reviewer source gates pass for these slices. Last presentation gap: Kanban loose
+  equality merged distinct Rust keys; contract owner adds opaque existing-canonical
+  keyId fields, Base owner projects them, renderer owner uses them through moves/
+  hide/order and fixes inert nested file/link labels. No TS formula regrouping.
+- Native owner may merge current canonicalmain863 into isolated recovery only
+  under named resolution grantmsg_e4d21dcde2bd, preserving Stage4 guards/capabilities
+  and scoped native hooks. Main remains root-owned. Its phonebuild5 is signed
+  ready but uninstalled until actual CoreDevice connectivity; simulator hotfix
+  proof and separate outstanding keyboard/PDF presentation are recorded in findings.
 - Subsequent21:36 checkpoint: native facade21944 exit0, all6 tests PASS,
   including explicit external import and authenticated sync receive with exact
   bytes, metadata/search/backlink retarget, old-pin coherence, rebuild equivalence

@@ -163,6 +163,8 @@ impl NativeVault {
     }
     /// Compile the Base bytes, presentation facts and relationships from exactly
     /// one retained generation. Live source/presentation is never substituted.
+    /// `options.current_entry_id` selects only a canonical row in this pin;
+    /// its current revision on disk or caller-supplied fields are never read.
     pub fn query_base_document(
         &self,
         pin: &DocumentQueryPin,

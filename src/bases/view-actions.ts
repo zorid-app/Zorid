@@ -81,9 +81,17 @@ export function createBaseViewActions(controller: BaseController, options: {
       const property = normalizeBaseProperty(group.property);
       if (normalizeBaseProperty(request.property) !== property) throw new Error('The grouping property changed');
       const source = result.groups.find(group => group.rows.some(row => row.path === request.path));
-      if (!source?.key || !baseValuesEqual(source.key, request.source, true)) throw new Error('The card group changed');
-      const destination = result.groups.find(group => group.key && baseValuesEqual(group.key, request.destination, true))?.key
-        ?? result.groupOptions.find(group => group.listed && baseValuesEqual(group.key, request.destination, true))?.key;
+      let destination: BaseExpressionValue | null | undefined;
+      if (result.shared !== undefined) {
+        if (typeof request.sourceKeyId !== 'string' || typeof request.destinationKeyId !== 'string'
+          || source?.sharedKeyId !== request.sourceKeyId) throw new Error('The card group changed');
+        destination = result.groups.find(group => group.sharedKeyId === request.destinationKeyId)?.key
+          ?? result.groupOptions.find(group => group.listed && group.sharedKeyId === request.destinationKeyId)?.key;
+      } else {
+        if (!source?.key || !baseValuesEqual(source.key, request.source, true)) throw new Error('The card group changed');
+        destination = result.groups.find(group => group.key && baseValuesEqual(group.key, request.destination, true))?.key
+          ?? result.groupOptions.find(group => group.listed && baseValuesEqual(group.key, request.destination, true))?.key;
+      }
       if (!destination) throw new Error('The destination group is not present in this view');
       if (property === 'file.folder') {
         if (!options.canRename || destination.type !== 'string') throw new Error('The host cannot move this file to that folder');

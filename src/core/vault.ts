@@ -555,16 +555,23 @@ export class Vault {
   }
 
   /** Update links resolved against the pre-move index, including links inside moved notes. */
-  rename(rawOld: string, rawNew: string, validate?: () => void): Promise<void> {
-    return this.renameInternal(rawOld, rawNew, true, validate);
+  rename(rawOld: string, rawNew: string, validate?: () => void, expectedIdentity?: Readonly<{ entryId: string; revision: string }>): Promise<void> {
+    return this.renameInternal(rawOld, rawNew, true, validate, expectedIdentity && Object.freeze({ ...expectedIdentity }));
   }
 
-  private renameInternal(rawOld: string, rawNew: string, updateLinks: boolean, validate?: () => void): Promise<void> {
+  private renameInternal(rawOld: string, rawNew: string, updateLinks: boolean, validate?: () => void, expectedIdentity?: Readonly<{ entryId: string; revision: string }>): Promise<void> {
     return this.enqueue(async () => {
       validate?.();
       const oldPath = normalizePath(rawOld), newPath = normalizePath(rawNew);
       await this.refresh();
-      if (!this.entries.has(oldPath)) throw new Error(`Path does not exist: ${oldPath}`);
+      const observed = this.entries.get(oldPath);
+      if (expectedIdentity && (typeof expectedIdentity.entryId !== 'string' || !expectedIdentity.entryId || typeof expectedIdentity.revision !== 'string' || !expectedIdentity.revision)) {
+        throw durableFailure('revision_conflict', 'Saved rename identity is incomplete');
+      }
+      if (expectedIdentity && (!observed || observed.entryId !== expectedIdentity.entryId || observed.revision !== expectedIdentity.revision)) {
+        throw durableFailure('revision_conflict', 'The saved file changed before rename');
+      }
+      if (!observed) throw new Error(`Path does not exist: ${oldPath}`);
       if (oldPath === newPath) return;
       this.requireDestination(newPath);
       if (newPath.startsWith(`${oldPath}/`)) throw new Error('Cannot move a folder inside itself');
@@ -605,7 +612,8 @@ export class Vault {
         }
       }
       validate?.();
-      await this.adapter.rename(oldPath, newPath);
+      const rename: (oldPath: string, newPath: string, expected?: Readonly<{ entryId: string; revision: string }>) => Promise<void> = this.adapter.rename.bind(this.adapter);
+      await rename(oldPath, newPath, expectedIdentity);
       const written: typeof changes = [];
       if (this.adapter.durableNamespace) {
         let rewriteError: unknown;

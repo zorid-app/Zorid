@@ -65,11 +65,23 @@ pub struct QueryOptions {
     pub search_terms: Vec<String>,
     pub ignore_paths: Vec<String>,
     pub evaluation: EvaluationOptions,
+    /// Select `this` only from the exact query snapshot, never from caller fields.
+    #[serde(
+        default,
+        deserialize_with = "current_entry_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub current_entry_id: Option<crate::EntryId>,
     pub max_steps: usize,
     pub max_scanned: usize,
     pub max_rows: usize,
     pub max_groups: usize,
     pub max_output_bytes: usize,
+}
+fn current_entry_option<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<crate::EntryId>, D::Error> {
+    crate::EntryId::deserialize(deserializer).map(Some)
 }
 impl Default for QueryOptions {
     fn default() -> Self {
@@ -78,6 +90,7 @@ impl Default for QueryOptions {
             search_terms: Vec::new(),
             ignore_paths: Vec::new(),
             evaluation: EvaluationOptions::default(),
+            current_entry_id: None,
             max_steps: 2_000_000,
             max_scanned: 50_000,
             max_rows: 10_000,
@@ -107,11 +120,15 @@ pub struct BaseRow {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseGroup {
+    /// Opaque presentation identity; None is only the ungrouped sentinel.
+    pub key_id: Option<String>,
     pub key: Option<BaseValue>,
     pub entry_ids: Vec<crate::EntryId>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupOption {
+    pub key_id: String,
     pub key: BaseValue,
     pub count: usize,
     pub listed: bool,
@@ -257,6 +274,9 @@ fn canonical(value: &BaseValue) -> String {
     }
     serde_json::to_string(&normalized(value)).expect("finite typed value serializes")
 }
+fn group_key_id(value: &BaseValue) -> String {
+    format!("base-key-v1:{}", canonical(value))
+}
 fn display(value: &BaseValue, timezone: &str) -> String {
     match value {
         BaseValue::Null => "null".into(),
@@ -331,10 +351,14 @@ pub fn query_base(
     }
     let mut ids = HashSet::new();
     let mut paths = HashSet::new();
+    let mut selected_current = None;
     for record in &snapshot.records {
         let witness = record.witness.as_ref().ok_or_else(|| {
             ExpressionDiagnostic::new("input", "Query records require an entry/revision witness")
         })?;
+        if options.current_entry_id.as_ref() == Some(&witness.entry_id) {
+            selected_current = Some(record);
+        }
         if !ids.insert(&witness.entry_id) || !paths.insert(&record.path) {
             return Err(ExpressionDiagnostic::new(
                 "input",
@@ -342,6 +366,30 @@ pub fn query_base(
             ));
         }
     }
+    let selected_options;
+    let options = if options.current_entry_id.is_some() {
+        let current = selected_current.ok_or_else(|| {
+            ExpressionDiagnostic::new("stale-source", "Current entry is absent from this snapshot")
+        })?;
+        if options
+            .evaluation
+            .current_record
+            .as_ref()
+            .is_some_and(|provided| provided != current)
+        {
+            return Err(ExpressionDiagnostic::new(
+                "stale-source",
+                "Current record conflicts with selected entry",
+            ));
+        }
+        let mut selected = options.clone();
+        selected.evaluation.current_record = Some(current.clone());
+        crate::encoded_size(&(snapshot, &selected), crate::MAX_BASE_REQUEST_BYTES)?;
+        selected_options = selected;
+        &selected_options
+    } else {
+        options
+    };
     if let Some(current) = &options.evaluation.current_record {
         let witness = current.witness.as_ref().ok_or_else(|| {
             ExpressionDiagnostic::new("input", "Current query record requires a witness")
@@ -565,6 +613,7 @@ pub fn query_base(
         let listed = keys.iter().map(canonical).collect::<HashSet<_>>();
         for key in keys {
             group_options.push(GroupOption {
+                key_id: group_key_id(key),
                 key: key.clone(),
                 count: indexed
                     .get(&canonical(key))
@@ -578,6 +627,7 @@ pub fn query_base(
                 .into_iter()
                 .filter(|(key, _)| !listed.contains(key))
                 .map(|(_, (key, count))| GroupOption {
+                    key_id: group_key_id(&key),
                     key,
                     count,
                     listed: false,
@@ -739,6 +789,7 @@ pub fn query_base(
                 }
                 let index = groups.len();
                 groups.push(BaseGroup {
+                    key_id: Some(format!("base-key-v1:{key_id}")),
                     key: Some(key),
                     entry_ids: Vec::new(),
                 });
@@ -770,6 +821,7 @@ pub fn query_base(
         }
     } else {
         groups.push(BaseGroup {
+            key_id: None,
             key: None,
             entry_ids: rows.iter().map(|row| row.entry_id.clone()).collect(),
         });
@@ -795,4 +847,51 @@ pub fn query_base(
     };
     crate::encoded_size(&result, options.max_output_bytes)?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod group_identity_tests {
+    use super::*;
+    #[test]
+    fn opaque_group_ids_preserve_existing_canonical_type_and_date_distinctions() {
+        let number = BaseValue::Number { value: 2.0 };
+        let string = BaseValue::String { value: "2".into() };
+        let list = BaseValue::List {
+            value: vec![number.clone()],
+        };
+        let date = BaseValue::Date {
+            timestamp: 0,
+            has_time: false,
+        };
+        let datetime = BaseValue::Date {
+            timestamp: 0,
+            has_time: true,
+        };
+        let values = [&number, &string, &list, &date, &datetime, &BaseValue::Null];
+        let ids = values.into_iter().map(group_key_id).collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 6);
+        assert!(ids.iter().all(|id| id.starts_with("base-key-v1:")));
+        assert_eq!(
+            group_key_id(&BaseValue::Number { value: -0.0 }),
+            group_key_id(&BaseValue::Number { value: 0.0 })
+        );
+    }
+    #[test]
+    fn opaque_group_ids_reuse_recursive_canonical_object_equivalence() {
+        let first = BaseValue::Object {
+            value: vec![
+                ("z".into(), BaseValue::Number { value: 2.0 }),
+                ("a".into(), BaseValue::String { value: "2".into() }),
+            ],
+        };
+        let mut reversed = first.clone();
+        if let BaseValue::Object { value } = &mut reversed {
+            value.reverse();
+        }
+        let first = BaseValue::List { value: vec![first] };
+        let reversed = BaseValue::List {
+            value: vec![reversed],
+        };
+        assert_eq!(group_key_id(&first), group_key_id(&reversed));
+    }
 }

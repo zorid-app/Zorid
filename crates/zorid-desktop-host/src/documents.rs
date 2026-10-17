@@ -93,6 +93,9 @@ struct BaseOptions {
     clock_ms: Option<i64>,
     timezone: String,
     max_rows: usize,
+    #[serde(default, deserialize_with = "current_entry_option")]
+    current_entry_id: Option<EntryId>,
+    max_steps: usize,
 }
 impl Default for BaseOptions {
     fn default() -> Self {
@@ -103,6 +106,8 @@ impl Default for BaseOptions {
             clock_ms: None,
             timezone: "UTC".into(),
             max_rows: 1000,
+            current_entry_id: None,
+            max_steps: QueryOptions::default().max_steps,
         }
     }
 }
@@ -114,7 +119,12 @@ impl BaseOptions {
         self,
         capture: impl FnOnce() -> Result<i64, Value>,
     ) -> Result<QueryOptions, Value> {
-        if self.max_rows == 0 || self.max_rows > 10_000 || self.view_index > 1000 {
+        if self.max_rows == 0
+            || self.max_rows > 10_000
+            || self.view_index > 1000
+            || self.max_steps == 0
+            || self.max_steps > QueryOptions::default().max_steps
+        {
             return Err(failure("invalid_budget"));
         }
         let mut options = QueryOptions::default();
@@ -129,8 +139,16 @@ impl BaseOptions {
         })?;
         options.evaluation.timezone = self.timezone;
         options.max_rows = self.max_rows;
+        options.max_steps = self.max_steps;
+        options.current_entry_id = self.current_entry_id;
         Ok(options)
     }
+}
+// An optional selector may be omitted, but present null must not erase it.
+fn current_entry_option<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<EntryId>, D::Error> {
+    EntryId::deserialize(deserializer).map(Some)
 }
 // Missing differs from explicit null: only omission selects the host clock.
 fn clock_option<'de, D: serde::Deserializer<'de>>(
@@ -211,8 +229,21 @@ impl Sessions {
 fn failure(code: &str) -> Value {
     json!({"code":code,"commit_uncertain":false,"message":"Document query failed; authoritative source remains unchanged"})
 }
+fn native_transport_code(code: &str) -> String {
+    // The stdio envelope admits only lowercase ASCII/underscore categories.
+    // Shared typed diagnostics retain their original spelling inside results.
+    if code.is_empty()
+        || code.len() > 64
+        || !code
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b == b'_' || b == b'-')
+    {
+        return "document_query_failed".into();
+    }
+    code.replace('-', "_")
+}
 fn native(error: NativeDocumentError) -> Value {
-    failure(error.code())
+    failure(&native_transport_code(error.code()))
 }
 struct Capped(Vec<u8>);
 impl Write for Capped {
@@ -570,5 +601,47 @@ mod clock_tests {
         ] {
             assert!(serde_json::from_str::<BaseOptions>(raw).is_err(), "{raw}");
         }
+    }
+    #[test]
+    fn base_context_options_preserve_strong_selector_and_bound_query_steps() {
+        let input: BaseOptions =
+            serde_json::from_str(r#"{"currentEntryId":"current-note","maxSteps":17,"clockMs":0}"#)
+                .unwrap();
+        let options = input
+            .into_options_with_clock(|| panic!("explicit clock must be preserved"))
+            .unwrap();
+        assert_eq!(
+            options.current_entry_id,
+            Some(EntryId::new("current-note").unwrap())
+        );
+        assert_eq!(options.max_steps, 17);
+        for steps in [0, QueryOptions::default().max_steps + 1] {
+            assert!(BaseOptions {
+                max_steps: steps,
+                ..BaseOptions::default()
+            }
+            .into_options_with_clock(|| Ok(0))
+            .is_err());
+        }
+        for raw in [
+            r#"{"currentEntryId":"bad:path"}"#,
+            r#"{"currentEntryId":null}"#,
+            r#"{"maxSteps":null}"#,
+            r#"{"currentEntryId":"one","currentEntryId":"two"}"#,
+            r#"{"maxSteps":1,"maxSteps":2}"#,
+        ] {
+            assert!(serde_json::from_str::<BaseOptions>(raw).is_err(), "{raw}");
+        }
+    }
+    #[test]
+    fn native_frame_error_categories_are_safe_without_rewriting_shared_diagnostics() {
+        for (shared, wire) in [
+            ("stale-source", "stale_source"),
+            ("numeric-domain", "numeric_domain"),
+            ("view_not_found", "view_not_found"),
+        ] {
+            assert_eq!(native_transport_code(shared), wire);
+        }
+        assert_eq!(native_transport_code("not/a/code"), "document_query_failed");
     }
 }

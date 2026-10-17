@@ -81,7 +81,16 @@ fn generation_factory_canonical_graph_corpus() {
         let r = case.request;
         let generation =
             Generation::from_sources(r.source, r.snapshot_id, r.entries, r.sources).unwrap();
-        let program = compile_base(r.configuration).unwrap();
+        let program = match compile_base(r.configuration) {
+            Ok(program) => program,
+            Err(error) => {
+                failures.push(format!(
+                    "{}: configuration failed to compile: {error}",
+                    case.id
+                ));
+                continue;
+            }
+        };
         let result = match query_generation(&program, &generation, &r.facts, &r.options) {
             Ok(r) => r,
             Err(e) => {
@@ -172,4 +181,71 @@ fn detached_transport_cannot_import_a_relationship_report() {
         json!({"snapshotId":id,"records":[],"relationships":{}})
     )
     .is_err());
+}
+
+#[test]
+fn current_entry_selection_rejects_missing_conflicting_and_unbounded_contexts() {
+    let corpus: Corpus = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/document-semantics/bases/accepted-generation-queries.json"
+    ))
+    .unwrap();
+    let request = corpus
+        .cases
+        .into_iter()
+        .find(|case| case.id == "current-entry-base-file-facts-with-empty-properties")
+        .unwrap()
+        .request;
+    let generation = Generation::from_sources(
+        request.source,
+        request.snapshot_id,
+        request.entries,
+        request.sources,
+    )
+    .unwrap();
+    let program = compile_base(request.configuration)
+        .expect("current-entry base context fixture must compile");
+    let mut options = request.options;
+    options.current_entry_id = Some(zorid_core::EntryId::new("missing-context").unwrap());
+    assert_eq!(
+        query_generation(&program, &generation, &request.facts, &options)
+            .unwrap_err()
+            .code,
+        "stale-source"
+    );
+    options.current_entry_id = Some(zorid_core::EntryId::new("context-base").unwrap());
+    let snapshot = BaseSnapshot::from_generation(&generation, &request.facts).unwrap();
+    options.evaluation.current_record = snapshot
+        .records()
+        .iter()
+        .find(|row| row.path == "Current.md")
+        .cloned();
+    assert_eq!(
+        query_generation(&program, &generation, &request.facts, &options)
+            .unwrap_err()
+            .code,
+        "stale-source"
+    );
+    options.evaluation.current_record = None;
+    for steps in [0, 1, QueryOptions::default().max_steps + 1] {
+        options.max_steps = steps;
+        assert_eq!(
+            query_generation(&program, &generation, &request.facts, &options)
+                .unwrap_err()
+                .code,
+            "budget"
+        );
+    }
+}
+
+#[test]
+fn current_entry_and_step_options_reject_present_null_and_duplicate_fields() {
+    assert!(serde_json::from_str::<QueryOptions>("{}").is_ok());
+    for raw in [
+        r#"{"currentEntryId":null}"#,
+        r#"{"maxSteps":null}"#,
+        r#"{"currentEntryId":"one","currentEntryId":"two"}"#,
+        r#"{"maxSteps":1,"maxSteps":2}"#,
+    ] {
+        assert!(serde_json::from_str::<QueryOptions>(raw).is_err(), "{raw}");
+    }
 }

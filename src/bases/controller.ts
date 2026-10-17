@@ -2,6 +2,8 @@ import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
 import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
+import { SharedBaseQueryRunner, sharedBaseWitness } from './shared-query.ts';
+import type { BaseSavedWitness } from './shared-query.ts';
 import { readProperties, removeProperty, setProperty } from '../core/properties.ts';
 import { isMarkdown, normalizePath } from '../core/types.ts';
 import type { Vault } from '../core/vault.ts';
@@ -9,9 +11,9 @@ import type { NoteBuffer } from '../ui/note-buffer.ts';
 
 export interface BaseMutationHost {
   /** Run transform once against the latest shared draft, validating after all awaits. */
-  transform(path: string, transform: (source: string) => string, validate: () => void, validateWrite?: () => void): Promise<void>;
+  transform(path: string, transform: (source: string) => string, validate: () => void, validateWrite?: () => void, expectedWitness?: BaseSavedWitness): Promise<void>;
   /** Must validate inside the host's serialized rename transaction. */
-  rename?(path: string, destination: string, validate: () => void): Promise<void>;
+  rename?(path: string, destination: string, validate: () => void, expectedWitness?: BaseSavedWitness): Promise<void>;
 }
 export interface BaseBufferHost {
   /** Must return the workspace's shared buffer, including existing dirty drafts. */
@@ -24,13 +26,23 @@ export interface BaseBufferHost {
 export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHost {
   let pending: Promise<unknown> = Promise.resolve();
   return {
-    transform(path, transform, validate, validateWrite = validate) {
+    transform(path, transform, validate, validateWrite = validate, expectedWitness) {
+      const expected = expectedWitness && Object.freeze({ ...expectedWitness });
       const result = pending.then(async () => {
         options.validate(); validate();
         const buffer = await options.getBuffer(path);
         await buffer.load();
         options.validate(); validate();
         if (buffer.path !== path) throw new Error('The edited file moved');
+        const durableWitness = () => (buffer as NoteBuffer & { readonly savedDurableWitness?: BaseSavedWitness & { readonly path: string } }).savedDurableWitness;
+        const admitted = durableWitness();
+        if (expected && (!admitted || admitted.entryId !== expected.entryId || admitted.revision !== expected.revision || admitted.path !== path)) {
+          throw new Error('This saved Base result is stale or has no durable edit identity; refresh before editing');
+        }
+        const validateIdentity = () => {
+          const current = durableWitness();
+          if (expected && (!current || current.entryId !== expected.entryId || current.path !== path)) throw new Error('The edited saved file was replaced or moved');
+        };
         const source = buffer.text, next = transform(source);
         // Transform is synchronous: no intervening editor input may be discarded.
         options.validate(); validate();
@@ -38,7 +50,7 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
         // A previous failed save may already contain this exact transformed draft.
         // Retrying must still persist it (or report the continuing failure).
         if (next === source && !buffer.dirty && !buffer.error) return;
-        buffer.update(next, { validateWrite: () => { options.validate(); validateWrite(); } });
+        buffer.update(next, { validateWrite: () => { options.validate(); validateWrite(); validateIdentity(); } });
         options.onBufferChange?.(path, buffer, source);
         // Do not replay or roll back a failed write: recovery draft owns that state.
         await buffer.flush();
@@ -90,6 +102,7 @@ export class BaseController {
   private nextIdentity = 0;
   private refreshing = false;
   private requested = false;
+  private sharedQueries = new SharedBaseQueryRunner();
   private current: BaseControllerState = Object.freeze({ version: 0, source: '', result: null, error: null });
 
   constructor(options: BaseControllerOptions) {
@@ -102,7 +115,7 @@ export class BaseController {
         for (const path of this.identities.keys()) if (path === previous || path.startsWith(previous + '/')) this.identities.delete(path);
       }
       for (const path of options.vault.entries.keys()) if (!this.identities.has(path)) this.identities.set(path, ++this.nextIdentity);
-      this.epoch++;
+      this.epoch++; this.sharedQueries.cancel();
       this.schedule();
     }));
     this.schedule();
@@ -124,13 +137,11 @@ export class BaseController {
       if (this.disposed) return;
       const epoch = this.epoch;
       try {
+        const service = this.options.vault.adapter.documentSemantics;
+        const observe = async (path: string) => this.options.vault.adapter.stat ? await this.options.vault.adapter.stat(path) : this.options.vault.entries.get(path);
+        const definition = service ? await observe(this.path) : undefined;
         const source = await this.options.vault.read(this.path);
         if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
-        const files = [...this.options.vault.entries.values()].filter(entry => entry.type === 'file').map(entry => {
-          const metadata = this.options.vault.metadata.get(entry.path);
-          return { path: entry.path, ctime: entry.ctime, mtime: entry.mtime, size: entry.size,
-            properties: metadata?.frontmatter, tags: metadata?.tags };
-        });
         const version = this.version + 1;
         const document = BaseDocument.parse(source);
         let viewIndex = this.query.viewIndex ?? 0;
@@ -138,7 +149,25 @@ export class BaseController {
           viewIndex = document.views.findIndex(view => view.name === this.viewName);
           if (viewIndex < 0) throw new Error(`Base view not found: ${this.viewName}`);
         }
-        const result = executeBaseQuery(document, { version, files }, { currentFilePath: this.path, ...this.query, viewIndex });
+        let result: BaseQueryResult;
+        if (service) {
+          const currentPath = this.query.currentFilePath ?? this.path;
+          const current = currentPath === this.path ? definition : await observe(currentPath);
+          if (!definition || !current) throw new Error('The saved Base or current file is unavailable.');
+          result = await this.sharedQueries.query({ service, definition, current, entries: [...this.options.vault.entries.values()], query: this.query,
+            viewIndex, viewName: this.viewName, version, isCurrent: () => !this.disposed && epoch === this.epoch });
+          if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+          const latest = await observe(this.path);
+          if (!latest || latest.entryId !== definition.entryId || latest.revision !== definition.revision) throw new Error('The Base definition changed. Refresh before editing.');
+          if (this.disposed || epoch !== this.epoch) { this.schedule(); return; }
+        } else {
+          const files = [...this.options.vault.entries.values()].filter(entry => entry.type === 'file').map(entry => {
+            const metadata = this.options.vault.metadata.get(entry.path);
+            return { path: entry.path, ctime: entry.ctime, mtime: entry.mtime, size: entry.size,
+              properties: metadata?.frontmatter, tags: metadata?.tags };
+          });
+          result = executeBaseQuery(document, { version, files }, { currentFilePath: this.path, ...this.query, viewIndex });
+        }
         this.query = { ...this.query, viewIndex };
         const signature = JSON.stringify([source, this.identities.get(this.path), result.rows.map(row => this.identities.get(row.path)), { ...result, version: 0 }]);
         if (signature === this.signature && !this.current.error) return;
@@ -172,7 +201,7 @@ export class BaseController {
       // cannot retarget an embedded view to an unrelated configuration.
       this.viewName = view.name;
     }
-    this.query = { ...this.query, viewIndex }; this.epoch++;
+    this.query = { ...this.query, viewIndex }; this.epoch++; this.sharedQueries.cancel();
     return this.refresh();
   }
 
@@ -206,7 +235,7 @@ export class BaseController {
       const properties = readProperties(source);
       const existing = properties.find(item => item.key === key) ?? properties.find(item => item.key.toLowerCase() === key.toLowerCase());
       return remove ? (existing ? removeProperty(source, existing.key) : source) : setProperty(source, existing?.key ?? key, value);
-    }, validate, validateWrite);
+    }, validate, validateWrite, sharedBaseWitness(this.current.result!, path));
     await this.refresh();
   }
 
@@ -228,7 +257,7 @@ export class BaseController {
     const { validate } = this.guard(version, path);
     if (!this.options.mutations.rename) throw new Error('The host does not provide guarded file renaming');
     if (!this.current.result!.rows.some(row => row.path === path)) throw new Error('The file is not in this base result');
-    await this.options.mutations.rename(path, destination, validate);
+    await this.options.mutations.rename(path, destination, validate, sharedBaseWitness(this.current.result!, path));
     await this.refresh();
   }
 
@@ -243,12 +272,12 @@ export class BaseController {
       // guarded persistence, but never merge unrelated unsaved configuration.
       if (source !== expected && source !== desired) throw new Error('The base configuration has an unsaved or external edit');
       return desired;
-    }, validate, validateWrite);
+    }, validate, validateWrite, sharedBaseWitness(this.current.result!, this.path));
     await this.refresh();
   }
 
   dispose(): void {
-    this.disposed = true; this.epoch++;
+    this.disposed = true; this.epoch++; this.sharedQueries.dispose();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.subscriptions.forEach(unsubscribe => unsubscribe()); this.subscriptions = [];
   }

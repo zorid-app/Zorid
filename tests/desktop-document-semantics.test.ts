@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+const {captureDocumentRequest}=createRequire(import.meta.url)('../desktop/document-semantics.cjs');
 import {createDesktopDocumentService} from '../src/platform/desktop-document-semantics.ts';
 import type {DesktopDocumentRequest} from '../src/platform/desktop-document-semantics.ts';
 const snapshot={localStoreId:'store',generationEpoch:'epoch',generation:'1',versions:{schema:1,extraction:'v1',resolver:'v1',query:'v1'}};
@@ -46,4 +48,22 @@ test('uncertain pin cleanup retries exact handles before discarding owned stage'
   await binding.service.open();await binding.service.begin();await assert.rejects(()=>binding.release());
   assert.deepEqual(operations,['open:1','begin','close:1']);await binding.release();
   assert.deepEqual(operations,['open:1','begin','close:1','close:1','discard']);
+});
+
+// IPC preserves own undefined keys; exercise the actual strict main-process codec.
+test('normal Base adapter omits unset scalar options before strict IPC capture',async()=>{
+  const optionsSeen:unknown[]=[];
+  const binding=createDesktopDocumentService(async input=>{
+    const request=captureDocumentRequest(structuredClone(input));
+    const c=request.command;
+    if(c.op==='open')return opened(c.pinId);
+    if(c.op==='close')return true;
+    if(c.op==='base'){optionsSeen.push(c.options);return {snapshot,source,coverageComplete:true,value:{}};}
+    throw Error('Unexpected operation');
+  });
+  const pin=await binding.service.open();
+  await pin.base({id:'base',options:{clockMs:0,maxRows:17,maxSteps:undefined,currentEntryId:undefined,viewIndex:undefined,timezone:undefined}});
+  await pin.base({id:'base',options:{clockMs:42,viewIndex:0,maxSteps:1,currentEntryId:'entry',timezone:'UTC'}});
+  assert.deepEqual(optionsSeen,[{clockMs:0,maxRows:17},{clockMs:42,viewIndex:0,maxSteps:1,currentEntryId:'entry',timezone:'UTC',maxRows:1000}]);
+  await binding.release();
 });

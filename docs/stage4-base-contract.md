@@ -319,3 +319,59 @@ no engine output was used to generate an expectation and no evaluator behavior
 changed. The actual failed browser report/results remain acceptance evidence;
 this fixture correction requires the native detached query corpus and actual
 browser Base corpus to rerun before a pass is recorded.
+
+
+## Retained current-entry query option
+
+The normal document service accepts `currentEntryId?: string` and
+`maxSteps?: number` alongside its existing Base options. `currentEntryId` is a
+strong entry ID, never a path or caller-authored record. Rust selects `this` from
+that exact retained generation's canonical row, including its revision, ordered
+properties, type hints, tags and host-owned presentation facts. Missing IDs and
+folder IDs fail explicitly with `stale-source`; an additional conflicting
+`evaluation.currentRecord` fails rather than overriding the selected row.
+Omission preserves the existing no-`this` behavior for other API consumers. The
+normal Base controller explicitly selects its Base entry by default, or the
+stable ID corresponding to its requested current-file path. A non-Markdown
+`.base` row has empty note properties and retained file facts; its configuration
+mapping is not imported as note properties. Dirty editor overlays are not query
+context authority.
+
+`maxSteps` is a positive integer no greater than 2,000,000 and maps directly to
+the portable query work ceiling, including generation preparation. Omission
+retains the existing 2,000,000 query ceiling. It does not replace the independent
+per-expression ceiling. Clock and maxRows defaults are unchanged. The shared
+canonical generation corpus adds `.base` context, Markdown context and omitted
+context cases for native/WASM parity; new source requires the coordinator's
+serialized native/WASM proof before those additions are verified.
+
+
+Only omission defaults the new selector/step options. Present `null`, duplicate
+fields and malformed strong IDs are rejected in raw Rust and WASM decoding as
+well as admitted JS transports. Shared diagnostics keep codes such as
+`stale-source` and `numeric-domain`. The desktop stdio outer error category maps
+hyphens to underscores (`stale_source`, `numeric_domain`) to obey its existing
+strict frame grammar; typed diagnostics inside successful query reports retain
+the shared codes. Unexpected non-category spellings become
+`document_query_failed`, never an invalid frame or arbitrary caught text.
+
+
+## Opaque group presentation identity
+
+Rust returns `BaseGroup.keyId: string | null` and `GroupOption.keyId: string`.
+The only null identity is the ungrouped sentinel (`BaseGroup.key == null` at the
+outer optional level). A real grouped typed-null value has its own non-null
+identity. Tokens currently use `base-key-v1:` plus the existing canonical typed
+value representation; they are stable across snapshots and refreshes but are not
+snapshot capabilities, source IDs or an editing authority. Consumers copy and
+compare tokens exactly without parsing, normalizing, hashing or rebuilding them.
+They must not use JavaScript's loose expression equality for group membership.
+
+The existing canonical policy preserves number/string/list distinctions and date
+`hasTime`, normalizes signed numeric zero, and recursively ignores object entry
+order for grouping. No expression equality, formulas, ordering or source values
+change. Tokens are included in the existing serialized result byte ceiling.
+Native source tests cover those distinctions and recursive object equivalence;
+accepted query expectations include reviewed literal identities for shared
+native/WASM checks. TypeScript fixture projection carries those literals and
+implements no independent canonicalization algorithm.

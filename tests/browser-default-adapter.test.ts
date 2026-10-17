@@ -90,3 +90,18 @@ test('owning terminal rejection settles retained binary bytes and permits a fres
   await assert.rejects(adapter.createBinary!('occupied.bin',Uint8Array.of(1)),{code:'revision_conflict',message:'Destination exists',source:'rust'});
   occupied=false;await adapter.createBinary!('occupied.bin',Uint8Array.of(2));assert.equal(begins.length,2);assert.notEqual(begins[0].operationId,begins[1].operationId);assert.notEqual(begins[0].target.entryId,begins[1].target.entryId);
 });
+
+
+test('browser rename forwards the captured witness and retains it in the uncertain request signature',async()=>{
+  const calls:any[]=[];let fail=true;
+  const context={durableWrites:{},recoverCommands:async()=>false,fileCommand:async(input:any)=>{calls.push(structuredClone(input));if(fail)throw new BrowserVaultError('outcome_unknown','unknown');}} as unknown as BrowserClientContext;
+  const adapter=defaultBrowserAdapter({} as BrowserCoreRuntime,context),expected={entryId:'selected',revision:'selected-revision'};
+  const pending=adapter.rename('Note.md','Renamed.md',expected);expected.entryId='replacement';
+  await assert.rejects(pending,{code:'outcome_unknown'});
+  assert.equal(calls[0].expectedEntryId,'selected');assert.equal(calls[0].expectedRevision,'selected-revision');
+  await assert.rejects(adapter.rename('Note.md','Renamed.md',expected),{code:'command_pending'});
+  await assert.rejects(adapter.rename('Note.md','Renamed.md'),{code:'command_pending'});
+  assert.equal(calls.length,1);fail=false;
+  await adapter.rename('Note.md','Renamed.md',{entryId:'selected',revision:'selected-revision'});
+  assert.deepEqual(calls[1],calls[0]);
+});
