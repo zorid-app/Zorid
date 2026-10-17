@@ -10,6 +10,7 @@ use zorid_sync_protocol::{
     ExpectedContext, RealmId, UpdateId, VaultId, MAX_PLAINTEXT_BYTES, MAX_WIRE_BYTES,
 };
 
+pub mod mutation;
 pub mod v2;
 
 pub const FORMAT_VERSION: u32 = 1;
