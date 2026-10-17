@@ -264,10 +264,53 @@ impl MutationPlan {
     }
 }
 
-fn checked_view(
+/// Internal namespace/identity view shared by legacy and metadata-only commands.
+pub(crate) trait PlanningGraph {
+    fn scope(&self) -> &crate::Scope;
+    fn version(&self) -> &Revision;
+    fn view(&self) -> crate::Result<v2::VaultView>;
+    fn known_entry(&self, id: &EntryId) -> bool;
+    fn reserved_ids(&self) -> BTreeSet<UpdateId>;
+}
+impl PlanningGraph for v2::State {
+    fn scope(&self) -> &crate::Scope {
+        self.scope()
+    }
+    fn version(&self) -> &Revision {
+        self.version()
+    }
+    fn view(&self) -> crate::Result<v2::VaultView> {
+        self.view()
+    }
+    fn known_entry(&self, id: &EntryId) -> bool {
+        known_entry(self, id)
+    }
+    fn reserved_ids(&self) -> BTreeSet<UpdateId> {
+        reserved_ids(self)
+    }
+}
+impl PlanningGraph for crate::metadata::MetadataState {
+    fn scope(&self) -> &crate::Scope {
+        self.scope()
+    }
+    fn version(&self) -> &Revision {
+        self.version()
+    }
+    fn view(&self) -> crate::Result<v2::VaultView> {
+        Ok(self.metadata_view()?.as_v2().clone())
+    }
+    fn known_entry(&self, id: &EntryId) -> bool {
+        crate::binary_mutation::known_entry(self, id)
+    }
+    fn reserved_ids(&self) -> BTreeSet<UpdateId> {
+        crate::binary_mutation::reserved_ids(self)
+    }
+}
+
+pub(crate) fn checked_view<G: PlanningGraph>(
     request: &MutationRequest,
     entries: &[EntryState],
-    graph: &v2::State,
+    graph: &G,
     mode: Option<CreateMode>,
     text: Option<&TextState>,
 ) -> Result<v2::VaultView> {
@@ -300,7 +343,7 @@ fn checked_view(
             if mode.is_none() {
                 return Err(Error::InvalidMode);
             }
-            if text.is_some() || known_entry(graph, id) {
+            if text.is_some() || graph.known_entry(id) {
                 return Err(Error::SnapshotMismatch);
             }
         }
@@ -312,7 +355,7 @@ fn checked_view(
             if mode.is_some() {
                 return Err(Error::InvalidMode);
             }
-            if text.is_some() || known_entry(graph, id) {
+            if text.is_some() || graph.known_entry(id) {
                 return Err(Error::SnapshotMismatch);
             }
         }
@@ -431,7 +474,7 @@ pub fn requirements(
     let view = checked_view(request, entries, graph, mode, text)?;
     requirements_with_view(request, entries, &view, mode)
 }
-fn requirements_with_view(
+pub(crate) fn requirements_with_view(
     request: &MutationRequest,
     entries: &[EntryState],
     view: &v2::VaultView,
@@ -531,11 +574,11 @@ fn reserved_ids(graph: &v2::State) -> BTreeSet<UpdateId> {
     }
     ids
 }
-fn validate_allocation(
+pub(crate) fn validate_allocation<G: PlanningGraph>(
     a: &Allocation,
     need: &AllocationRequirements,
     entries: &[EntryState],
-    graph: &v2::State,
+    graph: &G,
     text: Option<&TextState>,
 ) -> Result<()> {
     if a.update_ids.len() != need.update_count as usize
@@ -553,7 +596,7 @@ fn validate_allocation(
         (TextRequirement::Write, Some(t)) if t.new_text.is_none() => None,
         _ => return Err(Error::InvalidAllocation),
     };
-    let mut ids = reserved_ids(graph);
+    let mut ids = graph.reserved_ids();
     for id in &a.update_ids {
         if !ids.insert(id.clone()) {
             return Err(Error::InvalidAllocation);
@@ -662,6 +705,208 @@ impl<'a> Builder<'a> {
     }
 }
 
+pub(crate) fn namespace_events(
+    request: &MutationRequest,
+    entries: &[EntryState],
+    view: &v2::VaultView,
+    mode: Option<CreateMode>,
+    need: &AllocationRequirements,
+    allocation: &Allocation,
+    binary_manifest: Option<&Manifest>,
+    mut next_id: impl FnMut() -> Result<UpdateId>,
+) -> Result<(Vec<(v2::EntryEvent, bool)>, Option<TextNamespaceContext>)> {
+    let mut text_context = None;
+    let mut events = Vec::new();
+    match &request.mutation {
+        Mutation::Create { id, path, kind, .. } => {
+            let seed = match (kind, mode) {
+                (EntryKind::Folder, None) => None,
+                (EntryKind::File, Some(CreateMode::Binary)) => Some(v2::ContentSeed::Binary {
+                    manifest: binary_manifest.cloned().ok_or(Error::InvalidMode)?,
+                }),
+                (EntryKind::File, Some(CreateMode::Text)) => Some(v2::ContentSeed::Text {
+                    text_bootstrap_id: allocation
+                        .text
+                        .as_ref()
+                        .and_then(|t| t.new_text.as_ref())
+                        .ok_or(Error::InvalidAllocation)?
+                        .bootstrap_id
+                        .clone(),
+                    text_format: zorid_client_sync::v2::TEXT_FORMAT_VERSION,
+                }),
+                _ => return Err(Error::InvalidMode),
+            };
+            let event_id = next_id()?;
+            let identity = EntryIdentity {
+                entry_id: id.clone(),
+                bootstrap_id: event_id.clone(),
+            };
+            events.push((
+                v2::EntryEvent {
+                    id: event_id.clone(),
+                    identity,
+                    parents: vec![],
+                    effect: v2::Effect::Create {
+                        entry_kind: *kind,
+                        location: location(path, entries)?,
+                        content: seed,
+                    },
+                },
+                false,
+            ));
+            if need.text == TextRequirement::Create {
+                text_context = Some(TextNamespaceContext {
+                    bootstrap_id: event_id.clone(),
+                    parents: vec![event_id],
+                });
+            }
+        }
+        Mutation::Write { id, .. } => {
+            let entry = view
+                .namespace
+                .entries
+                .get(id)
+                .ok_or(Error::SnapshotMismatch)?;
+            if need.text == TextRequirement::Write {
+                text_context = Some(TextNamespaceContext {
+                    bootstrap_id: entry.identity.bootstrap_id.clone(),
+                    parents: entry.heads.clone(),
+                });
+            } else {
+                let manifest = binary_manifest.cloned().ok_or(Error::InvalidMode)?;
+                let event_id = next_id()?;
+                events.push((
+                    v2::EntryEvent {
+                        id: event_id,
+                        identity: entry.identity.clone(),
+                        parents: entry.heads.clone(),
+                        effect: v2::Effect::SetContent { content: manifest },
+                    },
+                    false,
+                ));
+            }
+        }
+        Mutation::Move { id, path, .. } => {
+            let entry = view
+                .namespace
+                .entries
+                .get(id)
+                .ok_or(Error::SnapshotMismatch)?;
+            let event_id = next_id()?;
+            events.push((
+                v2::EntryEvent {
+                    id: event_id,
+                    identity: entry.identity.clone(),
+                    parents: entry.heads.clone(),
+                    effect: v2::Effect::Move {
+                        location: location(path, entries)?,
+                    },
+                },
+                false,
+            ));
+        }
+        Mutation::Delete { .. } => {
+            for member in deleted_members(request, entries) {
+                let entry = view
+                    .namespace
+                    .entries
+                    .get(&member.id)
+                    .ok_or(Error::SnapshotMismatch)?;
+                let event_id = next_id()?;
+                events.push((
+                    v2::EntryEvent {
+                        id: event_id,
+                        identity: entry.identity.clone(),
+                        parents: entry.heads.clone(),
+                        effect: v2::Effect::Delete,
+                    },
+                    true,
+                ));
+            }
+        }
+    }
+    Ok((events, text_context))
+}
+
+pub(crate) fn author_text(
+    scope: &crate::Scope,
+    request: &MutationRequest,
+    text_state: Option<&TextState>,
+    allocation: &Allocation,
+    context: &TextNamespaceContext,
+    update_id: UpdateId,
+) -> Result<zorid_client_sync::v2::AuthoredTextPlan> {
+    let ta = allocation.text.as_ref().ok_or(Error::InvalidAllocation)?;
+    let initial;
+    let state = if let Some(new) = &ta.new_text {
+        initial = TextState::empty(
+            TextIdentity {
+                realm_id: scope.realm_id.clone(),
+                vault_id: scope.vault_id.clone(),
+                entry_id: request.mutation.id().clone(),
+                bootstrap_id: new.bootstrap_id.clone(),
+            },
+            new.empty_revision.clone(),
+        );
+        &initial
+    } else {
+        text_state.ok_or(Error::SnapshotMismatch)?
+    };
+    let bytes = match &request.mutation {
+        Mutation::Create {
+            content: Some(bytes),
+            ..
+        }
+        | Mutation::Write { content: bytes, .. } => bytes,
+        _ => return Err(Error::InvalidMode),
+    };
+    let authored = zorid_client_sync::v2::plan_replace_text(
+        state,
+        bytes,
+        &AuthorRequest {
+            expected_version: state.version.clone(),
+            next_version: allocation.metadata_revision.clone(),
+            update_id,
+            actor: ta.actor.clone(),
+            edits: vec![],
+        },
+        context,
+    )?;
+    Ok(authored)
+}
+
+pub(crate) fn validate_namespace_result<'a>(
+    final_view: &v2::VaultView,
+    authored_ids: impl Iterator<Item = &'a UpdateId>,
+    changes: &[EntryChange],
+) -> Result<()> {
+    // Local commands may never author unresolved causality or a namespace result
+    // different from the metadata operation the user actually requested.
+    for id in authored_ids {
+        if final_view.namespace.pending.contains(id) {
+            return Err(crate::Error::InvalidCausality.into());
+        }
+    }
+    for change in changes {
+        let entry = final_view
+            .namespace
+            .entries
+            .get(&change.after.id)
+            .ok_or(Error::SnapshotMismatch)?;
+        let expected = if change.after.deleted {
+            Projection::Tombstone
+        } else {
+            Projection::Normal {
+                path: change.after.path.clone(),
+            }
+        };
+        if entry.kind != change.after.kind || entry.projection != expected {
+            return Err(Error::SnapshotMismatch);
+        }
+    }
+    Ok(())
+}
+
 /// Plans local Create/Write/Move/Delete without filesystem, randomness or clocks.
 /// Move/Delete only change namespace+metadata: hosts rebind affected retained
 /// text states to metadata revisions atomically without modifying CRDT snapshots
@@ -685,119 +930,29 @@ pub fn plan_mutation(
         records: graph.records().clone(),
         authored: Vec::new(),
     };
-    let mut text_context = None;
-    match &request.mutation {
+    let binary_manifest = match &request.mutation {
         Mutation::Create {
-            id,
-            path,
-            kind,
-            content,
-        } => {
-            let seed = match (kind, mode) {
-                (EntryKind::Folder, None) => None,
-                (EntryKind::File, Some(CreateMode::Binary)) => Some(v2::ContentSeed::Binary {
-                    manifest: b.binary(content.as_deref().ok_or(Error::InvalidMode)?)?,
-                }),
-                (EntryKind::File, Some(CreateMode::Text)) => Some(v2::ContentSeed::Text {
-                    text_bootstrap_id: allocation
-                        .text
-                        .as_ref()
-                        .and_then(|t| t.new_text.as_ref())
-                        .ok_or(Error::InvalidAllocation)?
-                        .bootstrap_id
-                        .clone(),
-                    text_format: zorid_client_sync::v2::TEXT_FORMAT_VERSION,
-                }),
-                _ => return Err(Error::InvalidMode),
-            };
-            let event_id = b.id()?;
-            let identity = EntryIdentity {
-                entry_id: id.clone(),
-                bootstrap_id: event_id.clone(),
-            };
-            b.event(
-                v2::EntryEvent {
-                    id: event_id.clone(),
-                    identity,
-                    parents: vec![],
-                    effect: v2::Effect::Create {
-                        entry_kind: *kind,
-                        location: location(path, entries)?,
-                        content: seed,
-                    },
-                },
-                false,
-            )?;
-            if need.text == TextRequirement::Create {
-                text_context = Some(TextNamespaceContext {
-                    bootstrap_id: event_id.clone(),
-                    parents: vec![event_id],
-                });
-            }
+            kind: EntryKind::File,
+            content: Some(bytes),
+            ..
+        } if mode == Some(CreateMode::Binary) => Some(b.binary(bytes)?),
+        Mutation::Write { content, .. } if need.text == TextRequirement::None => {
+            Some(b.binary(content)?)
         }
-        Mutation::Write { id, content, .. } => {
-            let entry = view
-                .namespace
-                .entries
-                .get(id)
-                .ok_or(Error::SnapshotMismatch)?;
-            if need.text == TextRequirement::Write {
-                text_context = Some(TextNamespaceContext {
-                    bootstrap_id: entry.identity.bootstrap_id.clone(),
-                    parents: entry.heads.clone(),
-                });
-            } else {
-                let manifest = b.binary(content)?;
-                let event_id = b.id()?;
-                b.event(
-                    v2::EntryEvent {
-                        id: event_id,
-                        identity: entry.identity.clone(),
-                        parents: entry.heads.clone(),
-                        effect: v2::Effect::SetContent { content: manifest },
-                    },
-                    false,
-                )?;
-            }
-        }
-        Mutation::Move { id, path, .. } => {
-            let entry = view
-                .namespace
-                .entries
-                .get(id)
-                .ok_or(Error::SnapshotMismatch)?;
-            let event_id = b.id()?;
-            b.event(
-                v2::EntryEvent {
-                    id: event_id,
-                    identity: entry.identity.clone(),
-                    parents: entry.heads.clone(),
-                    effect: v2::Effect::Move {
-                        location: location(path, entries)?,
-                    },
-                },
-                false,
-            )?;
-        }
-        Mutation::Delete { .. } => {
-            for member in deleted_members(request, entries) {
-                let entry = view
-                    .namespace
-                    .entries
-                    .get(&member.id)
-                    .ok_or(Error::SnapshotMismatch)?;
-                let event_id = b.id()?;
-                b.event(
-                    v2::EntryEvent {
-                        id: event_id,
-                        identity: entry.identity.clone(),
-                        parents: entry.heads.clone(),
-                        effect: v2::Effect::Delete,
-                    },
-                    true,
-                )?;
-            }
-        }
+        _ => None,
+    };
+    let (events, text_context) = namespace_events(
+        request,
+        entries,
+        &view,
+        mode,
+        &need,
+        allocation,
+        binary_manifest.as_ref(),
+        || b.id(),
+    )?;
+    for (event, delete) in events {
+        b.event(event, delete)?;
     }
     // The staging version is never persisted. Text activity makes the final
     // graph transition to the single allocated graph revision below.
@@ -813,43 +968,16 @@ pub fn plan_mutation(
         graph.activities().clone(),
     )?;
     let (next_graph, text) = if let Some(context) = text_context {
-        let ta = allocation.text.as_ref().ok_or(Error::InvalidAllocation)?;
-        let initial;
-        let state = if let Some(new) = &ta.new_text {
-            initial = TextState::empty(
-                TextIdentity {
-                    realm_id: graph.scope().realm_id.clone(),
-                    vault_id: graph.scope().vault_id.clone(),
-                    entry_id: request.mutation.id().clone(),
-                    bootstrap_id: new.bootstrap_id.clone(),
-                },
-                new.empty_revision.clone(),
-            );
-            &initial
-        } else {
-            text_state.ok_or(Error::SnapshotMismatch)?
-        };
-        let bytes = match &request.mutation {
-            Mutation::Create {
-                content: Some(bytes),
-                ..
-            }
-            | Mutation::Write { content: bytes, .. } => bytes,
-            _ => return Err(Error::InvalidMode),
-        };
         let update_id = b.ids.next().cloned().ok_or(Error::InvalidAllocation)?;
-        let authored = zorid_client_sync::v2::plan_replace_text(
-            state,
-            bytes,
-            &AuthorRequest {
-                expected_version: state.version.clone(),
-                next_version: allocation.metadata_revision.clone(),
-                update_id,
-                actor: ta.actor.clone(),
-                edits: vec![],
-            },
+        let authored = author_text(
+            graph.scope(),
+            request,
+            text_state,
+            allocation,
             &context,
+            update_id,
         )?;
+        let ta = allocation.text.as_ref().ok_or(Error::InvalidAllocation)?;
         let graph_plan = v2::plan_authored_text_activity(
             &stage,
             authored.activity(),
@@ -871,30 +999,11 @@ pub fn plan_mutation(
         return Err(Error::InvalidAllocation);
     }
     let final_view = next_graph.view()?;
-    // Local commands may never author unresolved causality or a namespace result
-    // different from the metadata operation the user actually requested.
-    for file in &b.authored {
-        if final_view.namespace.pending.contains(&file.update_id) {
-            return Err(crate::Error::InvalidCausality.into());
-        }
-    }
-    for change in &changes {
-        let entry = final_view
-            .namespace
-            .entries
-            .get(&change.after.id)
-            .ok_or(Error::SnapshotMismatch)?;
-        let expected = if change.after.deleted {
-            Projection::Tombstone
-        } else {
-            Projection::Normal {
-                path: change.after.path.clone(),
-            }
-        };
-        if entry.kind != change.after.kind || entry.projection != expected {
-            return Err(Error::SnapshotMismatch);
-        }
-    }
+    validate_namespace_result(
+        &final_view,
+        b.authored.iter().map(|file| &file.update_id),
+        &changes,
+    )?;
     let mut expected_entries = entries.to_vec();
     expected_entries.sort_by(|a, b| a.id.cmp(&b.id));
     let mut allocated_update_ids = allocation.update_ids.clone();

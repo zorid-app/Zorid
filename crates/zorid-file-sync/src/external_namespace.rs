@@ -3,6 +3,8 @@
 //! path observations, and atomically compares those witnesses plus the graph before
 //! persisting these exact payloads. Valid graph history alone is NOT physical proof.
 //! No filesystem access, current-descendant expansion, text mutation or receipt here.
+use crate::metadata::MetadataState;
+use crate::metadata_plan::{prepare_authored_batch, AuthoredMetadataBatch, MetadataCandidate};
 use crate::{
     mutation::AuthoredFile, v2, EntryIdentity, Error, Family, Liveness, Location, Result,
     MAX_EVENTS, MAX_PARENTS, MAX_RECORDS,
@@ -64,6 +66,60 @@ impl Plan {
     }
 }
 
+/// Namespace-only payloads plus an unverified metadata candidate. Physical
+/// baselines remain independent immutable host witnesses; finalization requires
+/// the exact candidate's complete retained binary verification set.
+#[derive(Debug)]
+pub struct MetadataNamespacePlan {
+    expected_baselines: Vec<PhysicalNamespaceBaseline>,
+    authored: Vec<AuthoredFile>,
+    allocated_update_ids: Vec<UpdateId>,
+    candidate: MetadataCandidate,
+}
+impl MetadataNamespacePlan {
+    pub fn expected_baselines(&self) -> &[PhysicalNamespaceBaseline] {
+        &self.expected_baselines
+    }
+    pub fn authored(&self) -> &[AuthoredFile] {
+        &self.authored
+    }
+    pub fn allocated_update_ids(&self) -> &[UpdateId] {
+        &self.allocated_update_ids
+    }
+    pub fn candidate(&self) -> &MetadataCandidate {
+        &self.candidate
+    }
+    pub fn check_preconditions(
+        &self,
+        state: &MetadataState,
+        baselines: &[PhysicalNamespaceBaseline],
+        all_update_ids_unused: bool,
+    ) -> Result<()> {
+        if state != self.candidate.expected_state() || baselines != self.expected_baselines {
+            return Err(Error::VersionConflict);
+        }
+        if !all_update_ids_unused {
+            return Err(Error::DuplicateMismatch);
+        }
+        Ok(())
+    }
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<PhysicalNamespaceBaseline>,
+        Vec<AuthoredFile>,
+        Vec<UpdateId>,
+        MetadataCandidate,
+    ) {
+        (
+            self.expected_baselines,
+            self.authored,
+            self.allocated_update_ids,
+            self.candidate,
+        )
+    }
+}
+
 /// Validate canonical saved frontiers against actual retained historical events.
 /// This proves their same-entry bootstrap, kind, liveness and selected location;
 /// it cannot prove the supplied physical revision/path ever reached the disk.
@@ -78,6 +134,31 @@ fn validated_locations(
     graph: &v2::State,
     baselines: &[PhysicalNamespaceBaseline],
 ) -> Result<BTreeMap<EntryId, Location>> {
+    validate_baseline_order(baselines)?;
+    let (_, ancestry) = graph.view_and_ancestry()?;
+    validated_locations_from_ancestry(&ancestry, baselines)
+}
+
+/// Metadata-only validation of the same historical physical namespace cuts.
+/// Missing binary data does not invalidate a saved namespace frontier; complete
+/// binary content still requires verification before the host commits a plan.
+pub fn validate_metadata_baselines(
+    graph: &MetadataState,
+    baselines: &[PhysicalNamespaceBaseline],
+) -> Result<()> {
+    metadata_locations(graph, baselines).map(|_| ())
+}
+
+fn metadata_locations(
+    graph: &MetadataState,
+    baselines: &[PhysicalNamespaceBaseline],
+) -> Result<BTreeMap<EntryId, Location>> {
+    validate_baseline_order(baselines)?;
+    let (_, ancestry) = graph.view_and_ancestry()?;
+    validated_locations_from_ancestry(&ancestry, baselines)
+}
+
+fn validate_baseline_order(baselines: &[PhysicalNamespaceBaseline]) -> Result<()> {
     if baselines.is_empty() || baselines.len() > MAX_EVENTS {
         return Err(Error::TooLarge);
     }
@@ -87,7 +168,13 @@ fn validated_locations(
     {
         return Err(Error::InvalidState);
     }
-    let (_, ancestry) = graph.view_and_ancestry()?;
+    Ok(())
+}
+
+fn validated_locations_from_ancestry(
+    ancestry: &crate::GraphAncestry,
+    baselines: &[PhysicalNamespaceBaseline],
+) -> Result<BTreeMap<EntryId, Location>> {
     let mut paths = BTreeSet::new();
     let mut indexed = BTreeMap::new();
     for baseline in baselines {
@@ -134,10 +221,12 @@ fn validated_locations(
             }
         }
     }
-    let historical = crate::derive_graph(
-        &crate::State::empty(graph.scope().clone(), graph.version().clone()),
-        historical,
-    )?;
+    let (historical, _) = crate::derive_graph_with_status(historical, |manifest| {
+        manifest.validate()?;
+        Ok(crate::ContentStatus {
+            missing: manifest.pages.iter().map(|page| page.id.clone()).collect(),
+        })
+    })?;
     let mut locations = BTreeMap::new();
     for baseline in baselines {
         let entry = historical
@@ -179,6 +268,152 @@ pub fn plan_external_namespace(
     if &allocation.next_revision == graph.version() {
         return Err(Error::VersionConflict);
     }
+    let (_, ancestry) = graph.view_and_ancestry()?;
+    let reserved = reserved_namespace_ids(
+        &ancestry,
+        graph.records().iter().map(|(id, record)| {
+            (
+                id,
+                match &record.body {
+                    v2::Body::Page { page } => Some(page),
+                    _ => None,
+                },
+            )
+        }),
+    );
+    let authored = authored_namespace(
+        graph.scope(),
+        baselines,
+        &locations,
+        action,
+        allocation,
+        graph.records().len() + graph.activities().len(),
+        |id| reserved.contains(id),
+    )?;
+    let mut records = graph.records().clone();
+    for file in &authored {
+        records.insert(
+            file.update_id.clone(),
+            v2::Payload::decode(&file.payload_bytes)?,
+        );
+    }
+    let next_graph = v2::State::from_records(
+        graph.scope().clone(),
+        allocation.next_revision.clone(),
+        records,
+        graph.activities().clone(),
+    )?;
+    let view = next_graph.view()?;
+    if allocation
+        .update_ids
+        .iter()
+        .any(|id| view.namespace.pending.contains(id))
+    {
+        return Err(Error::InvalidCausality);
+    }
+    Ok(Plan {
+        expected_graph: graph.clone(),
+        expected_baselines: baselines.to_vec(),
+        next_graph,
+        authored,
+        allocated_update_ids: allocation.update_ids.clone(),
+    })
+}
+
+/// Prepare external namespace authorship against the saved physical frontier,
+/// retaining only metadata and bounded Move/Delete payloads. No current remote
+/// descendants or current heads are substituted for captured physical witnesses.
+pub fn prepare_metadata_namespace(
+    graph: &MetadataState,
+    baselines: &[PhysicalNamespaceBaseline],
+    action: &ExternalNamespaceAction,
+    allocation: &Allocation,
+) -> Result<MetadataNamespacePlan> {
+    let locations = metadata_locations(graph, baselines)?;
+    if &allocation.next_revision == graph.version() {
+        return Err(Error::VersionConflict);
+    }
+    let (_, ancestry) = graph.view_and_ancestry()?;
+    let reserved = reserved_namespace_ids(
+        &ancestry,
+        graph.records().iter().map(|(id, record)| {
+            (
+                id,
+                match record.body() {
+                    crate::metadata::GraphRecordBody::Page { page } => Some(page),
+                    _ => None,
+                },
+            )
+        }),
+    );
+    let authored = authored_namespace(
+        graph.scope(),
+        baselines,
+        &locations,
+        action,
+        allocation,
+        graph.records().len() + graph.activities().len(),
+        |id| reserved.contains(id),
+    )?;
+    let mut batch = AuthoredMetadataBatch::new(graph.scope().clone());
+    for file in &authored {
+        batch.push_exact(&file.payload_bytes)?;
+    }
+    let candidate = prepare_authored_batch(graph, batch, allocation.next_revision.clone())?;
+    Ok(MetadataNamespacePlan {
+        expected_baselines: baselines.to_vec(),
+        authored,
+        allocated_update_ids: allocation.update_ids.clone(),
+        candidate,
+    })
+}
+
+// A missing dependency still reserves its identity. Earlier external planning
+// checked only present rows/events, allowing a fresh same-entry local event to
+// impersonate a missing remote parent. Match local-command allocation fences on
+// both namespace paths and reject every observed role/reference before emission.
+fn reserved_namespace_ids<'a>(
+    ancestry: &crate::GraphAncestry,
+    records: impl Iterator<Item = (&'a UpdateId, Option<&'a crate::ChunkPage>)>,
+) -> BTreeSet<UpdateId> {
+    let mut reserved = BTreeSet::new();
+    for (id, page) in records {
+        reserved.insert(id.clone());
+        if let Some(page) = page {
+            reserved.extend(page.chunks.iter().map(|chunk| chunk.id.clone()));
+        }
+    }
+    for event in ancestry.events.values() {
+        reserved.insert(event.id.clone());
+        reserved.insert(event.identity.bootstrap_id.clone());
+        reserved.extend(event.parents.iter().cloned());
+        match &event.effect {
+            crate::GraphEffect::Create {
+                content: Some(manifest),
+                ..
+            }
+            | crate::GraphEffect::SetContent { content: manifest } => {
+                reserved.extend(manifest.pages.iter().map(|page| page.id.clone()));
+            }
+            crate::GraphEffect::CreateText { binding, .. }
+            | crate::GraphEffect::TextActivity { binding } => {
+                reserved.insert(binding.text_bootstrap_id.clone());
+            }
+            _ => (),
+        }
+    }
+    reserved
+}
+
+fn authored_namespace(
+    scope: &crate::Scope,
+    baselines: &[PhysicalNamespaceBaseline],
+    locations: &BTreeMap<EntryId, Location>,
+    action: &ExternalNamespaceAction,
+    allocation: &Allocation,
+    existing_records: usize,
+    mut id_occupied: impl FnMut(&UpdateId) -> bool,
+) -> Result<Vec<AuthoredFile>> {
     let (root, moving) = match action {
         ExternalNamespaceAction::Move { root, target } => {
             target.validate()?;
@@ -219,18 +454,15 @@ pub fn plan_external_namespace(
     }
     let count = if moving { 1 } else { baselines.len() };
     if allocation.update_ids.len() != count
-        || graph.records().len() + graph.activities().len() + count > MAX_RECORDS
+        || existing_records
+            .checked_add(count)
+            .is_none_or(|total| total > MAX_RECORDS)
     {
         return Err(Error::TooLarge);
     }
-    let (_, ancestry) = graph.view_and_ancestry()?;
     let mut unused = BTreeSet::new();
     for id in &allocation.update_ids {
-        if !unused.insert(id)
-            || graph.records().contains_key(id)
-            || graph.activities().contains_key(id)
-            || ancestry.events.contains_key(id)
-        {
+        if !unused.insert(id) || id_occupied(id) {
             return Err(Error::DuplicateMismatch);
         }
     }
@@ -239,7 +471,6 @@ pub fn plan_external_namespace(
     } else {
         baselines.iter().collect()
     };
-    let mut records = graph.records().clone();
     let mut authored = Vec::with_capacity(count);
     for (baseline, update_id) in affected.into_iter().zip(&allocation.update_ids) {
         let effect = match action {
@@ -251,7 +482,7 @@ pub fn plan_external_namespace(
         let payload = v2::Payload {
             family: Family::Files,
             format_version: v2::FORMAT_VERSION,
-            scope: graph.scope().clone(),
+            scope: scope.clone(),
             id: update_id.clone(),
             body: v2::Body::Events {
                 events: vec![v2::EntryEvent {
@@ -263,35 +494,18 @@ pub fn plan_external_namespace(
             },
         };
         let payload_bytes = payload.encode()?;
-        records.insert(update_id.clone(), payload);
         authored.push(AuthoredFile {
             update_id: update_id.clone(),
             payload_bytes,
         });
     }
-    let next_graph = v2::State::from_records(
-        graph.scope().clone(),
-        allocation.next_revision.clone(),
-        records,
-        graph.activities().clone(),
-    )?;
-    let view = next_graph.view()?;
-    if allocation
-        .update_ids
-        .iter()
-        .any(|id| view.namespace.pending.contains(id))
-    {
-        return Err(Error::InvalidCausality);
-    }
-    Ok(Plan {
-        expected_graph: graph.clone(),
-        expected_baselines: baselines.to_vec(),
-        next_graph,
-        authored,
-        allocated_update_ids: allocation.update_ids.clone(),
-    })
+    Ok(authored)
 }
 
 #[cfg(test)]
 #[path = "external_namespace_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "metadata_external_namespace_tests.rs"]
+mod metadata_tests;

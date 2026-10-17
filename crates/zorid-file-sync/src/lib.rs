@@ -16,6 +16,7 @@ pub mod external_namespace;
 pub mod materialization;
 pub mod metadata;
 pub mod metadata_plan;
+pub mod metadata_mutation;
 pub mod reference_materialization;
 pub mod mutation;
 pub mod v2;

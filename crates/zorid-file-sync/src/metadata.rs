@@ -171,6 +171,11 @@ pub struct MetadataView {
     view: v2::VaultView,
 }
 impl MetadataView {
+    /// Crate-internal namespace/binding view only. This does not establish
+    /// complete content or provide a public unverified publication conversion.
+    pub(crate) fn as_v2(&self) -> &v2::VaultView {
+        &self.view
+    }
     pub fn namespace(&self) -> &crate::VaultView {
         &self.view.namespace
     }
@@ -300,16 +305,22 @@ impl MetadataState {
         Ok(Sha256Digest(writer.0.finalize().into()))
     }
     pub fn metadata_view(&self) -> Result<MetadataView> {
+        self.view_and_ancestry().map(|(view, _)| view)
+    }
+    pub(crate) fn view_and_ancestry(&self) -> Result<(MetadataView, crate::GraphAncestry)> {
         let (events, mut content_bindings) = self.graph_inputs()?;
-        let (namespace, _) =
+        let (namespace, ancestry) =
             crate::derive_graph_with_status(events, |manifest| self.content_status(manifest))?;
         content_bindings.retain(|id, _| namespace.entries.contains_key(id));
-        Ok(MetadataView {
-            view: v2::VaultView {
-                namespace,
-                content_bindings,
+        Ok((
+            MetadataView {
+                view: v2::VaultView {
+                    namespace,
+                    content_bindings,
+                },
             },
-        })
+            ancestry,
+        ))
     }
     pub fn binary_content_ref(
         &self,

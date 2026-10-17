@@ -83,7 +83,7 @@ impl PreparedBinaryMutation {
     }
 }
 
-fn known_entry(state: &MetadataState, id: &EntryId) -> bool {
+pub(crate) fn known_entry(state: &MetadataState, id: &EntryId) -> bool {
     state.records().values().any(|record| match record.body() {
         GraphRecordBody::Events { events } | GraphRecordBody::ObservedDelete { events } => {
             events.iter().any(|event| &event.identity.entry_id == id)
@@ -97,7 +97,7 @@ fn known_entry(state: &MetadataState, id: &EntryId) -> bool {
 
 // Allocate outside every observed historical/future reference, not just rows
 // present now. Otherwise local authorship could impersonate a missing remote ID.
-fn reserved_ids(state: &MetadataState) -> BTreeSet<UpdateId> {
+pub(crate) fn reserved_ids(state: &MetadataState) -> BTreeSet<UpdateId> {
     let mut ids = BTreeSet::new();
     for (id, record) in state.records() {
         ids.insert(id.clone());

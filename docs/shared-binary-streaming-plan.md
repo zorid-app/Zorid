@@ -525,3 +525,73 @@ mapper regressions are written but unrun. Store activation dependencies remain:
 operation-bound stage lookup, immutable source pins, historical revision/ID
 allocation fences, a metadata-only core helper with ancestor revisions, and one
 atomic metadata/graph/outbox/receipt transaction. No active client path changed.
+
+
+At exact clean mapper source `a661bf7`, root's next exclusive single-job file-sync
+gate (process50222) exited0:97/97 tests passed, including6 mapper cases. Compile
+4.24s, tests3.67s; command/target as the previous gates. No source changed during
+the gate and the heavy slot was released. This completes the scoped portable
+candidate/classifier/eventmapper gate; no active store/native/browser/desktop
+streaming or protobuf sync implementation is implied.
+
+Root assigned the core metadata-only helper to `text_limit_contract` in new Orca
+worktree `core-content-target`, branch `tingkai-c/core-content-target`, current-main
+base`2ad1712`. Agreed additive API: FileContentTarget Create{id,path}/Write{id,expected}
+and plan_file_content_mutation(target,entries,next_revision), sharing Snapshot's
+Create/Write validation and ancestor revision logic with existing core APIs.
+It neither carries content nor authorizes an operation receipt. Its source/review/
+verification is tracked separately; no core edits were made in this worktree.
+
+
+Core helper source is now frozen `e7827b0c53e7844107ab0b18444ec92103b86d66`
+(three files in `core-content-target`, clean). Independent coordinator review
+approved the shared Create extraction and unchanged Write materialization path.
+Six focused tests cover deterministic ancestor changes, stale/missing/deleted/
+folder targets, path/identity collisions, fresh revision reuse and malformed
+snapshots. Tests remain unrun pending root's heavy-slot release. STORE owner has
+the exact API/commit for its separately assigned source-only activation plan;
+this portable branch does not change store receipts or activate streaming.
+
+
+### General command and external namespace metadata plans — source freeze
+
+STORE found that Move/Delete/Folder/Text still required full legacy State even
+beside a large Binary. Root assigned this followup to the portable owner, with
+STORE/native API agreement before edits. New `metadata_mutation` requirements and
+prepare_mutation accept the original bounded inline command and MetadataState;
+inline Binary Create/Write explicitly reject and use the staged mapper instead.
+The result retains expected entries, core changes, allocated IDs, bounded
+namespace-only authored rows, optional existing TextChange and MetadataCandidate.
+Validation, allocation, namespace event mapping, Text authoring and final
+namespace checks are shared with the existing legacy command planner. The modern
+path never creates a legacy State or loads retained binary payloads. CreateText's
+namespace event and exact TextActivity enter one candidate. Six source fixtures
+compare exact core changes, namespace payloads and Text plans against legacy,
+plus stale/coverage/allocation/backing-loss rejection. Independent text worker
+source review approved this module and shared extraction; tests are unrun.
+
+Additive external_namespace validate_metadata_baselines and
+prepare_metadata_namespace preserve historical immutable physical frontier cuts,
+root-only Move, captured Delete membership and unseen remote activity. Metadata
+join_physical_move_frontier shares the old pure ancestry algorithm; current equal
+bytes never replace a historical selected-event/physical frontier witness. The
+shared external allocator now also reserves every observed missing parent/page/
+chunk/bootstrap ID, closing possible local impersonation of a pending remote ID.
+Thirteen source fixtures compare legacy/metadata behavior, including compound
+move/delete, current Recovery/Tombstone, future pending work and binary
+move-away/back causal witnesses. Coordinator source review approved these files.
+No source test/build has run for this followup.
+
+Compound external commands collect bounded emitted namespace rows into one batch
+against the ORIGINAL durable graph and final graph revision, then verify/finalize
+that combined candidate. They preserve every original physical baseline CAS and
+commit graph, source pins, metadata, bindings, operation receipt and cursor once;
+transient subplans must never be independently published. Root explicitly retains
+the existing binary stale-disk conflict policy: captured alternatives remain
+recoverable Capture sources, not newly authored branches against latest content.
+No expanded binary conflict semantics, new wire encoding, receipt substitution
+or hidden all-chunk fallback is permitted by this phase.
+
+Separately, core helper `e7827b0` gate33112 exited0:6 new content_planning,
+12 existing planning and5 materialization tests (23 total), compile13.45s.
+The single-job shared-target slot was released to root's queued gRPC prototype.
