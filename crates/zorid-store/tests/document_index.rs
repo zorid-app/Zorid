@@ -770,3 +770,121 @@ fn checked_retained_projection_reports_exclusions_without_binary_bytes() {
         Err(DocumentIndexError::Contract(IndexError::MissingSource))
     ));
 }
+#[test]
+fn discarding_one_stale_stage_preserves_source_published_pins_and_other_stages() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .apply(&create("a", "a.md", b"needle committed"))
+        .unwrap();
+    store.initialize_document_index().unwrap();
+    let published = store.begin_document_index().unwrap();
+    store.pump_document_index(&published).unwrap();
+    store.publish_document_index(&published).unwrap();
+    let pin = store.open_document_snapshot().unwrap();
+    let stale = store.begin_document_index().unwrap();
+    store.pump_document_index(&stale).unwrap();
+    let other = store.begin_document_index().unwrap();
+    store.pump_document_index(&other).unwrap();
+    let mut writer = Store::open(&path).unwrap();
+    write(&mut writer, "edit", "a", b"needle changed");
+    let before_authority = authority(&path);
+    let db = Connection::open(&path).unwrap();
+    let discarded_key = format!(
+        "{}:{}",
+        stale.snapshot().generation_epoch().as_str(),
+        stale.snapshot().generation()
+    );
+    let remaining_cache = || {
+        let control: String = db
+            .query_row(
+                "SELECT record FROM document_index_control WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let headers = db.prepare("SELECT snapshot_key,record FROM document_index_generations WHERE snapshot_key<>?1 ORDER BY snapshot_key").unwrap().query_map([&discarded_key], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        let rows = db.prepare("SELECT snapshot_key,entry_id,record,text FROM document_index_rows WHERE snapshot_key<>?1 ORDER BY snapshot_key,entry_id").unwrap().query_map([&discarded_key], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<Vec<u8>>>(3)?))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        (control, headers, rows)
+    };
+    let before_cache = remaining_cache();
+    store
+        .discard_document_index_stage(stale.snapshot())
+        .unwrap();
+    store
+        .discard_document_index_stage(stale.snapshot())
+        .unwrap();
+    let rows: i64 = db
+        .query_row(
+            "SELECT count(*) FROM document_index_rows WHERE snapshot_key=?1",
+            [&discarded_key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let headers: i64 = db
+        .query_row(
+            "SELECT count(*) FROM document_index_generations WHERE snapshot_key=?1",
+            [&discarded_key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!((rows, headers), (0, 0));
+    assert_eq!(remaining_cache(), before_cache);
+    assert_eq!(authority(&path), before_authority);
+    assert!(matches!(
+        store.resume_document_index(other.snapshot()),
+        Err(DocumentIndexError::Contract(IndexError::StaleSource))
+    ));
+    assert!(matches!(
+        store.discard_document_index_stage(published.snapshot()),
+        Err(DocumentIndexError::Contract(IndexError::StaleIndex))
+    ));
+    assert_eq!(remaining_cache(), before_cache);
+    assert_eq!(
+        store
+            .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), None, 1)
+            .unwrap()
+            .hits[0]
+            .snippet,
+        "needle committed"
+    );
+    let foreign_path = dir.path().join("foreign");
+    let mut foreign = Store::open(&foreign_path).unwrap();
+    foreign.initialize_document_index().unwrap();
+    let foreign_before = authority(&foreign_path);
+    assert!(matches!(
+        foreign.discard_document_index_stage(other.snapshot()),
+        Err(DocumentIndexError::Contract(IndexError::StaleIndex))
+    ));
+    assert_eq!(authority(&foreign_path), foreign_before);
+    store.rebuild_document_index().unwrap();
+    let current = store.begin_document_index().unwrap();
+    store.pump_document_index(&current).unwrap();
+    let current_key = format!(
+        "{}:{}",
+        current.snapshot().generation_epoch().as_str(),
+        current.snapshot().generation()
+    );
+    let current_header: String = db
+        .query_row(
+            "SELECT record FROM document_index_generations WHERE snapshot_key=?1",
+            [&current_key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    store
+        .discard_document_index_stage(published.snapshot())
+        .unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT record FROM document_index_generations WHERE snapshot_key=?1",
+            [&current_key],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        current_header
+    );
+    assert!(store.resume_document_index(current.snapshot()).is_ok());
+    assert_eq!(authority(&path), before_authority);
+}

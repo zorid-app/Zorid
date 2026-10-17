@@ -770,6 +770,67 @@ impl Store {
         tx.commit()?;
         Ok(DocumentIndexStage { snapshot })
     }
+    /// Discard only this unpublished staging attempt, even after source/index
+    /// heads advance. The locator's actual store identity must match. Missing
+    /// attempts without retained rows, or expired epochs in a healthy same-store
+    /// cache, are no-ops;
+    /// retained published descriptors and the current published head reject.
+    pub fn discard_document_index_stage(&mut self, snapshot: &IndexSnapshotId) -> IndexResult<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if text_sync::identity(&tx)?.local_store_id != *snapshot.local_store_id() {
+            return Err(IndexError::StaleIndex.into());
+        }
+        let c = control(&tx)?;
+        if c.epoch != *snapshot.generation_epoch() {
+            tx.commit()?;
+            return Ok(());
+        }
+        if c.head.as_ref() == Some(&Snapshot::of(snapshot)) {
+            return Err(IndexError::StaleIndex.into());
+        }
+        if snapshot.generation() > c.allocated {
+            return Err(DocumentIndexError::RebuildRequired);
+        }
+        let key = Snapshot::of(snapshot).key();
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM document_index_generations WHERE snapshot_key=?1)",
+            [&key],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            let orphan_rows: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM document_index_rows WHERE snapshot_key=?1)",
+                [&key],
+                |r| r.get(0),
+            )?;
+            if orphan_rows {
+                return Err(DocumentIndexError::RebuildRequired);
+            }
+            tx.commit()?;
+            return Ok(());
+        }
+        let h = header(&tx, snapshot)?;
+        if h.published {
+            return Err(IndexError::StaleIndex.into());
+        }
+        // No source/head freshness fence: cleanup specifically accepts stale
+        // attempts. Exact descriptor identity is validated under this write Tx.
+        tx.execute(
+            "DELETE FROM document_index_rows WHERE snapshot_key=?1",
+            [&key],
+        )?;
+        if tx.execute(
+            "DELETE FROM document_index_generations WHERE snapshot_key=?1",
+            [&key],
+        )? != 1
+        {
+            return Err(DocumentIndexError::RebuildRequired);
+        }
+        tx.commit()?;
+        Ok(())
+    }
     /// Discover the most recent durable staging attempts after restart. Source
     /// changes can make an attempt stale; resume checks its publication fences.
     pub fn document_index_stages(&self) -> IndexResult<Vec<DocumentIndexStage>> {
