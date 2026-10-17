@@ -54,3 +54,9 @@ passed. Native sorting previously persisted Score ascending. Full visual pass
 was interrupted and remains incomplete. Source comparison to main `72208afe`
 found no overlapping source/test paths. Preserve both sessions' findings rows;
 core owns its separately resumed Rust durable-save seams and main integration.
+
+
+Practical native pass now completed; see `canvas-bases-native-check.md`.
+Reviewed batch is queued for sole main integrator, with bounded remaining
+resize/zoom/rich-block polish stated separately. No claim of main integration
+until the core coordinator confirms its commit.

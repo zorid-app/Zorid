@@ -124,6 +124,8 @@ User replaced the active task with Canvas edit-button hit ownership, consistent
 preview/Live rendering, smooth resizing and trackpad panning over cards, plus
 responsive functional Bases layout and controls. See `canvas-bases-ux-goal.md`.
 Reviewed implementations and scoped tests pass in `canvas-bases-ux-verify`;
-combined build/native checks and main integration remain pending. This scoped UI task does not resume the older fenced-Base work. The separate
+combined production build and short native practical pass now passed (see
+`canvas-bases-native-check.md`); main integration is queued. Broader native
+resize/zoom/rich-block polish remains unverified. This scoped UI task does not resume the older fenced-Base work. The separate
 core coordinator now owns the explicitly resumed Rust durable-save integration,
 including its NoteBuffer/workspace seams.
