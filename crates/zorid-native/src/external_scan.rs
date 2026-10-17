@@ -448,12 +448,20 @@ impl NativeVault {
                 });
             }
         }
+        self.paths.verify()?;
+        if started.elapsed() >= options.max_duration && scan.issues.is_empty() {
+            scan.issues.push(ScanIssue {
+                path: None,
+                reason: "external scan duration budget exhausted".into(),
+            });
+        }
         let complete = !stopped && stack.is_empty() && scan.issues.is_empty();
         scan.run = self.store.finish_scan(
             &id,
             complete,
             (!complete).then(|| "external scan incomplete; no namespace authority".into()),
         )?;
+        self.paths.verify()?;
         Ok(scan)
     }
 }

@@ -5,12 +5,35 @@ use std::collections::BTreeSet;
 use zorid_store::{ExternalNamespaceAction, ExternalNamespaceMember};
 
 impl NativeVault {
+    /// Only expected per-path conflicts become partial-report diagnostics. Root
+    /// and private-storage authority must still be intact before reporting one.
+    fn external_reconciliation_issue(&self, error: Error) -> Result<String> {
+        self.paths.verify()?;
+        let expected = match &error {
+            Error::Busy(_) | Error::Unsupported(_) => true,
+            Error::Store(error) => error.is_external_reconciliation_issue(),
+            Error::Contract(
+                zorid_core::ContractError::RevisionConflict { .. }
+                | zorid_core::ContractError::EntryNotFound { .. }
+                | zorid_core::ContractError::EntryDeleted { .. }
+                | zorid_core::ContractError::InvalidMutation { .. },
+            ) => true,
+            _ => false,
+        };
+        if expected {
+            Ok(error.to_string())
+        } else {
+            Err(error)
+        }
+    }
+
     pub fn reconcile_external(
         &mut self,
         options: ScanOptions,
         mode: ExternalFileMode,
     ) -> Result<ExternalReconcileReport> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.paths.verify()?;
         if !self.store.family_is_enrolled()? {
             return Err(Error::Unsupported(
                 "external family reconciliation requires enrollment",
@@ -84,7 +107,7 @@ impl NativeVault {
                 Ok(commit) => report.imported.push(commit),
                 Err(error) => report.issues.push(ScanIssue {
                     path: Some(path),
-                    reason: error.to_string(),
+                    reason: self.external_reconciliation_issue(error)?,
                 }),
             }
         }
@@ -246,7 +269,7 @@ impl NativeVault {
                 Ok(receipt) => report.namespace.push(receipt),
                 Err(error) => report.issues.push(ScanIssue {
                     path: Some(before.state.path.clone()),
-                    reason: error.to_string(),
+                    reason: self.external_reconciliation_issue(error)?,
                 }),
             }
         }
@@ -304,6 +327,23 @@ impl NativeVault {
                         Ok(None)
                     };
                 }
+                if let Some(parent_path) = path.parent() {
+                    let valid_parent =
+                        if let Some(binding) = self.store.physical_owner_at(&parent_path)? {
+                            binding.state.kind == EntryKind::Folder
+                                && binding.physical.inode == snapshot.parent_identity
+                                && self.store.list()?.iter().any(|entry| {
+                                    entry.id == binding.state.id && entry.path == parent_path
+                                })
+                        } else {
+                            false
+                        };
+                    if !valid_parent {
+                        return Err(Error::Busy(
+                            "external parent has no matching visible physical owner",
+                        ));
+                    }
+                }
                 if snapshot.kind == EntryKind::Folder {
                     self.observe_new_family_directory(
                         &path,
@@ -334,10 +374,11 @@ impl NativeVault {
                 Ok(None) => {}
                 Err(error) => report.issues.push(ScanIssue {
                     path: Some(path),
-                    reason: error.to_string(),
+                    reason: self.external_reconciliation_issue(error)?,
                 }),
             }
         }
+        self.paths.verify()?;
         report.complete = report.issues.is_empty();
         Ok(report)
     }

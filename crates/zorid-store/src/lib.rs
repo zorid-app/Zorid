@@ -240,6 +240,28 @@ impl fmt::Display for StoreError {
     }
 }
 impl std::error::Error for StoreError {}
+impl StoreError {
+    /// Expected per-entry divergence or bounded work. Corruption, decoding,
+    /// schema, SQL, identity and authentication failures are never diagnostics.
+    pub fn is_external_reconciliation_issue(&self) -> bool {
+        matches!(
+            self,
+            Self::Sync(
+                zorid_client_sync::SyncError::VersionConflict
+                    | zorid_client_sync::SyncError::TooLarge
+            ) | Self::FileSync(
+                zorid_file_sync::Error::VersionConflict
+                    | zorid_file_sync::Error::TooLarge
+                    | zorid_file_sync::Error::InvalidLocation
+            ) | Self::Contract(
+                ContractError::RevisionConflict { .. }
+                    | ContractError::EntryNotFound { .. }
+                    | ContractError::EntryDeleted { .. }
+                    | ContractError::InvalidMutation { .. }
+            )
+        )
+    }
+}
 impl From<rusqlite::Error> for StoreError {
     fn from(e: rusqlite::Error) -> Self {
         Self::Sql(e)

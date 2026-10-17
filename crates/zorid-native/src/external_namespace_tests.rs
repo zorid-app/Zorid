@@ -23,6 +23,57 @@ fn edit_after_namespace_prepared(point: &str) {
     }
 }
 
+fn corrupt_namespace_record_after_prepared(point: &str) {
+    if point == "external_namespace_prepared" {
+        PREPARED_EDIT_ROOT.with(|root| {
+            let sql = rusqlite::Connection::open(
+                root.borrow().as_ref().unwrap().join(".zorid/vault.sqlite"),
+            )
+            .unwrap();
+            assert_eq!(
+                sql.execute(
+                    "UPDATE family_external_namespace SET record='{' WHERE result IS NULL",
+                    [],
+                )
+                .unwrap(),
+                1
+            );
+        });
+    }
+}
+
+fn corrupt_graph_cache_after_prepared(point: &str) {
+    if point == "external_namespace_prepared" {
+        PREPARED_EDIT_ROOT.with(|root| {
+            let sql = rusqlite::Connection::open(
+                root.borrow().as_ref().unwrap().join(".zorid/vault.sqlite"),
+            )
+            .unwrap();
+            assert_eq!(
+                sql.execute(
+                    "UPDATE family_graph_heads SET record_count=record_count+1",
+                    [],
+                )
+                .unwrap(),
+                1
+            );
+        });
+    }
+}
+
+fn expose_private_directory_after_prepared(point: &str) {
+    if point == "external_namespace_prepared" {
+        use std::os::unix::fs::PermissionsExt;
+        PREPARED_EDIT_ROOT.with(|root| {
+            std::fs::set_permissions(
+                root.borrow().as_ref().unwrap().join(".zorid"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        });
+    }
+}
+
 fn path(value: &str) -> VaultPath {
     VaultPath::new(value).unwrap()
 }
@@ -829,12 +880,13 @@ fn external_namespace_receipt_failure_rolls_back_all_state_and_retries_same_obse
     sql.execute_batch(
         "CREATE TRIGGER fixture_abort_namespace_receipt BEFORE UPDATE OF result ON family_external_namespace WHEN NEW.result IS NOT NULL BEGIN SELECT RAISE(ABORT,'fixture namespace receipt abort'); END;",
     ).unwrap();
-    let report = reconcile(&mut vault);
-    assert!(!report.complete, "{report:?}");
-    assert!(report.run.complete);
-    assert!(!report.issues.is_empty());
-    assert!(report.namespace.is_empty());
-    assert!(report.imported.is_empty());
+    let error = vault
+        .reconcile_external(ScanOptions::default(), ExternalFileMode::Auto)
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Store(zorid_store::StoreError::Sql(_))),
+        "{error:?}"
+    );
     assert_eq!(
         vault.family_status().unwrap(),
         status,
@@ -1150,4 +1202,111 @@ fn external_namespace_binary_remote_move_away_and_back_blocks_external_edit() {
         current
     );
     assert_eq!(binding(&vault, &before.state.id), before);
+}
+
+#[test]
+fn external_namespace_prepared_invalid_json_is_fatal_and_never_authors() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    std::fs::write(root.path().join("before.md"), b"retained").unwrap();
+    complete(&mut vault);
+    let before = binding(&vault, &state_at(&vault, "before.md").id);
+    let authored = vault.family_pending_authored(None, 1000).unwrap().len();
+    std::fs::rename(root.path().join("before.md"), root.path().join("after.md")).unwrap();
+    PREPARED_EDIT_ROOT.with(|slot| *slot.borrow_mut() = Some(root.path().to_path_buf()));
+    vault.fault = Some(corrupt_namespace_record_after_prepared);
+    let result = vault.reconcile_external(ScanOptions::default(), ExternalFileMode::Auto);
+    vault.fault = None;
+    PREPARED_EDIT_ROOT.with(|slot| *slot.borrow_mut() = None);
+    let error = result.unwrap_err();
+    assert!(
+        matches!(error, Error::Store(zorid_store::StoreError::Json(_))),
+        "{error:?}"
+    );
+    assert_eq!(
+        vault.family_pending_authored(None, 1000).unwrap().len(),
+        authored
+    );
+    assert_eq!(binding(&vault, &before.state.id), before);
+    assert_eq!(namespace_rows(root.path()).len(), 1);
+    assert!(!namespace_rows(root.path())[0].1);
+    assert_eq!(
+        std::fs::read(root.path().join("after.md")).unwrap(),
+        b"retained"
+    );
+}
+
+#[test]
+fn external_namespace_prepared_corrupt_graph_cache_is_fatal_and_never_authors() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    std::fs::write(root.path().join("before.md"), b"retained").unwrap();
+    complete(&mut vault);
+    let before = binding(&vault, &state_at(&vault, "before.md").id);
+    let authored = vault.family_pending_authored(None, 1000).unwrap().len();
+    std::fs::rename(root.path().join("before.md"), root.path().join("after.md")).unwrap();
+    PREPARED_EDIT_ROOT.with(|slot| *slot.borrow_mut() = Some(root.path().to_path_buf()));
+    vault.fault = Some(corrupt_graph_cache_after_prepared);
+    let result = vault.reconcile_external(ScanOptions::default(), ExternalFileMode::Auto);
+    vault.fault = None;
+    PREPARED_EDIT_ROOT.with(|slot| *slot.borrow_mut() = None);
+    let error = result.unwrap_err();
+    assert!(
+        matches!(error, Error::Store(zorid_store::StoreError::Corrupt(_))),
+        "{error:?}"
+    );
+    assert_eq!(
+        vault.family_pending_authored(None, 1000).unwrap().len(),
+        authored
+    );
+    assert_eq!(binding(&vault, &before.state.id), before);
+    assert_eq!(namespace_rows(root.path()).len(), 1);
+    assert!(!namespace_rows(root.path())[0].1);
+    assert_eq!(
+        std::fs::read(root.path().join("after.md")).unwrap(),
+        b"retained"
+    );
+}
+
+#[test]
+fn external_namespace_prepared_private_permission_change_is_fatal_and_retryable() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    std::fs::write(root.path().join("before.md"), b"retained").unwrap();
+    complete(&mut vault);
+    let before = binding(&vault, &state_at(&vault, "before.md").id);
+    let authored = vault.family_pending_authored(None, 1000).unwrap().len();
+    std::fs::rename(root.path().join("before.md"), root.path().join("after.md")).unwrap();
+    let permissions = std::fs::metadata(root.path().join(".zorid"))
+        .unwrap()
+        .permissions();
+    PREPARED_EDIT_ROOT.with(|slot| *slot.borrow_mut() = Some(root.path().to_path_buf()));
+    vault.fault = Some(expose_private_directory_after_prepared);
+    let result = vault.reconcile_external(ScanOptions::default(), ExternalFileMode::Auto);
+    vault.fault = None;
+    std::fs::set_permissions(root.path().join(".zorid"), permissions).unwrap();
+    PREPARED_EDIT_ROOT.with(|slot| *slot.borrow_mut() = None);
+    assert_eq!(
+        std::fs::metadata(root.path().join(".zorid"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o077,
+        0
+    );
+    let error = result.unwrap_err();
+    assert!(matches!(error, Error::UnsafePath(_)), "{error:?}");
+    assert_eq!(
+        vault.family_pending_authored(None, 1000).unwrap().len(),
+        authored
+    );
+    assert_eq!(binding(&vault, &before.state.id), before);
+    let rows = namespace_rows(root.path());
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].1);
+    let retry = complete(&mut vault);
+    assert_eq!(retry.namespace.len(), 1);
+    assert_eq!(retry.namespace[0].observation_id, rows[0].0);
+    assert_file(&vault, &before.state.id, "after.md", b"retained");
 }
