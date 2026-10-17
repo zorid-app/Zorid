@@ -141,3 +141,71 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
     },
   };
 }
+
+export interface DocumentIndexProgress {readonly phase:'initialize'|'rebuild'|'indexing'|'publish';readonly prepared?:number;readonly total?:number}
+export interface CatchUpDocumentOptions {readonly isCurrent:()=>boolean;readonly onProgress?:(progress:DocumentIndexProgress)=>void;readonly maxPumps?:number;readonly maxRestarts?:number}
+interface Maintenance {stage?:DocumentStage;running?:Promise<DocumentStatus>;rebuildAttempted:boolean;listeners:Set<CatchUpDocumentOptions>}
+const maintenance=new WeakMap<DocumentService,Maintenance>();
+const cancelled=()=>new DocumentSemanticsError('document_request_cancelled');
+const staleCodes=new Set(['stale_source','stale_index','source_changed','index_source_changed','index_head_changed']);
+const rebuildCodes=new Set(['rebuild_required','index_rebuild_required']);
+/** One maintenance owner per service; every caller owns only its UI continuation.
+ * Partial stages survive bounded returns and cancellation. No pin is opened,
+ * closed or silently replaced. A rebuild explicitly invalidates existing pins. */
+export async function catchUpDocumentIndex(service:DocumentService,options:CatchUpDocumentOptions):Promise<DocumentStatus>{
+  if(!options.isCurrent())throw cancelled();
+  const pumps=options.maxPumps??8,restarts=options.maxRestarts??1;
+  if(!Number.isInteger(pumps)||pumps<1||pumps>128||!Number.isInteger(restarts)||restarts<0||restarts>2)throw new DocumentSemanticsError('invalid_request');
+  let state=maintenance.get(service);if(!state){state={rebuildAttempted:false,listeners:new Set()};maintenance.set(service,state);}
+  const owned=state;owned.listeners.add(options);
+  const active=()=>{if(![...owned.listeners].some(listener=>listener.isCurrent()))throw cancelled();};
+  const progress=(value:DocumentIndexProgress)=>{for(const listener of owned.listeners)if(listener.isCurrent())listener.onProgress?.(value);};
+  const step=async<T>(action:()=>Promise<T>):Promise<T>=>{active();const result=await action();active();return result;};
+  if(!owned.running){
+    owned.running=(async()=>{
+      let attempts=0,used=0;
+      for(;;){
+        try{
+          let status=await step(()=>service.status());
+          if(status.current){owned.rebuildAttempted=false;return status;}
+          if(status.rebuildRequired){
+            if(owned.rebuildAttempted)throw new DocumentSemanticsError('rebuild_required');
+            owned.rebuildAttempted=true;progress({phase:'rebuild'});await step(()=>service.rebuild());owned.stage=undefined;
+            status=await step(()=>service.status());
+            if(status.rebuildRequired)throw new DocumentSemanticsError('rebuild_required');
+          }
+          if(!status.snapshot&&!owned.stage){progress({phase:'initialize'});await step(()=>service.initialize());}
+          if(!owned.stage)owned.stage=await step(()=>service.begin());
+          while(used<pumps){
+            if(!owned.stage.progress?.ready){
+              // Assign the returned checkpoint before checking caller liveness;
+              // a cancelled subscriber cannot lose the helper's known stage.
+              active();owned.stage=await service.pump(owned.stage.stageId);active();used++;
+              const p=owned.stage.progress;progress({phase:'indexing',...(p?{prepared:p.prepared,total:p.total}:{})});
+            }
+            if(owned.stage.progress?.ready){
+              progress({phase:'publish'});active();await service.publish(owned.stage.stageId);owned.stage=undefined;active();
+              const result=await step(()=>service.status());if(result.current)owned.rebuildAttempted=false;return result;
+            }
+            await step(()=>new Promise<void>(resolve=>setTimeout(resolve,0)));
+          }
+          return await step(()=>service.status());
+        }catch(error){
+          const code=documentErrorCode(error);
+          if(code&&staleCodes.has(code)&&attempts<restarts){
+            if(owned.stage){active();await service.discard(owned.stage.stageId);owned.stage=undefined;active();}
+            attempts++;await step(()=>new Promise<void>(resolve=>setTimeout(resolve,0)));continue;
+          }
+          // Corruption reported by a bounded operation is handled once by the
+          // same visible policy as a status report; source motion never resets.
+          if(code&&rebuildCodes.has(code)&&!owned.rebuildAttempted){
+            owned.rebuildAttempted=true;progress({phase:'rebuild'});await step(()=>service.rebuild());owned.stage=undefined;continue;
+          }
+          throw error;
+        }
+      }
+    })().finally(()=>{owned.running=undefined;});
+  }
+  try{const result=await owned.running;if(!options.isCurrent())throw cancelled();return result;}
+  finally{owned.listeners.delete(options);}
+}
