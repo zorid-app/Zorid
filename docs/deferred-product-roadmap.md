@@ -116,6 +116,31 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Mainab64af0 now integrates the coherent browser-default/desktop-diagnostic/menu
+  batch. src/desktop/crates/scripts/build configs are identical to aggregate
+  ebbcc22. Normal-browser actual evidence is in browser-normal-verification.md:
+  no-query startup/save/reload, nested create/title rename/trash/reload,
+  competing-tab retained draft/recovery-copy reload and duplicate-tab fencing.
+  Undo/selection passed; IME/binary import/forced browser crash remain unproved.
+  Agent browser tabs/server closed. Desktop diagnostic actual evidence above
+  remains applicable; its source is now main14620da+c3297e0+7ede17e.
+- Cached desktop production gate35651 passed6.787sec after menu fix. Copied
+  matching tested CLI/host and renderer into ignored main artifacts; provenance
+  target/debug/zorid-build-provenance.json records per-binary source/hash.
+  Host2192d5926169de4939341420ca260e15f00ffc2d259b0126c5bd744e7d39942c;
+  renderer main.8b902e9bbe49f990cd13.js hash
+  d9f64be6ae8cdbf3bcdd7e3a9fa5d99cd8dbe232e76491d7fc026295994acbd7.
+  Artifact copy first hit an index-script parsing error after files copied;
+  repaired using HTMLParser and wrote the correct complete provenance. No app
+  running after verification. Heavy slot returned to native progress owner.
+- User asks whether Markdown indexing/search is being built and reused. Rust
+  semantics/index implementation has not started; this remains wave4, after the
+  current storage gate. CLI literal committed-text search is a small immediate
+  headless capability. Existing completed source reuse assessment already covers
+  pulldown-cmark/Comrak, SQLiteFTS5 and MDBASE evaluator extraction; none adopted
+  or runtime-evaluated yet. Preserve the reuse-first gate, not a custom parser/
+  search engine implementation by default. Root rechecked local assessment and
+  current primary upstream docs on2026-10-17; no new dependencies installed.
 - Maina1eb831 integrates standalone CLI search/watch (cf807b6+ a1eb831),
   independently reviewed with10 scoped local-process/relay checks. CLI/native/
   store/lock sources exactly match tested0f03894; copied tested CLI into main
