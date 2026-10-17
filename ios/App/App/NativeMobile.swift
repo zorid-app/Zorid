@@ -125,6 +125,7 @@ final class NativeMobileSession {
     }
 
     static func open(vault: LocalVault, root: URL, completion: @escaping (Result<NativeMobileSession, Error>) -> Void) {
+        let timer = NativePhaseTimer()
         worker.async {
             var error = ZoridBuffer(data: nil, len: 0)
             let pointer = root.path.withCString { zorid_mobile_open($0, &error) }
@@ -142,6 +143,7 @@ final class NativeMobileSession {
             } else {
                 result = .failure(MobileFailure.unavailable)
             }
+            timer.finish(.open)
             DispatchQueue.main.async { completion(result) }
         }
     }
@@ -156,6 +158,7 @@ final class NativeMobileSession {
     }
 
     func refresh(completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        let timer = NativePhaseTimer()
         Self.worker.async {
             let result: Result<[String: Any], Error>
             do {
@@ -168,6 +171,7 @@ final class NativeMobileSession {
                 // Retain the last validated state on failure; never fabricate ready.
                 result = .failure(MobileFailure.unavailable)
             }
+            timer.finish(.refresh)
             DispatchQueue.main.async { completion(result) }
         }
     }
@@ -306,6 +310,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             super.addListener(call)
             if call.getString("eventName") == "editorAction" { currentEditorState = .inactive }
             publishEditorState()
+            if call.getString("eventName") == "editorStateRequest" { requestForegroundEditorState() }
         }
         else { DispatchQueue.main.sync { self.addListener(call) } }
     }
@@ -358,6 +363,15 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     fileprivate func resetEditorState() {
         currentEditorState = .inactive
         publishEditorState()
+    }
+
+    fileprivate func requestForegroundEditorState() {
+        guard UIApplication.shared.applicationState == .active, !closeAuthorized else { return }
+        // Background checkpoints retain the workspace. Cancel only that pending
+        // request; successful switch ACK ownership must never be revoked here.
+        if pending?.reason == "background" { cancelLifecycle() }
+        guard pending == nil, hasListeners("editorStateRequest") else { return }
+        notifyListeners("editorStateRequest", data: ["reason": "foreground"])
     }
 
     fileprivate func sendEditorAction(_ action: NativeEditorAction) -> Bool {
@@ -522,8 +536,11 @@ final class NativeEditorContainer: UIViewController {
     var onNavigate: ((Int) -> Void)?
     private var canGoBack = false
     private var canGoForward = false
-    private var routeBack: UIBarButtonItem?
-    private var routeForward: UIBarButtonItem?
+    private var historyHost: UIHostingController<NativeHistoryControls>?
+    private var loadingHost: UIHostingController<NativeEditorLoadingView>?
+    private var loadingTimeout: DispatchWorkItem?
+    private var loadingTimer: NativePhaseTimer?
+    private var loadingFinished = false
     private let toolbarModel = NativeKeyboardToolbarModel()
     private var toolbarHost: UIHostingController<NativeKeyboardToolbarView>?
     private var toolbarHeight: NSLayoutConstraint?
@@ -547,16 +564,15 @@ final class NativeEditorContainer: UIViewController {
         view.backgroundColor = .systemBackground
         view.accessibilityIdentifier = "native.editor.container"
         navigationItem.hidesBackButton = true
-        let back = routeButton(symbol: "chevron.left", label: "Back", identifier: "native.editor.back", action: #selector(routeBackward))
-        let forward = routeButton(symbol: "chevron.right", label: "Forward", identifier: "native.editor.forward", action: #selector(routeForwardAction))
-        routeBack = back
-        routeForward = forward
-        navigationItem.leftBarButtonItems = [back, forward]
+        installRouteControls()
         let done = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
         done.accessibilityIdentifier = "native.editor.vaults"
         done.accessibilityLabel = "Return to " + originTitle
         navigationItem.rightBarButtonItem = done
-        editor.vaultPlugin.onNoteOpened = { [weak self] id in self?.onNoteOpened?(id) }
+        editor.vaultPlugin.onNoteOpened = { [weak self] id in
+            self?.finishEditorLoading(ready: true)
+            self?.onNoteOpened?(id)
+        }
         updateRouteControls()
         editor.vaultPlugin.onEditorState = { [weak self] state, available in
             guard let self = self else { return }
@@ -577,6 +593,7 @@ final class NativeEditorContainer: UIViewController {
             bottom
         ])
         editor.didMove(toParent: self)
+        installEditorLoading()
         installKeyboardToolbar()
     }
 
@@ -585,6 +602,7 @@ final class NativeEditorContainer: UIViewController {
         navigationController?.interactivePopGestureRecognizer?.isEnabled = false
         view.setNeedsLayout()
         updateToolbarLayout()
+        if !leaving { editor.vaultPlugin.requestForegroundEditorState() }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -652,6 +670,10 @@ final class NativeEditorContainer: UIViewController {
             self.view.setNeedsLayout()
             self.view.layoutIfNeeded()
             self.updateToolbarLayout()
+            if !self.leaving, self.view.window != nil,
+               self.navigationController?.topViewController === self {
+                self.editor.vaultPlugin.requestForegroundEditorState()
+            }
         })
     }
 
@@ -678,8 +700,14 @@ final class NativeEditorContainer: UIViewController {
         // and the floating toolbar. Web must not apply a second toolbar inset.
         bottom.constant = -inset
         host.view.isHidden = !visible
-        let duration = notification?.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.15
-        let curve = notification?.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
+        // Layout/state callbacks must not start a second viewport animation after
+        // WebKit has already revealed the focused selection for the keyboard.
+        guard let notification = notification,
+              let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else {
+            view.setNeedsLayout()
+            return
+        }
+        let curve = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
         if UIAccessibility.isReduceMotionEnabled {
             UIView.performWithoutAnimation { self.view.layoutIfNeeded() }
         } else {
@@ -690,18 +718,81 @@ final class NativeEditorContainer: UIViewController {
     }
 
     deinit {
+        loadingTimeout?.cancel()
         for observer in keyboardObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
-    private func routeButton(symbol: String, label: String, identifier: String, action: Selector) -> UIBarButtonItem {
-        let button = UIButton(type: .system)
-        button.setImage(UIImage(systemName: symbol), for: .normal)
-        button.accessibilityLabel = label
-        button.accessibilityIdentifier = identifier
-        button.addTarget(self, action: action, for: .touchUpInside)
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        return UIBarButtonItem(customView: button)
+    private var historyControls: NativeHistoryControls {
+        NativeHistoryControls(backEnabled: canGoBack && !leaving, forwardEnabled: canGoForward && !leaving,
+                              identifierPrefix: "native.editor") { [weak self] direction in
+            guard let self = self, !self.leaving else { return }
+            self.onNavigate?(direction)
+        }
+    }
+
+    private func installRouteControls() {
+        let host = UIHostingController(rootView: historyControls)
+        historyHost = host
+        addChild(host)
+        host.view.backgroundColor = .clear
+        host.view.clipsToBounds = false
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            host.view.widthAnchor.constraint(equalToConstant: 96),
+            host.view.heightAnchor.constraint(equalToConstant: 44)
+        ])
+        let item = UIBarButtonItem(customView: host.view)
+        // Our single capsule supplies its own glass, not another nested bar pill.
+        if #available(iOS 26, *) { item.hidesSharedBackground = true }
+        navigationItem.leftBarButtonItem = item
+        host.didMove(toParent: self)
+    }
+
+    private func installEditorLoading() {
+        loadingTimer = NativePhaseTimer()
+        let host = UIHostingController(rootView: NativeEditorLoadingView())
+        loadingHost = host
+        addChild(host)
+        view.addSubview(host.view)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            host.view.leadingAnchor.constraint(equalTo: editor.view.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: editor.view.trailingAnchor),
+            host.view.topAnchor.constraint(equalTo: editor.view.topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: editor.view.bottomAnchor)
+        ])
+        host.didMove(toParent: self)
+        editor.view.accessibilityElementsHidden = true
+        let timeout = DispatchWorkItem { [weak self] in self?.finishEditorLoading(ready: false) }
+        loadingTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: timeout)
+    }
+
+    private func finishEditorLoading(ready: Bool) {
+        if ready {
+            loadingTimer?.finish(.editorReady)
+            loadingTimer = nil
+        } else { loadingTimer?.finish(.editorTimeout) }
+        guard !loadingFinished else { return }
+        loadingFinished = true
+        loadingTimeout?.cancel()
+        loadingTimeout = nil
+        editor.view.accessibilityElementsHidden = false
+        guard let host = loadingHost else { return }
+        // Timeout exposes the real web error/content. Never reload the bridge or
+        // repeat a New note launch as a cosmetic loading retry.
+        let remove = { [weak self] in
+            host.willMove(toParent: nil)
+            host.view.removeFromSuperview()
+            host.removeFromParent()
+            self?.loadingHost = nil
+        }
+        if ready && !UIAccessibility.isReduceMotionEnabled {
+            UIView.animate(withDuration: 0.18, animations: { host.view.alpha = 0 }) { _ in remove() }
+        } else { remove() }
+        if !ready && view.window != nil && UIApplication.shared.applicationState == .active {
+            UIAccessibility.post(notification: .announcement, argument: "Editor is taking longer to load. Showing its current content.")
+        }
     }
 
     func setRouteAvailability(back: Bool, forward: Bool) {
@@ -711,13 +802,10 @@ final class NativeEditorContainer: UIViewController {
     }
 
     private func updateRouteControls() {
-        (routeBack?.customView as? UIButton)?.isEnabled = canGoBack && !leaving
-        (routeForward?.customView as? UIButton)?.isEnabled = canGoForward && !leaving
+        historyHost?.rootView = historyControls
         navigationItem.rightBarButtonItem?.isEnabled = !leaving
     }
 
-    @objc private func routeBackward() { if !leaving && canGoBack { onNavigate?(-1) } }
-    @objc private func routeForwardAction() { if !leaving && canGoForward { onNavigate?(1) } }
     @objc private func returnToVaults() { leaveForNativeRoute { _ in } }
 
     // Both ordinary return and history traversal use the same save/ACK fence.
@@ -740,6 +828,7 @@ final class NativeEditorContainer: UIViewController {
                 return
             }
             self.session.close {
+                self.loadingTimeout?.cancel()
                 self.onClosed()
                 completion(true)
                 self.navigationController?.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
@@ -777,6 +866,7 @@ final class NativeEditorContainer: UIViewController {
 final class NativeVaultPicker: UITableViewController {
     private var catalog: LocalVaultCatalog?
     private var opening = false
+    private var openingHost: UIHostingController<NativeLoadingSkeleton>?
 
     init() { super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -854,11 +944,34 @@ final class NativeVaultPicker: UITableViewController {
         present(alert, animated: true)
     }
 
+    private func showOpeningSkeleton() {
+        let host = UIHostingController(rootView: NativeLoadingSkeleton(editor: false))
+        openingHost = host
+        addChild(host)
+        host.view.backgroundColor = .systemBackground
+        host.view.frame = CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 300)
+        let inset = UIView(frame: host.view.frame)
+        host.view.frame = inset.bounds.insetBy(dx: 20, dy: 20)
+        inset.addSubview(host.view)
+        tableView.tableHeaderView = inset
+        host.didMove(toParent: self)
+    }
+
+    private func removeOpeningSkeleton() {
+        guard let host = openingHost else { return }
+        host.willMove(toParent: nil)
+        tableView.tableHeaderView = nil
+        host.view.removeFromSuperview()
+        host.removeFromParent()
+        openingHost = nil
+    }
+
     private func open(_ vault: LocalVault) {
         guard !opening, let catalog = catalog else { return }
         do {
             let root = try catalog.root(for: vault)
             opening = true
+            showOpeningSkeleton()
             tableView.isUserInteractionEnabled = false
             navigationItem.rightBarButtonItem?.isEnabled = false
             NativeMobileSession.open(vault: vault, root: root) { [weak self] result in
@@ -867,6 +980,7 @@ final class NativeVaultPicker: UITableViewController {
                     return
                 }
                 self.opening = false
+                self.removeOpeningSkeleton()
                 self.tableView.isUserInteractionEnabled = true
                 self.navigationItem.rightBarButtonItem?.isEnabled = true
                 switch result {
