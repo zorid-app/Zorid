@@ -46,3 +46,31 @@ test('registry release retry after consumer release never invokes the closed con
   await assert.rejects(release(),/registry write/);await release();
   assert.equal(commands,1);assert.equal(releases,1);assert.equal(slots,2);
 });
+
+
+test('mounted binary capability snapshots small upsert bytes, deduplicates calls, and retries original committed CAS target',async()=>{
+  const calls:{kind:string;input?:any}[]=[],stages=new Map<string,any>();let metadata:any=null,reads=0,failCommit=true,failClose=false,releaseMetadata!:(value?:unknown)=>void;
+  const blocked=new Promise(resolve=>{releaseMetadata=resolve;});
+  const streams={limits:{maxFileBytes:'67108864',maxChunkBytes:2,smallReadBytes:'16'},
+    async begin(input:any){calls.push({kind:'begin',input:structuredClone(input)});const ref={localStoreId:'store',clientId:'client',operationId:input.operationId,stageId:'stage-'+input.operationId};stages.set(input.operationId,{ref,phase:'receiving',acceptedLength:'0',nextSequence:0});return ref;},
+    async append(ref:any,input:any){calls.push({kind:'append',input:structuredClone(input)});const row=stages.get(ref.operationId);row.acceptedLength=String(Number(input.offset)+input.bytes.length);row.nextSequence=input.sequence+1;return {sequence:input.sequence,offset:input.offset,bytes:input.bytes.length,digest:'a'.repeat(64),acceptedLength:row.acceptedLength};},
+    async seal(ref:any,input:any){calls.push({kind:'seal',input});const finalized={length:input.finalLength,sha256:'a'.repeat(64)};Object.assign(stages.get(ref.operationId),{phase:'sealed',finalized});return finalized;},
+    async commit(ref:any){calls.push({kind:'commit',input:structuredClone(ref)});Object.assign(stages.get(ref.operationId),{phase:'committed',outcome:{status:'committed',receipt:'original-receipt'}});if(failCommit)throw new BrowserVaultError('outcome_unknown','lost commit reply');return 'original-receipt';},
+    async query(ref:any){calls.push({kind:'query'});return structuredClone(stages.get(ref.operationId));},
+    async openRead(input:any){calls.push({kind:'openRead',input:structuredClone(input)});return {localStoreId:'store',clientId:'client',readId:'pin',entryId:input.entryId,entryRevision:input.expectedRevision,selectedContentEvent:'original-event',length:'3'};},
+    async closeRead(ref:any){calls.push({kind:'closeRead',input:structuredClone(ref)});if(failClose){failClose=false;throw new BrowserVaultError('outcome_unknown','lost close reply');}},
+    async read(){throw new Error('whole input body must not be read');},async abort(){throw new Error('must not abort uncertain commit');},
+  };
+  const runtime={async readMetadata(){reads++;await blocked;return structuredClone(metadata);}} as unknown as BrowserCoreRuntime;
+  const context={durableWrites:{},binaryStreams:streams,recoverCommands:async()=>false,fileCommand:async()=>{throw new Error('legacy binary command forbidden');}} as unknown as BrowserClientContext;
+  const adapter=defaultBrowserAdapter(runtime,context);assert.equal(adapter.binaryStreams,streams);
+  await assert.rejects(adapter.createBinary!('too-big.bin',new Uint8Array(17)),{code:'stream_required'});assert.equal(calls.length,0);
+  metadata={entry:{id:'original-entry',revision:'original-revision',kind:'file'}};
+  const bytes=Uint8Array.of(0,255,7),first=adapter.writeBinary('existing.bin',bytes),duplicate=adapter.writeBinary('existing.bin',bytes);assert.equal(first,duplicate);bytes.fill(9);releaseMetadata();
+  await assert.rejects(first,{code:'outcome_unknown'});assert.equal(reads,1);assert.deepEqual(calls.find(call=>call.kind==='begin')!.input.target,{kind:'write',entryId:'original-entry',expectedRevision:'original-revision',expectedContentEvent:'original-event'});assert.deepEqual(calls.filter(call=>call.kind==='append').flatMap(call=>[...call.input.bytes]),[0,255,7]);
+  metadata={entry:{id:'replacement-entry',revision:'replacement-revision',kind:'file'}};
+  await assert.rejects(adapter.writeBinary('existing.bin',Uint8Array.of(8)),{code:'command_pending'});failCommit=false;await adapter.writeBinary('existing.bin',Uint8Array.of(0,255,7));assert.equal(reads,1);assert.equal(calls.filter(call=>call.kind==='begin').length,1);const commits=calls.filter(call=>call.kind==='commit');assert.equal(commits.length,2);assert.deepEqual(commits[0].input,commits[1].input);
+  metadata=null;await adapter.writeBinary('absent.bin',Uint8Array.of(1));assert.equal(calls.filter(call=>call.kind==='begin').at(-1)!.input.target.kind,'create');
+  const readsBefore=reads;await adapter.createBinary!('explicit.bin',Uint8Array.of(2));assert.equal(reads,readsBefore);assert.equal(calls.filter(call=>call.kind==='begin').at(-1)!.input.target.kind,'create');
+  metadata={entry:{id:'close-entry',revision:'close-revision',kind:'file'}};failClose=true;const beforeClose=calls.length,beforeReads=reads;await assert.rejects(adapter.writeBinary('close.bin',Uint8Array.of(3)),{code:'outcome_unknown'});metadata=null;await adapter.writeBinary('close.bin',Uint8Array.of(3));const closing=calls.slice(beforeClose);assert.equal(reads,beforeReads+1);assert.equal(closing.filter(call=>call.kind==='openRead').length,1);assert.deepEqual(closing.filter(call=>call.kind==='closeRead').map(call=>call.input.readId),['pin','pin']);assert.equal(closing.find(call=>call.kind==='begin')!.input.target.entryId,'close-entry');
+});
