@@ -15,7 +15,11 @@
     "mobile:sync": "npm run build && cap sync",
     "mobile:ios": "cap open ios",
     "mobile:android": "cap open android",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "package:stage": "node scripts/stage-desktop.mjs",
+    "package:mac": "node scripts/package-macos.mjs",
+    "package:mac:unsigned": "node scripts/package-macos.mjs --unsigned",
+    "package:verify": "node scripts/verify-desktop-package.mjs"
   },
   "dependencies": {
     "@capacitor/core": "^8.0.0",
@@ -40,9 +44,11 @@
     "@capacitor/android": "^8.0.0",
     "@capacitor/cli": "^8.0.0",
     "@capacitor/ios": "^8.0.0",
+    "@electron/asar": "4.3.1",
     "@types/node": "^24.1.0",
     "css-loader": "^7.1.0",
     "electron": "31.6.0",
+    "electron-builder": "26.15.3",
     "html-webpack-plugin": "^5.6.0",
     "jsdom": "^26.1.0",
     "style-loader": "^4.0.0",
@@ -51,5 +57,6 @@
     "webpack": "^5.99.0",
     "webpack-cli": "^6.0.0",
     "webpack-dev-server": "^5.2.0"
-  }
+  },
+  "packageManager": "pnpm@12.14.0"
 }

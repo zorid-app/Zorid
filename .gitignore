@@ -3,6 +3,8 @@ recovered/
 node_modules/
 .DS_Store
 dist/
+.release/
+release/
 .npm-cache/
 *.log
 ios/App/App/public/
