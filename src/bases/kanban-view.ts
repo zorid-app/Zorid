@@ -1,4 +1,4 @@
-import { createBaseKanbanColumns } from './kanban-columns.ts';
+import { createBaseKanbanColumns, matchesBaseGroupKey } from './kanban-columns.ts';
 import type { BaseKanbanGroupOrderRequest } from './kanban-columns.ts';
 import { icon } from '../ui/icons.ts';
 import { showContextMenu } from '../platform/context-menu.ts';
@@ -208,7 +208,7 @@ export function createBaseKanbanView(container: HTMLElement, options: BaseKanban
     if (!propertyOf(result)) groups = [];
     else if (Array.isArray(result.view.groupOrder)) {
       groups = result.groupOptions.filter(option => option.listed).map(option =>
-        queryGroups.find(group => equal(group.key, option.key) || (option.key.type === 'string' && option.key.value === label(group.key))) ?? { key: option.key, rows: [] });
+        queryGroups.find(group => group.key && matchesBaseGroupKey(option.key, group.key)) ?? { key: option.key, rows: [] });
     } else groups = [...queryGroups.filter(group => group.key?.type === 'null'), ...queryGroups.filter(group => group.key?.type !== 'null')];
     properties = result.properties.filter(property => property !== 'file.name');
     width = typeof result.view.columnWidth === 'number' && Number.isFinite(result.view.columnWidth) ? Math.max(200, Math.min(500, result.view.columnWidth)) : 280;

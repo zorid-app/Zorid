@@ -144,3 +144,16 @@ test('old drop target cannot cancel a new menu drag operation', async () => {
   row('Todo').dispatchEvent(new dom.window.Event('drop', { cancelable: true })); await settle();
   assert.deepEqual(requests[0].order, ['Done', 'Todo']); handle.destroy();
 });
+
+test('stored string labels resolve composite and typed-null groups without losing cards or hide actions', async () => {
+  for (const [stored, properties] of [['A, B', { status: ['A', 'B'] }], ['null', {}]] as const) {
+    const dom = new JSDOM('<main></main><button>Group</button>'), doc = dom.window.document;
+    const base = BaseDocument.parse(`views:\n - type: kanban\n   name: Board\n   groupBy: {property: status, direction: ASC}\n   groupOrder: [${JSON.stringify(stored)}]\n`);
+    const result = executeBaseQuery(base, { version: 1, files: [{ path: 'Typed.md', properties }] });
+    assert.equal(result.groups[0].rows.length, 1);
+    const view = createBaseKanbanView(doc.querySelector('main')!, { result, openFile() {} }); assert.ok(doc.querySelector('[data-path="Typed.md"]')); view.destroy();
+    let request: BaseKanbanGroupOrderRequest | undefined;
+    const handle = createBaseKanbanColumns(doc.querySelector('main')!, { result, async requestGroupOrder(input) { request = input; } });
+    assert.equal(await handle.hide(result.groups[0].key!), true); assert.deepEqual(request?.order, []); handle.destroy();
+  }
+});

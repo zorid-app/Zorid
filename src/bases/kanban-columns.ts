@@ -35,8 +35,14 @@ function propertyOf(result: BaseQueryResult): string | undefined {
     ? normalizeBaseProperty(group.property) : undefined;
 }
 const same = (a: BaseExpressionValue, b: BaseExpressionValue) => baseValuesEqual(a, b, true);
+/** Persisted matching uses query display text, never the UI's localized null label. */
+export function matchesBaseGroupKey(configured: BaseExpressionValue, key: BaseExpressionValue): boolean {
+  if (same(configured, key)) return true;
+  if (configured.type !== 'string') return false;
+  try { return configured.value === (key.type === 'namespace' ? key.name : baseValueToString(key)); } catch { return false; }
+}
 function matches(stored: BaseValue, key: BaseExpressionValue): boolean {
-  return same(baseExpressionValue(stored), key) || (typeof stored === 'string' && stored === text(key));
+  return matchesBaseGroupKey(baseExpressionValue(stored), key);
 }
 
 /** Snapshot-owned Group popover: only configuration changes, never note writes. */
@@ -57,7 +63,7 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
   }
   function readRows() {
     const order = Array.isArray(result.view.groupOrder) ? result.view.groupOrder as readonly BaseValue[] : undefined;
-    const candidates = result.groupOptions.length ? result.groupOptions.map(group => ({ key: group.key, count: group.count, listed: group.listed }))
+    const candidates = result.groupOptions.length ? result.groupOptions.map(group => ({ key: result.groups.find(actual => actual.key && matchesBaseGroupKey(group.key, actual.key))?.key ?? group.key, count: group.count, listed: group.listed }))
       : result.groups.filter(group => group.key !== null).map(group => ({ key: group.key!, count: group.rows.length, listed: true }));
     if (!order) candidates.sort((a, b) => a.key.type === 'null' ? -1 : b.key.type === 'null' ? 1 : 0);
     rows = candidates.filter(group => group.listed).concat(candidates.filter(group => !group.listed).sort((a, b) => text(a.key).localeCompare(text(b.key), undefined, { numeric: true })))
