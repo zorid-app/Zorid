@@ -27,13 +27,17 @@ function fixture() {
   let contextEvent: MobileLifecycleReason | undefined, wrongAuthority = false;
   let ackHook: ((input:{id:string;ok:boolean})=>Promise<void>) | undefined;
   let initialReconciliation: any = undefined, refreshValue: any = {reconciliation:scanStatus()}, refreshCalls=0;
-  let refreshHook: (()=>Promise<void>) | undefined;
+  let refreshHook: (()=>Promise<void>) | undefined, documentCapability:any=undefined;
+  let docSnapshot={localStoreId:'store',generationEpoch:'doc-epoch',generation:'1',versions:{schema:1,extraction:'markdown-1',resolver:'resolver-1',query:'query-1'}};
+  const docSource={localStoreId:'store',watermark:'9007199254740993'},docPins=new Map<string,any>(),docStages=new Map<string,any>(),docRequests:any[]=[];
+  let docReady=false,lastPin=0n,docHook:((request:any)=>Promise<void>)|undefined,docTransform:((op:string,value:any)=>any)|undefined;
+
   let initialPath: any = undefined, initialEntryId: any = undefined, createNoteOnOpen: any = undefined, openedHook: ((path:string)=>Promise<void>) | undefined; const opened: string[] = [],openedRefs:{path:string;entryId:string}[]=[];
   const plugin: NativeVaultPlugin & {close():Promise<void>} = {
     async addListener(event:'lifecycleRequest'|'editorAction'|'editorStateRequest',handler:(event:any)=>void) { if(event==='editorStateRequest'){requestInstalls++;if(requestInstallHook)await requestInstallHook();stateRequestCallbacks.add(handler);return{remove:async()=>{requestRemovals++;stateRequestCallbacks.delete(handler);}};} if(event==='editorAction'){actionInstalls++;if(actionInstallHook)await actionInstallHook();actionCallbacks.add(handler);return{remove:async()=>{actionRemovals++;actionCallbacks.delete(handler);}};} assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
     async editorState(state) {editorStates.push({...state});if(editorStateHook)await editorStateHook(state);},
     async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
-    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialEntryId===undefined?{}:{initialEntryId}),...(createNoteOnOpen===undefined?{}:{createNoteOnOpen}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
+    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialEntryId===undefined?{}:{initialEntryId}),...(createNoteOnOpen===undefined?{}:{createNoteOnOpen}),...(documentCapability===undefined?{}:{documentSemantics:documentCapability}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
     async noteOpened({path,entryId}) { openedRefs.push({path,entryId}); active++;maxActive=Math.max(maxActive,active);opened.push(path);try{if(openedHook)await openedHook(path);await new Promise<void>(r=>setImmediate(r));}finally{active--;} },
     async refresh() { active++;maxActive=Math.max(maxActive,active);refreshCalls++;try {if(refreshHook)await refreshHook();await new Promise<void>(r=>setImmediate(r));return refreshValue;}finally{active--;} },
     async request(input) {
@@ -53,10 +57,36 @@ function fixture() {
             if(activeLease)return reject('client_in_use');
             activeLease={local_store_id:'store',client_id:clientId,token:claims++===0?token:crypto.randomUUID()};
             result = {lease:activeLease}; break;
+          case 'documents': {
+            const request=c.request,command=request.command,op=command.op;docRequests.push(structuredClone(request));
+            assert.equal(request.schemaVersion,1);assert.equal(input.body,'');assert.equal(c.client_id,clientId);
+            if(docHook)await docHook(request);
+            let value:any;
+            const pin=docPins.get(command.pinId),report=(value:any)=>({snapshot:pin.snapshot,source:pin.source,coverageComplete:true,value});
+            const file={...state(),id:command.id??entryIdentity};
+            if(op==='status')value=docReady?{source:docSource,state:'ready',snapshot:docSnapshot,coveredWatermark:docSource.watermark,observedSourceHead:docSource.watermark,coverageComplete:true}:{source:docSource,state:'uninitialized'};
+            else if(op==='initialize')value=true;
+            else if(op==='rebuild'){docPins.clear();docReady=false;docSnapshot={...docSnapshot,generationEpoch:'rebuilt-epoch'};value=true;}
+            else if(op==='begin'){const snapshot={...docSnapshot,generation:String(BigInt(docSnapshot.generation)+1n)};docStages.set(snapshot.generation,snapshot);value={snapshot};}
+            else if(op==='pump')value={snapshot:command.snapshot,preparedDocuments:1,reusedDocuments:0,totalDocuments:1,ready:true};
+            else if(op==='publish'){docSnapshot=command.snapshot;docStages.delete(docSnapshot.generation);docReady=true;value=docSnapshot;}
+            else if(op==='discard'){docStages.delete(command.snapshot.generation);value=true;}
+            else if(op==='open'){
+              if(!pin){if(BigInt(command.pinId)<=lastPin)return reject('snapshot_expired');if(docPins.size>=4)return reject('pin_capacity');lastPin=BigInt(command.pinId);docPins.set(command.pinId,{snapshot:structuredClone(docSnapshot),source:{...docSource}});}
+              value={pinId:command.pinId,...docPins.get(command.pinId),coverageComplete:true};
+            }else if(op==='close'){docPins.delete(command.pinId);value=true;}
+            else if(!pin)return reject('snapshot_expired');
+            else if(op==='metadata')value=report({entry:file,metadata:{entryId:file.id,contentRevision:file.revision,properties:[{key:'nested',value:{Title:'first',title:'second'}}]},exclusion:null});
+            else if(op==='search'||op==='backlinks')value={result:report({snapshot:pin.snapshot,...(op==='search'?{hits:[],sourceBytes:0,documents:0}:{edges:[]}),next:null,scanComplete:true,coverageComplete:true,complete:true}),cursor:null};
+            else if(op==='base')value=report({definition:file,result:{snapshotId:pin.snapshot,rows:[]}});
+            else throw new Error('Unexpected document op '+op);
+            if(docTransform)value=docTransform(op,value);
+            const bytes=encoder.encode(JSON.stringify({schemaVersion:1,op,value}));result={documents:true,schemaVersion:1,bytes:bytes.length};output=btoa(String.fromCharCode(...bytes));break;
+          }
           case 'identity': result = {identity:{local_store_id:wrongAuthority?'wrong':'store'}}; break;
           case 'release_client': {
             if(failReleaseDispatch){failReleaseDispatch=false;throw new Error('release transport failed before dispatch');}
-            if(activeLease && JSON.stringify(activeLease)===JSON.stringify(c.reference)){releasedLeases.set(activeLease.token,activeLease);activeLease=undefined;}
+            if(activeLease && JSON.stringify(activeLease)===JSON.stringify(c.reference)){releasedLeases.set(activeLease.token,activeLease);activeLease=undefined;docPins.clear();}
             else if(JSON.stringify(releasedLeases.get(c.reference.token))!==JSON.stringify(c.reference))return reject('client_not_admitted');
             result = {released:true,reference:c.reference};
             if(failReleaseAck){failReleaseAck=false;throw new Error('lost release ACK');}break;
@@ -105,7 +135,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, editorStates, get requestInstalls(){return requestInstalls;},get requestRemovals(){return requestRemovals;}, onRequestInstall(hook:()=>Promise<void>){requestInstallHook=hook;}, stateRequest(event:any={reason:'foreground'}){for(const callback of stateRequestCallbacks)callback(event);}, get actionInstalls(){return actionInstalls;},get actionRemovals(){return actionRemovals;}, onActionInstall(hook:()=>Promise<void>){actionInstallHook=hook;}, onEditorState(hook:(state:NativeEditorState)=>Promise<void>){editorStateHook=hook;}, action(event:any){for(const callback of actionCallbacks)callback(event);}, opened, openedRefs, newNote(value:any){createNoteOnOpen=value;}, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, docRequests,docPins,docStages, documents(value:any=true){documentCapability=value;},onDocument(hook:(request:any)=>Promise<void>){docHook=hook;},documentTransform(transform:(op:string,value:any)=>any){docTransform=transform;}, editorStates, get requestInstalls(){return requestInstalls;},get requestRemovals(){return requestRemovals;}, onRequestInstall(hook:()=>Promise<void>){requestInstallHook=hook;}, stateRequest(event:any={reason:'foreground'}){for(const callback of stateRequestCallbacks)callback(event);}, get actionInstalls(){return actionInstalls;},get actionRemovals(){return actionRemovals;}, onActionInstall(hook:()=>Promise<void>){actionInstallHook=hook;}, onEditorState(hook:(state:NativeEditorState)=>Promise<void>){editorStateHook=hook;}, action(event:any){for(const callback of actionCallbacks)callback(event);}, opened, openedRefs, newNote(value:any){createNoteOnOpen=value;}, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -925,4 +955,77 @@ test('successful switch drops pending presentation notifications and later calls
   const f=fixture(),gate=deferred(),done=deferred(),received:NativePresentationSettled[]=[];f.plugin.presentationSettled=async input=>{received.push({...input});await gate.promise;};
   const v=await openNativeMobileVault(f.plugin),first=v.presentationSettled(readyPresentation);await until(()=>received.length===1);const queued=v.presentationSettled({...readyPresentation,state:'password'});
   v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('switchVault');await done.promise;await v.presentationSettled({...readyPresentation,state:'error'});gate.resolve();await Promise.all([first,queued]);assert.equal(received.length,1);await v.release!();
+});
+
+test('document capability is absent on old context without probing native commands',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);assert.equal(Object.hasOwn(v,'documentSemantics'),false);assert.equal(Object.hasOwn(v.adapter,'documentSemantics'),false);await v.adapter.list();assert.equal(f.docRequests.length,0);await v.release!();
+});
+for(const value of [false,1,'true',null,{}])test(`document capability rejects non-true handshake ${JSON.stringify(value)}`,async()=>{
+  const f=fixture();f.documents(value);await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});assert.equal(f.requests.length,0);assert.equal(f.removals,1);
+});
+
+test('admitted mobile exposes same shared Rust document service and typed body operations',async()=>{
+  const f=fixture();f.documents();const v=await openNativeMobileVault(f.plugin),service=v.documentSemantics!;assert.equal(service,v.adapter.documentSemantics);assert.equal(f.docRequests.length,0);
+  const initial=await service.status();assert.equal(initial.current,false);assert.equal(initial.snapshot,null);assert.equal(initial.source.watermark,'9007199254740993');
+  await service.initialize();const stage=await service.begin();assert.equal((await service.pump(stage.stageId)).progress!.ready,true);await service.publish(stage.stageId);assert.equal((await service.status()).current,true);
+  const pin=await service.open(),metadata=await pin.metadata('entry');assert.equal(metadata.value.entry.id,'entry');assert.deepEqual(Object.keys(metadata.value.metadata!.properties[0].value as object),['Title','title']);
+  assert.equal((await pin.search({query:'你好'})).result.value.complete,true);assert.equal((await pin.backlinks({targetId:'entry'})).result.value.edges.length,0);assert.equal((await pin.base({id:'entry'})).value.definition.id,'entry');
+  const native=f.requests.filter(r=>r.command.method==='documents');assert.equal(native.every(r=>r.command.client_id===clientId&&r.lease.client_id===clientId&&r.body===''),true);
+  await service.rebuild();await assert.rejects(pin.metadata('entry'),{code:'snapshot_expired'});await service.open();await service.begin();await v.release!();
+  assert.equal(f.docPins.size,0);assert.equal(f.docStages.size,0);assert.equal(f.closes,0);await assert.rejects(service.status(),{code:'client_not_admitted'});
+});
+
+test('mobile document requests share authoritative queue and reject UTF8/whole-request limits before dispatch',async()=>{
+  const f=fixture();f.documents();const v=await openNativeMobileVault(f.plugin),service=v.documentSemantics!,gate=deferred(),entered=deferred();
+  f.onDocument(async request=>{if(request.command.op==='status'){entered.resolve();await gate.promise;}});const status=service.status();await entered.promise;const read=v.adapter.read('Note.md');gate.resolve();await Promise.all([status,read]);assert.equal(f.maxActive,1);
+  const pin=await service.open(),before=f.docRequests.length;
+  await assert.rejects(pin.search({query:'😀'.repeat(1025)}),{code:'invalid_query'});
+  await assert.rejects(pin.base({id:'entry',options:{searchTerms:Array(17).fill('a'.repeat(4096))}}),{code:'request_too_large'});assert.equal(f.docRequests.length,before);await v.release!();
+});
+
+for(const mode of ['marker','op','utf8','raw-limit','foreign-store'] as const)test(`mobile document transport rejects ${mode} response and preserves saves`,async()=>{
+  const f=fixture();f.documents();const v=await openNativeMobileVault(f.plugin),original=f.plugin.request.bind(f.plugin);
+  f.plugin.request=async input=>{const reply=await original(input);if(JSON.parse(input.header).command.method!=='documents')return reply;const header=JSON.parse(reply.header);
+    if(mode==='marker')header.result.bytes++;
+    if(mode==='utf8'){reply.body='/w==';header.result.bytes=1;}
+    if(mode==='raw-limit')reply.body='A'.repeat(4*Math.ceil(16*1024*1024/3)+4);
+    if(mode==='op'||mode==='foreign-store'){const body=JSON.parse(decoder.decode(Uint8Array.from(atob(reply.body),c=>c.charCodeAt(0))));if(mode==='op')body.op='open';else body.value.source.localStoreId='foreign';const bytes=encoder.encode(JSON.stringify(body));reply.body=btoa(String.fromCharCode(...bytes));header.result.bytes=bytes.length;}
+    reply.header=JSON.stringify(header);return reply;};
+  await assert.rejects(v.documentSemantics!.status(),{code:mode==='raw-limit'?'response_limit':'invalid_document_response'});f.plugin.request=original;await v.adapter.write('Note.md','save after bad document response');await v.release!();
+});
+
+test('shared codec pin owner rejects changed generation and wrong metadata identity',async()=>{
+  const f=fixture();f.documents();const v=await openNativeMobileVault(f.plugin),pin=await v.documentSemantics!.open();
+  f.documentTransform((op,value)=>op==='metadata'?{...value,snapshot:{...value.snapshot,generation:'2'}}:value);await assert.rejects(pin.metadata('entry'),{code:'invalid_document_response'});
+  f.documentTransform((op,value)=>op==='metadata'?{...value,value:{...value.value,entry:{...value.value.entry,id:'wrong'}}}:value);await assert.rejects(pin.metadata('entry'),{code:'invalid_document_response'});f.documentTransform((_op,value)=>value);await v.release!();
+});
+
+test('release drains pending document open then closes pins and discards stages before lease release',async()=>{
+  const f=fixture();f.documents();const v=await openNativeMobileVault(f.plugin),service=v.documentSemantics!,gate=deferred(),entered=deferred();await service.begin();
+  f.onDocument(async request=>{if(request.command.op==='open'){entered.resolve();await gate.promise;}});const opened=service.open();await entered.promise;const release=v.release!();await assert.rejects(service.status(),{code:'client_not_admitted'});assert.equal(f.admitted,true);gate.resolve();await opened;await release;
+  const ops=f.requests.map(r=>r.command.method==='documents'?r.command.request.command.op:r.command.method);assert.ok(ops.indexOf('close')<ops.indexOf('release_client'));assert.ok(ops.indexOf('discard')<ops.indexOf('release_client'));assert.equal(f.docPins.size,0);assert.equal(f.docStages.size,0);
+});
+
+test('uncertain mobile document cleanup retries exact pin and stage before releasing admission',async()=>{
+  const f=fixture();f.documents();const v=await openNativeMobileVault(f.plugin),service=v.documentSemantics!;await service.open();await service.begin();f.hostError('documents',{code:'storage_io',message:'close uncertain',commit_uncertain:true});
+  await assert.rejects(v.release!(),{code:'storage_io',commitUncertain:true});assert.equal(f.admitted,true);assert.equal(f.requests.some(r=>r.command.method==='release_client'),false);await assert.rejects(service.status(),{code:'client_not_admitted'});await v.release!();
+  const closes=f.requests.filter(r=>r.command.method==='documents'&&r.command.request.command.op==='close');assert.equal(closes.length,2);assert.deepEqual(closes[0].command,closes[1].command);assert.equal(f.docStages.size,0);assert.equal(f.admitted,false);
+});
+
+test('background lifecycle drains admitted semantic read and retains binding and pin sequence',async()=>{
+  const f=fixture();f.documents();const v=await openNativeMobileVault(f.plugin),service=v.documentSemantics!,pin=await service.open(),gate=deferred(),entered=deferred(),done=deferred();
+  f.onDocument(async request=>{if(request.command.op==='metadata'){entered.resolve();await gate.promise;}});const read=pin.metadata('entry');await entered.promise;v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('background');await assert.rejects(service.open(),{code:'client_not_admitted'});assert.equal(f.acks.length,0);gate.resolve();await read;await done.promise;await new Promise<void>(r=>setImmediate(r));
+  assert.equal(v.documentSemantics,service);assert.equal((await service.open()).pinId,'2');assert.equal((await pin.metadata('entry')).value.entry.id,'entry');assert.equal(f.docRequests.some(r=>r.command.op==='close'),false);await v.release!();
+});
+
+test('stale switch ACK resumes SAME document service/pins and monotonic open sequence',async()=>{
+  const f=fixture();f.documents();const v=await openNativeMobileVault(f.plugin),service=v.documentSemantics!,pin=await service.open();f.onAck(async input=>{if(input.ok)throw Object.assign(new Error('expired'),{code:'stale_lifecycle'});});
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();});f.emit('switchVault');await until(()=>f.acks.length===2);await new Promise<void>(r=>setImmediate(r));
+  assert.equal(v.documentSemantics,service);assert.equal((await pin.metadata('entry')).value.entry.id,'entry');assert.equal((await service.open()).pinId,'2');assert.equal(f.docRequests.some(r=>r.command.op==='close'),false);await v.release!();
+});
+
+test('successful switch drains documents then forbids queries and skips dead-host cleanup RPCs',async()=>{
+  const f=fixture();f.documents();const v=await openNativeMobileVault(f.plugin),service=v.documentSemantics!,pin=await service.open(),gate=deferred(),entered=deferred(),done=deferred();await service.begin();
+  f.onDocument(async request=>{if(request.command.op==='metadata'){entered.resolve();await gate.promise;}});const read=pin.metadata('entry');await entered.promise;v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('switchVault');await new Promise<void>(r=>setImmediate(r));assert.equal(f.acks.length,0);gate.resolve();await read;await done.promise;
+  const before=f.requests.length;await assert.rejects(service.status(),{code:'client_not_admitted'});await v.release!();assert.equal(f.requests.length,before);assert.equal(f.docRequests.some(r=>r.command.op==='close'||r.command.op==='discard'),false);assert.equal(f.closes,0);
 });

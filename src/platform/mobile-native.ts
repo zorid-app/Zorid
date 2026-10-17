@@ -1,3 +1,6 @@
+import {captureDocumentRequest,decodeDocumentReply,createDesktopDocumentSemantics} from '../../desktop/document-semantics.cjs';
+import {createDesktopDocumentService} from './desktop-document-semantics.ts';
+import type {DesktopDocumentRequest} from './desktop-document-semantics.ts';
 import { vaultPath } from './path.ts';
 import { bytesToBase64, base64ToBytes } from './binary.ts';
 import { normalizePath, type VaultAdapter, type VaultEntry } from '../core/types.ts';
@@ -8,7 +11,7 @@ import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints
 
 /** Native chooses/opens the vault before loading the editor. No vault root crosses this API. */
 export interface NativeVaultPlugin {
-  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string; createNoteOnOpen?: boolean }>;
+  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string; createNoteOnOpen?: boolean; documentSemantics?: true }>;
   presentationSettled?(input: NativePresentationSettled): Promise<void>;
   noteOpened(input: { path: string; entryId: string }): Promise<void>;
   refresh(): Promise<{ reconciliation: DesktopReconciliation }>;
@@ -109,6 +112,10 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   const bridge = plugin;
   let clientId = '';
   let releasePromise: Promise<void> | undefined, leaseReleased = false;
+  let documents: ReturnType<typeof createDesktopDocumentService> | undefined;
+  let documentOwner: ReturnType<typeof createDesktopDocumentSemantics> | undefined;
+  const documentCalls = new Set<Promise<unknown>>();
+  let documentQuiescing = false, documentCleanup = false, documentsDrained = false;
   let lifecycleHandler: ((reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>) | undefined;
   let lifecycleTask: Promise<void> | undefined, lifecycleBusyId: string | undefined;
   let lifecycleStopped = false, lifecycleEpoch = 0;
@@ -239,7 +246,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     if (typeof event?.id !== 'string' || !uuid(event.id)) return;
     if (lifecycleBusyId === event.id) return; // Duplicate delivery shares the original outcome.
     if (lifecycleTask || lifecycleStopped || closed || closing || releasePromise || !['background','switchVault'].includes(event.reason)) { void rejectLifecycle(event.id); return; }
-    lifecycleBusyId = event.id; lifecycleEpoch++;
+    lifecycleBusyId = event.id; lifecycleEpoch++; documentQuiescing = true;
     const handler = lifecycleHandler;
     // Pause publication without replacing the workspace's latest state. A
     // handler may await setState while native still requires a negative ACK.
@@ -261,9 +268,10 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
         ackPromise = (async () => {
           // Native owns the deadline and rejects stale_lifecycle without switching.
           await Promise.allSettled([...(editorSubscription?.callbacks ?? [])]);
+          await Promise.allSettled([...documentCalls]);
           await bridge.lifecycleAck({ id: event.id, ok: true });
           approved = true; lifecycleApproved = true;
-          if (event.reason === 'switchVault') { stopNativeEditor(); stopPolling(); closed = true; leaseReleased = true; }
+          if (event.reason === 'switchVault') { stopNativeEditor(); stopPolling(); closed = true; leaseReleased = true; documentOwner?.forget(); }
         })();
         void ackPromise.catch(() => {}); // An unawaited ACK must not create an unhandled rejection.
         return ackPromise;
@@ -283,6 +291,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     void task.finally(() => {
       if (lifecycleTask === task) {
         lifecycleTask = undefined; lifecycleBusyId = undefined;
+        if (!closed && !releasePromise) documentQuiescing = false;
         // Replay only after the negative ACK settles. Never await lifecycleTask
         // inside the presentation queue: the handler may itself await setState.
         const sub = editorSubscription;
@@ -346,7 +355,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
         throw fail(error.code, error.commit_uncertain);
       }
       if (!envelope.result || typeof envelope.result !== 'object') throw fail('invalid_response', true);
-      if (!['read_path','read_presented','checkpoint_load','checkpoint_cas'].includes(command.method) && response.length) throw fail('invalid_response', true);
+      if (!['read_path','read_presented','checkpoint_load','checkpoint_cas','documents'].includes(command.method) && response.length) throw fail('invalid_response', true);
       return { result: envelope.result, bytes: response };
     });
     tail = task.catch(() => {}); return task;
@@ -355,6 +364,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   try {
     context = await bridge.context();
     if (typeof context.clientId !== 'string' || !uuid(context.clientId) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
+    if (context.documentSemantics !== undefined && context.documentSemantics !== true) throw fail('invalid_native_context');
     if (context.createNoteOnOpen !== undefined && typeof context.createNoteOnOpen !== 'boolean') throw fail('invalid_native_context');
     if (context.createNoteOnOpen === true && (context.initialPath !== undefined || context.initialEntryId !== undefined)) throw fail('invalid_native_context');
     createNoteOnOpen = context.createNoteOnOpen;
@@ -404,6 +414,23 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     },
   };
   const scope = Object.freeze({ vaultId: lease!.local_store_id as string, clientId });
+  if (context.documentSemantics === true) {
+    documentOwner = createDesktopDocumentSemantics({
+      async documentCommand(client, input) {
+        const captured = captureDocumentRequest(input);
+        const reply = await request({ method: 'documents', client_id: client, request: captured });
+        return decodeDocumentReply(captured,reply.result,reply.bytes);
+      },
+    },clientId,scope.vaultId);
+    documents = createDesktopDocumentService((input: DesktopDocumentRequest) => {
+      const cleanup = documentCleanup && ['close','discard'].includes(input.command.op);
+      if (closed || closing || !cleanup && (releasePromise || documentQuiescing)) return Promise.reject(fail('client_not_admitted'));
+      const call = documentOwner!.invoke(input);
+      documentCalls.add(call);
+      void call.then(() => documentCalls.delete(call),() => documentCalls.delete(call));
+      return call;
+    });
+  }
   function checkScope(value: Wire) { if (value?.vaultId !== scope.vaultId || value.clientId !== clientId) throw fail('checkpoint_scope_mismatch'); }
   function key(value: string) { textBytes(value, 1024); if (!value || value.includes('\0')) throw fail('checkpoint_invalid'); return value; }
   function checkpointMetadata(value: Wire): CheckpointMetadata {
@@ -660,7 +687,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   const bodyText = (content: string) => bytesToBase64(textBytes(content,FILE_LIMIT));
   function bodyBinary(data: Uint8Array) { if (!(data instanceof Uint8Array) || data.length > FILE_LIMIT) throw fail('request_limit'); return bytesToBase64(data); }
   const adapter: VaultAdapter = {
-    durableWrites, durableNamespace: true,
+    durableWrites, durableNamespace: true, ...(documents ? { documentSemantics: documents.service } : {}),
     async list() { return (await snapshot()).filter(row => visible(row.state.path)).map(row => ({ path: row.state.path, entryId: row.state.id, revision: row.state.revision, type: row.state.kind, ctime: row.presentation.ctime_ms, mtime: row.presentation.mtime_ms, size: row.presentation.size_bytes } as VaultEntry)); },
     async stat(path) { const target = normalizePath(path), row = (await snapshot()).find(row => row.state.path === target); return row ? { path: target, entryId: row.state.id, revision: row.state.revision, type: row.state.kind, ctime: row.presentation.ctime_ms, mtime: row.presentation.mtime_ms, size: row.presentation.size_bytes } : null; },
     // Background metadata/index reads must not consume the initial activation guard.
@@ -694,7 +721,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { listeners.delete(listener); if (!listeners.size && timer) { clearInterval(timer); timer = undefined; } };
     },
   };
-  return { adapter, mobileLifecycle, nativeEditor, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
+  return { adapter, ...(documents ? { documentSemantics: documents.service } : {}), mobileLifecycle, nativeEditor, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
     async presentationSettled(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input) || !sameKeys(input,['path','entryId','state'])) throw fail('invalid_presentation_settled');
       let captured: NativePresentationSettled;
@@ -744,13 +771,19 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     }),
     release() {
       if (releasePromise) return releasePromise;
-      lifecycleEpoch++; presentationGeneration++;
+      lifecycleEpoch++; presentationGeneration++; documentQuiescing = true;
       stopNativeEditor(); stopPolling();
       releasePromise = (async () => {
         // Flush admitted consumers before retiring the native client lease.
         await lifecycleTask;
         await editorTail; await Promise.allSettled([...editorRetirements]);
-        await serialTail; await tail; closing = true;
+        await serialTail; await tail;
+        if (documents && !documentsDrained && !leaseReleased) {
+          documentCleanup = true;
+          try { await documents.release(); documentsDrained = true; documentOwner!.forget(); }
+          finally { documentCleanup = false; }
+        }
+        closing = true;
         if (!leaseReleased) {
           const result = (await request({ method:'release_client', reference:lease },undefined,true)).result;
           if (result.released !== true || !result.reference || ['local_store_id','client_id','token'].some(k => result.reference[k] !== lease![k])) throw fail('invalid_release',true);
