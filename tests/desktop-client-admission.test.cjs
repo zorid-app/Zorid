@@ -21,7 +21,7 @@ function fixture() {
     assert.deepEqual(reference, active, 'each admitted RPC carries the owned native lease');
     let result;
     switch (command.method) {
-      case 'identity': result = { local_store_id: 'authority' }; break;
+      case 'identity': result = { identity: { local_store_id: 'authority', realm_id: null, vault_id: null } }; break;
       case 'read_path':
         if (readGate) await readGate.promise;
         return { result: { entry: { id: 'entry', revision: 'rev', path: 'note.md', kind: 'file', deleted: false }, has_content: true,

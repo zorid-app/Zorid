@@ -261,5 +261,54 @@ Source verification additions: `tests/desktop-client-admission.test.cjs` covers
 flush/drain, failed flush, uncertain release, superseded admission and post-queue
 grant checks. Native module tests cover exclusive ownership, safe permanent inodes,
 authority changes and unsafe files. The explicit real CLI/host fixture includes
-duplicate-process ownership, crash/reacquire and durable checkpoint recovery. These
-new tests have not yet run; source review and syntax checks are not runtime evidence.
+duplicate-process ownership, crash/reacquire and durable checkpoint recovery. The main-based runtime gate below now covers these fixtures; it does not establish
+production window selection or editor lifecycle integration.
+
+
+## Main-based admission verification — 2026-10-16
+
+Candidate `20b6973` applies reviewed `6ee6999` onto main `16eb60f`. The cherry-pick
+was clean and preserves main's newer CLI/protocol code and the request/response
+frame test correction. Native guard/hooks were independently reviewed by the
+native owner; host and JavaScript lifecycle/dispatch guards by the CLI owner.
+
+| Check | Execution session | Result |
+| --- | --- | --- |
+| Native + desktop-host Rust tests, one job/thread | 99012 | Exit 0; 45 native, 3 host unit and 8 actual host subprocess tests passed (56 total) |
+| CJS admission, transport and durable wrappers | 68417 | Initial exit 1; 43 passed, 3 failed because the new fake-host identity reply omitted the existing `result.identity` wrapper |
+| Same CJS gate after reviewed fixture-only correction | 12950 | Exit 0; 46/46 passed, 7.01 seconds |
+| Fresh standalone CLI + desktop-host binaries | 2645 | Exit 0; 34.69 seconds |
+| Actual CLI/host integration fixtures, serial | 91374 | Exit 0; 6/6 passed, 3.02 seconds |
+
+The one-line synthetic identity correction matches the production wrapper and
+nullable logical realm/vault fields; it changes no application behavior. Its
+independent source review completed before this evidence commit. The actual
+fixtures verify independent conditional writers, coherent metadata/events, inert
+prepared intents, exact retry/ACK behavior, persistent local authority across
+folder move and replacement rejection, raw checkpoints above 16 MiB, duplicate
+client exclusion across children, distinct simultaneous clients, release retry,
+crash/reacquisition with retained checkpoints, and standalone CLI access while a
+consumer lease is active. All spawned fixture children were closed or reaped.
+
+Commands, run serially from `desktop-admission-integration`:
+
+```sh
+CARGO_TARGET_DIR=/private/tmp/zorid-desktop-admission-target CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo test --offline -p zorid-native -p zorid-desktop-host -j1 -- --test-threads=1
+node --test --test-concurrency=1 tests/desktop-client-admission.test.cjs tests/rust-vault-service.test.cjs tests/core-vault-fixture-service.test.cjs tests/desktop-durable-writes.test.cjs tests/desktop-durable-checkpoints.test.cjs
+CARGO_TARGET_DIR=/private/tmp/zorid-desktop-admission-target CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo build --offline -p zorid-cli -p zorid-desktop-host -j1
+ZORID_CLI_BIN=/private/tmp/zorid-desktop-admission-target/debug/zorid ZORID_DESKTOP_HOST_BIN=/private/tmp/zorid-desktop-admission-target/debug/zorid-desktop-host node --test --test-concurrency=1 tests/rust-vault-cli.integration.cjs
+```
+
+Environment: macOS, Homebrew Rust/Cargo 1.99.0, Node v26.10.0; dedicated target,
+debug information disabled, no incremental compilation or package installation.
+Logs on the validation machine are `/private/tmp/zorid-desktop-admission-` followed
+by `rust-tests.log`, `cjs-tests.log`, `cjs-tests-retry.log`, `build.log` and
+`integration.log`. SHA-256 of the actual tested binaries:
+
+- CLI: `483d10c492ba2f222ef87880fc857d9dc81d8441a17147a523f9af20f35eff79`
+- Desktop host: `e6ef99f1f04f314f89386e1dd62af1db1b731d6ff999094f5ec4ca7d1a30b752`
+
+This is fixture ownership and storage/transport evidence. It does not enable or
+verify production persistent window allocation, WindowBroker/preload selection,
+NoteBuffer checkpoint/flush integration, native UI, mobile, or full encrypted
+web/desktop/CLI convergence. The paused editor consumer remains untouched.
