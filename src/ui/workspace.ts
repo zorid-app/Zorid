@@ -33,6 +33,7 @@ import { createPdfView } from './pdf-view.ts';
 import type { PdfView } from './pdf-view.ts';
 import { createMediaView, mediaKind } from './media-view.ts';
 import type { MediaView } from './media-view.ts';
+import {createBaseSession, type BaseSession} from '../bases/session.ts';
 import { CanvasDocument } from '../canvas/document.ts';
 import { createCanvasView } from '../canvas/view.ts';
 import type { CanvasView } from '../canvas/view.ts';
@@ -61,14 +62,14 @@ interface Pane {
   content?:HTMLElement; runtime?:TabViewRuntime; rebindView?:(pane:Pane)=>void;
   viewReady?:boolean; viewMode?:Mode; viewKind?:Tab['kind']; viewSettings?:string;
   viewTabId?:string; viewPath?:string|null; renderVersion:number;
-  editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; mediaView?:MediaView; canvasView?:CanvasView;
+  editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; mediaView?:MediaView; canvasView?:CanvasView; baseView?:BaseSession;
   canvasSource?:string; embeds?:MarkdownEmbeds; properties?:PropertiesView;
   propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void;
   history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
 }
 interface Settings extends AttachmentImportSettings { theme: 'system' | 'dark' | 'light'; fontSize: number; readableWidth: boolean; showInlineTitle: boolean; defaultMode: 'live'; useTab: boolean; tabSize: number; smartIndentList: boolean; autoConvertHtml: boolean; }
 interface Command { name: string; shortcut?: string; icon?: string; action: () => void | Promise<void>; }
-export interface WorkspaceViewFactories { pdf?: typeof createPdfView; media?: typeof createMediaView; canvas?: typeof createCanvasView }
+export interface WorkspaceViewFactories { pdf?: typeof createPdfView; media?: typeof createMediaView; canvas?: typeof createCanvasView; base?: typeof createBaseSession }
 type EditorFactory = (parent: HTMLElement, options: EditorOptions) => EditorHandle;
 const nameOf = (path: string) => path.split('/').at(-1)!.replace(/\.md$/i, '');
 const parentOf = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
@@ -114,7 +115,7 @@ export class Workspace {
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
     try{this.saveSession();}catch{/* Storage failure must not bypass the dirty-document unload guard. */}
-    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.canvasView?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
+    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
   };
   private menuSerial = 0;
   private inputContextListener=(event:MouseEvent)=>{
@@ -133,6 +134,7 @@ export class Workspace {
   private canvasMarkdownEmbeds = new Set<MarkdownEmbeds>();
   private bufferSubscriptions = new NoteBufferSubscriptions();
   private bufferRevisions = new WeakMap<NoteBuffer,number>();
+  private bufferEntries = new WeakMap<NoteBuffer,symbol>();
   private initialized = false;
   private attachments?:AttachmentResources;
   private attachmentImporter?: AttachmentImporter;
@@ -253,12 +255,12 @@ export class Workspace {
       if(this.treeRename&&(this.treeRename.path===change.path||this.treeRename.path.startsWith(change.path+'/')))this.treeRename.session.dispose();
       for (const pane of this.panes) for (const tab of [...pane.tabs]) if (tab.path === change.path || tab.path?.startsWith(change.path + '/')) {
         const buffer = this.buffers.get(tab.path);
-        if (buffer?.dirty || (pane.active === tab.id ? pane.canvasView : this.cachedViews.get(tab)?.canvasView)?.hasPendingChanges()) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
+        if (buffer?.dirty || (pane.active === tab.id ? pane.canvasView : this.cachedViews.get(tab)?.canvasView)?.hasPendingChanges() || (pane.active === tab.id ? pane.baseView : this.cachedViews.get(tab)?.baseView)?.hasPendingChanges()) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
         const cached=this.cachedViews.get(tab);
         if(cached){
           const path=tab.path,generation=this.vaultGeneration;
           this.run(async()=>{
-            if(generation!==this.vaultGeneration||this.cachedViews.get(tab)!==cached||tab.path!==path||buffer?.dirty||cached.canvasView?.hasPendingChanges())return;
+            if(generation!==this.vaultGeneration||this.cachedViews.get(tab)!==cached||tab.path!==path||buffer?.dirty||cached.canvasView?.hasPendingChanges()||cached.baseView?.hasPendingChanges())return;
             // Keep the original path until the runtime's flush gate succeeds.
             // A rejected write must leave the recoverable tab and owner intact.
             await this.disposePaneViews(cached);
@@ -273,6 +275,7 @@ export class Workspace {
       this.renderSidebar(); this.renderRight();
     }), this.vault.on('rename', change => {
       const oldPath = change.oldPath!;
+      const movedBuffers=new Set([...this.buffers].filter(([path,buffer])=>this.bufferEntries.has(buffer)&&this.bufferEntries.get(buffer)===this.entryTokens.get(path)).map(([,buffer])=>buffer));
       this.invalidateTreeTokens(oldPath); this.invalidateTreeTokens(change.path);
       const relocate=(path:string)=>path===oldPath||path.startsWith(oldPath+'/')?change.path+path.slice(oldPath.length):path;
       this.bookmarks=new Set([...this.bookmarks].map(relocate));
@@ -284,13 +287,20 @@ export class Workspace {
       for(const pane of this.panes)for(const tab of pane.tabs)if(tab.history)tab.history=tab.history.map(relocate);
       for (const [previous, buffer] of [...this.buffers]) if (previous === oldPath || previous.startsWith(oldPath + '/')) {
         const next = change.path + previous.slice(oldPath.length);
-        this.buffers.delete(previous); this.buffers.set(next, buffer); this.run(() => buffer.relocate(next));
+        this.buffers.delete(previous); this.buffers.set(next, buffer);if(movedBuffers.has(buffer)){const token=this.treeEntryToken(next);if(token)this.bufferEntries.set(buffer,token);} this.run(() => buffer.relocate(next));
       }
       for (const pane of this.panes) for (const tab of pane.tabs) if (tab.path === oldPath || tab.path?.startsWith(oldPath + '/')) {
         const previous = tab.path; tab.path = change.path + previous.slice(oldPath.length);
       }
       this.renderSidebar(); this.renderRight(); this.panes.forEach(pane => this.run(()=>this.renderPane(pane))); this.saveSession();
     }), this.vault.on('modify', change => {
+      if(/\.base$/i.test(change.path)){
+        // The session observes query/config events itself. Keep its active property
+        // draft and cached DOM; only reconcile the shared clean config buffer.
+        const buffer=this.buffers.get(change.path),generation=this.vaultGeneration;
+        if(buffer&&!buffer.dirty)this.run(async()=>{await buffer.reload();if(generation===this.vaultGeneration&&this.buffers.get(change.path)===buffer)this.renderStatus();});
+        return;
+      }
       if(/\.canvas$/i.test(change.path)){
         const buffer=this.buffers.get(change.path),generation=this.vaultGeneration;
         const targets=this.loadedViews().filter(pane=>this.current(pane)?.path===change.path&&pane.canvasView).map(pane=>({pane,view:pane.canvasView!}));
@@ -409,6 +419,7 @@ export class Workspace {
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
     await this.flushPane(pane);
+    if(/\.base$/i.test(path))await this.prepareBase(path,generation);
     if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||pane.renderVersion!==version||!this.panes.includes(pane)||(expectedActivation!==undefined&&expectedActivation!==this.paneActivationRevision))return;
     this.noteNavigation.set(pane,(this.noteNavigation.get(pane)??0)+1);
     this.capturePaneState(pane);const current=this.current(pane);
@@ -424,10 +435,30 @@ export class Workspace {
     if(matchMedia('(max-width: 700px)').matches)this.root.classList.add('left-hidden');
   }
 
+  private async prepareBase(path:string,generation=this.vaultGeneration):Promise<void>{
+    const vault=this.vault,token=this.treeEntryToken(path);
+    const validate=()=>{if(generation!==this.vaultGeneration||vault!==this.vault||!token||this.treeEntryToken(path)!==token)throw new Error('The Base file is no longer current.');};
+    const buffer=await this.baseBufferFor(path,validate);
+    validate();if(buffer.dirty)buffer.update(buffer.text,{validateWrite:()=>{validate();if(this.buffers.get(path)!==buffer||buffer.path!==path)throw new Error('The Base buffer was replaced.');}});await buffer.flush();validate();
+  }
+
+  private async baseBufferFor(path:string,validateOwner:()=>void):Promise<NoteBuffer>{
+    validateOwner();const token=this.treeEntryToken(path),buffer=await this.bufferFor(path);
+    const validate=()=>{validateOwner();if(!token||this.treeEntryToken(path)!==token||this.buffers.get(path)!==buffer||buffer.path!==path)throw new Error('The Base target file is no longer current.');};
+    validate();
+    if(this.bufferEntries.get(buffer)!==token){
+      if(buffer.dirty||buffer.error)throw new Error('This file was replaced; its previous recovery draft is retained.');
+      await buffer.reload();validate();
+      if(buffer.dirty||buffer.error)throw new Error('This file changed while reconnecting its Base buffer.');
+      this.bufferEntries.set(buffer,token!);
+    }
+    return buffer;
+  }
+
   private async bufferFor(path:string):Promise<NoteBuffer>{
     let buffer=this.buffers.get(path); if(buffer){await buffer.load();return buffer;}
     buffer=new NoteBuffer(this.vault,path,{storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{if(buffer)this.bufferSubscriptions.publish(buffer);this.renderStatus();}});
-    this.buffers.set(path,buffer);
+    this.buffers.set(path,buffer);const token=this.treeEntryToken(path);if(token)this.bufferEntries.set(buffer,token);
     try{await buffer.load();return buffer;}catch(error){this.buffers.delete(path);throw error;}
   }
 
@@ -477,7 +508,7 @@ export class Workspace {
     pane.history=tab.history??[];pane.historyIndex=tab.historyIndex??-1;
     const content=el('div','tab-view-content');Object.assign(content.style,{display:'flex',flexDirection:'column',flex:'1',minHeight:'0',minWidth:'0',overflow:'hidden'});pane.element.append(content);pane.content=content;
     const runtime=createTabViewRuntime({id:tab.id,element:content,owner:this.viewOwner(pane),
-      flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flush();},
+      flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flush();await pane.baseView?.close();},
       dispose:()=>this.releasePaneView(pane,content),focus:()=>this.focusPane(pane)});pane.runtime=runtime;
     let ownerChanged=()=>{};pane.rebindView=owner=>{pane=owner;ownerChanged();};
     const toolbar=el('div','pane-toolbar');
@@ -497,7 +528,43 @@ export class Workspace {
         if((event.target as Element|null)?.closest?.('audio, video')){event.stopPropagation();return;}
         event.preventDefault();const entry=this.vault.entries.get(path);if(entry)this.fileMenu(entry,event.clientX,event.clientY);
       };
-      if(isImage(path))pane.imageView=createImageView(host,path,this.attachments!);
+      if(/\.base$/i.test(path)){
+        host.classList.add('base-attachment-view');Object.assign(host.style,{display:'flex',flexDirection:'column',minHeight:'0',overflow:'hidden',padding:'0'});
+        try{
+          await this.prepareBase(path,generation);if(version!==pane.renderVersion||!current())return;
+          const vault=this.vault,fileToken=this.treeEntryToken(path),resources=this.attachments!;
+          const validate=()=>{
+            if(generation!==this.vaultGeneration||vault!==this.vault||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The Base view is no longer open.');
+            if(!fileToken||this.treeEntryToken(path)!==fileToken||vault.entries.get(path)?.type!=='file')throw new Error('The Base file is no longer current.');
+          };
+          const session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,
+            buffers:{getBuffer:target=>this.baseBufferFor(target,validate),validate,
+              onBufferChange:(target,buffer,previous)=>{
+                this.mapInactiveSelections(target,previous,buffer.text);
+                for(const embeds of new Set([...this.canvasMarkdownEmbeds,...this.loadedViews().flatMap(owner=>owner.embeds?[owner.embeds]:[])]))embeds.invalidate(target);
+                for(const owner of this.loadedViews())if(owner.viewPath===target){owner.editor?.setValue(buffer.text);owner.properties?.refresh();owner.refreshPreview?.();}
+              },
+              rename:async(source,destination,validateResult)=>{
+                validate();validateResult();const token=this.treeEntryToken(source);
+                // Calling Workspace.flush here would await this accepted Base
+                // operation itself. Flush the shared buffers before Vault's queue.
+                for(const buffer of this.buffers.values())await buffer.flush();
+                await vault.rename(source,destination,()=>{validate();validateResult();if(!token||this.treeEntryToken(source)!==token)throw new Error('The moved file is no longer current.');this.requireAvailableTreePath(vault,destination,source);});
+              }},
+            openFile:(target,event)=>this.run(()=>{validate();return this.openNote(target,('button'in event&&event.button===1)||event.metaKey||event.ctrlKey,pane);}),
+            loadThumbnail:async request=>{
+              validate();if(request.signal.aborted)return null;
+              const raw=request.property==='file.file'?request.row.path:request.value.type==='string'?request.value.value:'';
+              const wiki=/^!?\[\[([^\r\n]*?)\]\]$/.exec(raw),link=wiki?wiki[1].split('|')[0]:raw;
+              const target=vault.entries.has(raw)?raw:vault.metadata.resolveLink(request.row.path,link,'wiki');
+              if(!target||!isImage(target))return null;
+              const token=this.treeEntryToken(target),lease=await resources.acquire(target);
+              try{validate();if(request.signal.aborted||!token||this.treeEntryToken(target)!==token){lease.release();return null;}return{url:lease.url,dispose:()=>lease.release()};}catch(error){lease.release();throw error;}
+            },onError:error=>notice(error instanceof Error?error.message:String(error))});
+          pane.baseView=session;await session.ready;
+        }catch(error){if(version===pane.renderVersion)host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
+      }
+      else if(isImage(path))pane.imageView=createImageView(host,path,this.attachments!);
       else if(mediaKind(path)){
         host.classList.add('media-attachment-view');
         const view=(this.viewFactories.media??createMediaView)(host,path,this.attachments!);
@@ -785,7 +852,7 @@ export class Workspace {
   private viewSettings():string{return JSON.stringify([this.settings.readableWidth,this.settings.showInlineTitle,this.settings.useTab,this.settings.tabSize,this.settings.smartIndentList]);}
   private clearPaneViewFields(pane:Pane):void{
     pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
-    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.canvasSource=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
+    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.canvasSource=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
     pane.renderVersion=++this.viewSequence;
   }
   private parkPaneView(pane:Pane,keepConnected=false):void{
@@ -803,7 +870,7 @@ export class Workspace {
     const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
     const connected=cached.content.isConnected;
     cached.runtime.attach(pane.element,this.viewOwner(pane));
-    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','canvasSource','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
+    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','canvasSource','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
     for(const key of fields)(pane as unknown as Record<string,unknown>)[key]=cached[key];
     pane.history=tab.history??cached.history;pane.historyIndex=tab.historyIndex??cached.historyIndex;
     pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);
@@ -1263,7 +1330,7 @@ export class Workspace {
     if(key==='o')action=()=>this.quickSwitcher();else if(key==='p')action=()=>this.commandPalette();else if(key===',')action=()=>this.showSettings();else if(key==='e')action=()=>this.toggleReading();else if(key==='f'&&!event.shiftKey&&this.activePane.pdfView)action=()=>this.activePane.pdfView?.showSearch();else if(key==='s')action=()=>this.flush();else if(key==='w')action=()=>this.closeTab(this.activePane,this.current());else if(key==='f'&&event.shiftKey)action=()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector('input')?.focus();};
     if(action){event.preventDefault();this.run(action);}
   }
-  private async flushPane(pane:Pane):Promise<void>{await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
-  async flush():Promise<void>{for(const pane of [...this.panes,...this.cachedViews.values()])await pane.canvasView?.flush();for(const buffer of this.buffers.values())await buffer.flush();}
+  private async flushPane(pane:Pane):Promise<void>{await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
+  async flush():Promise<void>{for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
   async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
 }

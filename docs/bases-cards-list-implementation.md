@@ -38,10 +38,12 @@ Observed static contracts used here:
 ## Host API
 
 `createBaseCardsView(container, options)` and `createBaseListView(container, options)`
-return `{ update(result), refreshLayout(), destroy() }`. Each owns one child scroller;
+return `{ update(result), refreshLayout(), hasActiveEdits(), destroy() }`. Each owns one child scroller;
 its container must receive a bounded height from the host. Import `cards-view.css`
-and/or `list-view.css` when mounting. `update` replaces the result atomically and
-invalidates old widget/edit/thumbnail owners even when the host reuses a version.
+and/or `list-view.css` when mounting. `update` replaces the result atomically once active edits settle and invalidates old
+widget/thumbnail owners even when the host reuses a version. While a draft, IME
+composition, or primitive write exists, only the latest requested result is queued;
+the original result version remains attached to the editor's write callback.
 
 Both accept:
 
@@ -49,10 +51,15 @@ Both accept:
   preserve modifiers. Cards open on background click/middle click and Enter; List
   opens through its file-name link, not arbitrary row text.
 - Optional `getPropertyLabel(property)` for root-config display names.
+- `hasActiveEdits()` and optional `onEditStateChange(active)` let the host defer
+  selected-view replacement and closing. `destroy()` remains explicit forced cleanup;
+  the host must not destroy a view with recoverable drafts during an ordinary switch.
 - Optional `renderProperty(element, { row, property, value, version })` returning a
   disposer, for the host's full metadata/link/value registry. It replaces the default
   primitive renderer; it must use the supplied version for writes and release all
-  resources in its disposer.
+  resources in its disposer. Custom widgets mark recoverable drafts/pending writes
+  with `data-base-editing` on their element/descendant and clear that marker only on
+  settle/cancel, so the common virtual surface can defer replacement and pin them.
 - Optional `editProperty({ version, path, property, value })`, `onError(error)`.
   Default editing is limited to note properties on Markdown files: booleans and
   text/number/null input. The host is responsible for write authorization, metadata
@@ -72,11 +79,15 @@ it is not in the visible order.
 ## Performance and lifecycle
 
 `presentation-common.ts` owns a visible window with 300 pixels of overscan and keeps
-one focused unit mounted outside that window. A Fenwick height index supports
+focused units and marked draft units mounted outside that window. A Fenwick height index supports
 logarithmic measured-height updates and visible-index lookup. One ResizeObserver
 watches the scroller and mounted units only. Scroll renders are animation-frame
 coalesced. Measured changes above the current anchor compensate scroll position.
-Snapshot/width changes rebuild the O(n) unit index; scroll does not scan every row.
+Snapshot/width changes rebuild the O(n) unit index once drafts settle; scroll does
+not scan every row. One subtree MutationObserver observes only child changes and the
+edit marker attribute, coalesces edit-state notifications, and releases deferred
+refreshes. Failed/unfocused drafts remain pinned during scrolling. IME blur waits
+for composition end and the final input task before attempting a write.
 Large query evaluation remains the query engine's responsibility.
 
 The Cards layout uses fixed initial metrics; List rows are measured when mounted.
@@ -92,10 +103,12 @@ performance or a matching reference latency/memory budget.
 - Full property widget/coercion registry, rich links, Markdown values, lists/tags,
   date/datetime controls, plugin renderers, transaction undo, and failed-write UX
   must be supplied or implemented; primitive rendering is not full metadata parity.
-- Resize/query replacement currently reconstructs visible units and can retire an
-  active editor. Precise focus/draft preservation and reference keyboard navigation,
-  selection semantics, mobile touch, CSS-theme card scaling, and ephemeral scroll
-  state need additional work and native verification.
+- Resize/query/group-collapse replacement now waits for active/failed drafts or
+  pending writes. This original preservation policy is not a native reference
+  interaction certification. An unresolved draft can defer presentation refresh
+  indefinitely; the host must communicate write conflicts and offer retry/cancel.
+  Reference keyboard navigation, selection semantics, mobile touch, CSS-theme card
+  scaling, and ephemeral scroll state still need work and native verification.
 - Query groups/rows retain the engine's ordering. List-valued group keys are composite
   keys, not membership expansion. No grouping mutation or persisted collapse option
   is invented. Collapse state is local and retained across updates.
@@ -108,3 +121,25 @@ modifiers, text selection/editor protection, List omissions and numbering, neste
 markers, group collapse, asynchronous thumbnail retirement, 10,000-row virtual
 mounting, write-version boundaries, edit failures, repeated edits, null/unsupported values, invalid numeric drafts, bounded observer
 subscriptions, and measured scroll anchoring. Focused strict TypeScript passes.
+
+## Draft preservation follow-up
+
+At root checkpoint `5e2e1d9`, a read-only jsdom probe reproduced active and failed
+drafts disappearing on query or layout replacement in both views. The follow-up
+keeps the current DOM and original write revision until save/cancel; it does not
+rebase a stale write onto a new snapshot. The controller must perform the actual
+compare-and-set validation. Group collapse/layout requests queue without retiring
+the editor, and a pending checkbox stays marked through callback completion and
+DOM restoration. Escape during an in-flight write cannot remove its owner.
+
+Validation: 43 focused serial tests (16 original, 13 independent prior review,
+14 new preservation cases) and focused strict TypeScript pass. New cases cover
+latest-result queuing with the original version, failed/unfocused draft pinning
+through resize/collapse/scroll, final IME text after blur, pending checkboxes, and
+custom marker lifecycle. Two older tests now explicitly cancel a draft before
+asserting retirement rather than expecting destructive query replacement. Native
+IME, mobile keyboard, and integrated controller behavior remain separate gates.
+
+Independent review additionally found that a custom widget throwing after marking a
+draft could strand that marker. Failed custom mounts now clear partial content and
+the marker, allowing a later result to render; both views have regressions.

@@ -2,7 +2,7 @@ import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewPatch } from './document.ts';
 import { executeBaseQuery, normalizeBaseProperty } from './query.ts';
 import type { BaseQueryOptions, BaseQueryResult } from './query.ts';
-import { readProperties, setProperty } from '../core/properties.ts';
+import { readProperties, removeProperty, setProperty } from '../core/properties.ts';
 import { isMarkdown, normalizePath } from '../core/types.ts';
 import type { Vault } from '../core/vault.ts';
 import type { NoteBuffer } from '../ui/note-buffer.ts';
@@ -17,7 +17,7 @@ export interface BaseBufferHost {
   /** Must return the workspace's shared buffer, including existing dirty drafts. */
   getBuffer(path: string): NoteBuffer | Promise<NoteBuffer>;
   validate(): void;
-  onBufferChange?(path: string, buffer: NoteBuffer): void;
+  onBufferChange?(path: string, buffer: NoteBuffer, previousText: string): void;
   rename?: BaseMutationHost['rename'];
 }
 /** No private buffers or direct disk writes: use the same recovery/CAS path as typing. */
@@ -35,9 +35,11 @@ export function createBaseMutationHost(options: BaseBufferHost): BaseMutationHos
         // Transform is synchronous: no intervening editor input may be discarded.
         options.validate(); validate();
         if (buffer.text !== source) throw new Error('The edited buffer changed');
-        if (next === source) return;
+        // A previous failed save may already contain this exact transformed draft.
+        // Retrying must still persist it (or report the continuing failure).
+        if (next === source && !buffer.dirty && !buffer.error) return;
         buffer.update(next, { validateWrite: () => { options.validate(); validateWrite(); } });
-        options.onBufferChange?.(path, buffer);
+        options.onBufferChange?.(path, buffer, source);
         // Do not replay or roll back a failed write: recovery draft owns that state.
         await buffer.flush();
       });
@@ -168,7 +170,9 @@ export class BaseController {
     validate(); return { validate, validateWrite };
   }
 
-  async editProperty(edit: BasePropertyEdit): Promise<void> {
+  editProperty(edit: BasePropertyEdit): Promise<void> { return this.writeProperty(edit); }
+
+  private async writeProperty(edit: BasePropertyEdit, remove = false): Promise<void> {
     const path = normalizePath(edit.path), { validate, validateWrite } = this.guard(edit.version, path);
     if (!this.current.result!.rows.some(row => row.path === path)) throw new Error('The file is not in this base result');
     const property = normalizeBaseProperty(edit.property);
@@ -181,7 +185,7 @@ export class BaseController {
       validate();
       const properties = readProperties(source);
       const existing = properties.find(item => item.key === key) ?? properties.find(item => item.key.toLowerCase() === key.toLowerCase());
-      return setProperty(source, existing?.key ?? key, value);
+      return remove ? (existing ? removeProperty(source, existing.key) : source) : setProperty(source, existing?.key ?? key, value);
     }, validate, validateWrite);
     await this.refresh();
   }
@@ -192,6 +196,8 @@ export class BaseController {
     if (!group || typeof group !== 'object' || Array.isArray(group) || !('property' in group) || typeof group.property !== 'string') {
       return Promise.reject(new Error('This view has no editable grouping property'));
     }
+    // Reference Kanban clears the key for the empty group; table null edits remain values.
+    if (edit.value === null) return this.writeProperty({ ...edit, property: group.property }, true);
     const current = this.current.result?.rows.find(row => row.path === edit.path)?.values[normalizeBaseProperty(group.property)];
     if (current?.type === 'list' && !Array.isArray(edit.value)) return Promise.reject(new Error('List-valued group membership requires an explicit list destination'));
     return this.editProperty({ ...edit, property: group.property });

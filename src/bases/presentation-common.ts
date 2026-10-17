@@ -14,16 +14,20 @@ export interface BasePresentationOptions {
   readonly openFile: (path: string, event: MouseEvent | KeyboardEvent) => void;
   readonly getPropertyLabel?: (property: string) => string;
   readonly editProperty?: (edit: { version: BaseQueryResult['version']; path: string; property: string; value: BaseExpressionValue }) => void | Promise<void>;
-  /** Custom widgets own their content and must return a disposer for every acquired resource. */
+  /** Custom widgets own their content and must return a disposer for every acquired resource.
+   * Mark a live draft/pending write with data-base-editing and remove it only on settle/cancel. */
   readonly renderProperty?: (element: HTMLElement, property: BasePropertyPresentation) => void | (() => void);
   readonly contextMenu?: (row: BaseQueryRow, event: MouseEvent) => void;
   readonly hoverFile?: (row: BaseQueryRow, event: MouseEvent) => void;
   readonly dragFile?: (row: BaseQueryRow, event: DragEvent) => void;
   readonly onError?: (error: unknown) => void;
+  /** Structural view switches must wait until all drafts and in-flight primitive writes settle. */
+  readonly onEditStateChange?: (active: boolean) => void;
 }
 export interface BasePresentationHandle {
   update(result: BaseQueryResult): void;
   refreshLayout(): void;
+  hasActiveEdits(): boolean;
   destroy(): void;
 }
 export function displayBaseProperty(value: BaseExpressionValue): string {
@@ -56,7 +60,11 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
   element.dataset.property = property;
   if (options.renderProperty) {
     try { return options.renderProperty(element, { row, property, value, version: result.version }) || (() => {}); }
-    catch (error) { reportPresentationError(options, error); element.textContent = 'Error'; return () => {}; }
+    catch (error) {
+      // A failed custom mount owns no live editor; clear its marker along with partial content.
+      element.removeAttribute('data-base-editing'); element.textContent = 'Error';
+      reportPresentationError(options, error); return () => {};
+    }
   }
   let disposed = false;
   let pending = false;
@@ -71,6 +79,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
     finally { pending = false; }
   };
   const draw = (current: BaseExpressionValue) => {
+    element.removeAttribute('data-base-editing');
     element.replaceChildren();
     if (property === 'file.name' || property === 'file.file') {
       const link = element.ownerDocument.createElement('a');
@@ -89,12 +98,13 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
       input.setAttribute('aria-label', options.getPropertyLabel?.(property) ?? property.replace(/^note\./, ''));
       input.addEventListener('change', async () => {
         if (pending || disposed || !isCurrent()) return;
-        const next = input.checked; input.disabled = true;
+        const next = input.checked; input.disabled = true; element.dataset.baseEditing = 'pending';
         const accepted = await commit({ type: 'boolean', value: next });
         if (!disposed && isCurrent()) {
           if (accepted) value = { type: 'boolean', value: next };
           input.checked = value.type === 'boolean' ? value.value : current.value;
           input.disabled = !editable;
+          element.removeAttribute('data-base-editing');
         }
       });
       element.append(input);
@@ -111,10 +121,14 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
     const input = element.ownerDocument.createElement('input');
     input.type = 'text'; input.value = displayBaseProperty(value);
     input.setAttribute('aria-label', options.getPropertyLabel?.(property) ?? property.replace(/^note\./, ''));
+    element.dataset.baseEditing = 'draft';
     element.replaceChildren(input); input.focus(); input.select();
-    let ended = false;
+    let ended = false, composing = false, finishAfterComposition = false;
+    let compositionTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = async () => {
-      if (ended) return; ended = true;
+      if (disposed || !isCurrent() || ended) return;
+      if (composing) { finishAfterComposition = true; return; }
+      ended = true;
       const raw = input.value;
       if (input.validity.badInput) {
         ended = false; input.setAttribute('aria-invalid', 'true');
@@ -137,10 +151,19 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
         }
       }
     };
+    input.addEventListener('compositionstart', () => { composing = true; });
+    input.addEventListener('compositionend', () => {
+      composing = false;
+      if (finishAfterComposition) {
+        finishAfterComposition = false;
+        // Allow the final input event to publish the completed composition text.
+        compositionTimer = setTimeout(() => { compositionTimer = undefined; void finish(); }, 0);
+      }
+    });
     input.addEventListener('blur', () => { void finish(); });
     input.addEventListener('keydown', event => {
-      if (event.isComposing || event.defaultPrevented) return;
-      if (event.key === 'Escape') { event.preventDefault(); ended = true; draw(value); }
+      if (composing || event.isComposing || event.defaultPrevented || pending) return;
+      if (event.key === 'Escape') { event.preventDefault(); ended = true; if (compositionTimer !== undefined) clearTimeout(compositionTimer); draw(value); }
       else if (event.key === 'Enter') { event.preventDefault(); void finish(); }
     });
   };
@@ -185,14 +208,21 @@ class HeightIndex {
   }
 }
 
-/** Owns one scroller, visible units plus the focused unit, and one bounded ResizeObserver. */
-export function createBaseVirtualSurface(container: HTMLElement, className: string, layout: (width: number) => readonly VirtualUnit[], onError?: (error: unknown) => void) {
+export interface BaseVirtualEditLifecycle {
+  readonly beforeRefresh?: () => void;
+  readonly onEditStateChange?: (active: boolean) => void;
+}
+const hasBaseDraft = (element: HTMLElement) => element.hasAttribute('data-base-editing') || !!element.querySelector('[data-base-editing]');
+
+/** Owns one scroller, visible units plus focused/draft units, and bounded layout observers. */
+export function createBaseVirtualSurface(container: HTMLElement, className: string, layout: (width: number) => readonly VirtualUnit[], onError?: (error: unknown) => void, editLifecycle: BaseVirtualEditLifecycle = {}) {
   const document = container.ownerDocument;
   const scroller = document.createElement('div'); scroller.className = `bases-virtual-scroll ${className}`;
   scroller.style.cssText = 'overflow:auto;overflow-anchor:none;position:relative;height:100%;min-height:100px';
   const content = document.createElement('div'); content.className = 'bases-virtual-content'; content.style.position = 'relative';
   scroller.append(content); container.append(scroller);
   let units: readonly VirtualUnit[] = []; let destroyed = false; let width = -1; let frame: number | undefined;
+  let refreshQueued = false, reportedEditing = false;
   const heights = new HeightIndex();
   const mounted = new Map<number, ReturnType<VirtualUnit['mount']>>();
   const win = document.defaultView;
@@ -208,7 +238,7 @@ export function createBaseVirtualSurface(container: HTMLElement, className: stri
     const bottom = scroller.scrollTop + (scroller.clientHeight || 600) + 300;
     const start = heights.find(top); const end = units.length ? heights.find(bottom) + 1 : 0;
     for (const [index, item] of mounted) {
-      if ((index < start || index >= end) && !item.element.contains(document.activeElement)) release(index);
+      if ((index < start || index >= end) && !item.element.contains(document.activeElement) && !hasBaseDraft(item.element)) release(index);
     }
     for (let i = start; i < end; i++) if (!mounted.has(i)) {
       const item = units[i].mount(); mounted.set(i, item);
@@ -237,18 +267,35 @@ export function createBaseVirtualSurface(container: HTMLElement, className: stri
   }) : undefined;
   const refresh = () => {
     if (destroyed) return;
+    if (hasBaseDraft(content)) { refreshQueued = true; return; }
+    refreshQueued = false; editLifecycle.beforeRefresh?.();
+    if (destroyed) return;
     for (const index of [...mounted.keys()]) release(index);
     width = scroller.clientWidth; units = layout(width || 800); heights.reset(units); render();
   };
+  const editObserver = win?.MutationObserver ? new win.MutationObserver(() => {
+    if (destroyed) return;
+    let active = hasBaseDraft(content);
+    if (!active && refreshQueued) refresh();
+    if (destroyed) return;
+    active = hasBaseDraft(content);
+    if (active !== reportedEditing) {
+      reportedEditing = active;
+      try { editLifecycle.onEditStateChange?.(active); } catch (error) { try { onError?.(error); } catch {} }
+    }
+    if (!active) schedule();
+  }) : undefined;
+  editObserver?.observe(content, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-base-editing'] });
   scroller.addEventListener('scroll', schedule, { passive: true });
   scroller.addEventListener('focusout', schedule);
   win?.addEventListener('resize', refresh); observer?.observe(scroller);
   return {
     element: scroller, refresh,
+    hasActiveEdits: () => !destroyed && hasBaseDraft(content),
     destroy() {
       if (destroyed) return; destroyed = true;
       if (frame !== undefined) win?.cancelAnimationFrame(frame);
-      observer?.disconnect(); win?.removeEventListener('resize', refresh);
+      editObserver?.disconnect(); observer?.disconnect(); win?.removeEventListener('resize', refresh);
       for (const index of [...mounted.keys()]) release(index);
       scroller.remove();
     },

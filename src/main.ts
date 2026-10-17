@@ -21,6 +21,11 @@ import './ui/media-view.css';
 import './canvas/view.css';
 import './canvas/attachment-card.css';
 import './canvas/embed-preview.css';
+import './bases/session.css';
+import './bases/table-view.css';
+import './bases/cards-view.css';
+import './bases/list-view.css';
+import './bases/kanban-view.css';
 import './ui/split-layout.css';
 import './ui/tab-docking.css';
 
