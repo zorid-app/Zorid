@@ -328,7 +328,14 @@ export function createBrowserBinaryStageStore(options: BrowserBinaryStageStoreOp
             const exact = await payloadOf(saved.header); if (!exact || !same(exact.header, saved.header)) throw fail('storage_corrupt');
             // Bounded one-chunk encoding comparison, not a whole-stage replay or JS hash proof.
             const scratch = new wasm.WasmBinaryBuilder(scopeJson); let record: StageWasmRecord | undefined;
-            try { record = scratch.pushChunk(saved.header.updateId, captured.bytes); if (!equalBytes(record.payloadBytes(), exact.bytes) || !same(sourceDescriptor(JSON.parse(record.descriptorJson())), saved.header.descriptor)) throw fail('binary_chunk_conflict'); }
+            try {
+              record = scratch.pushChunk(saved.header.updateId, captured.bytes);
+              const descriptor = JSON.parse(record.descriptorJson());
+              if (!equalBytes(record.payloadBytes(), exact.bytes) || !same(sourceDescriptor(descriptor), saved.header.descriptor)) throw fail('binary_chunk_conflict');
+              const expected: BinaryChunkReceipt = { sequence: captured.sequence, offset: captured.offset, bytes: captured.bytes.length,
+                digest: digest(descriptor.record.body.digest), acceptedLength: String(BigInt(captured.offset) + BigInt(captured.bytes.length)) };
+              if (!same(saved.chunk, expected)) throw fail('storage_corrupt');
+            }
             finally { safeFree(record); safeFree(scratch); }
             active(); return clone(saved.chunk!);
           }

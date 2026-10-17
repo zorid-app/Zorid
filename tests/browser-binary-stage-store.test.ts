@@ -154,6 +154,15 @@ test('exact append retry returns original receipt and rejects changed bytes, seq
   await assert.rejects(f.store.append(ref,{sequence:2,offset:'3',bytes:new Uint8Array([1])}),{code:'binary_chunk_conflict'});
   assert.equal((await f.store.query(ref)).acceptedLength,'3');
 });
+test('exact append retry rejects corrupted persisted sequence, digest and accepted length receipts',async()=>{
+  const f=stageFixture(),ref=await f.store.begin(stageRequest('corrupt-retry','3')),input={sequence:0,offset:'0',bytes:new Uint8Array([1,2,3])};
+  const receipt=await f.store.append(ref,input),original=structuredClone([...f.records.get('binary_stage_chunks')!.values()][0]),key=['client',ref.stageId,original.sequenceOrder],before=structuredClone(f.usage());
+  for(const changed of [{sequence:1},{digest:'0'.repeat(64)},{acceptedLength:'4'}]){
+    const corrupt=structuredClone(original);Object.assign(corrupt.chunk,changed);f.seed('binary_stage_chunks',key,corrupt);
+    await assert.rejects(f.store.append(ref,input),{code:'storage_corrupt'});assert.deepEqual(f.row('binary_stage_chunks',key),corrupt);assert.deepEqual(f.usage(),before);
+  }
+  f.seed('binary_stage_chunks',key,original);assert.deepEqual(await f.store.append(ref,input),receipt);assert.equal((await f.store.query(ref)).acceptedLength,'3');
+});
 test('normal appends retain builder cache; restart restores each durable source once',async()=>{
   const f=stageFixture(),ref=await f.store.begin(stageRequest('cache',String(131072*2+3))),chunk=new Uint8Array(131072).fill(5);
   await f.store.append(ref,{sequence:0,offset:'0',bytes:chunk});await f.store.append(ref,{sequence:1,offset:'131072',bytes:chunk});assert.equal(f.metrics.restoredChunks,0);
