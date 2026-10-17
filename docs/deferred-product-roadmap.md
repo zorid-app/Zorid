@@ -117,6 +117,22 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- Latest composition is fa4d4aaf in stage4-integrated-engine: portable index
+  through6867ab9b/7c5876b6, CLI metadata dcdcff38, native Store through40109019
+  plus reviewed corrupt-key/provenance/decode-bound fixes a0faa65f/7e4efc93/
+  ca97529b. Lock7eddb413 adds unicode-normalization0.1.25 and tinyvec1.13.3
+  without upgrading existing dependencies. Store/index/CLI runtime checks await
+  release of mobile's confirmed live host opt1 handle22634; do not overlap it.
+- Eight useful workers now include stage4_browser_index_host in isolated
+  stage4-browser-index-host (new browser-document-index.ts/tests and WASM
+  document_index.rs, narrowly owned factory/worker/runtime dispatch seams) and
+  stage4_native_consumer in isolated stage4-native-consumer (new native
+  document_api.rs/document_index.rs, minimal module/reexports/dependencies).
+  Native owner acknowledged that wiring in msg_30db1a73c806; mobile retains
+  iOS cfg/admission/filesystem/embedded-host ownership. A separate native
+  semantic error wrapper preserves existing exhaustive Error consumers.
+  Both adapters must use shared Rust engines and coherent retained generations;
+  no JavaScript parser, duplicate resolver or current-body-as-old-snapshot path.
 - Latest Stage4 verification supersedes the first-run failures below. Isolated
   candidate0ce5cd40 in stage4-integrated-engine includes metadata fixes5590df2,
   dac1f0c and59863af plus Base accepted fixture projection12e05248. Official

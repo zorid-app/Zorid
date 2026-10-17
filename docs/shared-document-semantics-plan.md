@@ -4,7 +4,8 @@ Accepted by the user on 2026-10-16 after reviewing the proposed split between
 headless data semantics and live editor syntax. This is the next shared-core
 milestone (roadmap wave4), not a change to the current first-milestone completion
 criteria. User explicitly started Stage4 on 2026-10-17. Contract/corpus work is
-active; no parser implementation or consumer migration is yet verified.
+active. The first native Rust metadata/Base corpus runs pass in an isolated
+candidate; browser-WASM parity and consumer migration remain in progress.
 
 ## Timing and dependency gate
 
@@ -101,7 +102,11 @@ nonoverlapping ownership. Editor session retains live parsing/rendering ownershi
 Heavy builds and integration remain coordinator-serialized on the8GB machine.
 
 Current status (2026-10-17): wave3 acceptance is recorded in
-`shared-core-milestone-acceptance.md`; this is the next implementation stage.
-Contracts/fixtures precede parser/index/Base implementation and incremental
-consumer replacement. No semantic implementation is claimed by closing wave3.
+`shared-core-milestone-acceptance.md`; Stage4 source implementation is active.
+The isolated native metadata run passes all49 shared Markdown cases plus value,
+bound and YAML checks. The Base run passes30 accepted expressions,10 queries
+and focused error/resource checks. Portable index and native cache source are
+under independent review; standalone CLI metadata is composed for verification.
+Actual browser-WASM parity and complete CLI/web/desktop consumer evidence remain
+required. No semantic implementation is claimed by closing wave3.
 Track ownership and current execution state in `deferred-product-roadmap.md`.
