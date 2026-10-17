@@ -345,3 +345,21 @@ test('password keeps initial error observation, final error stops scans, explici
   error.remove();view.succeed();await presentationTick();
   assert.equal(f.presentations.at(-1)?.state,'ready');assert.equal(f.opened.length,1);
 });
+
+
+test('changed native launch identity reveals its visible error without acknowledging the replacement',async t=>{
+  const settled:unknown[]=[];
+  const f=await setup(t,{editorOnly:true,initialPath:'A.md',initialEntryId:'old-entry',presentationSettled:async value=>{settled.push(value);}});
+  assert.deepEqual(settled,[{path:'A.md',entryId:'old-entry',state:'error'}]);
+  assert.match(document.body.textContent??'',/selected note changed/);
+  assert.equal(f.workspace.activePane.editor,undefined);assert.deepEqual(f.opened,[]);
+  await f.workspace.flush();
+  assert.equal(await f.adapter.read('A.md'),'Alpha');
+});
+
+test('missing native selection error delivery rejection does not fail vault admission',async t=>{
+  const f=await setup(t,{editorOnly:true,initialPath:'Missing.md',initialEntryId:'missing-entry',presentationSettled:async()=>{throw new Error('native UI unavailable');}});
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.match(document.body.textContent??'',/selected note changed/);assert.deepEqual(f.opened,[]);
+  await f.workspace.openNote('A.md');assert.equal(f.workspace.activePane.editor?.getValue(),'Alpha');
+});

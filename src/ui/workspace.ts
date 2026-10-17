@@ -446,7 +446,15 @@ export class Workspace {
     if(platform.createNoteOnOpen){await this.newNote();return;}
     if(platform.initialPath===undefined)return;
     const entry=this.vault.entries.get(platform.initialPath);
-    if(!platform.initialEntryId||entry?.type!=='file'||entry.entryId!==platform.initialEntryId){notice('The selected note changed or is no longer available. Return to Files and select it again.');return;}
+    if(!platform.initialEntryId||entry?.type!=='file'||entry.entryId!==platform.initialEntryId){
+      notice('The selected note changed or is no longer available. Return to Files and select it again.');
+      // This error has no document runtime. Reveal its visible notice using only
+      // the admitted launch identity; never acknowledge the replacement file.
+      if(platform.initialEntryId&&this.platform===platform&&this.nativeOpening===platform&&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased){
+        try{void Promise.resolve(platform.presentationSettled?.({path:platform.initialPath,entryId:platform.initialEntryId,state:'error'})).catch(()=>{});}catch{/* Optional UI delivery cannot fail admission. */}
+      }
+      return;
+    }
     await this.openNote(platform.initialPath);
   }
 
