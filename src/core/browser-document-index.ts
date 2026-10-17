@@ -56,7 +56,7 @@ function baseOptions(input:unknown):string {
   if(Object.keys(value).some(key=>!allowed.has(key)))throw fail('index_invalid_request');
   const result:Record<string,unknown>={};
   for(const key of ['viewIndex','maxRows','clockMs'])if(value[key]!==undefined){const n=value[key];if(typeof n!=='number'||!Number.isSafeInteger(n)||(key!=='clockMs'&&n<0))throw fail('index_invalid_request');result[key]=n;}
-  result.clockMs=value.clockMs===undefined?Date.now():value.clockMs;
+  const clock=value.clockMs===undefined?Date.now():value.clockMs;if(typeof clock!=='number'||!Number.isSafeInteger(clock))throw fail('index_invalid_request');result.clockMs=clock;
   if(value.timezone!==undefined)result.timezone=inputText(value.timezone,256);
   for(const key of ['searchTerms','ignorePaths'])if(value[key]!==undefined){const array=value[key];if(!Array.isArray(array)||array.length>1000)throw fail('index_input_limit');result[key]=array.map(item=>inputText(item,4096));}
   const raw=JSON.stringify(result);if(size(raw)>65536)throw fail('index_input_limit');return raw;

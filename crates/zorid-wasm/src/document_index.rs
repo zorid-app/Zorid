@@ -17,18 +17,28 @@ const MAX_TOKENS: usize = 16;
 fn error(code: &str) -> JsValue {
     JsValue::from_str(&format!("{{\"code\":\"{code}\"}}"))
 }
-fn contract(value: IndexError) -> JsValue {
-    let code = match value {
+fn contract_code(value: &IndexError) -> &'static str {
+    match value {
         IndexError::StaleSource => "index_source_changed",
         IndexError::StaleIndex => "index_head_changed",
         IndexError::PumpLimit => "index_pump_limit",
         IndexError::GenerationLimit => "index_generation_limit",
         IndexError::SnapshotExpired => "index_snapshot_expired",
         IndexError::QueryMismatch => "index_query_mismatch",
-        _ => "index_invalid_record",
-    };
-    error(code)
+        IndexError::InvalidQuery => "index_invalid_query",
+        IndexError::InvalidBudget => "index_invalid_budget",
+        IndexError::InvalidTarget => "index_invalid_target",
+        IndexError::MissingSource => "index_missing_source",
+        IndexError::NoProgress => "index_no_progress",
+        // A persisted projection/record/version failure cannot invalidate raw
+        // source. Surface the shared explicit derived-cache rebuild category.
+        _ => "index_rebuild_required",
+    }
 }
+fn contract(value: IndexError) -> JsValue {
+    error(contract_code(&value))
+}
+
 fn decode<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, JsValue> {
     if input.len() > MAX_JSON {
         return Err(error("index_input_limit"));
@@ -669,5 +679,24 @@ mod tests {
             1
         );
         assert_eq!(report["value"]["result"]["rows"][0]["entryId"], "a");
+    }
+    #[test]
+    fn corrupted_projection_and_cached_versions_request_derived_rebuild_only() {
+        assert_eq!(
+            contract_code(&IndexError::ContentMismatch),
+            "index_rebuild_required"
+        );
+        assert_eq!(
+            contract_code(&IndexError::InvalidRecord),
+            "index_rebuild_required"
+        );
+        assert_eq!(
+            contract_code(&IndexError::InvalidVersion),
+            "index_rebuild_required"
+        );
+        assert_eq!(
+            contract_code(&IndexError::InvalidQuery),
+            "index_invalid_query"
+        );
     }
 }
