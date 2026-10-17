@@ -19,7 +19,8 @@ use tower::ServiceExt;
 use zorid_crypto::{seal, SystemEntropy, VaultKey};
 use zorid_sync_protocol::{
     rpc::{self, pb},
-    DeviceId, Header, RealmId, UpdateId, VaultId, MAX_PLAINTEXT_BYTES,
+    DeviceId, Header, RealmId, UpdateId, VaultId, MAX_HEADER_BYTES, MAX_PLAINTEXT_BYTES,
+    MAX_WIRE_BYTES,
 };
 use zorid_sync_rpc::relay_service_client::RelayServiceClient;
 use zorid_sync_server::{rpc::router, BearerToken, RelayStore};
@@ -139,7 +140,7 @@ fn pull(epoch: &str, after: u64, through: Option<u64>) -> pb::PullRequest {
     }
 }
 fn wire(update: &str, full: bool) -> Vec<u8> {
-    let header = Header::new(
+    let mut header = Header::new(
         RealmId::new("realm").unwrap(),
         VaultId::new("va").unwrap(),
         UpdateId::new(update).unwrap(),
@@ -147,6 +148,18 @@ fn wire(update: &str, full: bool) -> Vec<u8> {
         1,
     )
     .unwrap();
+    if full {
+        // Fill the allowed authenticated header as well as the plaintext, so
+        // this reaches the exact envelope cap rather than only its payload cap.
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&header.encode().unwrap()).unwrap();
+        value["optional_extensions"] = serde_json::json!({"padding": ""});
+        header = Header::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let padding = MAX_HEADER_BYTES - header.encode().unwrap().len();
+        value["optional_extensions"]["padding"] = "x".repeat(padding).into();
+        header = Header::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(header.encode().unwrap().len(), MAX_HEADER_BYTES);
+    }
     let plaintext = vec![0x93; if full { MAX_PLAINTEXT_BYTES } else { 8 }];
     seal(
         &header,
@@ -178,6 +191,7 @@ async fn native_http2_full_ciphertext_retry_bounded_snapshot_and_durable_reopen(
     let mut originals = Vec::new();
     for update in ["u1", "u2", "u3"] {
         let raw = wire(update, true);
+        assert_eq!(raw.len(), MAX_WIRE_BYTES);
         let first = client
             .append(auth(append(update, raw.clone()), &f.a))
             .await
