@@ -167,7 +167,15 @@ export class AttachmentImporter {
     let path = prefix + name.stem + name.extension, suffix = 0;
     while (inventory.has(path.toLowerCase())) path = prefix + name.stem + ` ${++suffix}` + name.extension;
     if (source) {
-      validate?.(); await this.vault.createBinaryStream(path, source, { validate }); validate?.();
+      validate?.(); const committed = await this.vault.createBinaryStream(path, source, { validate });
+      try { validate?.(); }
+      catch (error) {
+        // Publication already succeeded. Preserve that fact when a synchronous
+        // create listener or the next microtask retires the receiving workspace.
+        const failure = new Error(error instanceof Error ? error.message : 'Attachment committed before the destination closed.', { cause: error });
+        if (error && typeof error === 'object') for (const key of ['code', 'source', 'commitUncertain'] as const) if (key in error) Object.assign(failure, { [key]: (error as Record<string, unknown>)[key] });
+        throw Object.assign(failure, { committedAttachment: Object.freeze({ path: committed.path, ...(committed.entryId === undefined ? {} : { entryId: committed.entryId }), ...(committed.revision === undefined ? {} : { revision: committed.revision }) }) });
+      }
     } else await this.vault.createBinary(path, bytes!);
     return { path, embed: attachmentEmbed(this.vault, path, ownerPath, options) };
   }

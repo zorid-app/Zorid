@@ -63,3 +63,11 @@ test('invalid configured folder rejects before invoking a source factory or lega
   await assert.rejects(f.importer.import({name:'asset.bin',source(){opened++;throw new Error('must not open');},async read(){read++;throw new Error('must not read');}},'',null,{attachmentFolderPath:'../escape'}),/escape/);
   assert.equal(opened,0);assert.equal(read,0);assert.equal(f.calls.length,0);
 });
+test('cancellation at successful publication retains the committed attachment witness',async()=>{
+  const f=await fixture(),file=fileHandle(3);let current=true;
+  f.vault.on('create',change=>{if(change.path==='After/Images/asset.bin')current=false;});
+  await assert.rejects(f.importer.import(file.captured,'Receiving/Owner.md',()=>{if(!current)throw Object.assign(new Error('The destination vault is no longer open.'),{code:'destination_closed'});return 'After/Active.md';},{attachmentFolderPath:'./Images'}),error=>{
+    assert.equal((error as any).code,'destination_closed');const witness=(error as any).committedAttachment;assert.equal(witness.path,'After/Images/asset.bin');assert.equal(witness.revision,'committed');assert.equal(witness.entryId,f.published.get(witness.path)!.entryId);assert.equal(Object.isFrozen(witness),true);return true;
+  });
+  assert.equal(f.published.get('After/Images/asset.bin')!.size,3);assert.equal(f.calls.filter(value=>value==='commit').length,1);assert.equal(f.calls.includes('abort'),false);assert.equal(file.whole(),0);
+});
