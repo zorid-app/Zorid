@@ -8,6 +8,8 @@
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
         <string>$(ZORID_APP_DISPLAY_NAME)</string>
+	<key>ZoridAppEnvironment</key>
+	<string>$(ZORID_APP_ENVIRONMENT)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

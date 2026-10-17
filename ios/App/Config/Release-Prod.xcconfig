@@ -1,0 +1,2 @@
+#include "Production.xcconfig"
+CAPACITOR_DEBUG = false
