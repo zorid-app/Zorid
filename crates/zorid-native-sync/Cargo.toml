@@ -1,0 +1,25 @@
+[package]
+name = "zorid-native-sync"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+publish = false
+description = "Shared native loopback fixture sync orchestration"
+
+[dependencies]
+zorid-core = { path = "../zorid-core" }
+zorid-native = { path = "../zorid-native" }
+zorid-store = { path = "../zorid-store" }
+zorid-file-sync = { path = "../zorid-file-sync" }
+zorid-client-sync = { path = "../zorid-client-sync" }
+zorid-sync-protocol = { path = "../zorid-sync-protocol" }
+zorid-crypto = { path = "../zorid-crypto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+reqwest = { version = "=0.13.5", default-features = false, features = ["blocking"] }
+zeroize = "=1.9.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
