@@ -1742,7 +1742,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "zorid-core",
+ "zorid-file-sync",
  "zorid-native",
+ "zorid-native-sync",
  "zorid-store",
 ]
 
