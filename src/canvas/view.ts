@@ -7,6 +7,8 @@ import type { EditorOptions } from '../ui/editor.ts';
 import type { EmbedRequest } from '../ui/markdown.ts';
 import { createCanvasMarkdownCard } from './markdown-card.ts';
 import type { CanvasMarkdownCard, CanvasMarkdownSession } from './markdown-card.ts';
+import { CANVAS_RESIZE_DIRECTIONS, canvasBounds, canvasResizeGrid, canvasResizeRecordIndices, canvasSnapCoordinates, resizeCanvasBounds, scaleCanvasBounds, snapCanvasCoordinate } from './resize.ts';
+import type { CanvasBounds, CanvasResizeDirection } from './resize.ts';
 
 export interface CanvasViewOptions {
   document: CanvasDocument;
@@ -73,13 +75,14 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const cardMenu = dom.createElement('div'); cardMenu.className = 'zorid-canvas-card-menu'; cardMenu.setAttribute('aria-label', 'Canvas creation');
   const viewport = dom.createElement('div'); viewport.className = 'zorid-canvas-viewport'; viewport.tabIndex = 0; viewport.setAttribute('role', 'region'); viewport.setAttribute('aria-label', 'Canvas');
   const world = dom.createElement('div'); world.className = 'zorid-canvas-world';
+  const resizeOutline = dom.createElement('div'); resizeOutline.className = 'zorid-canvas-resize-outline'; resizeOutline.hidden = true;
   const svg = dom.createElementNS(svgNS, 'svg'); svg.classList.add('zorid-canvas-edges');
   const background = dom.createElementNS(svgNS, 'svg'); background.classList.add('zorid-canvas-background'); background.setAttribute('aria-hidden', 'true');
   const pattern = dom.createElementNS(svgNS, 'pattern'), dot = dom.createElementNS(svgNS, 'circle'), fill = dom.createElementNS(svgNS, 'rect');
   pattern.id = `zorid-canvas-dots-${++viewSequence}`; pattern.setAttribute('patternUnits', 'userSpaceOnUse');
   dot.setAttribute('cx', '.7'); dot.setAttribute('cy', '.7'); dot.setAttribute('r', '.7'); pattern.append(dot);
   fill.setAttribute('width', '100%'); fill.setAttribute('height', '100%'); fill.setAttribute('fill', `url(#${pattern.id})`); background.append(pattern, fill);
-  world.append(svg); viewport.append(background, world);
+  world.append(svg, resizeOutline); viewport.append(background, world);
   const status = dom.createElement('div'); status.className = 'zorid-canvas-status'; status.setAttribute('role', 'status');
   const selectedDescription = dom.createElement('span'), unselectedDescription = dom.createElement('span');
   selectedDescription.id = `zorid-canvas-selected-${viewSequence}`; selectedDescription.hidden = true; selectedDescription.textContent = 'Selected';
@@ -95,7 +98,8 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const textCards = new Map<string, { original: CanvasNode; text: string; card: CanvasMarkdownCard; listeners: Set<(text: string) => void> }>();
   const attachments = new Map<string, { file: string; subpath: string; owner: { element: HTMLElement; destroy(): void } }>();
   const fileCards = new Map<string, { file: string; subpath: string; card: CanvasMarkdownCard }>();
-  let drag: { id: number; mode: 'move' | 'pan' | 'select'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
+  let drag: { id: number; mode: 'move' | 'pan' | 'select' | 'resize'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
+  let resizing: { direction: CanvasResizeDirection; initial: CanvasBounds; minimum: { width: number; height: number }; ratio: number; targets: Map<string, { original: CanvasNode; bounds: CanvasBounds }>; preview: Map<string, CanvasBounds>; edges: string[]; snaps: { x: number[]; y: number[] }; started: boolean; multiple: boolean } | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let editorOriginal = '';
   let editorFailure: unknown;
@@ -112,7 +116,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const invoke = (action: (() => void | Promise<void>) | undefined) => { if (!closed && action) try { Promise.resolve(action()).catch(report); } catch (error) { report(error); } };
   const button = (host: HTMLElement, name: string, glyph: string, action: () => void, size = 16) => {
     const button = dom.createElement('button'); button.type = 'button'; button.title = name; button.setAttribute('aria-label', name);
-    button.append(icon(glyph, size, dom)); button.onclick = () => { if (!closed && !editor) action(); }; host.append(button); return button;
+    button.append(icon(glyph, size, dom)); button.onclick = () => { if (!closed && !editor && !drag) action(); }; host.append(button); return button;
   };
   const controlGroup = () => { const group = dom.createElement('div'); group.className = 'zorid-canvas-control-group'; toolbar.append(group); return group; };
   const zoomControls = controlGroup();
@@ -132,6 +136,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     button(cardMenu, 'Add media', 'file', () => { void chooseFile(undefined, 'media').catch(report); }, 32);
   }
   const position = (node: CanvasNode) => {
+    const resized = resizing?.preview.get(node.id); if (resized) return { ...node, ...resized };
     const preview = drag?.positions.get(node.id);
     return preview ? { ...node, x: preview.x + drag!.dx, y: preview.y + drag!.dy } : node;
   };
@@ -149,7 +154,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   function drawNode(id: string): void {
     const node = position(projection.nodes.get(id)!.data), item = nodeEls.get(id)!;
     item.style.left = `${node.x}px`; item.style.top = `${node.y}px`; item.style.width = `${Math.max(1, node.width)}px`; item.style.height = `${Math.max(1, node.height)}px`;
-    item.classList.toggle('is-dragging', !!drag?.positions.has(id) && !!(drag.dx || drag.dy));
+    item.classList.toggle('is-dragging', !!drag?.positions.has(id) && !!(drag.dx || drag.dy) || !!resizing?.started && resizing.targets.has(id));
   }
   function endpoint(node: CanvasNode, side: CanvasValue | undefined, other: CanvasNode) {
     if (!['left', 'right', 'top', 'bottom'].includes(String(side))) {
@@ -200,6 +205,20 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     const selection = JSON.stringify([[...selectedNodes].sort(), [...selectedEdges].sort()]);
     if (selection !== announcedSelection) { announcedSelection = selection; selectionStatus.textContent = announcement; }
     for (const [id, entry] of [...fileCards, ...textCards]) if (!selectedNodes.has(id)) void entry.card.deactivate().catch(report);
+    drawResizeOutline();
+  }
+  function resizeHandles(host: HTMLElement): void {
+    for (const direction of CANVAS_RESIZE_DIRECTIONS) {
+      const handle = dom.createElement('div'); handle.className = `zorid-canvas-resize-handle is-${direction}`; handle.dataset.resize = direction; handle.setAttribute('aria-hidden', 'true'); host.append(handle);
+    }
+  }
+  resizeHandles(resizeOutline);
+  function drawResizeOutline(): void {
+    const multiple = selectedNodes.size > 1;
+    element.classList.toggle('has-multiple-selection', multiple); resizeOutline.hidden = !multiple;
+    if (!multiple) return;
+    const bounds = canvasBounds([...selectedNodes].map(id => position(projection.nodes.get(id)!.data)));
+    Object.assign(resizeOutline.style, { left: `${bounds.x}px`, top: `${bounds.y}px`, width: `${bounds.width}px`, height: `${bounds.height}px` });
   }
   function markdownFile(node: CanvasNode): boolean { return node.type === 'file' && /\.md$/i.test(String(node.file)) && !!options.openMarkdownFile; }
   function assertCanReplaceCards(next: CanvasDocument, allowQueuedText = false): void {
@@ -360,9 +379,9 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         label.textContent = node.type === 'link' ? String(node.url ?? '') : String(node.file ?? '').split('/').at(-1)!.replace(/\.md$/i, '') + (node.subpath ? ` › ${String(node.subpath).replace(/^#/, '')}` : '');
         item.append(label);
       }
-      frame.append(content); item.append(frame); world.append(item); nodeEls.set(id, item); drawNode(id);
+      frame.append(content); item.append(frame); resizeHandles(item); world.append(item); nodeEls.set(id, item); drawNode(id);
       item.ondblclick = event => {
-        if (event.defaultPrevented || nodeEls.get(id) !== item || ownsInput(event.target as Element)) return;
+        if (event.defaultPrevented || nodeEls.get(id) !== item || (event.target as Element).closest('[data-resize]') || ownsInput(event.target as Element)) return;
         if (markdownFile(node)) { event.preventDefault(); selectedNodes.clear(); selectedEdges.clear(); selectedNodes.add(id); paintSelection(); invoke(() => fileCards.get(id)!.card.activate({ x: event.clientX, y: event.clientY })); }
         else if (node.type === 'text') { event.preventDefault(); startEditing(id, 'text', { x: event.clientX, y: event.clientY }); }
       };
@@ -486,14 +505,49 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     Object.assign(host.style, { position: 'absolute', left: '20px', top: '20px', width: 'min(320px, calc(100% - 40px))', height: '100px', zIndex: '6' });
     viewport.append(host); openValueEditor(host, label, value, change, () => host.remove(), afterSave);
   }
-  function clearDrag(): void { drag = undefined; box.remove(); viewport.classList.remove('is-panning'); }
+  function clearDrag(): void {
+    const id = drag?.id; drag = undefined; resizing = undefined; box.remove(); viewport.classList.remove('is-panning', 'is-resizing'); viewport.style.removeProperty('cursor');
+    if (id !== undefined && viewport.hasPointerCapture?.(id)) viewport.releasePointerCapture(id);
+  }
+  function startResize(event: PointerEvent, handle: HTMLElement): boolean {
+    const owner = handle.closest<HTMLElement>('[data-node-id]');
+    if (owner && nodeEls.get(owner.dataset.nodeId!) !== owner || !owner && handle.parentElement !== resizeOutline) return false;
+    if (event.pointerType !== 'mouse' && owner && !selectedNodes.has(owner.dataset.nodeId!)) return false;
+    const ids = owner ? [owner.dataset.nodeId!] : [...selectedNodes];
+    if (!ids.length) return false;
+    const targets = new Map<string, { original: CanvasNode; bounds: CanvasBounds }>();
+    let ratio = 0;
+    for (const id of ids) {
+      const projected = projection.nodes.get(id)!;
+      targets.set(id, { original: projected.original, bounds: { x: projected.data.x, y: projected.data.y, width: Math.max(1, projected.data.width), height: Math.max(1, projected.data.height) } });
+      const mediaHost = attachments.get(id)?.owner.element;
+      const media = mediaHost?.matches('img,video') ? mediaHost : mediaHost?.querySelector('img,video');
+      if (media?.tagName === 'IMG') { const image = media as HTMLImageElement; if (image.naturalWidth && image.naturalHeight) ratio = image.naturalWidth / image.naturalHeight; }
+      else if (media?.tagName === 'VIDEO') { const video = media as HTMLVideoElement; if (video.videoWidth && video.videoHeight) ratio = video.videoWidth / video.videoHeight; }
+    }
+    // Reject mutable-model collisions in one pass before showing any preview.
+    canvasResizeRecordIndices(document.nodes, [...targets.values()].map(target => target.original));
+    const initial = canvasBounds([...targets.values()].map(target => target.bounds)), multiple = targets.size > 1;
+    const minimum = { width: 50, height: 50 };
+    if (multiple) for (const target of targets.values()) { minimum.width = Math.max(minimum.width, 50 * initial.width / target.bounds.width); minimum.height = Math.max(minimum.height, 50 * initial.height / target.bounds.height); }
+    const visible = [...projection.nodes.values()].map(node => node.data).filter(node => !targets.has(node.id) && node.x * scale + tx <= (viewport.clientWidth || 800) && (node.x + node.width) * scale + tx >= 0 && node.y * scale + ty <= (viewport.clientHeight || 600) && (node.y + node.height) * scale + ty >= 0);
+    resizing = { direction: handle.dataset.resize as CanvasResizeDirection, initial, minimum, ratio: ratio && multiple ? initial.width / initial.height : ratio, targets, preview: new Map(), snaps: canvasSnapCoordinates(visible), started: false, multiple, edges: [...projection.edges].filter(([, edge]) => targets.has(edge.fromNode) || targets.has(edge.toNode)).map(([id]) => id) };
+    drag = { id: event.pointerId, mode: 'resize', startX: event.clientX, startY: event.clientY, x: tx, y: ty, dx: 0, dy: 0, positions: new Map(), prior: new Set() };
+    viewport.classList.add('is-resizing'); viewport.style.cursor = win.getComputedStyle(handle).cursor;
+    return true;
+  }
   const pointerDown = (event: PointerEvent) => {
-    if (closed || editor || event.defaultPrevented || event.isPrimary === false) return;
+    if (closed || editor || drag || event.defaultPrevented || event.isPrimary === false) return;
     menuVersion++;
     const target = event.target as Element;
     if (ownsInput(target)) return;
     const node = target.closest<HTMLElement>('[data-node-id]'), edge = target.closest<HTMLElement | SVGElement>('[data-edge-id],[data-edge-label-id]');
     const pan = event.button === 1 || (event.button === 0 && space); if (!pan && event.button !== 0) return;
+    const handle = target.closest<HTMLElement>('[data-resize]');
+    if (!pan && handle) {
+      try { if (!startResize(event, handle)) return; } catch (error) { report(error); return; }
+      event.preventDefault(); viewport.focus(); viewport.setPointerCapture?.(event.pointerId); return;
+    }
     event.preventDefault(); viewport.focus();
     const prior = new Set(selectedNodes);
     if (!pan) {
@@ -519,10 +573,24 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (closed || !drag || drag.id !== event.pointerId) return;
     const dx = event.clientX - drag.startX, dy = event.clientY - drag.startY;
     if (drag.mode === 'pan') { tx = drag.x + dx; ty = drag.y + dy; transform(); return; }
+    if (drag.mode === 'resize' && resizing) {
+      if (!resizing.started && Math.hypot(dx, dy) < 5) return;
+      if (!resizing.started && !resizing.multiple) { selectedNodes.clear(); selectedEdges.clear(); selectedNodes.add(resizing.targets.keys().next().value!); paintSelection(); }
+      resizing.started = true;
+      const rect = viewport.getBoundingClientRect(), point = { x: (event.clientX - rect.left - tx) / scale, y: (event.clientY - rect.top - ty) / scale };
+      const disableSnap = /Mac|iPhone|iPad/.test(win.navigator.platform) ? event.ctrlKey : event.altKey;
+      if (!disableSnap) { point.x = snapCanvasCoordinate(point.x, resizing.snaps.x, Math.ceil(15 / scale), canvasResizeGrid(scale)); point.y = snapCanvasCoordinate(point.y, resizing.snaps.y, Math.ceil(15 / scale), canvasResizeGrid(scale)); }
+      const ratio = resizing.multiple && event.shiftKey ? resizing.ratio ? 0 : resizing.initial.width / resizing.initial.height : resizing.ratio;
+      const bounds = resizeCanvasBounds(resizing.initial, resizing.direction, point, resizing.minimum, ratio);
+      for (const [id, target] of resizing.targets) { resizing.preview.set(id, resizing.multiple ? scaleCanvasBounds(target.bounds, resizing.initial, bounds) : bounds); drawNode(id); }
+      for (const id of resizing.edges) drawEdge(id);
+      drawResizeOutline(); return;
+    }
     drag.dx = Math.round(dx / scale); drag.dy = Math.round(dy / scale);
     if (drag.mode === 'move') {
       for (const id of drag.positions.keys()) drawNode(id);
       for (const [id, edge] of projection.edges) if (drag.positions.has(edge.fromNode) || drag.positions.has(edge.toNode)) drawEdge(id);
+      drawResizeOutline();
     } else {
       const rect = viewport.getBoundingClientRect(), x1 = Math.min(drag.startX, event.clientX) - rect.left, y1 = Math.min(drag.startY, event.clientY) - rect.top, x2 = x1 + Math.abs(dx), y2 = y1 + Math.abs(dy);
       Object.assign(box.style, { left: `${x1}px`, top: `${y1}px`, width: `${Math.abs(dx)}px`, height: `${Math.abs(dy)}px` });
@@ -533,8 +601,15 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   };
   const finishDrag = (event: PointerEvent, cancelled = false) => {
     if (closed || !drag || drag.id !== event.pointerId) return;
-    const ended = drag; clearDrag();
-    if (ended.mode === 'move' && !cancelled && (ended.dx || ended.dy)) {
+    const ended = drag, resized = resizing; clearDrag();
+    if (ended.mode === 'resize' && resized) {
+      if (!cancelled && resized.started) commit(draft => {
+        const resolved = canvasResizeRecordIndices(draft.nodes, [...resized.targets.values()].map(target => target.original));
+        const indices = new Map([...resolved].map(([id, index]) => [index, resized.preview.get(id)!]));
+        draft.setRoot('nodes', draft.nodes.map((node, index) => { const bounds = indices.get(index); return bounds ? { ...node, ...bounds } : node; }));
+      });
+      for (const id of resized.targets.keys()) drawNode(id); for (const id of resized.edges) drawEdge(id); drawResizeOutline();
+    } else if (ended.mode === 'move' && !cancelled && (ended.dx || ended.dy)) {
       commit(draft => {
         const indices = new Map([...ended.positions].map(([id, point]) => [recordIndex(draft.nodes, projection.nodes.get(id)!.original), point]));
         draft.setRoot('nodes', draft.nodes.map((node, index) => { const point = indices.get(index); return point ? { ...node, x: point.x + ended.dx, y: point.y + ended.dy } : node; }));
@@ -542,7 +617,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       // A rejected transaction must also restore the preview to source geometry.
       for (const id of ended.positions.keys()) drawNode(id); for (const id of projection.edges.keys()) drawEdge(id);
     } else if (ended.mode === 'move') { for (const id of ended.positions.keys()) drawNode(id); for (const id of projection.edges.keys()) drawEdge(id); }
-    if (viewport.hasPointerCapture?.(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    drawResizeOutline();
   };
   viewport.addEventListener('pointerdown', pointerDown); viewport.addEventListener('pointermove', pointerMove);
   viewport.addEventListener('pointerup', event => finishDrag(event)); viewport.addEventListener('pointercancel', event => finishDrag(event, true)); viewport.addEventListener('lostpointercapture', event => finishDrag(event, true));
@@ -624,6 +699,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     });
   }
   async function contextMenu(event: MouseEvent): Promise<void> {
+    if (!closed && drag?.mode === 'resize' && !event.defaultPrevented) { event.preventDefault(); finishDrag({ pointerId: drag.id } as PointerEvent, true); return; }
     if (closed || drag || event.defaultPrevented) return;
     const target = event.target as Element;
     // Active text editors keep the platform's spelling/selection/clipboard menu.

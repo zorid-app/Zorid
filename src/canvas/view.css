@@ -176,6 +176,39 @@ html[data-theme="light"] .zorid-canvas-card-menu, .theme-light .zorid-canvas-car
 .zorid-canvas-node-content.has-render-error { white-space: pre-wrap; }
 .zorid-canvas-node.is-group { z-index: 0; }
 .zorid-canvas-node.is-group .zorid-canvas-node-frame { background: transparent; }
+/* Bounded reference CSS555257–557146: 20 world px times sqrt(1/zoom),
+   centered on each edge/corner. Rich content keeps its own interior input. */
+.zorid-canvas-resize-handle { --resize-hit: calc(20px * var(--zc-zoom-compensation)); position: absolute; z-index: 4; touch-action: none; }
+.zorid-canvas-resize-handle.is-top, .zorid-canvas-resize-handle.is-bottom { left: 0; width: 100%; height: var(--resize-hit); cursor: ns-resize; }
+.zorid-canvas-resize-handle.is-left, .zorid-canvas-resize-handle.is-right { top: 0; height: 100%; width: var(--resize-hit); cursor: ew-resize; }
+.zorid-canvas-resize-handle.is-top { top: calc(var(--resize-hit) / -2); }
+.zorid-canvas-resize-handle.is-bottom { bottom: calc(var(--resize-hit) / -2); }
+.zorid-canvas-resize-handle.is-left { left: calc(var(--resize-hit) / -2); }
+.zorid-canvas-resize-handle.is-right { right: calc(var(--resize-hit) / -2); }
+.zorid-canvas-resize-handle.is-top-left, .zorid-canvas-resize-handle.is-top-right, .zorid-canvas-resize-handle.is-bottom-left, .zorid-canvas-resize-handle.is-bottom-right { width: var(--resize-hit); height: var(--resize-hit); z-index: 5; }
+.zorid-canvas-resize-handle.is-top-left, .zorid-canvas-resize-handle.is-top-right { top: calc(var(--resize-hit) / -2); }
+.zorid-canvas-resize-handle.is-bottom-left, .zorid-canvas-resize-handle.is-bottom-right { bottom: calc(var(--resize-hit) / -2); }
+.zorid-canvas-resize-handle.is-top-left, .zorid-canvas-resize-handle.is-bottom-left { left: calc(var(--resize-hit) / -2); }
+.zorid-canvas-resize-handle.is-top-right, .zorid-canvas-resize-handle.is-bottom-right { right: calc(var(--resize-hit) / -2); }
+.zorid-canvas-resize-handle.is-top-left, .zorid-canvas-resize-handle.is-bottom-right { cursor: nwse-resize; }
+.zorid-canvas-resize-handle.is-top-right, .zorid-canvas-resize-handle.is-bottom-left { cursor: nesw-resize; }
+.zorid-canvas.has-multiple-selection .zorid-canvas-node > .zorid-canvas-resize-handle { display: none; }
+.zorid-canvas-resize-outline { position: absolute; z-index: 4; box-sizing: border-box; border: 2px solid var(--zc-accent); pointer-events: none; }
+.zorid-canvas-resize-outline > .zorid-canvas-resize-handle { pointer-events: auto; }
+.zorid-canvas-resize-outline[hidden] { display: none; }
+.zorid-canvas-viewport.is-resizing .zorid-canvas-resize-handle { cursor: inherit; }
+@media (pointer: coarse) {
+  .zorid-canvas-node > .zorid-canvas-resize-handle { display: none; }
+  .zorid-canvas-node.is-selected > .zorid-canvas-resize-handle.is-top-left,
+  .zorid-canvas-node.is-selected > .zorid-canvas-resize-handle.is-top-right,
+  .zorid-canvas-node.is-selected > .zorid-canvas-resize-handle.is-bottom-left,
+  .zorid-canvas-node.is-selected > .zorid-canvas-resize-handle.is-bottom-right { display: block; }
+  .zorid-canvas.has-multiple-selection .zorid-canvas-node > .zorid-canvas-resize-handle { display: none; }
+  .zorid-canvas-resize-outline > .zorid-canvas-resize-handle.is-top,
+  .zorid-canvas-resize-outline > .zorid-canvas-resize-handle.is-right,
+  .zorid-canvas-resize-outline > .zorid-canvas-resize-handle.is-bottom,
+  .zorid-canvas-resize-outline > .zorid-canvas-resize-handle.is-left { display: none; }
+}
 .zorid-canvas-node-label, .zorid-canvas-group-label {
   position: absolute;
   left: 0;

@@ -77,3 +77,20 @@ server were closed and no editor-session heavy build or native app was running.
 The Canvas/Table full gate is held pending cross-session scheduling confirmation;
 light source review and scoped checks continue. This is not a claim about processes
 owned by the separate core session, nor an automatically shared build lock.
+
+## Orca coordination established
+
+After the editor restarted in Orca, both coordinators were found in terminals
+attached to the main workspace; the core implementation still uses its isolated
+worktree. The core coordinator explicitly acknowledged editor-only main
+integration and granted the next heavy slot after its own processes exited.
+The Canvas/Table gate completed: 1,873 tests, TypeScript and production build
+passed with all three process handles reporting terminal exit zero. The reviewed
+candidate was fast-forwarded into main as `87c3eb1`. No core commits were merged.
+
+The editor then explicitly released the slot through the Orca coordination
+channel. Core may resume queued heavy checks. The next Base embed/hotkey full
+gate or native editor pass requires another agreed slot; bounded source review
+can continue. This is an acknowledged reservation/release protocol, not an
+automatic filesystem lock. The three other-session root document edits remain
+preserved and unstaged.
