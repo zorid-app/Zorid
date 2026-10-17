@@ -3,6 +3,8 @@ export interface VaultEntry {
   type: 'file' | 'folder';
   /** Creation time in milliseconds, only when the adapter can provide it. */
   ctime?: number;
+  /** Opaque committed identity/version token. Compare only for equality, never as a timestamp. */
+  revision?: string;
   mtime: number;
   size: number;
 }

@@ -101,7 +101,7 @@ export class Vault {
       // Exact attachment notifications invalidate viewers even when a replacement
       // preserves its stats. Duplicate binary events are preferable to stale media;
       // no-argument full scans still compare metadata without loading binary files.
-      if (!isMarkdown(path) || old.mtime !== entry.mtime || old.size !== entry.size || this.contents.get(path) !== contents.get(path)) {
+      if (!isMarkdown(path) || old.revision !== entry.revision || old.mtime !== entry.mtime || old.size !== entry.size || this.contents.get(path) !== contents.get(path)) {
         changes.push({ path, entry });
       }
     }
@@ -125,7 +125,7 @@ export class Vault {
       for (const [path, entry] of this.entries) {
         const old = previous.get(path);
         if (!old) this.emit('create', { path, entry });
-        else if (old.mtime !== entry.mtime || old.size !== entry.size || contents.get(path) !== this.contents.get(path)) this.emit('modify', { path, entry });
+        else if (old.revision !== entry.revision || old.mtime !== entry.mtime || old.size !== entry.size || contents.get(path) !== this.contents.get(path)) this.emit('modify', { path, entry });
       }
     });
   }
