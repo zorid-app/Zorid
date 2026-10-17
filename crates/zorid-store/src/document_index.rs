@@ -189,7 +189,7 @@ pub struct DocumentSourceRead {
     pub content: Option<Vec<u8>>,
     pub exclusion: Option<Exclusion>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Header {
     snapshot: Snapshot,
@@ -442,6 +442,17 @@ fn reusable_record(
 
 fn check_stage(tx: &Connection, h: &Header) -> IndexResult<()> {
     let c = control(tx)?;
+    let raw: Option<String> = tx
+        .query_row(
+            "SELECT record FROM document_index_generations WHERE snapshot_key=?1",
+            [h.snapshot.key()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let active: Header = decode(&raw.ok_or(IndexError::SnapshotExpired)?)?;
+    if active != *h || active.published {
+        return Err(IndexError::StaleIndex.into());
+    }
     if c.epoch != h.snapshot.epoch {
         return Err(IndexError::SnapshotExpired.into());
     }
