@@ -581,7 +581,10 @@ class TableController {
     if (this.destroyed) return;
     // A child editor owns one cell and one range. Never collapse a parent
     // multicursor selection while transferring focus into that child.
-    if (this.owner.state.selection.ranges.length > 1) { this.close(); return; }
+    if (this.owner.state.selection.ranges.length > 1) {
+      if (this.selected && this.owner.state.selection.ranges.every(range => range.from >= this.model.from && range.to <= this.model.to)) return;
+      this.close(); return;
+    }
     const range = this.owner.state.selection.main;
     if (this.selected) {
       if (range.from >= this.model.from && range.to <= this.model.to) return;
@@ -800,18 +803,18 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
         rawFrom: cell.rawFrom + shift, rawTo: cell.rawTo + shift,
         insertion: cell.insertion ? { at: cell.insertion.at + shift, get prefix() { return cell.insertion!.prefix; }, suffix: cell.insertion.suffix } : undefined })) })),
   };
-  const build = (state: EditorState, excluded: readonly ExcludedRange[], cached = new Map<number, CachedTable>()) => {
+  const build = (state: EditorState, excluded: readonly ExcludedRange[], cached = new Map<number, CachedTable>(), selectedTable: object | null = null) => {
     let exclusionIndex = 0;
     const decorations: ReturnType<Decoration['range']>[] = [];
     syntaxTree(state).iterate({ enter(node) {
       if (node.name !== 'Table') return;
       while (exclusionIndex < excluded.length && excluded[exclusionIndex].to <= node.from) exclusionIndex++;
       if (excluded[exclusionIndex]?.from < node.to) return false;
+      const previous = cached.get(node.from);
       // Keep intersecting source visible when multiple parent ranges cannot be
       // represented by the single-cell editor. Unaffected tables stay rendered.
-      if (state.selection.ranges.length > 1 && state.selection.ranges.some(range =>
+      if (previous?.identity !== selectedTable && state.selection.ranges.length > 1 && state.selection.ranges.some(range =>
         range.from <= node.to && range.to >= node.from)) return false;
-      const previous = cached.get(node.from);
       const model = previous && !previous.changed && previous.model.to === node.to ? previous.model
         : parseTable(state.doc.sliceString(node.from, node.to), node.from);
       if (model) decorations.push(Decoration.replace({ widget: new TableWidget(model, open, previous?.identity ?? {}, cellExtensions), block: true }).range(node.from, node.to));
@@ -819,15 +822,20 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
     } });
     return Decoration.set(decorations, true);
   };
-  const field = StateField.define<{ decorations: DecorationSet; excluded: ExcludedRange[] }>({
-    create(state) { const excluded = exclusions(state); return { decorations: build(state, excluded), excluded }; },
+  const field = StateField.define<{ decorations: DecorationSet; excluded: ExcludedRange[]; selectedTable: object | null }>({
+    create(state) { const excluded = exclusions(state); return { decorations: build(state, excluded), excluded, selectedTable: null }; },
     update(value, transaction) {
       const excluded = exclusions(transaction.state);
       const sameExclusions = excluded.length === value.excluded.length && excluded.every((range, i) =>
         range.from === value.excluded[i].from && range.to === value.excluded[i].to);
       const multiSelectionChanged = (transaction.startState.selection.ranges.length > 1 || transaction.state.selection.ranges.length > 1)
         && !transaction.startState.selection.eq(transaction.state.selection);
-      if (!transaction.docChanged && syntaxTree(transaction.startState) === syntaxTree(transaction.state) && sameExclusions && !multiSelectionChanged) return value;
+      const cellTransaction = Boolean(transaction.annotation(cellSync));
+      const sameMappedSelection = transaction.newSelection.eq(transaction.startState.selection.map(transaction.changes));
+      let selectedTable = sameMappedSelection ? value.selectedTable : null;
+      if (transaction.newSelection.ranges.length < 2) selectedTable = null;
+      if (!transaction.docChanged && syntaxTree(transaction.startState) === syntaxTree(transaction.state) && sameExclusions && !multiSelectionChanged
+        && selectedTable === value.selectedTable) return value;
       const cached = new Map<number, CachedTable>();
       value.decorations.between(0, transaction.startState.doc.length, (from, to, decoration) => {
         const start = transaction.changes.mapPos(from, 1), end = transaction.changes.mapPos(to, -1);
@@ -835,9 +843,14 @@ export function liveTables(open: (target: string) => void, cellExtensions: Exten
         let changed = false;
         transaction.changes.iterChangedRanges((changedFrom, changedTo) => { if (changedFrom <= to && changedTo >= from) changed = true; });
         const widget = decoration.spec.widget;
+        // Annotated rectangle formatting represents selected cells as several
+        // parent ranges. Preserve their owning widget instead of treating these
+        // ranges as arbitrary multicursors that need exposed table source.
+        if (cellTransaction && transaction.newSelection.ranges.length > 1
+          && transaction.newSelection.ranges.every(range => range.from >= start && range.to <= end)) selectedTable = widget.identity;
         cached.set(start, { model: shiftModel(widget.model, start - from), identity: widget.identity, changed });
       });
-      return { decorations: build(transaction.state, excluded, cached), excluded };
+      return { decorations: build(transaction.state, excluded, cached, selectedTable), excluded, selectedTable };
     }, provide: field => EditorView.decorations.from(field, value => value.decorations) });
   const selection = ViewPlugin.fromClass(class {
     private version = 0;
