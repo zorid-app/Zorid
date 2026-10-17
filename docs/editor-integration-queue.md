@@ -6,6 +6,26 @@ continues independent implementation and review; it must not mutate main, push
 main, or start heavy checks without coordination. This supersedes the older
 sole-editor-integrator statements in historical checkpoints.
 
+## E1/E2 acceptance — 2026-10-16
+
+Coordinator candidate `6b96d1f` includes current main `aada3b0`, both reviewed
+editor batches, opaque revision invalidation `9e7ecce`, and formatting fix
+`a8cfb75` (exact two-file source equivalent of editor `dfbfae7`).
+
+Serialized session 64815 exited 0: focused format-menu 29/29 passed, full suite
+1963/1963 passed (108.707s), TypeScript passed, production webpack passed with
+three performance warnings (5.910s). The formatting fix has eight deterministic
+fail-before cases, verified in the editor's red log; the fixed source passed both
+focused and aggregate checks. The earlier aggregate failure was resolved rather
+than waived as a timing flake. Independent source review approved the fix and
+opaque revision seam.
+
+Main integration is approved for this candidate and evidence while main remains
+`aada3b0`. Actual packaged/native interaction and touch verification are still
+pending; these checks do not establish those outcomes. Newer E3/E4/E5 and header
+work are separate queued batches. The untracked node_modules dependency symlink
+is local only and is not part of the integration.
+
 ## Main handoff
 
 Main at handoff: `2592ebb3f6b168d5b0fffdefa3ba042c7a240975`.
