@@ -26,6 +26,33 @@ sequence below; completion of the first goal must not close those requirements.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
 
+### Integration checkpoint — 2026-10-16 22:16 local
+
+- Main `b43d973` is clean and contains the first core/native/standalone CLI batch.
+  Combined acceptance on candidate `3ac9e06`: 76 affected Rust tests passed in a
+  fresh target (session 61703 exit 0). See `docs/core-integration-acceptance.md` on
+  main. Apps still use their existing storage; no migration or push by this session.
+- Editor E1/E2 is reconciled in `editor-base-embed-integration` at `f14cdb3`, plus
+  three uncommitted, independently reviewed opaque-revision files. The first full
+  run had only a new test fixture error (nonexistent MemoryAdapter.remove), fixed
+  to trash. Second run 62700: 1954/1955 passed; partial-parse table formatting
+  failed after passing in the first run. Type/build did not run. Editor team owns
+  the next scoped reproduction slot; do not launch competing heavy checks.
+- Isolated core branch through `7ab190d`: native schema3/folder/rescan integrated
+  as `2971706`, CLI `451c84b`/`5c959ac`; owner native/store 56 checks passed, combined
+  newer CLI checks pending. Shared target stale artifact caused one compile failure
+  before successful recompilation; future worktrees use separate target directories.
+- Source-reviewed but runtime-pending on core branch: backup/restore `c7de4e0`,
+  desktop host `ebc0348`, text-sync plans `4d5867b`/`c05595f`, browser schema2/worker
+  adapter `7ab190d`. Independent review fixes are included; these are not actual
+  client integration or verified encrypted convergence.
+- Native owner prepares schema4 coherent path reads, persisted presentation metadata
+  and bounded change cursors. Review requires durable tail high-water validation and
+  rejecting empty local mutation events. Browser/desktop owners coordinate durable
+  host intent tokens and actual fixture-only app selection; ordinary vault migration
+  remains disabled. Physical moves/deletes and distributed binary/namespace/chunk
+  semantics are unfinished, not removed from the goal.
+
 ### Live work ledger
 
 | ID | Scope / owner | Branch/worktree | Implementation | Verification / next action |
@@ -189,7 +216,7 @@ handed-over core candidate `f44b812` at
 `/Users/ctk/orca/workspaces/Zorid/core-batch-one-integration`, including the
 reviewed late-divergence recovery-status correction. Editor candidate `4a29e12`
 at `editor-base-embed-integration` has scoped checks but no full gate yet.
-Neither candidate has been merged by this coordinator. Source work continues
+Core Batch 1 is now integrated; editor candidate remains isolated (latest checkpoint above). Source work continues
 on scanner finalization, browser intents, desktop host, client updates and backup.
 No heavy process remains after relay test session 48628 exited 0.
 
