@@ -886,11 +886,17 @@ impl EmbeddedHost {
             if job.plan.phase == Phase::Aborted {
                 job.state = "aborted";
             }
+            if job.plan.phase == Phase::Collision {
+                // Definitive rejection already permitted a new keep-both
+                // attempt. Never resurrect this old Create if its path later
+                // becomes free, even to try to discover a receipt by mutation.
+                job.state = "collision";
+            }
             if matches!(job.plan.phase, Phase::CommitRequested | Phase::Committed) {
                 job.uncertain = true;
             }
-            // Collision checkpoint is not an operation receipt. Text must replay
-            // its exact retained request; binary must resolve its durable stage.
+            // Only uncertain/committed text intents replay their exact retained
+            // request. Aborted/rejected plans are sticky terminal outcomes.
         }
         if !job.terminal()
             && job.state == "hashing"
@@ -1325,6 +1331,105 @@ mod tests {
         assert_eq!(
             TrustedStagedImportSource::new(file).err().unwrap()["code"],
             "import_too_large"
+        );
+    }
+    #[test]
+    fn rejected_text_stays_terminal_after_replacement_commits_and_competitor_leaves() {
+        let (dir, mut host) = setup();
+        let bytes = b"imported text";
+        let mut original = selection(&host, bytes, "note.md", "auto", OP, ENTRY);
+        host.staged_import_begin(Some(source(dir.path(), bytes)), original.clone())
+            .unwrap();
+        let competitor = EntryId::new("competing_text_entry").unwrap();
+        host.vault
+            .family_apply(
+                &MutationRequest {
+                    operation_id: OperationId::new("competing_text_create").unwrap(),
+                    mutation: Mutation::Create {
+                        id: competitor.clone(),
+                        path: VaultPath::new("note.md").unwrap(),
+                        kind: EntryKind::File,
+                        content: Some(b"competitor".to_vec()),
+                    },
+                },
+                Some(CreateMode::Text),
+            )
+            .unwrap();
+        let rejected = finish(&mut host, OP);
+        assert_eq!(rejected.state, "collision");
+        assert!(rejected.can_retry_collision);
+        let next_op = "abcdefab-0000-4000-8000-000000000004";
+        let next_entry = "abcdefab-0000-4000-8000-000000000005";
+        let replacement = selection(&host, bytes, "note.md", "auto", next_op, next_entry);
+        assert_eq!(
+            host.staged_import_begin(Some(source(dir.path(), bytes)), replacement)
+                .unwrap()
+                .selected_path,
+            "note (1).md"
+        );
+        assert_eq!(finish(&mut host, next_op).state, "committed");
+        let revision = host
+            .vault
+            .read_metadata(&competitor)
+            .unwrap()
+            .unwrap()
+            .state
+            .revision;
+        host.vault
+            .family_apply(
+                &MutationRequest {
+                    operation_id: OperationId::new("competing_text_delete").unwrap(),
+                    mutation: Mutation::Delete {
+                        id: competitor,
+                        expected: revision,
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        drop(host);
+        std::fs::remove_file(dir.path().join("source")).unwrap();
+        let mut host = EmbeddedHost::open_local(&dir.path().join("vault")).unwrap();
+        admit(&mut host);
+        original.lease_token = host
+            .leases
+            .active
+            .values()
+            .next()
+            .unwrap()
+            .reference()
+            .token
+            .as_str()
+            .into();
+        for operation in 0..3 {
+            let result = match operation {
+                0 => host.staged_import_begin(None, original.clone()).unwrap(),
+                1 => host.staged_import_cancel(OP).unwrap(),
+                _ => host.staged_import_step(OP).unwrap(),
+            };
+            assert_eq!(result.state, "collision");
+            assert!(result.can_retry_collision);
+            assert_eq!(result.commit_state, "rejected");
+        }
+        assert!(host
+            .vault
+            .read_metadata(&EntryId::new(ENTRY).unwrap())
+            .unwrap()
+            .is_none());
+        assert!(!dir.path().join("vault/note.md").exists());
+        assert_eq!(
+            std::fs::read(dir.path().join("vault/note (1).md")).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            host.vault
+                .list_snapshot()
+                .unwrap()
+                .entries
+                .iter()
+                .filter(|e| !e.state.deleted)
+                .count(),
+            1
         );
     }
 }
