@@ -3,6 +3,28 @@
 Updated 2026-10-16 when the user resumed the editor session in Orca.
 This is an execution snapshot; inspect Git and live processes before acting.
 
+## Latest continuation
+
+The restart completed. Main advanced to `87c3eb1` after the reviewed Canvas/Table
+gate passed 1,873 tests, TypeScript and production build. Root `dist/` now contains
+that tested build. The packaged app remains older. The core coordinator explicitly
+acknowledged sole editor main integration and granted this heavy slot; the editor
+reported terminal exits and released it. No core commits have been integrated.
+
+Writable Base file embeds were committed as `f9c0b1b`. Their isolated candidate
+is `688f2b1` on `tingkai-c/editor-base-embed-integration` in the Orca workspace
+`editor-base-embed-integration`; it starts from `c724601` and still needs current
+main reconciliation. Its 38 scoped checks passed; combined independent review
+and full validation remain pending. The occurrence-context conflict was resolved
+by retaining both hotkeys and optional embed context. Fenced Base planning is a
+separate documentation-only commit `e2ac390`, not an implementation claim.
+
+Bold/Italic default consumer `92c9b0a` depends on catalog `bac5bf4`; independent
+review remains pending. Canvas fit/auto-pan remains isolated while a reviewer-found
+stale preview after document replacement is repaired and rechecked.
+
+The sections below preserve the restart baseline and original dependency map.
+
 ## Ownership and safety
 
 The editor coordinator remains the sole integrator into canonical `main`.
