@@ -75,7 +75,9 @@ failures, elapsed time, each canonical corpus hash, the hash of the exact WASM b
 used for initialization, and the hash of actual results. The page emits
 `zorid-base-semantics-complete`, offers actual-results/report downloads, and
 terminates its worker after completion. Passing also requires high/low lone
-surrogate and wrong-input-type request checks to return `invalid_request`.
+surrogate, wrong-input-type and caller-authored relationship-graph request checks
+to return `invalid_request`. The latter reuses a canonical valid query request
+and adds a non-null graph; silently ignoring it is a test failure.
 
 Use immutable generated asset URLs or keep the module/binary pair frozen during a
 proof. Source syntax checks or a successful WASM build alone do not establish

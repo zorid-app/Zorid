@@ -91,8 +91,8 @@ function compareQuery(outcome, item) {
   }
   return null;
 }
-function requestChecks(bindings) {
-  return [
+function requestChecks(bindings, queryRequest) {
+  const checks = [
     { id: 'compile-unpaired-high-surrogate', input: String.fromCharCode(0xd800) },
     { id: 'compile-unpaired-low-surrogate', input: String.fromCharCode(0xdc00) },
     { id: 'compile-wrong-input-type', input: {} },
@@ -100,6 +100,10 @@ function requestChecks(bindings) {
     const actual = invoke(bindings.compileBaseSource, input);
     return { id, passed: !actual.ok && actual.error.code === 'invalid_request', actual };
   });
+  const forged = { ...queryRequest, snapshot: { ...queryRequest.snapshot, relationships: {} } };
+  const actual = invoke(bindings.queryBase, forged);
+  checks.push({ id: 'reject-caller-authored-relationship-graph', passed: !actual.ok && actual.error.code === 'invalid_request', actual });
+  return checks;
 }
 
 self.onmessage = async ({ data: config }) => {
@@ -142,7 +146,7 @@ self.onmessage = async ({ data: config }) => {
       if (outcome.ok !== item.current.valid || (!outcome.ok && !sharedCompileError)) failures.push({ id: item.id, operation: 'compile', expectedValid: item.current.valid, actual: outcome });
       self.postMessage({ type: 'progress', completed: ++completed, total });
     }
-    const checks = requestChecks(bindings);
+    const checks = requestChecks(bindings, queries.value.cases[0].request);
     for (const check of checks) if (!check.passed) failures.push({ id: check.id, operation: 'request-rejection', ...check });
     self.postMessage({ type: 'complete', report: {
       status: failures.length ? 'failed' : 'passed', runtime: 'actual-browser-worker-generated-rust-wasm',
