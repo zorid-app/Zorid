@@ -46,3 +46,20 @@ namespace fixtures including rename-plus-edit, folder membership, incomplete
 scan, interruption/retry, historical Recovery/Tombstone receipts and rollback;
 then combined actual desktop/CLI default startup/discovery verification. No
 native/mobile/reference-parity or full milestone completion is claimed here.
+
+Coordinator gate update: combined native/CLI/host compilation succeeded after
+`7c6e267` moved digest construction behind the store proof API. Native gate
+`25993` ran `cargo test -p zorid-native external_ -- --test-threads=1` on combined
+candidate `8c25e06`: 37/38 passed. The failing nested-folder rename plus binary
+edit exposed an opaque physical revision mismatch. Reviewed correction
+`f3cc59a` permits rebinding only when every non-revision EntryState field and
+both present complete causal publication records are identical. Equal bytes
+alone cannot pass. The coordinator owns the rerun; passing is not yet claimed.
+
+The focused fixture source now includes 14 namespace tests: original ordinary
+create/move/delete/budgets/retry/absence/digest/Recovery/Tombstone cases, plus
+post-preparation in-place byte change, atomic receipt-trigger abort, same-byte
+unseen binary event rejection and unseen namespace move-away/back rejection.
+The nested folder fixture also creates an untracked subdirectory/file after
+the move, exercising deferred child enrollment after its parent's historical
+observation. These additions were formatted and source-reviewed, not locally run.

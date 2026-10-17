@@ -56,6 +56,16 @@ impl NativeVault {
             {
                 continue;
             }
+            if let Some(parent) = path.parent() {
+                // A newly added child inside a relocated tracked folder waits
+                // for that folder's own observation. It is not an import error.
+                if self.store.physical_owner_at(&parent)?.is_none_or(|b| {
+                    b.state.kind != EntryKind::Folder
+                        || b.physical.inode != snapshot.parent_identity
+                }) {
+                    continue;
+                }
+            }
             let attempt = (|| -> Result<_> {
                 if !scan.confirm_snapshot(self, &path)? {
                     return Err(Error::Busy("external parent changed"));

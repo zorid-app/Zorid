@@ -6,6 +6,23 @@ use zorid_store::{
 };
 use zorid_sync_protocol::{ExpectedContext, RealmId, VaultId};
 
+thread_local! {
+    static PREPARED_EDIT_ROOT: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn edit_after_namespace_prepared(point: &str) {
+    if point == "external_namespace_prepared" {
+        PREPARED_EDIT_ROOT.with(|root| {
+            std::fs::write(
+                root.borrow().as_ref().unwrap().join("after.md"),
+                b"changed after namespace preparation",
+            )
+            .unwrap();
+        });
+    }
+}
+
 fn path(value: &str) -> VaultPath {
     VaultPath::new(value).unwrap()
 }
@@ -200,6 +217,12 @@ fn external_namespace_nested_folder_move_and_edits_preserve_every_descendant() {
         root.path().join("new-parent/moved"),
     )
     .unwrap();
+    std::fs::create_dir(root.path().join("new-parent/moved/fresh")).unwrap();
+    std::fs::write(
+        root.path().join("new-parent/moved/fresh/added.custom"),
+        b"created inside moved folder",
+    )
+    .unwrap();
     let text = b"\xef\xbb\xbfchanged\r\n";
     let binary = [128, 0, 255, 2, 3];
     std::fs::write(
@@ -216,7 +239,18 @@ fn external_namespace_nested_folder_move_and_edits_preserve_every_descendant() {
         "only the folder root moves causally"
     );
     assert_eq!(report.namespace[0].pending_content.len(), 2);
-    assert_eq!(vault.list().unwrap().len(), before.len() + 1);
+    assert_eq!(vault.list().unwrap().len(), before.len() + 3);
+    let added_folder = state_at(&vault, "new-parent/moved/fresh");
+    let added_file = state_at(&vault, "new-parent/moved/fresh/added.custom");
+    assert_eq!(added_folder.kind, EntryKind::Folder);
+    assert!(!before.iter().any(|old| old.state.id == added_folder.id));
+    assert!(!before.iter().any(|old| old.state.id == added_file.id));
+    assert_file(
+        &vault,
+        &added_file.id,
+        "new-parent/moved/fresh/added.custom",
+        b"created inside moved folder",
+    );
     for old in before {
         let suffix = old.state.path.as_str().strip_prefix("old").unwrap();
         let expected = path(&format!("new-parent/moved{suffix}"));
@@ -701,4 +735,419 @@ fn external_namespace_hidden_tombstone_delete_retires_only_retained_physical_bra
             .unwrap(),
         report.namespace[0]
     );
+}
+
+#[test]
+fn external_namespace_prepared_content_race_retains_observation_and_retries_exact_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    std::fs::write(root.path().join("before.md"), b"original bytes").unwrap();
+    complete(&mut vault);
+    let state = state_at(&vault, "before.md");
+    let before = binding(&vault, &state.id);
+    let baseline = vault.store.projection_baseline(&state.id).unwrap();
+    let logical = vault.read(&state.id).unwrap();
+    let status = vault.family_status().unwrap();
+    std::fs::rename(root.path().join("before.md"), root.path().join("after.md")).unwrap();
+    PREPARED_EDIT_ROOT.with(|slot| *slot.borrow_mut() = Some(root.path().to_path_buf()));
+    vault.fault = Some(edit_after_namespace_prepared);
+    let report = reconcile(&mut vault);
+    vault.fault = None;
+    PREPARED_EDIT_ROOT.with(|slot| *slot.borrow_mut() = None);
+    assert!(!report.complete, "{report:?}");
+    assert!(
+        report.run.complete,
+        "the capture finished before the content race"
+    );
+    assert!(!report.issues.is_empty());
+    assert!(report.namespace.is_empty());
+    assert!(report.imported.is_empty());
+    assert_eq!(vault.family_status().unwrap(), status);
+    assert_eq!(binding(&vault, &state.id), before);
+    assert_eq!(
+        vault.store.projection_baseline(&state.id).unwrap(),
+        baseline
+    );
+    assert_eq!(vault.read(&state.id).unwrap(), logical);
+    let prepared = namespace_rows(root.path());
+    assert_eq!(prepared.len(), 1);
+    assert!(!prepared[0].1);
+    assert_eq!(
+        vault
+            .store
+            .family_namespace_observation_result(&prepared[0].0)
+            .unwrap(),
+        None
+    );
+    let changed = b"changed after namespace preparation";
+    assert_eq!(
+        std::fs::read(root.path().join("after.md")).unwrap(),
+        changed
+    );
+    let retry = complete(&mut vault);
+    assert_eq!(retry.namespace.len(), 1, "{retry:?}");
+    assert_ne!(
+        retry.namespace[0].observation_id, prepared[0].0,
+        "changed capture bytes require a new immutable observation"
+    );
+    assert_file(&vault, &state.id, "after.md", changed);
+    assert_eq!(
+        binding(&vault, &state.id).physical.inode,
+        before.physical.inode
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("after.md")).unwrap(),
+        changed
+    );
+    assert_eq!(
+        vault
+            .store
+            .family_namespace_observation_result(&prepared[0].0)
+            .unwrap(),
+        None,
+        "the stale captured bytes must never receive a committed receipt"
+    );
+    let rows = namespace_rows(root.path());
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.iter().filter(|(_, resolved)| *resolved).count(), 1);
+}
+
+#[test]
+fn external_namespace_receipt_failure_rolls_back_all_state_and_retries_same_observation() {
+    let root = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    std::fs::write(root.path().join("before.md"), b"preserve these bytes").unwrap();
+    complete(&mut vault);
+    let state = state_at(&vault, "before.md");
+    let before = binding(&vault, &state.id);
+    let baseline = vault.store.projection_baseline(&state.id).unwrap();
+    let logical = vault.read(&state.id).unwrap();
+    let materialization = vault.store.family_materialization(&state.id).unwrap();
+    let status = vault.family_status().unwrap();
+    std::fs::rename(root.path().join("before.md"), root.path().join("after.md")).unwrap();
+    let sql = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+    sql.execute_batch(
+        "CREATE TRIGGER fixture_abort_namespace_receipt BEFORE UPDATE OF result ON family_external_namespace WHEN NEW.result IS NOT NULL BEGIN SELECT RAISE(ABORT,'fixture namespace receipt abort'); END;",
+    ).unwrap();
+    let report = reconcile(&mut vault);
+    assert!(!report.complete, "{report:?}");
+    assert!(report.run.complete);
+    assert!(!report.issues.is_empty());
+    assert!(report.namespace.is_empty());
+    assert!(report.imported.is_empty());
+    assert_eq!(
+        vault.family_status().unwrap(),
+        status,
+        "graph records and authored updates must roll back with the receipt"
+    );
+    assert_eq!(binding(&vault, &state.id), before);
+    assert_eq!(
+        vault.store.projection_baseline(&state.id).unwrap(),
+        baseline
+    );
+    assert_eq!(vault.read(&state.id).unwrap(), logical);
+    assert_eq!(
+        vault.store.family_materialization(&state.id).unwrap(),
+        materialization
+    );
+    assert_eq!(state_at(&vault, "before.md"), state);
+    assert_eq!(
+        std::fs::read(root.path().join("after.md")).unwrap(),
+        b"preserve these bytes"
+    );
+    let rows = namespace_rows(root.path());
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].1);
+    let observation = rows[0].0.clone();
+    assert_eq!(
+        vault
+            .store
+            .family_namespace_observation_result(&observation)
+            .unwrap(),
+        None
+    );
+    sql.execute_batch("DROP TRIGGER fixture_abort_namespace_receipt")
+        .unwrap();
+    drop(sql);
+    let retry = complete(&mut vault);
+    assert_eq!(retry.namespace.len(), 1, "{retry:?}");
+    let receipt = &retry.namespace[0];
+    assert_eq!(receipt.observation_id, observation);
+    assert_eq!(receipt.authored.len(), 1);
+    assert_file(&vault, &state.id, "after.md", b"preserve these bytes");
+    assert_eq!(
+        binding(&vault, &state.id).physical.inode,
+        before.physical.inode
+    );
+    assert_eq!(
+        namespace_rows(root.path()),
+        vec![(observation.clone(), true)]
+    );
+    let authored = vault.family_pending_authored(None, 1000).unwrap().len();
+    assert_eq!(
+        vault
+            .store
+            .import_family_namespace_observation(&observation)
+            .unwrap(),
+        *receipt
+    );
+    assert_eq!(
+        vault.family_pending_authored(None, 1000).unwrap().len(),
+        authored
+    );
+}
+
+#[test]
+fn external_namespace_binary_same_bytes_remote_rewrite_blocks_external_edit() {
+    let root = tempfile::tempdir().unwrap();
+    let peer = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    let mut remote = enrolled(peer.path());
+    let original = [0, 255, 128, 1];
+    std::fs::write(root.path().join("data.bin"), original).unwrap();
+    complete(&mut vault);
+    let before = binding(&vault, &state_at(&vault, "data.bin").id);
+    let baseline = vault.store.projection_baseline(&before.state.id).unwrap();
+    let historical = vault
+        .store
+        .family_publication(&before.state.id, &before.state.revision)
+        .unwrap()
+        .unwrap();
+    send(&mut vault, &mut remote, false);
+    let revision = remote
+        .read(&before.state.id)
+        .unwrap()
+        .unwrap()
+        .state
+        .revision;
+    let outcome = remote
+        .family_apply(
+            &MutationRequest {
+                operation_id: OperationId::new("same-bytes-remote-write").unwrap(),
+                mutation: Mutation::Write {
+                    id: before.state.id.clone(),
+                    expected: revision,
+                    content: original.to_vec(),
+                },
+            },
+            None,
+        )
+        .unwrap();
+    assert!(
+        matches!(outcome.projection, ProjectionStatus::Projected),
+        "{outcome:?}"
+    );
+    send(&mut remote, &mut vault, true);
+    let current = vault
+        .store
+        .family_materialization(&before.state.id)
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        current.retained_content, historical.retained_content,
+        "identical bytes still have a new binary selected event"
+    );
+    let logical = vault.read(&before.state.id).unwrap().unwrap();
+    assert_ne!(logical.state.revision, before.state.revision);
+    assert_eq!(logical.content.as_deref(), Some(original.as_slice()));
+    assert_eq!(logical.state.path, before.state.path);
+    assert_eq!(binding(&vault, &before.state.id), before);
+    let status = vault.family_status().unwrap();
+    let external = [128, 0, 222, 4];
+    std::fs::write(root.path().join("data.bin"), external).unwrap();
+    let report = reconcile(&mut vault);
+    assert!(!report.complete, "{report:?}");
+    assert!(report.run.complete);
+    assert!(report.imported.is_empty());
+    assert!(report.namespace.is_empty());
+    assert!(!report.issues.is_empty());
+    assert_eq!(binding(&vault, &before.state.id), before);
+    assert_eq!(
+        vault.store.projection_baseline(&before.state.id).unwrap(),
+        baseline
+    );
+    assert_eq!(vault.read(&before.state.id).unwrap().unwrap(), logical);
+    assert_eq!(
+        vault
+            .store
+            .family_materialization(&before.state.id)
+            .unwrap()
+            .unwrap(),
+        current
+    );
+    assert_eq!(vault.family_status().unwrap(), status);
+    assert_eq!(
+        std::fs::read(root.path().join("data.bin")).unwrap(),
+        external
+    );
+    let observations: Vec<_> = vault
+        .store
+        .external_observations()
+        .unwrap()
+        .into_iter()
+        .filter(|o| {
+            o.baseline
+                .as_ref()
+                .is_some_and(|b| b.state.id == before.state.id)
+                && o.content == external
+                && o.resolution.is_none()
+        })
+        .collect();
+    assert_eq!(
+        observations.len(),
+        1,
+        "conflicting external bytes must remain durable"
+    );
+    assert!(vault
+        .store
+        .import_family_observation(&observations[0].observation_id)
+        .is_err());
+    assert_eq!(
+        vault
+            .store
+            .family_materialization(&before.state.id)
+            .unwrap()
+            .unwrap(),
+        current
+    );
+    assert_eq!(binding(&vault, &before.state.id), before);
+}
+
+#[test]
+fn external_namespace_binary_remote_move_away_and_back_blocks_external_edit() {
+    let root = tempfile::tempdir().unwrap();
+    let peer = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(root.path());
+    let mut remote = enrolled(peer.path());
+    let original = [0, 255, 128, 1];
+    std::fs::write(root.path().join("data.bin"), original).unwrap();
+    complete(&mut vault);
+    let before = binding(&vault, &state_at(&vault, "data.bin").id);
+    let baseline = vault.store.projection_baseline(&before.state.id).unwrap();
+    let historical = vault
+        .store
+        .family_publication(&before.state.id, &before.state.revision)
+        .unwrap()
+        .unwrap();
+    send(&mut vault, &mut remote, false);
+    for (operation, target) in [
+        ("remote-move-away", "away.bin"),
+        ("remote-move-back", "data.bin"),
+    ] {
+        let revision = remote
+            .read(&before.state.id)
+            .unwrap()
+            .unwrap()
+            .state
+            .revision;
+        let outcome = remote
+            .family_apply(
+                &MutationRequest {
+                    operation_id: OperationId::new(operation).unwrap(),
+                    mutation: Mutation::Move {
+                        id: before.state.id.clone(),
+                        expected: revision,
+                        path: path(target),
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        assert!(
+            matches!(outcome.projection, ProjectionStatus::Projected),
+            "{outcome:?}"
+        );
+        assert_eq!(std::fs::read(peer.path().join(target)).unwrap(), original);
+    }
+    assert!(!peer.path().join("away.bin").exists());
+    send(&mut remote, &mut vault, true);
+    let current = vault
+        .store
+        .family_materialization(&before.state.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        current.retained_content, historical.retained_content,
+        "the remote namespace round trip did not change binary content"
+    );
+    let (
+        FamilyPublication::Normal {
+            path: old_path,
+            namespace_heads: old_heads,
+            ..
+        },
+        FamilyPublication::Normal {
+            path: new_path,
+            namespace_heads: new_heads,
+            ..
+        },
+    ) = (&historical.publication, &current.publication)
+    else {
+        panic!("both materializations must have normal publication");
+    };
+    assert_eq!(new_path, old_path);
+    assert_ne!(
+        new_heads, old_heads,
+        "matching paths must not hide unseen namespace heads"
+    );
+    let logical = vault.read(&before.state.id).unwrap().unwrap();
+    assert_ne!(logical.state.revision, before.state.revision);
+    assert_eq!(logical.state.path, before.state.path);
+    assert_eq!(logical.content.as_deref(), Some(original.as_slice()));
+    assert_eq!(binding(&vault, &before.state.id), before);
+    let status = vault.family_status().unwrap();
+    let external = [9, 0, 255, 7];
+    std::fs::write(root.path().join("data.bin"), external).unwrap();
+    let report = reconcile(&mut vault);
+    assert!(!report.complete, "{report:?}");
+    assert!(report.run.complete);
+    assert!(report.imported.is_empty());
+    assert!(report.namespace.is_empty());
+    assert!(!report.issues.is_empty());
+    assert_eq!(binding(&vault, &before.state.id), before);
+    assert_eq!(
+        vault.store.projection_baseline(&before.state.id).unwrap(),
+        baseline
+    );
+    assert_eq!(vault.read(&before.state.id).unwrap().unwrap(), logical);
+    assert_eq!(
+        vault
+            .store
+            .family_materialization(&before.state.id)
+            .unwrap()
+            .unwrap(),
+        current
+    );
+    assert_eq!(vault.family_status().unwrap(), status);
+    assert_eq!(
+        std::fs::read(root.path().join("data.bin")).unwrap(),
+        external
+    );
+    let observations: Vec<_> = vault
+        .store
+        .external_observations()
+        .unwrap()
+        .into_iter()
+        .filter(|o| {
+            o.baseline
+                .as_ref()
+                .is_some_and(|b| b.state.id == before.state.id)
+                && o.content == external
+                && o.resolution.is_none()
+        })
+        .collect();
+    assert_eq!(observations.len(), 1);
+    assert!(vault
+        .store
+        .import_family_observation(&observations[0].observation_id)
+        .is_err());
+    assert_eq!(
+        vault
+            .store
+            .family_materialization(&before.state.id)
+            .unwrap()
+            .unwrap(),
+        current
+    );
+    assert_eq!(binding(&vault, &before.state.id), before);
 }
