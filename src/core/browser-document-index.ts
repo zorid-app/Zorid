@@ -38,7 +38,7 @@ export interface BrowserDocumentIndex {
   rebuild():Promise<void>;close():Promise<void>;
 }
 interface Catalog {rebuilding?:string;version:1;localStoreId:string;head:string|null;generations:Descriptor[];pins:{id:string;clientId:string;generation:string}[]}
-interface Descriptor {id:string;clientId:string;state:'staging'|'published'|'deleting';snapshot:BrowserIndexSnapshot;sourceWatermark:string;coverageComplete:boolean;rows:number;bytes:number;metadataBytes:number}
+interface Descriptor {id:string;clientId:string;state:'staging'|'published'|'deleting';snapshot:BrowserIndexSnapshot;sourceWatermark:string;coverageComplete:boolean;wasPublished:boolean;rows:number;bytes:number;metadataBytes:number}
 interface CachedRow {sourceDescriptor:unknown;entry:EntryState;presentation:BrowserVaultPresentation;record:string;projection?:Uint8Array}
 interface SourceCapture {publication:StreamingPublication;descriptors:{id:string;content:any}[]}
 interface StoredHeader {rust:string;capture:SourceCapture}
@@ -80,7 +80,7 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
     const c=value.value as Catalog;
     if(!c||c.version!==1||c.localStoreId!==host.authorityId||!Array.isArray(c.generations)||c.generations.length>LIMITS.generations+LIMITS.stages||!Array.isArray(c.pins)||c.pins.length>LIMITS.pins)throw fail('index_rebuild_required');
     const ids=new Set<string>();let bytes=0;
-    for(const g of c.generations){if(!validId(g.id)||ids.has(g.id)||!validId(g.clientId)||!['staging','published','deleting'].includes(g.state)||g.snapshot?.localStoreId!==host.authorityId||g.snapshot?.generationEpoch!==g.id||g.snapshot?.generation!=='1'||typeof g.coverageComplete!=='boolean'||![g.rows,g.bytes,g.metadataBytes].every(n=>Number.isSafeInteger(n)&&n>=0)||g.rows>LIMITS.records||g.bytes>LIMITS.projection||g.metadataBytes>LIMITS.metadata)throw fail('index_rebuild_required');decimalU64(g.sourceWatermark);ids.add(g.id);bytes+=g.bytes;}
+    for(const g of c.generations){if(!validId(g.id)||ids.has(g.id)||!validId(g.clientId)||!['staging','published','deleting'].includes(g.state)||g.snapshot?.localStoreId!==host.authorityId||g.snapshot?.generationEpoch!==g.id||g.snapshot?.generation!=='1'||typeof g.coverageComplete!=='boolean'||typeof g.wasPublished!=='boolean'||g.state==='published'&&!g.wasPublished||g.state==='staging'&&g.wasPublished||![g.rows,g.bytes,g.metadataBytes].every(n=>Number.isSafeInteger(n)&&n>=0)||g.rows>LIMITS.records||g.bytes>LIMITS.projection||g.metadataBytes>LIMITS.metadata)throw fail('index_rebuild_required');decimalU64(g.sourceWatermark);ids.add(g.id);bytes+=g.bytes;}
     if(bytes>LIMITS.cache||c.head!==null&&!c.generations.some(g=>g.id===c.head&&g.state==='published'))throw fail('index_rebuild_required');
     const pinIds=new Set<string>();for(const p of c.pins){if(!validId(p.id)||pinIds.has(p.id)||!validId(p.clientId)||!c.generations.some(g=>g.id===p.generation&&g.state==='published'))throw fail('index_rebuild_required');pinIds.add(p.id);}
     return c;
@@ -162,9 +162,22 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
   const api:BrowserDocumentIndex={
     initialize(){active();return recover();},
     async discard(stageId){active();if(!validId(stageId))throw fail('index_stage_expired');
-      await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{const stage=c.generations.find(g=>g.id===stageId);
-        if(stage){if(stage.clientId!==host.clientId||stage.state==='published'||c.head===stageId)throw fail('index_stage_expired');stage.state='deleting';putCatalog(tx,c);}done();
+      const result=await run<{published?:{header:string;digest:string;snapshot:BrowserIndexSnapshot}}>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{const stage=c.generations.find(g=>g.id===stageId);
+        if(stage?.clientId!==undefined&&stage.clientId!==host.clientId)throw fail('index_stage_expired');
+        if(stage?.wasPublished){on(tx.objectStore('control').get(headerKey(stageId)),row=>{
+          if(typeof row?.value!=='string'||size(row.value)>3*LIMITS.header)throw fail('index_rebuild_required');done({published:{header:row.value,digest:row.digest,snapshot:stage.snapshot}});
+        },abort);return;}
+        if(stage){stage.state='deleting';putCatalog(tx,c);}done({});
       },abort));
+      if(result.published){const captured=result.published;if(captured.digest!==await digest(captured.header))throw fail('index_rebuild_required');
+        const stored=json<StoredHeader>(captured.header,3*LIMITS.header),header=checkedHeader(stored.rust);
+        if(!equal(header.nextIndex,captured.snapshot)||!equal(header.entries,stored.capture?.publication?.entries)||header.source.watermark!==stored.capture?.publication?.sequence)throw fail('index_rebuild_required');
+        const validator=rust(()=>new host.wasm.WasmDocumentIndexBuilder(stored.rust));validator.free();
+        await run<void>('readonly',['control'],(tx,done,abort)=>readCatalog(tx,c=>{const stage=c.generations.find(g=>g.id===stageId);if(!stage){done();return;}
+          if(stage.clientId!==host.clientId||!stage.wasPublished||!equal(stage.snapshot,captured.snapshot))throw fail('index_stage_expired');
+          on(tx.objectStore('control').get(headerKey(stageId)),row=>{if(!row&&stage.state==='deleting'){done();return;}if(row?.value!==captured.header||row?.digest!==captured.digest)throw fail('index_rebuild_required');done();},abort);
+        },abort));return;
+      }
       const stage=stages.get(stageId);stage?.builder?.free();stage?.generation?.free();stages.delete(stageId);await purge(stageId);
     },
     async status(){
@@ -194,7 +207,7 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       try{await run<void>('readwrite',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,h,c,capture.source,()=>{
         if(c.rebuilding)throw fail('index_rebuild_required');
         if(c.generations.filter(g=>g.state==='staging').length>=LIMITS.stages||c.generations.length>=LIMITS.generations+LIMITS.stages)throw fail('index_cache_limit');
-        c.generations.push({id,clientId:host.clientId,state:'staging',snapshot:h.nextIndex,sourceWatermark:h.source.watermark,coverageComplete:false,rows:0,bytes:0,metadataBytes:0});
+        c.generations.push({id,clientId:host.clientId,state:'staging',snapshot:h.nextIndex,sourceWatermark:h.source.watermark,coverageComplete:false,wasPublished:false,rows:0,bytes:0,metadataBytes:0});
         tx.objectStore('control').add({key:headerKey(id),value:storedHeader,digest:headerDigest});putCatalog(tx,c);done();
       },abort),abort));}catch(error){builder.free();throw error;}
       const stage:Stage={id,capture:capture.source,header:h,builder,prepared:0,total:h.entries.filter(e=>e.kind==='file').length,reused:0};if(rust(()=>builder.ready())){stage.generation=rust(()=>builder.finish());builder.free();stage.builder=undefined;}stages.set(id,stage);return stageInfo(stage);
@@ -246,7 +259,7 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
     async publish(stageId){const stage=liveStage(stageId);if(!stage.generation)throw fail('index_not_ready');
       const snapshot=json<BrowserIndexSnapshot>(rust(()=>stage.generation!.snapshotJson()));
       await run<void>('readwrite',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,stage.header,c,stage.capture,()=>{
-        const d=c.generations.find(g=>g.id===stage.id);if(!d||d.state!=='staging'||d.rows!==stage.total)throw fail('index_rebuild_required');d.state='published';d.coverageComplete=rust(()=>stage.generation!.coverageComplete());c.head=stage.id;putCatalog(tx,c);done();
+        const d=c.generations.find(g=>g.id===stage.id);if(!d||d.state!=='staging'||d.rows!==stage.total)throw fail('index_rebuild_required');d.state='published';d.wasPublished=true;d.coverageComplete=rust(()=>stage.generation!.coverageComplete());c.head=stage.id;putCatalog(tx,c);done();
       },abort),abort));stage.generation.free();stages.delete(stageId);await prune();return snapshot;
     },
     async open(){

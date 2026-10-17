@@ -145,7 +145,7 @@ test('continuations are bound to the exact random pin nonce',async()=>{
 
 test('discard is idempotent and removes only the owning unpublished stage',async()=>{
   const f=fixture();f.file('a','text');const a=f.open(),b=f.open('client-b');await a.initialize();await a.initialize();const snapshot=await f.build(a),pin=await a.open(),stage=await a.begin();await a.pump(stage.stageId);
-  await assert.rejects(b.discard(stage.stageId),{code:'index_stage_expired'});await assert.rejects(a.discard(snapshot.generationEpoch),{code:'index_stage_expired'});
+  await assert.rejects(b.discard(stage.stageId),{code:'index_stage_expired'});const before=structuredClone(f.records.get('control'));await a.discard(snapshot.generationEpoch);assert.deepEqual(f.records.get('control'),before);await assert.rejects(b.discard(snapshot.generationEpoch),{code:'index_stage_expired'});
   await a.discard(stage.stageId);await a.discard(stage.stageId);assert.deepEqual((await a.status()).snapshot,snapshot);assert.deepEqual((await a.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);
   const next=await a.begin();assert.ok(next.stageId);await a.discard(next.stageId);await a.close();await b.close();
 });
@@ -170,6 +170,11 @@ test('fresh and explicitly rebuilt caches are uninitialized rather than corrupt'
 test('normal consumer close retires only its unpublished cache reservations',async()=>{
   const f=fixture();f.file('a','text');const a=f.open(),b=f.open('client-b');await f.build(a);const source=f.source(),stage=await a.begin();await a.pump(stage.stageId);await a.close();
   const status=await b.status();assert.equal(status.current,true);const next=await b.begin();await b.pump(next.stageId);await b.publish(next.stageId);assert.deepEqual(f.source(),source);await b.close();
+});
+
+test('own already-published discard validates its exact header before no-op success',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();const snapshot=await f.build(index),pin=await index.open();await index.discard(snapshot.generationEpoch);assert.deepEqual((await index.status()).snapshot,snapshot);assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);
+  const header=f.records.get('control')!.get('document-index:v1/g/'+snapshot.generationEpoch+'/header');header.value+=' ';await assert.rejects(index.discard(snapshot.generationEpoch),{code:'index_rebuild_required'});await index.close();
 });
 
 test.after(()=>{(globalThis as any).IDBKeyRange=range;});
