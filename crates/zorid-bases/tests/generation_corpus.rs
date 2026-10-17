@@ -173,3 +173,56 @@ fn detached_transport_cannot_import_a_relationship_report() {
     )
     .is_err());
 }
+
+#[test]
+fn current_entry_selection_rejects_missing_conflicting_and_unbounded_contexts() {
+    let corpus: Corpus = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/document-semantics/bases/accepted-generation-queries.json"
+    ))
+    .unwrap();
+    let request = corpus
+        .cases
+        .into_iter()
+        .find(|case| case.id == "current-entry-base-file-facts-with-empty-properties")
+        .unwrap()
+        .request;
+    let generation = Generation::from_sources(
+        request.source,
+        request.snapshot_id,
+        request.entries,
+        request.sources,
+    )
+    .unwrap();
+    let program = compile_base(request.configuration).unwrap();
+    let mut options = request.options;
+    options.current_entry_id = Some(zorid_core::EntryId::new("missing-context").unwrap());
+    assert_eq!(
+        query_generation(&program, &generation, &request.facts, &options)
+            .unwrap_err()
+            .code,
+        "stale-source"
+    );
+    options.current_entry_id = Some(zorid_core::EntryId::new("context-base").unwrap());
+    let snapshot = BaseSnapshot::from_generation(&generation, &request.facts).unwrap();
+    options.evaluation.current_record = snapshot
+        .records()
+        .iter()
+        .find(|row| row.path == "Current.md")
+        .cloned();
+    assert_eq!(
+        query_generation(&program, &generation, &request.facts, &options)
+            .unwrap_err()
+            .code,
+        "stale-source"
+    );
+    options.evaluation.current_record = None;
+    for steps in [0, 1, zorid_bases::MAX_QUERY_STEPS + 1] {
+        options.max_steps = steps;
+        assert_eq!(
+            query_generation(&program, &generation, &request.facts, &options)
+                .unwrap_err()
+                .code,
+            "budget"
+        );
+    }
+}

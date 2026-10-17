@@ -733,3 +733,67 @@ fn all_file_rows_preserve_binary_unknown_and_invalid_markdown_authority() {
         b"---\nbad: [\n---\n# Still a heading\n"
     );
 }
+
+#[test]
+fn current_entry_context_uses_retained_properties_and_base_file_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = NativeVault::open(dir.path()).unwrap();
+    create(
+        &mut vault,
+        "context-note",
+        "Current.md",
+        "---\ntitle: Before\n---\n",
+    );
+    let source = "filters: file.path == this.file.path\nformulas:\n  context: this.file.path\n  title: this.title\nviews:\n  - type: table\n    order: [file.path, formula.context, formula.title]\n";
+    create(&mut vault, "context-base", "Context.base", source);
+    vault.initialize_document_index().unwrap();
+    build(&mut vault);
+    let retained = vault.open_document_snapshot().unwrap();
+    let mut options = QueryOptions::default();
+    options.current_entry_id = Some(id("context-note"));
+    write(
+        &mut vault,
+        "replace-current-context",
+        "context-note",
+        "---\ntitle: After\n---\n",
+    );
+    let result = vault
+        .query_base_document(&retained, &id("context-base"), &options)
+        .unwrap();
+    assert_eq!(result.value.result.rows.len(), 1);
+    assert_eq!(
+        result.value.result.rows[0].values["formula.title"],
+        zorid_bases::BaseValue::String {
+            value: "Before".into()
+        }
+    );
+    options.current_entry_id = Some(id("context-base"));
+    let base = vault
+        .query_base_document(&retained, &id("context-base"), &options)
+        .unwrap();
+    assert_eq!(base.value.result.rows[0].path, "Context.base");
+    assert_eq!(
+        base.value.result.rows[0].values["formula.title"],
+        zorid_bases::BaseValue::Null
+    );
+    options.current_entry_id = Some(id("missing-context"));
+    expect_code(
+        vault.query_base_document(&retained, &id("context-base"), &options),
+        "stale-source",
+    );
+    options.current_entry_id = Some(id("context-note"));
+    options.max_steps = 1;
+    expect_code(
+        vault.query_base_document(&retained, &id("context-base"), &options),
+        "budget",
+    );
+    assert_eq!(
+        vault
+            .read(&id("context-base"))
+            .unwrap()
+            .unwrap()
+            .content
+            .unwrap(),
+        source.as_bytes()
+    );
+}

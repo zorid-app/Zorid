@@ -928,6 +928,335 @@
           }
         ]
       }
+    },
+    {
+      "id": "current-entry-base-file-facts-with-empty-properties",
+      "request": {
+        "source": {
+          "localStoreId": "context-store",
+          "watermark": "1"
+        },
+        "snapshotId": {
+          "localStoreId": "context-store",
+          "generationEpoch": "context-epoch",
+          "generation": "1",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        },
+        "entries": [
+          {
+            "id": "context-base",
+            "path": "Context.base",
+            "kind": "file",
+            "revision": "base-r1",
+            "deleted": false
+          },
+          {
+            "id": "context-note",
+            "path": "Current.md",
+            "kind": "file",
+            "revision": "note-r1",
+            "deleted": false
+          }
+        ],
+        "sources": [
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "context-base",
+              "contentRevision": "base-r1",
+              "source": "views:\n  - type: table\n"
+            },
+            "markdown": false
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "context-note",
+              "contentRevision": "note-r1",
+              "source": "---\ntitle: Context title\n---\n"
+            },
+            "markdown": true
+          }
+        ],
+        "facts": [
+          {
+            "witness": {
+              "entryId": "context-base",
+              "revision": "base-r1"
+            },
+            "size": 23,
+            "ctimeMs": 1000,
+            "mtimeMs": 2000
+          }
+        ],
+        "configuration": {
+          "filters": "file.path == this.file.path",
+          "formulas": {
+            "contextPath": "this.file.path",
+            "contextTitle": "this.title",
+            "contextSize": "this.file.size"
+          },
+          "views": [
+            {
+              "type": "table",
+              "order": [
+                "file.path",
+                "formula.contextPath",
+                "formula.contextTitle",
+                "formula.contextSize"
+              ]
+            }
+          ]
+        },
+        "options": {
+          "currentEntryId": "context-base",
+          "maxSteps": 2000000,
+          "evaluation": {
+            "clockMs": 0,
+            "timezone": "UTC"
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "Context.base"
+        ],
+        "relationshipsAvailable": true,
+        "metadataComplete": true,
+        "metadataIssues": [],
+        "values": {
+          "Context.base": {
+            "formula.contextPath": {
+              "type": "string",
+              "value": "Context.base"
+            },
+            "formula.contextTitle": {
+              "type": "null"
+            },
+            "formula.contextSize": {
+              "type": "number",
+              "value": 23
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "current-entry-markdown-properties",
+      "request": {
+        "source": {
+          "localStoreId": "context-store",
+          "watermark": "1"
+        },
+        "snapshotId": {
+          "localStoreId": "context-store",
+          "generationEpoch": "context-epoch",
+          "generation": "1",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        },
+        "entries": [
+          {
+            "id": "context-base",
+            "path": "Context.base",
+            "kind": "file",
+            "revision": "base-r1",
+            "deleted": false
+          },
+          {
+            "id": "context-note",
+            "path": "Current.md",
+            "kind": "file",
+            "revision": "note-r1",
+            "deleted": false
+          }
+        ],
+        "sources": [
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "context-base",
+              "contentRevision": "base-r1",
+              "source": "views:\n  - type: table\n"
+            },
+            "markdown": false
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "context-note",
+              "contentRevision": "note-r1",
+              "source": "---\ntitle: Context title\n---\n"
+            },
+            "markdown": true
+          }
+        ],
+        "facts": [
+          {
+            "witness": {
+              "entryId": "context-base",
+              "revision": "base-r1"
+            },
+            "size": 23,
+            "ctimeMs": 1000,
+            "mtimeMs": 2000
+          }
+        ],
+        "configuration": {
+          "filters": "file.path == this.file.path",
+          "formulas": {
+            "contextPath": "this.file.path",
+            "contextTitle": "this.title",
+            "contextSize": "this.file.size"
+          },
+          "views": [
+            {
+              "type": "table",
+              "order": [
+                "file.path",
+                "formula.contextPath",
+                "formula.contextTitle",
+                "formula.contextSize"
+              ]
+            }
+          ]
+        },
+        "options": {
+          "currentEntryId": "context-note",
+          "maxSteps": 2000000,
+          "evaluation": {
+            "clockMs": 0,
+            "timezone": "UTC"
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "Current.md"
+        ],
+        "values": {
+          "Current.md": {
+            "formula.contextPath": {
+              "type": "string",
+              "value": "Current.md"
+            },
+            "formula.contextTitle": {
+              "type": "string",
+              "value": "Context title"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "omitted-current-entry-retains-no-this",
+      "request": {
+        "source": {
+          "localStoreId": "context-store",
+          "watermark": "1"
+        },
+        "snapshotId": {
+          "localStoreId": "context-store",
+          "generationEpoch": "context-epoch",
+          "generation": "1",
+          "versions": {
+            "schema": 1,
+            "extraction": "zorid-markdown-1:metadata-1",
+            "resolver": "link-nfc-lower-segment-utf16-v1",
+            "query": "literal-lines-exact-v1"
+          }
+        },
+        "entries": [
+          {
+            "id": "context-base",
+            "path": "Context.base",
+            "kind": "file",
+            "revision": "base-r1",
+            "deleted": false
+          },
+          {
+            "id": "context-note",
+            "path": "Current.md",
+            "kind": "file",
+            "revision": "note-r1",
+            "deleted": false
+          }
+        ],
+        "sources": [
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "context-base",
+              "contentRevision": "base-r1",
+              "source": "views:\n  - type: table\n"
+            },
+            "markdown": false
+          },
+          {
+            "kind": "text",
+            "request": {
+              "entryId": "context-note",
+              "contentRevision": "note-r1",
+              "source": "---\ntitle: Context title\n---\n"
+            },
+            "markdown": true
+          }
+        ],
+        "facts": [
+          {
+            "witness": {
+              "entryId": "context-base",
+              "revision": "base-r1"
+            },
+            "size": 23,
+            "ctimeMs": 1000,
+            "mtimeMs": 2000
+          }
+        ],
+        "configuration": {
+          "filters": "file.path == \"Current.md\"",
+          "formulas": {
+            "context": "this"
+          },
+          "views": [
+            {
+              "type": "table",
+              "order": [
+                "file.path",
+                "formula.context"
+              ]
+            }
+          ]
+        },
+        "options": {
+          "maxSteps": 2000000,
+          "evaluation": {
+            "clockMs": 0,
+            "timezone": "UTC"
+          }
+        }
+      },
+      "expected": {
+        "paths": [
+          "Current.md"
+        ],
+        "values": {
+          "Current.md": {
+            "formula.context": {
+              "type": "null"
+            }
+          }
+        }
+      }
     }
   ]
 }
