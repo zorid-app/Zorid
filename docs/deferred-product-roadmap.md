@@ -68,6 +68,18 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17 00:24 local
 
+- Native schema8 owned commits `dc9e1ba` + `a9e821c` passed combined store family
+  integration 3/3 in worker session98471. `core_cli` assembles latest-main native
+  + standalone CLI + shared runner candidate in `core-native-cli-combined`;
+  native compile remains pending. Source-only desktop normal editor bridge
+  `4c80179` waits for NoteBuffer consumer and native combined build.
+- Editor explicitly resumed scoped Canvas/Bases verification; native slot granted
+  via `msg_92a391b3b6b9`, live Electron session22552 acknowledged. Core heavy
+  work waits for release. Rust-save ownership remains with shared-core workers.
+- Actual browser rename preserved identity/content; remote deletion removed the
+  file from the other browser, and a normal restart preserved prior local content.
+  Evidence in `browser-relay-verification.md`; folders/crash/native checks remain.
+
 - User explicitly resumed **Rust save integration only**, leaving editor polish
   paused, and confirmed test-vault content is disposable. `browser_sync_plan`
   owns isolated NoteBuffer/helper/workspace durable-save lifecycle; desktop owner

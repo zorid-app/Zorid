@@ -27,7 +27,15 @@ IndexedDB and loopback Rust/SQLite relay (not direct storage seeding):
   the same length and SHA256 as the original local file:
   `1747d2793a50e7b872a8c354e68264a9a10043101766ed8f63d6b74d4ca74c8a`.
 
-Remaining: moves/deletions/folders, actual disconnected/restart
+- Browser A reopened its persistent database and read the same merged 38-byte
+  text before importing any network credentials. Normal client restart passed;
+  this is not a forced mid-commit crash test.
+- Browser A renamed `note.md` to `moved-note.md`; B received one update and read
+  the original stable entry ID and identical 38-byte content/digest at the new path.
+- Browser B deleted that note; A reopened/reconnected, received one update and
+  its file listing retained only `asset.bin`. Ordinary remote deletion passed.
+
+Remaining: folder operations, actual disconnected/mid-commit crash
 flow, account-B browser isolation, integrated CLI/Electron and backup/restore.
 This is runtime/core proof, not the main editor's storage integration or production
 security acceptance.
