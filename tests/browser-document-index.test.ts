@@ -79,14 +79,14 @@ function fixture(){
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
   const f=fixture();f.file('a','hello');const source=f.source(),index=f.open();await f.build(index);
   const status=await index.status();assert.equal(status.current,true);assert.equal(status.coveredWatermark,'0');assert.equal(status.rebuildRequired,false);assert.deepEqual(f.source(),source);
-  const pin=await index.open();assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'})) as any,{fixture:'projection-transport',observed:['hello'],snapshot:pin.snapshot});
+  const pin=await index.open();const page=await index.search({pinId:pin.pinId,query:'opaque'}) as any;assert.deepEqual(page.result.value.observed,['hello']);assert.deepEqual(page.result.snapshot,pin.snapshot);assert.equal(page.cursor,null);
   assert.ok(f.transactions.every(names=>names.includes('control')));await index.close();
 });
 test('old pinned generation reads retained projection across edit, move and delete',async()=>{
   const f=fixture();f.file('a','old');const index=f.open();await f.build(index);const old=await index.open();
   f.file('a','new',{path:'moved.md',revision:'r2'});f.sequence('1');await f.build(index);const fresh=await index.open();
   f.delete('a');f.sequence('2');await f.build(index);
-  assert.deepEqual((await index.search({pinId:old.pinId,query:'opaque'}) as any).observed,['old']);assert.deepEqual((await index.search({pinId:fresh.pinId,query:'opaque'}) as any).observed,['new']);
+  assert.deepEqual((await index.search({pinId:old.pinId,query:'opaque'}) as any).result.value.observed,['old']);assert.deepEqual((await index.search({pinId:fresh.pinId,query:'opaque'}) as any).result.value.observed,['new']);
   assert.equal((await index.status()).current,true);await index.close();
 });
 test('presentation-only change with unchanged local watermark rejects publication',async()=>{
@@ -99,7 +99,7 @@ test('two independently prepared publishers CAS the same index head',async()=>{
 });
 test('authored binary mode stays excluded even for valid UTF8 bytes',async()=>{
   const f=fixture();f.file('a','ordinary UTF8',{binary:true});const index=f.open();await f.build(index);const pin=await index.open();
-  assert.equal(f.stats().textExtractions,0);assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).observed,[]);await index.close();
+  assert.equal(f.stats().textExtractions,0);assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,[]);await index.close();
 });
 test('unchanged exact source witnesses reuse Rust records while moves re-extract',async()=>{
   const f=fixture();f.file('a','text');const index=f.open();await f.build(index);await f.build(index);assert.equal(f.stats().textExtractions,1);assert.equal(f.stats().reuses,1);
@@ -132,13 +132,13 @@ test('restart drops only its own stale pins and stages, retaining the published 
   const f=fixture();f.file('a','text');const first=f.open();await f.build(first);await first.open();await first.begin();
   // A real worker lifetime lease prevents both instances being active. Here the
   // second fixture stands for a fresh worker after abrupt first-worker loss.
-  const second=f.open();const pin=await second.open();assert.deepEqual((await second.search({pinId:pin.pinId,query:'opaque'}) as any).observed,['text']);const stage=await second.begin();assert.ok(stage.stageId);await second.close();
+  const second=f.open();const pin=await second.open();assert.deepEqual((await second.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);const stage=await second.begin();assert.ok(stage.stageId);await second.close();
 });
 
 test('continuations are bound to the exact random pin nonce',async()=>{
   const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const a=await index.open(),b=await index.open();const page=await index.search({pinId:a.pinId,query:'fixture-page'}) as any;
-  assert.equal(page.next,a.pinId+'/1');await index.search({pinId:a.pinId,query:'fixture-page',token:page.next});
-  await assert.rejects(index.search({pinId:b.pinId,query:'fixture-page',token:page.next}),{code:'index_snapshot_expired'});await index.close();
+  assert.equal(page.cursor,a.pinId+'/1');await index.search({pinId:a.pinId,query:'fixture-page',cursor:page.cursor});
+  await assert.rejects(index.search({pinId:b.pinId,query:'fixture-page',cursor:page.cursor}),{code:'index_snapshot_expired'});await index.close();
 });
 
 test.after(()=>{(globalThis as any).IDBKeyRange=range;});

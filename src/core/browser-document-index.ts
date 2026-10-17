@@ -12,33 +12,36 @@ const fail=(code:string)=>new BrowserVaultError(code,'Disposable document index 
 const size=(text:string)=>new TextEncoder().encode(text).byteLength;
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 interface Free {free():void}
+export interface BrowserIndexSource {localStoreId:string;watermark:string}
 export interface BrowserIndexSnapshot {localStoreId:string;generationEpoch:string;generation:string;versions:unknown}
 export interface BrowserIndexHeader {source:{localStoreId:string;watermark:string};entries:EntryState[];expectedIndex:BrowserIndexSnapshot|null;nextIndex:BrowserIndexSnapshot}
 interface Builder extends Free {headerJson():string;pendingJson():string;beginPump():void;addText(id:string,bytes:Uint8Array):void;addBinary(id:string):void;addUnreadable(id:string):void;addPersisted(id:string,row:string):void;rowJson(id:string):string;ready():boolean;finish():Generation}
-interface Generation extends Free {headerJson():string;snapshotJson():string;rowJson(id:string):string;coverageComplete():boolean;resolveJson(id:string,destination:string):string;backlinksJson(id:string,token:string,limit:number):string;openLiteral(query:string,token:string,limit:number):LiteralPage}
+interface Generation extends Free {headerJson():string;snapshotJson():string;rowJson(id:string):string;coverageComplete():boolean;metadataJson(id:string):string;baseJson(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null):string;resolveJson(id:string,destination:string):string;backlinksJson(id:string,token:string,limit:number):string;openLiteral(query:string,token:string,limit:number):LiteralPage}
 interface LiteralPage extends Free {nextReadJson():string;accept(bytes:Uint8Array):void;finishJson():string}
 export interface BrowserDocumentIndexWasm {documentIndexVersionsJson():string;WasmDocumentIndexBuilder:new(input:string)=>Builder}
 export interface BrowserDocumentIndexHost {
   db:IDBDatabase;authorityId:string;clientId:string;wasm:BrowserDocumentIndexWasm;assertActive():void;
   readPublication(tx:IDBTransaction,done:(value:StreamingPublication)=>void,abort:(error:unknown)=>void):void;
 }
-export interface BrowserIndexStage {stageId:string;prepared:number;total:number;ready:boolean}
-export interface BrowserIndexPin {pinId:string;snapshot:BrowserIndexSnapshot}
+export interface BrowserIndexStage {stageId:string;snapshot:BrowserIndexSnapshot;progress:{prepared:number;total:number;reused:number;ready:boolean};prepared:number;total:number;ready:boolean}
+export interface BrowserIndexPin {pinId:string;snapshot:BrowserIndexSnapshot;source:BrowserIndexSource;coverageComplete:boolean}
 export interface BrowserDocumentIndex {
-  status():Promise<{sourceWatermark:string;snapshot:BrowserIndexSnapshot|null;coveredWatermark:string|null;rebuildRequired:boolean;current:boolean}>;
+  status():Promise<{sourceWatermark:string;snapshot:BrowserIndexSnapshot|null;coveredWatermark:string|null;rebuildRequired:boolean;current:boolean;source:BrowserIndexSource;coveredSource:BrowserIndexSource|null;coverageComplete:boolean|null}>;
   begin():Promise<BrowserIndexStage>;pump(stageId:string):Promise<BrowserIndexStage>;publish(stageId:string):Promise<BrowserIndexSnapshot>;
   open():Promise<BrowserIndexPin>;closePin(pinId:string):Promise<void>;
-  search(input:{pinId:string;query:string;token?:string;limit?:number}):Promise<unknown>;
+  search(input:{pinId:string;query:string;cursor?:string;limit?:number}):Promise<unknown>;
   resolve(input:{pinId:string;sourceId:string;destination:string}):Promise<unknown>;
-  backlinks(input:{pinId:string;targetId:string;token?:string;limit?:number}):Promise<unknown>;
+  backlinks(input:{pinId:string;targetId:string;cursor?:string;limit?:number}):Promise<unknown>;
+  metadata(input:{pinId:string;id:string}):Promise<unknown>;
+  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number}}):Promise<unknown>;
   rebuild():Promise<void>;close():Promise<void>;
 }
 interface Catalog {rebuilding?:string;version:1;localStoreId:string;head:string|null;generations:Descriptor[];pins:{id:string;clientId:string;generation:string}[]}
-interface Descriptor {id:string;clientId:string;state:'staging'|'published'|'deleting';snapshot:BrowserIndexSnapshot;sourceWatermark:string;rows:number;bytes:number;metadataBytes:number}
+interface Descriptor {id:string;clientId:string;state:'staging'|'published'|'deleting';snapshot:BrowserIndexSnapshot;sourceWatermark:string;coverageComplete:boolean;rows:number;bytes:number;metadataBytes:number}
 interface CachedRow {sourceDescriptor:unknown;entry:EntryState;presentation:BrowserVaultPresentation;record:string;projection?:Uint8Array}
 interface SourceCapture {publication:StreamingPublication;descriptors:{id:string;content:any}[]}
 interface StoredHeader {rust:string;capture:SourceCapture}
-interface Stage {failed?:boolean;capture:SourceCapture;id:string;header:BrowserIndexHeader;builder?:Builder;generation?:Generation;prepared:number;total:number}
+interface Stage {failed?:boolean;capture:SourceCapture;id:string;header:BrowserIndexHeader;builder?:Builder;generation?:Generation;prepared:number;total:number;reused:number}
 const root=(id:string)=>PREFIX+'g/'+id+'/';
 const rowKey=(id:string,entryId:string)=>root(id)+'row/'+entryId;
 const headerKey=(id:string)=>root(id)+'header';
@@ -49,10 +52,10 @@ function pageLimit(value:unknown):number{if(value===undefined)return 100;if(type
 function inputText(value:unknown,maxBytes:number):string{if(typeof value!=='string'||value.length>maxBytes||size(value)>maxBytes)throw fail('index_invalid_request');for(let i=0;i<value.length;i++){const code=value.charCodeAt(i);if(code>=0xd800&&code<=0xdbff){const next=value.charCodeAt(++i);if(!(next>=0xdc00&&next<=0xdfff))throw fail('index_invalid_request');}else if(code>=0xdc00&&code<=0xdfff)throw fail('index_invalid_request');}return value;}
 const validId=(id:unknown):id is string=>typeof id==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(id);
 function json<T>(raw:string,max=LIMITS.header):T {if(typeof raw!=='string'||size(raw)>max)throw fail('index_rebuild_required');try{return JSON.parse(raw) as T;}catch{throw fail('index_rebuild_required');}}
-function rust<T>(action:()=>T):T {try{return action();}catch(error){if(error instanceof BrowserVaultError)throw error;let code='index_rebuild_required';try{const parsed=JSON.parse(String(error));if(typeof parsed.code==='string'&&parsed.code.startsWith('index_'))code=parsed.code;}catch{}throw fail(code);}}
+function rust<T>(action:()=>T):T {try{return action();}catch(error){if(error instanceof BrowserVaultError)throw error;let code='index_rebuild_required',details:unknown;try{const parsed=JSON.parse(String(error));if(typeof parsed.code==='string'&&parsed.code.startsWith('index_'))code=parsed.code;details=parsed.diagnostic;}catch{}throw new BrowserVaultError(code,'Shared Rust document engine rejected the operation',details,'rust');}}
 
 export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocumentIndex {
-  const stages=new Map<string,Stage>(),pins=new Map<string,{generation:string;value:Generation}>();
+  const stages=new Map<string,Stage>(),pins=new Map<string,{generation:string;value:Generation;header:BrowserIndexHeader;capture:SourceCapture}>();
   let closed=false;
   const active=()=>{if(closed)throw fail('index_closed');host.assertActive();};
   const run=<T>(mode:IDBTransactionMode,stores:readonly string[],start:(tx:IDBTransaction,done:(value:T)=>void,abort:(error:unknown)=>void)=>void)=>
@@ -65,7 +68,7 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
     const c=value.value as Catalog;
     if(!c||c.version!==1||c.localStoreId!==host.authorityId||!Array.isArray(c.generations)||c.generations.length>LIMITS.generations+LIMITS.stages||!Array.isArray(c.pins)||c.pins.length>LIMITS.pins)throw fail('index_rebuild_required');
     const ids=new Set<string>();let bytes=0;
-    for(const g of c.generations){if(!validId(g.id)||ids.has(g.id)||!validId(g.clientId)||!['staging','published','deleting'].includes(g.state)||g.snapshot?.localStoreId!==host.authorityId||g.snapshot?.generationEpoch!==g.id||g.snapshot?.generation!=='1'||![g.rows,g.bytes,g.metadataBytes].every(n=>Number.isSafeInteger(n)&&n>=0)||g.rows>LIMITS.records||g.bytes>LIMITS.projection||g.metadataBytes>LIMITS.metadata)throw fail('index_rebuild_required');decimalU64(g.sourceWatermark);ids.add(g.id);bytes+=g.bytes;}
+    for(const g of c.generations){if(!validId(g.id)||ids.has(g.id)||!validId(g.clientId)||!['staging','published','deleting'].includes(g.state)||g.snapshot?.localStoreId!==host.authorityId||g.snapshot?.generationEpoch!==g.id||g.snapshot?.generation!=='1'||typeof g.coverageComplete!=='boolean'||![g.rows,g.bytes,g.metadataBytes].every(n=>Number.isSafeInteger(n)&&n>=0)||g.rows>LIMITS.records||g.bytes>LIMITS.projection||g.metadataBytes>LIMITS.metadata)throw fail('index_rebuild_required');decimalU64(g.sourceWatermark);ids.add(g.id);bytes+=g.bytes;}
     if(bytes>LIMITS.cache||c.head!==null&&!c.generations.some(g=>g.id===c.head&&g.state==='published'))throw fail('index_rebuild_required');
     const pinIds=new Set<string>();for(const p of c.pins){if(!validId(p.id)||pinIds.has(p.id)||!validId(p.clientId)||!c.generations.some(g=>g.id===p.generation&&g.state==='published'))throw fail('index_rebuild_required');pinIds.add(p.id);}
     return c;
@@ -94,7 +97,7 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
   function sourceFence(tx:IDBTransaction,h:BrowserIndexHeader,c:Catalog,expected:SourceCapture,done:()=>void,abort:(error:unknown)=>void):void {
     captureSource(tx,current=>{if(!equal(current,expected))throw fail('index_source_changed');if(!equal(head(c),h.expectedIndex))throw fail('index_head_changed');done();},abort);
   }
-  const stageInfo=(stage:Stage):BrowserIndexStage=>({stageId:stage.id,prepared:stage.prepared,total:stage.total,ready:!!stage.generation||rust(()=>stage.builder!.ready())});
+  const stageInfo=(stage:Stage):BrowserIndexStage=>{const ready=!!stage.generation;return {stageId:stage.id,snapshot:stage.header.nextIndex,prepared:stage.prepared,total:stage.total,ready,progress:{prepared:stage.prepared,total:stage.total,reused:stage.reused,ready}};};
   function liveStage(id:string):Stage {active();const stage=stages.get(id);if(!stage)throw fail('index_stage_expired');if(stage.failed)throw fail('index_rebuild_required');return stage;}
   async function readRow(generation:string,entry:EntryState):Promise<CachedRow> {
     const captured=await run<{value:CachedRow;digest:string}>('readonly',['control'],(tx,done,abort)=>on(tx.objectStore('control').get(rowKey(generation,entry.id)),row=>{
@@ -142,7 +145,8 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
     if(token===undefined)return '';const value=inputText(token,256),prefix=pinId+'/';
     if(!value.startsWith(prefix)||!/^[1-9][0-9]{0,19}$/.test(value.slice(prefix.length)))throw fail('index_snapshot_expired');return value.slice(prefix.length);
   }
-  function pinPage(pinId:string,raw:string):unknown {const page=json<Record<string,unknown>>(raw);if(page.next!==null&&page.next!==undefined){if(typeof page.next!=='string')throw fail('index_rebuild_required');page.next=pinId+'/'+page.next;}return page;}
+  function envelope(pinId:string,value:unknown):unknown{const pin=pins.get(pinId);if(!pin)throw fail('index_snapshot_expired');return {snapshot:pin.header.nextIndex,source:pin.header.source,coverageComplete:rust(()=>pin.value.coverageComplete()),value};}
+  function pinPage(pinId:string,raw:string):unknown {const page=json<Record<string,unknown>>(raw);let cursor:string|null=null;if(page.next!==null&&page.next!==undefined){if(typeof page.next!=='string')throw fail('index_rebuild_required');cursor=pinId+'/'+page.next;}page.next=null;return {result:envelope(pinId,page),cursor};}
   const api:BrowserDocumentIndex={
     async status(){
       const captured=await run<{source:SourceCapture;catalog?:Catalog;raw?:string;digest?:string}>('readonly',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>{
@@ -152,9 +156,9 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
         },abort),abort);
       });
       const c=captured.catalog,g=c?.generations.find(g=>g.id===c.head),sourceWatermark=captured.source.publication.sequence;
-      try{if(!g||!captured.raw||captured.digest!==await digest(captured.raw))throw fail('index_rebuild_required');const stored=json<StoredHeader>(captured.raw,3*LIMITS.header);const h=checkedHeader(stored.rust);if(!equal(h.nextIndex,g.snapshot)||!equal(h.entries,stored.capture?.publication?.entries)||h.source.watermark!==stored.capture?.publication?.sequence)throw fail('index_rebuild_required');
-        return {sourceWatermark,snapshot:g.snapshot,coveredWatermark:g.sourceWatermark,rebuildRequired:!!c?.rebuilding,current:equal(stored.capture,captured.source)};
-      }catch{return {sourceWatermark,snapshot:null,coveredWatermark:null,rebuildRequired:true,current:false};}
+      try{if(!g||!captured.raw||captured.digest!==await digest(captured.raw))throw fail('index_rebuild_required');const stored=json<StoredHeader>(captured.raw,3*LIMITS.header);const h=checkedHeader(stored.rust);if(!equal(h.nextIndex.versions,json<unknown>(rust(()=>host.wasm.documentIndexVersionsJson())))||!equal(h.nextIndex,g.snapshot)||!equal(h.entries,stored.capture?.publication?.entries)||h.source.watermark!==stored.capture?.publication?.sequence)throw fail('index_rebuild_required');
+        return {sourceWatermark,snapshot:g.snapshot,coveredWatermark:g.sourceWatermark,rebuildRequired:!!c?.rebuilding,current:equal(stored.capture,captured.source),source:{localStoreId:host.authorityId,watermark:sourceWatermark},coverageComplete:g.coverageComplete,coveredSource:{localStoreId:host.authorityId,watermark:g.sourceWatermark}};
+      }catch{return {sourceWatermark,snapshot:null,coveredWatermark:null,rebuildRequired:true,current:false,source:{localStoreId:host.authorityId,watermark:sourceWatermark},coverageComplete:null,coveredSource:null};}
     },
     async begin(){
       active();await recover();if(stages.size>=1)throw fail('index_stage_limit');await prune();
@@ -170,10 +174,10 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       try{await run<void>('readwrite',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,h,c,capture.source,()=>{
         if(c.rebuilding)throw fail('index_rebuild_required');
         if(c.generations.filter(g=>g.state==='staging').length>=LIMITS.stages||c.generations.length>=LIMITS.generations+LIMITS.stages)throw fail('index_cache_limit');
-        c.generations.push({id,clientId:host.clientId,state:'staging',snapshot:h.nextIndex,sourceWatermark:h.source.watermark,rows:0,bytes:0,metadataBytes:0});
+        c.generations.push({id,clientId:host.clientId,state:'staging',snapshot:h.nextIndex,sourceWatermark:h.source.watermark,coverageComplete:false,rows:0,bytes:0,metadataBytes:0});
         tx.objectStore('control').add({key:headerKey(id),value:storedHeader,digest:headerDigest});putCatalog(tx,c);done();
       },abort),abort));}catch(error){builder.free();throw error;}
-      const stage:Stage={id,capture:capture.source,header:h,builder,prepared:0,total:h.entries.filter(e=>e.kind==='file').length};stages.set(id,stage);return stageInfo(stage);
+      const stage:Stage={id,capture:capture.source,header:h,builder,prepared:0,total:h.entries.filter(e=>e.kind==='file').length,reused:0};if(rust(()=>builder.ready())){stage.generation=rust(()=>builder.finish());builder.free();stage.builder=undefined;}stages.set(id,stage);return stageInfo(stage);
     },
     async pump(stageId){
       const stage=liveStage(stageId);if(stage.generation)return stageInfo(stage);const builder=stage.builder!;try{rust(()=>builder.beginPump());
@@ -192,10 +196,9 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
           if(metadata?.byte_length!==String(bytes.length)||metadata.witness?.identity?.entry_id!==entry.id||metadata.witness?.revision!==entry.revision||!Array.isArray(metadata.digest)||metadata.digest.length!==32||!metadata.digest.every((n:unknown)=>typeof n==='number'&&Number.isInteger(n)&&n>=0&&n<=255)||hex(new Uint8Array(metadata.digest))!==await byteDigest(bytes))throw fail('storage_corrupt');
         }
         if(sourceBytes>0&&bytes&&sourceBytes+bytes.length>1024*1024)break;
-        try{
+        let reused=false;try{
           // Unchanged witnesses and presentation reuse validated Rust facts and
           // the old immutable projection. A move receives a new witness/parse.
-          let reused=false;
           if(stage.header.expectedIndex){
             const previousId=stage.header.expectedIndex.generationEpoch;
             try{const previous=await readRow(previousId,entry);if(equal(previous.presentation,source.presentation)&&equal(previous.sourceDescriptor,sourceDescriptor)){
@@ -214,7 +217,7 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
           d.rows++;d.bytes+=projection?.length??0;d.metadataBytes+=size(record);
           if(d.rows>LIMITS.records||d.bytes>LIMITS.projection||d.metadataBytes>LIMITS.metadata||c.generations.reduce((n,g)=>n+g.bytes,0)>LIMITS.cache)throw fail('index_cache_limit');
           tx.objectStore('control').add({key:rowKey(stage.id,entry.id),value:row,digest:rowDigest});putCatalog(tx,c);done();
-        },abort),abort));stage.prepared++;sourceBytes+=bytes?.length??0;
+        },abort),abort));stage.prepared++;if(reused)stage.reused++;sourceBytes+=bytes?.length??0;
       }
       if(rust(()=>builder.ready())){stage.generation=rust(()=>builder.finish());builder.free();stage.builder=undefined;}
       return stageInfo(stage);
@@ -223,7 +226,7 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
     async publish(stageId){const stage=liveStage(stageId);if(!stage.generation)throw fail('index_not_ready');
       const snapshot=json<BrowserIndexSnapshot>(rust(()=>stage.generation!.snapshotJson()));
       await run<void>('readwrite',['control','metadata','presentation','sync_materialization_refs'],(tx,done,abort)=>readCatalog(tx,c=>sourceFence(tx,stage.header,c,stage.capture,()=>{
-        const d=c.generations.find(g=>g.id===stage.id);if(!d||d.state!=='staging'||d.rows!==stage.total)throw fail('index_rebuild_required');d.state='published';c.head=stage.id;putCatalog(tx,c);done();
+        const d=c.generations.find(g=>g.id===stage.id);if(!d||d.state!=='staging'||d.rows!==stage.total)throw fail('index_rebuild_required');d.state='published';d.coverageComplete=rust(()=>stage.generation!.coverageComplete());c.head=stage.id;putCatalog(tx,c);done();
       },abort),abort));stage.generation.free();stages.delete(stageId);await prune();return snapshot;
     },
     async open(){
@@ -234,16 +237,24 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
       if(captured.digest!==await digest(captured.header)){await api.closePin(pinId);throw fail('index_rebuild_required');}
       let builder:Builder|undefined;
       try{const stored=json<StoredHeader>(captured.header,3*LIMITS.header),h=checkedHeader(stored.rust);if(!equal(h.nextIndex,captured.snapshot)||!equal(h.entries,stored.capture?.publication?.entries)||h.source.watermark!==stored.capture?.publication?.sequence)throw fail('index_rebuild_required');builder=rust(()=>new host.wasm.WasmDocumentIndexBuilder(stored.rust));let count=0;for(const entry of h.entries){if(entry.kind!=='file')continue;if(count++%32===0)rust(()=>builder!.beginPump());const row=await readRow(captured.id,entry);try{rust(()=>builder!.addPersisted(entry.id,row.record));}catch(error){if(!(error instanceof BrowserVaultError)||error.code!=='index_pump_limit')throw error;rust(()=>builder!.beginPump());rust(()=>builder!.addPersisted(entry.id,row.record));}}
-        const generation=rust(()=>builder!.finish());pins.set(pinId,{generation:captured.id,value:generation});return {pinId,snapshot:captured.snapshot};
+        const generation=rust(()=>builder!.finish());pins.set(pinId,{generation:captured.id,value:generation,header:h,capture:stored.capture});return {pinId,snapshot:captured.snapshot,source:h.source,coverageComplete:rust(()=>generation.coverageComplete())};
       }catch(error){await api.closePin(pinId);throw error;}finally{builder?.free();}
     },
     async closePin(pinId){active();pins.get(pinId)?.value.free();pins.delete(pinId);await run<void>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{c.pins=c.pins.filter(p=>p.id!==pinId||p.clientId!==host.clientId);putCatalog(tx,c);done();},abort));},
-    async search(input){const g=await assertPin(input.pinId),pin=pins.get(input.pinId)!;const page=rust(()=>g.openLiteral(inputText(input.query,4096),tokenForPin(input.pinId,input.token),pageLimit(input.limit)));try{
+    async search(input){const g=await assertPin(input.pinId),pin=pins.get(input.pinId)!;const page=rust(()=>g.openLiteral(inputText(input.query,4096),tokenForPin(input.pinId,input.cursor),pageLimit(input.limit)));try{
       for(;;){const entry=json<EntryState|null>(rust(()=>page.nextReadJson()));if(!entry)break;const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_rebuild_required');rust(()=>page.accept(row.projection!));}
-      await assertPin(input.pinId);return pinPage(input.pinId,rust(()=>page.finishJson()));
+      const result=pinPage(input.pinId,rust(()=>page.finishJson()));await assertPin(input.pinId);return result;
     }finally{page.free();}},
     async resolve(input){const g=await assertPin(input.pinId),result=json<unknown>(rust(()=>g.resolveJson(inputText(input.sourceId,128),inputText(input.destination,4096))));await assertPin(input.pinId);return result;},
-    async backlinks(input){const g=await assertPin(input.pinId),result=pinPage(input.pinId,rust(()=>g.backlinksJson(inputText(input.targetId,128),tokenForPin(input.pinId,input.token),pageLimit(input.limit))));await assertPin(input.pinId);return result;},
+    async backlinks(input){const g=await assertPin(input.pinId),result=pinPage(input.pinId,rust(()=>g.backlinksJson(inputText(input.targetId,128),tokenForPin(input.pinId,input.cursor),pageLimit(input.limit))));await assertPin(input.pinId);return result;},
+    async metadata(input){const g=await assertPin(input.pinId),result=json<unknown>(rust(()=>g.metadataJson(inputText(input.id,128))));await assertPin(input.pinId);return result;},
+    async base(input){const g=await assertPin(input.pinId),pin=pins.get(input.pinId)!,id=inputText(input.id,128),entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
+      const row=await readRow(pin.generation,entry);if(!row.projection)throw fail('index_source_unavailable');
+      const facts=pin.header.entries.filter(e=>e.kind==='file').map(e=>{const presentation=pin.capture.publication.presentation.find(p=>p.id===e.id);if(!presentation)throw fail('index_rebuild_required');return {witness:{entryId:e.id,revision:e.revision},size:presentation.size_bytes,ctimeMs:presentation.ctime_ms,mtimeMs:presentation.mtime_ms};});
+      const factsJson=JSON.stringify(facts),options=JSON.stringify(input.options??{});if(size(factsJson)>8*1024*1024||size(options)>65536)throw fail('index_input_limit');
+      const viewName=input.viewName==null?undefined:inputText(input.viewName,1024);await assertPin(input.pinId);
+      const result=json<unknown>(rust(()=>g.baseJson(id,row.projection!,factsJson,options,viewName)));await assertPin(input.pinId);return result;
+    },
     async rebuild(){active();for(const stage of stages.values()){stage.builder?.free();stage.generation?.free();}stages.clear();for(const pin of pins.values())pin.value.free();pins.clear();
       // Explicit rebuild expires every old pin; fresh epochs prevent token ABA.
       recovery=undefined;const nonce=crypto.randomUUID();await run<void>('readwrite',['control'],(tx,done)=>{putCatalog(tx,{...empty(),rebuilding:nonce});done();});

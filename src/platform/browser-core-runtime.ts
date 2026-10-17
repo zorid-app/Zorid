@@ -118,6 +118,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
         pump:id=>runtime.call('document-index-pump',id),publish:id=>runtime.call('document-index-publish',id),
         open:()=>runtime.call('document-index-open'),closePin:id=>runtime.call('document-index-close-pin',id),
         search:input=>runtime.call('document-index-search',structuredClone(input)),
+        metadata:input=>runtime.call('document-index-metadata',structuredClone(input)),base:input=>runtime.call('document-index-base',structuredClone(input)),
         resolve:input=>runtime.call('document-index-resolve',structuredClone(input)),
         backlinks:input=>runtime.call('document-index-backlinks',structuredClone(input)),rebuild:()=>runtime.call('document-index-rebuild'),
       });

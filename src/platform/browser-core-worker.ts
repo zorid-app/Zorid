@@ -114,6 +114,8 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
       case 'document-index-open':return index.open();
       case 'document-index-close-pin':return index.closePin(payload);
       case 'document-index-search':return index.search(payload);
+      case 'document-index-metadata':return index.metadata(payload);
+      case 'document-index-base':return index.base(payload);
       case 'document-index-resolve':return index.resolve(payload);
       case 'document-index-backlinks':return index.backlinks(payload);
       case 'document-index-rebuild':return index.rebuild();

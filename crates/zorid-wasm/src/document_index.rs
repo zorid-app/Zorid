@@ -259,6 +259,43 @@ impl Tokens {
         Ok(key)
     }
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QueryReport<'a, T: Serialize> {
+    snapshot: &'a IndexSnapshotId,
+    source: &'a SourceSnapshotId,
+    coverage_complete: bool,
+    value: T,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetadataRead<'a> {
+    entry: &'a EntryState,
+    metadata: Option<&'a zorid_index::MetadataProjection>,
+    exclusion: Option<&'a Exclusion>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BaseRead<'a> {
+    definition: &'a EntryState,
+    result: zorid_bases::BaseQueryResult,
+}
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct BaseReadOptions {
+    view_index: Option<usize>,
+    search_terms: Vec<String>,
+    ignore_paths: Vec<String>,
+    clock_ms: Option<i64>,
+    timezone: Option<String>,
+    max_rows: Option<usize>,
+}
+fn base_error(code: &str, diagnostic: &impl Serialize) -> JsValue {
+    JsValue::from_str(
+        &serde_json::to_string(&serde_json::json!({"code":code,"diagnostic":diagnostic}))
+            .unwrap_or_else(|_| "{\"code\":\"index_invalid_record\"}".into()),
+    )
+}
 #[wasm_bindgen]
 pub struct WasmDocumentIndexGeneration {
     header: Header,
@@ -330,6 +367,70 @@ impl WasmDocumentIndexGeneration {
             &serde_json::json!({"snapshot":page.snapshot,"edges":page.edges,"next":next,"scanComplete":page.scan_complete,"coverageComplete":page.coverage_complete,"complete":page.complete}),
         )
     }
+    #[wasm_bindgen(js_name=metadataJson)]
+    pub fn metadata_json(&self, id: &str) -> Result<String, JsValue> {
+        let id = EntryId::new(id).map_err(|_| error("index_invalid_record"))?;
+        let record = self
+            .generation
+            .record(&id)
+            .ok_or_else(|| error("index_missing_source"))?;
+        self.report(MetadataRead {
+            entry: record.witness().entry(),
+            metadata: record.metadata(),
+            exclusion: record.exclusion(),
+        })
+    }
+    #[wasm_bindgen(js_name=baseJson)]
+    pub fn base_json(
+        &self,
+        id: &str,
+        bytes: &[u8],
+        facts_json: &str,
+        options_json: &str,
+        view_name: Option<String>,
+    ) -> Result<String, JsValue> {
+        if bytes.len() > 262144 || facts_json.len() > 8 * 1024 * 1024 || options_json.len() > 65536
+        {
+            return Err(error("index_input_limit"));
+        }
+        let id = EntryId::new(id).map_err(|_| error("index_invalid_record"))?;
+        let record = self
+            .generation
+            .record(&id)
+            .ok_or_else(|| error("index_missing_source"))?;
+        record.check_text(bytes).map_err(contract)?;
+        let source = std::str::from_utf8(bytes).map_err(|_| error("index_source_unavailable"))?;
+        let facts: Vec<zorid_bases::FilePresentationFacts> = decode(facts_json)?;
+        let input: BaseReadOptions = decode(options_json)?;
+        let program = zorid_bases::compile_base_source(source)
+            .map_err(|e| base_error("index_base_compile", &e))?;
+        let mut options = zorid_bases::QueryOptions::default();
+        if let Some(index) = input.view_index {
+            options.view_index = index;
+        }
+        if let Some(name) = view_name {
+            options.view_index = program
+                .view_index_by_name(&name)
+                .ok_or_else(|| error("index_view_not_found"))?;
+        }
+        options.search_terms = input.search_terms;
+        options.ignore_paths = input.ignore_paths;
+        if let Some(clock) = input.clock_ms {
+            options.evaluation.clock_ms = clock;
+        }
+        if let Some(timezone) = input.timezone {
+            options.evaluation.timezone = timezone;
+        }
+        if let Some(rows) = input.max_rows {
+            options.max_rows = rows;
+        }
+        let result = zorid_bases::query_generation(&program, &self.generation, &facts, &options)
+            .map_err(|e| base_error("index_base_evaluation", &e))?;
+        self.report(BaseRead {
+            definition: record.witness().entry(),
+            result,
+        })
+    }
     #[wasm_bindgen(js_name=resolveJson)]
     pub fn resolve_json(&self, source_id: &str, destination: &str) -> Result<String, JsValue> {
         let id = EntryId::new(source_id).map_err(|_| error("index_invalid_record"))?;
@@ -371,6 +472,17 @@ impl WasmDocumentIndexGeneration {
             page: Some(page),
             tokens: self.tokens.clone(),
             result: None,
+        })
+    }
+}
+impl WasmDocumentIndexGeneration {
+    fn report<T: Serialize>(&self, value: T) -> Result<String, JsValue> {
+        // Keep recursive source-map insertion order by avoiding generic Value.
+        encode(&QueryReport {
+            snapshot: self.generation.id(),
+            source: self.generation.manifest().source(),
+            coverage_complete: self.generation.coverage_complete(),
+            value,
         })
     }
 }
@@ -519,5 +631,43 @@ mod tests {
             }
         }
         assert_eq!(hits, 24);
+    }
+    #[test]
+    fn metadata_and_base_use_the_same_owned_generation_and_retained_definition() {
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"].as_array_mut().unwrap().push(serde_json::json!({"id":"base","path":"Links.base","kind":"file","revision":"r3","deleted":false}));
+        let definition=b"filters: file.hasLink(\"b\")\nviews:\n  - type: table\n    name: Links\n    order: [file.path]\n";
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
+        builder
+            .add_text(
+                "a",
+                b"---\ntitle: Original\nobject: {z: 1, a: 2}\n---\n[[b]]\n",
+            )
+            .unwrap();
+        builder.add_text("b", b"target\n").unwrap();
+        builder.add_text("base", definition).unwrap();
+        let generation = builder.finish().unwrap();
+        let metadata_raw = generation.metadata_json("a").unwrap();
+        assert!(metadata_raw.contains("{\"z\":1,\"a\":2}"));
+        let metadata: serde_json::Value = serde_json::from_str(&metadata_raw).unwrap();
+        assert_eq!(metadata["source"]["watermark"], "7");
+        assert_eq!(
+            metadata["value"]["metadata"]["properties"][0]["value"],
+            "Original"
+        );
+        let facts=serde_json::json!([{"witness":{"entryId":"a","revision":"r1"},"size":33,"ctimeMs":1,"mtimeMs":2}]).to_string();
+        let report: serde_json::Value = serde_json::from_str(
+            &generation
+                .base_json("base", definition, &facts, "{}", Some("Links".into()))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["snapshot"], metadata["snapshot"]);
+        assert_eq!(report["value"]["definition"]["revision"], "r3");
+        assert_eq!(
+            report["value"]["result"]["rows"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(report["value"]["result"]["rows"][0]["entryId"], "a");
     }
 }
