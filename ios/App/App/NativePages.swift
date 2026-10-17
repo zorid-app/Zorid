@@ -1063,10 +1063,11 @@ private final class NativePagesModel: ObservableObject {
     init(vault: LocalVault) { self.vault = vault }
     var heading: String { preferences.selected == .files && !folder.isEmpty ? folder : preferences.selected.title }
     var isInFolder: Bool { preferences.selected == .files && !folder.isEmpty }
+    var showInitialSkeleton: Bool { loading && listing == nil }
 
     func setLoading() {
         loading = true
-        status = listing == nil ? "Loading vault…" : "Updating vault…"
+        status = listing == nil ? "Loading vault…" : ""
         render()
     }
     func showLoadFailure(missingSelection: Bool = false) {
@@ -1191,7 +1192,7 @@ private final class NativePagesModel: ObservableObject {
             status = listing.reconciliationComplete ? "" : "Vault reconciliation is incomplete. Some files or changes may not yet be available. Pull down to retry."
         }
         canCreateNote = !loading && listing != nil
-        if loading { emptyMessage = "" }
+        if loading && listing == nil { emptyMessage = "" }
         else if listing == nil || historyFailed { emptyMessage = "" }
         else if listing?.reconciliationComplete != true { emptyMessage = "No entries are available while vault reconciliation is incomplete." }
         else if preferences.selected == .recents { emptyMessage = "Notes you open appear here. Browse Files or create a new note to get started." }
@@ -1402,9 +1403,6 @@ private struct NativePagesView: View {
                 .accessibilityIdentifier("native.files.parent")
                 .disabled(model.loading)
             }
-            if model.loading && !model.rows.isEmpty {
-                ProgressView("Updating vault").font(.footnote).padding(.horizontal, 20)
-            }
             if model.searchQuery.isEmpty { entryList } else { searchList }
         }
     }
@@ -1505,7 +1503,7 @@ private struct NativePagesView: View {
     private var entryList: some View {
         ScrollViewReader { proxy in
             List {
-                if model.loading && model.rows.isEmpty {
+                if model.showInitialSkeleton {
                     NativeLoadingSkeleton(editor: false).padding(.vertical, 12)
                         .listRowSeparator(.hidden)
                 } else if model.rows.isEmpty {
