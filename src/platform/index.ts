@@ -42,6 +42,11 @@ export async function createPlatformAdapter(): Promise<PlatformVault | null> {
     await adapter.initialize();
     return { adapter, label: 'Zorid', id: 'mobile:documents:Zorid' };
   }
+  if (typeof __ZORID_CORE_FIXTURES__ !== 'undefined' && __ZORID_CORE_FIXTURES__) {
+    const { browserCoreFixtureConfig, openBrowserCoreFixture } = await import('./browser-core-fixture');
+    const config = browserCoreFixtureConfig(true, new URL(window.location.href), __ZORID_CORE_BUILD_ID__);
+    if (config) return openBrowserCoreFixture(config);
+  }
   const { BrowserAdapter } = await import('./browser');
   return { adapter: new BrowserAdapter(), label: 'Browser vault', id: 'browser:default' };
 }
