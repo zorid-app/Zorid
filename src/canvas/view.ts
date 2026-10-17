@@ -9,6 +9,8 @@ import { createCanvasMarkdownCard } from './markdown-card.ts';
 import type { CanvasMarkdownCard, CanvasMarkdownSession } from './markdown-card.ts';
 import { CANVAS_RESIZE_DIRECTIONS, canvasBounds, canvasResizeGrid, canvasResizeRecordIndices, canvasSnapCoordinates, resizeCanvasBounds, scaleCanvasBounds, snapCanvasCoordinate } from './resize.ts';
 import type { CanvasBounds, CanvasResizeDirection } from './resize.ts';
+import { createCanvasResizeAutoPan, fitCanvasMarkdown } from './resize-interactions.ts';
+import type { CanvasResizeAutoPan } from './resize-interactions.ts';
 
 export interface CanvasViewOptions {
   document: CanvasDocument;
@@ -100,6 +102,9 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const fileCards = new Map<string, { file: string; subpath: string; card: CanvasMarkdownCard }>();
   let drag: { id: number; mode: 'move' | 'pan' | 'select' | 'resize'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
   let resizing: { direction: CanvasResizeDirection; initial: CanvasBounds; minimum: { width: number; height: number }; ratio: number; targets: Map<string, { original: CanvasNode; bounds: CanvasBounds }>; preview: Map<string, CanvasBounds>; edges: string[]; snaps: { x: number[]; y: number[] }; started: boolean; multiple: boolean } | undefined;
+  let resizeAutoPan: CanvasResizeAutoPan | undefined;
+  let autoFitting = false;
+  const fittedPreview = new Map<string, CanvasBounds>();
   let editor: HTMLTextAreaElement | undefined;
   let editorOriginal = '';
   let editorFailure: unknown;
@@ -136,6 +141,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     button(cardMenu, 'Add media', 'file', () => { void chooseFile(undefined, 'media').catch(report); }, 32);
   }
   const position = (node: CanvasNode) => {
+    const fitted = fittedPreview.get(node.id); if (fitted) return { ...node, ...fitted };
     const resized = resizing?.preview.get(node.id); if (resized) return { ...node, ...resized };
     const preview = drag?.positions.get(node.id);
     return preview ? { ...node, x: preview.x + drag!.dx, y: preview.y + drag!.dy } : node;
@@ -506,6 +512,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     viewport.append(host); openValueEditor(host, label, value, change, () => host.remove(), afterSave);
   }
   function clearDrag(): void {
+    resizeAutoPan?.destroy(); resizeAutoPan = undefined;
     const id = drag?.id; drag = undefined; resizing = undefined; box.remove(); viewport.classList.remove('is-panning', 'is-resizing'); viewport.style.removeProperty('cursor');
     if (id !== undefined && viewport.hasPointerCapture?.(id)) viewport.releasePointerCapture(id);
   }
@@ -533,11 +540,20 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     const visible = [...projection.nodes.values()].map(node => node.data).filter(node => !targets.has(node.id) && node.x * scale + tx <= (viewport.clientWidth || 800) && (node.x + node.width) * scale + tx >= 0 && node.y * scale + ty <= (viewport.clientHeight || 600) && (node.y + node.height) * scale + ty >= 0);
     resizing = { direction: handle.dataset.resize as CanvasResizeDirection, initial, minimum, ratio: ratio && multiple ? initial.width / initial.height : ratio, targets, preview: new Map(), snaps: canvasSnapCoordinates(visible), started: false, multiple, edges: [...projection.edges].filter(([, edge]) => targets.has(edge.fromNode) || targets.has(edge.toNode)).map(([id]) => id) };
     drag = { id: event.pointerId, mode: 'resize', startX: event.clientX, startY: event.clientY, x: tx, y: ty, dx: 0, dy: 0, positions: new Map(), prior: new Set() };
+    const gesture = resizing;
+    resizeAutoPan = createCanvasResizeAutoPan({
+      bounds: viewport.getBoundingClientRect(), scale: () => scale,
+      current: () => !closed && resizing === gesture && drag?.mode === 'resize',
+      // The reference pans its world center; our viewport stores screen-space
+      // translation with the opposite sign. Ticks do not synthesize resize moves.
+      pan(x, y) { tx -= x * scale; ty -= y * scale; transform(); },
+      schedule: (tick, delay) => win.setInterval(tick, delay), cancel: timer => win.clearInterval(timer),
+    });
     viewport.classList.add('is-resizing'); viewport.style.cursor = win.getComputedStyle(handle).cursor;
     return true;
   }
   const pointerDown = (event: PointerEvent) => {
-    if (closed || editor || drag || event.defaultPrevented || event.isPrimary === false) return;
+    if (closed || editor || drag || autoFitting || event.defaultPrevented || event.isPrimary === false) return;
     menuVersion++;
     const target = event.target as Element;
     if (ownsInput(target)) return;
@@ -584,7 +600,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       const bounds = resizeCanvasBounds(resizing.initial, resizing.direction, point, resizing.minimum, ratio);
       for (const [id, target] of resizing.targets) { resizing.preview.set(id, resizing.multiple ? scaleCanvasBounds(target.bounds, resizing.initial, bounds) : bounds); drawNode(id); }
       for (const id of resizing.edges) drawEdge(id);
-      drawResizeOutline(); return;
+      drawResizeOutline(); resizeAutoPan?.move(event); return;
     }
     drag.dx = Math.round(dx / scale); drag.dy = Math.round(dy / scale);
     if (drag.mode === 'move') {
@@ -621,6 +637,54 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   };
   viewport.addEventListener('pointerdown', pointerDown); viewport.addEventListener('pointermove', pointerMove);
   viewport.addEventListener('pointerup', event => finishDrag(event)); viewport.addEventListener('pointercancel', event => finishDrag(event, true)); viewport.addEventListener('lostpointercapture', event => finishDrag(event, true));
+  viewport.addEventListener('dblclick', event => {
+    if (closed || drag || editor || autoFitting || event.defaultPrevented || event.button !== 0) return;
+    const handle = (event.target as Element).closest<HTMLElement>('[data-resize]'), direction = handle?.dataset.resize;
+    if (!handle || direction !== 'bottom' && direction !== 'right') return;
+    const owner = handle.closest<HTMLElement>('[data-node-id]');
+    if (owner && nodeEls.get(owner.dataset.nodeId!) !== owner || !owner && handle.parentElement !== resizeOutline) return;
+    event.preventDefault(); event.stopPropagation(); menuVersion++;
+    const ids = owner ? [owner.dataset.nodeId!] : [...selectedNodes], sourceOwner = document;
+    const targets = ids.flatMap(id => {
+      const entry = textCards.get(id) ?? fileCards.get(id), node = projection.nodes.get(id), item = nodeEls.get(id);
+      const preview = entry?.card.element.querySelector<HTMLElement>('.zorid-canvas-note-preview');
+      return entry && node && item && preview && !entry.card.isEditing() && !preview.hidden && preview.getClientRects().length && preview.clientHeight > 0 ? [{ id, original: node.original, bounds: { ...node.data }, item, preview }] : [];
+    });
+    if (!targets.length) return;
+    autoFitting = true;
+    const targetIds = new Set(targets.map(target => target.id));
+    const edges = [...projection.edges].filter(([, edge]) => targetIds.has(edge.fromNode) || targetIds.has(edge.toNode)).map(([id]) => id);
+    const current = () => !closed && document === sourceOwner;
+    const allCurrent = () => current() && targets.every(target => nodeEls.get(target.id) === target.item);
+    try {
+      canvasResizeRecordIndices(document.nodes, targets.map(target => target.original));
+      for (const target of targets) {
+        const oldHeight = target.preview.style.getPropertyValue('height'), oldPriority = target.preview.style.getPropertyPriority('height');
+        const restoreHeight = () => { if (oldHeight) target.preview.style.setProperty('height', oldHeight, oldPriority); else target.preview.style.removeProperty('height'); };
+        const fitted = fitCanvasMarkdown(direction, { width: target.bounds.width, height: target.bounds.height }, {
+          clientHeight: () => target.preview.clientHeight, scrollHeight: () => target.preview.scrollHeight,
+          collapse(collapsed) { if (collapsed) target.preview.style.setProperty('height', '1px'); else restoreHeight(); },
+          apply(size) {
+            if (!current() || nodeEls.get(target.id) !== target.item) throw new Error('Canvas changed while measuring the card');
+            fittedPreview.set(target.id, { ...target.bounds, ...size }); drawNode(target.id);
+          },
+        });
+        fittedPreview.set(target.id, { ...target.bounds, ...fitted });
+      }
+      if (allCurrent()) {
+        const sizes = new Map(fittedPreview); fittedPreview.clear();
+        commit(draft => {
+          const indices = canvasResizeRecordIndices(draft.nodes, targets.map(target => target.original));
+          const changes = new Map([...indices].map(([id, index]) => [index, sizes.get(id)!]));
+          draft.setRoot('nodes', draft.nodes.map((node, index) => { const size = changes.get(index); return size ? { ...node, width: size.width, height: size.height } : node; }));
+        });
+      }
+    } catch (error) { if (allCurrent()) report(error); }
+    finally {
+      fittedPreview.clear(); autoFitting = false;
+      if (!closed && document === sourceOwner) { for (const target of targets) if (nodeEls.has(target.id)) drawNode(target.id); for (const id of edges) if (edgeEls.has(id)) drawEdge(id); drawResizeOutline(); }
+    }
+  });
   viewport.addEventListener('wheel', event => {
     if (closed || editor || drag || event.defaultPrevented || ownsInput(event.target as Element)) return;
     if ((event.target as Element).closest('.zorid-canvas-markdown-card,.zorid-canvas-attachment') && !event.ctrlKey && !event.metaKey && !space) return;
