@@ -11,6 +11,50 @@ or runtime parity claim. Read AGENTS.md, roadmap execution checkpoint, native
 integration record and relevant findings. Only this report is owned/changed.
 Owner retains validation and coordinator retains sole main integration.
 
+## Final source closure — 2026-10-17
+
+Reviewed Base correction `a9ec4ebcb2c2d9019425aa0fc538102c4af05bd1` atop
+`63040493dfa52df38970a6b776d2284ed447b085` in the actual recovery checkout.
+Observed HEAD was `7ee681b52ca71b0b97aa2fe95f404f85fee60406`; subsequent commits
+change documentation only. Tracked owner files were clean; untracked node_modules
+was untouched. All changes by this reviewer remain report-only.
+
+**The remaining Base P2 is resolved in source. No open concrete P1/P2 remains
+from this scoped mobile review.** `observeNativeNoteView` captures the Base
+session, awaits its readiness, and calls the runtime-ready function only when
+`!base.state.error && base.state.result`. This correctly distinguishes resolved
+refresh from successful Base parsing/querying. PDF uses a separate promise branch.
+The existing captured-generation/disposed-runtime and current-owner/active-view
+checks remain in place. The new eleventh navigation test supplies a Base with a
+resolved ready promise and retained query error and asserts no native open history.
+Reviewed test source only; no reviewer test/build execution or runtime acceptance.
+The open findings in earlier sections are historical and superseded by this closure.
+
+### Validation evidence and remaining limits
+
+The user reports 11/11 focused navigation tests passing, exit 0, after the Base
+fix; the preceding combined 112 pass covered 95 adapter, seven lifecycle and ten
+navigation cases. Do not describe this as a newly observed combined 113 run.
+Owner checkpoint `25d0217af07cc1538081d3050be891bf95e69dbb` additionally records
+optimized host unit8/8 and subprocess15/15, including the 17 MiB streaming case,
+ABI2/2, and the refreshed aarch64-apple-ios-sim staticlib passing, all exit 0.
+These owner-recorded results supersede the earlier pending optimized streaming
+rerun status; this source reviewer did not independently rerun them. ABI62353 is
+now recorded completed, and no heavy process/app/simulator is currently reported.
+
+The next acknowledged web/TypeScript/Xcode slot remains pending. Source closure
+and Rust staticlib compilation do not establish Swift SDK typecheck/link, a working
+bundled WKWebView app, native runtime or UX/accessibility parity. Still required:
+actual create/select/open/edit/save/reopen and independent exact disk/core bytes;
+Recents ordering/rename/delete/path reuse, successful renderer history and return
+to originating tab/folder; native claim/lease failure/retry; keyboard/safe-area,
+selection and rotation; lifecycle stale ACK/background deadline/OS expiry;
+terminate/reopen draft/conflict/namespace recovery; native filesystem durability;
+and actual glass/Reduce Motion/Transparency/contrast/Dynamic Type/assistive-input
+checks. Device archive/signing/TestFlight and native sync remain separate gates;
+Apple access is still pending. No main integration or broad desktop/browser/CLI
+regression acceptance is authorized or established by this report.
+
 ## Viewer-readiness follow-up — 2026-10-17
 
 Read owner inbox `msg_bf65b70f228b` and actual recovery HEAD
@@ -30,7 +74,7 @@ an old inactive or disposed view; cached valid readiness remains reusable when
 that view is intentionally activated again. Unknown-format placeholders have no
 success branch. These changes address the corresponding prior P2 paths in source.
 
-### Remaining P2 — Base readiness resolves on failure, too
+### Historical P2 at 63040493 — Base readiness resolves on failure, too
 
 `workspace.ts:294–295` shares `baseView.ready` and `pdfView.ready` through the same
 `pending.then(ready)` branch. Unlike PDF load failure, **Base refresh failure does
