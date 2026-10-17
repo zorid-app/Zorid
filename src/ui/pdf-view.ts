@@ -29,6 +29,8 @@ export interface PdfViewOptions {
   assetBase?:string;
   loadEngine?:(document:Document,assetBase:string)=>Promise<PdfEngine>;
   onError?:(error:Error)=>void;
+  /** Presentation only; password/error are not successful document readiness. No content is forwarded. */
+  onPresentationSettled?:(state:'ready'|'password'|'error')=>void;
   onPageChange?:(page:number)=>void;
   /** Host file/link actions shown at the right of an embedded viewer. */
   onOpenMenu?:(event:MouseEvent)=>void;
@@ -86,9 +88,16 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   const doc=parent.ownerDocument,win=doc.defaultView!;
   const node=<K extends keyof HTMLElementTagNameMap>(tag:K,cls='',text=''):HTMLElementTagNameMap[K]=>{const e=doc.createElement(tag);e.className=cls;e.textContent=text;return e;};
   const root=node('div','zorid-pdf-view interactive-child'),toolbar=node('div','zorid-pdf-toolbar'),stage=node('div','zorid-pdf-stage'),scroller=node('div','zorid-pdf-scroll'),pages=node('div','pdfViewer');
+  const nativeLoading=(loading:boolean)=>{if(loading)root.dataset.nativeLoading='true';else delete root.dataset.nativeLoading;root.setAttribute('aria-busy',String(loading));};
+  nativeLoading(true);
   root.classList.toggle('is-embed',!!options.embed);root.classList.toggle('is-mobile',!!options.mobile);root.setAttribute('aria-label',path.split('/').at(-1)??path);root.tabIndex=-1;
   toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','PDF controls');scroller.tabIndex=0;scroller.style.position='absolute';scroller.append(pages);stage.append(scroller);root.append(toolbar,stage);parent.append(root);
-  let closed=false,lease:AttachmentLease|undefined,task:LoadingTask|undefined,pdf:PdfDocument|undefined,viewer:Viewer|undefined,links:LinkService|undefined,bus:Bus|undefined;
+  let closed=false,presentationActive=true,lease:AttachmentLease|undefined,task:LoadingTask|undefined,pdf:PdfDocument|undefined,viewer:Viewer|undefined,links:LinkService|undefined,bus:Bus|undefined;
+  // Overlay bookkeeping must never fail PDF loading or leak a rejection.
+  const presentation=(state:'ready'|'password'|'error')=>{
+    if(closed||!presentationActive)return;
+    try{void Promise.resolve(options.onPresentationSettled?.(state)).catch(()=>{});}catch{/* Presentation only. */}
+  };
   let sidebar:PdfSidebar|undefined;
   let contextMenu:PdfMenuSession|undefined,contextVersion=0,normalizeUnicode:((text:string)=>string)|undefined;
   let loaded=false,labels:string[]|null=null,pendingSubpath=options.subpath??'',highlight:PdfLocation|undefined,searchTimer:ReturnType<typeof setTimeout>|undefined;
@@ -137,9 +146,9 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   const password=node('form','zorid-pdf-password'),passwordLabel=node('label','', 'This PDF requires a password.'),passwordInput=node('input');passwordInput.type='password';passwordInput.autocomplete='current-password';passwordInput.setAttribute('aria-label','PDF password');
   const submit=node('button','','Open');submit.type='submit';password.append(passwordLabel,passwordInput,submit);password.hidden=true;stage.append(password);
   let passwordCallback:((value:string)=>void)|undefined;
-  password.onsubmit=event=>{event.preventDefault();if(closed)return;if(passwordInput.value&&passwordCallback){const callback=passwordCallback;passwordCallback=undefined;password.hidden=true;callback(passwordInput.value);passwordInput.value='';}};
+  password.onsubmit=event=>{event.preventDefault();if(closed)return;if(passwordInput.value&&passwordCallback){const callback=passwordCallback;passwordCallback=undefined;password.hidden=true;nativeLoading(true);callback(passwordInput.value);passwordInput.value='';}};
   const on=(name:string,callback:(event:EventData)=>void)=>{bus!.on(name,callback);handlers.push([name,callback]);};
-  const report=(cause:unknown)=>{if(closed)return;const error=cause instanceof Error?cause:new Error(String(cause));status.textContent=`Unable to display PDF: ${error.message}`;status.hidden=false;options.onError?.(error);};
+  const report=(cause:unknown)=>{if(closed)return;nativeLoading(false);const error=cause instanceof Error?cause:new Error(String(cause));status.textContent=`Unable to display PDF: ${error.message}`;status.hidden=false;presentation('error');options.onError?.(error);};
   function updatePage():void{
     if(!viewer||!pdf)return;const current=viewer.currentPageNumber;
     pageInput.type=labels?'text':'number';pageInput.value=labels?.[current-1]??String(current);pageInput.max=String(pdf.numPages);pageCount.textContent=labels?`(${current} of ${pdf.numPages})`:`of ${pdf.numPages}`;
@@ -296,11 +305,12 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   const resized=()=>{updateFindHeight();if(!closed&&viewer&&loaded){if(['page-width','page-height'].includes(viewer.currentScaleValue))viewer.currentScaleValue=viewer.currentScaleValue;viewer.update();updateHeight();}};
   const resize=typeof win.ResizeObserver==='function'?new win.ResizeObserver(resized):undefined;resize?.observe(stage);
   function destroy():void{
-    if(closed)return;closed=true;contextVersion++;root.removeEventListener('contextmenu',context);if(contextMenu){contextMenu.dispose();contextMenu=undefined;void dismissContextMenu(doc);}sidebar?.destroy();if(sidebarMenu){sidebarMenu.dispose();sidebarMenu=undefined;void dismissContextMenu(doc);}if(menuSession){menuSession.dispose();menuSession=undefined;void dismissContextMenu(doc);}cancelReady();clearTimeout(searchTimer);clearHighlight();abort.abort();resize?.disconnect();for(const [name,handler]of handlers)bus?.off(name,handler);
+    if(closed)return;closed=true;nativeLoading(false);contextVersion++;root.removeEventListener('contextmenu',context);if(contextMenu){contextMenu.dispose();contextMenu=undefined;void dismissContextMenu(doc);}sidebar?.destroy();if(sidebarMenu){sidebarMenu.dispose();sidebarMenu=undefined;void dismissContextMenu(doc);}if(menuSession){menuSession.dispose();menuSession=undefined;void dismissContextMenu(doc);}cancelReady();clearTimeout(searchTimer);clearHighlight();abort.abort();resize?.disconnect();for(const [name,handler]of handlers)bus?.off(name,handler);
     root.removeEventListener('keydown',key);root.removeEventListener('keyup',keyup);scroller.removeEventListener('wheel',wheel);passwordCallback=undefined;root.remove();void release();
   }
   let releasing:Promise<void>|undefined;
   function release():Promise<void>{
+    presentationActive=false;
     if(releasing)return releasing;
     sidebar?.destroy();
     const currentTask=task,currentLease=lease;task=undefined;lease=undefined;
@@ -326,12 +336,13 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
       on('updatefindmatchescount',event=>{const count=event.matchesCount;matchCount.textContent=count?.total?`${count.current} of ${count.total>1000?'1000+':count.total}`:'';});
       on('updatefindcontrolstate',event=>{query.setAttribute('aria-invalid',String(event.state===1));if(event.matchesCount)matchCount.textContent=`${event.matchesCount.current} of ${event.matchesCount.total}`;});
       const initialPages=new Promise<void>(resolve=>on('pagesinit',()=>{if(closed)return;loaded=true;viewer!.currentScaleValue='page-width';updatePage();updateScale();applySubpath(pendingSubpath);resolve();}));
-      task=engine.core.getDocument({data,ownerDocument:doc,cMapUrl:new URL('cmaps/',assetBase).href,cMapPacked:true,standardFontDataUrl:new URL('standard_fonts/',assetBase).href,wasmUrl:new URL('wasm/',assetBase).href,iccUrl:new URL('iccs/',assetBase).href,isEvalSupported:false,enableXfa:true});
-      task.onPassword=(update,reason)=>{if(closed)return;passwordCallback=update;passwordLabel.textContent=reason===2?'Incorrect password. Try again.':'This PDF requires a password.';password.hidden=false;passwordInput.focus();};
-      pdf=await task.promise;if(closed)return;links.setDocument(pdf);viewer.setDocument(pdf);
+      const currentTask=engine.core.getDocument({data,ownerDocument:doc,cMapUrl:new URL('cmaps/',assetBase).href,cMapPacked:true,standardFontDataUrl:new URL('standard_fonts/',assetBase).href,wasmUrl:new URL('wasm/',assetBase).href,iccUrl:new URL('iccs/',assetBase).href,isEvalSupported:false,enableXfa:true});
+      task=currentTask;
+      currentTask.onPassword=(update,reason)=>{if(closed||task!==currentTask)return;nativeLoading(false);passwordCallback=update;passwordLabel.textContent=reason===2?'Incorrect password. Try again.':'This PDF requires a password.';password.hidden=false;passwordInput.focus();presentation('password');};
+      pdf=await currentTask.promise;if(closed||task!==currentTask)return;links.setDocument(pdf);viewer.setDocument(pdf);
       sidebar=createPdfSidebar(stage,pdf,{onPage:goToPage,onDestination:destination=>{if(!closed)links?.goToDestination(destination);},onOutlineContextMenu:clipboard&&options.generateMarkdownLink?outlineContext:undefined,onError:options.onError,onChange:state=>{if(closed)return;sidebarToggle.setAttribute('aria-expanded',String(state.open));scroller.style.insetInlineStart=state.open&&!options.embed&&!options.mobile?'140px':'0';resized();}});
       await Promise.race([viewer.firstPagePromise??Promise.resolve(),cancelled]);if(closed)return;
-      labels=await pdf.getPageLabels();if(closed)return;viewer.setPageLabels(labels);sidebar?.setPageLabels(labels);updatePage();await Promise.race([initialPages,cancelled]);
+      labels=await pdf.getPageLabels();if(closed)return;viewer.setPageLabels(labels);sidebar?.setPageLabels(labels);updatePage();await Promise.race([initialPages,cancelled]);if(!closed&&task===currentTask){nativeLoading(false);presentation('ready');}
     }catch(error){if(!closed){report(error);abort.abort();await release();throw error;}}
   })();
   // Waiting callers are released on close even when an import or resource provider

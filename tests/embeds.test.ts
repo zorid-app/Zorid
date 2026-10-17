@@ -151,3 +151,47 @@ test('PDF toolbar opens its source target when the host has no menu capability',
   f.calls[0].options.onOpenMenu!(new f.dom.window.MouseEvent('click'));
   assert.deepEqual(f.opens,['Home.md:Folder/Document.PDF#page=2']);
 });
+
+test('embed busy distinguishes pending from empty/error content and ignores superseded read completion',async t=>{
+  const pending:((text:string)=>void)[]=[];
+  const f=await setup(t,{'Home.md':'','Slow.md':''},()=>new Promise(resolve=>pending.push(resolve)));
+  const node=f.embeds.render({target:'Slow',kind:'wiki'},'Home.md');f.container.append(node);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(node.dataset.nativeLoading,'true');assert.equal(node.getAttribute('aria-busy'),'true');
+  f.embeds.invalidate('Slow.md');await new Promise(resolve=>setImmediate(resolve));assert.equal(pending.length,2);
+  pending[0]('stale');await new Promise(resolve=>setImmediate(resolve));assert.equal(node.dataset.nativeLoading,'true');assert.equal(node.querySelector('.markdown-embed-content'),null);
+  pending[1]('');await new Promise(resolve=>setImmediate(resolve));assert.ok(node.querySelector('.markdown-embed-content'));assert.equal(node.hasAttribute('data-native-loading'),false);assert.equal(node.getAttribute('aria-busy'),'false');
+  const missing=f.embeds.render({target:'Absent',kind:'wiki'},'Home.md');assert.equal(missing.getAttribute('aria-busy'),'false');assert.match(missing.textContent!,/File not found/);
+  f.embeds.invalidate('Slow.md');await new Promise(resolve=>setImmediate(resolve));assert.equal(node.dataset.nativeLoading,'true');f.embeds.releaseEmbed(node);pending[2]('late');await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(node.getAttribute('aria-busy'),'false');assert.equal(node.hasAttribute('data-native-loading'),false);assert.doesNotMatch(node.textContent!,/late/);
+});
+
+test('embedded images remain busy until decode event and old image events cannot settle a replacement',async t=>{
+  const f=await setup(t,{'Home.md':''});
+  const node=f.embeds.render({target:'https://example.test/image.png',kind:'markdown'},'Home.md');f.container.append(node);await new Promise(resolve=>setImmediate(resolve));
+  const image=node.querySelector('img')!;assert.equal(node.dataset.nativeLoading,'true');
+  f.embeds.invalidate();await new Promise(resolve=>setImmediate(resolve));const replacement=node.querySelector('img')!;assert.notEqual(image,replacement);
+  image.dispatchEvent(new f.dom.window.Event('load'));assert.equal(node.dataset.nativeLoading,'true');
+  replacement.dispatchEvent(new f.dom.window.Event('error'));assert.equal(node.getAttribute('aria-busy'),'false');assert.match(node.textContent!,/Unable to display/);
+  f.embeds.invalidate();await new Promise(resolve=>setImmediate(resolve));node.querySelector('img')!.dispatchEvent(new f.dom.window.Event('load'));
+  assert.equal(node.hasAttribute('data-native-loading'),false);assert.equal(node.getAttribute('aria-busy'),'false');
+});
+
+test('embedded viewer pending and rejection settle outer busy without replacing viewer-owned error or leases',async t=>{
+  const f=await setup(t,{'Home.md':'','Paper.pdf':''});let reject!:(error:Error)=>void,disposed=0;
+  const embeds=new MarkdownEmbeds({vault:f.vault,open(){},pdfFactory(node){node.textContent='Viewer-owned error';return{ready:new Promise((_,r)=>{reject=r;}),destroy(){disposed++;},goToPage(){},setScale(){},rotate(){},showSearch(){},applySubpath(){},getSelectionSubpath(){return null;}};}});
+  t.after(()=>embeds.destroy());const node=embeds.render({target:'Paper.pdf',kind:'wiki'},'Home.md');f.container.append(node);
+  assert.equal(node.dataset.nativeLoading,'true');reject(new Error('Invalid PDF'));await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(node.getAttribute('aria-busy'),'false');assert.equal(node.hasAttribute('data-native-loading'),false);assert.equal(node.textContent,'Viewer-owned error');
+  embeds.releaseEmbed(node);assert.equal(disposed,1);
+});
+
+test('delegated PDF embed leaves busy state to the viewer so an interactive password prompt is reachable',async t=>{
+  const f=await setup(t,{'Home.md':'','Paper.pdf':''});let resolve!:()=>void;
+  const embeds=new MarkdownEmbeds({vault:f.vault,open(){},pdfFactory(node){
+    const child=node.ownerDocument.createElement('div');child.className='zorid-pdf-view';child.dataset.nativeLoading='true';child.setAttribute('aria-busy','true');node.append(child);
+    return{ready:new Promise(r=>{resolve=r;}),destroy(){},goToPage(){},setScale(){},rotate(){},showSearch(){},applySubpath(){},getSelectionSubpath(){return null;}};
+  }});t.after(()=>embeds.destroy());const node=embeds.render({target:'Paper.pdf',kind:'wiki'},'Home.md');f.container.append(node);
+  const child=node.querySelector<HTMLElement>('.zorid-pdf-view')!;assert.equal(node.getAttribute('aria-busy'),'false');assert.equal(child.dataset.nativeLoading,'true');
+  delete child.dataset.nativeLoading;child.setAttribute('aria-busy','false');assert.equal(node.hasAttribute('data-native-loading'),false,'no ancestor skeleton covers the viewer prompt');resolve();await new Promise(r=>setImmediate(r));
+  assert.equal(node.getAttribute('aria-busy'),'false');
+});

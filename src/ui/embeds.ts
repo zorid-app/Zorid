@@ -17,6 +17,11 @@ import { createCanvasEmbedPreview } from '../canvas/embed-preview.ts';
 import type { CanvasEmbedPreview } from '../canvas/embed-preview.ts';
 import type { BaseEmbedSessions, BaseEmbedBinding } from './base-embed-sessions.ts';
 
+function nativeLoading(node: HTMLElement, loading: boolean): void {
+  if (loading) node.dataset.nativeLoading = 'true'; else delete node.dataset.nativeLoading;
+  node.setAttribute('aria-busy', String(loading));
+}
+
 interface EmbedOptions {
   bases?: {sessions: BaseEmbedSessions; identity(path: string): unknown};
   vault: Vault;
@@ -109,6 +114,7 @@ export class MarkdownEmbeds {
     if (this.disposed) return node;
     this.states.add(state); parent?.children.add(state);
     this.nodes.set(node, state);
+    nativeLoading(node,true);
     node.append(el('span', 'embed-loading', 'Loading…'));
     if (this.observer) { this.observed.set(node, state); this.observer.observe(node); }
     else void this.refresh(state);
@@ -138,6 +144,7 @@ export class MarkdownEmbeds {
 
   private markDirty(state: EmbedState): void {
     state.dirty = true;
+    nativeLoading(state.node,false); // The superseded read is cancelled, even while parked.
     state.version++; // Suppress in-flight output from the previous dependency.
     if (!state.visible) return; // The initial intersection callback will refresh.
     if (state.node.isConnected) void this.refresh(state);
@@ -206,7 +213,7 @@ export class MarkdownEmbeds {
 
   private release(state: EmbedState, prune = true): void {
     if (state.disposed) return;
-    state.disposed = true; state.version++;
+    state.disposed = true; state.version++;nativeLoading(state.node,false);
     const reconnectDocument = this.stopWaiting(state);
     state.baseBinding?.detach();state.baseBinding=undefined;
     destroyMarkdown(state.node);
@@ -231,7 +238,11 @@ export class MarkdownEmbeds {
     const resolved = this.options.vault.metadata.resolveLink(state.source, state.request.target, state.request.kind);
     const baseIdentity = resolved ? this.options.bases?.identity(resolved) : undefined;
     if(state.baseBinding && resolved === state.path && baseIdentity === state.baseIdentity){
-      state.dirty=false;this.pruneReconnectObserver(this.stopWaiting(state));return;
+      state.dirty=false;this.pruneReconnectObserver(this.stopWaiting(state));
+      const version=state.version;
+      nativeLoading(state.node,true);
+      const settled=()=>{if(!this.disposed&&!state.disposed&&state.version===version)nativeLoading(state.node,false);};
+      void state.baseBinding.ready.then(settled,settled);return;
     }
     state.baseBinding?.detach();state.baseBinding=undefined;
     const version = ++state.version;
@@ -245,6 +256,8 @@ export class MarkdownEmbeds {
     state.canvasPreview?.destroy();state.canvasPreview=undefined;
     state.lease?.release();state.lease=undefined;state.imageSource=undefined;
     const current = () => !this.disposed && !state.disposed && state.version === version;
+    nativeLoading(state.node,true);
+    const settled = () => { if(current())nativeLoading(state.node,false); };
     const { request, source } = state;
     const external=request.kind==='markdown'&&/^https?:\/\//i.test(request.target);
     const path = this.options.vault.metadata.resolveLink(source, request.target, request.kind);
@@ -255,13 +268,13 @@ export class MarkdownEmbeds {
     state.node.className='internal-embed markdown-embed';
     for (const attribute of ['alt', 'width', 'height']) state.node.removeAttribute(attribute);
     state.node.replaceChildren(open);
-    const fail = (message: string) => { if (current()) state.node.append(el('span', 'embed-error', message)); };
+    const fail = (message: string) => { if (current()) { settled();state.node.append(el('span', 'embed-error', message)); } };
     if(external || (path&&isImage(path))){
       state.node.className='internal-embed image-embed';state.node.replaceChildren();
       const details=imageAlt(request.label??path?.split('/').at(-1)??''),img=el('img');
       img.alt=details.alt;img.decoding='async';img.loading='lazy';img.draggable=false;
       if(details.width!==undefined)img.width=details.width;if(details.height!==undefined)img.height=details.height;
-      img.onerror=()=>fail('Unable to display this image.');state.node.append(img);
+      img.onload=settled;img.onerror=()=>fail('Unable to display this image.');state.node.append(img);
       state.imageSource=external?async()=>({url:request.target,type:'image/*',release(){}}):()=>this.resources.acquire(path!);
       img.onclick=()=>{
         const gallery=[...this.states].filter(item=>!item.disposed&&item.imageSource&&item.node.querySelector('img'));
@@ -281,9 +294,11 @@ export class MarkdownEmbeds {
         // The view acquires the resource itself. An outer lease would duplicate ownership.
         const view=(this.options.pdfFactory??createPdfView)(state.node,path,this.resources,{generateMarkdownLink:this.options.generatePdfLink?(subpath:string,alias:string)=>current()?this.options.generatePdfLink!(path,subpath,alias):null:undefined,embed:true,subpath:hash<0?'':request.target.slice(hash),onOpenMenu:event=>{if(!current())return;if(this.options.contextMenu)this.options.contextMenu(event,request,source);else this.options.open(source,request.target,request.kind);}});
         state.pdfView=view;
+        // The real viewer owns busy state, including interactive password waits.
+        if(state.node.querySelector('.zorid-pdf-view'))settled();
         // PDF views render their own loading errors. Consume completion without adding
         // stale errors to a replacement widget or duplicating the viewer's status UI.
-        void view.ready.catch(()=>{});
+        void view.ready.then(settled,settled);
       } catch(error) { fail(error instanceof Error?error.message:String(error)); }
       return;
     }
@@ -300,7 +315,8 @@ export class MarkdownEmbeds {
         const view = (this.options.mediaFactory ?? createMediaView)(state.node, path, this.resources);
         if (!current()) { view.destroy(); return; }
         state.mediaView = view;
-        void view.ready.catch(() => {});
+        if(state.node.querySelector('.zorid-media-view'))settled();
+        void view.ready.then(settled,settled);
       } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
       return;
     }
@@ -322,7 +338,7 @@ export class MarkdownEmbeds {
         // its pointer events as a request to reveal the embed source.
         preview.element.classList.add('interactive-child');
         if (!current()) { preview.destroy(); return; }
-        state.canvasPreview = preview;
+        state.canvasPreview = preview;settled();
       } catch (error) {
         if (current()) state.node.replaceChildren();
         fail(error instanceof Error ? error.message : String(error));
@@ -338,7 +354,7 @@ export class MarkdownEmbeds {
       try{
         state.baseIdentity=this.options.bases.identity(path);
         binding=this.options.bases.sessions.mount({sourcePath:source,targetPath:path,viewName,targetIdentity:state.baseIdentity,sourceIdentity:this.options.bases.identity(source),occurrence:state.occurrence},state.node);
-        state.baseBinding=binding;await binding.ready;
+        state.baseBinding=binding;await binding.ready;settled();
       }catch(error){if(state.baseBinding===binding){binding?.detach();state.baseBinding=undefined;}if(current())fail(error instanceof Error?error.message:String(error));}
       return;
     }
@@ -364,7 +380,7 @@ export class MarkdownEmbeds {
             .catch(error => fail(error instanceof Error ? error.message : String(error)));
         },
         {embed: child => this.render(child, path, [...state.ancestors, identity], state)});
-      if (current()) state.node.append(content);
+      if (current()) { state.node.append(content);settled(); }
       else destroyMarkdown(content);
     } catch (error) {
       // Rendering may have created async math/code owners before a later block

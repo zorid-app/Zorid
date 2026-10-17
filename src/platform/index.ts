@@ -5,7 +5,25 @@ import type { DurableWrites } from '../core/durable-writes.ts';
 import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
-export interface PlatformVault { readonly documentSemantics?:DocumentService; adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; recoverCommands?():Promise<boolean>; legacyExport?():void; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
+export interface PlatformVault {
+  readonly documentSemantics?:DocumentService;
+  /** Presentation bridge only; native controls execute shared editor commands. */
+  nativeEditor?: {
+    setState(state:import('../ui/editor.ts').NativeEditorState):Promise<void>;
+    subscribe(handler:(action:import('../ui/editor.ts').NativeEditorAction)=>void|Promise<void>,onStateRequest?:()=>void|Promise<void>):()=>void;
+  };
+  /** Native navigation owns the surrounding chrome; embed document content only. */
+  editorOnly?: boolean;
+  /** Native New note intent, applied once after durable admission/recovery. */
+  createNoteOnOpen?: boolean;
+  /** Native page selection, admitted together; paths alone do not identify a note. */
+  initialPath?: string;
+  initialEntryId?: string;
+  /** Presentation history only; rejection must not fail editing or saving. */
+  noteOpened?(path:string,entryId:string):Promise<void>;
+  /** Reveal ready content or actionable UI; password/error never acknowledge a successful open. */
+  presentationSettled?(input:{path:string;entryId:string;state:'ready'|'password'|'error'}):Promise<void>;
+  mobileLifecycle?:import('./mobile-native.ts').MobileLifecycle; adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; recoverCommands?():Promise<boolean>; legacyExport?():void; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
 async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<PlatformVault> {
   let reconciliationStatus=info.reconciliation??null;
   const reconciliation=info.reconciliation&&bridge.retryReconciliation?{
@@ -118,6 +136,11 @@ export async function createPlatformAdapter(): Promise<PlatformVault | null> {
   }
   const { Capacitor } = await import('@capacitor/core');
   if (Capacitor.isNativePlatform()) {
+    if (Capacitor.getPlatform() === 'ios') {
+      const { openNativeMobileVault } = await import('./mobile-native.ts');
+      return openNativeMobileVault();
+    }
+    // Android retains its current adapter until the native/JNI binding is ready.
     const { MobileAdapter } = await import('./mobile');
     const adapter = new MobileAdapter();
     await adapter.initialize();

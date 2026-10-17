@@ -1,0 +1,5 @@
+// Also used by legacy Debug/Release and the App scheme for shipping compatibility.
+PRODUCT_BUNDLE_IDENTIFIER = app.zorid.notes
+ZORID_APP_DISPLAY_NAME = Zorid
+ZORID_APP_ENVIRONMENT = production
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) ZORID_PRODUCTION
