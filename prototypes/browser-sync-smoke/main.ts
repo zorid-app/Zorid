@@ -12,23 +12,30 @@ const peer=new URL(url);peer.searchParams.set('database',`zorid-core-vault:smoke
 el<HTMLAnchorElement>('peer').href=peer.href;
 let runtime:BrowserCoreRuntime|undefined;
 let active=false;
+let diagnosticPhase='open';
+const failure=(error:any)=>({status:'failed',code:typeof error?.code==='string'?error.code:'operation_failed',phase:diagnosticPhase,invariant:typeof error?.details?.invariant==='string'?error.details.invariant:undefined,message:error?.code==='storage_corrupt'?error.message:undefined});
 function action(id:string,run:()=>Promise<unknown>){el<HTMLButtonElement>(id).onclick=async()=>{
-  if(active)return;active=true;
+  if(active)return;active=true;diagnosticPhase=id;
   try{if(!runtime)throw new Error('not_open');show(await run());}
-  catch(error){show({status:'failed',code:typeof(error as any)?.code==='string'?(error as any).code:'operation_failed'});}
+  catch(error){show(failure(error));}
   finally{active=false;}
 };}
 const rows=async()=> (await runtime!.inventory()).map(({entry,presentation})=>({...entry,size:presentation.size_bytes}));
 async function submit(mutation:unknown,create_mode:'text'|'binary'|null=null){
   const intentId=crypto.randomUUID();
+  diagnosticPhase='prepare_family';
   await runtime!.prepareFamily(intentId,JSON.stringify({version:1,request:{operation_id:intentId,mutation},create_mode}));
+  diagnosticPhase='commit_family';
   const receipt=await runtime!.commit(intentId);
+  diagnosticPhase='ack_family';
   await runtime!.acknowledge(intentId,{status:'committed',receipt});
+  diagnosticPhase='post_ack_inventory';
   return {status:'committed',files:await rows()};
 }
 const selected=async()=>{const row=await runtime!.readEntry(el<HTMLInputElement>('path').value);if(!row)throw new Error('missing_path');return row;};
 async function save(bytes:Uint8Array,mode:'text'|'binary'){
   const path=el<HTMLInputElement>('path').value;
+  diagnosticPhase='save_read_existing';
   const prior=await runtime!.readEntry(path);
   const mutation=prior?{type:'write',id:prior.entry.id,expected:prior.entry.revision,content:Array.from(bytes)}:
     {type:'create',id:crypto.randomUUID(),path,kind:'file',content:Array.from(bytes)};
@@ -59,4 +66,4 @@ el('reload').onclick=()=>location.reload();
 window.addEventListener('pagehide',()=>runtime?.close());
 void BrowserCoreRuntime.open({database,clientId,allowNewVault:true,wasmModuleUrl:new URL('lib/core/zorid_wasm.js',location.href).href,timeoutMs:60000})
 .then(value=>{runtime=value;show({status:'open',database,clientId});})
-.catch(error=>show({status:'open_failed',code:error.code??'unknown'}));
+.catch(error=>show({...failure(error),status:'open_failed'}));
