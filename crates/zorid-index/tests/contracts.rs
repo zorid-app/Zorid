@@ -204,7 +204,7 @@ fn snapshot_json_is_canonical_and_revalidates_private_identities() {
         assert!(serde_json::from_value::<IndexSnapshotId>(wrong).is_err());
     }
     let mut wrong = encoded.clone();
-    wrong["unknown"] = true;
+    wrong["unknown"] = serde_json::Value::Bool(true);
     assert!(serde_json::from_value::<IndexSnapshotId>(wrong).is_err());
     let mut wrong = encoded;
     wrong["versions"]["schema"] = 0.into();
