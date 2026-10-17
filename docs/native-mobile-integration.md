@@ -186,3 +186,48 @@ NativePages.swift in mobile-ios-shell. Shared initialPath/noteOpened seams are
 requested from coordinator before edits. Native-owned recent-open history is
 device-local UI state keyed by vault and stable Rust entry ID; current paths and
 file listings come from Rust snapshots. No Swift Markdown/Base/index semantics.
+
+
+## Native SwiftUI and verification checkpoint — 19:54 UTC
+
+Source imports: native293f52ab -> bb69fbee; adapter43247217 ->3368f734,
+3686c844 ->270c84b9; PBX source registrationfec0c7bb. Native identity/visibility
+fixes a9bc3b34+676e5b52 ->77531ff3+aa945e7d preserve opaque case-sensitive Rust
+EntryId and exact UTF8 path bytes, resolve selected current ID before handoff,
+hide dot namespaces/trash, and perform trusted refresh before Reload. Context
+initialPath+initialEntryId is paired; noteOpened requires exact path+entryId and
+fresh native Rust validation. Workspace seam63040493 consumes initial selection
+after admission/recovery and metadata ID validation, with same-read adapter ID
+fences before selected note bytes escape. Incidental indexing/recovery does not
+consume the initial guard. Notifications are nonfatal and require active rendered
+view success, with pending/failed/stale viewer coverage. Final Base error-state
+closure checks resolved session state.error/result; no view success inferred merely
+from settled ready.
+
+Coordinator explicitly granted/froze narrow workspace/platform activation seams.
+Host22634 matching prior accepted command-only CARGO_PROFILE_TEST_OPT_LEVEL=1,
+official Rust1.95, --locked/-j1/one test thread: unit8/8 and subprocess15/15 PASS,
+subprocess50.95s including17MiB streaming. Original unoptimized failure remains
+recorded above; no production watchdog/protocol relaxation. ABI62353 PASS2/2,
+including panic fences/drops invisible lease and exact owned buffer/free contract.
+Updated simulator staticlib46563 PASS26.59s, aarch64-apple-ios-sim debug. All three
+handles exited0; heavy slot explicitly released for coordinator Store/index/CLI
+checks. Next mobile web/TypeScript/Xcode/Orca slot requested. No app/simulator is
+running and no iOS app type/link/runtime/visual/accessibility claim follows.
+
+Focused combined Node suite95adapter+7lifecycle+10navigation PASS112/112 exit0,
+with injected DOM editor/viewers; subsequent11/11 navigation rerun passes including
+the additional Base retained-error case. These are focused seam checks, not iOS runtime evidence.
+Logs are ignored canonical tmp/mobile-host-opt1-check.log, mobile-ffi-check.log,
+mobile-staticlib-final.log and mobile-navigation-check.log.
+
+Apple helper individual-key auth source2469de9d imported4810ddf6. User explicitly
+authorized trying acceptance of the agreement already read/agreed, then contacting
+Apple Support. Correct same-team team key and downloaded Account Holder individual
+key still return agreement-required; Developer and ASC Business have no acceptance
+control because agreement already shows accepted. Actual official Apple Developer
+Support email case submitted and confirmation verified19:53:16UTC under Membership
+and Account / Agreements and Contracts. Private case number/message/receipt kept
+outside tracked source; Apple will review/reply. No claimed root cause or access
+resolution, no duplicate case or secret material sent. TestFlight provisioning and
+upload remain pending Apple access; app implementation continues independently.
