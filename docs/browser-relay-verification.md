@@ -51,6 +51,20 @@ storage_corrupt. First source fix `1cefd8d`, rebuilt as candidate `da2d162`, sti
 fails in fresh DB `e74ba4ea-df0d-431b-9cf2-fc2d193489f8`. Do not count folder
 support as verified. Diagnostic work is ongoing; failed commits may be durable.
 
+Superseding nested-file result (2026-10-17): fresh actual-worker verification
+with content-hashed assets passed. The prior rerun was still executing cached
+JavaScript. Source `1cefd8d` plus diagnostics `58d7eb0` and hashed assets
+`2205c9b` are integrated on main through `3dd3de6` after source review and this
+runtime check. Fresh database suffix `fb7cbedd-655a-4615-807e-fd9df8b65cb2`,
+client `51c3767c-2c4e-45f5-8b51-6fc010ad1164`, received 11 relay records,
+created `FreshFolder/child.md`, reloaded, and read its exact 36 bytes before
+credential reimport: `Nested browser file survives reload.` SHA256
+`70197d9f11995ef2bf24f9b58965c135f5a62aac27709ba8ba460484ddd0129e`.
+Reimport and HTTP sweep uploaded 3/received 3, complete true. CLI receipt of
+these new nested entries remains to be verified. The older failed database
+is preserved and correctly rejects open with `visible_publication_agreement`;
+no automatic repair or real-vault migration was attempted.
+
 2026-10-17 13:21 UTC diagnostic follow-up: actual Chrome ran the expanded
 existing storage fixture at localhost:8768. All 27 groups passed, including
 UUID parent/child identities after received history, prepare/commit/change
