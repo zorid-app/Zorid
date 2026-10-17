@@ -584,6 +584,9 @@ final class NativeEditorContainer: UIViewController {
         view.addSubview(editor.view)
         editor.view.translatesAutoresizingMaskIntoConstraints = false
         let safe = view.safeAreaLayoutGuide
+        // iOS17+ can extend the hidden guide to the absolute view bottom while
+        // retaining its docked-keyboard tracking. Top/side content stays safe.
+        if #available(iOS 17, *) { view.keyboardLayoutGuide.usesBottomSafeArea = false }
         let bottom = editor.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
         editorBottom = bottom
         NSLayoutConstraint.activate([
@@ -689,16 +692,27 @@ final class NativeEditorContainer: UIViewController {
             && frame.minX <= view.bounds.minX + 2 && frame.maxX >= view.bounds.maxX - 2
     }
 
+    private var hiddenKeyboardBottomExtension: CGFloat {
+        if #available(iOS 17, *) { return 0 } // usesBottomSafeArea owns this.
+        let safeBottom = view.safeAreaLayoutGuide.layoutFrame.maxY
+        let guideTop = view.keyboardLayoutGuide.layoutFrame.minY
+        // iOS15/16 lack usesBottomSafeArea. Correct only the guide's collapsed
+        // safe-area position, never add a keyboard height or cross a docked strip.
+        guard abs(guideTop - safeBottom) <= 0.5 else { return 0 }
+        return max(0, view.bounds.maxY - guideTop)
+    }
+
     private func updateToolbarLayout(notification: Notification? = nil) {
         guard isViewLoaded, let host = toolbarHost, let bottom = editorBottom else { return }
         let visible = toolbarModel.canAct && hasDockedSoftwareKeyboard
             && UIApplication.shared.applicationState == .active && !leaving
         let inset = visible ? (toolbarHeight?.constant ?? preferredToolbarHeight) + 8 : 0
-        guard visible != toolbarVisible || bottom.constant != -inset else { return }
+        let bottomConstant = hiddenKeyboardBottomExtension - inset
+        guard visible != toolbarVisible || bottom.constant != bottomConstant else { return }
         toolbarVisible = visible
         // One native viewport boundary clears BOTH guide-owned keyboard space
         // and the floating toolbar. Web must not apply a second toolbar inset.
-        bottom.constant = -inset
+        bottom.constant = bottomConstant
         host.view.isHidden = !visible
         // Layout/state callbacks must not start a second viewport animation after
         // WebKit has already revealed the focused selection for the keyboard.
