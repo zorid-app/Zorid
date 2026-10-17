@@ -100,7 +100,11 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Docu
             }
             Event::Start(Tag::Item) => {
                 if let Some(task) = task(source, range.start, positions) {
-                    result.tasks.push(task);
+                    let start = task.range.bytes[0] as usize;
+                    let end = task.range.bytes[1] as usize;
+                    if visible[start..end] == source.as_bytes()[start..end] {
+                        result.tasks.push(task);
+                    }
                 }
             }
             Event::Start(Tag::Link {

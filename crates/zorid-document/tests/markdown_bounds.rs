@@ -108,3 +108,21 @@ fn request_json_reuses_core_identity_validation() {
         assert!(serde_json::from_str::<MetadataRequest>(value).is_err());
     }
 }
+
+#[test]
+fn aliases_are_bounded_by_aggregate_decoded_bytes_before_cloning() {
+    // About 20 KiB of input, but over 8 MiB of decoded alias materialization.
+    // No giant allocation is necessary to exercise the amplification boundary.
+    let source = format!(
+        "---\nanchor: &shared \"{}\"\ncopies: [{}]\n---\nVisible #body",
+        "x".repeat(16 * 1024),
+        vec!["*shared"; 600].join(",")
+    );
+    let result = parse_markdown(&request(source)).unwrap();
+    assert!(result.properties.is_empty());
+    assert_eq!(
+        result.diagnostics[0].code,
+        DiagnosticCode::FrontmatterResource
+    );
+    assert_eq!(result.tags, ["body"]);
+}

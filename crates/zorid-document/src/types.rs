@@ -9,6 +9,7 @@ pub const MAX_FRONTMATTER_BYTES: usize = 1024 * 1024;
 pub const MAX_YAML_DEPTH: usize = 64;
 pub const MAX_VALUE_NODES: usize = 100_000;
 pub const MAX_ALIAS_NODES: usize = 1_000;
+pub const MAX_EXPANDED_YAML_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

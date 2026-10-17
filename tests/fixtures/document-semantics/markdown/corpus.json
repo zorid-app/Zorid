@@ -4816,6 +4816,154 @@
         "tasks": [],
         "diagnostics": []
       }
+    },
+    {
+      "id": "list-indented-code-tasks",
+      "decision": "A real ListItem may contain indented code as its first block. Exclude standard/custom markers within parser-owned CodeBlock spans, along with code tags/links.",
+      "request": {
+        "entryId": "fixture-list-indented-code-tasks",
+        "contentRevision": "fixture-1",
+        "source": "-     [ ] code #hidden\n\n-     [?] custom [[Hidden]]\n\n- [ ] actual"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-list-indented-code-tasks",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 65,
+          "utf16": 65
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [
+          {
+            "status": " ",
+            "checked": false,
+            "completed": false,
+            "text": "actual",
+            "line": 4,
+            "range": {
+              "bytes": [
+                55,
+                58
+              ],
+              "utf16": [
+                55,
+                58
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                56,
+                57
+              ],
+              "utf16": [
+                56,
+                57
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                59,
+                65
+              ],
+              "utf16": [
+                59,
+                65
+              ]
+            }
+          }
+        ],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "bare-cr-comment-null-root",
+      "decision": "Bare CR is a physical newline in empty/comment-only detection. A comment before explicit null must not hide an invalid nonmapping YAML root.",
+      "request": {
+        "entryId": "fixture-bare-cr-comment-null-root",
+        "contentRevision": "fixture-1",
+        "source": "---\r# comment\rnull\r---\r# Body"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-bare-cr-comment-null-root",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 29,
+          "utf16": 29
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              23
+            ],
+            "utf16": [
+              0,
+              23
+            ]
+          },
+          "bodyStart": {
+            "byte": 23,
+            "utf16": 23
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [
+          {
+            "text": "Body",
+            "level": 1,
+            "line": 4,
+            "range": {
+              "bytes": [
+                23,
+                29
+              ],
+              "utf16": [
+                23,
+                29
+              ]
+            }
+          }
+        ],
+        "links": [],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_mapping",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                23
+              ],
+              "utf16": [
+                0,
+                23
+              ]
+            }
+          }
+        ]
+      }
     }
   ]
 }

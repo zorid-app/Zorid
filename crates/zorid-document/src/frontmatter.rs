@@ -1,7 +1,7 @@
 use crate::positions::{after_line, line_end, Positions};
 use crate::*;
 use regex::Regex;
-use saphyr_parser::{Event, Parser, ScalarStyle, Span, Tag};
+use saphyr_parser::{Event, Parser, ScalarStyle, Tag};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::OnceLock;
@@ -194,6 +194,7 @@ struct Decoder<'a> {
     active: HashSet<usize>,
     nodes: usize,
     alias_nodes: usize,
+    decoded_bytes: usize,
     issues: Vec<DiagnosticCode>,
 }
 impl Decoder<'_> {
@@ -202,8 +203,17 @@ impl Decoder<'_> {
             self.issues.push(issue);
         }
     }
-    fn key(&mut self, index: usize) -> String {
-        match &self.tree.nodes[index].kind {
+    fn reserve_decoded_bytes(&mut self, bytes: usize) -> Result<(), DiagnosticCode> {
+        self.decoded_bytes = self
+            .decoded_bytes
+            .checked_add(bytes)
+            .filter(|total| *total <= MAX_EXPANDED_YAML_BYTES)
+            .ok_or(DiagnosticCode::FrontmatterResource)?;
+        Ok(())
+    }
+    fn key(&mut self, index: usize) -> Result<String, DiagnosticCode> {
+        let tree = self.tree;
+        match &tree.nodes[index].kind {
             Kind::Scalar(text, _, tag) => {
                 if tag.as_ref().is_some_and(|tag| !supported_tag(tag)) {
                     self.issue(DiagnosticCode::FrontmatterTag);
@@ -212,11 +222,12 @@ impl Decoder<'_> {
                 {
                     self.issue(DiagnosticCode::FrontmatterValue);
                 }
-                text.clone()
+                self.reserve_decoded_bytes(text.len())?;
+                Ok(text.clone())
             }
             _ => {
                 self.issue(DiagnosticCode::FrontmatterValue);
-                String::new()
+                Ok(String::new())
             }
         }
     }
@@ -245,14 +256,18 @@ impl Decoder<'_> {
         if alias {
             self.alias_nodes += 1;
         }
-        let result = match &self.tree.nodes[index].kind {
-            Kind::Scalar(text, style, tag) => match scalar(text, *style, tag.as_ref()) {
-                Ok(value) => value,
-                Err(code) => {
-                    self.issue(code);
-                    PropertyValue::Null
+        let tree = self.tree;
+        let result = match &tree.nodes[index].kind {
+            Kind::Scalar(text, style, tag) => {
+                self.reserve_decoded_bytes(text.len())?;
+                match scalar(text, *style, tag.as_ref()) {
+                    Ok(value) => value,
+                    Err(code) => {
+                        self.issue(code);
+                        PropertyValue::Null
+                    }
                 }
-            },
+            }
             Kind::Sequence(items, tag) => {
                 if tag.as_ref().is_some_and(|tag| !core_tag(tag, "seq")) {
                     self.issue(DiagnosticCode::FrontmatterTag);
@@ -270,7 +285,7 @@ impl Decoder<'_> {
                 let mut values = Vec::new();
                 let mut keys = HashSet::new();
                 for (key, value) in items {
-                    let key = self.key(*key);
+                    let key = self.key(*key)?;
                     if !keys.insert(key.clone()) {
                         self.issue(DiagnosticCode::FrontmatterDuplicateKey);
                     }
@@ -309,13 +324,14 @@ fn decode(
         active: HashSet::new(),
         nodes: 0,
         alias_nodes: 0,
+        decoded_bytes: 0,
         issues: Vec::new(),
     };
     let value = decoder.value(root, 0, false)?;
     let entries = match value {
         PropertyValue::Object(entries) => entries,
         _ if source
-            .lines()
+            .split(['\r', '\n'])
             .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#')) =>
         {
             Vec::new()

@@ -1373,6 +1373,43 @@
         }
       ],
       "propertiesError": false
+    },
+    {
+      "id": "list-indented-code-tasks",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "hidden"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": [
+          {
+            "target": "Hidden",
+            "fragment": "",
+            "start": 43,
+            "end": 49,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "bare-cr-comment-null-root",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
     }
   ]
 }

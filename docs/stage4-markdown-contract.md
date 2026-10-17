@@ -272,7 +272,12 @@ Fixed initial defaults, identical on native/WASM: input ≤16 MiB UTF-8; framed
 frontmatter ≤1 MiB; YAML value depth ≤64 with scalar root depth zero; ≤100,000
 expanded JSON value nodes, counting container and scalar values; ≤1,000 values
 created by alias substitution, counting every copied container/scalar including
-nested copies. Exceeding the input cap is an extraction request error; exceeding
+nested copies; and ≤8 MiB aggregate decoded scalar/key UTF-8 bytes across ordinary
+and alias materializations, reserved before any materialization clone. Count all
+decoded scalar spelling bytes, including numeric/bool/null spellings, plus map
+keys. This byte ceiling prevents a large scalar reused by many aliases from
+amplifying into gigabytes while remaining under node caps. Exceeding the input cap is an
+extraction request error; exceeding
 YAML caps yields `frontmatter_resource`, preserving body extraction. Bound
 iteration/recursion before materializing an oversized expansion. Never truncate
 metadata silently or publish a partial YAML map. Fixed defaults are part of this
@@ -315,7 +320,7 @@ notices. [Parser docs](https://docs.rs/saphyr-parser/latest/saphyr_parser/) and
 exact crate, including `Cargo.toml`, `parser.rs`, `scanner.rs` and `LICENSE`, was
 the primary version-specific evidence. No dependency/runtime build is claimed. MDBASE and index/query work have separate owners.
 
-The 44-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
+The 46-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
 invalid/duplicate/tagged YAML, mixed projections, nonfinite/unsafe numbers,
 BOM/CRLF/bare-CR/astral/decomposed Unicode, empty/partial Markdown, exclusions,
 ATX/Setext/container headings, raw/inline/reference links and task dialect.
@@ -343,7 +348,7 @@ include separate `propertyKeySpellings` source assertions; decoded keys must not
 be mistaken for raw YAML spelling. The TypeScript option checks all
 recorded baseline observations, including intentional mismatches with the target.
 
-Verification at preparation completion: the checker and all 44 current TypeScript
+Verification at preparation completion: the checker and all 46 current TypeScript
 observations pass; 22 existing property/metadata tests pass. The first checker
 run caught an accidentally empty status in the final empty task and was corrected;
 fixture IDs were corrected to the existing strong-ID grammar before completion.
