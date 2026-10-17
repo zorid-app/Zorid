@@ -9,8 +9,19 @@ struct NativeFileEntry: Decodable {
     let kind: Kind
     let deleted: Bool
 
-    var name: String { path.split(separator: "/", omittingEmptySubsequences: false).last.map(String.init) ?? path }
-    var parent: String { path.split(separator: "/", omittingEmptySubsequences: false).dropLast().joined(separator: "/") }
+    var name: String { Self.pathComponents(path).last ?? path }
+    var parent: String { Self.pathComponents(path).dropLast().joined(separator: "/") }
+
+    static func pathComponents(_ path: String) -> [String] {
+        // Rust splits ASCII slash bytes, including before combining characters.
+        path.utf8.split(separator: 47, omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    static func samePath(_ left: String, _ right: String) -> Bool {
+        // Swift String equality folds Unicode canonical equivalents; Rust/JS do
+        // not. Keep distinct vault spellings distinct, without normalization.
+        left.utf8.elementsEqual(right.utf8)
+    }
 
     static func isValidEntryId(_ value: String) -> Bool {
         // Rust EntryId is an opaque, case-sensitive token, not a UUID.
@@ -21,9 +32,9 @@ struct NativeFileEntry: Decodable {
     }
 
     static func isValidPath(_ path: String) -> Bool {
-        guard !path.isEmpty, path.utf8.count <= 1_048_576, !path.contains("\\"),
+        guard !path.isEmpty, path.utf8.count <= 1_048_576, !path.utf8.contains(92),
               !path.unicodeScalars.contains(where: { $0.value < 0x20 || (0x7f...0x9f).contains($0.value) }) else { return false }
-        let segments = path.split(separator: "/", omittingEmptySubsequences: false)
+        let segments = pathComponents(path)
         guard segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return false }
         let first = Array(segments[0].utf8.prefix(2))
         if first.count == 2, first[1] == 58,
@@ -34,7 +45,7 @@ struct NativeFileEntry: Decodable {
     static func isVisiblePath(_ path: String) -> Bool {
         // Match the adapter's visible/nativeNotePath boundary: never expose root
         // .zorid (Rust-reserved), .trash, or any other dot namespace/component.
-        isValidPath(path) && path.split(separator: "/").allSatisfy { !$0.hasPrefix(".") }
+        isValidPath(path) && pathComponents(path).allSatisfy { $0.utf8.first != 46 }
     }
 
 }
@@ -94,7 +105,7 @@ extension NativeMobileSession {
                             let entries = decoded.entries.map(\.state)
                             guard !decoded.cursor.isEmpty, entries.allSatisfy({ !$0.deleted && NativeFileEntry.isValidEntryId($0.id) && NativeFileEntry.isValidPath($0.path) }),
                                   Set(entries.map(\.id)).count == entries.count,
-                                  Set(entries.map(\.path)).count == entries.count else { throw NativePageError.invalidResponse }
+                                  Set(entries.map { Data($0.path.utf8) }).count == entries.count else { throw NativePageError.invalidResponse }
                             self.context { context in
                                 let reconciliation = context["reconciliation"] as? [String: Any]
                                 completion(.success(NativeVaultListing(localStoreId: storeId, entries: entries.filter { NativeFileEntry.isVisiblePath($0.path) },
@@ -114,7 +125,7 @@ extension NativeMobileSession {
         pageListing { result in
             completion(result.flatMap { listing in
                 Result {
-                    guard let entry = listing.entries.first(where: { $0.id == entryId && $0.path == path && $0.kind == .file }) else {
+                    guard let entry = listing.entries.first(where: { $0.id == entryId && NativeFileEntry.samePath($0.path, path) && $0.kind == .file }) else {
                         throw NativePageError.unavailable
                     }
                     try NativeRecentStore.record(entryId: entry.id, vaultId: self.vault.id, storeId: listing.localStoreId)
@@ -356,7 +367,7 @@ private final class NativePagesModel: ObservableObject {
         loading = false
         self.listing = listing
         status = listing.scanComplete ? "" : "The vault scan is incomplete. Some files may be unavailable. Open the editor for recovery."
-        if !folder.isEmpty && !listing.entries.contains(where: { $0.path == folder && $0.kind == .folder }) { folder = "" }
+        if !folder.isEmpty && !listing.entries.contains(where: { NativeFileEntry.samePath($0.path, folder) && $0.kind == .folder }) { folder = "" }
         render()
         if restoringFocus {
             if !rows.contains(where: { $0.id == focusedEntryId }) { focusedEntryId = nil }
@@ -381,7 +392,7 @@ private final class NativePagesModel: ObservableObject {
     }
     func enter(_ folder: NativeFileEntry) { self.folder = folder.path; render() }
     func parentFolder() {
-        folder = folder.split(separator: "/", omittingEmptySubsequences: false).dropLast().joined(separator: "/")
+        folder = NativeFileEntry.pathComponents(folder).dropLast().joined(separator: "/")
         render()
     }
     func willOpen(_ entry: NativeFileEntry?) {
@@ -396,7 +407,7 @@ private final class NativePagesModel: ObservableObject {
                 do { rows = try NativeRecentStore.entries(vaultId: vault.id, listing: listing) }
                 catch { historyFailed = true }
             } else {
-                rows = listing.entries.filter { $0.parent == folder }.sorted {
+                rows = listing.entries.filter { NativeFileEntry.samePath($0.parent, folder) }.sorted {
                     if $0.kind != $1.kind { return $0.kind == .folder }
                     return $0.name.localizedStandardCompare($1.name) == .orderedAscending
                 }
