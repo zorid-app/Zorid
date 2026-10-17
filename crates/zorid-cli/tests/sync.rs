@@ -528,8 +528,26 @@ fn enrollment_is_explicit_and_mode_is_part_of_exact_operation_retry() {
     assert!(!cli(&f.a, &args).status.success());
     let mut binary = args.to_vec();
     binary.push("--binary");
-    success(cli(&f.a, &binary));
-    success(cli(&f.a, &binary));
+    let committed = success(cli(&f.a, &binary));
+    let before = success(sync(&f.a, &f.ca, &["status"]));
+    let before_read = success(cli(&f.a, &["read", "--id", "mode"]));
+    // This is a separate process AFTER the explicit-mode command committed.
+    // Generic apply must not bypass the composite identity fence by returning
+    // an old plain-MutationRequest receipt when mode is omitted on retry.
+    let omitted = cli(&f.a, &args);
+    assert!(!omitted.status.success());
+    assert!(omitted.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&omitted.stderr).unwrap();
+    assert!(matches!(
+        error["error"]["code"].as_str(),
+        Some("invalid_mutation" | "idempotency_conflict")
+    ));
+    assert_eq!(success(sync(&f.a, &f.ca, &["status"])), before);
+    assert_eq!(success(cli(&f.a, &["read", "--id", "mode"])), before_read);
+    assert_eq!(fs::read(f.a.join("mode.dat")).unwrap(), b"same bytes");
+    let retried = success(cli(&f.a, &binary));
+    assert_eq!(retried["commit"], committed["commit"]);
+    assert_eq!(success(sync(&f.a, &f.ca, &["status"])), before);
     let mut text = args.to_vec();
     text.push("--text");
     assert!(!cli(&f.a, &text).status.success());
