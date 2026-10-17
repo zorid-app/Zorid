@@ -9,13 +9,19 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+pub const MAX_QUERY_STEPS: usize = 2_000_000;
+pub const MAX_QUERY_SCANNED: usize = 50_000;
+pub const MAX_QUERY_ROWS: usize = 10_000;
+pub const MAX_QUERY_GROUPS: usize = 5_000;
+pub const MAX_QUERY_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BaseSnapshot {
-    pub snapshot_id: String,
+    pub snapshot_id: crate::IndexSnapshotId,
     pub records: Vec<DetachedRecord>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct QueryOptions {
     pub view_index: usize,
     pub search_terms: Vec<String>,
@@ -46,7 +52,7 @@ impl Default for QueryOptions {
 #[serde(rename_all = "camelCase")]
 pub struct QueryDiagnostic {
     pub phase: String,
-    pub entry_id: String,
+    pub entry_id: crate::EntryId,
     pub path: String,
     pub property: Option<String>,
     pub code: String,
@@ -55,8 +61,8 @@ pub struct QueryDiagnostic {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseRow {
-    pub entry_id: String,
-    pub revision: String,
+    pub entry_id: crate::EntryId,
+    pub revision: crate::Revision,
     pub path: String,
     pub values: BTreeMap<String, BaseValue>,
 }
@@ -64,7 +70,7 @@ pub struct BaseRow {
 #[serde(rename_all = "camelCase")]
 pub struct BaseGroup {
     pub key: Option<BaseValue>,
-    pub entry_ids: Vec<String>,
+    pub entry_ids: Vec<crate::EntryId>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupOption {
@@ -84,7 +90,7 @@ pub struct QueryCounts {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseQueryResult {
-    pub snapshot_id: String,
+    pub snapshot_id: crate::IndexSnapshotId,
     pub view: PropertyValue,
     pub rows: Vec<BaseRow>,
     pub groups: Vec<BaseGroup>,
@@ -161,7 +167,12 @@ fn report(
 ) {
     let diagnostic = QueryDiagnostic {
         phase: phase.into(),
-        entry_id: record.entry_id.clone(),
+        entry_id: record
+            .witness
+            .as_ref()
+            .expect("query witness validated")
+            .entry_id
+            .clone(),
         path: record.path.clone(),
         property: property.map(String::from),
         code: error.code,
@@ -256,6 +267,15 @@ pub fn query_base(
     options: &QueryOptions,
 ) -> Result<BaseQueryResult, ExpressionDiagnostic> {
     let budget = |message: &str| ExpressionDiagnostic::new("budget", message);
+    if options.max_steps > MAX_QUERY_STEPS
+        || options.max_scanned > MAX_QUERY_SCANNED
+        || options.max_rows > MAX_QUERY_ROWS
+        || options.max_groups > MAX_QUERY_GROUPS
+        || options.max_output_bytes > MAX_QUERY_OUTPUT_BYTES
+    {
+        return Err(budget("Query ceilings exceed supported maximum"));
+    }
+
     let view = program
         .views
         .get(options.view_index)
@@ -269,10 +289,10 @@ pub fn query_base(
     let mut ids = HashSet::new();
     let mut paths = HashSet::new();
     for record in &snapshot.records {
-        if record.entry_id.is_empty()
-            || !ids.insert(&record.entry_id)
-            || !paths.insert(&record.path)
-        {
+        let witness = record.witness.as_ref().ok_or_else(|| {
+            ExpressionDiagnostic::new("input", "Query records require an entry/revision witness")
+        })?;
+        if !ids.insert(&witness.entry_id) || !paths.insert(&record.path) {
             return Err(ExpressionDiagnostic::new(
                 "input",
                 "Snapshot entry IDs and paths must be nonempty and unique",
@@ -378,8 +398,18 @@ pub fn query_base(
             }
             steps_used = steps_used.saturating_add(session.steps_used());
             Ok(Some(BaseRow {
-                entry_id: record.entry_id.clone(),
-                revision: record.revision.clone(),
+                entry_id: record
+                    .witness
+                    .as_ref()
+                    .expect("query witness validated")
+                    .entry_id
+                    .clone(),
+                revision: record
+                    .witness
+                    .as_ref()
+                    .expect("query witness validated")
+                    .revision
+                    .clone(),
                 path: record.path.clone(),
                 values,
             }))
@@ -478,7 +508,16 @@ pub fn query_base(
     let by_id = snapshot
         .records
         .iter()
-        .map(|record| (&record.entry_id, record))
+        .map(|record| {
+            (
+                &record
+                    .witness
+                    .as_ref()
+                    .expect("query witness validated")
+                    .entry_id,
+                record,
+            )
+        })
         .collect::<HashMap<_, _>>();
     for row in &rows {
         if let Some(record) = by_id.get(&row.entry_id) {

@@ -433,7 +433,6 @@ pub(crate) struct BasesEvaluationContext {
     pub this_file: Option<BasesFile>,
     pub files: Arc<super::files::BasesFiles>,
     pub formulas: Arc<IndexMap<String, String>>,
-    pub property_types: Arc<BTreeMap<String, String>>,
     pub link_resolutions: Arc<BTreeMap<String, Option<String>>>,
     pub now: Option<String>,
     pub timezone: BasesTimezone,
@@ -904,7 +903,13 @@ impl<'a> Evaluator<'a> {
                     .map(|(key, value)| (key.clone(), self.note_property(key, value)))
                     .collect(),
             ),
-            "file" => RuntimeValue::File(Box::new(self.context.file.clone())),
+            "file" => {
+                if self.context.file.path.is_empty() {
+                    RuntimeValue::Null
+                } else {
+                    RuntimeValue::File(Box::new(self.context.file.clone()))
+                }
+            }
             "this" => self
                 .context
                 .this_file
@@ -3075,4 +3080,25 @@ pub(crate) fn display_date(
             .unwrap_or(("unsupported", message.as_str()));
         ExpressionDiagnostic::new(code, text)
     })
+}
+
+pub(crate) fn apply_property_type(
+    value: RuntimeValue,
+    hint: &crate::PropertyType,
+    timezone: &BasesTimezone,
+) -> RuntimeValue {
+    if matches!(
+        hint,
+        crate::PropertyType::Date | crate::PropertyType::Datetime
+    ) {
+        match value {
+            RuntimeValue::String(value) => parse_date(&value, timezone)
+                .map(RuntimeValue::Date)
+                .unwrap_or(RuntimeValue::Null),
+            RuntimeValue::Null => RuntimeValue::Null,
+            _ => RuntimeValue::Error("type\0Date property must contain date text".into()),
+        }
+    } else {
+        value
+    }
 }

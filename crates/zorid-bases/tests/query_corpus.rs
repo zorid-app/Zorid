@@ -1,8 +1,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use zorid_bases::{
-    compile_base, compile_base_source, query_base, BaseSnapshot, DetachedRecord, PropertyValue,
-    QueryOptions,
+    compile_base, compile_base_source, query_base, BaseSnapshot, PropertyValue, QueryOptions,
 };
 #[derive(Deserialize)]
 struct Corpus {
@@ -11,84 +10,33 @@ struct Corpus {
 #[derive(Deserialize)]
 struct Case {
     id: String,
-    document: PropertyValue,
-    snapshot: Snapshot,
-    options: Options,
-    current: Value,
-    proposed: Option<Value>,
+    request: Request,
+    expected: Value,
 }
 #[derive(Deserialize)]
-struct Snapshot {
-    version: String,
-    files: Vec<File>,
-}
-#[derive(Deserialize)]
-struct File {
-    path: String,
-    properties: Option<PropertyValue>,
-    tags: Option<Vec<String>>,
-    size: Option<u64>,
-    ctime: Option<i64>,
-    mtime: Option<i64>,
-}
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Options {
-    current_file_path: Option<String>,
-    search_terms: Option<Vec<String>>,
-}
-fn record(file: File) -> DetachedRecord {
-    let properties = match file.properties {
-        Some(PropertyValue::Object(value)) => value,
-        None => Vec::new(),
-        _ => panic!("fixture property mapping"),
-    };
-    DetachedRecord {
-        entry_id: file.path.clone(),
-        revision: "r1".into(),
-        path: file.path,
-        properties,
-        tags: file.tags.unwrap_or_default(),
-        size: file.size,
-        ctime_ms: file.ctime,
-        mtime_ms: file.mtime,
-    }
+struct Request {
+    configuration: PropertyValue,
+    snapshot: BaseSnapshot,
+    options: QueryOptions,
 }
 #[test]
-fn accepted_query_corpus_uses_one_row_scoped_evaluator() {
+fn accepted_query_corpus_uses_shared_transport_requests() {
     let corpus: Corpus = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/document-semantics/bases/queries.json"
+        "../../../tests/fixtures/document-semantics/bases/accepted-queries.json"
     ))
     .unwrap();
     let mut failures = Vec::new();
     for case in corpus.cases {
-        let snapshot = BaseSnapshot {
-            snapshot_id: case.snapshot.version,
-            records: case.snapshot.files.into_iter().map(record).collect(),
-        };
-        let mut options = QueryOptions {
-            search_terms: case.options.search_terms.unwrap_or_default(),
-            ..Default::default()
-        };
-        options.evaluation.clock_ms = 1705314030000;
-        options.evaluation.current_record = case.options.current_file_path.and_then(|path| {
-            snapshot
-                .records
-                .iter()
-                .find(|record| record.path == path)
-                .cloned()
-        });
-        let program = compile_base(case.document).unwrap();
-        let result = match query_base(&program, &snapshot, &options) {
+        let program = compile_base(case.request.configuration).unwrap();
+        let result = match query_base(&program, &case.request.snapshot, &case.request.options) {
             Ok(result) => result,
             Err(error) => {
                 failures.push(format!("{}: {error}", case.id));
                 continue;
             }
         };
-        let actual = json!({"paths":result.rows.iter().map(|row|&row.path).collect::<Vec<_>>(),"properties":result.properties,"counts":result.counts,"groups":result.groups.iter().map(|group|json!({"key":group.key,"paths":group.entry_ids})).collect::<Vec<_>>(),"groupOptions":result.group_options});
-        let expected = case.proposed.unwrap_or(case.current);
-        for (key, expected) in expected.as_object().unwrap() {
+        let actual = json!({"paths":result.rows.iter().map(|row|&row.path).collect::<Vec<_>>(),"properties":result.properties,"counts":result.counts,"groups":result.groups,"groupOptions":result.group_options});
+        for (key, expected) in case.expected.as_object().unwrap() {
             match key.as_str() {
                 "values" => {
                     for (path, values) in expected.as_object().unwrap() {
@@ -107,15 +55,14 @@ fn accepted_query_corpus_uses_one_row_scoped_evaluator() {
                 }
                 "diagnostics" => {
                     for expected in expected.as_array().unwrap() {
-                        let found = result.diagnostics.iter().any(|diagnostic| {
+                        if !result.diagnostics.iter().any(|diagnostic| {
                             let actual = serde_json::to_value(diagnostic).unwrap();
                             expected
                                 .as_object()
                                 .unwrap()
                                 .iter()
                                 .all(|(key, value)| actual.get(key) == Some(value))
-                        });
-                        if !found {
+                        }) {
                             failures.push(format!("{}: missing diagnostic {expected}", case.id));
                         }
                     }
@@ -159,18 +106,14 @@ fn shared_yaml_decoder_preserves_unknown_configuration_and_raw_source() {
     assert!(compile_base_source("").is_ok());
 }
 #[test]
-fn query_limit_does_not_hide_resource_failure() {
+fn query_limit_does_not_hide_resource_failure_or_missing_witness() {
     let program =
         compile_base_source("views:\n  - type: table\n    name: Table\n    limit: 1\n").unwrap();
-    let snapshot = BaseSnapshot {
-        snapshot_id: "g1".into(),
-        records: vec![DetachedRecord {
-            entry_id: "a".into(),
-            revision: "r1".into(),
-            path: "a.md".into(),
-            ..Default::default()
-        }],
-    };
+    let corpus: Corpus = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/document-semantics/bases/accepted-queries.json"
+    ))
+    .unwrap();
+    let mut snapshot = corpus.cases.into_iter().next().unwrap().request.snapshot;
     assert_eq!(
         query_base(
             &program,
@@ -184,8 +127,14 @@ fn query_limit_does_not_hide_resource_failure() {
         .code,
         "budget"
     );
+    snapshot.records[0].witness = None;
+    assert_eq!(
+        query_base(&program, &snapshot, &QueryOptions::default())
+            .unwrap_err()
+            .code,
+        "input"
+    );
 }
-
 fn json_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),

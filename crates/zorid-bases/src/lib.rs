@@ -17,7 +17,12 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-pub use zorid_document::PropertyValue;
+pub use zorid_core::{EntryId, Revision};
+pub use zorid_document::{PropertyType, PropertyValue};
+pub use zorid_index::IndexSnapshotId;
+pub const MAX_EXPRESSION_STEPS: usize = 100_000;
+pub const MAX_BASE_SOURCE_BYTES: usize = 262_144;
+pub const MAX_BASE_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -91,14 +96,24 @@ pub struct EvaluationResult {
 
 /// Host-owned facts from one coherent document-index generation. Property order
 /// is recursive through the shared document value, including nested collisions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordWitness {
+    pub entry_id: EntryId,
+    pub revision: Revision,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct DetachedRecord {
-    pub entry_id: String,
-    pub revision: String,
+    pub witness: Option<RecordWitness>,
     pub path: String,
     #[serde(default)]
     pub properties: Vec<(String, PropertyValue)>,
+    /// Exact metadata type hints for existing source property keys. Ordered
+    /// values stay intact; date conversion uses the invocation timezone only.
+    #[serde(default)]
+    pub property_types: Vec<(String, PropertyType)>,
     #[serde(default)]
     pub tags: Vec<String>,
     pub size: Option<u64>,
@@ -117,7 +132,8 @@ impl OperationCancellation {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvaluationOptions {
     /// One captured operation clock; no ambient clock is read by the engine.
     pub clock_ms: i64,
@@ -126,6 +142,7 @@ pub struct EvaluationOptions {
     pub max_steps: usize,
     pub formulas: Vec<(String, String)>,
     pub current_record: Option<DetachedRecord>,
+    #[serde(skip)]
     pub cancellation: Option<OperationCancellation>,
 }
 impl Default for EvaluationOptions {
@@ -194,14 +211,18 @@ fn runtime_value(
         }
     })
 }
-fn runtime_file(record: &DetachedRecord) -> Result<expression::BasesFile, ExpressionDiagnostic> {
-    if record.path.is_empty()
+fn runtime_file(
+    record: &DetachedRecord,
+    timezone: &expression::BasesTimezone,
+) -> Result<expression::BasesFile, ExpressionDiagnostic> {
+    if (record.path.is_empty() && record.witness.is_some())
         || record.path.starts_with('/')
         || record.path.contains('\\')
-        || record
-            .path
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
+        || (!record.path.is_empty()
+            && record
+                .path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == ".."))
     {
         return Err(ExpressionDiagnostic::new(
             "input",
@@ -220,7 +241,23 @@ fn runtime_file(record: &DetachedRecord) -> Result<expression::BasesFile, Expres
                 "Duplicate exact property key",
             ));
         }
-        properties.insert(key.clone(), runtime_value(value, 0, &mut bytes)?);
+        let value = runtime_value(value, 0, &mut bytes)?;
+        let value =
+            if let Some((_, hint)) = record.property_types.iter().find(|(name, _)| name == key) {
+                expression::apply_property_type(value, hint, timezone)
+            } else {
+                value
+            };
+        properties.insert(key.clone(), value);
+    }
+    let mut hinted = std::collections::HashSet::new();
+    for (name, _) in &record.property_types {
+        if !hinted.insert(name) || !properties.contains_key(name) {
+            return Err(ExpressionDiagnostic::new(
+                "input",
+                "Property type hints require unique existing exact keys",
+            ));
+        }
     }
     if bytes > 8 * 1024 * 1024 {
         return Err(ExpressionDiagnostic::new(
@@ -258,6 +295,12 @@ pub(crate) fn with_session<T>(
     options: &EvaluationOptions,
     run: impl FnOnce(&mut expression::Session<'_>) -> Result<T, ExpressionDiagnostic>,
 ) -> Result<T, ExpressionDiagnostic> {
+    if options.max_steps > MAX_EXPRESSION_STEPS {
+        return Err(ExpressionDiagnostic::new(
+            "budget",
+            "Expression step ceiling exceeds supported maximum",
+        ));
+    }
     if options.formulas.len() > 1024 {
         return Err(ExpressionDiagnostic::new("budget", "Too many formulas"));
     }
@@ -275,11 +318,13 @@ pub(crate) fn with_session<T>(
             return Err(ExpressionDiagnostic::new("input", "Duplicate formula name"));
         }
     }
-    let file = runtime_file(record)?;
+    let timezone = expression::BasesTimezone::from_setting(Some(&options.timezone))
+        .map_err(|message| ExpressionDiagnostic::new("input", message))?;
+    let file = runtime_file(record, &timezone)?;
     let this_file = options
         .current_record
         .as_ref()
-        .map(runtime_file)
+        .map(|record| runtime_file(record, &timezone))
         .transpose()?;
     let context = expression::BasesEvaluationContext {
         note: file.properties.clone(),
@@ -288,8 +333,7 @@ pub(crate) fn with_session<T>(
         files: Arc::new(files::BasesFiles::new(vec![file])),
         formulas: Arc::new(formulas),
         now: Some(instant(options.clock_ms)?),
-        timezone: expression::BasesTimezone::from_setting(Some(&options.timezone))
-            .map_err(|message| ExpressionDiagnostic::new("input", message))?,
+        timezone,
         work_limit: Some(options.max_steps),
         cancellation: options.cancellation.clone(),
         ..Default::default()
@@ -311,3 +355,7 @@ pub fn evaluate_expression(
         })
     })
 }
+
+pub use query::{
+    MAX_QUERY_GROUPS, MAX_QUERY_OUTPUT_BYTES, MAX_QUERY_ROWS, MAX_QUERY_SCANNED, MAX_QUERY_STEPS,
+};

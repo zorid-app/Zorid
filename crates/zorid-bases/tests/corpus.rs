@@ -11,25 +11,15 @@ struct Corpus {
 #[derive(Deserialize)]
 struct Case {
     id: String,
-    expression: String,
+    request: Request,
     expected: Value,
-    context: Option<Context>,
     repeat: Option<usize>,
 }
-#[derive(Default, Deserialize)]
-struct Context {
-    note: Option<PropertyValue>,
-    formulas: Option<PropertyValue>,
-    now: Option<String>,
-    #[serde(rename = "maxSteps")]
-    max_steps: Option<usize>,
-}
-fn pairs(value: Option<PropertyValue>) -> Vec<(String, PropertyValue)> {
-    match value {
-        Some(PropertyValue::Object(value)) => value,
-        None => Vec::new(),
-        _ => panic!("expected fixture object"),
-    }
+#[derive(Deserialize)]
+struct Request {
+    expression: String,
+    record: DetachedRecord,
+    options: EvaluationOptions,
 }
 fn compact(value: &BaseValue) -> Value {
     match value {
@@ -48,39 +38,17 @@ fn accepted_expression_corpus_uses_reused_engine() {
     .unwrap();
     let mut failures = Vec::new();
     for case in corpus.cases {
-        let context = case.context.unwrap_or_default();
-        let record = DetachedRecord {
-            entry_id: "entry-a".into(),
-            revision: "r1".into(),
-            path: "a.md".into(),
-            properties: pairs(context.note),
-            ..Default::default()
-        };
-        let formulas = pairs(context.formulas)
-            .into_iter()
-            .map(|(name, value)| match value {
-                PropertyValue::String(value) => (name, value),
-                _ => panic!("formula string"),
-            })
-            .collect();
-        let clock_ms = chrono::DateTime::parse_from_rfc3339(
-            context.now.as_deref().unwrap_or("2024-01-15T10:20:30Z"),
-        )
-        .unwrap()
-        .timestamp_millis();
-        let options = EvaluationOptions {
-            clock_ms,
-            formulas,
-            max_steps: context.max_steps.unwrap_or(100_000),
-            ..Default::default()
-        };
         let actual = (0..case.repeat.unwrap_or(1))
-            .map(
-                |_| match evaluate_expression(&case.expression, &record, &options) {
+            .map(|_| {
+                match evaluate_expression(
+                    &case.request.expression,
+                    &case.request.record,
+                    &case.request.options,
+                ) {
                     Ok(value) => compact(&value.value),
                     Err(error) => json!({"type":"error","code":error.code}),
-                },
-            )
+                }
+            })
             .collect::<Vec<_>>();
         let actual = if case.repeat.is_some() {
             Value::Array(actual)
@@ -299,5 +267,66 @@ fn repeated_membership_work_is_charged_before_traversal() {
             .unwrap_err()
             .code,
         "budget"
+    );
+}
+
+#[test]
+fn typed_date_properties_and_unbound_context_keep_their_meaning() {
+    use zorid_bases::PropertyType;
+    let record = DetachedRecord {
+        path: "a.md".into(),
+        properties: vec![
+            (
+                "Due".into(),
+                PropertyValue::String("2024-01-15T10:00:00+02:00".into()),
+            ),
+            ("due".into(), PropertyValue::String("2024-01-16".into())),
+        ],
+        property_types: vec![
+            ("Due".into(), PropertyType::Datetime),
+            ("due".into(), PropertyType::Date),
+        ],
+        ..Default::default()
+    };
+    let before = record.clone();
+    let options = EvaluationOptions::default();
+    assert_eq!(
+        evaluate_expression("DUE", &record, &options).unwrap().value,
+        BaseValue::Date {
+            timestamp: 1705305600000,
+            has_time: true
+        }
+    );
+    assert_eq!(
+        evaluate_expression("due", &record, &options).unwrap().value,
+        BaseValue::Date {
+            timestamp: 1705363200000,
+            has_time: false
+        }
+    );
+    assert_eq!(record, before);
+    assert_eq!(
+        evaluate_expression("1+1", &DetachedRecord::default(), &options)
+            .unwrap()
+            .value,
+        BaseValue::Number { value: 2.0 }
+    );
+    assert_eq!(
+        evaluate_expression("file.path", &DetachedRecord::default(), &options)
+            .unwrap()
+            .value,
+        BaseValue::Null
+    );
+    let invalid = DetachedRecord {
+        path: "bad.md".into(),
+        properties: vec![("date".into(), PropertyValue::String("2024-02-30".into()))],
+        property_types: vec![("date".into(), PropertyType::Date)],
+        ..Default::default()
+    };
+    assert_eq!(
+        evaluate_expression("date", &invalid, &options)
+            .unwrap()
+            .value,
+        BaseValue::Null
     );
 }

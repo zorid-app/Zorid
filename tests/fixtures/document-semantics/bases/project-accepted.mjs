@@ -23,13 +23,34 @@ const cases=baseline.cases.map(item=>{
   let expectation;
   if(item.decision==='retain') {assert.ok(!Object.hasOwn(item,'proposed'),`${item.id}: retain cannot silently carry proposed output`);expectation='current';}
   else {assert.equal(item.decision,'proposed-change',`${item.id}: unknown decision`);assert.ok(approvedChanges.has(item.id),`${item.id}: proposed change needs explicit coordinator approval in generator`);assert.ok(Object.hasOwn(item,'proposed'),`${item.id}: approved change lacks machine-readable expectation`);expectation='proposed';}
-  const result={id:item.id,expression:item.expression,...(item.context ? {context:item.context}:{}),...(item.repeat ? {repeat:item.repeat}:{}),expected:item[expectation],expectationSource:expectation,evidence:item.evidence};
+  const context=item.context ?? {};
+  const request={expression:item.expression,record:{path:'a.md',properties:Object.entries(context.note ?? {})},options:{clockMs:Date.parse(context.now ?? '2024-01-15T10:20:30Z'),timezone:'UTC',maxSteps:context.maxSteps ?? 100000,formulas:Object.entries(context.formulas ?? {})}};
+  const result={id:item.id,request,...(item.repeat ? {repeat:item.repeat}:{}),expected:item[expectation],expectationSource:expectation,evidence:item.evidence};
   scalarStrings(result,item.id);return result;
 });
 for(const id of approvedChanges) assert.ok(seen.has(id),`Approved change missing baseline case ${id}`);
 const projected={schemaVersion:1,baselineRevision:baseline.baselineRevision,baselineTimezone:baseline.baselineTimezone,source:'expressions.json',approvedChangeIds:[...approvedChanges],approval:'Shared-core coordinator accepted these corrections on 2026-10-17; all other cases retain baseline behavior.',cases};
 const contents=JSON.stringify(projected,null,2)+'\n';
-const target=resolve(here,'accepted-expressions.json');
-if(process.argv.includes('--write')) await writeFile(target,contents);
-else assert.equal(await readFile(target,'utf8'),contents,'Accepted corpus is stale; review source changes and approval list before regenerating');
-console.log(JSON.stringify({scope:'accepted-fixture-projection',cases:cases.length,approvedChanges:approvedChanges.size,mode:process.argv.includes('--write')?'write':'check'}));
+async function publish(name,value) {
+  const contents=JSON.stringify(value,null,2)+'\n';const target=resolve(here,name);
+  if(process.argv.includes('--write')) await writeFile(target,contents);
+  else assert.equal(await readFile(target,'utf8'),contents,`${name} is stale; review source changes and approval list before regenerating`);
+}
+await publish('accepted-expressions.json',projected);
+const queryBaseline=JSON.parse(await readFile(resolve(here,'queries.json'),'utf8'));
+const approvedQueryChanges=new Map([['default-natural-order','current'],['typed-group-keys','proposed'],['empty-or-composed','proposed']]);
+const snapshotId={localStoreId:'fixture-store',generationEpoch:'fixture-epoch',generation:'1',versions:{schema:1,extraction:'zorid-markdown-1:metadata-1',resolver:'link-nfc-lower-segment-utf16-v1',query:'literal-lines-exact-v1'}};
+const queryCases=queryBaseline.cases.map(item=>{
+  let expectation='current';
+  if(item.decision==='proposed-change'){assert.ok(approvedQueryChanges.has(item.id),`${item.id}: unapproved query proposal`);expectation=approvedQueryChanges.get(item.id);}
+  else {assert.equal(item.decision,'retain');assert.ok(!Object.hasOwn(item,'proposed'),`${item.id}: retain cannot silently carry proposed output`);}
+  assert.ok(Object.hasOwn(item,expectation),`${item.id}: missing accepted expectation`);
+  const records=item.snapshot.files.map((file,index)=>({witness:{entryId:`fixture-${index}`,revision:'r1'},path:file.path,properties:Object.entries(file.properties ?? {}),tags:file.tags ?? [],size:file.size ?? null,ctimeMs:file.ctime ?? null,mtimeMs:file.mtime ?? null}));
+  const ids=new Map(records.map(record=>[record.path,record.witness.entryId]));
+  const expected=structuredClone(item[expectation]);
+  if(expected.groups) expected.groups=expected.groups.map(group=>({key:group.key,entryIds:group.paths.map(path=>{assert.ok(ids.has(path),`${item.id}: expected group path absent`);return ids.get(path);})}));
+  const options={searchTerms:item.options.searchTerms ?? [],evaluation:{clockMs:Date.parse('2024-01-15T10:20:30Z'),timezone:'UTC',currentRecord:records.find(record=>record.path===item.options.currentFilePath) ?? null}};
+  const result={id:item.id,request:{configuration:item.document,snapshot:{snapshotId,records},options},expected,expectationSource:expectation,evidence:item.evidence};scalarStrings(result,item.id);return result;
+});
+await publish('accepted-queries.json',{schemaVersion:1,baselineRevision:queryBaseline.baselineRevision,source:'queries.json',approvedChangeSources:Object.fromEntries(approvedQueryChanges),cases:queryCases});
+console.log(JSON.stringify({scope:'accepted-fixture-projection',expressions:cases.length,queries:queryCases.length,approvedExpressionChanges:approvedChanges.size,approvedQueryChanges:approvedQueryChanges.size,mode:process.argv.includes('--write')?'write':'check'}));

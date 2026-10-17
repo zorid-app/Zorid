@@ -13,3 +13,6 @@ chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 chrono-tz = { version = "=0.10.4", default-features = false, features = ["std"] }
 regex = "=1.13.1"
 zorid-document = { path = "../zorid-document" }
+
+zorid-core = { path = "../zorid-core" }
+zorid-index = { path = "../zorid-index" }
