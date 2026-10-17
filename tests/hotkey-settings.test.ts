@@ -39,12 +39,12 @@ test('removing the Settings section releases active window capture',async()=>{
 test('editor commands are searchable, configurable and conflict with workspace bindings',()=>{
   const dom=new JSDOM('<main></main>',{url:'https://test.local',pretendToBeVisual:true}),doc=dom.window.document;
   const prefs=new HotkeyPreferences(dom.window.localStorage,'other'),ui=mountHotkeySettings(doc.querySelector('main')!,prefs,()=>{});
-  assert.equal(doc.querySelectorAll('[data-scope="editor"]').length,13);assert.equal(doc.querySelectorAll('[data-scope="workspace"]').length,27);
+  assert.equal(doc.querySelectorAll('[data-scope="editor"]').length,14);assert.equal(doc.querySelectorAll('[data-scope="workspace"]').length,27);
   const search=doc.querySelector('input')!;search.value='Toggle bold';search.dispatchEvent(new dom.window.Event('input'));
-  const add=doc.querySelector<HTMLButtonElement>('.hotkey-add')!;add.click();
+  const add=doc.querySelector<HTMLButtonElement>('.hotkey-binding button')!;add.click();
   const key=(key:string)=>add.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key,ctrlKey:true,altKey:key==='b',bubbles:true,cancelable:true}));
-  key('n');assert.match(doc.querySelector('.hotkey-status')!.textContent!,/Create new note/);assert.deepEqual(prefs.bindings('editor-bold'),[]);
-  key('i');assert.match(doc.querySelector('.hotkey-status')!.textContent!,/Reserved/);
+  key('n');assert.match(doc.querySelector('.hotkey-status')!.textContent!,/Create new note/);assert.equal(prefs.label('editor-bold'),'Ctrl+B');
+  key('i');assert.match(doc.querySelector('.hotkey-status')!.textContent!,/Toggle italic/);
   key('b');assert.equal(prefs.label('editor-bold'),'Ctrl+Alt+B');
   doc.querySelector<HTMLButtonElement>('[aria-label^="Remove"]')!.click();assert.deepEqual(prefs.effectiveBindings('editor-bold'),[]);
   doc.querySelector<HTMLButtonElement>('[aria-label^="Reset"]')!.click();assert.equal(prefs.customized('editor-bold'),false);

@@ -44,15 +44,15 @@ test('storage refresh applies another window changes while preserving distinct e
 
 test('editor commands persist with scope-specific resolution and shared workspace conflicts',()=>{
   const store=storage(),prefs=new HotkeyPreferences(store,'other');
-  assert.deepEqual(prefs.bindings('editor-bold'),[]);
+  assert.deepEqual(prefs.bindings('editor-bold'),[binding('b','Mod')]);
   prefs.set('editor-bold',[binding('b','Mod','Alt')]);
   assert.equal(prefs.resolve(event('b',{altKey:true})),null);
   assert.equal(prefs.resolve(event('b',{altKey:true}),'editor'),'editor-bold');
   assert.throws(()=>prefs.set('graph',[binding('b','Mod','Alt')]),/Editor: Toggle bold/);
   assert.throws(()=>prefs.set('editor-bold',[binding('o','Mod')]),/quick switcher/);
-  assert.throws(()=>prefs.set('editor-bold',[binding('i','Mod')]),/Reserved/);
+  assert.throws(()=>prefs.set('editor-bold',[binding('i','Mod')]),/Toggle italic/);
   const loaded=new HotkeyPreferences(store,'other');assert.deepEqual(loaded.effectiveBindings('editor-bold'),[binding('b','Mod','Alt')]);
-  loaded.set('editor-bold',null);assert.deepEqual(loaded.effectiveBindings('editor-bold'),[]);
+  loaded.set('editor-bold',null);assert.deepEqual(loaded.effectiveBindings('editor-bold'),[binding('b','Mod')]);
 });
 test('effective editor bindings suppress imported reserved and cross-scope conflicts on both platforms',()=>{
   for(const platform of ['mac','other']as const){
@@ -98,4 +98,33 @@ test('Option normalization preserves layout logical keys, text, AltGraph and com
   for(const extra of [{isComposing:true},{repeat:true},{getModifierState:()=>true}])assert.equal(eventHotkey(event('†',{...macOption,keyCode:84,...extra}),'mac'),null);
   assert.equal(eventHotkey(event('Dead',{...macOption,keyCode:69}),'mac'),null);
   for(const keyCode of [229,0,64,91,84.5])assert.equal(eventHotkey(event('†',{...macOption,keyCode}),'mac')!.key,'†');
+});
+
+test('Bold and Italic own conventional defaults only in editor scope and can be reassigned after removal',()=>{
+  for(const platform of ['mac','other']as const){
+    const prefs=new HotkeyPreferences(storage(),platform),modifiers=platform==='mac'?{ctrlKey:false,metaKey:true}:{};
+    assert.deepEqual(prefs.effectiveBindings('editor-bold'),[binding('b','Mod')]);
+    assert.deepEqual(prefs.effectiveBindings('editor-italic'),[binding('i','Mod')]);
+    assert.equal(prefs.resolve(event('b',modifiers)),null);
+    assert.equal(prefs.resolve(event('b',modifiers),'editor'),'editor-bold');
+    assert.equal(prefs.resolve(event('i',modifiers),'editor'),'editor-italic');
+    assert.throws(()=>prefs.set('graph',[binding('b','Mod')]),/editor formatting/);
+    assert.throws(()=>prefs.set('editor-code',[binding('i','Mod')]),/Toggle italic/);
+    prefs.set('editor-italic',[]);assert.equal(prefs.resolve(event('i',modifiers),'editor'),null);
+    prefs.set('editor-select-parent-syntax',[binding('i','Mod')]);
+    assert.equal(prefs.resolve(event('i',modifiers),'editor'),'editor-select-parent-syntax');
+    assert.throws(()=>prefs.set('editor-italic',null),/Select parent syntax/);
+    prefs.set('editor-select-parent-syntax',[]);prefs.set('editor-italic',null);
+    assert.equal(prefs.resolve(event('i',modifiers),'editor'),'editor-italic');
+    for(const reserved of [binding('z','Mod'),binding('q','Mod'),binding('b','Ctrl'),binding('Escape')]){
+      if(platform==='other'&&reserved.modifiers[0]==='Ctrl')continue;
+      assert.throws(()=>prefs.set('editor-code',[reserved]),/reserved/i);
+    }
+  }
+});
+test('explicit unbound or custom formatting preferences survive the new defaults',()=>{
+  const prefs=new HotkeyPreferences(storage(JSON.stringify({'editor-bold':[],'editor-italic':[binding('e','Mod','Alt')]})),'mac');
+  assert.deepEqual(prefs.effectiveBindings('editor-bold'),[]);
+  assert.deepEqual(prefs.effectiveBindings('editor-italic'),[binding('e','Mod','Alt')]);
+  assert.deepEqual(prefs.effectiveBindings('editor-select-parent-syntax'),[]);
 });
