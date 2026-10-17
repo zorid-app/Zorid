@@ -146,3 +146,37 @@ for(const reason of ['scroll','cancel','multitouch','external-multitouch','preve
   assert.equal(touch(ui,target,'touchend',200,reason==='scroll'?620:600).defaultPrevented,false);
   assert.equal(ui.document.activeElement,before);
 });
+
+
+for(const reason of ['new-selection','new-document','new-focus','inactive','reactivated'] as const)test(`rejected native touch cannot bypass ${reason} fence through compatibility mouse`,t=>{
+  let current=true;const ui=setup(t,'Existing',false,true,()=>current);
+  touch(ui,ui.host,'touchstart');
+  if(reason==='new-selection')ui.view.dispatch({selection:EditorSelection.range(0,3)});
+  if(reason==='new-document')ui.view.dispatch({changes:{from:0,insert:'New'}});
+  if(reason==='new-focus')ui.document.querySelector<HTMLInputElement>('.note-title')!.focus();
+  if(reason==='inactive'||reason==='reactivated')current=false;
+  const before=ui.view.state,focus=ui.document.activeElement;
+  assert.equal(touch(ui,ui.host,'touchend').defaultPrevented,false);
+  if(reason==='reactivated')current=true;
+  assert.equal(ui.mouse(ui.host,'mousedown',{clientY:600}).defaultPrevented,true);
+  ui.mouse(ui.host,'mouseup',{clientY:600});
+  assert.equal(ui.document.activeElement,focus);assert.ok(ui.view.state.selection.eq(before.selection));assert.equal(ui.view.state.doc,before.doc);
+});
+
+for(const timing of ['before-down','between-down-up'] as const)test(`native legacy mouse route rejects owner invalidation ${timing}`,t=>{
+  let current=true;const ui=setup(t,'Existing',false,true,()=>current);
+  ui.view.dispatch({selection:EditorSelection.range(0,3)});const focus=ui.document.activeElement;
+  if(timing==='before-down')current=false;
+  ui.mouse(ui.host,'mousedown');current=false;ui.mouse(ui.host,'mouseup');
+  assert.equal(ui.document.activeElement,focus);assert.equal(ui.view.state.selection.main.to,3);
+});
+
+
+test('native touch rejected at start cannot acquire a fresh mouse snapshot after reactivation',t=>{
+  let current=false;const ui=setup(t,'Existing',false,true,()=>current);
+  ui.view.dispatch({selection:EditorSelection.range(0,3)});const focus=ui.document.activeElement;
+  touch(ui,ui.host,'touchstart');current=true;
+  assert.equal(touch(ui,ui.host,'touchend').defaultPrevented,false);
+  assert.equal(ui.mouse(ui.host,'mousedown',{clientY:600}).defaultPrevented,true);ui.mouse(ui.host,'mouseup',{clientY:600});
+  assert.equal(ui.document.activeElement,focus);assert.equal(ui.view.state.selection.main.to,3);
+});
