@@ -10,6 +10,9 @@ use zorid_index::{
     LITERAL_QUERY_VERSION, MAX_GENERATION_METADATA_BYTES, MAX_PUMP_BYTES, RESOLVER_VERSION,
 };
 
+/// Control is tiny; each generation's header/manifest plus encoded facts share
+/// the portable 64MiB metadata ceiling. Source projection bytes are separate.
+pub const DOCUMENT_INDEX_MAX_CONTROL_BYTES: usize = 16 * 1024;
 pub const DOCUMENT_INDEX_MAX_QUERY_PINS: usize = 4;
 pub const DOCUMENT_INDEX_RETAINED_GENERATIONS: usize = 3;
 pub const DOCUMENT_INDEX_RETAINED_STAGES: usize = 4;
@@ -311,14 +314,41 @@ fn cache_tables(tx: &Connection) -> IndexResult<usize> {
         .filter(|v| *v)
         .count())
 }
+fn generation_bounds(tx: &Connection, transient_insert: bool) -> IndexResult<()> {
+    let (count,key_min,key_max,record_min,record_max):(i64,i64,i64,i64,i64)=tx.query_row("SELECT count(*),coalesce(min(length(CAST(snapshot_key AS BLOB))),0),coalesce(max(length(CAST(snapshot_key AS BLOB))),0),coalesce(min(length(CAST(record AS BLOB))),0),coalesce(max(length(CAST(record AS BLOB))),0) FROM document_index_generations",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+    let limit = DOCUMENT_INDEX_RETAINED_GENERATIONS
+        + DOCUMENT_INDEX_RETAINED_STAGES
+        + usize::from(transient_insert);
+    if count < 0
+        || count as u64 > limit as u64
+        || (count > 0
+            && (key_min < 1
+                || key_max > 160
+                || record_min < 1
+                || record_max > MAX_GENERATION_METADATA_BYTES as i64))
+    {
+        return Err(DocumentIndexError::RebuildRequired);
+    }
+    Ok(())
+}
+fn header_bytes(tx: &Connection, key: &str) -> IndexResult<usize> {
+    let bytes:Option<i64>=tx.query_row("SELECT length(CAST(record AS BLOB)) FROM document_index_generations WHERE snapshot_key=?1",[key],|r|r.get(0)).optional()?;
+    let bytes = bytes.ok_or(DocumentIndexError::RebuildRequired)?;
+    if !(1..=MAX_GENERATION_METADATA_BYTES as i64).contains(&bytes) {
+        return Err(DocumentIndexError::RebuildRequired);
+    }
+    Ok(bytes as usize)
+}
+
 fn control(tx: &Connection) -> IndexResult<Control> {
     if cache_tables(tx)? != SCHEMA.len() {
         return Err(DocumentIndexError::RebuildRequired);
     }
+    generation_bounds(tx, false)?;
     let raw: Option<String> = tx
         .query_row(
-            "SELECT record FROM document_index_control WHERE singleton=1",
-            [],
+            "SELECT record FROM document_index_control WHERE singleton=1 AND length(CAST(record AS BLOB)) BETWEEN 1 AND ?1",
+            [DOCUMENT_INDEX_MAX_CONTROL_BYTES as i64],
             |r| r.get(0),
         )
         .optional()?;
@@ -349,6 +379,10 @@ fn source(tx: &Connection) -> IndexResult<SourceSnapshotId> {
 }
 fn capture(tx: &Connection) -> IndexResult<DocumentManifest> {
     let source = source(tx)?;
+    let minimum:i64=tx.query_row("SELECT coalesce(sum(length(CAST(state AS BLOB))+coalesce(length(CAST(content_ref AS BLOB)),0)+coalesce(length(CAST(content_digest AS BLOB)),0)+256),0) FROM entries WHERE visible=1 AND deleted=0",[],|r|r.get(0))?;
+    if minimum < 0 || minimum as u64 > MAX_GENERATION_METADATA_BYTES as u64 {
+        return Err(IndexError::GenerationLimit.into());
+    }
     let entries = read_states(tx, false)?
         .into_iter()
         .map(|state| {
@@ -376,8 +410,8 @@ fn header(tx: &Connection, snapshot: &IndexSnapshotId) -> IndexResult<Header> {
     }
     let raw: Option<String> = tx
         .query_row(
-            "SELECT record FROM document_index_generations WHERE snapshot_key=?1",
-            [Snapshot::of(snapshot).key()],
+            "SELECT record FROM document_index_generations WHERE snapshot_key=?1 AND length(CAST(record AS BLOB)) BETWEEN 1 AND ?2",
+            params![Snapshot::of(snapshot).key(),MAX_GENERATION_METADATA_BYTES as i64],
             |r| r.get(0),
         )
         .optional()?;
@@ -396,8 +430,14 @@ fn builder(tx: &Connection, h: &Header) -> IndexResult<GenerationBuilder> {
     let manifest = h.manifest.manifest()?;
     let mut b = GenerationBuilder::new(manifest.clone(), h.fence()?)
         .map_err(|_| DocumentIndexError::RebuildRequired)?;
-    let encoded: i64 = tx.query_row("SELECT coalesce(sum(length(CAST(record AS BLOB))),0) FROM document_index_rows WHERE snapshot_key=?1", [h.snapshot.key()], |r|r.get(0))?;
-    if encoded < 0 || encoded as u64 > MAX_GENERATION_METADATA_BYTES as u64 {
+    let (encoded,id_min,id_max):(i64,i64,i64) = tx.query_row("SELECT coalesce(sum(length(CAST(record AS BLOB))+length(CAST(entry_id AS BLOB))),0),coalesce(min(length(CAST(entry_id AS BLOB))),1),coalesce(max(length(CAST(entry_id AS BLOB))),1) FROM document_index_rows WHERE snapshot_key=?1", [h.snapshot.key()], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    if encoded < 0
+        || id_min < 1
+        || id_max > 128
+        || (encoded as usize)
+            .checked_add(header_bytes(tx, &h.snapshot.key())?)
+            .is_none_or(|n| n > MAX_GENERATION_METADATA_BYTES)
+    {
         return Err(DocumentIndexError::RebuildRequired);
     }
     let mut stmt = tx.prepare("SELECT entry_id,record,length(text) FROM document_index_rows WHERE snapshot_key=?1 ORDER BY entry_id")?;
@@ -456,8 +496,8 @@ fn check_stage(tx: &Connection, h: &Header) -> IndexResult<()> {
     let c = control(tx)?;
     let raw: Option<String> = tx
         .query_row(
-            "SELECT record FROM document_index_generations WHERE snapshot_key=?1",
-            [h.snapshot.key()],
+            "SELECT record FROM document_index_generations WHERE snapshot_key=?1 AND length(CAST(record AS BLOB)) BETWEEN 1 AND ?2",
+            params![h.snapshot.key(),MAX_GENERATION_METADATA_BYTES as i64],
             |r| r.get(0),
         )
         .optional()?;
@@ -479,31 +519,40 @@ fn check_stage(tx: &Connection, h: &Header) -> IndexResult<()> {
 }
 
 fn prune(tx: &Connection, published: bool, retain: usize) -> IndexResult<()> {
-    let rows = tx
-        .prepare("SELECT snapshot_key,record FROM document_index_generations ORDER BY rowid DESC")?
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut seen = 0;
-    for (key, raw) in rows {
-        let h: Header = decode(&raw)?;
-        if h.snapshot.key() != key {
-            return Err(DocumentIndexError::RebuildRequired);
-        }
-        if h.published != published {
-            continue;
-        }
-        seen += 1;
-        if seen > retain {
-            tx.execute(
-                "DELETE FROM document_index_rows WHERE snapshot_key=?1",
-                [&key],
-            )?;
-            tx.execute(
-                "DELETE FROM document_index_generations WHERE snapshot_key=?1",
-                [&key],
-            )?;
+    generation_bounds(tx, true)?;
+    let mut expired = Vec::new();
+    {
+        let mut statement = tx.prepare(
+            "SELECT snapshot_key,record FROM document_index_generations ORDER BY rowid DESC",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut seen = 0;
+        while let Some(row) = rows.next()? {
+            let key: String = row.get(0)?;
+            let h: Header = decode(&row.get::<_, String>(1)?)?;
+            if h.snapshot.key() != key {
+                return Err(DocumentIndexError::RebuildRequired);
+            }
+            if h.published != published {
+                continue;
+            }
+            seen += 1;
+            if seen > retain {
+                expired.push(key);
+            }
         }
     }
+    for key in expired {
+        tx.execute(
+            "DELETE FROM document_index_rows WHERE snapshot_key=?1",
+            [&key],
+        )?;
+        tx.execute(
+            "DELETE FROM document_index_generations WHERE snapshot_key=?1",
+            [&key],
+        )?;
+    }
+    generation_bounds(tx, false)?;
     Ok(())
 }
 
@@ -642,9 +691,13 @@ impl Store {
             manifest,
             published: false,
         };
+        let encoded = encode(&h)?;
+        if encoded.len() > MAX_GENERATION_METADATA_BYTES {
+            return Err(IndexError::GenerationLimit.into());
+        }
         tx.execute(
             "INSERT INTO document_index_generations VALUES(?1,?2)",
-            params![h.snapshot.key(), encode(&h)?],
+            params![h.snapshot.key(), encoded],
         )?;
         tx.execute(
             "UPDATE document_index_control SET record=?1 WHERE singleton=1",
@@ -660,19 +713,20 @@ impl Store {
         let tx = self.connection.unchecked_transaction()?;
         let c = control(&tx)?;
         let mut out = Vec::new();
-        let raw = tx
-            .prepare("SELECT record FROM document_index_generations ORDER BY rowid DESC LIMIT 32")?
-            .query_map([], |r| r.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        for raw in raw {
-            let h: Header = decode(&raw)?;
-            if h.snapshot.epoch != c.epoch {
-                return Err(DocumentIndexError::RebuildRequired);
-            }
-            if !h.published {
-                out.push(DocumentIndexStage {
-                    snapshot: h.snapshot.id()?,
-                });
+        {
+            let mut statement =
+                tx.prepare("SELECT record FROM document_index_generations ORDER BY rowid DESC")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let h: Header = decode(&row.get::<_, String>(0)?)?;
+                if h.snapshot.epoch != c.epoch {
+                    return Err(DocumentIndexError::RebuildRequired);
+                }
+                if !h.published {
+                    out.push(DocumentIndexStage {
+                        snapshot: h.snapshot.id()?,
+                    });
+                }
             }
         }
         tx.commit()?;
@@ -817,7 +871,10 @@ impl Store {
                 }
             };
             let encoded = encode(&Record::of(&record))?;
-            if !prepared.is_empty() && encoded_bytes.saturating_add(encoded.len()) > MAX_PUMP_BYTES
+            if !prepared.is_empty()
+                && encoded_bytes
+                    .saturating_add(encoded.len() + record.witness().entry().id.as_str().len())
+                    > MAX_PUMP_BYTES
             {
                 break;
             }
@@ -832,7 +889,7 @@ impl Store {
                 reused_documents += 1;
             }
             source_bytes += bytes;
-            encoded_bytes += encoded.len();
+            encoded_bytes += encoded.len() + id.as_str().len();
             prepared.push((id, encoded, text));
         }
         let progress = DocumentIndexProgress {
@@ -852,10 +909,12 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         // The source and derived-head fences are rechecked in this same write Tx.
         check_stage(&tx, &h)?;
-        let existing:i64=tx.query_row("SELECT coalesce(sum(length(CAST(record AS BLOB))),0) FROM document_index_rows WHERE snapshot_key=?1",[h.snapshot.key()],|r|r.get(0))?;
+        let existing:i64=tx.query_row("SELECT coalesce(sum(length(CAST(record AS BLOB))+length(CAST(entry_id AS BLOB))),0) FROM document_index_rows WHERE snapshot_key=?1",[h.snapshot.key()],|r|r.get(0))?;
+        let descriptor_bytes = header_bytes(&tx, &h.snapshot.key())?;
         if existing < 0
             || (existing as usize)
                 .checked_add(encoded_bytes)
+                .and_then(|n| n.checked_add(descriptor_bytes))
                 .is_none_or(|n| n > MAX_GENERATION_METADATA_BYTES)
         {
             return Err(IndexError::GenerationLimit.into());

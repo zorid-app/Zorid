@@ -626,3 +626,56 @@ fn copied_cache_cannot_be_queried_under_another_authority_identity() {
     assert!(hits(&b, "private A").is_empty());
     assert_eq!(hits(&b, "private B").len(), 1);
 }
+#[test]
+fn oversized_control_headers_and_excess_generation_rows_require_rebuild() {
+    for corruption in ["control", "header", "count"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let mut store = Store::open(&path).unwrap();
+        store.apply(&create("a", "a.md", b"before")).unwrap();
+        store.initialize_document_index().unwrap();
+        build(&mut store);
+        let db = Connection::open(&path).unwrap();
+        match corruption {
+            "control" => {
+                db.execute(
+                    "UPDATE document_index_control SET record=zeroblob(?1)",
+                    [DOCUMENT_INDEX_MAX_CONTROL_BYTES as i64 + 1],
+                )
+                .unwrap();
+            }
+            "header" => {
+                db.execute(
+                    "UPDATE document_index_generations SET record=zeroblob(?1)",
+                    [zorid_index::MAX_GENERATION_METADATA_BYTES as i64 + 1],
+                )
+                .unwrap();
+            }
+            _ => {
+                for n in 0..DOCUMENT_INDEX_RETAINED_GENERATIONS + DOCUMENT_INDEX_RETAINED_STAGES {
+                    db.execute("INSERT INTO document_index_generations SELECT ?1,record FROM document_index_generations LIMIT 1",[format!("extra_{n}")]).unwrap();
+                }
+            }
+        }
+        assert!(
+            matches!(
+                store.document_index_status().unwrap(),
+                DocumentIndexStatus::RebuildRequired
+            ),
+            "{corruption}"
+        );
+        assert!(
+            matches!(
+                store.open_document_snapshot(),
+                Err(DocumentIndexError::RebuildRequired)
+            ),
+            "{corruption}"
+        );
+        write(&mut store, "save", "a", b"after");
+        let before = authority(&path);
+        store.rebuild_document_index().unwrap();
+        build(&mut store);
+        assert_eq!(authority(&path), before);
+        assert_eq!(hits(&store, "after").len(), 1);
+    }
+}
