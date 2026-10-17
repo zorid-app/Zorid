@@ -779,7 +779,7 @@ impl Store {
                             (IndexRecord::excluded(witness, Exclusion::SourceLimit), None)
                         }
                         _ => match text.and_then(|b| String::from_utf8(b).ok()) {
-                            Some(text) if !text.contains('\0') => {
+                            Some(text) => {
                                 let request = MetadataRequest {
                                     entry_id: witness.entry().id.clone(),
                                     content_revision: witness.entry().revision.clone(),

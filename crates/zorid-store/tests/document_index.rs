@@ -393,6 +393,9 @@ fn binary_mode_and_invalid_text_are_explicit_while_current_invalid_yaml_keeps_di
     store
         .apply(&create("utf8", "unknown.extension", b"needle plain"))
         .unwrap();
+    store
+        .apply(&create("invalid_utf8", "invalid.extension", &[0xff, 0xfe]))
+        .unwrap();
     store.initialize_document_index().unwrap();
     build(&mut store);
     assert_eq!(hits(&store, "needle").len(), 1);
