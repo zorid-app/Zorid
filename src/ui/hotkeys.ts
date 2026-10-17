@@ -37,7 +37,8 @@ export const EDITOR_HOTKEY_COMMANDS: readonly HotkeyCommand[] = [
   ['highlight','Toggle highlight'], ['clear-formatting','Clear formatting'],
   ['toggle-fold','Toggle fold'], ['fold','Fold current'], ['unfold','Unfold current'],
   ['fold-all','Fold all'], ['unfold-all','Unfold all'],
-].map(([id,name])=>({id:`editor-${id}`,name:`Editor: ${name}`,defaults:[],scope:'editor'}));
+  ['select-parent-syntax','Select parent syntax'],
+].map(([id,name])=>({id:`editor-${id}`,name:`Editor: ${name}`,defaults:id==='bold'?[chord('b','Mod')]:id==='italic'?[chord('i','Mod')]:[],scope:'editor'}));
 export const HOTKEY_COMMANDS: readonly HotkeyCommand[] = [...WORKSPACE_HOTKEY_COMMANDS,...EDITOR_HOTKEY_COMMANDS];
 const ids = new Set(HOTKEY_COMMANDS.map(command=>command.id));
 const modifierOrder: HotkeyModifier[] = ['Mod','Ctrl','Meta','Alt','Shift'];
@@ -82,7 +83,7 @@ export function formatHotkey(binding:Hotkey,platform:HotkeyPlatform):string {
   return [...new Set(binding.modifiers.map(mod=>labels[mod])),name].join(platform==='mac'?' ':'+');
 }
 /** These commands are intentionally not rebound at the document/workspace layer. */
-export function reservedHotkey(binding:Hotkey,platform:HotkeyPlatform):string|null {
+export function reservedHotkey(binding:Hotkey,platform:HotkeyPlatform,scope:HotkeyScope='workspace'):string|null {
   const mods=binding.modifiers,key=binding.key,id=hotkeyIdentity(binding,platform);
   if(!mods.some(mod=>['Mod','Ctrl','Meta','Alt'].includes(mod))&&!/^F\d+$/.test(key))return 'Text entry and navigation keys are reserved for the focused control.';
   if(mods.includes('Mod')&&mods.includes(platform==='mac'?'Meta':'Ctrl'))return 'Duplicate primary modifiers are not supported.';
@@ -91,6 +92,12 @@ export function reservedHotkey(binding:Hotkey,platform:HotkeyPlatform):string|nu
   if(mods.includes('Alt')&&!mods.includes('Mod'))return 'Alt shortcuts are reserved for text input and editor navigation.';
   if(/^Arrow|^(Home|End|PageUp|PageDown|Backspace|Delete|Tab|Escape|Space)$/.test(key))return 'This key is reserved for editor, window or system navigation.';
   if(key==='F2')return 'F2 is reserved for file-tree rename.';
+  // Formatting owns these chords in configured Markdown editors. Once freed,
+  // they may be assigned to another editor action; workspace commands cannot
+  // claim them in text fields or other controls. The consumer removes CM's
+  // built-in Mod-I fallback so unbinding Italic does not select syntax instead.
+  if(['b','i'].some(key=>hotkeyIdentity(chord(key,'Mod'),platform)===id))
+    return scope==='editor'?null:'Reserved for editor formatting commands.';
   const reserved=[
     ...['a','b','c','d','f','g','h','i','j','k','l','m','q','r','u','v','x','y','z','[',']','/','-','='].map(key=>chord(key,'Mod')),
     ...['g','z','u','k','\\','l','i','j','c','r','v','h','-','='].map(key=>chord(key,'Mod','Shift')),
@@ -120,7 +127,7 @@ export class HotkeyPreferences implements EditorHotkeySource {
   reload():void{const next=this.read();if(JSON.stringify(next)===JSON.stringify(this.overrides))return;this.overrides=next;this.changed();}
   subscribe(listener:()=>void):()=>void{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};}
   private changed():void{for(const listener of [...this.listeners]){try{listener();}catch(error){console.error('Hotkey subscriber failed',error);}}}
-  effectiveBindings(id:string):Hotkey[]{return this.bindings(id).filter(binding=>!reservedHotkey(binding,this.platform)&&!this.conflicts(id,binding).length); }
+  effectiveBindings(id:string):Hotkey[]{const scope=HOTKEY_COMMANDS.find(command=>command.id===id)?.scope??'workspace';return this.bindings(id).filter(binding=>!reservedHotkey(binding,this.platform,scope)&&!this.conflicts(id,binding).length); }
   bindings(id:string):Hotkey[]{const defaults=HOTKEY_COMMANDS.find(command=>command.id===id)?.defaults??[];return (Object.hasOwn(this.overrides,id)?this.overrides[id]:defaults).map(binding=>({key:binding.key,modifiers:[...binding.modifiers]}));}
   customized(id:string):boolean{return Object.hasOwn(this.overrides,id);}
   label(id:string):string{return this.bindings(id).map(binding=>formatHotkey(binding,this.platform)).join(' / ');}
@@ -129,7 +136,7 @@ export class HotkeyPreferences implements EditorHotkeySource {
     if(!ids.has(id))throw new Error('Unknown command.');
     const next={...this.overrides};
     if(bindings===null)delete next[id];
-    else {if(bindings.length>8)throw new Error('Use at most eight shortcuts per command.');next[id]=bindings.map(binding=>{const normalized=normalizeHotkey(binding);if(!normalized)throw new Error('Invalid shortcut.');const reserved=reservedHotkey(normalized,this.platform);if(reserved)throw new Error(reserved);return normalized;});}
+    else {if(bindings.length>8)throw new Error('Use at most eight shortcuts per command.');next[id]=bindings.map(binding=>{const normalized=normalizeHotkey(binding);if(!normalized)throw new Error('Invalid shortcut.');const reserved=reservedHotkey(normalized,this.platform,HOTKEY_COMMANDS.find(command=>command.id===id)!.scope);if(reserved)throw new Error(reserved);return normalized;});}
     const candidate=bindings===null?HOTKEY_COMMANDS.find(command=>command.id===id)!.defaults:next[id];
     for(const binding of candidate){const conflicts=this.conflicts(id,binding);if(conflicts.length)throw new Error(`Already assigned to ${conflicts.map(command=>command.name).join(', ')}. Remove that binding first.`);}
     if(new Set(candidate.map(binding=>hotkeyIdentity(binding,this.platform))).size!==candidate.length)throw new Error('This shortcut is already assigned to this command.');
@@ -139,7 +146,7 @@ export class HotkeyPreferences implements EditorHotkeySource {
     if(event.defaultPrevented)return null;
     const binding=eventHotkey(event,this.platform);if(!binding)return null;
     // Corrupt/foreign-platform preferences never override editor/system behavior.
-    if(reservedHotkey(binding,this.platform))return null;
+    if(reservedHotkey(binding,this.platform,scope))return null;
     const matches=HOTKEY_COMMANDS.filter(command=>this.bindings(command.id).some(other=>hotkeyIdentity(other,this.platform)===hotkeyIdentity(binding,this.platform)));
     return matches.length===1&&matches[0].scope===scope?matches[0].id:null;
   }

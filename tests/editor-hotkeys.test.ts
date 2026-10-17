@@ -223,3 +223,63 @@ test('macOS Option-produced characters use CodeMirror virtual-letter matching an
   assert.equal(press(view, dom, '†', { metaKey: true, altKey: true }).defaultPrevented, false);
   assert.equal(view.state.doc.toString(), 'word');
 });
+
+for (const platform of ['mac', 'other'] as const) {
+  for (const table of [false, true]) {
+    test(`${platform} formatting defaults and explicit overrides own ${table ? 'table cells' : 'note editors'}`, async t => {
+      const source = new HotkeyPreferences({ getItem: () => null, setItem: () => {} }, platform);
+      const text = table ? '| A | B |\n| --- | --- |\n| word | other |' : 'word';
+      const { view, host, dom } = setup(t, text, table ? 'live' : 'source', { hotkeys: source });
+      const focused = table ? cellEditor(host, dom) : view;
+      const primary = platform === 'mac' ? { metaKey: true } : { ctrlKey: true };
+      const originalDOM = focused.contentDOM;
+      for (const [key, formatted] of [['b', '**word**'], ['i', '*word*']]) {
+        focused.dispatch({ selection: { anchor: 0, head: 4 } });
+        assert.equal(press(focused, dom, key, primary).defaultPrevented, true);
+        assert.equal(focused.state.doc.toString(), formatted);
+        assert.ok(undo(view)); await flush();
+        assert.equal(focused.state.doc.toString(), 'word');
+      }
+      source.set('editor-bold', []);
+      source.set('editor-italic', [{ key: 'F8', modifiers: [] }]); await flush();
+      focused.dispatch({ selection: { anchor: 2 } });
+      const selection = focused.state.selection;
+      press(focused, dom, 'b', primary);
+      assert.equal(focused.state.doc.toString(), 'word');
+      // CM uses the host platform for its Emacs Ctrl-B navigation binding.
+      focused.dispatch({ selection });
+      assert.equal(press(focused, dom, 'i', primary).defaultPrevented, false);
+      assert.ok(focused.state.selection.eq(selection), 'removed Mod-I must not select syntax');
+      source.set('editor-italic', []); await flush();
+      assert.equal(press(focused, dom, 'i', primary).defaultPrevented, false);
+      assert.ok(focused.state.selection.eq(selection));
+      source.set('editor-italic', [{ key: 'F8', modifiers: [] }]); await flush();
+      focused.dispatch({ selection: { anchor: 0, head: 4 } });
+      assert.equal(press(focused, dom, 'F8').defaultPrevented, true);
+      assert.equal(focused.state.doc.toString(), '*word*');
+      assert.equal(focused.contentDOM, originalDOM);
+      assert.equal(focused.hasFocus, true);
+    });
+
+    test(`${platform} select parent syntax is explicitly configurable in ${table ? 'table cells' : 'note editors'}`, async t => {
+      const source = new HotkeyPreferences({ getItem: () => null, setItem: () => {} }, platform);
+      source.set('editor-italic', []);
+      source.set('editor-select-parent-syntax', [{ key: 'i', modifiers: ['Mod'] }]);
+      const text = table ? '| A | B |\n| --- | --- |\n| *word* | other |' : '*word*';
+      const { view, host, dom, editor } = setup(t, text, table ? 'live' : 'source', { hotkeys: source });
+      const focused = table ? cellEditor(host, dom) : view;
+      const primary = platform === 'mac' ? { metaKey: true } : { ctrlKey: true };
+      focused.dispatch({ selection: { anchor: 3 } });
+      assert.equal(press(focused, dom, 'i', primary).defaultPrevented, true);
+      assert.equal(focused.state.selection.main.from, 0);
+      assert.equal(focused.state.selection.main.to, 6);
+      assert.equal(editor.getValue(), text);
+      assert.equal(focused.hasFocus, true);
+      source.set('editor-select-parent-syntax', []); await flush();
+      focused.dispatch({ selection: { anchor: 3 } });
+      assert.equal(press(focused, dom, 'i', primary).defaultPrevented, false);
+      assert.equal(focused.state.selection.main.from, 3);
+      assert.equal(focused.state.selection.main.to, 3);
+    });
+  }
+}

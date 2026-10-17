@@ -15,8 +15,10 @@ import { createMediaView, mediaKind } from './media-view.ts';
 import type { MediaView } from './media-view.ts';
 import { createCanvasEmbedPreview } from '../canvas/embed-preview.ts';
 import type { CanvasEmbedPreview } from '../canvas/embed-preview.ts';
+import type { BaseEmbedSessions, BaseEmbedBinding } from './base-embed-sessions.ts';
 
 interface EmbedOptions {
+  bases?: {sessions: BaseEmbedSessions; identity(path: string): unknown};
   vault: Vault;
   open: (source: string, target: string, kind: 'wiki' | 'markdown') => void;
   read?: (path: string) => Promise<string>;
@@ -31,6 +33,9 @@ interface EmbedOptions {
   mediaFactory?: typeof createMediaView;
 }
 interface EmbedState {
+  baseBinding?: BaseEmbedBinding;
+  baseIdentity?: unknown;
+  occurrence?: object;
   node: HTMLElement;
   request: EmbedRequest;
   source: string;
@@ -88,11 +93,11 @@ export class MarkdownEmbeds {
     ];
   }
 
-  render(request: EmbedRequest, source: string, ancestors: readonly string[] = [], parent?: EmbedState): HTMLElement {
+  render(request: EmbedRequest, source: string, ancestors: readonly string[] = [], parent?: EmbedState, context?: {occurrence: object}): HTMLElement {
     const node = el('span', 'internal-embed markdown-embed');
     node.setAttribute('role', 'group'); node.setAttribute('aria-label', `Embed ${request.target}`);
     node.dataset.embedTarget = request.target;
-    const state: EmbedState = { node, request, source, ancestors, version:0, visible:!this.observer, disposed:false, dirty:true, children:new Set() };
+    const state: EmbedState = { node, request, source, ancestors, occurrence:context?.occurrence, version:0, visible:!this.observer, disposed:false, dirty:true, children:new Set() };
     node.addEventListener('contextmenu', event => {
       if (state.disposed || event.defaultPrevented) return;
       const target = event.target as Element | null;
@@ -203,6 +208,7 @@ export class MarkdownEmbeds {
     if (state.disposed) return;
     state.disposed = true; state.version++;
     const reconnectDocument = this.stopWaiting(state);
+    state.baseBinding?.detach();state.baseBinding=undefined;
     destroyMarkdown(state.node);
     state.pdfView?.destroy();state.pdfView=undefined;
     state.mediaView?.destroy();state.mediaView=undefined;
@@ -222,6 +228,12 @@ export class MarkdownEmbeds {
 
   private async refresh(state: EmbedState): Promise<void> {
     if (this.disposed || state.disposed) return;
+    const resolved = this.options.vault.metadata.resolveLink(state.source, state.request.target, state.request.kind);
+    const baseIdentity = resolved ? this.options.bases?.identity(resolved) : undefined;
+    if(state.baseBinding && resolved === state.path && baseIdentity === state.baseIdentity){
+      state.dirty=false;this.pruneReconnectObserver(this.stopWaiting(state));return;
+    }
+    state.baseBinding?.detach();state.baseBinding=undefined;
     const version = ++state.version;
     state.dirty = false;
     const reconnectDocument = this.stopWaiting(state);
@@ -315,6 +327,19 @@ export class MarkdownEmbeds {
         if (current()) state.node.replaceChildren();
         fail(error instanceof Error ? error.message : String(error));
       }
+      return;
+    }
+    if (/\.base$/i.test(path)) {
+      if(!this.options.bases){fail('Writable Base embeds are unavailable in this view');return;}
+      const hash=request.target.indexOf('#');let viewName=hash<0?'':request.target.slice(hash+1);
+      if(request.kind==='markdown')try{viewName=decodeURIComponent(viewName);}catch{/* Preserve malformed literal fragments for an explicit missing-view error. */}
+      state.node.classList.add('bases-embed','interactive-child');
+      let binding:BaseEmbedBinding|undefined;
+      try{
+        state.baseIdentity=this.options.bases.identity(path);
+        binding=this.options.bases.sessions.mount({sourcePath:source,targetPath:path,viewName,targetIdentity:state.baseIdentity,sourceIdentity:this.options.bases.identity(source),occurrence:state.occurrence},state.node);
+        state.baseBinding=binding;await binding.ready;
+      }catch(error){if(state.baseBinding===binding){binding?.detach();state.baseBinding=undefined;}if(current())fail(error instanceof Error?error.message:String(error));}
       return;
     }
     if (!/\.md$/i.test(path)) { fail('Attachment viewer is not implemented yet'); return; }

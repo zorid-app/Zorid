@@ -135,3 +135,55 @@ test('failed readback after successful host comparison preserves unpublished sna
   assert.deepEqual(changes, []); assert.equal(vault.metadata.get('One.md')?.headings[0].heading, 'Old');
   adapter.failRead = false; assert.equal(await adapter.read('One.md'), '# New');
 });
+
+
+test('full reload sees mixed structural and same-stat binary changes by opaque revision', async () => {
+  class RevisionAdapter extends MemoryAdapter {
+    revision = 'opaque-first';
+    async list() {
+      return (await super.list()).map(entry => ({ ...entry, mtime: 10,
+        revision: entry.path === 'image.bin' ? this.revision : 'structural' }));
+    }
+  }
+  const adapter = new RevisionAdapter();
+  await adapter.writeBinary('image.bin', new Uint8Array([1, 2]));
+  const vault = new Vault(adapter);
+  await vault.initialize();
+  const modified: string[] = [], created: string[] = [];
+  vault.on('modify', change => modified.push(change.path));
+  vault.on('create', change => created.push(change.path));
+  await adapter.mkdir('New folder');
+  await adapter.writeBinary('image.bin', new Uint8Array([3, 4]));
+  adapter.revision = 'opaque-second';
+  await vault.reload();
+  assert.deepEqual(created, ['New folder']);
+  assert.deepEqual(modified, ['image.bin']);
+  assert.deepEqual(await vault.readBinary('image.bin'), new Uint8Array([3, 4]));
+  await vault.reload();
+  assert.deepEqual(modified, ['image.bin']);
+  // A new incarnation at the same spelling is also a new opaque revision.
+  await adapter.trash('image.bin');
+  await adapter.writeBinary('image.bin', new Uint8Array([5, 6]));
+  adapter.revision = 'another-incarnation';
+  await vault.reload();
+  assert.deepEqual(modified, ['image.bin', 'image.bin']);
+});
+
+test('legacy adapters without revisions retain metadata-based binary reload behavior', async () => {
+  class LegacyAdapter extends MemoryAdapter {
+    stamp = 10;
+    async list() { return (await super.list()).map(entry => ({ ...entry, mtime: this.stamp })); }
+  }
+  const adapter = new LegacyAdapter();
+  await adapter.writeBinary('image.bin', new Uint8Array([1, 2]));
+  const vault = new Vault(adapter);
+  await vault.initialize();
+  const modified: string[] = [];
+  vault.on('modify', change => modified.push(change.path));
+  await vault.reload();
+  assert.deepEqual(modified, []);
+  await adapter.writeBinary('image.bin', new Uint8Array([3, 4]));
+  adapter.stamp = 11;
+  await vault.reload();
+  assert.deepEqual(modified, ['image.bin']);
+});

@@ -5,7 +5,7 @@ import type { HotkeyPreferences } from './hotkeys.ts';
 export function mountHotkeySettings(parent:HTMLElement,preferences:HotkeyPreferences,onChange:()=>void):{destroy():void;refresh():void} {
   const doc=parent.ownerDocument,win=doc.defaultView!;
   const section=doc.createElement('section');section.className='hotkey-settings';
-  const description=doc.createElement('p');description.className='muted';description.textContent='Customize workspace commands and Markdown formatting or folding in the editor. Other editor, text-editing and system shortcuts keep their existing bindings. Editor commands start unassigned and only run in an active note editor. Open new window requires the desktop app.';
+  const description=doc.createElement('p');description.className='muted';description.textContent='Customize workspace commands and Markdown formatting, folding or syntax selection in the editor. Other editor, text-editing and system shortcuts keep their existing bindings. Bold and Italic have default shortcuts; other editor commands start unassigned. Editor commands only run in an active note editor. Open new window requires the desktop app.';
   const search=doc.createElement('input');search.type='search';search.placeholder='Search commands or shortcuts';search.setAttribute('aria-label','Search hotkeys');
   const status=doc.createElement('p');status.className='hotkey-status';status.role='status';status.setAttribute('aria-live','polite');
   const list=doc.createElement('div');list.className='hotkey-list';
@@ -24,7 +24,7 @@ export function mountHotkeySettings(parent:HTMLElement,preferences:HotkeyPrefere
       event.preventDefault();event.stopImmediatePropagation();
       if(event.key==='Escape'){cancel();status.textContent='Shortcut capture cancelled.';return;}
       const binding=eventHotkey(event,preferences.platform);if(!binding)return;
-      const reserved=reservedHotkey(binding,preferences.platform);if(reserved){status.textContent=reserved;return;}
+      const reserved=reservedHotkey(binding,preferences.platform,HOTKEY_COMMANDS.find(command=>command.id===id)!.scope);if(reserved){status.textContent=reserved;return;}
       const bindings=preferences.bindings(id);if(index===undefined)bindings.push(binding);else bindings[index]=binding;
       if(save(id,()=>preferences.set(id,bindings)))cancel();
     };
@@ -44,7 +44,7 @@ export function mountHotkeySettings(parent:HTMLElement,preferences:HotkeyPrefere
         const edit=button('Change',()=>capture(command.id,index,edit));edit.setAttribute('aria-label',`Change ${key.textContent} for ${command.name}`);
         const remove=button('Remove',()=>save(command.id,()=>preferences.set(command.id,bindings.filter((_,i)=>i!==index))));remove.setAttribute('aria-label',`Remove ${key.textContent} from ${command.name}`);
         group.append(key,edit,remove);controls.append(group);
-        const conflicts=preferences.conflicts(command.id,binding),reserved=reservedHotkey(binding,preferences.platform);
+        const conflicts=preferences.conflicts(command.id,binding),reserved=reservedHotkey(binding,preferences.platform,command.scope);
         if(conflicts.length||reserved){const warning=doc.createElement('span');warning.className='hotkey-conflict';warning.textContent=reserved??`Conflicts with ${conflicts.map(item=>item.name).join(', ')}; no command will run.`;controls.append(warning);}
       });
       if(!bindings.length){const unbound=doc.createElement('span');unbound.className='muted';unbound.textContent='Not assigned';controls.append(unbound);}

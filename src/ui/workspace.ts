@@ -36,6 +36,7 @@ import type { PdfView } from './pdf-view.ts';
 import { createMediaView, mediaKind } from './media-view.ts';
 import type { MediaView } from './media-view.ts';
 import {createBaseSession, type BaseSession} from '../bases/session.ts';
+import {BaseEmbedSessions} from './base-embed-sessions.ts';
 import { CanvasDocument } from '../canvas/document.ts';
 import { createCanvasView } from '../canvas/view.ts';
 import type { CanvasView } from '../canvas/view.ts';
@@ -65,7 +66,7 @@ interface Pane {
   viewReady?:boolean; viewMode?:Mode; viewKind?:Tab['kind']; viewSettings?:string;
   viewTabId?:string; viewPath?:string|null; renderVersion:number;
   editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; mediaView?:MediaView; canvasView?:CanvasView; baseView?:BaseSession;
-  canvasSource?:string; embeds?:MarkdownEmbeds; properties?:PropertiesView;
+  canvasSource?:string; baseEmbeds?:BaseEmbedSessions; embeds?:MarkdownEmbeds; properties?:PropertiesView;
   propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void;
   history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
 }
@@ -120,7 +121,7 @@ export class Workspace {
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
     try{this.saveSession();}catch{/* Storage failure must not bypass the dirty-document unload guard. */}
-    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
+    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges() || pane.baseEmbeds?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
   };
   private menuSerial = 0;
   private inputContextListener=(event:MouseEvent)=>{
@@ -267,12 +268,12 @@ export class Workspace {
       if(this.treeRename&&(this.treeRename.path===change.path||this.treeRename.path.startsWith(change.path+'/')))this.treeRename.session.dispose();
       for (const pane of this.panes) for (const tab of [...pane.tabs]) if (tab.path === change.path || tab.path?.startsWith(change.path + '/')) {
         const buffer = this.buffers.get(tab.path);
-        if (buffer?.dirty || (pane.active === tab.id ? pane.canvasView : this.cachedViews.get(tab)?.canvasView)?.hasPendingChanges() || (pane.active === tab.id ? pane.baseView : this.cachedViews.get(tab)?.baseView)?.hasPendingChanges()) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
+        if (buffer?.dirty || (pane.active === tab.id ? pane.canvasView : this.cachedViews.get(tab)?.canvasView)?.hasPendingChanges() || (pane.active === tab.id ? pane.baseView : this.cachedViews.get(tab)?.baseView)?.hasPendingChanges() || (pane.active === tab.id ? pane.baseEmbeds : this.cachedViews.get(tab)?.baseEmbeds)?.hasPendingChanges()) { notice(`“${nameOf(tab.path)}” was removed outside the app. Your unsaved text is retained.`); continue; }
         const cached=this.cachedViews.get(tab);
         if(cached){
           const path=tab.path,generation=this.vaultGeneration;
           this.run(async()=>{
-            if(generation!==this.vaultGeneration||this.cachedViews.get(tab)!==cached||tab.path!==path||buffer?.dirty||cached.canvasView?.hasPendingChanges()||cached.baseView?.hasPendingChanges())return;
+            if(generation!==this.vaultGeneration||this.cachedViews.get(tab)!==cached||tab.path!==path||buffer?.dirty||cached.canvasView?.hasPendingChanges()||cached.baseView?.hasPendingChanges()||cached.baseEmbeds?.hasPendingChanges())return;
             // Keep the original path until the runtime's flush gate succeeds.
             // A rejected write must leave the recoverable tab and owner intact.
             await this.disposePaneViews(cached);
@@ -520,8 +521,8 @@ export class Workspace {
     pane.history=tab.history??[];pane.historyIndex=tab.historyIndex??-1;
     const content=el('div','tab-view-content');Object.assign(content.style,{display:'flex',flexDirection:'column',flex:'1',minHeight:'0',minWidth:'0',overflow:'hidden'});pane.element.append(content);pane.content=content;
     const runtime=createTabViewRuntime({id:tab.id,element:content,owner:this.viewOwner(pane),
-      flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flush();await pane.baseView?.close();},
-      dispose:()=>this.releasePaneView(pane,content),focus:()=>this.focusPane(pane)});pane.runtime=runtime;
+      flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flush();await pane.baseView?.close();await pane.baseEmbeds?.flush();},
+      dispose:async()=>{await pane.baseEmbeds?.close();this.releasePaneView(pane,content);},focus:()=>this.focusPane(pane)});pane.runtime=runtime;
     let ownerChanged=()=>{};pane.rebindView=owner=>{pane=owner;ownerChanged();};
     const toolbar=el('div','pane-toolbar');
     const back=button('left','Navigate back',()=>this.run(()=>this.navigate(-1,pane)));back.disabled=pane.historyIndex<=0;
@@ -549,30 +550,7 @@ export class Workspace {
             if(generation!==this.vaultGeneration||vault!==this.vault||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The Base view is no longer open.');
             if(!fileToken||this.treeEntryToken(path)!==fileToken||vault.entries.get(path)?.type!=='file')throw new Error('The Base file is no longer current.');
           };
-          const session=(this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,
-            buffers:{getBuffer:target=>this.baseBufferFor(target,validate),validate,
-              onBufferChange:(target,buffer,previous)=>{
-                this.mapInactiveSelections(target,previous,buffer.text);
-                for(const embeds of new Set([...this.canvasMarkdownEmbeds,...this.loadedViews().flatMap(owner=>owner.embeds?[owner.embeds]:[])]))embeds.invalidate(target);
-                for(const owner of this.loadedViews())if(owner.viewPath===target){owner.editor?.setValue(buffer.text);owner.properties?.refresh();owner.refreshPreview?.();}
-              },
-              rename:async(source,destination,validateResult)=>{
-                validate();validateResult();const token=this.treeEntryToken(source);
-                // Calling Workspace.flush here would await this accepted Base
-                // operation itself. Flush the shared buffers before Vault's queue.
-                for(const buffer of this.buffers.values())await buffer.flush();
-                await vault.rename(source,destination,()=>{validate();validateResult();if(!token||this.treeEntryToken(source)!==token)throw new Error('The moved file is no longer current.');this.requireAvailableTreePath(vault,destination,source);});
-              }},
-            openFile:(target,event)=>this.run(()=>{validate();return this.openNote(target,('button'in event&&event.button===1)||event.metaKey||event.ctrlKey,pane);}),
-            loadThumbnail:async request=>{
-              validate();if(request.signal.aborted)return null;
-              const raw=request.property==='file.file'?request.row.path:request.value.type==='string'?request.value.value:'';
-              const wiki=/^!?\[\[([^\r\n]*?)\]\]$/.exec(raw),link=wiki?wiki[1].split('|')[0]:raw;
-              const target=vault.entries.has(raw)?raw:vault.metadata.resolveLink(request.row.path,link,'wiki');
-              if(!target||!isImage(target))return null;
-              const token=this.treeEntryToken(target),lease=await resources.acquire(target);
-              try{validate();if(request.signal.aborted||!token||this.treeEntryToken(target)!==token){lease.release();return null;}return{url:lease.url,dispose:()=>lease.release()};}catch(error){lease.release();throw error;}
-            },onError:error=>notice(error instanceof Error?error.message:String(error))});
+          const session=this.createWorkspaceBaseSession(host,path,()=>pane,validate);
           pane.baseView=session;await session.ready;
         }catch(error){if(version===pane.renderVersion)host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
       }
@@ -600,6 +578,7 @@ export class Workspace {
           pane.canvasView=(this.viewFactories.canvas??createCanvasView)(host,{...{openMarkdownFile:(target:string)=>this.openCanvasMarkdownSession(target,()=>pane,runtime),
             chooseFile:(kind?:'note'|'media')=>this.canvasDocumentInput?.chooseFile(()=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase==='active'&&pane.content?.isConnected===true,kind)??Promise.resolve(null),
             textEditorOptions:services.options,
+            textEmbedLifecycle:services.baseSessions,
             renderFile:(target:string,subpath?:string)=>{
               const parent=el('div'),token=this.treeEntryToken(target),available=()=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'&&token!==undefined&&this.treeEntryToken(target)===token&&this.vault.entries.get(target)?.type==='file';
               if(!available()){const element=el('p','error-message',`File not found: ${target}`);return{element,destroy(){element.remove();}};}
@@ -640,7 +619,8 @@ export class Workspace {
           await buffer.flush();
         },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
       }
-      const createEmbeds=()=>new MarkdownEmbeds({vault:this.vault,resources:this.attachments,pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'?pdfMarkdownLink(this.vault,target,fragment,alias,this.settings):null,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
+      const baseSessions=this.embeddedBases(()=>pane,()=>{if(generation!==this.vaultGeneration||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The source note is closed.');});
+      const createEmbeds=()=>new MarkdownEmbeds({bases:{sessions:baseSessions,identity:target=>this.treeEntryToken(target)},vault:this.vault,resources:this.attachments,pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'?pdfMarkdownLink(this.vault,target,fragment,alias,this.settings):null,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
       if(tab.mode==='reading'){
         const preview=el('div','markdown-preview');scroll.append(preview);
         pane.refreshPreview=()=>{
@@ -672,7 +652,7 @@ export class Workspace {
             }},
           isUnresolved:(target,kind)=>generation!==this.vaultGeneration||!this.vault.metadata.resolveLink(path,target,kind),
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
-          renderEmbed:request=>{const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
+          renderEmbed:(request,context)=>{const dom=embeds.render(request,path,[],undefined,context);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
           transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
           onChange:value=>{this.updateMarkdownBuffer(buffer,value);runtime.touch();this.renderStatus();for(const other of this.loadedViews()){if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);const properties=other.properties,preview=other.refreshPreview;other.propertyTimer=setTimeout(()=>{properties?.refresh();preview?.();},150);}}},open:(target,kind)=>{if(generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path)this.run(()=>this.followLink(path,target,pane,kind));}});
       }
@@ -686,13 +666,60 @@ export class Workspace {
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
 
+  private createWorkspaceBaseSession(host:HTMLElement,path:string,owner:()=>Pane,validate:()=>void,sourcePath?:string,viewName?:string):BaseSession{
+    const vault=this.vault,resources=this.attachments!;
+    return (this.viewFactories.base??createBaseSession)(host,{vault,basePath:path,validate,viewName,query:{currentFilePath:sourcePath??path},
+            buffers:{getBuffer:target=>this.baseBufferFor(target,validate),validate,
+              onBufferChange:(target,buffer,previous)=>{
+                this.mapInactiveSelections(target,previous,buffer.text);
+                for(const embeds of new Set([...this.canvasMarkdownEmbeds,...this.loadedViews().flatMap(owner=>owner.embeds?[owner.embeds]:[])]))embeds.invalidate(target);
+                for(const owner of this.loadedViews())if(owner.viewPath===target){owner.editor?.setValue(buffer.text);owner.properties?.refresh();owner.refreshPreview?.();}
+              },
+              rename:async(source,destination,validateResult)=>{
+                validate();validateResult();const token=this.treeEntryToken(source);
+                // Calling Workspace.flush here would await this accepted Base
+                // operation itself. Flush the shared buffers before Vault's queue.
+                for(const buffer of this.buffers.values())await buffer.flush();
+                await vault.rename(source,destination,()=>{validate();validateResult();if(!token||this.treeEntryToken(source)!==token)throw new Error('The moved file is no longer current.');this.requireAvailableTreePath(vault,destination,source);});
+              }},
+            openFile:(target,event)=>this.run(()=>{validate();return this.openNote(target,('button'in event&&event.button===1)||event.metaKey||event.ctrlKey,owner());}),
+            loadThumbnail:async request=>{
+              validate();if(request.signal.aborted)return null;
+              const raw=request.property==='file.file'?request.row.path:request.value.type==='string'?request.value.value:'';
+              const wiki=/^!?\[\[([^\r\n]*?)\]\]$/.exec(raw),link=wiki?wiki[1].split('|')[0]:raw;
+              const target=vault.entries.has(raw)?raw:vault.metadata.resolveLink(request.row.path,link,'wiki');
+              if(!target||!isImage(target))return null;
+              const token=this.treeEntryToken(target),lease=await resources.acquire(target);
+              try{validate();if(request.signal.aborted||!token||this.treeEntryToken(target)!==token){lease.release();return null;}return{url:lease.url,dispose:()=>lease.release()};}catch(error){lease.release();throw error;}
+            },onError:error=>notice(error instanceof Error?error.message:String(error))});
+  }
+
+  private embeddedBases(owner:()=>Pane,validateOwner:()=>void):BaseEmbedSessions{
+    const pane=owner();if(pane.baseEmbeds)return pane.baseEmbeds;
+    const vault=this.vault,generation=this.vaultGeneration;
+    const sessions=new BaseEmbedSessions({recoveryHost:pane.content!,create:async(container,target)=>{
+      const sourceIdentity=target.sourceIdentity;
+      const validate=()=>{
+        validateOwner();
+        if(vault!==this.vault||generation!==this.vaultGeneration)throw new Error('The embedded Base vault is closed.');
+        if(!sourceIdentity||this.treeEntryToken(target.sourcePath)!==sourceIdentity)throw new Error('The source document changed. Your embedded Base edits are retained.');
+        if(!target.targetIdentity||this.treeEntryToken(target.targetPath)!==target.targetIdentity||vault.entries.get(target.targetPath)?.type!=='file')throw new Error('The embedded Base file changed. Your edits are retained.');
+      };
+      validate();await this.prepareBase(target.targetPath,generation);validate();
+      return this.createWorkspaceBaseSession(container,target.targetPath,owner,validate,target.sourcePath,target.viewName||undefined);
+    }});
+    pane.baseEmbeds=sessions;return sessions;
+  }
+
   /** Both Canvas text and linked-note cards use the existing Markdown services.
    * The caller owns the manager and supplies its current source/view guard. */
-  private canvasEditorServices(path:string,owner:()=>Pane,validate:()=>void):{embeds:MarkdownEmbeds;options:Omit<EditorOptions,'value'|'mode'|'onChange'>}{
+  private canvasEditorServices(path:string,owner:()=>Pane,validate:()=>void):{embeds:MarkdownEmbeds;baseSessions:BaseEmbedSessions;options:Omit<EditorOptions,'value'|'mode'|'onChange'>}{
     const vault=this.vault,generation=this.vaultGeneration,workspace=this;
     const available=()=>{try{validate();return true;}catch{return false;}};
     const open=(target:string,kind:'wiki'|'markdown'='wiki')=>{if(available())this.run(()=>{if(available())return this.followLink(path,target,owner(),kind);});};
-    const embeds=new MarkdownEmbeds({vault,resources:this.attachments,pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>available()?pdfMarkdownLink(vault,target,fragment,alias,this.settings):null,
+    const runtime=owner().runtime;
+    const baseSessions=this.embeddedBases(owner,()=>{if(vault!==this.vault||generation!==this.vaultGeneration||owner().runtime!==runtime||runtime?.phase==='disposed')throw new Error('The Canvas source is closed.');});
+    const embeds=new MarkdownEmbeds({bases:{sessions:baseSessions,identity:target=>this.treeEntryToken(target)},vault,resources:this.attachments,pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>available()?pdfMarkdownLink(vault,target,fragment,alias,this.settings):null,
       open:(source,target,kind)=>{if(available())this.run(()=>{if(available())return this.followLink(source,target,owner(),kind);});},
       read:async target=>{validate();const loaded=this.buffers.get(target);if(loaded){await loaded.load();validate();if(loaded.dirty)return loaded.text;}return vault.cachedRead(target);},
       taskChange:(target,line,checked)=>{validate();return this.changeTask(target,line,checked,validate);},
@@ -711,10 +738,10 @@ export class Workspace {
             else if(this.settings.newLinkFormat==='relative'){const from=parentOf(source).split('/').filter(Boolean),to=target.split('/');while(from.length&&to.length&&from[0]===to[0]){from.shift();to.shift();}result=from.length?[...from.map(()=>'..'),...to].join('/'):'./'+to.join('/');}
             return result.replace(/\.md$/i,'');
           }},
-        renderEmbed:request=>{validate();const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
+        renderEmbed:(request,context)=>{validate();const dom=embeds.render(request,path,[],undefined,context);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
         transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:async file=>{validate();const result=await this.importAttachment(file,path,generation);validate();return result;},nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
       };
-    return{embeds,options};
+    return{embeds,options,baseSessions};
   }
 
   private async openCanvasMarkdownSession(path:string,owner:()=>Pane,runtime:TabViewRuntime):Promise<CanvasMarkdownBufferSession>{
@@ -733,7 +760,7 @@ export class Workspace {
     const services=this.canvasEditorServices(path,owner,()=>{if(disposed)throw new Error('The Canvas file card is closed.');validateWrite();validateSession();});
     const embeds=services.embeds;
     this.canvasMarkdownEmbeds.add(embeds);
-    return createCanvasMarkdownBufferSession({buffer,validateWrite,validateSession,
+    const session=createCanvasMarkdownBufferSession({buffer,validateWrite,validateSession,
       subscribe:listener=>this.bufferSubscriptions.subscribe(buffer,listener),
       update:(next,guard)=>{
         this.updateMarkdownBuffer(buffer,next,guard);runtime.touch();
@@ -745,6 +772,7 @@ export class Workspace {
       dispose:()=>{disposed=true;embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);},
       onError:error=>notice(error instanceof Error?error.message:String(error)),
     });
+    return{...session,flush:async()=>{await services.baseSessions.flush();await session.flush();},hasPendingChanges:()=>services.baseSessions.hasPendingChanges()||session.hasPendingChanges()};
   }
 
   private updateMarkdownBuffer(buffer:NoteBuffer,next:string,validateWrite?:()=>void):void{
@@ -864,7 +892,7 @@ export class Workspace {
   private viewSettings():string{return JSON.stringify([this.settings.readableWidth,this.settings.showInlineTitle,this.settings.useTab,this.settings.tabSize,this.settings.smartIndentList]);}
   private clearPaneViewFields(pane:Pane):void{
     pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
-    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.canvasSource=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
+    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
     pane.renderVersion=++this.viewSequence;
   }
   private parkPaneView(pane:Pane,keepConnected=false):void{
@@ -882,7 +910,7 @@ export class Workspace {
     const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
     const connected=cached.content.isConnected;
     cached.runtime.attach(pane.element,this.viewOwner(pane));
-    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','canvasSource','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
+    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
     for(const key of fields)(pane as unknown as Record<string,unknown>)[key]=cached[key];
     pane.history=tab.history??cached.history;pane.historyIndex=tab.historyIndex??cached.historyIndex;
     pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);
@@ -1184,7 +1212,7 @@ export class Workspace {
     await this.renderPane(pane);this.saveSession();this.renderRight();
   }
   private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;this.current(pane).historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
-  private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.path&&!isMarkdown(tab.path))return;if(tab.path)await this.buffers.get(tab.path)?.flush();tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
+  private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.path&&!isMarkdown(tab.path))return;await this.flushPane(pane);tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
   private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane,true,target.includes('#')?target.slice(target.indexOf('#')):'');return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
   private async dailyNote():Promise<void>{const now=new Date();const name=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.md`;if(!this.vault.entries.has(name))await this.vault.create(name,'');await this.openNote(name);}
   private async split(edge:'right'|'bottom'='right',source=this.activePane,tab=this.current(source)):Promise<void>{
@@ -1373,7 +1401,7 @@ export class Workspace {
     const primary=this.hotkeys.platform==='mac'?event.metaKey&&!event.ctrlKey:event.ctrlKey&&!event.metaKey;
     if(primary&&!event.shiftKey&&!event.altKey&&!event.repeat&&event.key.toLowerCase()==='f'&&this.activePane?.pdfView){event.preventDefault();this.activePane.pdfView.showSearch();}
   }
-  private async flushPane(pane:Pane):Promise<void>{await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
-  async flush():Promise<void>{for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
+  private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
+  async flush():Promise<void>{for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
   async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
 }

@@ -1,6 +1,6 @@
 import { Compartment, Prec } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
-import { isolateHistory } from '@codemirror/commands';
+import { isolateHistory, selectParentSyntax } from '@codemirror/commands';
 import { EditorView, keymap, ViewPlugin } from '@codemirror/view';
 import type { KeyBinding } from '@codemirror/view';
 import { eventHotkey, hotkeyIdentity } from '../ui/hotkeys.ts';
@@ -19,7 +19,10 @@ const folds: Record<string, (view: EditorView) => boolean> = {
   'editor-toggle-fold': toggleMarkdownFold, 'editor-fold': foldMarkdown, 'editor-unfold': unfoldMarkdown,
   'editor-fold-all': foldAllMarkdown, 'editor-unfold-all': unfoldAllMarkdown,
 };
-const ids = [...Object.keys(formats), ...Object.keys(folds)];
+const selectionCommands: Record<string, (view: EditorView) => boolean> = {
+  'editor-select-parent-syntax': selectParentSyntax,
+};
+const ids = [...Object.keys(formats), ...Object.keys(folds), ...Object.keys(selectionCommands)];
 
 function findAction(items: FormatMenuItem[], id: string): Extract<FormatMenuItem, { run: unknown }> | undefined {
   for (const item of items) {
@@ -38,8 +41,14 @@ function surfaceBlocked(view: EditorView, owner: EditorView): boolean {
 /** Internal commands only. A recognized unavailable action is consumed, so a
  * lower-priority keymap never executes a different command for that binding. */
 export function runEditorCommand(id: string, view: EditorView, owner: EditorView = view): boolean {
-  if (!Object.hasOwn(formats, id) && !Object.hasOwn(folds, id)) return false;
+  if (!Object.hasOwn(formats, id) && !Object.hasOwn(folds, id) && !Object.hasOwn(selectionCommands, id)) return false;
   if (surfaceBlocked(view, owner) || view.composing || owner.composing || activeTableEditor(owner)?.composing) return true;
+  if (Object.hasOwn(selectionCommands, id)) {
+    // Selection belongs to the focused cell, never the enclosing note. A
+    // rectangle's readonly child must retain its table selection ownership.
+    if (!view.state.readOnly) selectionCommands[id](view);
+    return true;
+  }
   if (Object.hasOwn(folds, id)) {
     const child = activeTableEditor(owner);
     const changed = folds[id](owner);

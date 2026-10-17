@@ -2,7 +2,7 @@ import { Annotation, Compartment, EditorSelection, EditorState, Prec, StateField
 import type { Extension } from '@codemirror/state';
 import { Decoration, EditorView, keymap, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
-import { defaultKeymap, insertNewline, isolateHistory, redo, undo } from '@codemirror/commands';
+import { defaultKeymap, selectParentSyntax, insertNewline, isolateHistory, redo, undo } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { inline } from '../ui/markdown.ts';
@@ -487,7 +487,7 @@ class TableController {
             { key: 'ArrowDown', run: view => this.collapseSelection(1) || this.vertical(view, 1), shift: view => this.extendSelection(view, 1, 0) },
             { key: 'Backspace', run: () => this.deleteSelection(-1) },
             { key: 'Delete', run: () => this.deleteSelection(1) },
-          ])), keymap.of(defaultKeymap),
+          ])), keymap.of(defaultKeymap.filter(binding => binding.run !== selectParentSyntax)),
         ] }),
       dispatchTransactions: (transactions, child) => {
         // Read-only commands normally stop at the child's facet. Also guard

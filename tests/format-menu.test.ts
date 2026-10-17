@@ -340,7 +340,8 @@ test('cell-local custom syntax preserves encoded breaks and escaped pipes when r
 });
 
 
-test('late table cells stay independent when the initial Markdown syntax tree is partial', () => {
+test('late table cells stay independent when the initial Markdown syntax tree is partial', t => {
+  t.mock.method(Date, 'now', () => 0);
   const prefix = 'plain\n\n'.repeat(2000);
   for (const [body, id, expected] of [
     ['==one | two==', 'format-highlight-default', '====one== | two=='],
@@ -360,4 +361,84 @@ test('late table cells stay independent when the initial Markdown syntax tree is
     const action = find(formatMenuForEditor(view, { ranges }), id); assert.ok('run' in action); assert.equal(action.run(), true);
     assert.equal(state.doc.toString(), prefix + `| A | B |\n| --- | --- |\n| ${expected} |`);
   }
+});
+
+// Keep parser budgets deterministic without sleeping or changing production
+// limits. The real Markdown parser still stops at CM's initial 3,000-character
+// viewport; freezing only its clock lets the explicit ensure complete in tests.
+const partialPrefix = 'plain\n\n'.repeat(600);
+function partialFormattingFixture(text: string) {
+  let state = EditorState.create({ doc: text, extensions: [markdown({ base: markdownLanguage }), EditorState.allowMultipleSelections.of(true)] });
+  const transactions: Transaction[] = [];
+  const view = { get state() { return state; }, dom: { isConnected: true }, focus() {}, dispatch(spec) {
+    const transaction = state.update(spec); transactions.push(transaction); state = transaction.state;
+  } } as unknown as EditorView;
+  const replace = (text: string) => { state = EditorState.create({ doc: text, extensions: [markdown({ base: markdownLanguage }), EditorState.allowMultipleSelections.of(true)] }); };
+  const ranges = () => {
+    const from = state.doc.toString().lastIndexOf('| A | B |');
+    const cell = parseTable(state.sliceDoc(from), from)!.rows[1].cells[0];
+    return [{ from: cell.from, to: cell.to }];
+  };
+  return { view, transactions, replace, ranges };
+}
+
+test('first table formatting inspection uses the ensured tree without publishing a selection transaction', t => {
+  t.mock.method(Date, 'now', () => 0);
+  const table = '| A | B |\n| --- | --- |\n| **one** | other |';
+  const f = partialFormattingFixture(partialPrefix + table), snapshot = syntaxTree(f.view.state);
+  assert.ok(snapshot.length < partialPrefix.length, 'real initial viewport stops before the table');
+  const menu = formatMenuForEditor(f.view, { ranges: f.ranges });
+  assert.equal(find(menu, 'format-bold').checked, true);
+  assert.equal(find(menu, 'format-italic').checked, false);
+  assert.equal(find(menu, 'format-bold').enabled, true);
+  assert.equal(syntaxTree(f.view.state), snapshot, 'ensuring the mutable parse context does not publish a new state tree');
+  assert.equal(f.transactions.length, 0, 'inspection preserves rectangle ownership');
+});
+
+for (const [id, marked] of [
+  ['format-bold', '**one**'], ['format-italic', '*one*'],
+  ['format-strikethrough', '~~one~~'], ['format-code', '`one`'],
+  ['format-clear', '**one**'],
+]) test(`captured ${id} uses a cold ensured table tree at action time`, t => {
+  t.mock.method(Date, 'now', () => 0);
+  const table = `| A | B |\n| --- | --- |\n| ${marked} | other |`;
+  const f = partialFormattingFixture(table);
+  const action = find(formatMenuForEditor(f.view, { ranges: f.ranges }), id); assert.ok('run' in action);
+  f.replace(partialPrefix + table);
+  assert.ok(syntaxTree(f.view.state).length < partialPrefix.length);
+  assert.equal(action.run(), true);
+  assert.equal(f.view.state.doc.toString(), partialPrefix + '| A | B |\n| --- | --- |\n| one | other |');
+  assert.equal(f.transactions.length, 1, 'no preliminary parse/selection dispatch');
+});
+
+test('ensured content-line markers keep late heading syntax outside formatting wrappers', t => {
+  t.mock.method(Date, 'now', () => 0);
+  const f = partialFormattingFixture(partialPrefix + '# title');
+  assert.ok(syntaxTree(f.view.state).length < partialPrefix.length);
+  const ranges = () => [{ from: partialPrefix.length, to: f.view.state.doc.length }];
+  const action = find(formatMenuForEditor(f.view, { ranges }), 'format-bold'); assert.ok('run' in action);
+  // Replacing with a fresh state prevents menu inspection from warming the
+  // action's parse context and hiding stale contentLine lookups.
+  f.replace(partialPrefix + '# title');
+  assert.equal(action.run(), true);
+  assert.equal(f.view.state.doc.toString(), partialPrefix + '# **title**');
+  assert.equal(f.transactions.length, 1);
+});
+
+test('exhausted parser budget makes no edit and a later completed ensure uses its returned tree', t => {
+  let exhausted = false, clock = 0;
+  t.mock.method(Date, 'now', () => exhausted ? clock += 1000 : clock);
+  const table = '| A | B |\n| --- | --- |\n| **one** | other |';
+  const f = partialFormattingFixture(table);
+  const action = find(formatMenuForEditor(f.view, { ranges: f.ranges }), 'format-bold'); assert.ok('run' in action);
+  f.replace(partialPrefix + table);
+  exhausted = true;
+  const unavailable = find(formatMenuForEditor(f.view, { ranges: f.ranges }), 'format-bold');
+  assert.equal(unavailable.enabled, false);
+  assert.equal(action.run(), false); assert.equal(f.transactions.length, 0);
+  assert.equal(f.view.state.doc.toString(), partialPrefix + table);
+  exhausted = false;
+  assert.equal(action.run(), true);
+  assert.equal(f.view.state.doc.toString(), partialPrefix + '| A | B |\n| --- | --- |\n| one | other |');
+  assert.equal(f.transactions.length, 1);
 });
