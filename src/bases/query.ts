@@ -1,3 +1,4 @@
+import type { DocumentBaseResult } from '../core/document-semantics.ts';
 import { BaseDocument } from './document.ts';
 import type { BaseValue, BaseViewConfig } from './document.ts';
 import { BASE_NULL, BaseExpressionError, BaseFunctionRegistry, baseDate, baseExpressionValue, baseValueIsTruthy, baseValuesEqual, baseValueToString, evaluateBaseExpression, evaluateBaseExpressionOrThrow, parseBaseExpression } from './expression.ts';
@@ -40,17 +41,22 @@ export interface BaseQueryRow {
   readonly values: Readonly<Record<string, BaseExpressionValue>>;
 }
 export interface BaseQueryGroup {
+  /** Opaque Rust grouping identity; absent on legacy evaluator results. */
+  readonly sharedKeyId?: string | null;
   /** JS null denotes an ungrouped result; typed null denotes the empty-key group. */
   readonly key: BaseExpressionValue | null;
   readonly rows: readonly BaseQueryRow[];
 }
 export interface BaseQueryGroupOption {
+  readonly sharedKeyId?: string;
   readonly key: BaseExpressionValue;
   /** Matching rows before search, sorting and the limit. */
   readonly count: number;
   readonly listed: boolean;
 }
 export interface BaseQueryResult {
+  /** Read-only shared evidence marks Rust-owned row/group/query semantics. */
+  readonly shared?: DocumentBaseResult;
   readonly version: BaseQuerySnapshot['version'];
   /** The selected complete view configuration, including unknown presentation options. */
   readonly view: BaseViewConfig;

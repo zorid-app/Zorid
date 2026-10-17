@@ -21,7 +21,7 @@ class IdentityAdapter extends MemoryAdapter {
 }
 function result(): DocumentBaseResult {
   return { snapshotId: snapshot, view: { type: 'table', name: 'First' }, rows: [{ entryId: 'One.md', revision: 'r1', path: 'One.md', values: { 'note.Status': { type: 'string', value: 'From Rust' } } }],
-    groups: [{ key: null, entryIds: ['One.md'] }], groupOptions: [], properties: ['note.Status'], availableProperties: ['note.Status'], counts: { scanned: 2, matched: 1, afterGroupOrder: 1, afterSearch: 1, returned: 1 }, diagnostics: [], relationshipsAvailable: true, metadataComplete: true, metadataIssues: [], stepsUsed: 9 };
+    groups: [{ key: null, keyId: null, entryIds: ['One.md'] }], groupOptions: [], properties: ['note.Status'], availableProperties: ['note.Status'], counts: { scanned: 2, matched: 1, afterGroupOrder: 1, afterSearch: 1, returned: 1 }, diagnostics: [], relationshipsAvailable: true, metadataComplete: true, metadataIssues: [], stepsUsed: 9 };
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 async function until(check: () => boolean) { for (let i = 0; i < 100 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 1)); assert.ok(check()); }
@@ -67,7 +67,7 @@ test('capable normal Base controller calls shared query with captured identity/o
 });
 test('shared projection retains Rust row/group order, typed values and exact shared diagnostic codes', () => {
   const r: DocumentBaseResult = { ...result(), rows: [ { entryId: 'b', revision: 'r1', path: 'B.md', values: { date: { type: 'date', timestamp: 123, hasTime: false }, nested: { type: 'object', value: [['z', { type: 'number', value: 1 }], ['a', { type: 'number', value: 2 }], ['__proto__', { type: 'number', value: 3 }]] }, list: { type: 'list', value: [{ type: 'null' }, { type: 'boolean', value: false }] }, error: { type: 'error', code: 'unavailable', message: 'No graph' }, file: { type: 'file', path: 'B.md' }, link: { type: 'link', path: 'Target', target: { entryId: 'target-id', revision: 'target-revision' }, display: null, external: false } } }, { entryId: 'a', revision: 'r1', path: 'A.md', values: {} } ],
-  groups: [{ key: { type: 'number', value: 2 }, entryIds: ['a', 'b'] }],
+  groups: [{ key: { type: 'number', value: 2 }, keyId: 'opaque-number-two', entryIds: ['a', 'b'] }],
   diagnostics: [{ phase: 'value', entryId: 'b', path: 'B.md', property: null, code: 'numeric-domain', message: 'Invalid number' }] };
   const actual = projectSharedBaseResult(r, 7, []);
   assert.deepEqual(actual.rows.map(row => row.path), ['B.md', 'A.md']); assert.deepEqual(actual.groups[0].rows.map(row => row.path), ['A.md', 'B.md']);
@@ -79,7 +79,7 @@ test('view changes cancel stale shared results and retire pins before publishing
   const f = await fixture(); try {
     const gate = f.hold(), pending = f.controller.refresh(); await until(() => f.calls.length === 2);
     const changed = f.controller.setView(1); assert.equal(f.pins[1].closed, 0);
-    gate.resolve({ ...result(), rows: [{ entryId: 'bad', revision: 'r1', path: 'Poison.md', values: {} }], groups: [{ key: null, entryIds: ['bad'] }] });
+    gate.resolve({ ...result(), rows: [{ entryId: 'bad', revision: 'r1', path: 'Poison.md', values: {} }], groups: [{ key: null, keyId: null, entryIds: ['bad'] }] });
     await pending; await changed; assert.equal(f.controller.state.result?.view.name, 'Second'); assert.ok(f.published.every(paths => !paths.includes('Poison.md'))); assert.ok(f.pins.every(pin => pin.closed === 1));
   } finally { f.controller.dispose(); }
 });
@@ -142,4 +142,19 @@ test('Vault witnessed rename rejects unseen revision changes and forwards the or
   adapter.rename = async (oldPath: string, newPath: string, expected?: { entryId: string; revision: string }) => { forwarded = expected; await original(oldPath, newPath); };
   await vault.rename('One.md', 'Other.md', undefined, { entryId: 'One.md', revision: 'r2' });
   assert.deepEqual(forwarded, { entryId: 'One.md', revision: 'r2' }); assert.equal(await adapter.read('Other.md'), 'external');
+});
+
+test('shared group identity tokens survive projection without numeric/string or structural regrouping', () => {
+  const raw = { ...result(), groups: [
+    { key: { type: 'number' as const, value: 2 }, keyId: 'opaque-number-two', entryIds: ['One.md'] },
+    { key: { type: 'string' as const, value: '2' }, keyId: 'opaque-string-two', entryIds: [] },
+  ], groupOptions: [
+    { key: { type: 'number' as const, value: 2 }, keyId: 'opaque-number-two', count: 1, listed: true },
+    { key: { type: 'string' as const, value: '2' }, keyId: 'opaque-string-two', count: 0, listed: true },
+  ] };
+  const projected = projectSharedBaseResult(raw, 1, []);
+  assert.deepEqual(projected.groups.map(group => [group.sharedKeyId, group.rows.map(row => row.path)]), [['opaque-number-two', ['One.md']], ['opaque-string-two', []]]);
+  assert.deepEqual(projected.groupOptions.map(option => option.sharedKeyId), ['opaque-number-two', 'opaque-string-two']);
+  assert.ok(projected.shared); assert.notEqual(projected.groups[0].key?.type, projected.groups[1].key?.type);
+  assert.throws(() => projectSharedBaseResult({ ...raw, groups: [{ key: { type: 'number', value: 2 }, entryIds: [] }] } as any, 1, []), /identity/);
 });

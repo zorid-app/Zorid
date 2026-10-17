@@ -60,8 +60,12 @@ export function projectSharedBaseResult(raw: DocumentBaseResult, version: number
     values: Object.freeze(Object.fromEntries(Object.entries(row.values).map(([key, item]) => [key, value(item)]))) })));
   const byId = new Map(result.rows.map((row, index) => [row.entryId, rows[index]]));
   if (byId.size !== rows.length) return invalid();
-  const groups = Object.freeze(result.groups.map(group => Object.freeze({ key: group.key === null ? null : value(group.key),
-    rows: Object.freeze(group.entryIds.map(id => byId.get(id) ?? invalid())) })));
+  const groups = Object.freeze(result.groups.map(group => {
+    const keyId = (group as typeof group & { readonly keyId?: string | null }).keyId;
+    if (group.key === null ? keyId !== null : typeof keyId !== 'string' || !keyId.length) return invalid('Shared Base group identity is missing.');
+    return Object.freeze({ key: group.key === null ? null : value(group.key), sharedKeyId: keyId,
+      rows: Object.freeze(group.entryIds.map(id => byId.get(id) ?? invalid())) });
+  }));
   const diagnostics: BaseQueryDiagnostic[] = result.diagnostics.map(item => Object.freeze({ ...item, property: item.property ?? undefined, phase: item.phase as BaseQueryDiagnostic['phase'] }));
   const paths = new Map(entries.filter(entry => entry.entryId).map(entry => [entry.entryId, entry.path]));
   for (const issue of result.metadataIssues) {
@@ -72,7 +76,11 @@ export function projectSharedBaseResult(raw: DocumentBaseResult, version: number
   const view = result.view as Readonly<Record<string, unknown>>;
   if (!view || typeof view !== 'object' || Array.isArray(view) || typeof view.type !== 'string' || typeof view.name !== 'string') return invalid();
   const projected = Object.freeze({ version, view: view as BaseViewConfig, rows, groups,
-    groupOptions: Object.freeze(result.groupOptions.map(option => Object.freeze({ ...option, key: value(option.key) }))),
+    groupOptions: Object.freeze(result.groupOptions.map(option => {
+      const keyId = (option as typeof option & { readonly keyId?: string }).keyId;
+      if (typeof keyId !== 'string' || !keyId.length) return invalid('Shared Base group option identity is missing.');
+      return Object.freeze({ ...option, sharedKeyId: keyId, key: value(option.key) });
+    })),
     properties: Object.freeze([...result.properties]), availableProperties: Object.freeze([...result.availableProperties]),
     counts: Object.freeze({ ...result.counts }), diagnostics: Object.freeze(diagnostics),
     // Retain shared identity/coverage evidence without changing view contracts.
