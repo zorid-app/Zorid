@@ -357,7 +357,8 @@ fn load(tx: &Connection, reference: &BinaryStageRef) -> Result<Stage> {
     {
         return Err(corrupt("binary stage phase/metadata mismatch"));
     }
-    let (chunks, total, highest, allocated):(u32,u64,Option<u32>,u32) = tx.query_row("SELECT count(*),coalesce(sum(bytes),0),max(sequence),(SELECT count(*) FROM binary_stage_allocations WHERE stage_id=?1 AND kind='chunk') FROM binary_stage_chunks WHERE stage_id=?1",[reference.stage_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+    let (chunks, total, highest, allocated):(u32,i64,Option<u32>,u32) = tx.query_row("SELECT count(*),coalesce(sum(bytes),0),max(sequence),(SELECT count(*) FROM binary_stage_allocations WHERE stage_id=?1 AND kind='chunk') FROM binary_stage_chunks WHERE stage_id=?1",[reference.stage_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+    let total = u64::try_from(total).map_err(|_| corrupt("negative staged chunk byte total"))?;
     if chunks != next || allocated != next || total != accepted || highest != next.checked_sub(1) {
         return Err(corrupt("binary stage progress differs from durable chunks"));
     }
@@ -611,12 +612,16 @@ impl Store {
         check_payload_quota(&tx, &stage, raw.len())?;
         let descriptor = descriptor(&raw, &stage.scope, &id)?;
         let digest = Sha256Digest::of(bytes);
+        let sql_offset = i64::try_from(offset)
+            .map_err(|_| corrupt("staged offset exceeds SQLite integer range"))?;
+        let sql_accepted = i64::try_from(accepted)
+            .map_err(|_| corrupt("staged length exceeds SQLite integer range"))?;
         tx.execute(
             "INSERT INTO binary_stage_chunks VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 reference.stage_id.as_str(),
                 sequence,
-                offset,
+                sql_offset,
                 bytes.len() as u32,
                 serde_json::to_string(&digest)?,
                 id.as_str(),
@@ -626,7 +631,7 @@ impl Store {
         )?;
         tx.execute(
             "UPDATE binary_stages SET accepted_length=?1,next_sequence=?2 WHERE stage_id=?3",
-            params![accepted, sequence + 1, reference.stage_id.as_str()],
+            params![sql_accepted, sequence + 1, reference.stage_id.as_str()],
         )?;
         tx.commit()?;
         Ok(StageChunkReceipt {
@@ -1038,7 +1043,7 @@ mod tests {
             "authored_envelopes",
             "family_file_records",
         ] {
-            let count: u64 = store
+            let count: i64 = store
                 .connection
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
                 .unwrap();

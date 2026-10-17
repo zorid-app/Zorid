@@ -755,6 +755,7 @@ pub(super) fn same_directory_publication(
 #[cfg(test)]
 mod directory_publication_tests {
     use super::*;
+    use zorid_core::OperationId;
     #[test]
     fn revision_only_folder_publication_requires_identical_namespace_witness() {
         let dir = tempfile::tempdir().unwrap();
