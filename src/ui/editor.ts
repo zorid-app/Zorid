@@ -5,6 +5,8 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { searchKeymap } from '@codemirror/search';
+import { editorCommandHotkeys } from '../editor/editor-commands.ts';
+import type { EditorHotkeySource } from './hotkeys.ts';
 import { activeTableEditor, liveTables } from '../editor/live-tables.ts';
 import { bodyStart, liveProperties, propertyUpdate } from '../editor/live-properties.ts';
 import { frontmatterMarkdown } from '../editor/frontmatter-syntax.ts';
@@ -60,6 +62,7 @@ export interface EditorOptions {
   wiki?: Omit<WikiCompletionOptions, 'paths'>;
   transfers?: TransferOptions;
   listOptions?: MarkdownListOptions;
+  hotkeys?: EditorHotkeySource;
   renderEmbed?: (request: EmbedRequest) => { dom: HTMLElement; destroy(): void };
 }
 
@@ -77,7 +80,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       EditorState.allowMultipleSelections.of(true),
       history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
-      EditorView.lineWrapping, wiki,
+      EditorView.lineWrapping, wiki, editorCommandHotkeys(options.hotkeys),
       markdownFolding(),
       EditorView.contentAttributes.of({'aria-label': 'Note editor', spellcheck: 'true'}),
       EditorView.updateListener.of(update => { if (update.transactions.some(transaction => transaction.docChanged && !transaction.annotation(externalChange))) options.onChange(update.state.doc.toString()); }),
@@ -94,7 +97,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
       ...(options.transfers ? [editorTransfers(options.transfers)] : []),
       editorContextMenu(),
       ...(options.mode === 'live' ? [liveProperties(), liveCallouts({open: options.open, renderEmbed: options.renderEmbed}),
-        liveTables(options.open, wiki, renderedCalloutRanges), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
+        liveTables(options.open, owner => [wiki, editorCommandHotkeys(options.hotkeys, owner)], renderedCalloutRanges), liveTasks({excludes: renderedCalloutRanges}), liveLists({excludes: renderedCalloutRanges}),
         liveMath({excludes: renderedCalloutRanges}), liveFences({excludes: renderedCalloutRanges}),
         ...(options.renderEmbed ? [liveEmbeds(options.renderEmbed, {excludes: renderedCalloutRanges})] : []),
         liveInline({open: options.open,isUnresolved: options.isUnresolved,onHover: options.onLinkHover,excludes: renderedCalloutRanges})] : []),

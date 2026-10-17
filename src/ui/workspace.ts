@@ -659,7 +659,7 @@ export class Workspace {
         const factory=this.editorFactory||(await import('./editor.ts')).createEditor;if(version!==pane.renderVersion)return;
         const embeds=createEmbeds();pane.embeds=embeds;const generation=this.vaultGeneration;
         const ownsEditor=()=>generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path;
-        pane.editor=factory(host,{value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
+        pane.editor=factory(host,{hotkeys:this.hotkeys,value:buffer.text,mode:tab.mode,paths:()=>ownsEditor()?[...this.vault.entries.keys()]:[],
           wiki:{sourcePath:()=>ownsEditor()?path:null,
             metadata:target=>{if(!ownsEditor())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):this.vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:this.vault.entries.get(target)?.mtime};},
             resolvePath:(target,source)=>ownsEditor()?this.vault.metadata.resolveLink(source,target):null,
@@ -698,7 +698,7 @@ export class Workspace {
       taskChange:(target,line,checked)=>{validate();return this.changeTask(target,line,checked,validate);},
       contextMenu:(event,request,source)=>{if(!available())return;const target=vault.metadata.resolveLink(source,request.target,request.kind),entry=target?vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},
     });
-    const options:Omit<EditorOptions,'value'|'mode'|'onChange'>={paths:()=>available()?[...vault.entries.keys()]:[],open,
+    const options:Omit<EditorOptions,'value'|'mode'|'onChange'>={hotkeys:this.hotkeys,paths:()=>available()?[...vault.entries.keys()]:[],open,
         get listOptions(){return{useTab:workspace.settings.useTab,tabSize:workspace.settings.tabSize,smartIndentList:workspace.settings.smartIndentList};},
         isUnresolved:(target,kind)=>!available()||!vault.metadata.resolveLink(path,target,kind),
         wiki:{sourcePath:()=>available()?path:null,

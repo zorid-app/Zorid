@@ -1,11 +1,11 @@
-import { eventHotkey, formatHotkey, reservedHotkey, WORKSPACE_HOTKEY_COMMANDS } from './hotkeys.ts';
+import { eventHotkey, formatHotkey, reservedHotkey, HOTKEY_COMMANDS } from './hotkeys.ts';
 import type { HotkeyPreferences } from './hotkeys.ts';
 
 /** Owns only this Settings section; capture stops before the modal Escape handler. */
 export function mountHotkeySettings(parent:HTMLElement,preferences:HotkeyPreferences,onChange:()=>void):{destroy():void;refresh():void} {
   const doc=parent.ownerDocument,win=doc.defaultView!;
   const section=doc.createElement('section');section.className='hotkey-settings';
-  const description=doc.createElement('p');description.className='muted';description.textContent='Customize workspace commands. Editor, text-editing and system shortcuts keep their existing bindings. Open new window requires the desktop app.';
+  const description=doc.createElement('p');description.className='muted';description.textContent='Customize workspace commands and Markdown formatting or folding in the editor. Other editor, text-editing and system shortcuts keep their existing bindings. Editor commands start unassigned and only run in an active note editor. Open new window requires the desktop app.';
   const search=doc.createElement('input');search.type='search';search.placeholder='Search commands or shortcuts';search.setAttribute('aria-label','Search hotkeys');
   const status=doc.createElement('p');status.className='hotkey-status';status.role='status';status.setAttribute('aria-live','polite');
   const list=doc.createElement('div');list.className='hotkey-list';
@@ -17,7 +17,7 @@ export function mountHotkeySettings(parent:HTMLElement,preferences:HotkeyPrefere
   const capture=(id:string,index:number|undefined,trigger:HTMLButtonElement)=>{
     cancelCapture?.();trigger.textContent='Press shortcut…';trigger.setAttribute('aria-label','Press a shortcut. Escape cancels. Tab moves to the next control.');trigger.dataset.recording='true';trigger.focus();
     status.textContent='Press your shortcut. Escape cancels. Tab moves to the next control.';
-    const cancel=()=>{win.removeEventListener('keydown',record,true);delete trigger.dataset.recording;cancelCapture=undefined;if(trigger.isConnected){trigger.textContent=index===undefined?'Add shortcut':'Change';trigger.setAttribute('aria-label',`${index===undefined?'Add shortcut to':'Change shortcut for'} ${WORKSPACE_HOTKEY_COMMANDS.find(command=>command.id===id)!.name}`);}};
+    const cancel=()=>{win.removeEventListener('keydown',record,true);delete trigger.dataset.recording;cancelCapture=undefined;if(trigger.isConnected){trigger.textContent=index===undefined?'Add shortcut':'Change';trigger.setAttribute('aria-label',`${index===undefined?'Add shortcut to':'Change shortcut for'} ${HOTKEY_COMMANDS.find(command=>command.id===id)!.name}`);}};
     const record=(event:KeyboardEvent)=>{
       if(!section.isConnected||doc.activeElement!==trigger){cancel();return;}
       if(event.key==='Tab'){cancel();status.textContent='Shortcut capture cancelled.';return;}
@@ -33,9 +33,9 @@ export function mountHotkeySettings(parent:HTMLElement,preferences:HotkeyPrefere
   const render=()=>{
     cancelCapture?.();list.replaceChildren();
     const query=search.value.trim().toLocaleLowerCase();
-    const commands=WORKSPACE_HOTKEY_COMMANDS.filter(command=>`${command.name} ${preferences.label(command.id)}`.toLocaleLowerCase().includes(query));
+    const commands=HOTKEY_COMMANDS.filter(command=>`${command.name} ${preferences.label(command.id)}`.toLocaleLowerCase().includes(query));
     for(const command of commands){
-      const row=doc.createElement('div');row.className='hotkey-row';row.dataset.command=command.id;
+      const row=doc.createElement('div');row.className='hotkey-row';row.dataset.command=command.id;row.dataset.scope=command.scope;
       const name=doc.createElement('span');name.className='hotkey-command-name';name.textContent=command.name;
       const controls=doc.createElement('div');controls.className='hotkey-controls';
       const bindings=preferences.bindings(command.id);
