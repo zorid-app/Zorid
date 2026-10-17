@@ -16,6 +16,8 @@ impl NativeVault {
                 "external family reconciliation requires enrollment",
             ));
         }
+        let started = std::time::Instant::now();
+        let duration = options.max_duration;
         let scan = self.external_scan_locked(options)?;
         let mut report = ExternalReconcileReport {
             complete: false,
@@ -38,6 +40,13 @@ impl NativeVault {
             .collect();
         folders.sort_by_key(|p| p.as_str().split('/').count());
         for path in folders {
+            if started.elapsed() >= duration {
+                report.issues.push(ScanIssue {
+                    path: Some(path),
+                    reason: "external reconciliation duration budget exhausted".into(),
+                });
+                break;
+            }
             let snapshot = &scan.entries[&path];
             if self
                 .store
@@ -81,6 +90,13 @@ impl NativeVault {
         });
         let mut handled = BTreeSet::new();
         for before in &bindings {
+            if started.elapsed() >= duration {
+                report.issues.push(ScanIssue {
+                    path: Some(before.state.path.clone()),
+                    reason: "external reconciliation duration budget exhausted".into(),
+                });
+                break;
+            }
             if handled.contains(&before.state.id) {
                 continue;
             }
@@ -233,6 +249,13 @@ impl NativeVault {
                 .then_with(|| a.cmp(b))
         });
         for path in paths {
+            if started.elapsed() >= duration {
+                report.issues.push(ScanIssue {
+                    path: Some(path),
+                    reason: "external reconciliation duration budget exhausted".into(),
+                });
+                break;
+            }
             let snapshot = &scan.entries[&path];
             let attempt = (|| -> Result<Option<CommitResult>> {
                 if !scan.confirm_snapshot(self, &path)? {

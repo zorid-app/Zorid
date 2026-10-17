@@ -397,22 +397,15 @@ impl NativeVault {
         for (path, snapshot) in &scan.entries {
             self.store.record_external_scan_proof(
                 &id,
-                &ExternalScanProof::Present {
-                    path: path.clone(),
-                    entry_kind: snapshot.kind,
-                    physical: PhysicalIdentity {
+                &ExternalScanProof::present(
+                    path.clone(),
+                    snapshot.kind,
+                    PhysicalIdentity {
                         inode: snapshot.identity.clone(),
                         parent_inode: snapshot.parent_identity.clone(),
                     },
-                    content_digest: snapshot
-                        .bytes
-                        .as_ref()
-                        .map(|bytes| zorid_file_sync::Sha256Digest::of(bytes)),
-                    content_bytes: snapshot
-                        .bytes
-                        .as_ref()
-                        .map_or(0, |bytes| bytes.len() as u64),
-                },
+                    snapshot.bytes.as_deref(),
+                ),
             )?;
         }
         if !stopped && stack.is_empty() && scan.issues.is_empty() {

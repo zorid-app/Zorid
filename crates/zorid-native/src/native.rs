@@ -20,6 +20,9 @@ mod directory;
 mod external_create_tests;
 #[path = "external_namespace.rs"]
 mod external_namespace;
+#[cfg(test)]
+#[path = "external_namespace_tests.rs"]
+mod external_namespace_tests;
 #[path = "external_scan.rs"]
 mod external_scan;
 #[path = "family.rs"]

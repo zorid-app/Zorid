@@ -29,6 +29,20 @@ pub enum ExternalScanProof {
     },
 }
 impl ExternalScanProof {
+    pub fn present(
+        path: VaultPath,
+        entry_kind: EntryKind,
+        physical: PhysicalIdentity,
+        bytes: Option<&[u8]>,
+    ) -> Self {
+        Self::Present {
+            path,
+            entry_kind,
+            physical,
+            content_digest: bytes.map(zorid_file_sync::Sha256Digest::of),
+            content_bytes: bytes.map_or(0, |b| b.len() as u64),
+        }
+    }
     fn path(&self) -> &VaultPath {
         match self {
             Self::Present { path, .. } => path,
