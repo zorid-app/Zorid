@@ -118,6 +118,26 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 Current authoritative update — 2026-10-17 20:42 UTC. The bullets below
 this update are historical checkpoints where their status differs:
+- Browser publication defect is now identified and fixed: order-sensitive JSON
+  string equality rejected equivalent source/Rust DTOs whose object fields were
+  serialized in different orders. Diagnostic cf8f8ed6 + guarded retryb64de88d
+  observed index_capture_descriptor/sameEntry:false on the original6 entries.
+  Strict structural comparator03b0b6b4 (root0d35e292) ignores object key order
+  only; exact fields, values, types and array order remain checked. Independent
+  source review approved; host21/21 tests pass. Actual same-database retry now
+  publishes successfully, source watermark6/currenttrue, all6 entries present,
+  rawBytesPreserved:true. No source reset or relaxed validation.
+- Full fresh browser suite advanced through metadata/graph/Base/24 literal pages
+  and reached retained edits. It then exposed fixture-only invalid YAML Boolean
+  filters:false; frozen compiler requires expression text or logical mapping.
+  Base owner confirmed correctiona35ac698 to filters:"false" text; composed,
+  awaiting next lightweight bundle/full run. Preserve failed suite database
+  zorid-core-vault:document-index-28dd0a09-e973-4fa2-91f4-220d08c3b8da.
+  Current server40946(port8766) serves tmp/stage4-browser-index-app-fixed,
+  source0d35e292; root Chrome tab1268039028 is marked for continuation.
+  Old corpus server22178 stopped after downloaded reports; no Rust/Electron
+  process live. Full frontend tsc18913 exit0; desktop app webpack70127 exit0,
+  but normal desktop UI has not yet run. Temporary node_modules symlink removed.
 - New actual browser evidence: WASM63741 exit0 (official1.95, release/j1,
   2m35s). BinarySHA2566c67442d272195269eb2d92e723c3fc8fd92e237c33c9368e046a92134903256.
   Chrome real-worker Markdown49/49 +4 malformed checks PASS, downloaded actual
