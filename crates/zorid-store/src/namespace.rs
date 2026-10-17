@@ -14,6 +14,7 @@ pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("namespace_member_progress", "CREATE TABLE namespace_member_progress (job_id TEXT NOT NULL, member_index INTEGER NOT NULL, directory_stage_identity TEXT, captured INTEGER NOT NULL CHECK(captured IN (0,1)), published INTEGER NOT NULL CHECK(published IN (0,1)), finished INTEGER NOT NULL CHECK(finished IN (0,1)), PRIMARY KEY(job_id,member_index), FOREIGN KEY(job_id,member_index) REFERENCES namespace_members(job_id,member_index))"),
     family::SCHEMA[0],
     family::SCHEMA[1],
+    family::SCHEMA[2],
 ];
 pub const MAX_NAMESPACE_MEMBERS: usize = 10_000;
 pub const MAX_NAMESPACE_EVIDENCE_BYTES: usize = 64 * 1024 * 1024;

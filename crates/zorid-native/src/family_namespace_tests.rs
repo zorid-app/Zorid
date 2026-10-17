@@ -255,3 +255,139 @@ fn family_folder_move_preserves_child_frontier_and_explicit_members() {
     assert_eq!(path.as_str(), "moved/child.md");
     assert_eq!(vault.family_status().unwrap().pending_projection, "0");
 }
+#[test]
+fn mixed_folder_move_and_child_delete_retire_parent_only_after_remaining_members_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(directory.path());
+    let folder = EntryId::new("mixed-folder").unwrap();
+    let removed = EntryId::new("removed-child").unwrap();
+    let kept = EntryId::new("kept-child").unwrap();
+    for (operation, id, path, kind, content, mode) in [
+        (
+            "mixed-folder-create",
+            folder.clone(),
+            "folder",
+            EntryKind::Folder,
+            None,
+            None,
+        ),
+        (
+            "removed-create",
+            removed.clone(),
+            "folder/removed.md",
+            EntryKind::File,
+            Some(b"remove".to_vec()),
+            Some(FamilyCreateMode::Text),
+        ),
+        (
+            "kept-create",
+            kept.clone(),
+            "folder/kept.md",
+            EntryKind::File,
+            Some(b"keep".to_vec()),
+            Some(FamilyCreateMode::Text),
+        ),
+    ] {
+        let outcome = vault
+            .family_apply(
+                &request(
+                    operation,
+                    Mutation::Create {
+                        id,
+                        path: VaultPath::new(path).unwrap(),
+                        kind,
+                        content,
+                    },
+                ),
+                mode,
+            )
+            .unwrap();
+        assert!(
+            matches!(outcome.projection, ProjectionStatus::Projected),
+            "{outcome:?}"
+        );
+    }
+    let folder_state = vault.store.read(&folder).unwrap().unwrap().state;
+    vault
+        .store
+        .family_apply(
+            &request(
+                "mixed-move",
+                Mutation::Move {
+                    id: folder.clone(),
+                    expected: folder_state.revision,
+                    path: VaultPath::new("moved").unwrap(),
+                },
+            ),
+            None,
+        )
+        .unwrap();
+    let removed_state = vault.store.read(&removed).unwrap().unwrap().state;
+    vault
+        .store
+        .family_apply(
+            &request(
+                "mixed-delete",
+                Mutation::Delete {
+                    id: removed.clone(),
+                    expected: removed_state.revision,
+                    recursive: false,
+                },
+            ),
+            None,
+        )
+        .unwrap();
+    let jobs = vault.store.pending_namespace_jobs().unwrap();
+    let original_move=jobs.iter().find(|j|matches!(&j.origin,zorid_store::ProjectionOrigin::LocalCommand{operation_id} if operation_id.as_str()=="mixed-move")).unwrap().job_id.clone();
+    let targets = vault.store.family_namespace_targets(&jobs).unwrap();
+    assert!(targets.iter().any(|t| t.deleted) && targets.iter().any(|t| !t.deleted));
+    let deleted: Vec<_> = targets.into_iter().filter(|t| t.deleted).collect();
+    let binding = vault.store.physical_binding(&removed).unwrap().unwrap();
+    let baseline = vault.store.projection_baseline(&removed).unwrap().unwrap();
+    let evidence = zorid_store::NamespaceEvidence {
+        before: binding.state.clone(),
+        source_identity: binding.physical.inode.clone(),
+        source_parent_identity: binding.physical.parent_inode.clone(),
+        destination_parent_identity: None,
+        content: Some(baseline.content.clone()),
+        file_baseline: Some(baseline),
+        directory_baseline: None,
+        physical_binding: Some(binding),
+    };
+    let attempt = vault
+        .store
+        .family_namespace_prepare(&jobs, &deleted, &[evidence])
+        .unwrap()
+        .unwrap();
+    vault.resume_namespace(attempt).unwrap();
+    assert!(
+        !vault
+            .store
+            .projection_job(&original_move)
+            .unwrap()
+            .completed
+    );
+    assert!(!directory.path().join("folder/removed.md").exists());
+    assert_eq!(
+        std::fs::read(directory.path().join("folder/kept.md")).unwrap(),
+        b"keep"
+    );
+    drop(vault);
+    let mut vault = NativeVault::open(directory.path()).unwrap();
+    let report = vault.recover().unwrap();
+    assert!(report.blocked.is_empty(), "{report:?}");
+    assert!(!directory.path().join("folder").exists());
+    assert!(!directory.path().join("moved/removed.md").exists());
+    assert_eq!(
+        std::fs::read(directory.path().join("moved/kept.md")).unwrap(),
+        b"keep"
+    );
+    assert!(
+        vault
+            .store
+            .projection_job(&original_move)
+            .unwrap()
+            .completed
+    );
+    assert_eq!(vault.family_status().unwrap().pending_projection, "0");
+}

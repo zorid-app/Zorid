@@ -7,7 +7,9 @@ commands and received envelopes use this same physical path.
 
 `family_namespace_attachments` stores exact original job snapshots, exact desired
 entry states, and prepared physical targets. `family_namespace_covered` maps each
-original job to its physical attempt. A separate projection job lets the existing
+original job/member pair to its physical attempt and records immutable completion.
+An original job retires only after every explicit member is satisfied; historical
+completion is not invalidated by later logical changes. A separate projection job lets the existing
 strict namespace journal retain its exact member/evidence contract. It carries
 the real command/update origin; it creates no command receipt or sync envelope.
 
@@ -54,7 +56,13 @@ obsolete migration expectations; the latter now assert rejection without databas
 mutation and fresh-schema canonical layout. These checks do not establish
 browser/CLI/Electron cross-client integration or all family recovery scenarios.
 
-Remaining conditions are explicit: a connected group with mixed final Move and
-Delete dispositions, or a pre-existing active content publication, stays pending
-with retained evidence. These need obligation splitting or explicit publication
-responsibility transfer; they are not treated as completed namespace operations.
+The mixed-disposition follow-up splits a connected group into explicit member
+claims, applies semantic deletes first, and resumes remaining moves after restart.
+Null-plan claims require no binding, baseline, or active publication; no filesystem
+occupant is inferred to belong to an unbound entry. The new mixed folder fixture
+checks that child deletion cannot retire the parent Move before remaining members
+finish. This follow-up is source-only pending its coordinated runtime gate.
+
+A pre-existing active content publication remains pending with retained evidence.
+Explicit publication responsibility transfer is still required; it is not treated
+as a completed namespace operation.
