@@ -10,7 +10,8 @@ function source(parts:Uint8Array[],cancelled?:()=>void):ReadableStream<Uint8Arra
 async function collect(stream:ReadableStream<Uint8Array>):Promise<Uint8Array> {const reader=stream.getReader(),parts:Uint8Array[]=[];let size=0;for(;;){const value=await reader.read();if(value.done)break;parts.push(value.value);size+=value.value.length;}const result=new Uint8Array(size);let offset=0;for(const part of parts){result.set(part,offset);offset+=part.length;}return result;}
 const text=new TextEncoder();
 test('five-byte 0xffffffff envelope is rejected before any header is forwarded',async()=>{
-  let cancelled=false;const stream=guardGrpcWebFrames(source([frame(0,new Uint8Array(0),0xffffffff)],()=>{cancelled=true;}),limits);
+  let cancelled=false;const source=new ReadableStream<Uint8Array>({start(c){c.enqueue(frame(0,new Uint8Array(0),0xffffffff));},cancel(){cancelled=true;}});
+  const stream=guardGrpcWebFrames(source,limits);
   await assert.rejects(stream.getReader().read(),{code:'sync_response_limit'});assert.equal(cancelled,true);
 });
 test('fragmented five-byte headers preserve exact body and captured protobuf bytes',async()=>{

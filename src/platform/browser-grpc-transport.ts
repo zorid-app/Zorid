@@ -1,4 +1,5 @@
 import { createClient, ConnectError, Code } from '@connectrpc/connect';
+import { create, fromBinary } from '@bufbuild/protobuf';
 import type { Client } from '@connectrpc/connect';
 import { createGrpcWebTransport } from '@connectrpc/connect-web';
 import { RelayService, ErrorDetailSchema, ErrorCode } from '../generated/zorid/sync/rpc/v1/relay_pb.ts';
@@ -7,6 +8,7 @@ import { BrowserSyncTransportError, SYNC_WIRE_BYTES } from './browser-sync-trans
 import type { BrowserSyncTransport, BrowserSyncTransportOptions, BrowserSyncTransportCode } from './browser-sync-transport.ts';
 import { guardGrpcWebFrames } from './browser-grpc-frame-guard.ts';
 
+export const BROWSER_GRPC_BINARY_OPTIONS = Object.freeze({ readUnknownFields: false, recursionLimit: 100 });
 export const GRPC_CONTROL_BYTES = 4096;
 export const GRPC_APPEND_BYTES = SYNC_WIRE_BYTES + GRPC_CONTROL_BYTES;
 export const GRPC_PULL_BYTES = 2 * SYNC_WIRE_BYTES + 32768;
@@ -68,15 +70,35 @@ export function createBrowserGrpcTransport(
       cause = cause instanceof Error ? cause.cause : undefined;
     }
     if (error instanceof ConnectError) {
-      // Details are generated protobuf, not strings. Unknown/malformed details
-      // never become authorization, compatibility or retry decisions.
+      // findDetails silently omits malformed known details and has no decoding
+      // options. Decode their bounded bytes through the standard ES decoder so
+      // malformed, unknown-enum or duplicate known details cannot select a
+      // terminal classification merely by falling back to the gRPC status.
       try {
-        const details = error.findDetails(ErrorDetailSchema);
-        if (details.length === 1) {
-          switch (details[0].code) {
-            case ErrorCode.UNSUPPORTED_PROTOCOL: return new BrowserVaultError('sync_unsupported_protocol', 'Sync protocol was rejected');
-            case ErrorCode.EPOCH_MISMATCH: return new BrowserVaultError('sync_epoch_mismatch', 'Sync epoch was rejected');
-          }
+        const known = error.details.filter(detail => 'type' in detail
+          ? detail.type === ErrorDetailSchema.typeName
+          : detail.desc.typeName === ErrorDetailSchema.typeName);
+        if (known.length > 1) return transportError('sync_invalid_response');
+        if (known.length === 1) {
+          const source = known[0];
+          if ('type' in source && (!(source.value instanceof Uint8Array) || source.value.byteLength > GRPC_CONTROL_BYTES)) return transportError('sync_invalid_response');
+          const detail = 'type' in source
+            ? fromBinary(ErrorDetailSchema, source.value, BROWSER_GRPC_BINARY_OPTIONS)
+            : create(ErrorDetailSchema, source.value);
+          const requiredStatus = new Map<number, Code>([
+            [ErrorCode.INVALID_REQUEST, Code.InvalidArgument],
+            [ErrorCode.UNSUPPORTED_PROTOCOL, Code.FailedPrecondition],
+            [ErrorCode.EPOCH_MISMATCH, Code.FailedPrecondition],
+            [ErrorCode.IMMUTABLE_UPDATE_CONFLICT, Code.AlreadyExists],
+            [ErrorCode.RELAY_BUSY, Code.Unavailable],
+            [ErrorCode.UNAUTHORIZED, Code.Unauthenticated],
+            [ErrorCode.FORBIDDEN, Code.PermissionDenied],
+            [ErrorCode.TOO_LARGE, Code.ResourceExhausted],
+            [ErrorCode.INTERNAL, Code.Internal],
+          ]).get(detail.code);
+          if (requiredStatus === undefined || requiredStatus !== error.code) return transportError('sync_invalid_response');
+          if (detail.code === ErrorCode.UNSUPPORTED_PROTOCOL) return new BrowserVaultError('sync_unsupported_protocol', 'Sync protocol was rejected');
+          if (detail.code === ErrorCode.EPOCH_MISMATCH) return new BrowserVaultError('sync_epoch_mismatch', 'Sync epoch was rejected');
         }
       } catch { return transportError('sync_invalid_response'); }
       switch (error.code) {
@@ -85,7 +107,8 @@ export function createBrowserGrpcTransport(
         case Code.ResourceExhausted: return transportError('sync_limit');
         case Code.DeadlineExceeded: return transportError('sync_timeout');
         case Code.Canceled: return transportError(closed ? 'sync_closed' : 'sync_aborted');
-        case Code.InvalidArgument: case Code.OutOfRange: return transportError('sync_invalid_request');
+        case Code.InvalidArgument: return transportError('sync_invalid_request');
+        case Code.OutOfRange: return transportError('sync_response_limit');
         default: return transportError('sync_transport');
       }
     }
@@ -152,7 +175,7 @@ export function createBrowserGrpcTransport(
       return new Response(guarded, { status: response.status, statusText: response.statusText, headers: response.headers });
     };
     try {
-      const client = createClient(RelayService, createGrpcWebTransport({ baseUrl: origin, useBinaryFormat: true, fetch: guardedFetch, defaultTimeoutMs: timeoutMs, binaryOptions: { readUnknownFields: false } }));
+      const client = createClient(RelayService, createGrpcWebTransport({ baseUrl: origin, useBinaryFormat: true, fetch: guardedFetch, defaultTimeoutMs: timeoutMs, binaryOptions: BROWSER_GRPC_BINARY_OPTIONS }));
       await call(client, controller.signal); // Includes final grpc-status/trailer validation.
       if (controller.signal.aborted) throw abortError();
       if (!bodyComplete || !captured) throw transportError('sync_invalid_response');

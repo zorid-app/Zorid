@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { ConnectError, Code } from '@connectrpc/connect';
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
-import { HelloReplySchema, AppendRequestSchema, AcceptedReplySchema, PullRequestSchema, PullReplySchema } from '../src/generated/zorid/sync/rpc/v1/relay_pb.ts';
-import { createBrowserGrpcTransport, GRPC_CONTROL_BYTES, GRPC_PULL_BYTES } from '../src/platform/browser-grpc-transport.ts';
+import { HelloReplySchema, AppendRequestSchema, AcceptedReplySchema, PullRequestSchema, PullReplySchema, ErrorDetailSchema, ErrorCode } from '../src/generated/zorid/sync/rpc/v1/relay_pb.ts';
+import { createBrowserGrpcTransport, GRPC_CONTROL_BYTES, GRPC_PULL_BYTES, BROWSER_GRPC_BINARY_OPTIONS } from '../src/platform/browser-grpc-transport.ts';
 
 const options={endpoint:'https://sync.zorid.test/',vaultId:'vault',bearerToken:'secret',timeoutMs:1000};
 const emptyControl=()=>({requiredFeatures:[],optionalExtensions:[]});
@@ -22,6 +23,9 @@ test('generated unary client returns exact protobuf payload only after successfu
   let request:RequestInit|undefined;
   const transport=createBrowserGrpcTransport(options,async(_url,init)=>{request=init;return response(raw);});
   assert.equal(transport.format,'grpc-protobuf-v2');assert.deepEqual(await transport.hello(),raw);
+  assert.deepEqual(BROWSER_GRPC_BINARY_OPTIONS,{readUnknownFields:false,recursionLimit:100});
+  const decoded=fromBinary(HelloReplySchema,raw,BROWSER_GRPC_BINARY_OPTIONS);
+  assert.equal(decoded.$unknown,undefined);assert.deepEqual(toBinary(HelloReplySchema,decoded),canonical);
   assert.equal(request!.redirect,'error');assert.equal(request!.credentials,'omit');assert.equal(request!.cache,'no-store');assert.equal(request!.referrerPolicy,'no-referrer');
   assert.equal(new Headers(request!.headers).has('Authorization'),false);transport.close();
 });
@@ -76,5 +80,21 @@ test('trailers-only response headers retain final gRPC error classification',asy
   for(const body of [null,new Uint8Array()]){
     const transport=createBrowserGrpcTransport(options,async()=>new Response(body,{headers:{'Content-Type':'application/grpc-web+proto','grpc-status':'16','grpc-message':'secret-internal'}}));
     await assert.rejects(transport.hello(),error=>{assert.equal((error as any).code,'sync_authorization_failed');assert.doesNotMatch(String(error),/secret-internal/);return true;});transport.close();
+  }
+});
+
+// Generated ErrorDetail has no Control field in transport2. Required features
+// remain in the Hello/Accepted/Page/Cursor controls validated by shared Rust.
+test('known error details reject unknown/unspecified enums, duplicates and status mismatches',async()=>{
+  const incoming=(code:number)=>({type:ErrorDetailSchema.typeName,value:toBinary(ErrorDetailSchema,create(ErrorDetailSchema,{code:code as any}))});
+  for(const details of [[incoming(99)],[incoming(ErrorCode.UNSPECIFIED)],[incoming(ErrorCode.IMMUTABLE_UPDATE_CONFLICT),incoming(ErrorCode.IMMUTABLE_UPDATE_CONFLICT)],[incoming(ErrorCode.UNSUPPORTED_PROTOCOL)],[{type:ErrorDetailSchema.typeName,value:Uint8Array.of(0xff)}]]){
+    const transport=createBrowserGrpcTransport(options,async()=>{const error=new ConnectError('secret',Code.AlreadyExists);error.details=details;throw error;});
+    await assert.rejects(transport.upload('update',Uint8Array.of(1)),{code:'sync_invalid_response'});transport.close();
+  }
+});
+test('valid typed error details retain finite classification and OutOfRange is response limit',async()=>{
+  for(const[grpc,detail,expected]of [[Code.FailedPrecondition,ErrorCode.UNSUPPORTED_PROTOCOL,'sync_unsupported_protocol'],[Code.FailedPrecondition,ErrorCode.EPOCH_MISMATCH,'sync_epoch_mismatch'],[Code.AlreadyExists,ErrorCode.IMMUTABLE_UPDATE_CONFLICT,'sync_relay_conflict'],[Code.OutOfRange,undefined,'sync_response_limit']]as const){
+    const transport=createBrowserGrpcTransport(options,async()=>{const error=new ConnectError('secret',grpc);if(detail!==undefined)error.details=[{type:ErrorDetailSchema.typeName,value:toBinary(ErrorDetailSchema,create(ErrorDetailSchema,{code:detail}))}];throw error;});
+    await assert.rejects(transport.hello(),{code:expected});transport.close();
   }
 });
