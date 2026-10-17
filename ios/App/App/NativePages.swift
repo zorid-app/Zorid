@@ -1,5 +1,6 @@
 import UIKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // UI metadata only. Rust remains the sole authority for vault entries/content.
 struct NativeFilePresentation: Decodable {
@@ -1050,11 +1051,68 @@ private enum NativePageAction: String, CaseIterable, Identifiable {
 }
 private enum NativeNotesFieldMode { case search, actions }
 
+// Only implemented native pages belong here. Recents/Files are Notes modes.
+private enum NativeNavigationItem: String, CaseIterable, Identifiable, Codable {
+    case notes
+    var id: String { rawValue }
+    var title: String { switch self { case .notes: return "Notes" } }
+    var symbol: String { switch self { case .notes: return "note.text" } }
+}
+
+private struct NativeNavigationPreferences {
+    private static let key = "native.navigation.items.v1"
+    private let defaults: UserDefaults
+    private(set) var items: [NativeNavigationItem]
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        // Missing is the default; an explicitly empty or all-unknown saved bar
+        // stays empty. Root Notes/Settings remain reachable without a tab bar.
+        if let saved = defaults.array(forKey: Self.key) {
+            items = Self.clean(saved.compactMap { ($0 as? String).flatMap(NativeNavigationItem.init(rawValue:)) })
+        } else { items = [.notes] }
+        persist()
+    }
+    private static func clean(_ items: [NativeNavigationItem]) -> [NativeNavigationItem] {
+        var seen = Set<NativeNavigationItem>()
+        return items.filter { seen.insert($0).inserted }
+    }
+    mutating func replace(_ items: [NativeNavigationItem]) {
+        self.items = Self.clean(items)
+        persist()
+    }
+    private func persist() {
+        defaults.set(items.map(\.rawValue), forKey: Self.key)
+    }
+}
+
 // Presentation state and local preferences belong to this model; UIKit owns the
 // push/pop flow and Rust owns the snapshot. No parallel SwiftUI navigation stack.
 @MainActor
 private final class NativePagesModel: ObservableObject {
     let vault: LocalVault
+    @Published private(set) var navigation = NativeNavigationPreferences()
+    private(set) var navigationRevision: UInt64 = 0
+    var unusedNavigationItems: [NativeNavigationItem] { NativeNavigationItem.allCases.filter { !navigation.items.contains($0) } }
+    func setNavigationItems(_ items: [NativeNavigationItem]) {
+        navigationRevision &+= 1
+        navigation.replace(items)
+        if navigation.items.isEmpty { showPage(.recents) }
+    }
+    func addNavigationItem(_ item: NativeNavigationItem) {
+        guard !navigation.items.contains(item) else { return }
+        setNavigationItems(navigation.items + [item])
+    }
+    func removeNavigationItem(_ item: NativeNavigationItem) {
+        setNavigationItems(navigation.items.filter { $0 != item })
+    }
+    func moveNavigationItem(_ item: NativeNavigationItem, by offset: Int) {
+        guard let index = navigation.items.firstIndex(of: item) else { return }
+        let destination = index + offset
+        guard navigation.items.indices.contains(destination) else { return }
+        var items = navigation.items
+        items.swapAt(index, destination)
+        setNavigationItems(items)
+    }
     @Published private(set) var fieldMode: NativeNotesFieldMode = .search
     @Published private(set) var searchQuery = ""
     func toggleFieldMode() {
@@ -1326,7 +1384,7 @@ final class NativePagesController: UIViewController {
             guard let self = self else { return }
             self.model.willOpen(entry)
             self.coordinator.openEditor(entry: entry, origin: self.model.preferences.selected.title)
-        }, chooseVault: { [weak self] in self?.coordinator.chooseVault() }, refresh: { [weak self] in
+        }, showSettings: { [weak self] in self?.showSettings() }, chooseVault: { [weak self] in self?.coordinator.chooseVault() }, refresh: { [weak self] in
             if let self = self { await self.coordinator.reload() }
         })
         let hosting = UIHostingController(rootView: pages)
@@ -1369,10 +1427,12 @@ final class NativePagesController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(true, animated: false)
-        navigationController?.interactivePopGestureRecognizer?.isEnabled = false
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // Do not disable an in-progress Settings swipe-back in viewWillAppear.
+        // Once settled, root/editor admission regains the existing pop guard.
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = false
         coordinator.setVisible(true)
     }
     override func viewWillDisappear(_ animated: Bool) {
@@ -1382,6 +1442,36 @@ final class NativePagesController: UIViewController {
     }
     deinit {
         for observer in activityObservers { NotificationCenter.default.removeObserver(observer) }
+    }
+    private func showSettings() {
+        guard let navigation = navigationController, navigation.topViewController === self else { return }
+        view.endEditing(true)
+        model.beginSettingsPresentation() // Invalidates any pending file-open/search admission.
+        let settings = NativeSettingsPageController(page: .settings, rootView: AnyView(
+            NativeSettingsView(model: model, back: { [weak self] in self?.popSettingsPage(.settings) },
+                               configure: { [weak self] in self?.showNavigationConfiguration() },
+                               chooseVault: { [weak self] in self?.chooseVaultFromSettings() })))
+        navigation.pushViewController(settings, animated: !UIAccessibility.isReduceMotionEnabled)
+    }
+    private func showNavigationConfiguration() {
+        guard let navigation = navigationController,
+              let page = navigation.topViewController as? NativeSettingsPageController, page.page == .settings else { return }
+        let configuration = NativeSettingsPageController(page: .navigationBar, rootView: AnyView(
+            NativeNavigationConfigurationView(model: model, back: { [weak self] in self?.popSettingsPage(.navigationBar) })))
+        navigation.pushViewController(configuration, animated: !UIAccessibility.isReduceMotionEnabled)
+    }
+    private func popSettingsPage(_ expected: NativeSettingsPageController.Page) {
+        guard let navigation = navigationController,
+              let page = navigation.topViewController as? NativeSettingsPageController, page.page == expected else { return }
+        navigation.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
+    }
+    private func chooseVaultFromSettings() {
+        guard let navigation = navigationController, navigation.viewControllers.contains(where: { $0 === self }),
+              navigation.topViewController is NativeSettingsPageController else { return }
+        // Queue ownership cleanup, then return to the real page. Its settled
+        // viewDidAppear drains this intent; never pop/close behind a sheet.
+        coordinator.chooseVault()
+        navigation.popToViewController(self, animated: !UIAccessibility.isReduceMotionEnabled)
     }
     fileprivate var searchQuery: String { model.fieldMode == .search ? model.searchQuery : "" }
     fileprivate func showSearchProgress(_ progress: NativeSearchProgress) { model.showSearchProgress(progress) }
@@ -1406,6 +1496,7 @@ private struct NativePagesView: View {
     @ObservedObject var model: NativePagesModel
     let navigate: (Int) -> Void
     let open: (NativeFileEntry?) -> Void
+    let showSettings: () -> Void
     let chooseVault: () -> Void
     let refresh: () async -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1414,9 +1505,6 @@ private struct NativePagesView: View {
     @Namespace private var glassNamespace
     @AccessibilityFocusState private var focus: Focus?
     @FocusState private var fieldFocused: Bool
-    @State private var showingSettings = false
-    @State private var chooseVaultAfterDismiss = false
-    @State private var settingsReturnFocus: Focus = .settings
 
     private enum Focus: Hashable { case settings, fieldMode, compose, heading, folderHeading, entry(String) }
     private var currentHeadingFocus: Focus { model.isInFolder ? .folderHeading : .heading }
@@ -1434,20 +1522,24 @@ private struct NativePagesView: View {
             // Draw glass above the opaque TabView sibling so its diffuse shadow
             // can cross the header boundary rather than being overpainted there.
             topBar.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12).zIndex(1)
-            TabView {
-                pageContent.tabItem {
-                    Label("Notes", systemImage: "note.text")
-                        .accessibilityIdentifier("native.pages.tab.notes")
+            if model.navigation.items.isEmpty {
+                pageContent // A valid empty bar never locks the user out of Notes/Settings.
+            } else {
+                TabView {
+                    ForEach(model.navigation.items) { item in
+                        navigationPage(item).tabItem {
+                            Label(item.title, systemImage: item.symbol)
+                                .accessibilityIdentifier("native.pages.tab.\(item.rawValue)")
+                        }.tag(item)
+                    }
                 }
             }
         }
         .background(Color(uiColor: .systemBackground))
-        .sheet(isPresented: $showingSettings, onDismiss: {
-            if chooseVaultAfterDismiss {
-                chooseVaultAfterDismiss = false
-                chooseVault()
-            } else { focus = settingsReturnFocus }
-        }) { settingsContent }
+    }
+
+    @ViewBuilder private func navigationPage(_ item: NativeNavigationItem) -> some View {
+        switch item { case .notes: pageContent }
     }
 
     private var pageContent: some View {
@@ -1528,9 +1620,8 @@ private struct NativePagesView: View {
                                       identifierPrefix: "native.pages", navigate: navigate)
             } else {
                 Button {
-                    settingsReturnFocus = .settings
-                    model.beginSettingsPresentation()
-                    showingSettings = true
+                    fieldFocused = false
+                    showSettings()
                 } label: {
                     Image(systemName: "gearshape").padding(12).frame(minWidth: 44, minHeight: 44)
                 }
@@ -1598,10 +1689,7 @@ private struct NativePagesView: View {
         case .newNote: open(nil)
         case .recents: withAnimation(motion) { model.showPage(.recents) }; focus = .heading
         case .files: withAnimation(motion) { model.showPage(.files) }; focus = .heading
-        case .settings:
-            settingsReturnFocus = .fieldMode
-            model.beginSettingsPresentation()
-            showingSettings = true
+        case .settings: showSettings()
         case .chooseVault: chooseVault()
         }
     }
@@ -1752,34 +1840,287 @@ private struct NativePagesView: View {
         }
     }
 
-    private var settingsContent: some View {
-        NavigationView {
-            Form {
-                Section {
-                    Text("\(model.vault.name) · On this device")
-                    Button("Choose vault") {
-                        // Finish the native modal dismissal before closing the
-                        // unleased page host and popping to the vault picker.
-                        chooseVaultAfterDismiss = true
-                        showingSettings = false
-                    }
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("native.settings.choose-vault")
-                }
+}
+
+// These are real navigation-controller children, never bar custom-view hosts.
+@MainActor
+private final class NativeSettingsPageController: UIHostingController<AnyView> {
+    enum Page: Equatable { case settings, navigationBar }
+    let page: Page
+    init(page: Page, rootView: AnyView) {
+        self.page = page
+        super.init(rootView: rootView)
+        view.backgroundColor = .systemBackground
+        view.clipsToBounds = false
+        view.accessibilityIdentifier = page == .settings ? "native.settings" : "native.navigation"
+        view.isAccessibilityElement = false
+    }
+    @MainActor required dynamic init?(coder: NSCoder) { fatalError("Use native Settings navigation.") }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(true, animated: false)
+        // Only unleased native Settings pages use this gesture. NativePages
+        // disables it again before an editor can be admitted.
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = true
+    }
+}
+
+@MainActor
+private struct NativeSettingsHeader: View {
+    let title: String
+    let identifier: String
+    let back: () -> Void
+    @Namespace private var glassNamespace
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: back) {
+                Image(systemName: "chevron.left").font(.body.weight(.semibold))
+                    .frame(minWidth: 44, minHeight: 44)
             }
-            .accessibilityIdentifier("native.settings")
-            .navigationTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showingSettings = false }
-                        .frame(minWidth: 44, minHeight: 44)
-                        .accessibilityIdentifier("native.settings.done")
-                }
-            }
+            .buttonStyle(.plain)
+            .modifier(PageControlSurface(id: "back", namespace: glassNamespace))
+            .accessibilityLabel("Back")
+            .accessibilityIdentifier("\(identifier).back")
+            Text(title).font(.title2.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("\(identifier).heading")
+            Spacer(minLength: 0)
         }
-        .navigationViewStyle(.stack)
+        .foregroundColor(.primary)
+        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+}
+
+@MainActor
+private struct NativeSettingsView: View {
+    @ObservedObject var model: NativePagesModel
+    let back: () -> Void
+    let configure: () -> Void
+    let chooseVault: () -> Void
+    var body: some View {
+        VStack(spacing: 0) {
+            NativeSettingsHeader(title: "Settings", identifier: "native.settings", back: back).zIndex(1)
+            List {
+                Section {
+                    Button(action: configure) {
+                        HStack(spacing: 12) {
+                            Label("Navigation bar", systemImage: "menubar.rectangle")
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right").foregroundColor(.secondary).accessibilityHidden(true)
+                        }.frame(minHeight: 44)
+                    }
+                    .foregroundColor(.primary)
+                    .accessibilityIdentifier("native.settings.navigation-bar")
+                }
+                Section(header: Text("Vault")) {
+                    Text("\(model.vault.name) · On this device").foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Choose vault", action: chooseVault).frame(minHeight: 44)
+                        .accessibilityIdentifier("native.settings.choose-vault")
+                }
+            }
+            .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, 44)
+            .accessibilityIdentifier("native.settings.entries")
+        }
+        .background(Color(uiColor: .systemBackground))
+    }
+}
+
+private enum NativeNavigationPlacement { case bar(Int), unused }
+private enum NativeNavigationOrder {
+    static func placing<Item: Equatable>(_ item: Item, before position: Int, in original: [Item]) -> [Item]? {
+        guard (0...original.count).contains(position) else { return nil }
+        var items = original.filter { $0 != item }
+        var destination = position
+        if let previous = original.firstIndex(of: item), previous < position { destination -= 1 }
+        items.insert(item, at: min(destination, items.count))
+        return items
+    }
+}
+
+private struct NativeNavigationDrag {
+    static let type = UTType(exportedAs: "app.zorid.native-navigation-item")
+    struct Payload: Codable, Equatable { let token: String; let item: NativeNavigationItem }
+    let payload: Payload
+    let revision: UInt64
+    let items: [NativeNavigationItem]
+    func applyingDrop(_ bytes: Data, currentDrag: NativeNavigationDrag?, revision: UInt64,
+                      currentItems: [NativeNavigationItem], active: Bool,
+                      placement: NativeNavigationPlacement) -> [NativeNavigationItem]? {
+        guard active, currentDrag?.payload == payload, revision == self.revision,
+              currentItems == items, bytes.count <= 512,
+              let received = try? JSONDecoder().decode(Payload.self, from: bytes), received == payload else { return nil }
+        switch placement {
+        case .unused:
+            guard items.contains(payload.item) else { return nil }
+            return items.filter { $0 != payload.item }
+        case .bar(let position): return NativeNavigationOrder.placing(payload.item, before: position, in: items)
+        }
+    }
+}
+
+@MainActor
+private struct NativeNavigationDrop: DropDelegate {
+    let allowed: () -> Bool
+    let receive: (NSItemProvider) -> Bool
+    func validateDrop(info: DropInfo) -> Bool {
+        allowed() && info.itemProviders(for: [NativeNavigationDrag.type]).count == 1
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: validateDrop(info: info) ? .move : .forbidden)
+    }
+    func performDrop(info: DropInfo) -> Bool {
+        guard validateDrop(info: info), let provider = info.itemProviders(for: [NativeNavigationDrag.type]).first else { return false }
+        return receive(provider)
+    }
+}
+
+@MainActor
+private struct NativeNavigationConfigurationView: View {
+    @ObservedObject var model: NativePagesModel
+    let back: () -> Void
+    @State private var drag: NativeNavigationDrag?
+    @State private var active = false
+    @State private var dropError = ""
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var glassNamespace
+    private var motion: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            NativeSettingsHeader(title: "Navigation bar", identifier: "native.navigation", back: back).zIndex(1)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Drag items to reorder. Drop an item below to remove it.")
+                        .font(.subheadline).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text("Navigation bar").font(.headline).accessibilityAddTraits(.isHeader)
+                    barPreview
+                    Text("Available pages").font(.headline).accessibilityAddTraits(.isHeader)
+                    unusedItems
+                    if !dropError.isEmpty {
+                        Text(dropError).font(.footnote).foregroundColor(.secondary)
+                            .accessibilityIdentifier("native.navigation.error")
+                    }
+                }
+                .padding(20)
+            }
+            .accessibilityIdentifier("native.navigation.configuration")
+        }
+        .background(Color(uiColor: .systemBackground))
+        .onAppear { active = true }
+        .onDisappear { active = false; drag = nil }
     }
 
+    private var barPreview: some View {
+        HStack(spacing: 8) {
+            if model.navigation.items.isEmpty {
+                Text("Drag Notes here, or use Add below.")
+                    .font(.subheadline).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 64)
+                    .accessibilityIdentifier("native.navigation.empty")
+            }
+            ForEach(Array(model.navigation.items.enumerated()), id: \.element.id) { index, item in
+                Menu {
+                    Button("Move earlier") { edit { model.moveNavigationItem(item, by: -1) } }
+                        .disabled(index == 0)
+                    Button("Move later") { edit { model.moveNavigationItem(item, by: 1) } }
+                        .disabled(index + 1 == model.navigation.items.count)
+                    Button("Remove from navigation bar") { edit { model.removeNavigationItem(item) } }
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: item.symbol).font(.title3)
+                        Text(item.title).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(minWidth: 64, maxWidth: .infinity, minHeight: 64)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.title)
+                .accessibilityValue("Position \(index + 1) of \(model.navigation.items.count)")
+                .accessibilityHint("Drag to move, or activate for move and remove actions")
+                .accessibilityAddTraits(.isSelected)
+                .accessibilityIdentifier("native.navigation.item.\(item.rawValue)")
+                .onDrag { beginDrag(item) }
+                .onDrop(of: [NativeNavigationDrag.type], delegate: drop(.bar(index)))
+            }
+        }
+        .padding(12)
+        .modifier(PageControlSurface(id: "navigation-preview", namespace: glassNamespace))
+        .onDrop(of: [NativeNavigationDrag.type], delegate: drop(.bar(model.navigation.items.count)))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("native.navigation.preview")
+    }
+
+    private var unusedItems: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if model.unusedNavigationItems.isEmpty {
+                Text("All available pages are in the navigation bar. Drop an item here to remove it.")
+                    .font(.subheadline).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(model.unusedNavigationItems) { item in
+                HStack(spacing: 12) {
+                    Label(item.title, systemImage: item.symbol).font(.body)
+                    Spacer(minLength: 0)
+                    Button("Add") { edit { model.addNavigationItem(item) } }
+                        .frame(minWidth: 44, minHeight: 44)
+                        .accessibilityLabel("Add \(item.title) to navigation bar")
+                        .accessibilityIdentifier("native.navigation.add.\(item.rawValue)")
+                }
+                .frame(minHeight: 44).contentShape(Rectangle())
+                .onDrag { beginDrag(item) }
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+        .padding(16)
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+        .onDrop(of: [NativeNavigationDrag.type], delegate: drop(.unused))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("native.navigation.unused")
+    }
+
+    private func edit(_ change: () -> Void) {
+        drag = nil // Invalidate delayed drop callbacks before any button edit.
+        dropError = ""
+        withAnimation(motion, change)
+    }
+    private func beginDrag(_ item: NativeNavigationItem) -> NSItemProvider {
+        let current = NativeNavigationDrag(payload: .init(token: UUID().uuidString.lowercased(), item: item),
+                                           revision: model.navigationRevision, items: model.navigation.items)
+        drag = current
+        dropError = ""
+        let bytes = (try? JSONEncoder().encode(current.payload)) ?? Data()
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(forTypeIdentifier: NativeNavigationDrag.type.identifier, visibility: .ownProcess) { completion in
+            completion(bytes, nil)
+            return nil
+        }
+        return provider
+    }
+    private func drop(_ placement: NativeNavigationPlacement) -> NativeNavigationDrop {
+        NativeNavigationDrop(allowed: {
+            guard active, let drag = drag, drag.revision == model.navigationRevision,
+                  drag.items == model.navigation.items else { return false }
+            if case .unused = placement { return drag.items.contains(drag.payload.item) }
+            return true
+        }, receive: { provider in
+            guard let expected = drag else { return false }
+            _ = provider.loadDataRepresentation(forTypeIdentifier: NativeNavigationDrag.type.identifier) { data, _ in
+                DispatchQueue.main.async {
+                    guard active, drag?.payload.token == expected.payload.token else { return }
+                    guard let data = data,
+                          let items = expected.applyingDrop(data, currentDrag: drag, revision: model.navigationRevision,
+                                                            currentItems: model.navigation.items, active: active, placement: placement) else {
+                        drag = nil
+                        dropError = "Navigation changed. Try dragging the item again."
+                        return
+                    }
+                    edit { model.setNavigationItems(items) }
+                }
+            }
+            return true
+        })
+    }
 }
 
 // Real Liquid Glass is restricted to the functional top controls. Content stays
