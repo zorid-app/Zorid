@@ -503,3 +503,47 @@ the Apple setup branch. Only the three named host files were changed; no Rust
 checks have run yet. Coordinator must acknowledge the bounded Rust check slot
 and cache target before execution. Mobile FFI/Swift sync and real-phone remote
 TLS/enrollment/Keychain remain later work; no sync-runtime completion is claimed.
+
+
+## Resumed native owner checkpoint — 2026-10-17 22:03 UTC
+
+Owner remains terminal term_bbf1787b-d2e5-402a-b366-24d40a2385c3, branch
+tingkai-c/native-mobile-recovery in the isolated Orca worktree named above.
+Canonical main remains coordinator-only. Goal resumed; no main edits or push.
+
+Resolved canonical863334c7 into isolated merge7d04f2f3 under named grant
+msg_e4d21dcde2bd. Three conflicts resolved: host lib is byte-identical to the
+canonical second parent; PlatformVault retains shared document service and all
+native hooks; Workspace retains seventh trailing post-await commitGuard, native
+activation notification and both cleanup paths. Standalone mobile/rust/Cargo.lock
+was stale despite matching both branches and was reconciled using official
+Cargo generate-lockfile --offline (root lock unchanged by this resolution).
+Official cargo metadata --offline --locked for mobile manifest passes with192
+packages; this is graph validation, not compilation. Full TypeScript passes0.
+Serial workspace navigation/lifecycle/backlinks + desktop document tests pass
+32/32; mobile-native + document-backlinks pass152/152. Logs:
+/private/tmp/mobile-main-merge-tsc.log, mobile-main-merge-focused-tests.log,
+mobile-merge-extra-tests.log and mobile-main-merge-cargo-metadata.json.
+Frozen independent review is assigned existing delivery reviewer; root retains
+all Rust/Xcode build resources. Source checks do not verify merged iOS runtime.
+
+Additional actual hotfix5 Simulator evidence: two-page local PDF rendered both
+fixture page texts and page count2, with native navigation present and no UIKit
+containment crash. Screenshot /private/tmp/mobile-v5-pdf.png; actual AX snapshot
+/private/tmp/mobile-v5-pdf-rendered.json. This supersedes the earlier pending PDF
+opening automation observation, not the password/error loading-state gap.
+
+Signed phone hotfix5 remains uninstalled: current CoreDevice inventory reports
+paired, Developer Mode enabled, tunnel unavailable, developer services false.
+Existing signed artifact remains untouched. Install is already authorized when
+connection returns. No new build or duplicate reconnect question was issued.
+
+Presentation consumer work is assigned to existing mobile-slice-review worker
+on a fresh branch from7d04f2f3: only PlatformVault optional signature, Workspace
+native presentation wiring and focused tests. It must expose password/errors
+without successful noteOpened/Recents and fence stale/lifecycle notifications.
+Shared document transport assessment is read-only in mobile-editor-adapter;
+root granted subsequent named source scope in msg_9bf740e528d3, after reviewed
+reconciliation and inclusion of published hostfixture d94c3ae3. No shared core
+crate changes, no renderer-accessible fixture sync/credentials, and no duplicated
+Markdown/Base/index semantics are authorized by this next source scope.
