@@ -170,6 +170,10 @@ export async function catchUpDocumentIndex(service:DocumentService,options:Catch
         try{
           if(owned.explicitRebuild){owned.explicitRebuild=false;owned.rebuildAttempted=true;await reset();}
           let status=await step(()=>service.status());
+          // A publication may commit before its transport acknowledgment is
+          // lost. The exact published identity is a witness even when newer
+          // source changes have already made that generation lag behind.
+          if(owned.stage&&status.snapshot&&sameSnapshot(owned.stage.snapshot,status.snapshot))owned.stage=undefined;
           if(owned.explicitRebuild)continue maintenanceLoop;
           if(status.current){if(owned.stage){active();await service.discard(owned.stage.stageId);owned.stage=undefined;active();}if(owned.explicitRebuild)continue maintenanceLoop;owned.rebuildAttempted=false;return status;}
           if(status.rebuildRequired){
