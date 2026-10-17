@@ -5108,6 +5108,86 @@
         "tasks": [],
         "diagnostics": []
       }
+    },
+    {
+      "id": "bom-indented-heading",
+      "decision": "Ignoring the initial BOM must not add indentation. A valid ATX heading with up to three original leading spaces keeps logical line zero and original byte/UTF-16 coordinates.",
+      "request": {
+        "entryId": "fixture-bom-indented-heading",
+        "contentRevision": "fixture-1",
+        "source": "﻿   # Heading\n[[A]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-bom-indented-heading",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 21,
+          "utf16": 19
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [
+          {
+            "text": "Heading",
+            "level": 1,
+            "line": 0,
+            "range": {
+              "bytes": [
+                6,
+                15
+              ],
+              "utf16": [
+                4,
+                13
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "A",
+            "fragment": "",
+            "destination": "A",
+            "range": {
+              "bytes": [
+                16,
+                21
+              ],
+              "utf16": [
+                14,
+                19
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                18,
+                19
+              ],
+              "utf16": [
+                16,
+                17
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
     }
   ]
 }

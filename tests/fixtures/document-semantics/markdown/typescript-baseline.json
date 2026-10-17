@@ -1460,6 +1460,28 @@
       },
       "properties": [],
       "propertiesError": false
+    },
+    {
+      "id": "bom-indented-heading",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": [
+          {
+            "target": "A",
+            "fragment": "",
+            "start": 16,
+            "end": 17,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
     }
   ]
 }

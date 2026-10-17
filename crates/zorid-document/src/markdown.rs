@@ -46,7 +46,9 @@ fn comments(masked: &mut [u8], exclusion: &[Range<usize>]) {
 pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut DocumentMetadata) {
     let mut bytes = source.as_bytes().to_vec();
     if source.starts_with('\u{feff}') {
-        blank(&mut bytes, 0..3);
+        // Byte-length-preserving semantic document prefix, not indentation.
+        // Three spaces would turn a valid 1–3-space ATX line into code.
+        bytes[..3].fill(b'\n');
     }
     if matches!(
         result.frontmatter.state,

@@ -127,3 +127,16 @@ fn aliases_are_bounded_by_aggregate_decoded_bytes_before_cloning() {
     );
     assert_eq!(result.tags, ["body"]);
 }
+
+#[test]
+fn initial_bom_does_not_add_markdown_indentation_or_logical_lines() {
+    for spaces in 0..=3 {
+        let source = format!("\u{feff}{}# Heading\n[[A]]", " ".repeat(spaces));
+        let result = parse_markdown(&request(source.clone())).unwrap();
+        assert_eq!(result.headings[0].text, "Heading", "indent {spaces}");
+        assert_eq!(result.headings[0].line, 0);
+        assert_eq!(result.headings[0].range.bytes[0], (3 + spaces) as u32);
+        assert_eq!(result.headings[0].range.utf16[0], (1 + spaces) as u32);
+        assert_eq!(result.links[0].target, "A");
+    }
+}

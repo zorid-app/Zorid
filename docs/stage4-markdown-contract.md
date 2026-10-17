@@ -320,7 +320,7 @@ notices. [Parser docs](https://docs.rs/saphyr-parser/latest/saphyr_parser/) and
 exact crate, including `Cargo.toml`, `parser.rs`, `scanner.rs` and `LICENSE`, was
 the primary version-specific evidence. No dependency/runtime build is claimed. MDBASE and index/query work have separate owners.
 
-The 48-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
+The 49-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
 invalid/duplicate/tagged YAML, mixed projections, nonfinite/unsafe numbers,
 BOM/CRLF/bare-CR/astral/decomposed Unicode, empty/partial Markdown, exclusions,
 ATX/Setext/container headings, raw/inline/reference links and task dialect.
@@ -348,7 +348,7 @@ include separate `propertyKeySpellings` source assertions; decoded keys must not
 be mistaken for raw YAML spelling. The TypeScript option checks all
 recorded baseline observations, including intentional mismatches with the target.
 
-Verification at preparation completion: the checker and all 48 current TypeScript
+Verification at preparation completion: the checker and all 49 current TypeScript
 observations pass; 22 existing property/metadata tests pass. The first checker
 run caught an accidentally empty status in the final empty task and was corrected;
 fixture IDs were corrected to the existing strong-ID grammar before completion.
@@ -415,3 +415,11 @@ all AST byte spans by three, keeping original BOM/CRLF coordinates and source
 untouched. Focused YAML-only cases cover nonempty BOM content and BOM+comment
 before both a valid map and an invalid null root. This is a framing/offset
 compatibility adapter around the same established YAML parser.
+
+
+Initial Markdown BOM masking also required a source-input correction: three
+synthetic spaces could turn an original 1–3-space ATX heading into indented code.
+The read-only parser input now replaces the three BOM bytes with blank newlines,
+a semantic empty document prefix. Original source positions/line numbers still
+come from the untouched input. The shared corpus covers BOM+three-space heading;
+a focused parameterized test covers zero through three original spaces.
