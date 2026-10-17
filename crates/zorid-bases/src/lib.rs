@@ -166,6 +166,33 @@ impl Default for EvaluationOptions {
     }
 }
 
+/// Count serialized bytes with early rejection, without allocating an oversized buffer.
+pub(crate) fn encoded_size<T: Serialize>(
+    value: &T,
+    maximum: usize,
+) -> Result<usize, ExpressionDiagnostic> {
+    struct Counter {
+        bytes: usize,
+        maximum: usize,
+    }
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.bytes = self
+                .bytes
+                .checked_add(bytes.len())
+                .filter(|n| *n <= self.maximum)
+                .ok_or_else(|| std::io::Error::other("Base encoded byte budget exceeded"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter { bytes: 0, maximum };
+    serde_json::to_writer(&mut counter, value)
+        .map_err(|_| ExpressionDiagnostic::new("budget", "Base encoded byte budget exceeded"))?;
+    Ok(counter.bytes)
+}
 fn instant(millis: i64) -> Result<String, ExpressionDiagnostic> {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis)
         .map(|date| date.to_rfc3339())

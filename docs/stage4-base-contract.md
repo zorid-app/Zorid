@@ -276,3 +276,13 @@ The current index snapshot API has no per-edge cancellation seam; the bounded
 synchronous snapshot call remains a stated cooperative-cancellation gap, not a
 claim of immediate interruption. No file write, IO resolver fallback, plugin
 callback or ambient clock enters this crate.
+
+Factory review follow-up: the 64 MiB ceiling is aggregate serialized snapshot
+input (identity/envelope, ordered rows, current revision metadata issues and graph),
+not 64 MiB per component. A counting writer rejects oversized encodings without
+allocating a full oversized buffer. Exclusions and shared parser diagnostics carry
+entry/revision witnesses in `metadataIssues`; `metadataComplete` requires a real
+generation and available property extraction. Access to unavailable properties is
+an `unavailable` error, so a filter cannot silently reinterpret failed extraction
+as an ordinary missing property. Binary exclusions remain distinct from unreadable
+or resource-excluded source.

@@ -318,6 +318,7 @@ pub fn query_base(
         return Err(budget("Query ceilings exceed supported maximum"));
     }
 
+    crate::encoded_size(&(snapshot, options), crate::MAX_BASE_REQUEST_BYTES)?;
     let view = program
         .views
         .get(options.view_index)
@@ -768,10 +769,11 @@ pub fn query_base(
         steps_used,
         relationships_available: relationship_available,
         metadata_issues: snapshot.metadata_issues.clone(),
-        metadata_complete: !snapshot
-            .metadata_issues
-            .iter()
-            .any(|i| i.properties_unavailable),
+        metadata_complete: snapshot.relationships.is_some()
+            && !snapshot
+                .metadata_issues
+                .iter()
+                .any(|i| i.properties_unavailable),
     };
     if serde_json::to_vec(&result)
         .map_err(|error| ExpressionDiagnostic::new("output", error.to_string()))?

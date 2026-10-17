@@ -64,7 +64,10 @@ impl BaseSnapshot {
         }
         let mut records = Vec::new();
         let mut metadata_issues = Vec::new();
-        let mut bytes = 0usize;
+        let mut bytes = crate::encoded_size(
+            &serde_json::json!({"snapshotId":generation.id(),"records":[],"relationships":null,"metadataIssues":[]}),
+            crate::MAX_BASE_REQUEST_BYTES,
+        )?;
         for record in generation.records() {
             if records.len() >= crate::MAX_QUERY_SCANNED {
                 return Err(ExpressionDiagnostic::new(
@@ -93,6 +96,12 @@ impl BaseSnapshot {
                     diagnostics: metadata.map(|m| m.diagnostics.clone()).unwrap_or_default(),
                     properties_unavailable,
                 });
+                bytes = bytes
+                    .saturating_add(crate::encoded_size(
+                        metadata_issues.last().expect("just inserted"),
+                        crate::MAX_BASE_REQUEST_BYTES,
+                    )?)
+                    .saturating_add(usize::from(metadata_issues.len() > 1));
             }
 
             let row = DetachedRecord {
@@ -124,11 +133,9 @@ impl BaseSnapshot {
                 ctime_ms: facts.and_then(|f| f.ctime_ms),
                 mtime_ms: facts.and_then(|f| f.mtime_ms),
             };
-            bytes = bytes.saturating_add(
-                serde_json::to_vec(&row)
-                    .map_err(|_| ExpressionDiagnostic::new("input", "Invalid generation row"))?
-                    .len(),
-            );
+            bytes = bytes
+                .saturating_add(crate::encoded_size(&row, crate::MAX_BASE_REQUEST_BYTES)?)
+                .saturating_add(usize::from(!records.is_empty()));
             if bytes > crate::MAX_BASE_REQUEST_BYTES {
                 return Err(ExpressionDiagnostic::new(
                     "budget",
@@ -138,7 +145,13 @@ impl BaseSnapshot {
             records.push(row);
         }
         let relationships = ResolutionView::new(generation)
-            .snapshot(MAX_RELATIONSHIP_EDGES, crate::MAX_BASE_REQUEST_BYTES)
+            .snapshot(
+                MAX_RELATIONSHIP_EDGES,
+                crate::MAX_BASE_REQUEST_BYTES
+                    .saturating_sub(bytes)
+                    .saturating_add(4)
+                    .min(crate::MAX_BASE_REQUEST_BYTES),
+            )
             .map_err(index_error)?;
         Ok(Self {
             snapshot_id: generation.id().clone(),
