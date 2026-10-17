@@ -54,9 +54,12 @@ mutation, destination/parent rejection, folder/binary/move/delete, interrupted
 trash prefix recovery, concurrent edit CAS, same-byte replacement identity guard,
 and retained text-create recovery across two restarts. One focused Vault test
 confirms committed rename and completed backlinks survive a later CAS failure.
-CJS syntax and whitespace checks pass. Heavy TypeScript/webpack/host compilation
-and actual normal-app New folder/rename/trash plus real-host binary operations
-remain pending. No live editor window or user document was changed by this work.
+CJS syntax and whitespace checks pass. Full TypeScript checking and development
+webpack passed on source57ada91 (session72416, webpack1723ms). The native owner
+reports candidate9c61837 compiled CLI and desktop host with4883a3b and the SQLite
+lock/namespace corrections (session3348), with84 native and18 store namespace
+tests passing. Actual normal-app New folder/rename/trash plus real-host binary
+operations remain pending. No live editor window or user document was changed by this work.
 
 Platform retry follow-up: two regressions failed before the fix and pass afterward.
 A late duplicate success or terminal error cannot clear a newer pending request;
