@@ -39,11 +39,12 @@ Always JSON.stringify input before the `&str` binding so lone JavaScript UTF-16
 surrogates become JSON escapes that Rust serde can reject without replacement.
 
 After the root grants a runtime slot and builds matching current web bindings,
-serve a checkout containing this fixture, the canonical accepted corpora and the
-generated module/binary pair over local HTTP. For example:
+serve a root-prepared allowlisted asset directory containing only this fixture,
+the canonical accepted corpora and the matching generated module/binary pair.
+Keep their documented URL paths when staging. For example:
 
 ```sh
-python3 -m http.server 8765 --bind 127.0.0.1 --directory /absolute/checkout
+python3 -m http.server 8765 --bind 127.0.0.1 --directory /absolute/allowlisted-fixture-assets
 ```
 
 Open `/tests/fixtures/browser-base-semantics/index.html`. Query parameters:

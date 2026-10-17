@@ -19,12 +19,13 @@ zorid-document = { path = "../zorid-document" }
 mod document;
 ```
 
-After the root builds the current generated web bindings, serve a checkout
+After the root builds the current generated web bindings, serve the fixture assets
 containing this fixture, the current canonical corpus and those generated assets
-over local HTTP. For example, after an explicitly granted verification slot:
+from a root-prepared allowlisted asset copy. Keep the documented URL paths and
+serve only the staged files. For example, after an explicitly granted verification slot:
 
 ```sh
-python3 -m http.server 8765 --bind 127.0.0.1 --directory /absolute/checkout
+python3 -m http.server 8765 --bind 127.0.0.1 --directory /absolute/allowlisted-fixture-assets
 ```
 
 Open `/tests/fixtures/browser-document-semantics/index.html`. Defaults are:
