@@ -68,6 +68,19 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-16 23:10 local
 
+- Latest main promotion: namespace commits `82a8567` through `1a81819` include
+  retained move/delete projection and bounded per-member progress. Main-based
+  candidate `8ba5c55` passed 158 native/store/host tests, session12395 exit0;
+  evidence in `native-namespace.md`. Distributed namespace sync remains separate.
+- Desktop flush lifetime fix `e39e266` has three fail-before regressions and
+  8/8 passing focused tests. Browser transport `5681a11` through `634ab77` passed
+  11 mocked fetch/stream tests and scoped TypeScript; no actual CORS/client sync
+  claim. Browser admission and atomic storage integrations remain in progress.
+- LiveSync matrix is integrated as `5c30e20`: 27 scoped scenarios, pinned sources,
+  exact source-test references and explicit gaps. Source audit is not runtime
+  coverage. Recovery `7a54d70` is independently reviewed and now owns the heavy
+  slot; codec/text-v2/file-v2/WASM runtime gates follow. Root has no live build.
+
 - Latest promotion: `6b450d7`/`13214dd` integrate the reviewed native schema6,
   text-sync CLI, desktop-host/wrapper and shared protocol decoder batch.
   Candidate `3660c77` plus resolved lock passed 202 Rust tests (session14067),
