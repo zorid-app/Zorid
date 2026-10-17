@@ -76,10 +76,68 @@ export interface DocumentPin {
  * callers must never silently retry against a different generation. */
 export interface DocumentService {
   status():Promise<DocumentStatus>;initialize():Promise<void>;open():Promise<DocumentPin>;rebuild():Promise<void>;
-  begin():Promise<DocumentStage>;pump(stageId:DocumentStageId):Promise<DocumentStage>;publish(stageId:DocumentStageId):Promise<DocumentSnapshotId>;
+  begin():Promise<DocumentStage>;pump(stageId:DocumentStageId):Promise<DocumentStage>;publish(stageId:DocumentStageId):Promise<DocumentSnapshotId>;discard(stageId:DocumentStageId):Promise<void>;
 }
 export interface DocumentSemanticsCapability {readonly documentSemantics?:DocumentService}
 export const DOCUMENT_REQUEST_BYTES=64*1024,DOCUMENT_RESPONSE_BYTES=16*1024*1024,DOCUMENT_PAGE_LIMIT=1000;
 export class DocumentSemanticsError extends Error {
   constructor(readonly code:string){super('Shared document semantics are unavailable.');this.name='DocumentSemanticsError';}
+}
+
+
+/** Already-admitted host transport. Query payloads come directly from Rust JSON.
+ * This seam adds lifecycle ownership and validates retained generation headers. */
+export interface DocumentTransport {
+  status():Promise<unknown>;initialize():Promise<void>;rebuild():Promise<void>;
+  begin():Promise<unknown>;pump(stageId:string):Promise<unknown>;publish(stageId:string):Promise<unknown>;discard(stageId:string):Promise<void>;
+  open():Promise<unknown>;closePin(pinId:string):Promise<void>;
+  metadata(input:{pinId:string;id:string}):Promise<unknown>;
+  search(input:{pinId:string;query:string;cursor?:string;limit?:number}):Promise<unknown>;
+  backlinks(input:{pinId:string;targetId:string;cursor?:string;limit?:number}):Promise<unknown>;
+  base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number}}):Promise<unknown>;
+}
+const invalid=():never=>{throw new DocumentSemanticsError('invalid_document_response');};
+function object(value:unknown):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))return invalid();return value as Record<string,unknown>;}
+function text(value:unknown):string{if(typeof value!=='string'||!value.length)return invalid();return value;}
+function bool(value:unknown):boolean{if(typeof value!=='boolean')return invalid();return value;}
+function counter(value:unknown):string{const result=text(value);if(!/^(0|[1-9][0-9]*)$/.test(result)||result.length>20||BigInt(result)>18446744073709551615n)return invalid();return result;}
+function integer(value:unknown):number{if(typeof value!=='number'||!Number.isSafeInteger(value)||value<0)return invalid();return value;}
+export function documentSource(value:unknown):DocumentSourceId{const row=object(value);return Object.freeze({localStoreId:text(row.localStoreId),watermark:counter(row.watermark)});}
+export function documentSnapshot(value:unknown):DocumentSnapshotId{
+  const row=object(value),v=object(row.versions);
+  return Object.freeze({localStoreId:text(row.localStoreId),generationEpoch:text(row.generationEpoch),generation:counter(row.generation),versions:Object.freeze({schema:integer(v.schema),extraction:text(v.extraction),resolver:text(v.resolver),query:text(v.query)})});
+}
+function sameSource(a:DocumentSourceId,b:DocumentSourceId):boolean{return a.localStoreId===b.localStoreId&&a.watermark===b.watermark;}
+function sameSnapshot(a:DocumentSnapshotId,b:DocumentSnapshotId):boolean{return a.localStoreId===b.localStoreId&&a.generationEpoch===b.generationEpoch&&a.generation===b.generation&&a.versions.schema===b.versions.schema&&a.versions.extraction===b.versions.extraction&&a.versions.resolver===b.versions.resolver&&a.versions.query===b.versions.query;}
+function bounded(value:unknown,maximum:number,request=false):void{
+  if(request){
+    const inspect=(part:unknown,depth:number):void=>{if(depth>8)throw new DocumentSemanticsError('invalid_request');if(typeof part==='string'){for(let i=0;i<part.length;i++){const c=part.charCodeAt(i);if(c>=0xd800&&c<=0xdbff){const next=part.charCodeAt(++i);if(!(next>=0xdc00&&next<=0xdfff))throw new DocumentSemanticsError('invalid_request');}else if(c>=0xdc00&&c<=0xdfff)throw new DocumentSemanticsError('invalid_request');}}else if(part&&typeof part==='object'){for(const child of Object.values(part))inspect(child,depth+1);}};inspect(value,0);
+  }
+  const encoded=JSON.stringify(value);if(typeof encoded!=='string'||encoded.length>maximum||new TextEncoder().encode(encoded).byteLength>maximum)throw new DocumentSemanticsError(request?'request_too_large':'response_too_large');
+}
+export function documentErrorCode(error:unknown):string|undefined{return error&&typeof error==='object'&&'code'in error&&typeof error.code==='string'?error.code:undefined;}
+export function createDocumentService(transport:DocumentTransport):DocumentService{
+  const call=async<T>(input:unknown,action:()=>Promise<T>):Promise<T>=>{bounded(input,DOCUMENT_REQUEST_BYTES,true);const value=await action();if(value!==undefined)bounded(value,DOCUMENT_RESPONSE_BYTES);return value;};
+  const stage=(value:unknown):DocumentStage=>{const row=object(value),p=row.progress===null?null:object(row.progress);return Object.freeze({stageId:text(row.stageId) as DocumentStageId,snapshot:documentSnapshot(row.snapshot),progress:p===null?null:Object.freeze({prepared:integer(p.prepared),total:integer(p.total),reused:p.reused===null?null:integer(p.reused),ready:bool(p.ready)})});};
+  return {
+    async status(){const row=object(await call({},()=>transport.status()));const source=documentSource(row.source),snapshot=row.snapshot===null?null:documentSnapshot(row.snapshot),coveredSource=row.coveredSource===null?null:documentSource(row.coveredSource);if(snapshot&&snapshot.localStoreId!==source.localStoreId||coveredSource&&coveredSource.localStoreId!==source.localStoreId)return invalid();return {source,snapshot,coveredSource,current:bool(row.current),rebuildRequired:bool(row.rebuildRequired),coverageComplete:row.coverageComplete===null?null:bool(row.coverageComplete)};},
+    initialize:()=>call({},()=>transport.initialize()),rebuild:()=>call({},()=>transport.rebuild()),
+    async begin(){return stage(await call({},()=>transport.begin()));},async pump(stageId){return stage(await call({stageId},()=>transport.pump(stageId)));},
+    async publish(stageId){return documentSnapshot(await call({stageId},()=>transport.publish(stageId)));},discard:stageId=>call({stageId},()=>transport.discard(stageId)),
+    async open(){
+      const row=object(await call({},()=>transport.open())),pinId=text(row.pinId) as DocumentPinId,snapshot=documentSnapshot(row.snapshot),source=documentSource(row.source),coverageComplete=bool(row.coverageComplete);
+      if(snapshot.localStoreId!==source.localStoreId)return invalid();let closed=false,closing:Promise<void>|undefined;
+      const live=()=>{if(closed||closing)throw new DocumentSemanticsError('snapshot_expired');};
+      const report=<T>(value:unknown):DocumentQueryResult<T>=>{const result=object(value);if(!sameSnapshot(documentSnapshot(result.snapshot),snapshot)||!sameSource(documentSource(result.source),source)||bool(result.coverageComplete)!==coverageComplete)return invalid();return result as unknown as DocumentQueryResult<T>;};
+      const page=<T extends DocumentPageStatus>(value:unknown):DocumentPage<T>=>{const row=object(value),result=report<T>(row.result),p=object(result.value);if(!sameSnapshot(documentSnapshot(p.snapshot),snapshot)||p.next!==null||bool(p.coverageComplete)!==coverageComplete)return invalid();bool(p.complete);bool(p.scanComplete);if(row.cursor!==null)text(row.cursor);return {result,cursor:row.cursor as DocumentCursor|null};};
+      const limit=(value:number|undefined)=>{if(value!==undefined&&(!Number.isInteger(value)||value<1||value>DOCUMENT_PAGE_LIMIT))throw new DocumentSemanticsError('invalid_request');};
+      return Object.freeze({pinId,snapshot,source,coverageComplete,
+        close(){if(closed)return Promise.resolve();if(closing)return closing;closing=call({pinId},()=>transport.closePin(pinId)).then(()=>{closed=true;}).finally(()=>{closing=undefined;});return closing;},
+        async metadata(id:string){live();return report<DocumentMetadataRow>(await call({pinId,id},()=>transport.metadata({pinId,id})));},
+        async search(input:{query:string;cursor?:DocumentCursor|null;limit?:number}){live();limit(input.limit);const request={pinId,query:input.query,...(input.cursor==null?{}:{cursor:input.cursor}),limit:input.limit};return page<DocumentLiteralPage>(await call(request,()=>transport.search(request)));},
+        async backlinks(input:{targetId:string;cursor?:DocumentCursor|null;limit?:number}){live();limit(input.limit);const request={pinId,targetId:input.targetId,...(input.cursor==null?{}:{cursor:input.cursor}),limit:input.limit};return page<DocumentRelationshipPage>(await call(request,()=>transport.backlinks(request)));},
+        async base(input:{id:string;viewName?:string|null;options?:DocumentBaseOptions}){live();const options=input.options?{...input.options,...(input.options.searchTerms?{searchTerms:[...input.options.searchTerms]}:{}),...(input.options.ignorePaths?{ignorePaths:[...input.options.ignorePaths]}:{})}:undefined;const request={pinId,id:input.id,viewName:input.viewName,options};return report<DocumentBaseRead>(await call(request,()=>transport.base(request)));},
+      });
+    },
+  };
 }
