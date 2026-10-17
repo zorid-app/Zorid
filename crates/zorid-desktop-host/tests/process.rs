@@ -509,14 +509,13 @@ fn default_local_startup_imports_bytes_and_mutates_without_relay_credentials() {
 #[test]
 fn incomplete_discovery_keeps_host_live_without_claiming_first_import_ready_on_restart() {
     let root = tempfile::tempdir().unwrap();
-    for index in 0..257 {
-        std::fs::create_dir(root.path().join(format!("folder-{index:03}"))).unwrap();
-    }
-    std::fs::write(
-        root.path().join("not-yet-imported.md"),
-        b"Retain exact disk bytes",
-    )
-    .unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("retained.md");
+    std::fs::write(&outside_file, b"Retain exact outside bytes").unwrap();
+    let blocked_link = root.path().join("blocked-link.md");
+    // An unsupported link deterministically keeps discovery incomplete without
+    // relying on a directory-count ceiling or how quickly a scan can finish.
+    std::os::unix::fs::symlink(&outside_file, &blocked_link).unwrap();
     let mut scope = Value::Null;
     for _ in 0..2 {
         let mut host = Host::spawn_options(root.path(), None, true);
@@ -526,10 +525,19 @@ fn incomplete_discovery_keeps_host_live_without_claiming_first_import_ready_on_r
         assert_eq!(diagnostic["complete"], false, "{diagnostic}");
         assert_eq!(diagnostic["scanComplete"], false);
         assert!(diagnostic["issueCount"].as_u64().unwrap() > 0);
-        assert!(diagnostic["issues"].as_array().unwrap().len() <= 32);
+        let issues = diagnostic["issues"].as_array().unwrap();
+        assert!(issues.len() <= 32);
+        assert!(issues
+            .iter()
+            .any(|issue| issue["path"] == "blocked-link.md"));
+        assert_eq!(diagnostic["imported"], 0);
         let current = host.request(json!({"method":"local_family_status"}), &[]).0["result"]
             ["family"]["scope"]
             .clone();
+        assert!(
+            !current.is_null(),
+            "local authority must exist despite incomplete import"
+        );
         if scope.is_null() {
             scope = current;
         } else {
@@ -541,9 +549,14 @@ fn incomplete_discovery_keeps_host_live_without_claiming_first_import_ready_on_r
         host.close();
     }
     assert_eq!(
-        std::fs::read(root.path().join("not-yet-imported.md")).unwrap(),
-        b"Retain exact disk bytes"
+        std::fs::read(&outside_file).unwrap(),
+        b"Retain exact outside bytes"
     );
+    assert!(std::fs::symlink_metadata(&blocked_link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read_link(&blocked_link).unwrap(), outside_file);
 }
 
 #[test]
@@ -557,17 +570,45 @@ fn incomplete_later_discovery_keeps_previously_imported_notes_readable() {
     let mut host = Host::spawn_options(root.path(), None, true);
     assert_eq!(host.recv().0["result"]["reconciliation"]["complete"], true);
     host.close();
-    for index in 0..257 {
-        std::fs::create_dir(root.path().join(format!("folder-{index:03}"))).unwrap();
-    }
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("retained.md");
+    std::fs::write(
+        &outside_file,
+        b"Outside bytes must never be imported or changed",
+    )
+    .unwrap();
+    let blocked_link = root.path().join("blocked-link.md");
+    std::os::unix::fs::symlink(&outside_file, &blocked_link).unwrap();
     let mut host = Host::spawn_options(root.path(), None, true);
     let startup = host.recv().0;
     assert_eq!(startup["ok"], true, "{startup}");
-    assert_eq!(startup["result"]["reconciliation"]["complete"], false);
-    assert_eq!(
-        host.request(json!({"method":"read_path","path":"usable.md"}), &[])
-            .1,
-        b"Existing authority remains usable"
-    );
+    let diagnostic = &startup["result"]["reconciliation"];
+    assert_eq!(diagnostic["complete"], false);
+    assert!(diagnostic["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["path"] == "blocked-link.md"));
+    let (read, bytes) = host.request(json!({"method":"read_path","path":"usable.md"}), &[]);
+    assert_eq!(read["ok"], true, "{read}");
+    assert_eq!(bytes, b"Existing authority remains usable");
+    let listed = host.request(json!({"method":"list_snapshot"}), &[]).0;
+    assert_eq!(listed["ok"], true, "{listed}");
+    let entries = listed["result"]["entries"].as_array().unwrap();
+    assert!(entries
+        .iter()
+        .any(|entry| entry["state"]["path"] == "usable.md"));
+    assert!(!entries
+        .iter()
+        .any(|entry| entry["state"]["path"] == "blocked-link.md"));
     host.close();
+    assert_eq!(
+        std::fs::read(&outside_file).unwrap(),
+        b"Outside bytes must never be imported or changed"
+    );
+    assert!(std::fs::symlink_metadata(&blocked_link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read_link(&blocked_link).unwrap(), outside_file);
 }
