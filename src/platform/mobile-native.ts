@@ -9,6 +9,7 @@ import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints
 /** Native chooses/opens the vault before loading the editor. No vault root crosses this API. */
 export interface NativeVaultPlugin {
   context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string; createNoteOnOpen?: boolean }>;
+  presentationSettled?(input: NativePresentationSettled): Promise<void>;
   noteOpened(input: { path: string; entryId: string }): Promise<void>;
   refresh(): Promise<{ reconciliation: DesktopReconciliation }>;
   request(input: { header: string; body: string }): Promise<{ header: string; body: string }>;
@@ -18,6 +19,7 @@ export interface NativeVaultPlugin {
   addListener(event: 'lifecycleRequest', handler: (event: { id: string; reason: MobileLifecycleReason }) => void): Promise<{ remove(): Promise<void> }>;
   lifecycleAck(input: { id: string; ok: boolean }): Promise<void>;
 }
+export interface NativePresentationSettled { path: string; entryId: string; state: 'ready' | 'password' | 'error' }
 export type MobileLifecycleReason = 'background' | 'switchVault';
 export interface MobileLifecycle {
   subscribe(handler: (reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>): () => void;
@@ -31,7 +33,7 @@ export interface NativeEditorBridge {
 const editorActions = new Set<string>(['insertLink','insertTable','insertCodeBlock','insertHorizontalRule','bold','italic','strikethrough','inlineCode','undo','redo','dismissKeyboard']);
 const disabledEditorState: Readonly<NativeEditorState> = Object.freeze({ focused: false, editable: false, canUndo: false, canRedo: false });
 // Keep this owned surface until the coordinator lands the PlatformVault declaration.
-type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; nativeEditor: NativeEditorBridge; editorOnly: true; createNoteOnOpen?: boolean; initialPath?: string; initialEntryId?: string; noteOpened(path: string, entryId: string): Promise<void> };
+type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; nativeEditor: NativeEditorBridge; editorOnly: true; createNoteOnOpen?: boolean; initialPath?: string; initialEntryId?: string; noteOpened(path: string, entryId: string): Promise<void>; presentationSettled(input: NativePresentationSettled): Promise<void> };
 const FILE_LIMIT = 16 * 1024 * 1024, PLAN_LIMIT = 8 * 1024 * 1024, CHECKPOINT_LIMIT = 32 * 1024 * 1024;
 const encoder = new TextEncoder(), decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 // Wire objects are validated at their consumer boundary; never cast them to editor state directly.
@@ -109,7 +111,8 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   let releasePromise: Promise<void> | undefined, leaseReleased = false;
   let lifecycleHandler: ((reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>) | undefined;
   let lifecycleTask: Promise<void> | undefined, lifecycleBusyId: string | undefined;
-  let lifecycleStopped = false;
+  let lifecycleStopped = false, lifecycleEpoch = 0;
+  let presentationTail: Promise<void> = Promise.resolve(), presentationGeneration = 0;
   let tail: Promise<unknown> = Promise.resolve(), serialTail: Promise<unknown> = Promise.resolve();
   let requestId = 0n, closed = false, closing = false, lease: Wire | undefined;
   const listeners = new Set<(paths?: readonly string[]) => void>();
@@ -236,7 +239,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     if (typeof event?.id !== 'string' || !uuid(event.id)) return;
     if (lifecycleBusyId === event.id) return; // Duplicate delivery shares the original outcome.
     if (lifecycleTask || lifecycleStopped || closed || closing || releasePromise || !['background','switchVault'].includes(event.reason)) { void rejectLifecycle(event.id); return; }
-    lifecycleBusyId = event.id;
+    lifecycleBusyId = event.id; lifecycleEpoch++;
     const handler = lifecycleHandler;
     // Pause publication without replacing the workspace's latest state. A
     // handler may await setState while native still requires a negative ACK.
@@ -692,6 +695,24 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     },
   };
   return { adapter, mobileLifecycle, nativeEditor, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
+    async presentationSettled(input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || !sameKeys(input,['path','entryId','state'])) throw fail('invalid_presentation_settled');
+      let captured: NativePresentationSettled;
+      try {
+        captured = Object.freeze({ path: nativeNotePath(input.path), entryId: input.entryId, state: input.state });
+        if (!id(captured.entryId) || !['ready','password','error'].includes(captured.state)) throw 0;
+      } catch { throw fail('invalid_presentation_settled'); }
+      const epoch = lifecycleEpoch, generation = ++presentationGeneration;
+      const current = () => !closed && !closing && !releasePromise && !lifecycleTask && epoch === lifecycleEpoch && generation === presentationGeneration;
+      if (!current() || typeof bridge.presentationSettled !== 'function') return;
+      // UI-only metadata. Never join this optional call to a save, admission,
+      // lifecycle ACK or release; native also verifies the current path/ID.
+      const task = presentationTail.then(async () => {
+        if (!current()) return;
+        try { await bridge.presentationSettled?.(captured); } catch { /* Optional skeleton dismissal cannot fail editing or saving. */ }
+      });
+      presentationTail = task.catch(() => {}); await task;
+    },
     async noteOpened(path,entryId) {
       active(); if (releasePromise) throw fail('storage_closed');
       const captured = nativeNotePath(path);
@@ -723,6 +744,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     }),
     release() {
       if (releasePromise) return releasePromise;
+      lifecycleEpoch++; presentationGeneration++;
       stopNativeEditor(); stopPolling();
       releasePromise = (async () => {
         // Flush admitted consumers before retiring the native client lease.

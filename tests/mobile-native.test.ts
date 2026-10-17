@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import { openNativeMobileVault, type NativeVaultPlugin, type MobileLifecycleReason, type NativeEditorAction, type NativeEditorState } from '../src/platform/mobile-native.ts';
+import { openNativeMobileVault, type NativeVaultPlugin, type MobileLifecycleReason, type NativeEditorAction, type NativeEditorState, type NativePresentationSettled } from '../src/platform/mobile-native.ts';
 
 const clientId = 'a1b2c3d4-abcd-4abc-8abc-abcdef012345';
 const entryUuid='c3d4e5f6-cdef-4cde-acde-cdef01234567';
@@ -874,4 +874,55 @@ test('unsubscribe drains an in-flight state-query callback before removing both 
   const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),entered=deferred();
   const stop=v.nativeEditor.subscribe(()=>{},async()=>{entered.resolve();await gate.promise;await v.nativeEditor.setState(enabledEditor);});await until(()=>f.requestInstalls===1);f.stateRequest();await entered.promise;stop();
   await new Promise<void>(r=>setImmediate(r));assert.equal(f.requestRemovals,0);assert.equal(f.actionRemovals,0);gate.resolve();await until(()=>f.requestRemovals===1&&f.actionRemovals===1);assert.equal(f.editorStates.some(s=>s.focused),false);await v.release!();
+});
+
+const readyPresentation:NativePresentationSettled={path:'資料/你好.md',entryId:'Opaque_Case-1',state:'ready'};
+
+test('presentation settlement forwards exact bounded metadata and never records activation history',async()=>{
+  const f=fixture(),received:NativePresentationSettled[]=[];f.plugin.presentationSettled=async input=>{received.push({...input});};
+  const v=await openNativeMobileVault(f.plugin),before=f.requests.length;
+  for(const state of ['ready','password','error'] as const)await v.presentationSettled({...readyPresentation,state});
+  assert.deepEqual(received,['ready','password','error'].map(state=>({...readyPresentation,state})));
+  assert.deepEqual(f.openedRefs,[]);assert.equal(f.requests.length,before);assert.equal(f.heads.size,0);await v.release!();
+});
+
+test('presentation settlement rejects malformed DTO and secret/error-body fields before dispatch',async()=>{
+  const f=fixture();let calls=0;f.plugin.presentationSettled=async()=>{calls++;};const v=await openNativeMobileVault(f.plugin);
+  for(const input of [null,[],{}, {...readyPresentation,state:'loading'},{...readyPresentation,path:'../Note.md'},{...readyPresentation,entryId:'bad id'}, {...readyPresentation,password:'secret'}, {...readyPresentation,errorBody:'content'}])await assert.rejects(v.presentationSettled(input as any),{code:'invalid_presentation_settled'});
+  assert.equal(calls,0);await v.release!();
+});
+
+test('missing or rejected optional presentation method cannot fail editing or saves',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);await v.presentationSettled(readyPresentation);
+  f.plugin.presentationSettled=async()=>{throw new Error('old native plugin has no presentation method');};await v.presentationSettled({...readyPresentation,state:'error'});
+  await v.adapter.write('Note.md','saved despite optional presentation');assert.equal(f.content,'saved despite optional presentation');assert.deepEqual(f.openedRefs,[]);await v.release!();
+});
+
+test('presentation snapshots caller data and coalesces stale queued settlements',async()=>{
+  const f=fixture(),gate=deferred(),received:NativePresentationSettled[]=[];f.plugin.presentationSettled=async input=>{received.push({...input});if(received.length===1)await gate.promise;};const v=await openNativeMobileVault(f.plugin);
+  const first=v.presentationSettled(readyPresentation);await until(()=>received.length===1);
+  const stale=v.presentationSettled({...readyPresentation,state:'error'}),input={...readyPresentation,path:'latest.md'};const latest=v.presentationSettled(input);input.path='mutated.md';
+  gate.resolve();await Promise.all([first,stale,latest]);assert.deepEqual(received,[readyPresentation,{...readyPresentation,path:'latest.md'}]);await v.release!();
+});
+
+test('pending lifecycle settlement and queued previous epoch cannot dismiss successor presentation',async()=>{
+  const f=fixture(),gate=deferred(),negative=deferred(),received:NativePresentationSettled[]=[];f.plugin.presentationSettled=async input=>{received.push({...input});if(received.length===1)await gate.promise;};
+  const v=await openNativeMobileVault(f.plugin),first=v.presentationSettled(readyPresentation);await until(()=>received.length===1);const stale=v.presentationSettled({...readyPresentation,path:'stale.md'});
+  v.mobileLifecycle.subscribe(async()=>{await negative.promise;throw new Error('switch canceled');});f.emit('switchVault');await v.presentationSettled({...readyPresentation,path:'during-lifecycle.md'});
+  negative.resolve();await until(()=>f.acks.some(a=>!a.ok));await new Promise<void>(r=>setImmediate(r));const fresh=v.presentationSettled({...readyPresentation,path:'current.md'});
+  gate.resolve();await Promise.all([first,stale,fresh]);assert.deepEqual(received,[readyPresentation,{...readyPresentation,path:'current.md'}]);await v.release!();
+});
+
+test('stalled presentation callback does not block save/release and queued old-platform notifications drop',async()=>{
+  const f=fixture(),gate=deferred(),received:NativePresentationSettled[]=[];f.plugin.presentationSettled=async input=>{received.push({...input});if(received.length===1)await gate.promise;};
+  const first=await openNativeMobileVault(f.plugin),pending=first.presentationSettled(readyPresentation);await until(()=>received.length===1);const stale=first.presentationSettled({...readyPresentation,path:'queued-old.md'});
+  await first.adapter.write('Note.md','save while skeleton callback waits');await first.release!();
+  const successor=await openNativeMobileVault(f.plugin);await first.presentationSettled({...readyPresentation,path:'released.md'});gate.resolve();await Promise.all([pending,stale]);
+  assert.deepEqual(received,[readyPresentation]);await successor.presentationSettled({...readyPresentation,path:'successor.md'});assert.equal(received.at(-1)!.path,'successor.md');await successor.release!();
+});
+
+test('successful switch drops pending presentation notifications and later calls',async()=>{
+  const f=fixture(),gate=deferred(),done=deferred(),received:NativePresentationSettled[]=[];f.plugin.presentationSettled=async input=>{received.push({...input});await gate.promise;};
+  const v=await openNativeMobileVault(f.plugin),first=v.presentationSettled(readyPresentation);await until(()=>received.length===1);const queued=v.presentationSettled({...readyPresentation,state:'password'});
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('switchVault');await done.promise;await v.presentationSettled({...readyPresentation,state:'error'});gate.resolve();await Promise.all([first,queued]);assert.equal(received.length,1);await v.release!();
 });
