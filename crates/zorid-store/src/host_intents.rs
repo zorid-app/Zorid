@@ -121,15 +121,18 @@ fn view(tx: &Connection, reference: &HostIntentRef) -> Result<Option<HostIntentV
         }
         let receipt = tx
             .query_row(
-                "SELECT result,request=(SELECT request FROM host_intents WHERE client_id=?2 AND token=?3) FROM operations WHERE operation_id=?1",
+                "SELECT o.result,o.request,h.request FROM operations o JOIN host_intents h ON h.client_id=?2 AND h.token=?3 WHERE o.operation_id=?1",
                 params![operation_id.as_str(),reference.client_id.as_str(),reference.token.as_str()],
-                |r| Ok((r.get::<_, String>(0)?,r.get::<_,bool>(1)?)),
+                |r| Ok((r.get::<_, String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)),
             )
             .optional()?
-            .map(|(json, exact_request)| -> Result<CommitResult> {
-                if !exact_request { return Err(StoreError::Corrupt("host intent differs from durable receipt request".into())); }
-                let result: CommitResult = serde_json::from_str(&json)?;
-                result.validate()?;
+            .map(|(json, raw_request, intent_request)| -> Result<CommitResult> {
+                let intent: MutationRequest = serde_json::from_str(&intent_request)?;
+                intent.validate()?;
+                if intent.operation_id != operation_id || intent.mutation.id() != &entry_id {
+                    return Err(StoreError::Corrupt("host intent request identity mismatch".into()));
+                }
+                let result = operation_request::replay_inline_with_mode(&intent, None, &raw_request, &json)?;
                 if result.operation_id != operation_id
                     || !result.changes.iter().any(|c| c.after.id == entry_id)
                 {
@@ -194,18 +197,10 @@ fn prior(tx: &Connection, request: &MutationRequest) -> Result<Option<CommitResu
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
         .optional()?;
-    let record = raw
-        .map(|(a, b)| -> Result<RecordedOperation> {
-            Ok(RecordedOperation {
-                request: serde_json::from_str(&a)?,
-                result: serde_json::from_str(&b)?,
-            })
-        })
-        .transpose()?;
-    match check_idempotency(request, record.as_ref())? {
-        IdempotencyCheck::New => Ok(None),
-        IdempotencyCheck::Replay(r) => Ok(Some(r.clone())),
-    }
+    raw.map(|(raw, result)| {
+        operation_request::replay_inline_with_mode(request, None, &raw, &result)
+    })
+    .transpose()
 }
 /// Called under the same write transaction before ordinary mutation planning.
 pub(crate) fn check_execution(tx: &Connection, command: &MutationRequest) -> Result<()> {
@@ -266,6 +261,35 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Binary intent bytes must never become a second durable body in this
+        // generic checkpoint journal. Enrolled binary clients authorize their
+        // opaque stage; the editor's bounded Text intent keeps this protocol.
+        let authority = text_sync::identity(&tx)?;
+        if let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) {
+            let metadata =
+                blob_index::load_metadata(&tx, &zorid_file_sync::Scope { realm_id, vault_id })?
+                    .ok_or_else(|| StoreError::Corrupt("enrolled intent graph missing".into()))?;
+            match &command.mutation {
+                Mutation::Write { id, content, .. }
+                    if metadata.metadata_view()?.content_bindings().get(id)
+                        == Some(&zorid_file_sync::v2::ContentBinding::Binary) =>
+                {
+                    return Err(StoreError::StreamRequired {
+                        bytes: content.len() as u64,
+                        limit: 0,
+                    });
+                }
+                Mutation::Create {
+                    kind: EntryKind::File,
+                    ..
+                } => {
+                    return Err(invalid(
+                        "enrolled file creation requires a mode-bound family command",
+                    ));
+                }
+                _ => {}
+            }
+        }
         let existing = tx
             .query_row(
                 "SELECT client_id,token FROM host_intents WHERE operation_id=?1",
@@ -441,5 +465,195 @@ impl Store {
             next_cursor,
             has_more,
         })
+    }
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+    use crate::content::BinaryStageLocator;
+    use crate::operation_request::{
+        BinaryOperationRequest, InlineCallCommitment, OperationRequest,
+    };
+    use zorid_core::VaultPath;
+    use zorid_file_sync::{Manifest, PageRef, Sha256Digest};
+    use zorid_sync_protocol::UpdateId;
+
+    #[test]
+    fn normalized_binary_write_intent_replays_receipt_after_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.db");
+        let mut store = Store::open(&path).unwrap();
+        let id = EntryId::new("file").unwrap();
+        let client = OperationId::new("desktop").unwrap();
+        store
+            .apply(&MutationRequest {
+                operation_id: OperationId::new("create").unwrap(),
+                mutation: Mutation::Create {
+                    id: id.clone(),
+                    path: VaultPath::new("file.bin").unwrap(),
+                    kind: EntryKind::File,
+                    content: Some(vec![0]),
+                },
+            })
+            .unwrap();
+        let expected_revision = store.read(&id).unwrap().unwrap().state.revision;
+        let content = vec![255, 0, 1];
+        let request = MutationRequest {
+            operation_id: OperationId::new("write").unwrap(),
+            mutation: Mutation::Write {
+                id: id.clone(),
+                expected: expected_revision.clone(),
+                content: content.clone(),
+            },
+        };
+        let prepared = store.prepare_host_intent(&client, &request).unwrap();
+        let reference = HostIntentRef {
+            client_id: client.clone(),
+            token: prepared.token,
+        };
+        store.request_host_commit(&reference).unwrap();
+        let receipt = store.apply(&request).unwrap();
+        // Normalize only the already committed request fixture. This tests
+        // receipt decoding, not stage/source verification or binary activation.
+        let mut normalized = BinaryOperationRequest {
+            stage: BinaryStageLocator {
+                local_store_id: store.identity().unwrap().local_store_id,
+                client_id: client.clone(),
+                operation_id: request.operation_id.clone(),
+                stage_id: OperationId::new("stage").unwrap(),
+            },
+            request: BinaryStageRequest {
+                target: BinaryTarget::Write {
+                    id: id.clone(),
+                    expected_revision,
+                    expected_content_event: UpdateId::new("selected-before").unwrap(),
+                },
+                expected_length: Some(content.len() as u64),
+            },
+            manifest: Manifest {
+                bytes: content.len() as u64,
+                digest: Sha256Digest::of(&content),
+                pages: vec![PageRef {
+                    id: UpdateId::new("page").unwrap(),
+                    bytes: content.len() as u64,
+                    digest: Sha256Digest::of(b"page"),
+                }],
+            },
+            source_commitment: Sha256Digest::of(b"durable-source-commitment"),
+            original_inline: Some(InlineCallCommitment::from_request(&request, None).unwrap()),
+        };
+        store
+            .connection
+            .execute(
+                "UPDATE operations SET request=?1 WHERE operation_id=?2",
+                params![
+                    serde_json::to_string(&OperationRequest::BinaryRef(normalized.clone()))
+                        .unwrap(),
+                    request.operation_id.as_str()
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .query_host_intent(&reference)
+                .unwrap()
+                .unwrap()
+                .receipt,
+            Some(receipt.clone())
+        );
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(
+            store
+                .query_host_intent(&reference)
+                .unwrap()
+                .unwrap()
+                .receipt,
+            Some(receipt.clone())
+        );
+        assert_eq!(
+            store.list_host_intents(&client, "0", 10).unwrap().intents[0].receipt,
+            Some(receipt.clone())
+        );
+        assert_eq!(store.request_host_commit(&reference).unwrap(), request);
+        let acknowledged = store
+            .acknowledge_host_intent(
+                &reference,
+                &HostIntentAcknowledgment::Committed {
+                    operation_id: request.operation_id.clone(),
+                    sequence: receipt.sequence.to_string(),
+                },
+            )
+            .unwrap();
+        assert!(acknowledged.acknowledged);
+        assert_eq!(acknowledged.receipt, Some(receipt));
+        normalized.original_inline = None;
+        store
+            .connection
+            .execute(
+                "UPDATE operations SET request=?1 WHERE operation_id=?2",
+                params![
+                    serde_json::to_string(&OperationRequest::BinaryRef(normalized)).unwrap(),
+                    request.operation_id.as_str()
+                ],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.query_host_intent(&reference),
+            Err(StoreError::Contract(
+                ContractError::IdempotencyConflict { .. }
+            ))
+        ));
+    }
+}
+
+#[cfg(test)]
+mod binary_checkpoint_policy_tests {
+    use super::*;
+    use zorid_core::VaultPath;
+    #[test]
+    fn enrolled_binary_bytes_never_enter_generic_intent_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("vault")).unwrap();
+        store
+            .family_enroll(&zorid_file_sync::Scope {
+                realm_id: zorid_sync_protocol::RealmId::new("realm").unwrap(),
+                vault_id: zorid_sync_protocol::VaultId::new("vault").unwrap(),
+            })
+            .unwrap();
+        let entry = EntryId::new("binary").unwrap();
+        store
+            .family_apply(
+                &MutationRequest {
+                    operation_id: OperationId::new("create").unwrap(),
+                    mutation: Mutation::Create {
+                        id: entry.clone(),
+                        path: VaultPath::new("binary.bin").unwrap(),
+                        kind: EntryKind::File,
+                        content: Some(vec![]),
+                    },
+                },
+                Some(FamilyCreateMode::Binary),
+            )
+            .unwrap();
+        let state = store.read_metadata(&entry).unwrap().unwrap().state;
+        let request = MutationRequest {
+            operation_id: OperationId::new("write").unwrap(),
+            mutation: Mutation::Write {
+                id: entry,
+                expected: state.revision,
+                content: vec![],
+            },
+        };
+        assert!(matches!(
+            store.prepare_host_intent(&OperationId::new("client").unwrap(), &request),
+            Err(StoreError::StreamRequired { bytes: 0, limit: 0 })
+        ));
+        let count: i64 = store
+            .connection
+            .query_row("SELECT count(*) FROM host_intents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

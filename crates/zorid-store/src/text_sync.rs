@@ -151,36 +151,17 @@ pub(super) fn reserve_revision(tx: &Connection, revision: &Revision) -> Result<(
     Ok(())
 }
 fn stored_entry(tx: &Connection, id: &EntryId) -> Result<StoredEntry> {
-    let raw = tx
-        .query_row(
-            "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND visible=1",
-            [id.as_str()],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, Option<Vec<u8>>>(3)?,
-                ))
-            },
-        )
-        .optional()?
+    let entry = entry_content::read_legacy_entry(tx, id)?
         .ok_or_else(|| ContractError::EntryNotFound { id: id.clone() })?;
-    let state = decode_state(id.as_str(), &raw.0, raw.1, &raw.2, raw.3.is_some())?;
-    if state.deleted {
-        return Err(ContractError::EntryDeleted { id: id.clone() }.into());
-    }
-    if state.kind != EntryKind::File {
+    if entry.state.kind != EntryKind::File {
         return Err(ContractError::InvalidMutation {
             reason: "managed text target must be a file".into(),
         }
         .into());
     }
-    Ok(StoredEntry {
-        state,
-        content: raw.3,
-    })
+    Ok(entry)
 }
+
 pub(super) fn revision(
     tx: &Connection,
     id: &EntryId,
@@ -311,7 +292,7 @@ pub(super) fn baseline(
     revision(tx, &physical.state.id, &physical.state.revision)?
         .map(|state| {
             let bytes = state.materialized_utf8()?;
-            if bytes != physical.content {
+            if physical.content.inline_bytes() != Some(bytes.as_slice()) {
                 return Err(StoreError::Corrupt(
                     "physical baseline bytes and causal revision disagree".into(),
                 ));
@@ -651,11 +632,12 @@ impl Store {
                     stored_entry_content(&tx, &change.after.id)?
                 };
                 tx.execute(
-                    "UPDATE entries SET state=?1,content=?2 WHERE id=?3",
+                    "UPDATE entries SET state=?1,content=?2,content_ref=NULL,content_digest=?4 WHERE id=?3",
                     params![
                         serde_json::to_string(&change.after)?,
                         content,
-                        change.after.id.as_str()
+                        change.after.id.as_str(),
+                        content.as_ref().map(|bytes| serde_json::to_string(&Sha256Digest::of(bytes))).transpose()?
                     ],
                 )?;
             }
@@ -697,11 +679,15 @@ impl Store {
     }
 }
 fn stored_entry_content(tx: &Connection, id: &EntryId) -> Result<Option<Vec<u8>>> {
-    Ok(tx.query_row(
-        "SELECT content FROM entries WHERE id=?1",
-        [id.as_str()],
-        |r| r.get(0),
-    )?)
+    let entry = entry_content::read_content_entry(tx, id)?
+        .ok_or_else(|| StoreError::Corrupt("text sibling entry missing".into()))?;
+    match entry.1 {
+        None => Ok(None),
+        Some(StoredContent::InlineBytes(bytes)) => Ok(Some(bytes)),
+        Some(StoredContent::BinaryRef(_)) => Err(StoreError::Corrupt(
+            "text receive cannot inline a binary sibling".into(),
+        )),
+    }
 }
 
 pub(super) fn check_namespace(
@@ -947,10 +933,7 @@ impl Store {
                 [operation.as_str()],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
-            let record = RecordedOperation {
-                request: serde_json::from_str(&request)?,
-                result: serde_json::from_str(&result)?,
-            };
+            let record = operation_request::decode_inline_record(&request, &result, operation)?;
             check_idempotency(&record.request, Some(&record))?;
             if record.request.operation_id != *id
                 || !matches!(&record.request.mutation,Mutation::Write{id:entry,..} if observation.baseline.as_ref().is_some_and(|b|b.state.id==*entry))

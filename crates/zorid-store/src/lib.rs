@@ -3,14 +3,37 @@
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
+mod binary_commit;
+mod blob_read;
+mod capture_authorization;
+mod entry_content;
+mod family_metadata_transactions;
+mod immutable_payloads;
+mod operation_request;
+pub use binary_commit::{
+    BinaryStageCommit, BinaryStageRejection, BinaryStageRejectionCode, BinaryStageTerminal,
+    BINARY_COMMIT_MAX_RECEIPT_BYTES,
+};
+pub use blob_read::{
+    BinaryReadChunk, BinaryReadRef, BinaryReadSession, BINARY_READ_MAX_ACTIVE_PINS,
+    BINARY_READ_MAX_RANGE_BYTES,
+};
+pub use entry_content::FAMILY_MAX_INLINE_BYTES;
+pub use family_external_create::ExternalCreateIntent;
+pub use operation_request::{
+    BinaryOperationRequest, InlineCallCommitment, InlineCallTarget, OperationRequest,
+    StoredOperation,
+};
+pub use zorid_file_sync::Sha256Digest;
 mod blob_index;
 mod blob_stage;
 mod checkpoints;
 mod content;
+pub use blob_stage::BinaryCaptureRequest as CaptureRequest;
 pub use blob_stage::{
-    BinaryStageRef, BinaryStageRequest, BinaryStageStatus, BinaryTarget, StageChunkReceipt,
-    StagePhase, StagedBinaryRef, StreamingLimits, BINARY_STAGE_MAX_CHUNK_BYTES,
-    BINARY_STAGE_MAX_FILE_BYTES, BINARY_STAGE_MAX_PAYLOAD_BYTES,
+    BinaryCaptureRequest, BinaryStageRef, BinaryStageRequest, BinaryStageStatus, BinaryTarget,
+    StageChunkReceipt, StagePhase, StagedBinaryRef, StreamingLimits, BINARY_STAGE_MAX_CHUNK_BYTES,
+    BINARY_STAGE_MAX_FILE_BYTES, BINARY_STAGE_MAX_PATH_BYTES, BINARY_STAGE_MAX_PAYLOAD_BYTES,
 };
 pub use content::{
     BinarySourceRef, BinaryStageLocator, CapturedBinaryRef, ContentMetadata, PublishedBinaryRef,
@@ -43,8 +66,9 @@ pub use checkpoints::{
 };
 mod namespace;
 pub use namespace::{
-    NamespaceAttempt, NamespaceAttemptMetadata, NamespaceEvidence, NamespaceMember,
-    NamespaceMemberMetadata, MAX_NAMESPACE_EVIDENCE_BYTES, MAX_NAMESPACE_MEMBERS,
+    namespace_content_evidence_bytes, NamespaceAttempt, NamespaceAttemptMetadata,
+    NamespaceEvidence, NamespaceMember, NamespaceMemberMetadata, MAX_NAMESPACE_EVIDENCE_BYTES,
+    MAX_NAMESPACE_MEMBERS,
 };
 mod host_intents;
 pub use host_intents::{
@@ -76,10 +100,17 @@ use zorid_core::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
+pub const DEFAULT_STREAMING_LIMITS: StreamingLimits = StreamingLimits {
+    max_active_stages: 8,
+    max_stage_records: 4096,
+    max_staged_bytes: 512 * 1024 * 1024,
+    max_chunk_records: 4096,
+    max_page_records: 256,
+};
 const APPLICATION_ID: i64 = 0x5a4f5244; // ZORD
 const SCHEMA: &[(&str, &str)] = &[
-    ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB, visible INTEGER NOT NULL DEFAULT 1 CHECK(visible IN (0,1)))"),
+    ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB, visible INTEGER NOT NULL DEFAULT 1 CHECK(visible IN (0,1)), content_ref TEXT, content_digest TEXT)"),
     ("live_paths", "CREATE UNIQUE INDEX live_paths ON entries(path) WHERE deleted = 0 AND visible = 1"),
     ("operations", "CREATE TABLE operations (sequence INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL UNIQUE, request TEXT NOT NULL, result TEXT)"),
     ("outbox", "CREATE TABLE outbox (sequence INTEGER PRIMARY KEY REFERENCES operations(sequence))"),
@@ -101,10 +132,13 @@ fn schema_objects() -> Vec<(&'static str, &'static str)> {
         .chain(family_commands::SCHEMA)
         .chain(family_external_create::SCHEMA)
         .chain(family_external_namespace::SCHEMA)
+        .chain(immutable_payloads::SCHEMA)
         .chain(family_ledger::SCHEMA)
         .chain(file_state::SCHEMA)
         .chain(blob_index::SCHEMA)
         .chain(blob_stage::SCHEMA)
+        .chain(blob_read::SCHEMA)
+        .chain(binary_commit::SCHEMA)
         .chain(family_materialization::SCHEMA)
         .copied()
         .collect()
@@ -194,24 +228,15 @@ fn decode_state(
 }
 
 fn read_states(connection: &Connection, include_deleted: bool) -> Result<Vec<EntryState>> {
-    let mut stmt = connection.prepare(
-        "SELECT id,path,deleted,state,content IS NOT NULL FROM entries WHERE visible=1 AND (?1 OR deleted=0) ORDER BY path"
-    )?;
-    let records = stmt
-        .query_map([include_deleted], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, bool>(4)?,
-            ))
-        })?
+    let ids = connection
+        .prepare("SELECT id FROM entries WHERE visible=1 AND (?1 OR deleted=0) ORDER BY path")?
+        .query_map([include_deleted], |r| r.get::<_, String>(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    records
-        .into_iter()
-        .map(|(id, path, deleted, json, has_content)| {
-            decode_state(&id, &path, deleted, &json, has_content)
+    ids.into_iter()
+        .map(|id| {
+            entry_content::read_metadata_row(connection, &EntryId::new(id)?)?
+                .map(|entry| entry.state)
+                .ok_or_else(|| StoreError::Corrupt("listed entry disappeared".into()))
         })
         .collect()
 }
@@ -242,7 +267,7 @@ impl fmt::Display for StoreError {
         match self {
             Self::StreamRequired { bytes, limit } => write!(
                 f,
-                "content requires streaming ({bytes} bytes exceeds inline limit {limit})"
+                "content requires streaming ({bytes} bytes; inline limit {limit})"
             ),
             Self::ReloadRequired(reason) => {
                 write!(f, "Coherent snapshot reload required: {reason:?}")
@@ -390,10 +415,13 @@ impl Store {
                 .chain(family_commands::SCHEMA)
                 .chain(family_external_create::SCHEMA)
                 .chain(family_external_namespace::SCHEMA)
+                .chain(immutable_payloads::SCHEMA)
                 .chain(family_ledger::SCHEMA)
                 .chain(file_state::SCHEMA)
                 .chain(blob_index::SCHEMA)
                 .chain(blob_stage::SCHEMA)
+                .chain(blob_read::SCHEMA)
+                .chain(binary_commit::SCHEMA)
                 .chain(family_materialization::SCHEMA)
             {
                 tx.execute_batch(sql)?;
@@ -409,30 +437,17 @@ impl Store {
     }
 
     pub fn list(&self) -> Result<Vec<EntryState>> {
-        read_states(&self.connection, false)
+        let tx = self.connection.unchecked_transaction()?;
+        let states = read_states(&tx, false)?;
+        tx.commit()?;
+        Ok(states)
     }
 
     pub fn read(&self, id: &EntryId) -> Result<Option<StoredEntry>> {
-        self.connection
-            .query_row(
-                "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND visible=1",
-                [id.as_str()],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, Option<Vec<u8>>>(3)?,
-                    ))
-                },
-            )
-            .optional()?
-            .map(|(path, deleted, json, content)| {
-                let state = decode_state(id.as_str(), &path, deleted, &json, content.is_some())?;
-                Ok(StoredEntry { state, content })
-            })
-            .transpose()
-            .map(|entry: Option<StoredEntry>| entry.filter(|entry| !entry.state.deleted))
+        let tx = self.connection.unchecked_transaction()?;
+        let entry = entry_content::read_legacy_entry(&tx, id)?;
+        tx.commit()?;
+        Ok(entry)
     }
 
     /// Atomically commits metadata, file bytes, operation receipt, outgoing intent
@@ -484,15 +499,12 @@ impl Store {
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
             .optional()?
-            .map(|(req, result)| -> Result<RecordedOperation> {
-                Ok(RecordedOperation {
-                    request: serde_json::from_str(&req)?,
-                    result: serde_json::from_str(&result)?,
-                })
+            .map(|(raw, result)| {
+                operation_request::replay_inline_with_mode(request, None, &raw, &result)
             })
             .transpose()?;
-        if let IdempotencyCheck::Replay(receipt) = check_idempotency(request, prior.as_ref())? {
-            return Ok(receipt.clone());
+        if let Some(receipt) = prior {
+            return Ok(receipt);
         }
         host_intents::check_execution(tx, request)?;
         let now_ms = match now_ms {
@@ -525,7 +537,7 @@ impl Store {
             "INSERT INTO operations(operation_id,request) VALUES (?1,?2)",
             params![
                 request.operation_id.as_str(),
-                serde_json::to_string(request)?
+                operation_request::encode_inline(request)?
             ],
         )?;
         let sql_sequence = tx.last_insert_rowid();
@@ -556,25 +568,35 @@ impl Store {
                 }
                 _ => None,
             };
-            let content = match replaced {
-                Some(content) => content,
-                None => tx
-                    .query_row(
-                        "SELECT content FROM entries WHERE id=?1",
-                        [state.id.as_str()],
-                        |r| r.get::<_, Option<Vec<u8>>>(0),
-                    )
-                    .optional()?
-                    .flatten(),
-            };
-            if (state.kind == EntryKind::File) != content.is_some() {
-                return Err(StoreError::Corrupt("file/folder content mismatch".into()));
+            if let Some(content) = replaced {
+                if (state.kind == EntryKind::File) != content.is_some() {
+                    return Err(StoreError::Corrupt("file/folder content mismatch".into()));
+                }
+                let digest = content
+                    .as_ref()
+                    .map(|bytes| serde_json::to_string(&Sha256Digest::of(bytes)))
+                    .transpose()?;
+                tx.execute(
+                    "INSERT INTO entries(id,path,deleted,state,content,content_digest) VALUES (?1,?2,?3,?4,?5,?6)
+                     ON CONFLICT(id) DO UPDATE SET path=excluded.path,deleted=excluded.deleted,state=excluded.state,content=excluded.content,content_ref=NULL,content_digest=excluded.content_digest",
+                    params![state.id.as_str(), state.path.as_str(), state.deleted, serde_json::to_string(state)?, content, digest],
+                )?;
+            } else {
+                // Namespace changes preserve the existing content authority in SQL;
+                // never load every descendant's bytes to rename its parent.
+                let count = tx.execute(
+                    "UPDATE entries SET path=?1,deleted=?2,state=?3 WHERE id=?4",
+                    params![
+                        state.path.as_str(),
+                        state.deleted,
+                        serde_json::to_string(state)?,
+                        state.id.as_str()
+                    ],
+                )?;
+                if count != 1 {
+                    return Err(StoreError::Corrupt("namespace target is missing".into()));
+                }
             }
-            tx.execute(
-                "INSERT INTO entries(id,path,deleted,state,content) VALUES (?1,?2,?3,?4,?5)
-                 ON CONFLICT(id) DO UPDATE SET path=excluded.path,deleted=excluded.deleted,state=excluded.state,content=excluded.content",
-                params![state.id.as_str(), state.path.as_str(), state.deleted, serde_json::to_string(state)?, content],
-            )?;
         }
         tx.execute(
             "UPDATE operations SET result=?1 WHERE sequence=?2",
@@ -593,25 +615,36 @@ impl Store {
 
     /// Durable local change stream; cursor is an integer locally and decimal string
     /// at JSON boundaries. This is not a remote-server acknowledgement stream.
-    pub fn operations_after(&self, sequence: u64, limit: u32) -> Result<Vec<RecordedOperation>> {
+    pub fn operations_after(
+        &self,
+        sequence: u64,
+        limit: u32,
+    ) -> Result<Vec<operation_request::StoredOperation>> {
         if sequence > i64::MAX as u64 {
             return Ok(Vec::new());
         }
         let mut stmt = self.connection.prepare(
-            "SELECT request,result FROM operations WHERE sequence>?1 ORDER BY sequence LIMIT ?2",
+            "SELECT operation_id,sequence,request,result FROM operations WHERE sequence>?1 ORDER BY sequence LIMIT ?2",
         )?;
         let rows = stmt
             .query_map(params![sequence as i64, limit.min(1000)], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .map(|(request, result)| {
-                let operation = RecordedOperation {
-                    request: serde_json::from_str(&request)?,
-                    result: serde_json::from_str(&result)?,
-                };
-                operation.result.validate()?;
+            .map(|(id, sequence, request, result)| {
+                let operation_id = zorid_core::OperationId::new(id)?;
+                let operation = operation_request::decode_record(&request, &result, &operation_id)?;
+                if u64::try_from(sequence).ok() != Some(operation.result.sequence) {
+                    return Err(StoreError::Corrupt(
+                        "operation journal sequence mismatch".into(),
+                    ));
+                }
                 Ok(operation)
             })
             .collect()

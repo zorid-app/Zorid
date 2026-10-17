@@ -433,7 +433,7 @@ mod tests {
                 &store.connection,
                 &ProjectionBaseline {
                     state: state.clone(),
-                    content: b"bytes".to_vec(),
+                    content: StoredContent::InlineBytes(b"bytes".to_vec()),
                 },
             )
             .unwrap();
@@ -501,7 +501,7 @@ mod tests {
             &store.connection,
             &ProjectionBaseline {
                 state: latest.state,
-                content: latest.content.unwrap(),
+                content: StoredContent::InlineBytes(latest.content.unwrap()),
             },
         )
         .unwrap();
@@ -550,7 +550,7 @@ mod tests {
                 &tx,
                 &ProjectionBaseline {
                     state: observed.clone(),
-                    content: b"observed".to_vec(),
+                    content: StoredContent::InlineBytes(b"observed".to_vec()),
                 },
             )
             .unwrap();
@@ -567,7 +567,7 @@ mod tests {
             &tx,
             &ProjectionBaseline {
                 state: observed.clone(),
-                content: b"observed".to_vec(),
+                content: StoredContent::InlineBytes(b"observed".to_vec()),
             },
         )
         .unwrap();

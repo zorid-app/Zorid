@@ -45,7 +45,24 @@ impl ExternalScanProof {
             entry_kind,
             physical,
             content_digest: bytes.map(zorid_file_sync::Sha256Digest::of),
-            content_bytes: bytes.map_or(0, |b| b.len() as u64),
+            content_bytes: bytes.map_or(0, |bytes| bytes.len() as u64),
+        }
+    }
+    /// Native scanners supply the digest of their bounded streaming capture.
+    /// This remains physical evidence and never authenticates causal content.
+    pub fn present_from_digest(
+        path: VaultPath,
+        entry_kind: EntryKind,
+        physical: PhysicalIdentity,
+        content_bytes: u64,
+        content_digest: Option<zorid_file_sync::Sha256Digest>,
+    ) -> Self {
+        Self::Present {
+            path,
+            entry_kind,
+            physical,
+            content_digest,
+            content_bytes,
         }
     }
     fn path(&self) -> &VaultPath {
@@ -127,7 +144,7 @@ pub struct ExternalNamespaceMember {
     /// Already-observed destination; absent for a proven deletion.
     pub after: Option<(VaultPath, PhysicalIdentity)>,
     /// Exact newly captured bytes, retained if a move also changed content.
-    pub observed_content: Option<Vec<u8>>,
+    pub observed_content: Option<StoredContent>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -209,7 +226,7 @@ fn bindings(tx: &Connection) -> Result<Vec<PhysicalBinding>> {
 fn baseline(tx: &Connection, b: &PhysicalBinding) -> Result<external::PhysicalNamespaceBaseline> {
     physical_bindings::check_binding(tx, &b.state.id, Some(b))?;
     let bytes = projection::baseline(tx, &b.state.id)?.map(|b| b.content);
-    family_materialization::check_publication(tx, &b.state, bytes.as_deref())?;
+    family_materialization::check_publication_content(tx, &b.state, bytes.as_ref())?;
     let h = family_materialization::history(tx, &b.state.id, &b.state.revision)?
         .ok_or_else(|| invalid("external physical history missing"))?;
     let FamilyPublication::Normal {
@@ -399,16 +416,54 @@ fn check_scan(tx: &Connection, o: &ExternalNamespaceObservation) -> Result<()> {
                 path: path.clone(),
                 entry_kind: m.before.state.kind,
                 physical: physical.clone(),
-                content_digest: m
-                    .observed_content
-                    .as_ref()
-                    .map(|b| zorid_file_sync::Sha256Digest::of(b)),
-                content_bytes: m.observed_content.as_ref().map_or(0, |b| b.len() as u64),
+                content_digest: m.observed_content.as_ref().map(StoredContent::digest),
+                content_bytes: m.observed_content.as_ref().map_or(0, StoredContent::len),
             };
             if scan_proof(tx, &o.scan_id, path)? != expected {
                 return Err(conflict());
             }
         }
+    }
+    Ok(())
+}
+/// Bound both retained journal metadata and the aggregate streamed hash work.
+/// Repeated exact source locators share a verification pass in this snapshot.
+fn verify_observed_sources(tx: &Connection, members: &[ExternalNamespaceMember]) -> Result<()> {
+    if members.is_empty() || members.len() > MAX_NAMESPACE_MEMBERS {
+        return Err(zorid_file_sync::Error::TooLarge.into());
+    }
+    let mut source_ids = BTreeSet::new();
+    let mut journal_bytes = 0usize;
+    let mut hash_bytes = 0u64;
+    for content in members.iter().filter_map(|m| m.observed_content.as_ref()) {
+        let journal_size = match content {
+            StoredContent::InlineBytes(bytes) => bytes.len(),
+            StoredContent::BinaryRef(source) => {
+                let encoded = serde_json::to_vec(source)?;
+                if encoded.len() > BINARY_STAGE_MAX_PAYLOAD_BYTES {
+                    return Err(zorid_file_sync::Error::TooLarge.into());
+                }
+                encoded.len()
+            }
+        };
+        journal_bytes = journal_bytes
+            .checked_add(journal_size)
+            .ok_or(zorid_file_sync::Error::TooLarge)?;
+        if journal_bytes > MAX_NAMESPACE_EVIDENCE_BYTES {
+            return Err(zorid_file_sync::Error::TooLarge.into());
+        }
+        if let StoredContent::BinaryRef(source) = content {
+            if !source_ids.insert(serde_json::to_vec(source)?) {
+                continue;
+            }
+            hash_bytes = hash_bytes
+                .checked_add(source.len())
+                .ok_or(zorid_file_sync::Error::TooLarge)?;
+            if hash_bytes > zorid_file_sync::MAX_MANIFEST_VERIFY_BYTES {
+                return Err(zorid_file_sync::Error::TooLarge.into());
+            }
+        }
+        entry_content::verify_stored_content(tx, content)?;
     }
     Ok(())
 }
@@ -446,7 +501,13 @@ fn check_members(
         .members
         .iter()
         .try_fold(0usize, |sum, m| {
-            sum.checked_add(m.observed_content.as_ref().map_or(0, Vec::len))
+            sum.checked_add(match &m.observed_content {
+                None => 0,
+                Some(StoredContent::InlineBytes(bytes)) => bytes.len(),
+                Some(StoredContent::BinaryRef(reference)) => {
+                    serde_json::to_vec(reference).ok()?.len()
+                }
+            })
         })
         .ok_or(zorid_client_sync::SyncError::TooLarge)?;
     if total > MAX_NAMESPACE_EVIDENCE_BYTES {
@@ -470,9 +531,9 @@ fn check_members(
             {
                 return Err(conflict());
             }
-            let graph = file_state::load(tx, &scope(tx)?)?
-                .ok_or_else(|| invalid("hidden external branch has no graph"))?;
-            family_materialization::validate(tx, &graph)?;
+            // The historical and current typed witnesses are checked above.
+            // Full retained manifest verification belongs to preparation, never
+            // to this final physical comparison inside an IMMEDIATE writer.
         }
         if m.after.is_some()
             && (m.observed_content.is_some() != (m.before.state.kind == EntryKind::File))
@@ -480,10 +541,10 @@ fn check_members(
         {
             return Err(invalid("external namespace observed bytes kind mismatch"));
         }
-        if m.observed_content
-            .as_ref()
-            .is_some_and(|b| b.len() as u64 > FAMILY_MAX_FILE_BYTES)
-        {
+        if m.observed_content.as_ref().is_some_and(|b| match b {
+            StoredContent::InlineBytes(bytes) => bytes.len() as u64 > FAMILY_MAX_INLINE_BYTES,
+            StoredContent::BinaryRef(reference) => reference.len() > FAMILY_MAX_FILE_BYTES,
+        }) {
             return Err(zorid_client_sync::SyncError::TooLarge.into());
         }
         for table in ["projection_attempts", "directory_attempts"] {
@@ -539,6 +600,9 @@ fn check_members(
         }
         result.push(historical);
     }
+    let graph = blob_index::load_metadata(tx, &scope(tx)?)?
+        .ok_or_else(|| invalid("external namespace graph missing"))?;
+    external::validate_metadata_baselines(&graph, &result)?;
     Ok(result)
 }
 impl Store {
@@ -707,9 +771,46 @@ impl Store {
         &mut self,
         scan_id: &OperationId,
         action: ExternalNamespaceAction,
+        members: Vec<ExternalNamespaceMember>,
+    ) -> Result<ExternalNamespaceObservation> {
+        self.record_family_namespace_observation_inner(None, scan_id, action, members)
+    }
+    pub fn record_family_namespace_observation_content(
+        &mut self,
+        client: &OperationId,
+        scan_id: &OperationId,
+        action: ExternalNamespaceAction,
+        members: Vec<ExternalNamespaceMember>,
+    ) -> Result<ExternalNamespaceObservation> {
+        self.record_family_namespace_observation_inner(Some(client), scan_id, action, members)
+    }
+    fn record_family_namespace_observation_inner(
+        &mut self,
+        client: Option<&OperationId>,
+        scan_id: &OperationId,
+        action: ExternalNamespaceAction,
         mut members: Vec<ExternalNamespaceMember>,
     ) -> Result<ExternalNamespaceObservation> {
         members.sort_by(|a, b| a.before.state.id.cmp(&b.before.state.id));
+        let snapshot = self.connection.unchecked_transaction()?;
+        for member in &members {
+            if let Some(content) = &member.observed_content {
+                if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = content {
+                    if client != Some(&capture.stage.client_id) {
+                        return Err(invalid(
+                            "namespace capture lacks independent client admission",
+                        ));
+                    }
+                    let (path, _) = member
+                        .after
+                        .as_ref()
+                        .ok_or_else(|| invalid("capture has no observed public path"))?;
+                    entry_content::validate_captured_at(&snapshot, capture, path)?;
+                }
+            }
+        }
+        verify_observed_sources(&snapshot, &members)?;
+        snapshot.commit()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -721,6 +822,18 @@ impl Store {
         };
         check_members(&tx, &o)?;
         check_scan(&tx, &o)?;
+        for member in &o.members {
+            if let Some(content) = &member.observed_content {
+                entry_content::validate_stored_content(&tx, content, true)?;
+                if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = content {
+                    let (path, _) = member
+                        .after
+                        .as_ref()
+                        .ok_or_else(|| invalid("capture has no observed public path"))?;
+                    entry_content::validate_captured_at(&tx, capture, path)?;
+                }
+            }
+        }
         let ids = tx
             .prepare("SELECT observation_id FROM family_external_namespace WHERE result IS NULL")?
             .query_map([], |r| r.get::<_, String>(0))?
@@ -751,9 +864,9 @@ impl Store {
         &mut self,
         id: &OperationId,
     ) -> Result<ExternalNamespaceCommit> {
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Hash every retained complete manifest under a pinned read snapshot.
+        // Only exact metadata and physical comparisons run in the final writer.
+        let tx = self.connection.unchecked_transaction()?;
         let (o, prior) = read(&tx, id)?;
         if let Some(r) = prior {
             tx.commit()?;
@@ -762,9 +875,13 @@ impl Store {
         let baselines = check_members(&tx, &o)?;
         check_scan(&tx, &o)?;
         let scope = scope(&tx)?;
-        let graph = file_state::load(&tx, &scope)?
+        let graph = blob_index::load_metadata(&tx, &scope)?
             .ok_or_else(|| invalid("external namespace graph missing"))?;
-        family_materialization::validate(&tx, &graph)?;
+        let verified_old = blob_index::verify_metadata(&tx, &graph, &[])?;
+        family_materialization::validate(&tx, &graph, &verified_old)?;
+        let mut expected_entries = read_states(&tx, true)?;
+        expected_entries.sort_by(|a, b| a.id.cmp(&b.id));
+        let expected_texts = family_ingress::retained_texts(&tx, &scope)?;
         let action = match &o.action {
             ExternalNamespaceAction::Delete { root } => {
                 external::ExternalNamespaceAction::Delete { root: root.clone() }
@@ -807,10 +924,13 @@ impl Store {
                 .map(|_| family_commands::fresh_update())
                 .collect::<Result<Vec<_>>>()?,
         };
-        let mut plan = external::plan_external_namespace(&graph, &baselines, &action, &allocation)?;
-        text_sync::reserve_revision(&tx, &allocation.next_revision)?;
-        // Compose on transient graphs only. Intermediate Move state must never
-        // create publication history or jobs for bytes known to be absent.
+        let first = external::prepare_metadata_namespace(&graph, &baselines, &action, &allocation)?;
+        let mut next_graph = first.candidate().verification_state().clone();
+        let mut authored = first.authored().to_vec();
+        let mut allocated_update_ids = first.allocated_update_ids().to_vec();
+        let mut revisions = vec![allocation.next_revision.clone()];
+        // Transient candidates guide subsequent deletion planning, but only one
+        // accumulated batch is authorized against the ORIGINAL metadata state.
         for deleted in deleted_roots(&o)? {
             let subset = baselines
                 .iter()
@@ -827,37 +947,73 @@ impl Store {
                     .map(|_| family_commands::fresh_update())
                     .collect::<Result<Vec<_>>>()?,
             };
-            let deletion = external::plan_external_namespace(
-                &plan.next_graph,
+            let deletion = external::prepare_metadata_namespace(
+                &next_graph,
                 &subset,
                 &external::ExternalNamespaceAction::Delete {
                     root: deleted.before.state.id.clone(),
                 },
                 &allocation,
             )?;
-            let unused = deletion
-                .allocated_update_ids
-                .iter()
-                .map(|id| family_ledger::unused(&tx, &family_commands::key(&scope, id)))
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .all(|v| v);
-            deletion.check_preconditions(&plan.next_graph, &subset, unused)?;
-            text_sync::reserve_revision(&tx, &allocation.next_revision)?;
-            plan.next_graph = deletion.next_graph;
-            plan.authored.extend(deletion.authored);
-            plan.allocated_update_ids
-                .extend(deletion.allocated_update_ids);
+            next_graph = deletion.candidate().verification_state().clone();
+            authored.extend_from_slice(deletion.authored());
+            allocated_update_ids.extend_from_slice(deletion.allocated_update_ids());
+            revisions.push(allocation.next_revision);
         }
-        let unused = plan
-            .allocated_update_ids
+        let mut batch = zorid_file_sync::metadata_plan::AuthoredMetadataBatch::new(scope.clone());
+        for authored in &authored {
+            batch.push_exact(&authored.payload_bytes)?;
+        }
+        let candidate = zorid_file_sync::metadata_plan::prepare_authored_batch(
+            &graph,
+            batch,
+            next_graph.version().clone(),
+        )?;
+        let overlay: Vec<_> = authored
             .iter()
-            .map(|id| family_ledger::unused(&tx, &family_commands::key(&scope, id)))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .all(|v| v);
-        plan.check_preconditions(&graph, &baselines, unused)?;
-        for a in &plan.authored {
+            .map(|a| (a.update_id.clone(), a.payload_bytes.clone()))
+            .collect();
+        let verified = blob_index::verify_metadata(&tx, candidate.verification_state(), &overlay)?;
+        let plan = candidate.finalize(verified)?;
+        verify_observed_sources(&tx, &o.members)?;
+        tx.commit()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (actual_observation, prior) = read(&tx, id)?;
+        if let Some(receipt) = prior {
+            tx.commit()?;
+            return Ok(receipt);
+        }
+        if actual_observation != o || check_members(&tx, &o)? != baselines {
+            return Err(conflict());
+        }
+        check_scan(&tx, &o)?;
+        let actual_graph = blob_index::load_metadata(&tx, &scope)?
+            .ok_or_else(|| invalid("external namespace graph missing"))?;
+        plan.check_preconditions(&actual_graph, None)?;
+        blob_index::check_sources(&tx, &actual_graph)?;
+        let mut actual_entries = read_states(&tx, true)?;
+        actual_entries.sort_by(|a, b| a.id.cmp(&b.id));
+        if actual_entries != expected_entries
+            || family_ingress::retained_texts(&tx, &scope)? != expected_texts
+        {
+            return Err(conflict());
+        }
+        for revision in &revisions {
+            text_sync::reserve_revision(&tx, revision)?;
+        }
+        for update in &allocated_update_ids {
+            if !family_ledger::unused(&tx, &family_commands::key(&scope, update))? {
+                return Err(conflict());
+            }
+        }
+        for member in &o.members {
+            if let Some(content) = &member.observed_content {
+                entry_content::validate_stored_content(&tx, content, true)?;
+            }
+        }
+        for a in &authored {
             let metadata = family_ledger::EnvelopeMetadata {
                 key: family_commands::key(&scope, &a.update_id),
                 family: family_ledger::Family::Files,
@@ -874,20 +1030,13 @@ impl Store {
             };
             family_ledger::insert_authored(&tx, &metadata, &a.payload_bytes)?;
         }
-        let fp = zorid_file_sync::v2::FilePlan {
-            expected_state: graph,
-            next_state: Some(plan.next_graph.clone()),
-            view: plan.next_graph.view()?,
-        };
-        let files: Vec<_> = plan
-            .authored
-            .iter()
-            .map(|a| (&a.update_id, a.payload_bytes.as_slice()))
-            .collect();
-        file_state::persist_many(&tx, &fp, &files)?;
+        blob_index::persist_plan(&tx, &plan)?;
+        let next_graph = plan.verification_state();
+        blob_index::check_sources(&tx, next_graph)?;
         let changed = family_materialization::apply(
             &tx,
-            &plan.next_graph,
+            next_graph,
+            plan.verified_binaries(),
             ProjectionOrigin::ExternalObservation {
                 observation_id: id.clone(),
             },
@@ -898,17 +1047,18 @@ impl Store {
             if let Some((path, physical)) = &m.after {
                 move_physical(
                     &tx,
-                    &plan.next_graph,
+                    next_graph,
                     &m.before,
                     path,
                     physical,
                     o.action.root(),
-                    &plan.allocated_update_ids[0],
+                    &allocated_update_ids[0],
                 )?;
                 if let Some(bytes) = &m.observed_content {
                     let base = projection::baseline(&tx, &m.before.state.id)?
                         .ok_or_else(|| invalid("moved file baseline missing"))?;
-                    if base.content != *bytes {
+                    if base.content.len() != bytes.len() || base.content.digest() != bytes.digest()
+                    {
                         let binding = physical_bindings::binding(&tx, &m.before.state.id)?
                             .ok_or_else(|| invalid("moved binding missing"))?;
                         let observed = projection::record_external_transaction(
@@ -978,7 +1128,7 @@ impl Store {
             observation_id: id.clone(),
             cursor: cursor.to_string(),
             changed,
-            authored: plan.allocated_update_ids,
+            authored: allocated_update_ids,
             pending_content,
         };
         tx.execute(
@@ -991,7 +1141,7 @@ impl Store {
 }
 fn move_physical(
     tx: &Connection,
-    graph: &zorid_file_sync::v2::State,
+    graph: &zorid_file_sync::metadata::MetadataState,
     before: &PhysicalBinding,
     path: &VaultPath,
     physical: &PhysicalIdentity,
@@ -1043,7 +1193,7 @@ fn move_physical(
         EntryKind::File => {
             let old = projection::baseline(tx, &state.id)?
                 .ok_or_else(|| invalid("external move file baseline missing"))?;
-            family_materialization::check_publication(tx, &state, Some(&old.content))?;
+            family_materialization::check_publication_content(tx, &state, Some(&old.content))?;
             projection::put_baseline(
                 tx,
                 &ProjectionBaseline {

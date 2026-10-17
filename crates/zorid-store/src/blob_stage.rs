@@ -1,19 +1,26 @@
 //! Durable, invisible binary upload staging. These rows are not operation
 //! receipts, graph records, authored envelopes or filesystem publications.
+use super::content::{BinaryStageLocator, CapturedBinaryRef};
+use super::family_ledger::{EnvelopeKey, EnvelopeMetadata, Family};
 use super::*;
 use zorid_core::{OperationId, VaultPath};
-use zorid_file_sync::{Manifest, Scope, Sha256Digest};
+use zorid_file_sync::{
+    metadata::{GraphRecord, MetadataState},
+    Manifest, Scope, Sha256Digest,
+};
 use zorid_sync_protocol::UpdateId;
 
 pub const BINARY_STAGE_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const BINARY_STAGE_MAX_CHUNK_BYTES: usize = 128 * 1024;
 pub const BINARY_STAGE_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
+pub const BINARY_STAGE_MAX_PATH_BYTES: usize = 4096;
+const MAX_RETAINED_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(super) const SCHEMA: &[(&str, &str)] = &[
-    ("binary_stages", "CREATE TABLE binary_stages (stage_id TEXT PRIMARY KEY NOT NULL,local_store_id TEXT NOT NULL,client_id TEXT NOT NULL,operation_id TEXT NOT NULL UNIQUE,realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,request TEXT NOT NULL,limits TEXT NOT NULL,phase TEXT NOT NULL CHECK(phase IN ('receiving','sealed','commit_requested','committed','rejected','aborted')),accepted_length INTEGER NOT NULL CHECK(accepted_length BETWEEN 0 AND 67108864),next_sequence INTEGER NOT NULL CHECK(next_sequence BETWEEN 0 AND 512),seal_request TEXT,manifest TEXT,source_commitment TEXT,CHECK((manifest IS NULL)=(source_commitment IS NULL)))"),
+    ("binary_stages", "CREATE TABLE binary_stages (stage_id TEXT PRIMARY KEY NOT NULL,local_store_id TEXT NOT NULL,client_id TEXT NOT NULL,operation_id TEXT NOT NULL UNIQUE,realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,purpose TEXT NOT NULL CHECK(purpose IN ('command','capture')),request TEXT NOT NULL,limits TEXT NOT NULL,phase TEXT NOT NULL CHECK(phase IN ('receiving','sealed','commit_requested','committed','rejected','aborted')),accepted_length INTEGER NOT NULL CHECK(accepted_length BETWEEN 0 AND 67108864),next_sequence INTEGER NOT NULL CHECK(next_sequence BETWEEN 0 AND 512),seal_request TEXT,manifest TEXT,source_commitment TEXT,CHECK((manifest IS NULL)=(source_commitment IS NULL)))"),
     ("binary_stage_allocations", "CREATE TABLE binary_stage_allocations (realm_id TEXT NOT NULL,vault_id TEXT NOT NULL,update_id TEXT NOT NULL,stage_id TEXT NOT NULL REFERENCES binary_stages(stage_id),kind TEXT NOT NULL CHECK(kind IN ('chunk','page')),sequence INTEGER NOT NULL CHECK(sequence>=0),PRIMARY KEY(realm_id,vault_id,update_id),UNIQUE(stage_id,kind,sequence))"),
-    ("binary_stage_chunks", "CREATE TABLE binary_stage_chunks (stage_id TEXT NOT NULL REFERENCES binary_stages(stage_id),sequence INTEGER NOT NULL CHECK(sequence BETWEEN 0 AND 511),offset INTEGER NOT NULL CHECK(offset BETWEEN 0 AND 67108864),bytes INTEGER NOT NULL CHECK(bytes BETWEEN 1 AND 131072),digest TEXT NOT NULL,update_id TEXT NOT NULL,payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 1048576),descriptor TEXT NOT NULL,PRIMARY KEY(stage_id,sequence),UNIQUE(stage_id,update_id))"),
-    ("binary_stage_pages", "CREATE TABLE binary_stage_pages (stage_id TEXT NOT NULL REFERENCES binary_stages(stage_id),sequence INTEGER NOT NULL CHECK(sequence BETWEEN 0 AND 3),update_id TEXT NOT NULL,payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 1048576),descriptor TEXT NOT NULL,PRIMARY KEY(stage_id,sequence),UNIQUE(stage_id,update_id))"),
+    ("binary_stage_chunks", "CREATE TABLE binary_stage_chunks (stage_id TEXT NOT NULL REFERENCES binary_stages(stage_id),sequence INTEGER NOT NULL CHECK(sequence BETWEEN 0 AND 511),offset INTEGER NOT NULL CHECK(offset BETWEEN 0 AND 67108864),bytes INTEGER NOT NULL CHECK(bytes BETWEEN 1 AND 131072),digest TEXT NOT NULL,update_id TEXT NOT NULL,payload_bytes INTEGER NOT NULL CHECK(payload_bytes BETWEEN 1 AND 1048576),payload_digest TEXT NOT NULL,file_summary_digest TEXT NOT NULL,PRIMARY KEY(stage_id,sequence),UNIQUE(stage_id,update_id))"),
+    ("binary_stage_pages", "CREATE TABLE binary_stage_pages (stage_id TEXT NOT NULL REFERENCES binary_stages(stage_id),sequence INTEGER NOT NULL CHECK(sequence BETWEEN 0 AND 3),update_id TEXT NOT NULL,payload_bytes INTEGER NOT NULL CHECK(payload_bytes BETWEEN 1 AND 1048576),payload_digest TEXT NOT NULL,file_summary_digest TEXT NOT NULL,PRIMARY KEY(stage_id,sequence),UNIQUE(stage_id,update_id))"),
 ];
 
 /// Policy is injected by the caller; this foundation enables no default quota.
@@ -66,7 +73,7 @@ pub struct BinaryStageRequest {
 }
 impl BinaryStageRequest {
     fn validate(&self) -> Result<()> {
-        if matches!(&self.target, BinaryTarget::Create { path, .. } if path.as_str().len() > BINARY_STAGE_MAX_PAYLOAD_BYTES)
+        if matches!(&self.target, BinaryTarget::Create { path, .. } if path.as_str().len() > BINARY_STAGE_MAX_PATH_BYTES)
         {
             return Err(zorid_file_sync::Error::TooLarge.into());
         }
@@ -81,6 +88,66 @@ impl BinaryStageRequest {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BinaryCaptureRequest {
+    pub path: VaultPath,
+    #[serde(with = "decimal")]
+    pub expected_length: u64,
+    pub expected_digest: Sha256Digest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "purpose",
+    content = "request",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub(super) enum StagePurpose {
+    Command(BinaryStageRequest),
+    Capture(BinaryCaptureRequest),
+}
+impl StagePurpose {
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::Command(request) => request.validate()?,
+            Self::Capture(request) => {
+                if request.expected_length > BINARY_STAGE_MAX_FILE_BYTES
+                    || request.path.as_str().len() > BINARY_STAGE_MAX_PAYLOAD_BYTES
+                {
+                    return Err(zorid_file_sync::Error::TooLarge.into());
+                }
+            }
+        }
+        if serde_json::to_vec(self)?.len() > BINARY_STAGE_MAX_PAYLOAD_BYTES {
+            return Err(zorid_file_sync::Error::TooLarge.into());
+        }
+        Ok(())
+    }
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Command(_) => "command",
+            Self::Capture(_) => "capture",
+        }
+    }
+    fn expected_length(&self) -> Option<u64> {
+        match self {
+            Self::Command(request) => request.expected_length,
+            Self::Capture(request) => Some(request.expected_length),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct StageInfo {
+    pub scope: Scope,
+    pub purpose: StagePurpose,
+    pub phase: StagePhase,
+    pub manifest: Option<Manifest>,
+    pub source_commitment: Option<Sha256Digest>,
 }
 
 /// Store-issued identity. Resume through client/operation, never deserialize a
@@ -104,6 +171,14 @@ impl BinaryStageRef {
     }
     pub fn stage_id(&self) -> &OperationId {
         &self.stage_id
+    }
+    pub fn locator(&self) -> BinaryStageLocator {
+        BinaryStageLocator {
+            local_store_id: self.local_store_id.clone(),
+            client_id: self.client_id.clone(),
+            operation_id: self.operation_id.clone(),
+            stage_id: self.stage_id.clone(),
+        }
     }
 }
 
@@ -137,6 +212,7 @@ pub struct BinaryStageStatus {
     pub next_sequence: u32,
     pub seal_requested: bool,
     pub finalized: Option<StagedBinaryRef>,
+    pub terminal: Option<super::binary_commit::BinaryStageTerminal>,
 }
 
 /// Inert private capability, not a receipt. Only actual durable source
@@ -241,7 +317,7 @@ fn serialize_manifest<S: serde::Serializer>(
 struct Stage {
     reference: BinaryStageRef,
     scope: Scope,
-    request: BinaryStageRequest,
+    purpose: StagePurpose,
     limits: StreamingLimits,
     phase: StagePhase,
     accepted: u64,
@@ -296,7 +372,7 @@ fn authority(tx: &Connection) -> Result<(OperationId, Scope)> {
 }
 
 fn load(tx: &Connection, reference: &BinaryStageRef) -> Result<Stage> {
-    let bounded: bool = tx.query_row("SELECT length(CAST(request AS BLOB)) BETWEEN 1 AND 1048576 AND length(CAST(limits AS BLOB)) BETWEEN 1 AND 4096 AND (seal_request IS NULL OR length(CAST(seal_request AS BLOB)) BETWEEN 1 AND 4096) AND (manifest IS NULL OR length(CAST(manifest AS BLOB)) BETWEEN 1 AND 1048576) AND (source_commitment IS NULL OR length(CAST(source_commitment AS BLOB)) BETWEEN 1 AND 1024) FROM binary_stages WHERE stage_id=?1",[reference.stage_id.as_str()],|r|r.get(0)).optional()?.ok_or_else(||invalid("binary stage not found"))?;
+    let bounded: bool = tx.query_row("SELECT purpose IN ('command','capture') AND length(CAST(request AS BLOB)) BETWEEN 1 AND 1048576 AND length(CAST(limits AS BLOB)) BETWEEN 1 AND 4096 AND (seal_request IS NULL OR length(CAST(seal_request AS BLOB)) BETWEEN 1 AND 4096) AND (manifest IS NULL OR length(CAST(manifest AS BLOB)) BETWEEN 1 AND 1048576) AND (source_commitment IS NULL OR length(CAST(source_commitment AS BLOB)) BETWEEN 1 AND 1024) FROM binary_stages WHERE stage_id=?1",[reference.stage_id.as_str()],|r|r.get(0)).optional()?.ok_or_else(||invalid("binary stage not found"))?;
     if !bounded {
         return Err(corrupt("binary stage metadata bound exceeded"));
     }
@@ -332,11 +408,27 @@ fn load(tx: &Connection, reference: &BinaryStageRef) -> Result<Stage> {
     {
         return Err(conflict(&reference.operation_id));
     }
-    let request: BinaryStageRequest = serde_json::from_str(&request)?;
-    request.validate()?;
+    let purpose: StagePurpose = serde_json::from_str(&request)?;
+    purpose.validate()?;
+    let purpose_name: String = tx.query_row(
+        "SELECT purpose FROM binary_stages WHERE stage_id=?1",
+        [reference.stage_id.as_str()],
+        |r| r.get(0),
+    )?;
+    if purpose_name != purpose.name() {
+        return Err(corrupt("binary stage purpose columns disagree"));
+    }
     let limits: StreamingLimits = serde_json::from_str(&limits)?;
     limits.validate()?;
     let state = phase(&state)?;
+    if matches!(purpose, StagePurpose::Capture(_))
+        && matches!(
+            state,
+            StagePhase::CommitRequested | StagePhase::Committed | StagePhase::Rejected
+        )
+    {
+        return Err(corrupt("capture stage cannot become a command outcome"));
+    }
     let accepted = u64::try_from(accepted).map_err(|_| corrupt("negative staged length"))?;
     let next = u32::try_from(next).map_err(|_| corrupt("invalid stage sequence"))?;
     if accepted > BINARY_STAGE_MAX_FILE_BYTES || next > 512 || (accepted == 0) != (next == 0) {
@@ -365,7 +457,7 @@ fn load(tx: &Connection, reference: &BinaryStageRef) -> Result<Stage> {
     Ok(Stage {
         reference: reference.clone(),
         scope,
-        request,
+        purpose,
         limits,
         phase: state,
         accepted,
@@ -423,7 +515,7 @@ fn allocation(tx: &Connection, stage: &Stage, kind: &str, sequence: u32) -> Resu
 }
 
 fn usage(tx: &Connection) -> Result<(u64, u64, u64, u64, u64)> {
-    let (active, bytes, chunks, pages, stages):(i64,i64,i64,i64,i64) = tx.query_row("SELECT (SELECT count(*) FROM binary_stages WHERE phase IN ('receiving','sealed','commit_requested')),(SELECT coalesce(sum(length(payload)),0) FROM binary_stage_chunks)+(SELECT coalesce(sum(length(payload)),0) FROM binary_stage_pages),(SELECT count(*) FROM binary_stage_allocations WHERE kind='chunk'),(SELECT count(*) FROM binary_stage_allocations WHERE kind='page'),(SELECT count(*) FROM binary_stages)",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+    let (active, bytes, chunks, pages, stages):(i64,i64,i64,i64,i64) = tx.query_row("SELECT (SELECT count(*) FROM binary_stages WHERE phase IN ('receiving','commit_requested') OR (phase='sealed' AND purpose='command')),(SELECT coalesce(sum(length(payload)),0) FROM immutable_payloads p WHERE EXISTS(SELECT 1 FROM binary_stage_allocations a WHERE a.realm_id=p.realm_id AND a.vault_id=p.vault_id AND a.update_id=p.update_id)),(SELECT count(*) FROM binary_stage_allocations WHERE kind='chunk'),(SELECT count(*) FROM binary_stage_allocations WHERE kind='page'),(SELECT count(*) FROM binary_stages)",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
     Ok((
         u64::try_from(active).map_err(|_| corrupt("invalid stage usage"))?,
         u64::try_from(bytes).map_err(|_| corrupt("invalid stage usage"))?,
@@ -450,6 +542,36 @@ impl Store {
         client: &OperationId,
         operation: &OperationId,
         request: &BinaryStageRequest,
+        limits: StreamingLimits,
+    ) -> Result<BinaryStageRef> {
+        self.begin_binary_purpose(
+            client,
+            operation,
+            &StagePurpose::Command(request.clone()),
+            limits,
+        )
+    }
+
+    pub fn begin_binary_capture(
+        &mut self,
+        client: &OperationId,
+        operation: &OperationId,
+        request: &BinaryCaptureRequest,
+        limits: StreamingLimits,
+    ) -> Result<BinaryStageRef> {
+        self.begin_binary_purpose(
+            client,
+            operation,
+            &StagePurpose::Capture(request.clone()),
+            limits,
+        )
+    }
+
+    fn begin_binary_purpose(
+        &mut self,
+        client: &OperationId,
+        operation: &OperationId,
+        request: &StagePurpose,
         limits: StreamingLimits,
     ) -> Result<BinaryStageRef> {
         request.validate()?;
@@ -481,7 +603,7 @@ impl Store {
                 operation_id: operation.clone(),
                 stage_id: OperationId::new(id)?,
             };
-            if load(&tx, &reference)?.request != *request {
+            if load(&tx, &reference)?.purpose != *request {
                 return Err(conflict(operation));
             }
             reference
@@ -505,7 +627,7 @@ impl Store {
                 operation_id: operation.clone(),
                 stage_id: OperationId::new(uuid::Uuid::new_v4().to_string())?,
             };
-            tx.execute("INSERT INTO binary_stages(stage_id,local_store_id,client_id,operation_id,realm_id,vault_id,request,limits,phase,accepted_length,next_sequence) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'receiving',0,0)",params![reference.stage_id.as_str(),reference.local_store_id.as_str(),client.as_str(),operation.as_str(),scope.realm_id.as_str(),scope.vault_id.as_str(),serde_json::to_string(request)?,serde_json::to_string(&limits)?])?;
+            tx.execute("INSERT INTO binary_stages(stage_id,local_store_id,client_id,operation_id,realm_id,vault_id,request,limits,purpose,phase,accepted_length,next_sequence) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'receiving',0,0)",params![reference.stage_id.as_str(),reference.local_store_id.as_str(),client.as_str(),operation.as_str(),scope.realm_id.as_str(),scope.vault_id.as_str(),serde_json::to_string(request)?,serde_json::to_string(&limits)?,request.name()])?;
             reference
         };
         tx.commit()?;
@@ -587,7 +709,10 @@ impl Store {
             .checked_add(bytes.len() as u64)
             .ok_or(zorid_file_sync::Error::TooLarge)?;
         if accepted > BINARY_STAGE_MAX_FILE_BYTES
-            || stage.request.expected_length.is_some_and(|n| accepted > n)
+            || stage
+                .purpose
+                .expected_length()
+                .is_some_and(|n| accepted > n)
         {
             return Err(zorid_file_sync::Error::TooLarge.into());
         }
@@ -610,14 +735,15 @@ impl Store {
             return Err(zorid_file_sync::Error::TooLarge.into());
         }
         check_payload_quota(&tx, &stage, raw.len())?;
-        let descriptor = descriptor(&raw, &stage.scope, &id)?;
+        let metadata = metadata_for_exact(&raw, &stage.scope, &id)?;
+        immutable_payloads::put_exact(&tx, &metadata, &raw, MAX_RETAINED_PAYLOAD_BYTES)?;
         let digest = Sha256Digest::of(bytes);
         let sql_offset = i64::try_from(offset)
             .map_err(|_| corrupt("staged offset exceeds SQLite integer range"))?;
         let sql_accepted = i64::try_from(accepted)
             .map_err(|_| corrupt("staged length exceeds SQLite integer range"))?;
         tx.execute(
-            "INSERT INTO binary_stage_chunks VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            "INSERT INTO binary_stage_chunks VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 reference.stage_id.as_str(),
                 sequence,
@@ -625,8 +751,13 @@ impl Store {
                 bytes.len() as u32,
                 serde_json::to_string(&digest)?,
                 id.as_str(),
-                raw,
-                descriptor
+                metadata.payload_bytes,
+                serde_json::to_string(&metadata.payload_digest)?,
+                serde_json::to_string(
+                    &metadata
+                        .file_summary_digest
+                        .ok_or_else(|| corrupt("staged file summary missing"))?
+                )?
             ],
         )?;
         tx.execute(
@@ -648,6 +779,11 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let stage = load(&tx, reference)?;
+        if matches!(stage.purpose, StagePurpose::Capture(_)) && stage.phase == StagePhase::Sealed {
+            return Err(invalid(
+                "sealed capture references cannot be invalidated by abort",
+            ));
+        }
         if !matches!(
             stage.phase,
             StagePhase::Receiving | StagePhase::Sealed | StagePhase::Aborted
@@ -664,6 +800,27 @@ impl Store {
 
     pub fn query_binary_stage(&self, reference: &BinaryStageRef) -> Result<BinaryStageStatus> {
         let tx = self.connection.unchecked_transaction()?;
+        // A durable operation result is authoritative after an unknown commit
+        // ACK, even if a later write changed the entry or a source is damaged.
+        if let Some(terminal) = super::binary_commit::terminal_status(&tx, reference)? {
+            let (accepted_length, next_sequence) =
+                super::binary_commit::terminal_progress(&tx, reference)?
+                    .ok_or_else(|| corrupt("terminal binary stage lacks original progress"))?;
+            let state = match &terminal {
+                super::binary_commit::BinaryStageTerminal::Committed(_) => StagePhase::Committed,
+                super::binary_commit::BinaryStageTerminal::Rejected(_) => StagePhase::Rejected,
+            };
+            let result = BinaryStageStatus {
+                state,
+                accepted_length,
+                next_sequence,
+                seal_requested: true,
+                finalized: None,
+                terminal: Some(terminal),
+            };
+            tx.commit()?;
+            return Ok(result);
+        }
         let stage = load(&tx, reference)?;
         let finalized = if matches!(
             stage.phase,
@@ -680,9 +837,28 @@ impl Store {
             next_sequence: stage.next,
             seal_requested: stage.seal_request.is_some(),
             finalized,
+            terminal: None,
         };
         tx.commit()?;
         Ok(result)
+    }
+
+    pub fn captured_binary_ref(&self, reference: &BinaryStageRef) -> Result<CapturedBinaryRef> {
+        let tx = self.connection.unchecked_transaction()?;
+        let stage = load(&tx, reference)?;
+        if !matches!(stage.purpose, StagePurpose::Capture(_)) || stage.phase != StagePhase::Sealed {
+            return Err(invalid(
+                "only a sealed capture can issue a captured binary reference",
+            ));
+        }
+        let verified = validate_sealed(&tx, reference)?;
+        let captured = CapturedBinaryRef {
+            stage: reference.locator(),
+            manifest: verified.manifest,
+            source_commitment: verified.source_commitment,
+        };
+        tx.commit()?;
+        Ok(captured)
     }
 
     pub fn seal_binary_stage(
@@ -712,8 +888,8 @@ impl Store {
             } else {
                 if final_length != stage.accepted
                     || stage
-                        .request
-                        .expected_length
+                        .purpose
+                        .expected_length()
                         .is_some_and(|n| n != final_length)
                 {
                     return Err(invalid(
@@ -759,14 +935,26 @@ impl Store {
             })?;
             check_payload_quota(&tx, &stage, extra)?;
             for page in &verified.pages {
+                let metadata = metadata_for_exact(&page.raw, &stage.scope, &page.id)?;
+                immutable_payloads::put_exact(
+                    &tx,
+                    &metadata,
+                    &page.raw,
+                    MAX_RETAINED_PAYLOAD_BYTES,
+                )?;
                 tx.execute(
-                    "INSERT INTO binary_stage_pages VALUES(?1,?2,?3,?4,?5)",
+                    "INSERT INTO binary_stage_pages VALUES(?1,?2,?3,?4,?5,?6)",
                     params![
                         reference.stage_id.as_str(),
                         page.sequence,
                         page.id.as_str(),
-                        page.raw,
-                        page.descriptor
+                        metadata.payload_bytes,
+                        serde_json::to_string(&metadata.payload_digest)?,
+                        serde_json::to_string(
+                            &metadata
+                                .file_summary_digest
+                                .ok_or_else(|| corrupt("staged page summary missing"))?
+                        )?
                     ],
                 )?;
             }
@@ -777,13 +965,203 @@ impl Store {
     }
 }
 
-fn descriptor(raw: &[u8], scope: &Scope, id: &UpdateId) -> Result<String> {
-    let (actual_scope, actual_id, descriptor) =
-        zorid_file_sync::metadata::GraphRecord::from_authored_exact(raw)?;
+pub(super) fn resolve_locator(
+    tx: &Connection,
+    locator: &BinaryStageLocator,
+) -> Result<BinaryStageRef> {
+    let reference = BinaryStageRef {
+        local_store_id: locator.local_store_id.clone(),
+        client_id: locator.client_id.clone(),
+        operation_id: locator.operation_id.clone(),
+        stage_id: locator.stage_id.clone(),
+    };
+    load(tx, &reference)?;
+    Ok(reference)
+}
+
+pub(super) fn stage_info(tx: &Connection, reference: &BinaryStageRef) -> Result<StageInfo> {
+    let stage = load(tx, reference)?;
+    Ok(StageInfo {
+        scope: stage.scope,
+        purpose: stage.purpose,
+        phase: stage.phase,
+        manifest: stage.manifest,
+        source_commitment: stage.commitment,
+    })
+}
+
+pub(super) fn validate_sealed(
+    tx: &Connection,
+    reference: &BinaryStageRef,
+) -> Result<StagedBinaryRef> {
+    let stage = load(tx, reference)?;
+    if !matches!(
+        stage.phase,
+        StagePhase::Sealed | StagePhase::CommitRequested
+    ) {
+        return Err(invalid("binary stage is not sealed or commit requested"));
+    }
+    Ok(verify_stage(tx, &stage)?.reference)
+}
+
+pub(super) fn expected_source_metadata(
+    tx: &Connection,
+    reference: &BinaryStageRef,
+    id: &UpdateId,
+) -> Result<EnvelopeMetadata> {
+    let stage = load(tx, reference)?;
+    let allocation:Option<(String,u32)> = tx.query_row("SELECT kind,sequence FROM binary_stage_allocations WHERE realm_id=?1 AND vault_id=?2 AND stage_id=?3 AND update_id=?4",params![stage.scope.realm_id.as_str(),stage.scope.vault_id.as_str(),reference.stage_id.as_str(),id.as_str()],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+    let (kind, sequence) =
+        allocation.ok_or_else(|| corrupt("binary source is not allocated to this stage"))?;
+    let metadata = source_metadata(tx, &stage, &kind, sequence)?;
+    if metadata.key.update_id != *id {
+        return Err(corrupt("binary source ID differs from stage commitments"));
+    }
+    Ok(metadata)
+}
+
+/// Frozen metadata only, in chunk order followed by page order. Callers retain
+/// their surrounding transaction and separately validate the sealed reference.
+pub(super) fn staged_sources(
+    tx: &Connection,
+    reference: &BinaryStageRef,
+) -> Result<Vec<EnvelopeMetadata>> {
+    let stage = load(tx, reference)?;
+    if !matches!(
+        stage.phase,
+        StagePhase::Sealed | StagePhase::CommitRequested | StagePhase::Committed
+    ) {
+        return Err(invalid("binary source listing requires a sealed stage"));
+    }
+    let mut sources = Vec::new();
+    for sequence in 0..stage.next {
+        sources.push(source_metadata(tx, &stage, "chunk", sequence)?);
+    }
+    for sequence in 0..stage.next.div_ceil(zorid_file_sync::MAX_PAGE_CHUNKS as u32) {
+        sources.push(source_metadata(tx, &stage, "page", sequence)?);
+    }
+    Ok(sources)
+}
+
+pub(super) fn capture_metadata(
+    tx: &Connection,
+    captured: &CapturedBinaryRef,
+) -> Result<MetadataState> {
+    let reference = resolve_locator(tx, &captured.stage)?;
+    let stage = load(tx, &reference)?;
+    if !matches!(stage.purpose, StagePurpose::Capture(_)) || stage.phase != StagePhase::Sealed {
+        return Err(invalid("captured source does not name a sealed capture"));
+    }
+    let actual = validate_sealed(tx, &reference)?;
+    if actual.manifest != captured.manifest
+        || actual.source_commitment != captured.source_commitment
+    {
+        return Err(corrupt(
+            "captured locator differs from immutable stage authority",
+        ));
+    }
+    let mut records = std::collections::BTreeMap::new();
+    for source in staged_sources(tx, &reference)? {
+        let head = immutable_payloads::head(tx, &source.key)?
+            .ok_or_else(|| corrupt("captured source payload is missing"))?;
+        if head.family != source.family
+            || head.payload_bytes != source.payload_bytes
+            || head.payload_digest != source.payload_digest
+            || head.file_summary_digest != source.file_summary_digest
+        {
+            return Err(corrupt(
+                "captured source metadata differs from stage commitments",
+            ));
+        }
+        let descriptor = head
+            .descriptor
+            .ok_or_else(|| corrupt("captured source descriptor is missing"))?;
+        let record = GraphRecord::from_persisted_json(
+            &descriptor,
+            source.payload_bytes,
+            source.payload_digest,
+            source
+                .file_summary_digest
+                .ok_or_else(|| corrupt("captured source summary missing"))?,
+        )?;
+        records.insert(source.key.update_id, record);
+    }
+    Ok(MetadataState::from_records(
+        stage.scope,
+        Revision::new(reference.stage_id.as_str())?,
+        records,
+        std::collections::BTreeMap::new(),
+    )?)
+}
+
+fn metadata_for_exact(raw: &[u8], scope: &Scope, id: &UpdateId) -> Result<EnvelopeMetadata> {
+    let (actual_scope, actual_id, descriptor) = GraphRecord::from_authored_exact(raw)?;
     if &actual_scope != scope || &actual_id != id {
         return Err(corrupt("binary stage payload routing mismatch"));
     }
-    Ok(serde_json::to_string(&descriptor)?)
+    Ok(EnvelopeMetadata {
+        key: EnvelopeKey {
+            realm_id: scope.realm_id.clone(),
+            vault_id: scope.vault_id.clone(),
+            update_id: id.clone(),
+        },
+        family: Family::Files,
+        format_version: 2,
+        payload_bytes: descriptor.payload_bytes(),
+        payload_digest: *descriptor.payload_digest(),
+        file_summary_digest: Some(descriptor.summary_digest()?),
+        text_binding: None,
+    })
+}
+
+fn source_metadata(
+    tx: &Connection,
+    stage: &Stage,
+    kind: &str,
+    sequence: u32,
+) -> Result<EnvelopeMetadata> {
+    let table = match kind {
+        "chunk" => "binary_stage_chunks",
+        "page" => "binary_stage_pages",
+        _ => return Err(corrupt("invalid staged source kind")),
+    };
+    let sql = format!("SELECT payload_bytes BETWEEN 1 AND 1048576 AND length(CAST(update_id AS BLOB)) BETWEEN 1 AND 128 AND length(CAST(payload_digest AS BLOB)) BETWEEN 1 AND 256 AND length(CAST(file_summary_digest AS BLOB)) BETWEEN 1 AND 256 FROM {table} WHERE stage_id=?1 AND sequence=?2");
+    if !tx
+        .query_row(
+            &sql,
+            params![stage.reference.stage_id.as_str(), sequence],
+            |r| r.get::<_, bool>(0),
+        )
+        .optional()?
+        .ok_or_else(|| corrupt("staged source metadata missing"))?
+    {
+        return Err(corrupt("staged source metadata bound exceeded"));
+    }
+    let sql = format!("SELECT update_id,payload_bytes,payload_digest,file_summary_digest FROM {table} WHERE stage_id=?1 AND sequence=?2");
+    let (id, bytes, digest, summary): (String, u32, String, String) = tx.query_row(
+        &sql,
+        params![stage.reference.stage_id.as_str(), sequence],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    let allocated:Option<String> = tx.query_row("SELECT update_id FROM binary_stage_allocations WHERE realm_id=?1 AND vault_id=?2 AND stage_id=?3 AND kind=?4 AND sequence=?5",params![stage.scope.realm_id.as_str(),stage.scope.vault_id.as_str(),stage.reference.stage_id.as_str(),kind,sequence],|r|r.get(0)).optional()?;
+    if allocated.as_deref() != Some(id.as_str()) {
+        return Err(corrupt(
+            "staged source allocation differs from independent commitments",
+        ));
+    }
+    Ok(EnvelopeMetadata {
+        key: EnvelopeKey {
+            realm_id: stage.scope.realm_id.clone(),
+            vault_id: stage.scope.vault_id.clone(),
+            update_id: UpdateId::new(id)?,
+        },
+        family: Family::Files,
+        format_version: 2,
+        payload_bytes: bytes,
+        payload_digest: serde_json::from_str(&digest)?,
+        file_summary_digest: Some(serde_json::from_str(&summary)?),
+        text_binding: None,
+    })
 }
 
 struct Chunk {
@@ -794,22 +1172,20 @@ struct Chunk {
     payload_digest: Sha256Digest,
 }
 fn read_chunk(tx: &Connection, stage: &Stage, sequence: u32) -> Result<Chunk> {
-    let bounded: bool = tx.query_row("SELECT length(payload) BETWEEN 1 AND 1048576 AND length(CAST(descriptor AS BLOB)) BETWEEN 1 AND 1048576 FROM binary_stage_chunks WHERE stage_id=?1 AND sequence=?2",params![stage.reference.stage_id.as_str(),sequence],|r|r.get(0)).optional()?.ok_or_else(||corrupt("binary stage chunk missing"))?;
+    let bounded: bool = tx.query_row("SELECT length(CAST(digest AS BLOB)) BETWEEN 1 AND 256 FROM binary_stage_chunks WHERE stage_id=?1 AND sequence=?2",params![stage.reference.stage_id.as_str(),sequence],|r|r.get(0)).optional()?.ok_or_else(||corrupt("binary stage chunk missing"))?;
     if !bounded {
         return Err(corrupt(
             "binary stage stored payload/descriptor bound exceeded",
         ));
     }
-    let (offset, bytes, digest, id, raw, stored):(i64,u32,String,String,Vec<u8>,String) = tx.query_row("SELECT offset,bytes,digest,update_id,payload,descriptor FROM binary_stage_chunks WHERE stage_id=?1 AND sequence=?2",params![stage.reference.stage_id.as_str(),sequence],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
-    if raw.is_empty() || raw.len() > BINARY_STAGE_MAX_PAYLOAD_BYTES {
-        return Err(corrupt("binary stage payload bound exceeded"));
-    }
-    let id = UpdateId::new(id)?;
-    let expected_id:Option<String> = tx.query_row("SELECT update_id FROM binary_stage_allocations WHERE realm_id=?1 AND vault_id=?2 AND stage_id=?3 AND kind='chunk' AND sequence=?4",params![stage.scope.realm_id.as_str(),stage.scope.vault_id.as_str(),stage.reference.stage_id.as_str(),sequence],|r|r.get(0)).optional()?;
-    if expected_id.as_deref() != Some(id.as_str()) || descriptor(&raw, &stage.scope, &id)? != stored
-    {
-        return Err(corrupt("binary stage descriptor/allocation mismatch"));
-    }
+    let (offset, bytes, digest): (i64, u32, String) = tx.query_row(
+        "SELECT offset,bytes,digest FROM binary_stage_chunks WHERE stage_id=?1 AND sequence=?2",
+        params![stage.reference.stage_id.as_str(), sequence],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let metadata = source_metadata(tx, stage, "chunk", sequence)?;
+    let raw = immutable_payloads::read_exact(tx, &metadata)?;
+    let (_, _, record) = GraphRecord::from_authored_exact(&raw)?;
     let payload = zorid_file_sync::v2::Payload::decode(&raw)?;
     let zorid_file_sync::v2::Body::Chunk { bytes: body } = payload.body else {
         return Err(corrupt("binary stage chunk has wrong payload kind"));
@@ -824,11 +1200,11 @@ fn read_chunk(tx: &Connection, stage: &Stage, sequence: u32) -> Result<Chunk> {
         return Err(corrupt("binary stage chunk progress/digest mismatch"));
     }
     Ok(Chunk {
-        id,
+        id: metadata.key.update_id,
         offset,
         bytes: body,
-        descriptor: stored,
-        payload_digest: Sha256Digest::of(&raw),
+        descriptor: serde_json::to_string(&record)?,
+        payload_digest: metadata.payload_digest,
     })
 }
 
@@ -927,9 +1303,10 @@ fn verify_stage(tx: &Connection, stage: &Stage) -> Result<VerifiedStage> {
     if manifest.bytes != stage.accepted
         || manifest.bytes != seal.final_length
         || stage
-            .request
-            .expected_length
+            .purpose
+            .expected_length()
             .is_some_and(|n| n != manifest.bytes)
+        || matches!(&stage.purpose,StagePurpose::Capture(request) if request.expected_digest != manifest.digest)
         || seal
             .expected_digest
             .is_some_and(|digest| digest != manifest.digest)
@@ -941,16 +1318,16 @@ fn verify_stage(tx: &Connection, stage: &Stage) -> Result<VerifiedStage> {
         version: u32,
         stage: &'a BinaryStageRef,
         scope: &'a Scope,
-        request: &'a BinaryStageRequest,
+        request: &'a StagePurpose,
         seal: &'a SealRequest,
         manifest: &'a Manifest,
         sources: &'a [SourceRecord],
     }
     let canonical = serde_json::to_vec(&Commitment {
-        version: 1,
+        version: 2,
         stage: &stage.reference,
         scope: &stage.scope,
-        request: &stage.request,
+        request: &stage.purpose,
         seal,
         manifest: &manifest,
         sources: &sources,
@@ -978,12 +1355,13 @@ fn verify_stage(tx: &Connection, stage: &Stage) -> Result<VerifiedStage> {
             ));
         }
         for page in &pages {
-            let bounded: bool = tx.query_row("SELECT length(payload) BETWEEN 1 AND 1048576 AND length(CAST(descriptor AS BLOB)) BETWEEN 1 AND 1048576 FROM binary_stage_pages WHERE stage_id=?1 AND sequence=?2",params![stage.reference.stage_id.as_str(),page.sequence],|r|r.get(0)).optional()?.ok_or_else(||corrupt("sealed binary page missing"))?;
-            if !bounded {
-                return Err(corrupt("sealed binary page bound exceeded"));
-            }
-            let (id, raw, descriptor):(String,Vec<u8>,String) = tx.query_row("SELECT update_id,payload,descriptor FROM binary_stage_pages WHERE stage_id=?1 AND sequence=?2",params![stage.reference.stage_id.as_str(),page.sequence],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-            if id != page.id.as_str() || raw != page.raw || descriptor != page.descriptor {
+            let metadata = source_metadata(tx, stage, "page", page.sequence)?;
+            let raw = immutable_payloads::read_exact(tx, &metadata)?;
+            let (_, _, record) = GraphRecord::from_authored_exact(&raw)?;
+            if metadata.key.update_id != page.id
+                || raw != page.raw
+                || serde_json::to_string(&record)? != page.descriptor
+            {
                 return Err(corrupt(
                     "sealed binary page differs from exact durable source",
                 ));
@@ -1453,7 +1831,7 @@ mod tests {
         let raw: Vec<u8> = store
             .connection
             .query_row(
-                "SELECT payload FROM binary_stage_chunks WHERE stage_id=?1",
+                "SELECT p.payload FROM immutable_payloads p JOIN binary_stage_allocations a USING(realm_id,vault_id,update_id) WHERE a.stage_id=?1 AND a.kind='chunk'",
                 [good.stage_id.as_str()],
                 |r| r.get(0),
             )
@@ -1464,13 +1842,153 @@ mod tests {
         };
         store
             .connection
-            .execute(
-                "UPDATE binary_stage_chunks SET payload=?1 WHERE stage_id=?2",
-                params![payload.encode().unwrap(), good.stage_id.as_str()],
-            )
+            .execute_batch("DROP TRIGGER immutable_payloads_no_update")
             .unwrap();
+        store.connection.execute("UPDATE immutable_payloads SET payload=?1 WHERE update_id IN (SELECT update_id FROM binary_stage_allocations WHERE stage_id=?2 AND kind='chunk')",params![payload.encode().unwrap(),good.stage_id.as_str()]).unwrap();
         assert!(store.query_binary_stage(&good).is_err());
         assert!(store.seal_binary_stage(&good, 8, None).is_err());
+        invisible(&store);
+    }
+
+    #[test]
+    fn sealed_capture_is_inert_owner_bound_and_releases_only_its_active_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.sqlite");
+        let mut store = enrolled(&path);
+        let capture = BinaryCaptureRequest {
+            path: VaultPath::new("external.bin").unwrap(),
+            expected_length: 4,
+            expected_digest: Sha256Digest::of(b"data"),
+        };
+        let quota = StreamingLimits {
+            max_active_stages: 1,
+            ..limits()
+        };
+        let stage = store
+            .begin_binary_capture(&op("client"), &op("capture"), &capture, quota)
+            .unwrap();
+        assert!(store.captured_binary_ref(&stage).is_err());
+        assert_eq!(
+            store
+                .begin_binary_capture(&op("client"), &op("capture"), &capture, quota)
+                .unwrap(),
+            stage
+        );
+        assert!(store
+            .begin_binary_stage(
+                &op("client"),
+                &op("capture"),
+                &request("fake-command", Some(4)),
+                quota
+            )
+            .is_err());
+        store.append_binary_chunk(&stage, 0, 0, b"data").unwrap();
+        let sealed = store.seal_binary_stage(&stage, 4, None).unwrap();
+        let captured = store.captured_binary_ref(&stage).unwrap();
+        assert_eq!(captured.manifest, *sealed.manifest());
+        assert_eq!(captured.source_commitment, *sealed.source_commitment());
+        assert_eq!(usage(&store.connection).unwrap().0, 0);
+        assert_eq!(usage(&store.connection).unwrap().4, 1);
+        assert_eq!(
+            usage(&store.connection).unwrap().1,
+            immutable_payloads::total_bytes(&store.connection).unwrap()
+        );
+        assert!(store.abort_binary_stage(&stage).is_err());
+        assert_eq!(
+            resolve_locator(&store.connection, &stage.locator()).unwrap(),
+            stage
+        );
+        let mut forged = stage.locator();
+        forged.client_id = op("foreign");
+        assert!(resolve_locator(&store.connection, &forged).is_err());
+        let sources = staged_sources(&store.connection, &stage).unwrap();
+        assert_eq!(sources.len(), 2);
+        assert_eq!(
+            expected_source_metadata(&store.connection, &stage, &sources[0].key.update_id).unwrap(),
+            sources[0]
+        );
+        assert!(expected_source_metadata(
+            &store.connection,
+            &stage,
+            &UpdateId::new("foreign-source").unwrap()
+        )
+        .is_err());
+        let metadata = capture_metadata(&store.connection, &captured).unwrap();
+        assert_eq!(metadata.records().len(), 2);
+        assert!(metadata.activities().is_empty());
+        assert!(metadata
+            .metadata_view()
+            .unwrap()
+            .namespace()
+            .entries
+            .is_empty());
+        let mut forged = captured.clone();
+        forged.source_commitment = Sha256Digest::of(b"invented");
+        assert!(capture_metadata(&store.connection, &forged).is_err());
+        for table in ["binary_stage_chunks", "binary_stage_pages"] {
+            let columns = store
+                .connection
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap();
+            assert!(!columns
+                .iter()
+                .any(|name| name == "payload" || name == "descriptor"));
+        }
+        invisible(&store);
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(store.captured_binary_ref(&stage).unwrap(), captured);
+        // A new ordinary upload can begin while the sealed capture stays pinned.
+        store
+            .begin_binary_stage(
+                &op("client"),
+                &op("command"),
+                &request("new-command", None),
+                quota,
+            )
+            .unwrap();
+        assert_eq!(store.captured_binary_ref(&stage).unwrap(), captured);
+        invisible(&store);
+    }
+
+    #[test]
+    fn capture_cannot_seal_a_different_hash_or_replay_as_another_purpose() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = enrolled(&dir.path().join("vault.sqlite"));
+        let expected = BinaryCaptureRequest {
+            path: VaultPath::new("external.bin").unwrap(),
+            expected_length: 4,
+            expected_digest: Sha256Digest::of(b"wrong"),
+        };
+        let capture = store
+            .begin_binary_capture(&op("client"), &op("capture"), &expected, limits())
+            .unwrap();
+        let mut changed = expected.clone();
+        changed.path = VaultPath::new("other.bin").unwrap();
+        assert!(store
+            .begin_binary_capture(&op("client"), &op("capture"), &changed, limits())
+            .is_err());
+        store.append_binary_chunk(&capture, 0, 0, b"data").unwrap();
+        assert!(store.seal_binary_stage(&capture, 4, None).is_err());
+        assert!(store.captured_binary_ref(&capture).is_err());
+        store.abort_binary_stage(&capture).unwrap();
+        let command = store
+            .begin_binary_stage(
+                &op("client"),
+                &op("command"),
+                &request("command", Some(0)),
+                limits(),
+            )
+            .unwrap();
+        store.seal_binary_stage(&command, 0, None).unwrap();
+        assert!(store.captured_binary_ref(&command).is_err());
+        assert!(store
+            .begin_binary_capture(&op("client"), &op("command"), &expected, limits())
+            .is_err());
         invisible(&store);
     }
 }

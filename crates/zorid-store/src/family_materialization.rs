@@ -1,11 +1,13 @@
 //! Derived publication cache. Graph/text state remains authoritative; hidden
 //! outcomes never replace retained bytes with empty or guessed content.
+use super::content::{BinarySourceRef, PublishedBinaryRef, StoredContent};
 use super::*;
 use std::collections::BTreeMap;
 use zorid_core::EntryChange;
-use zorid_file_sync::materialization::{
-    ContentWitness, EntryMaterialization, Outcome, PendingReason,
-};
+use zorid_file_sync::binary_stream::VerifiedBinarySet;
+use zorid_file_sync::materialization::{ContentWitness, PendingReason};
+use zorid_file_sync::metadata::MetadataState;
+use zorid_file_sync::reference_materialization::{ContentRef, EntryMaterializationRef, OutcomeRef};
 use zorid_file_sync::{EntryIdentity, Sha256Digest};
 use zorid_sync_protocol::UpdateId;
 
@@ -63,10 +65,33 @@ pub(super) fn get(tx: &Connection, id: &EntryId) -> Result<Option<FamilyMaterial
     })
     .transpose()
 }
-fn retained_entry(tx: &Connection, id: &EntryId) -> Result<Option<(StoredEntry, bool)>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RetainedEntry {
+    state: EntryState,
+    content: Option<StoredContent>,
+}
+fn retained_entry(tx: &Connection, id: &EntryId) -> Result<Option<(RetainedEntry, bool)>> {
+    let sizes: Option<(Option<i64>, Option<i64>, Option<i64>)> = tx
+        .query_row(
+            "SELECT length(content),length(CAST(content_ref AS BLOB)),length(CAST(content_digest AS BLOB)) FROM entries WHERE id=?1",
+            [id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if sizes.is_some_and(|(inline, reference, digest)| {
+        inline.is_some_and(|n| n < 0 || n > zorid_client_sync::MAX_TEXT_BYTES as i64)
+            || reference.is_some_and(|n| {
+                n <= 0 || n > zorid_file_sync::metadata::MAX_GRAPH_RECORD_BYTES as i64
+            })
+            || digest.is_some_and(|n| !(1..=256).contains(&n))
+    }) {
+        return Err(StoreError::Corrupt(
+            "retained publication content exceeds metadata/text bound".into(),
+        ));
+    }
     let raw = tx
         .query_row(
-            "SELECT path,deleted,state,content,visible FROM entries WHERE id=?1",
+            "SELECT path,deleted,state,content,visible,content_ref,content_digest FROM entries WHERE id=?1",
             [id.as_str()],
             |r| {
                 Ok((
@@ -75,16 +100,43 @@ fn retained_entry(tx: &Connection, id: &EntryId) -> Result<Option<(StoredEntry, 
                     r.get::<_, String>(2)?,
                     r.get::<_, Option<Vec<u8>>>(3)?,
                     r.get::<_, i64>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, Option<String>>(6)?,
                 ))
             },
         )
         .optional()?;
-    raw.map(|(path, deleted, raw, content, visible)| {
+    raw.map(|(path, deleted, raw, inline, visible, reference, digest)| {
+        let content = match (inline, reference) {
+            (Some(bytes), None) => Some(StoredContent::InlineBytes(bytes)),
+            (None, Some(raw)) => {
+                let source: BinarySourceRef = serde_json::from_str(&raw)?;
+                if !matches!(source, BinarySourceRef::Graph(_)) {
+                    return Err(StoreError::Corrupt(
+                        "captured source cannot be desired publication".into(),
+                    ));
+                }
+                Some(StoredContent::BinaryRef(source))
+            }
+            (None, None) => None,
+            (Some(_), Some(_)) => {
+                return Err(StoreError::Corrupt(
+                    "entry has two content authorities".into(),
+                ))
+            }
+        };
+        let stored_digest: Option<Sha256Digest> =
+            digest.map(|raw| serde_json::from_str(&raw)).transpose()?;
+        if stored_digest != content.as_ref().map(StoredContent::digest) {
+            return Err(StoreError::Corrupt(
+                "retained publication digest differs from typed content".into(),
+            ));
+        }
         if !matches!(visible, 0 | 1) {
             return Err(StoreError::Corrupt("invalid publication visibility".into()));
         }
         Ok((
-            StoredEntry {
+            RetainedEntry {
                 state: decode_state(id.as_str(), &path, deleted, &raw, content.is_some())?,
                 content,
             },
@@ -93,22 +145,303 @@ fn retained_entry(tx: &Connection, id: &EntryId) -> Result<Option<(StoredEntry, 
     })
     .transpose()
 }
+fn load_metadata(tx: &Connection) -> Result<MetadataState> {
+    let authority = text_sync::identity(tx)?;
+    let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) else {
+        return Err(StoreError::Corrupt("family scope missing".into()));
+    };
+    blob_index::load_metadata(tx, &FamilyScope { realm_id, vault_id })?
+        .ok_or_else(|| StoreError::Corrupt("family metadata missing".into()))
+}
+fn check_retained_content(
+    tx: &Connection,
+    graph: &MetadataState,
+    identity: &EntryIdentity,
+    witness: &FamilyContentWitness,
+    content: &StoredContent,
+    verified: Option<&VerifiedBinarySet>,
+) -> Result<()> {
+    if content.digest() != witness.digest {
+        return Err(StoreError::Corrupt(
+            "retained content differs from witness digest".into(),
+        ));
+    }
+    match (&witness.witness, content) {
+        (
+            ContentWitness::Text {
+                identity: text_identity,
+                revision,
+                snapshot_digest,
+            },
+            StoredContent::InlineBytes(bytes),
+        ) => {
+            let view = graph.metadata_view()?;
+            if view
+                .namespace()
+                .entries
+                .get(&identity.entry_id)
+                .is_none_or(|entry| &entry.identity != identity)
+                || !matches!(view.content_bindings().get(&identity.entry_id), Some(zorid_file_sync::v2::ContentBinding::Text { text_bootstrap_id, text_format }) if text_bootstrap_id == &text_identity.bootstrap_id && *text_format == zorid_client_sync::v2::TEXT_FORMAT_VERSION)
+            {
+                return Err(StoreError::Corrupt(
+                    "retained text binding differs from metadata".into(),
+                ));
+            }
+            let state = text_sync::revision(tx, &identity.entry_id, revision)?
+                .ok_or_else(|| StoreError::Corrupt("retained text witness missing".into()))?;
+            if &state.identity != text_identity
+                || state.identity.entry_id != identity.entry_id
+                || state.identity.realm_id != graph.scope().realm_id
+                || state.identity.vault_id != graph.scope().vault_id
+                || Sha256Digest::of(&state.snapshot) != *snapshot_digest
+                || state.complete_materialized_utf8()?.as_deref() != Some(bytes.as_slice())
+            {
+                return Err(StoreError::Corrupt(
+                    "retained text witness does not prove bytes".into(),
+                ));
+            }
+        }
+        (
+            ContentWitness::Binary {
+                selected_event,
+                manifest,
+            },
+            StoredContent::BinaryRef(BinarySourceRef::Graph(reference)),
+        ) => {
+            if &reference.identity != identity
+                || &reference.selected_event != selected_event
+                || &reference.manifest != manifest
+            {
+                return Err(StoreError::Corrupt(
+                    "retained binary locator differs from witness".into(),
+                ));
+            }
+            let resolved = reference.resolve(graph)?;
+            if let Some(verified) = verified {
+                verified.check_preconditions(graph)?;
+                verified
+                    .get(resolved.manifest())?
+                    .ok_or_else(|| {
+                        StoreError::Corrupt(
+                            "retained binary manifest lacks exact-state verification".into(),
+                        )
+                    })?
+                    .check_preconditions(graph, resolved.manifest())?;
+            }
+        }
+        _ => {
+            return Err(StoreError::Corrupt(
+                "retained content kind differs from witness".into(),
+            ))
+        }
+    }
+    Ok(())
+}
+/// Historical binary locators are checked against immutable event identity and
+/// manifest metadata. This does not reread file bytes or manufacture a proof.
+fn check_history_metadata(
+    tx: &Connection,
+    graph: &MetadataState,
+    record: &FamilyMaterialization,
+) -> Result<()> {
+    if let Some(witness) = &record.retained_content {
+        match &witness.witness {
+            ContentWitness::Binary {
+                selected_event,
+                manifest,
+            } => {
+                if witness.digest != manifest.digest {
+                    return Err(StoreError::Corrupt(
+                        "historical manifest digest differs from witness".into(),
+                    ));
+                }
+                PublishedBinaryRef {
+                    scope: graph.scope().clone(),
+                    identity: record.identity.clone(),
+                    selected_event: selected_event.clone(),
+                    manifest: manifest.clone(),
+                }
+                .resolve(graph)?;
+            }
+            ContentWitness::Text {
+                identity,
+                revision,
+                snapshot_digest,
+            } => {
+                let view = graph.metadata_view()?;
+                if identity.entry_id != record.identity.entry_id
+                    || view
+                        .namespace()
+                        .entries
+                        .get(&record.identity.entry_id)
+                        .is_none_or(|entry| entry.identity != record.identity)
+                    || !matches!(view.content_bindings().get(&record.identity.entry_id), Some(zorid_file_sync::v2::ContentBinding::Text { text_bootstrap_id, text_format }) if text_bootstrap_id == &identity.bootstrap_id && *text_format == zorid_client_sync::v2::TEXT_FORMAT_VERSION)
+                {
+                    return Err(StoreError::Corrupt(
+                        "historical text binding differs from metadata".into(),
+                    ));
+                }
+                let text = text_sync::revision(tx, &record.identity.entry_id, revision)?
+                    .ok_or_else(|| StoreError::Corrupt("historical text witness missing".into()))?;
+                if &text.identity != identity
+                    || identity.realm_id != graph.scope().realm_id
+                    || identity.vault_id != graph.scope().vault_id
+                    || Sha256Digest::of(&text.snapshot) != *snapshot_digest
+                    || text
+                        .complete_materialized_utf8()?
+                        .is_none_or(|bytes| Sha256Digest::of(&bytes) != witness.digest)
+                {
+                    return Err(StoreError::Corrupt(
+                        "historical text witness differs from snapshot".into(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn check_current_metadata(
+    tx: &Connection,
+    graph: &MetadataState,
+    record: &FamilyMaterialization,
+) -> Result<()> {
+    check_history_metadata(tx, graph, record)?;
+    let row = retained_entry(tx, &record.identity.entry_id)?;
+    let normal = matches!(&record.publication, FamilyPublication::Normal { .. });
+    if normal != row.as_ref().is_some_and(|(_, visible)| *visible) {
+        return Err(StoreError::Corrupt(
+            "publication visibility differs from metadata".into(),
+        ));
+    }
+    if let Some((row, _)) = row {
+        if history(tx, &row.state.id, &row.state.revision)?.as_ref() != Some(record) {
+            return Err(StoreError::Corrupt(
+                "current publication differs from immutable history".into(),
+            ));
+        }
+        match (&row.content, &record.retained_content) {
+            (Some(content), Some(witness)) => {
+                check_retained_content(tx, graph, &record.identity, witness, content, None)?
+            }
+            (None, None) if row.state.kind == EntryKind::Folder => {}
+            _ => {
+                return Err(StoreError::Corrupt(
+                    "retained publication content missing".into(),
+                ))
+            }
+        }
+        if let FamilyPublication::Normal {
+            path,
+            kind,
+            namespace_heads,
+            location_event,
+        } = &record.publication
+        {
+            let view = graph.metadata_view()?;
+            let entry = view.namespace().entries.get(&row.state.id).ok_or_else(|| {
+                StoreError::Corrupt("Normal publication identity missing from metadata".into())
+            })?;
+            if row.state.deleted
+                || &row.state.path != path
+                || &row.state.kind != kind
+                || entry.identity != record.identity
+                || entry.kind != *kind
+                || !matches!(&entry.projection, zorid_file_sync::Projection::Normal { path: actual } if actual == path)
+                || &entry.heads != namespace_heads
+                || entry.locations.last().map(|value| &value.event) != Some(location_event)
+            {
+                return Err(StoreError::Corrupt(
+                    "Normal publication differs from current metadata".into(),
+                ));
+            }
+            if let Some(FamilyContentWitness {
+                witness: ContentWitness::Text { revision, .. },
+                ..
+            }) = &record.retained_content
+            {
+                let source =
+                    text_sync::revision(tx, &row.state.id, revision)?.ok_or_else(|| {
+                        StoreError::Corrupt("current text witness revision missing".into())
+                    })?;
+                if text_sync::retained(tx, &row.state.id)?.as_ref() != Some(&source) {
+                    return Err(StoreError::Corrupt(
+                        "Normal text witness differs from current retained snapshot".into(),
+                    ));
+                }
+            }
+            if let Some(FamilyContentWitness {
+                witness:
+                    ContentWitness::Binary {
+                        selected_event,
+                        manifest,
+                    },
+                ..
+            }) = &record.retained_content
+            {
+                if entry.contents.last().is_none_or(|head| {
+                    &head.event != selected_event
+                        || &head.manifest != manifest
+                        || !head.status.missing.is_empty()
+                }) {
+                    return Err(StoreError::Corrupt(
+                        "Normal binary publication is not selected complete content".into(),
+                    ));
+                }
+            }
+        }
+    } else {
+        let had_row: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM family_materialization_history WHERE entry_id=?1)",
+            [record.identity.entry_id.as_str()],
+            |row| row.get(0),
+        )?;
+        if record.retained_content.is_some() || normal || had_row {
+            return Err(StoreError::Corrupt(
+                "retained publication row missing".into(),
+            ));
+        }
+    }
+    Ok(())
+}
 struct Change {
     record: FamilyMaterialization,
-    before: Option<StoredEntry>,
-    after: Option<StoredEntry>,
+    before: Option<RetainedEntry>,
+    after: Option<RetainedEntry>,
     was_visible: bool,
     visible: bool,
     changed: bool,
 }
 fn candidate(
     tx: &Connection,
-    graph: &zorid_file_sync::v2::State,
-    classified: &EntryMaterialization,
+    graph: &MetadataState,
+    verified: &VerifiedBinarySet,
+    classified: &EntryMaterializationRef,
 ) -> Result<Change> {
     let id = &classified.identity.entry_id;
     let prior = get(tx, id)?;
     let row = retained_entry(tx, id)?;
+    match (&prior, &row) {
+        (Some(prior), Some((row, _)))
+            if history(tx, id, &row.state.revision)?.as_ref() != Some(prior) =>
+        {
+            return Err(StoreError::Corrupt(
+                "retained publication differs from immutable history".into(),
+            ));
+        }
+        (Some(prior), None) => {
+            let had_row: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM family_materialization_history WHERE entry_id=?1)",
+                [id.as_str()],
+                |row| row.get(0),
+            )?;
+            if prior.retained_content.is_some() || had_row {
+                return Err(StoreError::Corrupt(
+                    "historically retained publication row missing".into(),
+                ));
+            }
+        }
+        _ => {}
+    }
     if prior
         .as_ref()
         .is_some_and(|r| r.identity != classified.identity)
@@ -135,7 +468,7 @@ fn candidate(
     };
     let mut after = before.clone();
     let visible = match &classified.outcome {
-        Outcome::Normal {
+        OutcomeRef::Normal {
             path,
             kind,
             content,
@@ -148,11 +481,20 @@ fn candidate(
                 namespace_heads: namespace_heads.clone(),
                 location_event: location_event.clone(),
             };
-            record.retained_content = content.as_ref().map(|c| FamilyContentWitness {
-                digest: c.digest.clone(),
-                witness: c.witness.clone(),
+            record.retained_content = content.as_ref().map(|content| match content {
+                ContentRef::Text(value) => FamilyContentWitness {
+                    digest: value.digest,
+                    witness: value.witness.clone(),
+                },
+                ContentRef::Binary(value) => FamilyContentWitness {
+                    digest: value.manifest().digest,
+                    witness: ContentWitness::Binary {
+                        selected_event: value.selected_event().clone(),
+                        manifest: value.manifest().clone(),
+                    },
+                },
             });
-            after = Some(StoredEntry {
+            after = Some(RetainedEntry {
                 state: EntryState {
                     id: id.clone(),
                     path: path.clone(),
@@ -163,17 +505,22 @@ fn candidate(
                         .unwrap_or(Revision::new("unallocated")?),
                     deleted: false,
                 },
-                content: content.as_ref().map(|c| c.bytes.clone()),
+                content: content.as_ref().map(|content| match content {
+                    ContentRef::Text(value) => StoredContent::InlineBytes(value.bytes.clone()),
+                    ContentRef::Binary(value) => StoredContent::BinaryRef(BinarySourceRef::Graph(
+                        PublishedBinaryRef::from_verified_content(value),
+                    )),
+                }),
             });
             true
         }
-        Outcome::Pending { reason } => {
+        OutcomeRef::Pending { reason } => {
             record.publication = FamilyPublication::Pending {
                 reason: reason.clone(),
             };
             false
         }
-        Outcome::Recovery { reason } => {
+        OutcomeRef::Recovery { reason } => {
             record.publication = FamilyPublication::Recovery {
                 reason: reason.clone(),
             };
@@ -184,7 +531,7 @@ fn candidate(
             }
             false
         }
-        Outcome::Tombstone => {
+        OutcomeRef::Tombstone => {
             if let Some(row) = &mut after {
                 row.state.deleted = true;
             }
@@ -200,48 +547,18 @@ fn candidate(
             ));
         }
         if let Some(witness) = prior.as_ref().and_then(|r| r.retained_content.as_ref()) {
-            if let Some(bytes) = &before.content {
-                match &witness.witness {
-                    ContentWitness::Text {
-                        identity,
-                        revision,
-                        snapshot_digest,
-                    } => {
-                        let state = text_sync::revision(tx, id, revision)?.ok_or_else(|| {
-                            StoreError::Corrupt("retained text witness missing".into())
-                        })?;
-                        if &state.identity != identity
-                            || Sha256Digest::of(&state.snapshot) != *snapshot_digest
-                            || state.complete_materialized_utf8()?.as_ref() != Some(bytes)
-                        {
-                            return Err(StoreError::Corrupt(
-                                "retained text witness does not prove bytes".into(),
-                            ));
-                        }
-                    }
-                    ContentWitness::Binary { selected_event, .. } => {
-                        graph.validate_retained_binary_content(
-                            &classified.identity,
-                            selected_event,
-                            &zorid_file_sync::materialization::VerifiedContent {
-                                bytes: bytes.clone(),
-                                digest: witness.digest.clone(),
-                                witness: witness.witness.clone(),
-                            },
-                            family_store::FAMILY_MAX_FILE_BYTES,
-                        )?;
-                    }
-                }
-            }
-            if before
+            let content = before
                 .content
                 .as_ref()
-                .is_none_or(|bytes| Sha256Digest::of(bytes) != witness.digest)
-            {
-                return Err(StoreError::Corrupt(
-                    "retained bytes differ from publication witness".into(),
-                ));
-            }
+                .ok_or_else(|| StoreError::Corrupt("retained content missing".into()))?;
+            check_retained_content(
+                tx,
+                graph,
+                &classified.identity,
+                witness,
+                content,
+                Some(verified),
+            )?;
         }
     }
     let changed = prior.as_ref() != Some(&record) || before != after || was_visible != visible;
@@ -256,11 +573,17 @@ fn candidate(
 }
 /// Validate the old cache before mutating causal state. Missing old rows are
 /// corruption, not permission to manufacture a new cache on duplicate delivery.
-pub(super) fn validate(tx: &Connection, graph: &zorid_file_sync::v2::State) -> Result<()> {
-    let classified = zorid_file_sync::materialization::classify(
+pub(super) fn validate(
+    tx: &Connection,
+    graph: &MetadataState,
+    verified: &VerifiedBinarySet,
+) -> Result<()> {
+    let classified = zorid_file_sync::reference_materialization::classify_metadata(
         graph,
+        verified,
         &family_ingress::retained_texts(tx, graph.scope())?,
-        family_store::FAMILY_MAX_FILE_BYTES,
+        zorid_file_sync::MAX_FILE_BYTES,
+        zorid_file_sync::MAX_STATE_BYTES as u64,
     )?;
     let count: i64 = tx.query_row("SELECT count(*) FROM family_materializations", [], |r| {
         r.get(0)
@@ -270,8 +593,8 @@ pub(super) fn validate(tx: &Connection, graph: &zorid_file_sync::v2::State) -> R
             "publication cache identity coverage mismatch".into(),
         ));
     }
-    for value in classified.values() {
-        if candidate(tx, graph, value)?.changed {
+    for value in &classified {
+        if candidate(tx, graph, verified, value)?.changed {
             return Err(StoreError::Corrupt(
                 "publication cache differs from causal authority".into(),
             ));
@@ -315,19 +638,26 @@ pub(super) fn recovery_count(tx: &Connection) -> Result<u32> {
 /// ancestors. Metadata-only changes keep immutable causal snapshots intact.
 pub(super) fn apply(
     tx: &Connection,
-    graph: &zorid_file_sync::v2::State,
+    graph: &MetadataState,
+    verified: &VerifiedBinarySet,
     origin: ProjectionOrigin,
     allocated_revision: Option<&Revision>,
 ) -> Result<Vec<EntryId>> {
     let texts = family_ingress::retained_texts(tx, graph.scope())?;
-    let classified = zorid_file_sync::materialization::classify(
+    let classified = zorid_file_sync::reference_materialization::classify_metadata(
         graph,
+        verified,
         &texts,
-        family_store::FAMILY_MAX_FILE_BYTES,
+        zorid_file_sync::MAX_FILE_BYTES,
+        zorid_file_sync::MAX_STATE_BYTES as u64,
     )?;
+    let classified: BTreeMap<_, _> = classified
+        .into_iter()
+        .map(|c| (c.identity.entry_id.clone(), c))
+        .collect();
     let mut changes: BTreeMap<EntryId, Change> = classified
         .iter()
-        .map(|(id, c)| Ok((id.clone(), candidate(tx, graph, c)?)))
+        .map(|(id, c)| Ok((id.clone(), candidate(tx, graph, verified, c)?)))
         .collect::<Result<_>>()?;
     // Existing caches may never disappear from the immutable graph identity set.
     let cached: Vec<String> = tx
@@ -405,7 +735,15 @@ pub(super) fn apply(
                     if &source.identity != identity
                         || Sha256Digest::of(&source.snapshot) != *snapshot_digest
                         || source.materialized_utf8()?.as_slice()
-                            != after.content.as_deref().unwrap_or_default()
+                            != after
+                                .content
+                                .as_ref()
+                                .and_then(StoredContent::inline_bytes)
+                                .ok_or_else(|| {
+                                    StoreError::Corrupt(
+                                        "text publication has no inline content".into(),
+                                    )
+                                })?
                     {
                         return Err(StoreError::Corrupt(
                             "text publication provenance mismatch".into(),
@@ -430,7 +768,22 @@ pub(super) fn apply(
                     *source_revision = revision.clone();
                 }
             }
-            tx.execute("INSERT INTO entries(id,path,deleted,state,content,visible) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET path=excluded.path,deleted=excluded.deleted,state=excluded.state,content=excluded.content,visible=excluded.visible",params![id.as_str(),after.state.path.as_str(),after.state.deleted,serde_json::to_string(&after.state)?,after.content,change.visible])?;
+            let (inline, reference) = match after.content.as_ref() {
+                Some(StoredContent::InlineBytes(bytes)) => (Some(bytes.as_slice()), None),
+                Some(StoredContent::BinaryRef(value @ BinarySourceRef::Graph(_))) => {
+                    (None, Some(serde_json::to_string(value)?))
+                }
+                Some(StoredContent::BinaryRef(BinarySourceRef::Capture(_))) => {
+                    return Err(StoreError::Corrupt("capture cannot be published".into()))
+                }
+                None => (None, None),
+            };
+            let digest = after
+                .content
+                .as_ref()
+                .map(|content| serde_json::to_string(&content.digest()))
+                .transpose()?;
+            tx.execute("INSERT INTO entries(id,path,deleted,state,content,visible,content_ref,content_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET path=excluded.path,deleted=excluded.deleted,state=excluded.state,content=excluded.content,visible=excluded.visible,content_ref=excluded.content_ref,content_digest=excluded.content_digest",params![id.as_str(),after.state.path.as_str(),after.state.deleted,serde_json::to_string(&after.state)?,inline,change.visible,reference,digest])?;
             let entry_change = EntryChange {
                 before: change.before.as_ref().map(|e| e.state.clone()),
                 after: after.state.clone(),
@@ -511,10 +864,28 @@ impl Store {
         let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) else {
             return Err(zorid_client_sync::SyncError::IdentityMismatch.into());
         };
-        let graph = file_state::load(&tx, &zorid_file_sync::Scope { realm_id, vault_id })?
+        let graph = blob_index::load_metadata(&tx, &zorid_file_sync::Scope { realm_id, vault_id })?
             .ok_or_else(|| StoreError::Corrupt("enrolled graph missing".into()))?;
-        validate(&tx, &graph)?;
         let value = get(&tx, id)?;
+        if let Some(record) = &value {
+            check_current_metadata(&tx, &graph, record)?;
+        } else {
+            let known = graph.records().values().any(|record| match record.body() {
+                zorid_file_sync::metadata::GraphRecordBody::Events { events }
+                | zorid_file_sync::metadata::GraphRecordBody::ObservedDelete { events } => {
+                    events.iter().any(|event| event.identity.entry_id == *id)
+                }
+                _ => false,
+            }) || graph
+                .activities()
+                .values()
+                .any(|activity| activity.identity().entry_id == *id);
+            if known {
+                return Err(StoreError::Corrupt(
+                    "graph identity lacks publication cache".into(),
+                ));
+            }
+        }
         tx.commit()?;
         Ok(value)
     }
@@ -541,6 +912,9 @@ impl Store {
                 Ok(record)
             })
             .transpose()?;
+        if let Some(record) = &value {
+            check_history_metadata(&tx, &load_metadata(&tx)?, record)?;
+        }
         tx.commit()?;
         Ok(value)
     }
@@ -576,6 +950,25 @@ pub(super) fn check_publication(
     state: &EntryState,
     content: Option<&[u8]>,
 ) -> Result<()> {
+    if let Some(bytes) = content {
+        const INLINE_LIMIT: u64 = 16 * 1024 * 1024;
+        if bytes.len() as u64 > INLINE_LIMIT {
+            return Err(StoreError::StreamRequired {
+                bytes: bytes.len() as u64,
+                limit: INLINE_LIMIT,
+            });
+        }
+    }
+    let owned = content.map(|bytes| StoredContent::InlineBytes(bytes.to_vec()));
+    check_publication_content(tx, state, owned.as_ref())
+}
+/// Metadata-only check of a typed physical target. Reading bytes later must use
+/// a checked pin; a serialized locator is never itself a content proof.
+pub(super) fn check_publication_content(
+    tx: &Connection,
+    state: &EntryState,
+    content: Option<&StoredContent>,
+) -> Result<()> {
     let enrolled: bool =
         tx.query_row("SELECT EXISTS(SELECT 1 FROM family_graph_heads)", [], |r| {
             r.get(0)
@@ -587,60 +980,22 @@ pub(super) fn check_publication(
         StoreError::Corrupt("physical publication lacks immutable family witness".into())
     })?;
     if state.deleted
-        || !matches!(&record.publication,FamilyPublication::Normal{path,kind,..} if path==&state.path && kind==&state.kind)
+        || !matches!(&record.publication, FamilyPublication::Normal { path, kind, .. } if path == &state.path && kind == &state.kind)
     {
         return Err(StoreError::Corrupt(
             "physical publication is not its exact historical Normal target".into(),
         ));
     }
+    let graph = load_metadata(tx)?;
     match (content, &record.retained_content) {
         (None, None) if state.kind == EntryKind::Folder => Ok(()),
-        (Some(bytes), Some(provenance)) if state.kind == EntryKind::File => {
-            if Sha256Digest::of(bytes) != provenance.digest {
-                return Err(StoreError::Corrupt(
-                    "physical target digest differs from history".into(),
-                ));
-            }
-            match &provenance.witness {
-                ContentWitness::Text {
-                    identity,
-                    revision,
-                    snapshot_digest,
-                } => {
-                    let text = text_sync::revision(tx, &state.id, revision)?.ok_or_else(|| {
-                        StoreError::Corrupt("physical text history missing".into())
-                    })?;
-                    if &text.identity != identity
-                        || &text.version != &state.revision
-                        || Sha256Digest::of(&text.snapshot) != *snapshot_digest
-                        || text.complete_materialized_utf8()?.as_deref() != Some(bytes)
-                    {
-                        return Err(StoreError::Corrupt(
-                            "physical text target differs from causal history".into(),
-                        ));
-                    }
-                }
-                ContentWitness::Binary { selected_event, .. } => {
-                    let authority = text_sync::identity(tx)?;
-                    let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id)
-                    else {
-                        return Err(StoreError::Corrupt("physical family scope missing".into()));
-                    };
-                    let graph =
-                        file_state::load(tx, &zorid_file_sync::Scope { realm_id, vault_id })?
-                            .ok_or_else(|| {
-                                StoreError::Corrupt("physical family graph missing".into())
-                            })?;
-                    graph.validate_retained_binary_content(
-                        &record.identity,
-                        selected_event,
-                        &zorid_file_sync::materialization::VerifiedContent {
-                            bytes: bytes.to_vec(),
-                            digest: provenance.digest.clone(),
-                            witness: provenance.witness.clone(),
-                        },
-                        family_store::FAMILY_MAX_FILE_BYTES,
-                    )?;
+        (Some(value), Some(witness)) if state.kind == EntryKind::File => {
+            check_retained_content(tx, &graph, &record.identity, witness, value, None)?;
+            if let ContentWitness::Text { revision, .. } = &witness.witness {
+                if revision != &state.revision {
+                    return Err(StoreError::Corrupt(
+                        "physical text revision differs from history".into(),
+                    ));
                 }
             }
             Ok(())
@@ -650,6 +1005,7 @@ pub(super) fn check_publication(
         )),
     }
 }
+
 impl Store {
     pub fn family_assert_projected(&self, id: &EntryId) -> Result<()> {
         let tx = self.connection.unchecked_transaction()?;
@@ -684,14 +1040,14 @@ impl Store {
                     }
                 })?;
                 if baseline.state != entry.state
-                    || Some(baseline.content.as_slice()) != entry.content.as_deref()
+                    || Some(&baseline.content) != entry.content.as_ref()
                 {
                     return Err(ContractError::InvalidMutation {
                         reason: "file projection remains pending".into(),
                     }
                     .into());
                 }
-                check_publication(&tx, &baseline.state, Some(&baseline.content))?;
+                check_publication_content(&tx, &baseline.state, Some(&baseline.content))?;
             }
             EntryKind::Folder => {
                 let baseline =
@@ -862,7 +1218,7 @@ pub(super) fn prepare_physical_move(
             None
         }
     };
-    check_publication(tx, before, bytes.as_deref())?;
+    check_publication_content(tx, before, bytes.as_ref())?;
     let mut old = history(tx, &before.id, &before.revision)?
         .ok_or_else(|| invalid("physical move old history missing"))?;
     let current =
@@ -888,7 +1244,7 @@ pub(super) fn prepare_physical_move(
     let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) else {
         return Err(invalid("physical move family scope missing"));
     };
-    let graph = file_state::load(tx, &FamilyScope { realm_id, vault_id })?
+    let graph = blob_index::load_metadata(tx, &FamilyScope { realm_id, vault_id })?
         .ok_or_else(|| invalid("physical move graph missing"))?;
     let FamilyPublication::Normal {
         path,
@@ -987,6 +1343,276 @@ pub(super) fn prepare_physical_move(
             serde_json::to_string(&old)?
         ],
     )?;
-    check_publication(tx, &physical, bytes.as_deref())?;
+    check_publication_content(tx, &physical, bytes.as_ref())?;
     Ok(physical)
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use zorid_file_sync::{
+        binary_stream::{verify_complete_binary_manifests, ChunkSource},
+        metadata::GraphRecord,
+        v2, Manifest, Scope,
+    };
+    use zorid_sync_protocol::{RealmId, VaultId};
+
+    struct NoChunks;
+    impl ChunkSource for NoChunks {
+        fn read_chunk(
+            &mut self,
+            _: &Scope,
+            _: &UpdateId,
+            _: &GraphRecord,
+        ) -> zorid_file_sync::Result<Vec<u8>> {
+            panic!("empty binary must never request a body")
+        }
+    }
+    fn fixture() -> (
+        Connection,
+        MetadataState,
+        VerifiedBinarySet,
+        EntryMaterializationRef,
+    ) {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE entries(id TEXT PRIMARY KEY,path TEXT,deleted INTEGER,state TEXT,content BLOB,visible INTEGER,content_ref TEXT,content_digest TEXT)").unwrap();
+        for (_, sql) in SCHEMA {
+            db.execute_batch(sql).unwrap();
+        }
+        let scope = Scope {
+            realm_id: RealmId::new("realm").unwrap(),
+            vault_id: VaultId::new("vault").unwrap(),
+        };
+        let event = UpdateId::new("create").unwrap();
+        let identity = EntryIdentity {
+            entry_id: EntryId::new("file").unwrap(),
+            bootstrap_id: event.clone(),
+        };
+        let payload = v2::Payload {
+            family: zorid_file_sync::Family::Files,
+            format_version: 2,
+            scope: scope.clone(),
+            id: event.clone(),
+            body: v2::Body::Events {
+                events: vec![v2::EntryEvent {
+                    id: event.clone(),
+                    identity,
+                    parents: vec![],
+                    effect: v2::Effect::Create {
+                        entry_kind: EntryKind::File,
+                        location: zorid_file_sync::Location {
+                            parent: None,
+                            name: "empty.bin".into(),
+                        },
+                        content: Some(v2::ContentSeed::Binary {
+                            manifest: Manifest {
+                                bytes: 0,
+                                digest: Sha256Digest::of(&[]),
+                                pages: vec![],
+                            },
+                        }),
+                    },
+                }],
+            },
+        };
+        let (_, id, descriptor) =
+            GraphRecord::from_authored_exact(&payload.encode().unwrap()).unwrap();
+        let graph = MetadataState::from_records(
+            scope,
+            Revision::new("graph").unwrap(),
+            BTreeMap::from([(id, descriptor)]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let verified = verify_complete_binary_manifests(&graph, &mut NoChunks).unwrap();
+        let classified = zorid_file_sync::reference_materialization::classify_metadata(
+            &graph,
+            &verified,
+            &[],
+            zorid_file_sync::MAX_FILE_BYTES,
+            zorid_file_sync::MAX_STATE_BYTES as u64,
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        (db, graph, verified, classified)
+    }
+    fn retain(db: &Connection, change: &Change) {
+        let row = change.after.as_ref().unwrap();
+        let source = row.content.as_ref().unwrap().binary_ref().unwrap();
+        db.execute(
+            "INSERT INTO entries VALUES(?1,?2,?3,?4,NULL,?5,?6,?7)",
+            params![
+                row.state.id.as_str(),
+                row.state.path.as_str(),
+                row.state.deleted,
+                serde_json::to_string(&row.state).unwrap(),
+                change.visible,
+                serde_json::to_string(source).unwrap(),
+                serde_json::to_string(&row.content.as_ref().unwrap().digest()).unwrap()
+            ],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO family_materialization_history VALUES(?1,?2,?3)",
+            params![
+                row.state.id.as_str(),
+                row.state.revision.as_str(),
+                serde_json::to_string(&change.record).unwrap()
+            ],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO family_materializations VALUES(?1,?2)",
+            params![
+                row.state.id.as_str(),
+                serde_json::to_string(&change.record).unwrap()
+            ],
+        )
+        .unwrap();
+    }
+    #[test]
+    fn empty_binary_remains_present_as_a_graph_reference() {
+        let (db, graph, verified, classified) = fixture();
+        let change = candidate(&db, &graph, &verified, &classified).unwrap();
+        let row = change.after.as_ref().unwrap();
+        assert_eq!(row.state.kind, EntryKind::File);
+        assert!(
+            matches!(&row.content, Some(StoredContent::BinaryRef(BinarySourceRef::Graph(reference))) if reference.manifest.bytes == 0)
+        );
+        retain(&db, &change);
+        assert_eq!(retained_entry(&db, &row.state.id).unwrap().unwrap().0, *row);
+        assert!(
+            !candidate(&db, &graph, &verified, &classified)
+                .unwrap()
+                .changed
+        );
+    }
+    #[test]
+    fn hidden_and_tombstoned_binary_preserve_exact_source_and_witness() {
+        let (db, graph, verified, classified) = fixture();
+        let normal = candidate(&db, &graph, &verified, &classified).unwrap();
+        retain(&db, &normal);
+        for outcome in [
+            OutcomeRef::Pending {
+                reason: PendingReason::MissingBootstrap,
+            },
+            OutcomeRef::Recovery {
+                reason: zorid_file_sync::RecoveryReason::DeleteConflict,
+            },
+            OutcomeRef::Tombstone,
+        ] {
+            let next = EntryMaterializationRef {
+                identity: classified.identity.clone(),
+                outcome,
+            };
+            let changed = candidate(&db, &graph, &verified, &next).unwrap();
+            assert!(!changed.visible);
+            assert_eq!(
+                changed.after.as_ref().unwrap().content,
+                normal.after.as_ref().unwrap().content
+            );
+            assert_eq!(
+                changed.record.retained_content,
+                normal.record.retained_content
+            );
+            assert_eq!(
+                changed.after.as_ref().unwrap().state.deleted,
+                matches!(next.outcome, OutcomeRef::Tombstone)
+            );
+        }
+    }
+    #[test]
+    fn binary_witness_rejects_changed_scope_event_or_manifest_even_without_reading_bytes() {
+        let (db, graph, verified, classified) = fixture();
+        let normal = candidate(&db, &graph, &verified, &classified).unwrap();
+        let content = normal.after.as_ref().unwrap().content.as_ref().unwrap();
+        let witness = normal.record.retained_content.as_ref().unwrap();
+        check_retained_content(
+            &db,
+            &graph,
+            &classified.identity,
+            witness,
+            content,
+            Some(&verified),
+        )
+        .unwrap();
+        let StoredContent::BinaryRef(BinarySourceRef::Graph(reference)) = content else {
+            panic!()
+        };
+        for mutation in 0..3 {
+            let mut changed = reference.clone();
+            match mutation {
+                0 => changed.scope.vault_id = VaultId::new("other").unwrap(),
+                1 => changed.selected_event = UpdateId::new("other").unwrap(),
+                _ => changed.manifest.digest = Sha256Digest::of(b"changed"),
+            }
+            assert!(check_retained_content(
+                &db,
+                &graph,
+                &classified.identity,
+                witness,
+                &StoredContent::BinaryRef(BinarySourceRef::Graph(changed)),
+                None
+            )
+            .is_err());
+        }
+        assert!(check_retained_content(
+            &db,
+            &graph,
+            &classified.identity,
+            witness,
+            &StoredContent::InlineBytes(vec![]),
+            None
+        )
+        .is_err());
+    }
+    #[test]
+    fn retained_row_rejects_two_sources_and_oversized_inline_before_fetch() {
+        let (db, graph, verified, classified) = fixture();
+        let normal = candidate(&db, &graph, &verified, &classified).unwrap();
+        retain(&db, &normal);
+        db.execute("UPDATE entries SET content=X''", []).unwrap();
+        assert!(retained_entry(&db, &classified.identity.entry_id).is_err());
+        db.execute(
+            "UPDATE entries SET content=zeroblob(?1),content_ref=NULL",
+            [zorid_client_sync::MAX_TEXT_BYTES as i64 + 1],
+        )
+        .unwrap();
+        assert!(retained_entry(&db, &classified.identity.entry_id).is_err());
+    }
+    #[test]
+    fn retained_publication_cannot_lose_its_row_or_history() {
+        let (db, graph, verified, classified) = fixture();
+        let normal = candidate(&db, &graph, &verified, &classified).unwrap();
+        retain(&db, &normal);
+        db.execute("DELETE FROM family_materialization_history", [])
+            .unwrap();
+        assert!(candidate(&db, &graph, &verified, &classified).is_err());
+        db.execute(
+            "INSERT INTO family_materialization_history VALUES(?1,?2,?3)",
+            params![
+                classified.identity.entry_id.as_str(),
+                normal.after.as_ref().unwrap().state.revision.as_str(),
+                serde_json::to_string(&normal.record).unwrap()
+            ],
+        )
+        .unwrap();
+        db.execute("DELETE FROM entries", []).unwrap();
+        assert!(candidate(&db, &graph, &verified, &classified).is_err());
+    }
+    #[test]
+    fn retained_binary_requires_proof_for_the_exact_metadata_state() {
+        let (db, graph, verified, classified) = fixture();
+        let normal = candidate(&db, &graph, &verified, &classified).unwrap();
+        retain(&db, &normal);
+        let changed = MetadataState::from_records(
+            graph.scope().clone(),
+            Revision::new("different").unwrap(),
+            graph.records().clone(),
+            graph.activities().clone(),
+        )
+        .unwrap();
+        assert!(candidate(&db, &changed, &verified, &classified).is_err());
+    }
 }

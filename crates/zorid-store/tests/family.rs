@@ -66,6 +66,8 @@ fn actual_family_commands_receive_restart_and_exact_replay_preserve_authority() 
             zorid_core::ContractError::IdempotencyConflict { .. }
         ))
     ));
+    // A mode-bound family receipt does not authorize the generic legacy API.
+    assert!(a.apply(&request).is_err());
     let mut packets = wires(&mut a);
     packets.sort_by_key(|(family, _, _)| {
         if *family == FamilyPayloadKind::Text {

@@ -26,7 +26,7 @@ pub struct NamespaceEvidence {
     pub source_identity: String,
     pub source_parent_identity: String,
     pub destination_parent_identity: Option<String>,
-    pub content: Option<Vec<u8>>,
+    pub content: Option<StoredContent>,
     pub file_baseline: Option<ProjectionBaseline>,
     pub directory_baseline: Option<DirectoryBaseline>,
     /// Immutable prior physical authority, independent of logical revision.
@@ -114,12 +114,39 @@ fn validate_member(work: ProjectionWork, internal_parent: bool, m: &NamespaceMem
             if e.directory_baseline.is_some() || m.directory_stage_identity.is_some() {
                 return Err(invalid("file has directory evidence"));
             }
+            if matches!(
+                &e.content,
+                Some(StoredContent::BinaryRef(BinarySourceRef::Capture(_)))
+            ) && (e.file_baseline.is_none() || e.physical_binding.is_none())
+            {
+                return Err(invalid("captured namespace bytes require an original graph baseline and physical binding"));
+            }
             if let Some(base) = &e.file_baseline {
+                if matches!(
+                    &base.content,
+                    StoredContent::BinaryRef(BinarySourceRef::Capture(_))
+                ) {
+                    return Err(invalid("captured bytes cannot be a namespace baseline"));
+                }
                 if base.state.id != e.before.id
                     || base.state.path != e.before.path
                     || base.state.kind != EntryKind::File
                     || base.state.deleted
-                    || Some(&base.content) != e.content.as_ref()
+                    || !e.content.as_ref().is_some_and(|content| {
+                        if matches!(
+                            content,
+                            StoredContent::BinaryRef(BinarySourceRef::Capture(_))
+                        ) {
+                            matches!(
+                                &base.content,
+                                StoredContent::BinaryRef(BinarySourceRef::Graph(_))
+                            ) && e.physical_binding.is_some()
+                                && content.len() == base.content.len()
+                                && content.digest() == base.content.digest()
+                        } else {
+                            content == &base.content
+                        }
+                    })
                 {
                     return Err(invalid("file namespace baseline mismatch"));
                 }
@@ -215,7 +242,7 @@ fn validate(a: &NamespaceAttempt) -> Result<()> {
         .flatten()
         {
             bytes = bytes
-                .checked_add(content.len())
+                .checked_add(namespace_content_evidence_bytes(content)?)
                 .ok_or_else(|| invalid("namespace evidence overflow"))?;
         }
         if bytes > MAX_NAMESPACE_EVIDENCE_BYTES {
@@ -251,9 +278,33 @@ fn flag(value: i64) -> Result<bool> {
         _ => Err(invalid("invalid namespace progress flag")),
     }
 }
+// Reference metadata is charged here; retained immutable body bytes have their
+// own storage quota. A 64 MiB reference is not 64 MiB of namespace journal data.
+pub fn namespace_content_evidence_bytes(content: &StoredContent) -> Result<usize> {
+    match content {
+        StoredContent::InlineBytes(bytes) => Ok(bytes.len()),
+        StoredContent::BinaryRef(reference) => {
+            let size = serde_json::to_vec(reference)?.len();
+            if size > BINARY_STAGE_MAX_PAYLOAD_BYTES {
+                return Err(invalid("namespace reference metadata exceeds limit"));
+            }
+            Ok(size)
+        }
+    }
+}
 fn evidence_size(e: &NamespaceEvidence) -> Result<usize> {
-    let a = e.content.as_ref().map_or(0, Vec::len);
-    let b = e.file_baseline.as_ref().map_or(0, |b| b.content.len());
+    let a = e
+        .content
+        .as_ref()
+        .map(namespace_content_evidence_bytes)
+        .transpose()?
+        .unwrap_or(0);
+    let b = e
+        .file_baseline
+        .as_ref()
+        .map(|b| namespace_content_evidence_bytes(&b.content))
+        .transpose()?
+        .unwrap_or(0);
     let size = a
         .checked_add(b)
         .ok_or_else(|| invalid("namespace evidence overflow"))?;
@@ -572,18 +623,130 @@ fn directory_baseline(tx: &Connection, id: &EntryId) -> Result<Option<DirectoryB
     })
     .transpose()
 }
-fn entry(tx: &Connection, id: &EntryId) -> Result<(EntryState, Option<Vec<u8>>)> {
-    let (path, deleted, json, content): (String, i64, String, Option<Vec<u8>>) = tx.query_row(
-        "SELECT path,deleted,state,content FROM entries WHERE id=?1",
-        [id.as_str()],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-    )?;
-    Ok((
-        decode_state(id.as_str(), &path, deleted, &json, content.is_some())?,
+fn entry(tx: &Connection, id: &EntryId) -> Result<(EntryState, Option<StoredContent>)> {
+    entry_content::read_content_entry(tx, id)?.ok_or_else(|| invalid("namespace entry is missing"))
+}
+fn publication_content(evidence: &NamespaceEvidence) -> Result<&StoredContent> {
+    let content = evidence
+        .content
+        .as_ref()
+        .ok_or_else(|| invalid("file evidence missing"))?;
+    if matches!(
         content,
-    ))
+        StoredContent::BinaryRef(BinarySourceRef::Capture(_))
+    ) {
+        let original = evidence
+            .file_baseline
+            .as_ref()
+            .ok_or_else(|| invalid("captured namespace evidence has no graph baseline"))?;
+        if !matches!(
+            &original.content,
+            StoredContent::BinaryRef(BinarySourceRef::Graph(_))
+        ) || evidence.physical_binding.is_none()
+            || content.len() != original.content.len()
+            || content.digest() != original.content.digest()
+        {
+            return Err(invalid(
+                "captured namespace evidence differs from original graph baseline",
+            ));
+        }
+        Ok(&original.content)
+    } else {
+        Ok(content)
+    }
+}
+pub(super) fn verify_evidence_sources(
+    snapshot: &Connection,
+    client: Option<&OperationId>,
+    evidence: &[NamespaceEvidence],
+) -> Result<()> {
+    if evidence.len() > MAX_NAMESPACE_MEMBERS {
+        return Err(invalid("invalid namespace evidence count"));
+    }
+    let mut journal_bytes = 0usize;
+    for e in evidence {
+        journal_bytes = journal_bytes
+            .checked_add(evidence_size(e)?)
+            .ok_or_else(|| invalid("namespace evidence overflow"))?;
+        if journal_bytes > MAX_NAMESPACE_EVIDENCE_BYTES {
+            return Err(invalid("namespace evidence exceeds limit"));
+        }
+    }
+    let mut verified = BTreeSet::new();
+    let mut verification_bytes = 0u64;
+    for e in evidence {
+        if let Some(content) = &e.content {
+            if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = content {
+                if client != Some(&capture.stage.client_id) {
+                    return Err(ContractError::IdempotencyConflict {
+                        operation_id: capture.stage.operation_id.clone(),
+                    }
+                    .into());
+                }
+                entry_content::validate_captured_at(snapshot, capture, &e.before.path)?;
+                publication_content(e)?;
+            }
+        }
+        if let Some(baseline) = &e.file_baseline {
+            entry_content::validate_stored_content(snapshot, &baseline.content, false)?;
+        }
+        for content in [
+            e.content.as_ref(),
+            e.file_baseline.as_ref().map(|b| &b.content),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let StoredContent::BinaryRef(reference) = content {
+                // Exact locators in the same snapshot may share one hash pass.
+                if !verified.insert(serde_json::to_vec(reference)?) {
+                    continue;
+                }
+                verification_bytes = verification_bytes
+                    .checked_add(content.len())
+                    .ok_or(zorid_file_sync::Error::TooLarge)?;
+                if verification_bytes > zorid_file_sync::MAX_MANIFEST_VERIFY_BYTES {
+                    return Err(zorid_file_sync::Error::TooLarge.into());
+                }
+            }
+            entry_content::verify_stored_content(snapshot, content)?;
+        }
+    }
+    Ok(())
+}
+fn replay_namespace(tx: &Connection, request: &MutationRequest) -> Result<Option<CommitResult>> {
+    let prior: Option<(String, String)> = tx
+        .query_row(
+            "SELECT request,result FROM operations WHERE operation_id=?1",
+            [request.operation_id.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((command, result)) = prior {
+        let recorded =
+            operation_request::decode_inline_record(&command, &result, &request.operation_id)?;
+        check_idempotency(request, Some(&recorded))?;
+        let attempt_id = operation_attempt_id(tx, &request.operation_id)?
+            .ok_or_else(|| invalid("legacy namespace command lacks physical evidence"))?;
+        metadata(tx, &attempt_id)?;
+        Ok(Some(recorded.result))
+    } else {
+        Ok(None)
+    }
 }
 fn check_baselines(tx: &Connection, e: &NamespaceEvidence) -> Result<()> {
+    if let Some(content) = &e.content {
+        entry_content::validate_stored_content(tx, content, true)?;
+        if let StoredContent::BinaryRef(BinarySourceRef::Capture(capture)) = content {
+            entry_content::validate_captured_at(tx, capture, &e.before.path)?;
+            // Metadata is not byte proof. The admitted native caller verifies
+            // this immutable capture before entering the write transaction.
+            publication_content(e)?;
+        }
+    }
+    if let Some(baseline) = &e.file_baseline {
+        entry_content::validate_stored_content(tx, &baseline.content, false)?;
+    }
     physical_bindings::check_binding(tx, &e.before.id, e.physical_binding.as_ref())?;
     if projection::baseline(tx, &e.before.id)? != e.file_baseline
         || directory_baseline(tx, &e.before.id)? != e.directory_baseline
@@ -686,33 +849,46 @@ impl Store {
         request: &MutationRequest,
         evidence: &[NamespaceEvidence],
     ) -> Result<CommitResult> {
+        self.apply_namespace_inner(None, request, evidence)
+    }
+    /// Typed native counterpart; the client is independently admitted by the
+    /// adapter, never copied from a supplied capture locator.
+    pub fn apply_namespace_content(
+        &mut self,
+        client: &OperationId,
+        request: &MutationRequest,
+        evidence: &[NamespaceEvidence],
+    ) -> Result<CommitResult> {
+        self.apply_namespace_inner(Some(client), request, evidence)
+    }
+    fn apply_namespace_inner(
+        &mut self,
+        client: Option<&OperationId>,
+        request: &MutationRequest,
+        evidence: &[NamespaceEvidence],
+    ) -> Result<CommitResult> {
         if !matches!(
             request.mutation,
             Mutation::Move { .. } | Mutation::Delete { .. }
         ) {
             return Err(invalid("expected namespace mutation"));
         }
+        let snapshot = self.connection.unchecked_transaction()?;
+        if let Some(receipt) = replay_namespace(&snapshot, request)? {
+            snapshot.commit()?;
+            return Ok(receipt);
+        }
+        if evidence.is_empty() || evidence.len() > MAX_NAMESPACE_MEMBERS {
+            return Err(invalid("invalid namespace evidence count"));
+        }
+        verify_evidence_sources(&snapshot, client, evidence)?;
+        snapshot.commit()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let prior: Option<(String, String)> = tx
-            .query_row(
-                "SELECT request,result FROM operations WHERE operation_id=?1",
-                [request.operation_id.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        if let Some((command, result)) = prior {
-            let recorded = RecordedOperation {
-                request: serde_json::from_str(&command)?,
-                result: serde_json::from_str(&result)?,
-            };
-            check_idempotency(request, Some(&recorded))?;
-            let attempt_id = operation_attempt_id(&tx, &request.operation_id)?
-                .ok_or_else(|| invalid("legacy namespace command lacks physical evidence"))?;
-            metadata(&tx, &attempt_id)?;
+        if let Some(receipt) = replay_namespace(&tx, request)? {
             tx.commit()?;
-            return Ok(recorded.result);
+            return Ok(receipt);
         }
         if evidence.is_empty() || evidence.len() > MAX_NAMESPACE_MEMBERS {
             return Err(invalid("invalid namespace evidence count"));
@@ -727,7 +903,7 @@ impl Store {
             .flatten()
             {
                 evidence_bytes = evidence_bytes
-                    .checked_add(bytes.len())
+                    .checked_add(namespace_content_evidence_bytes(bytes)?)
                     .ok_or_else(|| invalid("namespace evidence overflow"))?;
                 if evidence_bytes > MAX_NAMESPACE_EVIDENCE_BYTES {
                     return Err(invalid("namespace evidence exceeds limit"));
@@ -742,7 +918,11 @@ impl Store {
                 return Err(invalid("duplicate namespace evidence"));
             }
             let (state, content) = entry(&tx, &e.before.id)?;
-            if state != e.before || content != e.content {
+            let expected_content = match e.before.kind {
+                EntryKind::File => Some(publication_content(e)?),
+                EntryKind::Folder => None,
+            };
+            if state != e.before || content.as_ref() != expected_content {
                 return Err(invalid("namespace preflight state/content changed"));
             }
             check_baselines(&tx, e)?;
@@ -903,11 +1083,7 @@ impl Store {
                     &tx,
                     &ProjectionBaseline {
                         state: after.clone(),
-                        content: m
-                            .evidence
-                            .content
-                            .clone()
-                            .ok_or_else(|| invalid("file evidence missing"))?,
+                        content: publication_content(&m.evidence)?.clone(),
                     },
                 )?;
             } else {
@@ -975,5 +1151,125 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(a)
+    }
+}
+
+#[cfg(test)]
+mod typed_evidence_tests {
+    use super::*;
+    use zorid_file_sync::{EntryIdentity, Manifest, PageRef, Scope, Sha256Digest};
+    use zorid_sync_protocol::{RealmId, UpdateId, VaultId};
+    fn graph(bytes: u64, selected: &str) -> StoredContent {
+        StoredContent::BinaryRef(BinarySourceRef::Graph(PublishedBinaryRef {
+            scope: Scope {
+                realm_id: RealmId::new("realm").unwrap(),
+                vault_id: VaultId::new("vault").unwrap(),
+            },
+            identity: EntryIdentity {
+                entry_id: EntryId::new("file").unwrap(),
+                bootstrap_id: UpdateId::new("bootstrap").unwrap(),
+            },
+            selected_event: UpdateId::new(selected).unwrap(),
+            manifest: Manifest {
+                bytes,
+                digest: Sha256Digest::of(&[]),
+                pages: if bytes == 0 {
+                    vec![]
+                } else {
+                    (0..4)
+                        .map(|n| PageRef {
+                            id: UpdateId::new(format!("page-{n}")).unwrap(),
+                            bytes: bytes / 4,
+                            digest: Sha256Digest::of(b"page"),
+                        })
+                        .collect()
+                },
+            },
+        }))
+    }
+    fn evidence(content: StoredContent) -> NamespaceEvidence {
+        let before = EntryState {
+            id: EntryId::new("file").unwrap(),
+            path: zorid_core::VaultPath::new("file.bin").unwrap(),
+            kind: EntryKind::File,
+            revision: Revision::new("before").unwrap(),
+            deleted: false,
+        };
+        let binding = PhysicalBinding {
+            state: before.clone(),
+            physical: PhysicalIdentity {
+                inode: "source".into(),
+                parent_inode: "parent".into(),
+            },
+        };
+        NamespaceEvidence {
+            before: before.clone(),
+            source_identity: "source".into(),
+            source_parent_identity: "parent".into(),
+            destination_parent_identity: Some("destination-parent".into()),
+            file_baseline: Some(ProjectionBaseline {
+                state: before,
+                content: content.clone(),
+            }),
+            content: Some(content),
+            directory_baseline: None,
+            physical_binding: Some(binding),
+        }
+    }
+    #[test]
+    fn namespace_reference_budget_does_not_charge_retained_binary_bodies() {
+        let e = evidence(graph(BINARY_STAGE_MAX_FILE_BYTES, "selected"));
+        assert!(evidence_size(&e).unwrap() < 64 * 1024);
+        assert_eq!(
+            e.content.as_ref().unwrap().len(),
+            BINARY_STAGE_MAX_FILE_BYTES
+        );
+    }
+    #[test]
+    fn capture_uses_original_graph_and_requires_physical_binding() {
+        let mut e = evidence(graph(0, "selected"));
+        let reference = match e.content.as_ref().unwrap() {
+            StoredContent::BinaryRef(BinarySourceRef::Graph(reference)) => reference,
+            _ => unreachable!(),
+        };
+        e.content = Some(StoredContent::BinaryRef(BinarySourceRef::Capture(
+            CapturedBinaryRef {
+                stage: BinaryStageLocator {
+                    local_store_id: OperationId::new("store").unwrap(),
+                    client_id: OperationId::new("client").unwrap(),
+                    operation_id: OperationId::new("capture").unwrap(),
+                    stage_id: OperationId::new("stage").unwrap(),
+                },
+                manifest: reference.manifest.clone(),
+                source_commitment: Sha256Digest::of(b"source"),
+            },
+        )));
+        assert_eq!(
+            publication_content(&e).unwrap(),
+            &e.file_baseline.as_ref().unwrap().content
+        );
+        let mut after = e.before.clone();
+        after.revision = Revision::new("after").unwrap();
+        after.path = zorid_core::VaultPath::new("renamed.bin").unwrap();
+        let member = NamespaceMember {
+            change: EntryChange {
+                before: Some(e.before.clone()),
+                after,
+            },
+            evidence: e.clone(),
+            directory_stage_identity: None,
+            captured: false,
+            published: false,
+            finished: false,
+        };
+        validate_member(ProjectionWork::Move, false, &member).unwrap();
+        e.physical_binding = None;
+        assert!(publication_content(&e).is_err());
+        let mut missing_proof = member.clone();
+        missing_proof.evidence = e;
+        assert!(validate_member(ProjectionWork::Move, false, &missing_proof).is_err());
+        let mut changed_graph = member;
+        changed_graph.evidence.content = Some(graph(0, "different-selected"));
+        assert!(validate_member(ProjectionWork::Move, false, &changed_graph).is_err());
     }
 }

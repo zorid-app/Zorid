@@ -87,7 +87,9 @@ fn claim(tx: &Connection, job: &OperationId, id: &EntryId) -> Result<Option<Clai
 fn target_entries(tx: &Connection, ids: &BTreeSet<EntryId>) -> Result<Vec<EntryState>> {
     let mut result = Vec::with_capacity(ids.len());
     for id in ids {
-        let (state, _) = entry(tx, id)?;
+        let state = entry_content::read_metadata_row(tx, id)?
+            .ok_or_else(|| invalid("family namespace target missing"))?
+            .state;
         let record = family_materialization::get(tx, id)?
             .ok_or_else(|| invalid("family namespace target missing"))?;
         match record.publication {
@@ -353,6 +355,29 @@ impl Store {
         expected: &[EntryState],
         evidence: &[NamespaceEvidence],
     ) -> Result<Option<NamespaceAttempt>> {
+        self.family_namespace_prepare_inner(None, covered, expected, evidence)
+    }
+    /// A captured binary source must be admitted by its independent client.
+    /// Complete source verification runs before the final physical CAS writer.
+    pub fn family_namespace_prepare_content(
+        &mut self,
+        client: &OperationId,
+        covered: &[ProjectionJob],
+        expected: &[EntryState],
+        evidence: &[NamespaceEvidence],
+    ) -> Result<Option<NamespaceAttempt>> {
+        self.family_namespace_prepare_inner(Some(client), covered, expected, evidence)
+    }
+    fn family_namespace_prepare_inner(
+        &mut self,
+        client: Option<&OperationId>,
+        covered: &[ProjectionJob],
+        expected: &[EntryState],
+        evidence: &[NamespaceEvidence],
+    ) -> Result<Option<NamespaceAttempt>> {
+        let snapshot = self.connection.unchecked_transaction()?;
+        verify_evidence_sources(&snapshot, client, evidence)?;
+        snapshot.commit()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;

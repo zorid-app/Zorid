@@ -54,7 +54,7 @@ fn committed_binary_and_all_durable_intents_survive_reopen() {
     assert_eq!(reopened.pending_counts().unwrap(), (1, 1));
     let log = reopened.operations_after(0, 10).unwrap();
     assert_eq!(log.len(), 1);
-    assert_eq!(log[0].request, operation);
+    assert_eq!(log[0].request.inline(), Some(&operation));
     assert_eq!(log[0].result, receipt);
 }
 
@@ -199,7 +199,7 @@ fn folder_revision_covers_descendant_edits_and_move_preserves_bytes() {
     assert_eq!(
         operations
             .iter()
-            .map(|op| op.request.operation_id.as_str())
+            .map(|op| op.request.operation_id().as_str())
             .collect::<Vec<_>>(),
         ["folder", "child", "child-edit", "move", "delete"]
     );

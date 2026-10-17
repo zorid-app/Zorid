@@ -7,7 +7,7 @@ use zorid_client_sync::ReceiveCursor;
 use zorid_file_sync::Scope;
 use zorid_sync_protocol::UpdateId;
 
-pub const FAMILY_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+pub const FAMILY_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 pub use zorid_file_sync::mutation::CreateMode as FamilyCreateMode;
 pub type FamilyScope = zorid_file_sync::Scope;
@@ -21,6 +21,8 @@ pub enum FamilyPayloadKind {
 #[serde(deny_unknown_fields)]
 pub struct FamilyLimits {
     pub max_file_bytes: u64,
+    /// Byte-bearing convenience reads and writes use the shared inline limit.
+    pub max_inline_file_bytes: u64,
     pub max_graph_encoded_bytes: u64,
     pub max_records: u32,
 }
@@ -28,6 +30,7 @@ impl Default for FamilyLimits {
     fn default() -> Self {
         Self {
             max_file_bytes: FAMILY_MAX_FILE_BYTES,
+            max_inline_file_bytes: FAMILY_MAX_INLINE_BYTES,
             max_graph_encoded_bytes: zorid_file_sync::MAX_STATE_BYTES as u64,
             max_records: zorid_file_sync::MAX_RECORDS as u32,
         }
@@ -143,7 +146,7 @@ fn require_scope(tx: &Connection, realm: &RealmId, vault: &VaultId) -> Result<()
         realm_id: realm.clone(),
         vault_id: vault.clone(),
     };
-    if file_state::load(tx, &scope)?.is_none() {
+    if blob_index::load_metadata(tx, &scope)?.is_none() {
         return Err(ContractError::InvalidMutation {
             reason: "vault is not enrolled for current family synchronization".into(),
         }
@@ -333,9 +336,11 @@ fn status_in(tx: &Connection) -> Result<FamilyStatus> {
         recovery_entries: "0".into(),
     };
     if let Some(scope) = &scope {
-        let state = file_state::load(tx, scope)?
+        let state = blob_index::load_metadata(tx, scope)?
             .ok_or_else(|| StoreError::Corrupt("enrolled family graph head missing".into()))?;
-        family_materialization::validate(tx, &state)?;
+        // Status restores committed descriptors; publication validation requires
+        // an in-process content proof and runs on mutation/receive snapshots.
+        state.metadata_view()?;
         output.graph_records = u32::try_from(state.records().len() + state.activities().len())
             .map_err(|_| zorid_client_sync::SyncError::TooLarge)?;
         output.graph_encoded_bytes = serde_json::to_vec(&state)?.len() as u64;
@@ -367,7 +372,7 @@ impl Store {
         if identity.realm_id.is_some() || identity.vault_id.is_some() {
             if identity.realm_id.as_ref() == Some(&scope.realm_id)
                 && identity.vault_id.as_ref() == Some(&scope.vault_id)
-                && file_state::load(&tx, scope)?.is_some()
+                && blob_index::load_metadata(&tx, scope)?.is_some()
             {
                 let status = status_in(&tx)?;
                 tx.commit()?;
@@ -428,16 +433,17 @@ impl Store {
             vault_id: vault_id.clone(),
             update_id: update.clone(),
         };
-        family_ledger::authored(&tx, &key)?;
-        let value = family_ledger::wire(&tx, &key)?.map(|record| FamilyEnvelopeStatus {
-            scope: Scope { realm_id, vault_id },
-            update_id: update.clone(),
-            family: public_kind(record.metadata.family),
-            origin: match record.direction {
-                family_ledger::Direction::Authored => FamilyEnvelopeOrigin::Authored,
-                family_ledger::Direction::Received => FamilyEnvelopeOrigin::Received,
-            },
-        });
+        let value = family_ledger::metadata_only(&tx, &key)?
+            .and_then(|record| record.sealed.then_some(record))
+            .map(|record| FamilyEnvelopeStatus {
+                scope: Scope { realm_id, vault_id },
+                update_id: update.clone(),
+                family: public_kind(record.metadata.family),
+                origin: match record.direction {
+                    family_ledger::Direction::Authored => FamilyEnvelopeOrigin::Authored,
+                    family_ledger::Direction::Received => FamilyEnvelopeOrigin::Received,
+                },
+            });
         tx.commit()?;
         Ok(value)
     }
@@ -455,22 +461,31 @@ impl Store {
         };
         // Reject obsolete formats before even opening a write transaction.
         decode(opened)?;
+        let tx = self.connection.unchecked_transaction()?;
+        require_scope(&tx, &scope.realm_id, &scope.vault_id)?;
+        let current = blob_index::load_metadata(&tx, &scope)?
+            .ok_or_else(|| StoreError::Corrupt("enrolled graph missing".into()))?;
+        let prepared = family_ingress::prepare_metadata(&tx, &current, opened, delivery)?;
+        tx.commit()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_scope(&tx, &scope.realm_id, &scope.vault_id)?;
-        let current = file_state::load(&tx, &scope)?
-            .ok_or_else(|| StoreError::Corrupt("enrolled graph missing".into()))?;
-        family_materialization::validate(&tx, &current)?;
-        let prepared = family_ingress::prepare(&tx, &current, opened, delivery)?;
-        family_ingress::persist(&tx, &prepared)?;
-        let graph = prepared.graph.next_state.as_ref().unwrap_or(&current);
+        family_ingress::check_delivery(&tx, &scope, delivery)?;
+        family_ingress::persist_metadata(&tx, &prepared)?;
+        let graph = prepared.graph.verification_state();
         let origin = ProjectionOrigin::ReceivedUpdate {
             realm_id: scope.realm_id.as_str().to_owned(),
             vault_id: scope.vault_id.as_str().to_owned(),
             update_id: prepared.metadata.key.update_id.as_str().to_owned(),
         };
-        let changed_entry_ids = family_materialization::apply(&tx, graph, origin, None)?;
+        let changed_entry_ids = family_materialization::apply(
+            &tx,
+            graph,
+            prepared.graph.verified_binaries(),
+            origin,
+            None,
+        )?;
         if prepared.duplicate && !changed_entry_ids.is_empty() {
             return Err(StoreError::Corrupt(
                 "duplicate changed publication cache".into(),
