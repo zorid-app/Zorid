@@ -3,9 +3,13 @@
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use zorid_bases::{
-    compile_base, compile_base_source, evaluate_expression, query_base, BaseSnapshot,
-    DetachedRecord, EvaluationOptions, PropertyValue, QueryOptions,
+    compile_base, compile_base_source, evaluate_expression, query_base, query_generation,
+    BaseSnapshot, DetachedRecord, EvaluationOptions, FilePresentationFacts, PropertyValue,
+    QueryOptions,
 };
+
+use zorid_core::EntryState;
+use zorid_index::{Generation, GenerationSource, IndexSnapshotId, SourceSnapshotId};
 
 // Initial bounded transport, separate from the engine's source/work/row guards.
 const MAX_REQUEST_JSON_BYTES: usize = 8 * 1024 * 1024;
@@ -16,6 +20,7 @@ const MAX_RESULT_JSON_BYTES: usize = 8 * 1024 * 1024;
 enum BindingError {
     RequestTooLarge { maximum_bytes: usize },
     InvalidRequest,
+    IndexError { error: zorid_index::IndexError },
     ResultTooLarge { maximum_bytes: usize },
     ResultEncoding,
 }
@@ -65,6 +70,22 @@ struct QueryRequest {
     #[serde(default)]
     options: QueryOptions,
 }
+/// A bounded source import, not a persisted generation or a publication receipt.
+/// Every identity and source item is the shared core/index DTO; graphs are never
+/// accepted here. Generation::from_sources enforces inventory/source coherence.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GenerationQueryRequest {
+    source: SourceSnapshotId,
+    snapshot_id: IndexSnapshotId,
+    entries: Vec<EntryState>,
+    sources: Vec<GenerationSource>,
+    #[serde(default)]
+    facts: Vec<FilePresentationFacts>,
+    configuration: PropertyValue,
+    #[serde(default)]
+    options: QueryOptions,
+}
 fn clamp_evaluation(options: &mut EvaluationOptions) {
     options.max_steps = options
         .max_steps
@@ -94,6 +115,21 @@ fn query_json(input: &str) -> Result<String, String> {
         .map_err(|error| wire_error(&error))?;
     encode(&result)
 }
+fn generation_query_json(input: &str) -> Result<String, String> {
+    let mut request: GenerationQueryRequest = decode(input)?;
+    clamp_query(&mut request.options);
+    let program = compile_base(request.configuration).map_err(|error| wire_error(&error))?;
+    let generation = Generation::from_sources(
+        request.source,
+        request.snapshot_id,
+        request.entries,
+        request.sources,
+    )
+    .map_err(|error| wire_error(&BindingError::IndexError { error }))?;
+    let result = query_generation(&program, &generation, &request.facts, &request.options)
+        .map_err(|error| wire_error(&error))?;
+    encode(&result)
+}
 fn compile_json(input: &str) -> Result<String, String> {
     let source: String = decode(input)?;
     let program = compile_base_source(&source).map_err(|error| wire_error(&error))?;
@@ -113,6 +149,13 @@ pub fn evaluate_base_expression(input_json: &str) -> Result<String, JsValue> {
 #[wasm_bindgen(js_name = queryBase)]
 pub fn query_base_json(input_json: &str) -> Result<String, JsValue> {
     query_json(input_json).map_err(js_error)
+}
+/// Build one small complete generation from exact supplied source, derive its
+/// relationship view in Rust, and run the shared Base query. This is a bounded
+/// detached proof/consumer seam; it does not publish or restore host storage.
+#[wasm_bindgen(js_name = queryBaseFromSources)]
+pub fn query_base_from_sources(input_json: &str) -> Result<String, JsValue> {
+    generation_query_json(input_json).map_err(js_error)
 }
 /// Input is a JSON-encoded exact .base source string. Returns decoded semantic
 /// configuration only; it neither owns a file nor grants a source rewrite path.
