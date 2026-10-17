@@ -1,0 +1,15 @@
+/* Fixed Canvas geometry owns sizing; shared viewers own their controls and rendering. */
+.canvas-attachment-card{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden}
+.canvas-attachment-content{display:flex;flex:1;min-width:0;min-height:0;width:100%;overflow:hidden;align-items:center;justify-content:center}
+.canvas-attachment-card .image-container{width:100%;height:100%;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center}
+.canvas-attachment-card .image-container img{max-width:100%;max-height:100%;object-fit:contain}
+.canvas-attachment-card .zorid-media-view{width:100%;max-height:100%;overflow:auto}
+.canvas-attachment-card .zorid-media-view video{display:block;width:100%;max-height:100%;object-fit:contain}
+.canvas-attachment-card[data-kind=video] .zorid-media-view{height:100%;display:flex;flex-direction:column;justify-content:center}
+.canvas-attachment-card[data-kind=pdf] .zorid-pdf-view.is-embed{flex:1;width:100%;height:100%;border:0;border-radius:0}
+.canvas-attachment-card[data-kind=pdf] .zorid-pdf-view.is-embed .zorid-pdf-stage{flex:1;height:auto!important;min-height:0}
+.canvas-attachment-status{position:absolute;inset:auto 8px 8px;padding:6px;border-radius:4px;background:var(--background-primary,#fff);color:var(--text-error,#b22);font-size:var(--font-ui-small,13px);overflow-wrap:anywhere;max-height:70%;overflow:auto}
+.canvas-attachment-status[hidden]{display:none}
+.canvas-attachment-open{position:absolute;right:4px;top:4px;z-index:2;opacity:0;padding:2px 6px;line-height:20px;border:0;border-radius:4px;background:var(--background-primary,#fff);color:var(--text-muted,#666)}
+.canvas-attachment-card:hover>.canvas-attachment-open,.canvas-attachment-open:focus-visible{opacity:1}
+.canvas-attachment-card[data-kind=pdf]>.canvas-attachment-open{top:auto;bottom:4px}
