@@ -164,20 +164,23 @@ impl<'a> ResolutionView<'a> {
 
 /// Direction of a metadata relationship query. Embedded links are included in
 /// outgoing/incoming; Embeds selects only outgoing embedded occurrences.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RelationshipDirection {
     Outgoing,
     Incoming,
     Embeds,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RelationshipToken {
     snapshot: IndexSnapshotId,
     entry: EntryId,
     direction: RelationshipDirection,
     offset: usize,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RelationshipPage {
     pub snapshot: IndexSnapshotId,
     pub edges: Vec<ResolvedEdge>,

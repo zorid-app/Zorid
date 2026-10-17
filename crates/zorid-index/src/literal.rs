@@ -1,9 +1,11 @@
 use crate::{Generation, IndexError, IndexSnapshotId, MAX_PUMP_BYTES, MAX_PUMP_DOCUMENTS};
+use serde::Serialize;
 use std::sync::Arc;
 use zorid_core::{EntryKind, EntryState};
 use zorid_document::{SourceRange, MAX_SOURCE_BYTES};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LiteralQuery {
     value: String,
 }
@@ -21,7 +23,8 @@ impl LiteralQuery {
 }
 /// Token pins full store/epoch/generation/version identity and the exact query.
 /// Hosts reject absent/expired generations; never substitute the active one.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LiteralToken {
     snapshot: IndexSnapshotId,
     query: LiteralQuery,
@@ -33,7 +36,8 @@ impl LiteralToken {
         &self.snapshot
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextReadRequest {
     snapshot: IndexSnapshotId,
     entry: EntryState,
@@ -56,7 +60,8 @@ impl TextReadRequest {
         self.bytes
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub entry: EntryState,
     pub line: u32,
@@ -64,6 +69,8 @@ pub struct SearchHit {
     pub snippet: String,
     pub snippet_truncated: bool,
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LiteralPage {
     pub snapshot: IndexSnapshotId,
     pub hits: Vec<SearchHit>,

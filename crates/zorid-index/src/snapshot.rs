@@ -5,7 +5,8 @@ use zorid_core::{EntryId, EntryKind, EntryState, OperationId};
 pub const MAX_PUMP_DOCUMENTS: usize = 32;
 pub const MAX_PUMP_BYTES: usize = 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum IndexError {
     InvalidWatermark,
     InvalidVersion,
