@@ -69,6 +69,17 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Encrypted restore extension integrated as main `e71f59a` after candidate
+  f53a6b5 recovery54884 exit0: clean CLI restored exact text and 262163-byte
+  multi-chunk binary, then restart preserved both. Existing metadata/credential
+  restore test81517 and pinned WAL permission/log snapshot check also passed.
+- Concurrent-editor follow-up remains failing/unproven: test launch37850,
+  Electron74599/host74662, vault0936, note `Untitled 1.md` entry
+  cbc93ccf-f71d-493c-ae4e-ebf238906f6d. Two bounded readonly checkpoint observers
+  timed out without issuing CLI writes. UI and physical file have appended race
+  tokens while Rust CLI read/checkpoint retain `Concurrent seed.` (generation16).
+  browser_sync_plan owns save/admission diagnosis; no concurrent-write success
+  or draft-crash recovery is claimed. Preserve fixture for investigation.
 - Main `5d29c53` now integrates native candidate292cd27 and normal desktop
   create/save candidatea29605b plus idle-child cleanupc06d110. Main tsc31928
   exited0 and four focused creation checks passed; crates/Cargo sources exactly
