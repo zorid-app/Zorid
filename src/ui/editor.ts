@@ -1,6 +1,6 @@
 import { Annotation, Compartment, EditorSelection, EditorState, Transaction } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, isolateHistory } from '@codemirror/commands';
+import { defaultKeymap, selectParentSyntax, history, historyKeymap, isolateHistory } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
@@ -80,7 +80,7 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     state: EditorState.create({ doc: options.value, extensions: [
       EditorState.allowMultipleSelections.of(true),
       history(), listConfiguration.of(markdownListKeymap(options.listOptions)), markdown({base: markdownLanguage,addKeymap:false,extensions:[frontmatterMarkdown, liveInlineMarkdown, liveMathMarkdown]}), syntaxHighlighting(markdownHighlightStyle),
-      keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+      keymap.of([...defaultKeymap.filter(binding => binding.run !== selectParentSyntax), ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping, wiki, editorCommandHotkeys(options.hotkeys),
       markdownFolding(),
       EditorView.contentAttributes.of({'aria-label': 'Note editor', spellcheck: 'true'}),
