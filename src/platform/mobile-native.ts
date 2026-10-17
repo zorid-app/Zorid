@@ -157,7 +157,9 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     const limit = command.method.startsWith('checkpoint_') ? CHECKPOINT_LIMIT : FILE_LIMIT;
     if (bytes.length > limit) throw fail('request_limit');
     const request_id = String(++requestId);
-    const header = JSON.stringify({ version: 1, request_id, command, ...(lease ? { lease } : {}) });
+    // Release authorizes its command reference, never an outer lease. Rust
+    // rejects leased release_client; omission also permits lost-ACK replay.
+    const header = JSON.stringify({ version: 1, request_id, command, ...(lease && command.method !== 'release_client' ? { lease } : {}) });
     if (encoder.encode(header).length > 1024 * 1024) throw fail('request_limit');
     const body = bytesToBase64(bytes);
     const task = tail.then(async () => {

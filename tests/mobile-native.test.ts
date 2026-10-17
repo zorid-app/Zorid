@@ -11,31 +11,45 @@ function scanStatus(overrides:Record<string,unknown>={}) { return {scanId:'scan_
 function fixture() {
   const requests: any[] = [], heads = new Map<string, any>(), intents = new Map<string, any>(), receipts = new Map<string, any>();
   let content = 'before', revision = 'rev1', path = 'Note.md', exists = true, closes = 0, sequence = 0, active = 0, maxActive = 0;
-  let failCommand = false, failCheckpoint = false, failCommit = false, wrongId = false;
+  let failCommand = false, failCheckpoint = false, failCommit = false, wrongId = false, failReleaseAck = false, failReleaseDispatch = false;
+  let activeLease: {local_store_id:string;client_id:string;token:string} | undefined, claims=0;
+  const releasedLeases=new Map<string,any>();
   const state = () => ({ id:'entry', path, kind:'file', revision, deleted:false });
   const presentation = () => ({id:'entry',ctime_ms:1,mtime_ms:2,size_bytes:encoder.encode(content).length});
   const acks: {id:string;ok:boolean}[] = [], lifecycleOrder: string[] = [], expired = new Set<string>();
-  let lifecycleListener: ((event:{id:string;reason:MobileLifecycleReason})=>void) | undefined, removals = 0;
+  const lifecycleCallbacks=new Set<(event:{id:string;reason:MobileLifecycleReason})=>void>();let removals = 0;
   let contextEvent: MobileLifecycleReason | undefined, wrongAuthority = false;
   let ackHook: ((input:{id:string;ok:boolean})=>Promise<void>) | undefined;
   let initialReconciliation: any = undefined, refreshValue: any = {reconciliation:scanStatus()}, refreshCalls=0;
   let refreshHook: (()=>Promise<void>) | undefined;
   const plugin: NativeVaultPlugin & {close():Promise<void>} = {
-    async addListener(event,handler) { assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleListener=handler; return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleListener=undefined;}}; },
+    async addListener(event,handler) { assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
     async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
-    context: async () => { lifecycleOrder.push('context'); if(contextEvent)lifecycleListener!({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
+    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
     async refresh() { active++;maxActive=Math.max(maxActive,active);refreshCalls++;try {if(refreshHook)await refreshHook();await new Promise<void>(r=>setImmediate(r));return refreshValue;}finally{active--;} },
     async request(input) {
       active++; maxActive = Math.max(maxActive,active);
       await new Promise(resolve => setImmediate(resolve));
       const header = JSON.parse(input.header), c = header.command; requests.push({ ...header,body:input.body });
-      if (c.method !== 'claim_client') assert.deepEqual(header.lease,{local_store_id:'store',client_id:clientId,token});
+      const reject=(code:string)=>({header:JSON.stringify({version:1,request_id:header.request_id,ok:false,error:{code}}),body:''});
       let result: any = {}, output = '';
       try {
+        if (header.lease && (!activeLease || JSON.stringify(header.lease)!==JSON.stringify(activeLease))) return reject('client_not_admitted');
+        if (header.lease && ['claim_client','release_client'].includes(c.method)) return reject('client_operation_unsupported');
+        if (!['claim_client','release_client'].includes(c.method)) assert.deepEqual(header.lease,activeLease);
         switch (c.method) {
-          case 'claim_client': result = {lease:{local_store_id:'store',client_id:clientId,token}}; break;
+          case 'claim_client':
+            if(activeLease)return reject('client_in_use');
+            activeLease={local_store_id:'store',client_id:clientId,token:claims++===0?token:crypto.randomUUID()};
+            result = {lease:activeLease}; break;
           case 'identity': result = {identity:{local_store_id:wrongAuthority?'wrong':'store'}}; break;
-          case 'release_client': result = {released:true,reference:c.reference}; break;
+          case 'release_client': {
+            if(failReleaseDispatch){failReleaseDispatch=false;throw new Error('release transport failed before dispatch');}
+            if(activeLease && JSON.stringify(activeLease)===JSON.stringify(c.reference)){releasedLeases.set(activeLease.token,activeLease);activeLease=undefined;}
+            else if(JSON.stringify(releasedLeases.get(c.reference.token))!==JSON.stringify(c.reference))return reject('client_not_admitted');
+            result = {released:true,reference:c.reference};
+            if(failReleaseAck){failReleaseAck=false;throw new Error('lost release ACK');}break;
+          }
           case 'list_snapshot': result = {entries:exists?[{state:state(),presentation:presentation()}]:[]}; break;
           case 'read_path': case 'read_presented': result = {entry:exists?state():null,presentation:presentation(),has_content:exists}; output = exists?body(content):''; break;
           case 'checkpoint_load': { const head = heads.get(c.key); result = {checkpoint:head?.metadata??null}; output = head?.body??''; break; }
@@ -79,7 +93,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id=crypto.randomUUID()){lifecycleListener!({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(){wrongAuthority=true;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -272,7 +286,9 @@ test('startup identity failure releases the valid claimed lease without closing 
   const f=fixture();f.badAuthority();
   await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_authority'});
   assert.deepEqual(f.requests.map(r=>r.command.method),['claim_client','identity','release_client']);
-  assert.equal(f.removals,1);assert.equal(f.closes,0);
+  assert.equal(f.removals,1);assert.equal(f.closes,0);assert.equal(f.admitted,false);
+  assert.equal(Object.hasOwn(f.requests.at(-1),'lease'),false);
+  f.badAuthority(false);const reopened=await openNativeMobileVault(f.plugin);await reopened.release!();
 });
 
 test('context failure removes preinstalled listener without attempting host close',async()=>{
@@ -394,4 +410,46 @@ test('noncanonical lifecycle UUID cannot invoke workspace or approve a native sw
   const f=fixture(),v=await openNativeMobileVault(f.plugin);let calls=0;
   v.mobileLifecycle.subscribe(async(_reason,ack)=>{calls++;await ack();});f.emit('switchVault',clientId.toUpperCase());
   await new Promise<void>(r=>setImmediate(r));assert.equal(calls,0);assert.equal(f.acks.length,0);assert.equal(await v.adapter.read('Note.md'),'before');await v.release!();
+});
+
+test('strict host rejects an outer lease on release_client, matching Rust authorization',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),claimed=f.requests.find(r=>r.command.method==='identity').lease;
+  const reply=await f.plugin.request({header:JSON.stringify({version:1,request_id:'999',command:{method:'release_client',reference:claimed},lease:claimed}),body:''});
+  assert.equal(JSON.parse(reply.header).error.code,'client_operation_unsupported');assert.equal(f.admitted,true);
+  await v.release!();assert.equal(f.admitted,false);
+});
+
+test('successful release omits the outer lease and permits fresh-token reacquisition',async()=>{
+  const f=fixture(),first=await openNativeMobileVault(f.plugin),old=f.requests.find(r=>r.command.method==='identity').lease;
+  await first.release!();assert.equal(f.admitted,false);
+  const release=f.requests.find(r=>r.command.method==='release_client');
+  assert.equal(Object.hasOwn(release,'lease'),false);assert.deepEqual(release.command.reference,old);
+  const second=await openNativeMobileVault(f.plugin);assert.equal(await second.adapter.read('Note.md'),'before');
+  const identities=f.requests.filter(r=>r.command.method==='identity');assert.notEqual(identities[1].lease.token,old.token);assert.equal(identities[1].lease.client_id,clientId);
+  await second.release!();assert.equal(f.admitted,false);assert.equal(f.closes,0);
+});
+
+test('uncertain release retries original reference after reacquisition without retiring new lease',async()=>{
+  const f=fixture(),first=await openNativeMobileVault(f.plugin);f.loseReleaseAck();
+  await assert.rejects(first.release!(),{code:'outcome_unknown',commitUncertain:true});
+  assert.equal(f.admitted,false);assert.equal(f.removals,0);
+  await assert.rejects(first.adapter.read('Note.md'),{code:'storage_closed'});
+  const oldRelease=f.requests.find(r=>r.command.method==='release_client');
+  const second=await openNativeMobileVault(f.plugin);assert.equal(f.admitted,true);
+  await first.release!();assert.equal(f.admitted,true);assert.equal(f.removals,1);
+  const releases=f.requests.filter(r=>r.command.method==='release_client');
+  assert.deepEqual(releases[0].command,releases[1].command);assert.equal(Object.hasOwn(releases[1],'lease'),false);
+  assert.equal(releases[1].command.reference.token,oldRelease.command.reference.token);
+  assert.equal(await second.adapter.read('Note.md'),'before');await second.release!();
+  assert.equal(f.admitted,false);assert.equal(f.removals,2);assert.equal(f.closes,0);
+});
+
+test('release transport failure before dispatch retains ownership until exact retry',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);f.loseReleaseDispatch();
+  await assert.rejects(v.release!(),{commitUncertain:true});assert.equal(f.admitted,true);assert.equal(f.removals,0);
+  await assert.rejects(openNativeMobileVault(f.plugin),{code:'client_in_use'});assert.equal(f.admitted,true);
+  await v.release!();assert.equal(f.admitted,false);
+  const releases=f.requests.filter(r=>r.command.method==='release_client');assert.equal(releases.length,2);
+  assert.deepEqual(releases[0].command,releases[1].command);assert.equal(releases.every(r=>!Object.hasOwn(r,'lease')),true);
+  const reopened=await openNativeMobileVault(f.plugin);await reopened.release!();assert.equal(f.closes,0);
 });
