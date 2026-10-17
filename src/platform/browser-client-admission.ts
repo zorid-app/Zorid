@@ -4,6 +4,8 @@ import type { DurableWrites } from '../core/durable-writes.ts';
 import type { BrowserCoreRuntime } from './browser-core-runtime.ts';
 import type { BrowserCoreBackend } from './browser-core.ts';
 import { browserDurableWrites } from './browser-durable-writes.ts';
+import { createBrowserFileCommands } from './browser-file-commands.ts';
+import type { BrowserFileCommandInput } from './browser-file-commands.ts';
 
 export interface BrowserFlushContext {
   readonly scope: CheckpointScope;
@@ -11,18 +13,18 @@ export interface BrowserFlushContext {
   assertActive(): void;
 }
 export interface BrowserClientContext extends BrowserFlushContext {
+  fileCommand?(input:BrowserFileCommandInput):Promise<void>;
+  recoverCommands?():Promise<boolean>;
   release(flushGate: (context: BrowserFlushContext) => void | Promise<void>): Promise<void>;
 }
 const admittedRuntimes = new WeakSet<BrowserCoreRuntime>();
 const failure = (code: string) => new BrowserVaultError(code, 'Browser fixture consumer is not admitted');
 
-/** Fixture-only injection. Scope is read from the lock-owning worker runtime,
- * never supplied by the caller. Production persistent tab-slot selection and
- * editor lifecycle integration are separate gates.
- */
-export function admitBrowserFixtureClient(runtime: BrowserCoreRuntime,
-  options: { fixture: true; assertOwner: () => void }): BrowserClientContext {
-  if (options?.fixture !== true || typeof options.assertOwner !== 'function') throw failure('invalid_admission');
+/** Scope comes from the lock-owning worker. The platform owner selects and
+ * persists a tab slot before admission, then drains/flushes before release. */
+export function admitBrowserClient(runtime: BrowserCoreRuntime,
+  options: { assertOwner: () => void }): BrowserClientContext {
+  if (typeof options?.assertOwner !== 'function') throw failure('invalid_admission');
   if (admittedRuntimes.has(runtime)) throw failure('client_already_admitted');
   let flushToken: symbol | undefined;
   let phase: 'active' | 'flushing' | 'releasing' | 'release_unknown' | 'released' = 'active';
@@ -54,6 +56,7 @@ export function admitBrowserFixtureClient(runtime: BrowserCoreRuntime,
     readEntryById: id => dispatch(() => runtime.readEntryById(id)),
     execute: (id, json) => dispatch(() => runtime.execute(id, json)),
     prepare: (id, json) => dispatch(() => runtime.prepare(id, json)),
+    ...(typeof runtime.prepareFamily==='function'?{prepareFamily:(id:string,json:string)=>dispatch(()=>runtime.prepareFamily(id,json))}:{}),
     commit: id => dispatch(() => runtime.commit(id)),
     intents: () => dispatch(() => runtime.intents()),
     acknowledge: (id, outcome) => dispatch(() => runtime.acknowledge(id, outcome)),
@@ -92,10 +95,15 @@ export function admitBrowserFixtureClient(runtime: BrowserCoreRuntime,
     });
   }
   const durableWrites = wrap();
+  const commands=backend.prepareFamily?createBrowserFileCommands({
+    checkpoints,readEntry:path=>backend.readEntry(path),prepareFamily:backend.prepareFamily,
+    commit:id=>backend.commit!(id),intents:()=>backend.intents(),acknowledge:(id,outcome)=>backend.acknowledge(id,outcome),
+  },()=>dispatch(()=>undefined)):undefined;
   runtime.installAdmissionGuard(() => dispatch(() => undefined));
   admittedRuntimes.add(runtime);
   async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
   return Object.freeze({ scope, durableWrites, assertActive: () => allowed(),
+    ...(commands?{fileCommand:(input:BrowserFileCommandInput)=>invoke(()=>commands.execute(input)),recoverCommands:()=>invoke(()=>commands.recover())}:{}),
     release(flushGate: (context: BrowserFlushContext) => void | Promise<void>): Promise<void> {
       if (phase === 'released') return Promise.resolve();
       if (closing) return closing;
@@ -129,4 +137,10 @@ export function admitBrowserFixtureClient(runtime: BrowserCoreRuntime,
       return closing;
     },
   });
+}
+
+/** Explicit fixture entry remains available for reproducible bounded fixtures. */
+export function admitBrowserFixtureClient(runtime:BrowserCoreRuntime,options:{fixture:true;assertOwner:()=>void}):BrowserClientContext{
+  if(options?.fixture!==true)throw failure('invalid_admission');
+  return admitBrowserClient(runtime,options);
 }

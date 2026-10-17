@@ -2,7 +2,7 @@ import type { DurableWrites } from '../core/durable-writes.ts';
 import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
-export interface PlatformVault { adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
+export interface PlatformVault { adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; recoverCommands?():Promise<boolean>; legacyExport?():void; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
 async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<PlatformVault> {
   let reconciliationStatus=info.reconciliation??null;
   const reconciliation=info.reconciliation&&bridge.retryReconciliation?{
@@ -112,6 +112,6 @@ export async function createPlatformAdapter(): Promise<PlatformVault | null> {
     const config = browserCoreFixtureConfig(true, new URL(window.location.href), __ZORID_CORE_BUILD_ID__);
     if (config) return openBrowserCoreFixture(config);
   }
-  const { BrowserAdapter } = await import('./browser');
-  return { adapter: new BrowserAdapter(), label: 'Browser vault', id: 'browser:default' };
+  const { openDefaultBrowserVault } = await import('./browser-default.ts');
+  return openDefaultBrowserVault();
 }

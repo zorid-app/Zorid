@@ -18,6 +18,7 @@ export interface BrowserCoreBackend {
   /** Persist exact intent before executing; retries must reuse both arguments. */
   execute(intentId: string, requestJson: string): Promise<string>;
   prepare?(intentId: string, requestJson: string): Promise<void>;
+  prepareFamily?(intentId:string,commandJson:string):Promise<void>;
   commit?(intentId: string): Promise<string>;
   intents(): Promise<BrowserVaultIntent[]>;
   acknowledge(intentId: string, outcome: BrowserVaultOutcome): Promise<void>;

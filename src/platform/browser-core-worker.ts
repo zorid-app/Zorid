@@ -57,6 +57,11 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         failStorage(error.code);
       });
       assertOwner();
+      if(payload.initializeLocal===true){
+        const status=await vault.sync.inspect();
+        if(!status.scope)await vault.sync.enroll({realm_id:`local_${vault.authorityId}`,vault_id:`vault_${vault.authorityId}`,key_epoch:1});
+        assertOwner();
+      }
       sync = new BrowserSyncWorker({storage:vault.sync,wasm:wasm as unknown as BrowserSyncCodec,assertOwner,local,fatal:failStorage,
         changed:async assertSession=>{assertSession();await refresh(assertSession);assertSession();channel?.postMessage({changed:true});}});
       channel = new BroadcastChannel(`zorid-core:${payload.database}`);

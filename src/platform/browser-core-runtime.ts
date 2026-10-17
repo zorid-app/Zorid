@@ -14,6 +14,8 @@ export interface BrowserCoreRuntimeOptions {
   wasmModuleUrl: string;
   /** Required opt-in while startup/migration integration is not yet installed. */
   allowNewVault: true;
+  /** Normal local vault: enroll persistent family authority without network credentials. */
+  initializeLocal?: boolean;
   timeoutMs?: number;
 }
 interface Pending { resolve(value: unknown): void; reject(error: unknown): void; timer: ReturnType<typeof setTimeout>; operation: string }

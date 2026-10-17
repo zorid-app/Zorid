@@ -20,7 +20,8 @@ test('worker runtime gates recovered commands until exact outcome acknowledgemen
     Object.defineProperty(globalThis,'document',{configurable:true,value:{addEventListener(name:string,fn:()=>void){listeners.set(name,fn);},removeEventListener(name:string){listeners.delete(name);},visibilityState:'visible'}});
     Object.defineProperty(globalThis,'location',{configurable:true,value:{href:'https://zorid.test/',origin:'https://zorid.test'}});
     const runtime = await BrowserCoreRuntime.open({database:'zorid-core-vault:explicit',clientId:'22222222-2222-4222-8222-222222222222',
-      wasmModuleUrl:'/assets/core.js',allowNewVault:true});
+      wasmModuleUrl:'/assets/core.js',allowNewVault:true,initializeLocal:true});
+    assert.equal(calls[0].payload.initializeLocal,true,'normal local bootstrap is an explicit worker startup decision');
     assert.equal(calls[0].payload.clientId,'22222222-2222-4222-8222-222222222222');
     assert.deepEqual(runtime.durableScope,{vaultId:'12345678-1234-4123-8123-123456789abc',clientId:'22222222-2222-4222-8222-222222222222'});
     await assert.rejects(runtime.execute('new-intent','{}'),{code:'recovery_required'});

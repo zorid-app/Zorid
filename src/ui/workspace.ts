@@ -253,7 +253,7 @@ export class Workspace {
     // a new adapter initializes, and a late request cannot acquire a watcher.
     await next.initialize();
     if(request!==this.vaultRequest)return;
-    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){const recovered=await this.recoverDurableBuffers(next);await this.replaceVault(platform,next,recovered);}});
+    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){let recovered=await this.recoverDurableBuffers(next);if(await platform.recoverCommands?.()){await next.initialize();recovered=await this.recoverDurableBuffers(next);}await this.replaceVault(platform,next,recovered);}});
     this.vaultTransition=transition.catch(()=>{});
     await transition;
   }
@@ -1449,7 +1449,7 @@ export class Workspace {
         const smart=toggle(this.settings.smartIndentList,value=>{this.settings.smartIndentList=value;configureLists();});smart.setAttribute('aria-label','Smart indent lists');row('Smart indent lists','Continue list items when pressing Enter.',smart);
       }else if(section==='Hotkeys'){this.hotkeySettings=mountHotkeySettings(body,this.hotkeys,()=>{this.refreshHotkeyLabels();this.syncNativeHotkeys();});}
       else if(section==='Files and links'){
-        row('Vault',this.platform.label,textButton('Open another',()=>{close();this.run(()=>this.chooseVault());}));row('Deleted files','Deleted files are moved to a .trash folder in the vault.',el('span','','Vault trash'));row('Internal links','Resolved links are updated when files are renamed.',el('span','','Automatic'));
+        row('Vault',this.platform.label,textButton('Open another',()=>{close();this.run(()=>this.chooseVault());}));if(this.platform.legacyExport)row('Previous browser vault','Download the original preview vault and retained drafts. The originals stay on this device.',textButton('Export previous browser vault',()=>this.platform.legacyExport!()));row('Deleted files','Deleted files are moved to a .trash folder in the vault.',el('span','','Vault trash'));row('Internal links','Resolved links are updated when files are renamed.',el('span','','Automatic'));
         const wiki=toggle(!this.settings.useMarkdownLinks,value=>{this.settings.useMarkdownLinks=!value;});wiki.setAttribute('aria-label','Use Wikilinks');row('Use Wikilinks','Use [[links]] for imported attachments.',wiki);
         row('New link format','Choose how paths are written for imported attachments.',selectControl('New link format',this.settings.newLinkFormat,[['shortest','Shortest path when possible'],['relative','Relative path to file'],['absolute','Absolute path in vault']],value=>{this.settings.newLinkFormat=value as Settings['newLinkFormat'];}));
         const folder=this.settings.attachmentFolderPath;
