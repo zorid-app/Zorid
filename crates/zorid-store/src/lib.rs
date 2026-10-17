@@ -5,9 +5,15 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 
 mod checkpoints;
 mod family_commands;
-mod family_observations;
+mod family_external_create;
+mod family_external_namespace;
+pub use family_external_namespace::{
+    ExternalNamespaceAction, ExternalNamespaceCommit, ExternalNamespaceMember,
+    ExternalNamespaceObservation, ExternalScanProof,
+};
 mod family_ingress;
 mod family_materialization;
+mod family_observations;
 pub use family_materialization::{FamilyContentWitness, FamilyMaterialization, FamilyPublication};
 mod family_ledger;
 mod family_store;
@@ -57,7 +63,7 @@ use zorid_core::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const APPLICATION_ID: i64 = 0x5a4f5244; // ZORD
 const SCHEMA: &[(&str, &str)] = &[
     ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB, visible INTEGER NOT NULL DEFAULT 1 CHECK(visible IN (0,1)))"),
@@ -80,6 +86,8 @@ fn schema_objects() -> Vec<(&'static str, &'static str)> {
         .chain(checkpoints::SCHEMA)
         .chain(physical_bindings::SCHEMA)
         .chain(family_commands::SCHEMA)
+        .chain(family_external_create::SCHEMA)
+        .chain(family_external_namespace::SCHEMA)
         .chain(family_ledger::SCHEMA)
         .chain(file_state::SCHEMA)
         .chain(family_materialization::SCHEMA)
@@ -338,6 +346,8 @@ impl Store {
                 .chain(namespace::SCHEMA)
                 .chain(physical_bindings::SCHEMA)
                 .chain(family_commands::SCHEMA)
+                .chain(family_external_create::SCHEMA)
+                .chain(family_external_namespace::SCHEMA)
                 .chain(family_ledger::SCHEMA)
                 .chain(file_state::SCHEMA)
                 .chain(family_materialization::SCHEMA)

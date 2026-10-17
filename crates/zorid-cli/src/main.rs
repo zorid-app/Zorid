@@ -84,7 +84,7 @@ enum Command {
         #[arg(required = true, num_args = 1..)]
         paths: Vec<String>,
     },
-    /// Discover external files/folders with bounded work; missing paths are not deleted.
+    /// Discover external files/folders; enrolled vaults also reconcile proven moves/deletions.
     Rescan {
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100_000))]
         max_entries: Option<u32>,
@@ -95,6 +95,12 @@ enum Command {
         /// Soft work duration limit, checked between operations (not a hard timeout).
         #[arg(long)]
         max_duration_ms: Option<u64>,
+        /// Import newly discovered enrolled files as UTF-8 text instead of auto-detecting.
+        #[arg(long, conflicts_with = "binary")]
+        text: bool,
+        /// Import newly discovered enrolled files as binary instead of auto-detecting.
+        #[arg(long, conflicts_with = "text")]
+        binary: bool,
     },
     /// Resume pending filesystem publications without scanning the whole vault.
     Recover,
@@ -526,6 +532,8 @@ fn run(args: Args) -> Result<Output> {
             max_total_bytes,
             max_depth,
             max_duration_ms,
+            text,
+            binary,
         } => {
             let mut options = zorid_native::ScanOptions::default();
             if let Some(value) = max_entries {
@@ -541,9 +549,23 @@ fn run(args: Args) -> Result<Output> {
                 options.max_duration = std::time::Duration::from_millis(value);
             }
             let limits = json!({"max_entries":options.max_entries,"max_total_bytes":options.max_total_bytes.to_string(),"max_depth":options.max_depth,"max_duration_ms":options.max_duration.as_millis().to_string()});
-            let report = vault.rescan_with_options(options)?;
-            let issues: Vec<_> = report.issues.into_iter().map(|issue| json!({"path":issue.path,"code":"scan_issue","message":"This path could not be fully reconciled; data is preserved"})).collect();
-            json!({"complete":report.run.complete,"run":{"scan_id":report.run.scan_id,"max_entries":report.run.max_entries,"finished":report.run.finished,"complete":report.run.complete,"observed":report.run.observed,"imported":report.run.imported,"issue":report.run.issue.map(|_| "scan_incomplete")},"issues":issues,"missing":report.missing,"missing_are_deletions":false,"limits":limits,"synced":false})
+            if vault.family_status()?.scope.is_some() {
+                let mode = if text {
+                    zorid_native::ExternalFileMode::Text
+                } else if binary {
+                    zorid_native::ExternalFileMode::Binary
+                } else {
+                    zorid_native::ExternalFileMode::Auto
+                };
+                let report = vault.reconcile_external(options, mode)?;
+                let issues: Vec<_> = report.issues.into_iter().map(|issue| json!({"path":issue.path,"code":"scan_issue","message":"This path could not be fully reconciled; data is preserved"})).collect();
+                let namespace: Vec<_> = report.namespace.into_iter().map(|commit| json!({"observation_id":commit.observation_id,"cursor":commit.cursor,"changed":commit.changed,"authored":commit.authored,"pending_content":commit.pending_content})).collect();
+                json!({"complete":report.complete,"run":{"scan_id":report.run.scan_id,"max_entries":report.run.max_entries,"finished":report.run.finished,"complete":report.run.complete,"observed":report.run.observed,"imported":report.run.imported,"issue":report.run.issue.map(|_| "scan_incomplete")},"issues":issues,"imported":report.imported.len(),"namespace":namespace,"missing_are_deletions":true,"limits":limits,"synced":false})
+            } else {
+                let report = vault.rescan_with_options(options)?;
+                let issues: Vec<_> = report.issues.into_iter().map(|issue| json!({"path":issue.path,"code":"scan_issue","message":"This path could not be fully reconciled; data is preserved"})).collect();
+                json!({"complete":report.run.complete,"run":{"scan_id":report.run.scan_id,"max_entries":report.run.max_entries,"finished":report.run.finished,"complete":report.run.complete,"observed":report.run.observed,"imported":report.run.imported,"issue":report.run.issue.map(|_| "scan_incomplete")},"issues":issues,"missing":report.missing,"missing_are_deletions":false,"limits":limits,"synced":false})
+            }
         }
         Command::Search => unreachable!(),
     };

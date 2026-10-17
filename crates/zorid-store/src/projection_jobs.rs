@@ -8,6 +8,9 @@ pub(super) const SCHEMA:&[(&str,&str)]=&[
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProjectionOrigin {
+    ExternalObservation {
+        observation_id: OperationId,
+    },
     LocalCommand {
         operation_id: OperationId,
     },
@@ -231,7 +234,10 @@ pub(super) fn enqueue_received_work(
     target: EntryState,
     affected: Vec<EntryChange>,
 ) -> Result<ProjectionJob> {
-    if !matches!(origin, ProjectionOrigin::ReceivedUpdate { .. }) {
+    if !matches!(
+        origin,
+        ProjectionOrigin::ReceivedUpdate { .. } | ProjectionOrigin::ExternalObservation { .. }
+    ) {
         return Err(StoreError::Corrupt(
             "received projection has local origin".into(),
         ));

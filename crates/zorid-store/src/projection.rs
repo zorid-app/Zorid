@@ -521,42 +521,7 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let records: Vec<(String, String)> = tx
-            .prepare("SELECT observation_id,record FROM external_observations")?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<std::result::Result<_, _>>()?;
-        for (id, record) in records {
-            let old = decode_observation(&id, &record)?;
-            if old.path == *path
-                && old.baseline == base
-                && old.content == content
-                && old.resolution.is_none()
-                && physical_bindings::observation_proof(&tx, &old.observation_id)?.as_ref() == proof
-            {
-                return Ok(old);
-            }
-        }
-        let value = ExternalObservation {
-            observation_id: OperationId::new(uuid::Uuid::new_v4().to_string())?,
-            path: path.clone(),
-            baseline: base,
-            content,
-            resolution: None,
-        };
-        decode_observation(
-            value.observation_id.as_str(),
-            &serde_json::to_string(&value)?,
-        )?;
-        tx.execute(
-            "INSERT INTO external_observations(observation_id,record) VALUES (?1,?2)",
-            params![
-                value.observation_id.as_str(),
-                serde_json::to_string(&value)?
-            ],
-        )?;
-        if let Some(proof) = proof {
-            physical_bindings::put_observation_proof(&tx, &value.observation_id, proof)?;
-        }
+        let value = record_external_transaction(&tx, path, base, content, proof)?;
         tx.commit()?;
         Ok(value)
     }
@@ -700,4 +665,51 @@ impl Store {
         snapshot.commit()?;
         Ok(result)
     }
+}
+
+/// Enclosing transaction owns the matching causal/physical commit.
+pub(super) fn record_external_transaction(
+    tx: &Connection,
+    path: &VaultPath,
+    base: Option<ProjectionBaseline>,
+    content: Vec<u8>,
+    proof: Option<&ObservationPhysical>,
+) -> Result<ExternalObservation> {
+    let records: Vec<(String, String)> = tx
+        .prepare("SELECT observation_id,record FROM external_observations")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    for (id, record) in records {
+        let old = decode_observation(&id, &record)?;
+        if old.path == *path
+            && old.baseline == base
+            && old.content == content
+            && old.resolution.is_none()
+            && physical_bindings::observation_proof(tx, &old.observation_id)?.as_ref() == proof
+        {
+            return Ok(old);
+        }
+    }
+    let value = ExternalObservation {
+        observation_id: OperationId::new(uuid::Uuid::new_v4().to_string())?,
+        path: path.clone(),
+        baseline: base,
+        content,
+        resolution: None,
+    };
+    decode_observation(
+        value.observation_id.as_str(),
+        &serde_json::to_string(&value)?,
+    )?;
+    tx.execute(
+        "INSERT INTO external_observations(observation_id,record) VALUES (?1,?2)",
+        params![
+            value.observation_id.as_str(),
+            serde_json::to_string(&value)?
+        ],
+    )?;
+    if let Some(proof) = proof {
+        physical_bindings::put_observation_proof(tx, &value.observation_id, proof)?;
+    }
+    Ok(value)
 }

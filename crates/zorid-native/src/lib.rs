@@ -118,6 +118,14 @@ pub struct RescanReport {
     pub missing: Vec<VaultPath>,
 }
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ExternalReconcileReport {
+    pub complete: bool,
+    pub run: ScanRun,
+    pub issues: Vec<ScanIssue>,
+    pub imported: Vec<CommitResult>,
+    pub namespace: Vec<zorid_store::ExternalNamespaceCommit>,
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FolderAttemptStatus {
     pub attempt_id: OperationId,
     pub entry_id: EntryId,
@@ -190,9 +198,17 @@ mod fs;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod native;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub use native::NativeVault;
+pub use native::{select_external_file_mode, ExternalFileMode, NativeVault};
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub struct NativeVault;
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalFileMode {
+    Auto,
+    Text,
+    Binary,
+}
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl NativeVault {
     pub fn open(_: impl AsRef<std::path::Path>) -> Result<Self> {
@@ -373,6 +389,13 @@ impl NativeVault {
         unsupported()
     }
     pub fn rescan(&mut self) -> Result<RescanReport> {
+        unsupported()
+    }
+    pub fn reconcile_external(
+        &mut self,
+        _: ScanOptions,
+        _: ExternalFileMode,
+    ) -> Result<ExternalReconcileReport> {
         unsupported()
     }
     pub fn rescan_with_options(&mut self, _: ScanOptions) -> Result<RescanReport> {

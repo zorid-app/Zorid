@@ -45,7 +45,7 @@ pub struct ScanObservation {
     pub imported: bool,
     pub issue: Option<String>,
 }
-fn run(tx: &Connection, id: &OperationId) -> Result<ScanRun> {
+pub(super) fn run(tx: &Connection, id: &OperationId) -> Result<ScanRun> {
     let (finished, json): (i64, String) = tx.query_row(
         "SELECT finished,record FROM scan_runs WHERE scan_id=?1",
         [id.as_str()],
@@ -71,7 +71,7 @@ fn put_run(tx: &Connection, value: &ScanRun) -> Result<()> {
     tx.execute("INSERT INTO scan_runs(scan_id,finished,record) VALUES (?1,?2,?3) ON CONFLICT(scan_id) DO UPDATE SET finished=excluded.finished,record=excluded.record",params![value.scan_id.as_str(),value.finished,serde_json::to_string(value)?])?;
     Ok(())
 }
-fn coverage(path: &str, complete: i64, json: &str) -> Result<DirectoryCoverage> {
+pub(super) fn coverage(path: &str, complete: i64, json: &str) -> Result<DirectoryCoverage> {
     let value: DirectoryCoverage = serde_json::from_str(json)?;
     if value.path.as_ref().map_or("", VaultPath::as_str) != path
         || !matches!(complete, 0 | 1)
@@ -86,7 +86,7 @@ fn coverage(path: &str, complete: i64, json: &str) -> Result<DirectoryCoverage> 
     }
     Ok(value)
 }
-fn observation(path: &str, json: &str) -> Result<ScanObservation> {
+pub(super) fn observation(path: &str, json: &str) -> Result<ScanObservation> {
     let value: ScanObservation = serde_json::from_str(json)?;
     if value.path.as_str() != path
         || value

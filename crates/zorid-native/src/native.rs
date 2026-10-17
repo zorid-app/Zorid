@@ -10,8 +10,18 @@ use zorid_store::{
 };
 #[path = "checkpoints.rs"]
 mod checkpoints;
+#[path = "external_create.rs"]
+mod external_create;
+pub use external_create::{select_external_file_mode, ExternalFileMode};
 #[path = "directory.rs"]
 mod directory;
+#[cfg(test)]
+#[path = "external_create_tests.rs"]
+mod external_create_tests;
+#[path = "external_namespace.rs"]
+mod external_namespace;
+#[path = "external_scan.rs"]
+mod external_scan;
 #[path = "family.rs"]
 mod family;
 #[path = "family_namespace.rs"]

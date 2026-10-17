@@ -7,7 +7,7 @@ use std::{
     os::unix::fs::MetadataExt,
     time::Instant,
 };
-use zorid_store::{DirectoryCoverage, ScanObservation, ScanObservationKind};
+use zorid_store::{DirectoryCoverage, ExternalScanProof, ScanObservation, ScanObservationKind};
 
 // Retain original descriptors for final binding checks without exhausting the
 // process descriptor budget on a deeply/widely nested vault.
@@ -390,6 +390,70 @@ impl NativeVault {
                 path: None,
                 reason: "external scan duration budget exhausted".into(),
             });
+        }
+        // Save immutable capture proofs before the run becomes authoritative.
+        // Missing descendants of a missing directory never acquire absence proof.
+        let mut proof_count = scan.entries.len();
+        for (path, snapshot) in &scan.entries {
+            self.store.record_external_scan_proof(
+                &id,
+                &ExternalScanProof::Present {
+                    path: path.clone(),
+                    entry_kind: snapshot.kind,
+                    physical: PhysicalIdentity {
+                        inode: snapshot.identity.clone(),
+                        parent_inode: snapshot.parent_identity.clone(),
+                    },
+                    content_digest: snapshot
+                        .bytes
+                        .as_ref()
+                        .map(|bytes| zorid_file_sync::Sha256Digest::of(bytes)),
+                    content_bytes: snapshot
+                        .bytes
+                        .as_ref()
+                        .map_or(0, |bytes| bytes.len() as u64),
+                },
+            )?;
+        }
+        if !stopped && stack.is_empty() && scan.issues.is_empty() {
+            for binding in self.store.physical_bindings()? {
+                if scan.entries.contains_key(&binding.state.path) {
+                    continue;
+                }
+                let Some(parent) = scan.directories.get(&binding.state.path.parent()) else {
+                    continue;
+                };
+                if proof_count >= options.max_entries as usize
+                    || started.elapsed() >= options.max_duration
+                {
+                    scan.issues.push(ScanIssue {
+                        path: Some(binding.state.path),
+                        reason: "external absence proof budget exhausted".into(),
+                    });
+                    break;
+                }
+                parent.verify(self, binding.state.path.parent().as_ref())?;
+                if parent.identity != binding.physical.parent_inode
+                    || fs::node_type(&parent.file, binding.state.path.file_name())?.is_some()
+                {
+                    scan.issues.push(ScanIssue {
+                        path: Some(binding.state.path),
+                        reason: "external absence parent changed".into(),
+                    });
+                    continue;
+                }
+                self.store.record_external_scan_proof(
+                    &id,
+                    &ExternalScanProof::Absent { before: binding },
+                )?;
+                proof_count += 1;
+            }
+            if let Err(error) = scan.verify_directories(self) {
+                scan.issues.push(ScanIssue {
+                    path: None,
+                    reason: error.to_string(),
+                });
+            }
         }
         let complete = !stopped && stack.is_empty() && scan.issues.is_empty();
         scan.run = self.store.finish_scan(

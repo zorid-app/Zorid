@@ -89,6 +89,9 @@ pub struct ListingSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ChangeOrigin {
+    ExternalObservation {
+        observation_id: OperationId,
+    },
     Bootstrap,
     LocalCommand {
         operation_id: OperationId,
@@ -220,6 +223,9 @@ pub(crate) fn record_family_reload(
         tx.execute("INSERT INTO entry_presentation VALUES(?1,?2,?2,?3) ON CONFLICT(entry_id) DO UPDATE SET mtime_ms=max(entry_presentation.mtime_ms,excluded.mtime_ms),size_bytes=excluded.size_bytes",params![change.after.id.as_str(),now,size])?;
     }
     let origin = match origin {
+        ProjectionOrigin::ExternalObservation { observation_id } => {
+            ChangeOrigin::ExternalObservation { observation_id }
+        }
         ProjectionOrigin::ReceivedUpdate {
             realm_id,
             vault_id,
