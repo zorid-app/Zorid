@@ -124,7 +124,7 @@ fn durable_bounded_stage_resumes_after_restart_without_authority_writes() {
             CheckpointWrite {
                 key: "draft",
                 expected_revision: None,
-                next_revision: "draft_revision",
+                next_revision: "00000000-0000-4000-8000-000000000001",
                 encoded_state: Some("unsaved draft"),
             },
         )
