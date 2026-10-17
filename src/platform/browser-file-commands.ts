@@ -321,6 +321,7 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
                 exactRow(row, step, state.request);
             if (!state.outcome) {
                 if (!row) {
+                    assertActive();
                     await backend.prepareFamily(step.operationId, family(step, state.request));
                     row = (await backend.intents()).find(item => item.intent_id === step.operationId);
                     if (!row)
@@ -329,6 +330,7 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
                 }
                 if (row.status === 'prepared' || row.status === 'commit_requested') {
                     try {
+                        assertActive();
                         await backend.commit(step.operationId);
                     }
                     catch (error) {
@@ -382,6 +384,7 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
                 throw failure('idempotency_conflict');
         }
         else {
+            if (head) throw failure('invalid_file_checkpoint');
             const steps = await plan(request);
             state = { version: 1, request, signature: await signature(request), planSignature:await signature(steps), steps, next: 0, status: 'requested' };
             for (const step of state.steps)
