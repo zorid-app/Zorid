@@ -268,6 +268,42 @@ fn create_text(vault: &Path, input: &Path, content: &str) {
         ],
     ));
 }
+fn create_binary(vault: &Path, input: &Path, bytes: &[u8]) {
+    fs::write(input, bytes).unwrap();
+    success(cli(
+        vault,
+        &[
+            "create",
+            "attachment.bin",
+            "--id",
+            "attachment",
+            "--operation-id",
+            "create-attachment",
+            "--binary",
+            "--input",
+            input.to_str().unwrap(),
+        ],
+    ));
+}
+fn assert_binary(vault: &Path, expected: &[u8]) {
+    let output = cli(vault, &["read", "--id", "attachment", "--raw"]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let disk = fs::read(vault.join("attachment.bin")).unwrap();
+    assert!(
+        output.stdout == expected,
+        "restored CLI attachment bytes differ"
+    );
+    assert!(
+        disk == expected,
+        "restored physical attachment bytes differ"
+    );
+    assert!(
+        zorid_file_sync::Sha256Digest::of(&output.stdout)
+            == zorid_file_sync::Sha256Digest::of(expected),
+        "restored attachment digest differs"
+    );
+}
 fn read(vault: &Path) -> Vec<u8> {
     let output = cli(vault, &["read", "--id", "note", "--raw"]);
     assert!(output.status.success());
@@ -294,10 +330,11 @@ fn credentials(
 }
 
 // The receiver starts with no namespace entries or note/bootstrap bindings.
-// It reconstructs this text fixture from authenticated family envelopes. This
-// does not cover every file type, key epoch, history policy or production setup.
+// It reconstructs text and a multi-chunk binary attachment from authenticated
+// family envelopes. This does not cover all namespace history, key epochs or
+// production setup.
 #[test]
-fn external_recovery_secret_restores_namespace_and_text_from_managed_backup() {
+fn external_recovery_secret_restores_namespace_text_and_binary_from_managed_backup() {
     let original = tempfile::tempdir().unwrap();
     let backup = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
@@ -333,12 +370,18 @@ fn external_recovery_secret_restores_namespace_and_text_from_managed_backup() {
     initialize(&local, &old_credentials);
     let expected = "recovery-private-sentinel-6b7d97a4: \u{feff}Unicode 🦀\r\n";
     create_text(&local, &input, expected);
+    // Three chunks, all byte values (including NUL/invalid UTF-8), and an uneven
+    // final chunk exercise attachment reconstruction rather than text coercion.
+    let binary: Vec<u8> = (0..zorid_file_sync::MAX_CHUNK_BYTES * 2 + 19)
+        .map(|i| (i as u8).wrapping_add((i / zorid_file_sync::MAX_CHUNK_BYTES) as u8))
+        .collect();
+    create_binary(&local, &input, &binary);
     let uploaded = success(sync(&local, &old_credentials, &["once"]))["server_accepted"]
         .as_u64()
         .unwrap();
     assert!(
-        uploaded >= 2,
-        "expected namespace and text family envelopes"
+        uploaded >= 7,
+        "expected text namespace/update and binary namespace/page/three chunks"
     );
     let backup_db = backup.path().join("relay-backup.db");
     admin.backup_to(&backup_db).unwrap();
@@ -413,15 +456,18 @@ fn external_recovery_secret_restores_namespace_and_text_from_managed_backup() {
     );
     initialize(&clean_vault, &clean_credentials);
     assert!(!clean_vault.join("note.md").exists());
+    assert!(!clean_vault.join("attachment.bin").exists());
     let result = success(sync(&clean_vault, &clean_credentials, &["once"]));
     assert_eq!(result["locally_received"], uploaded);
     assert_eq!(result["server_accepted"], 0);
     assert_eq!(read(&clean_vault), expected.as_bytes());
+    assert_binary(&clean_vault, &binary);
     // A fresh CLI process resumes its durable receipt without echoing the update.
     let replay = success(sync(&clean_vault, &clean_credentials, &["once"]));
     assert_eq!(replay["locally_received"], 0);
     assert_eq!(replay["server_accepted"], 0);
     assert_eq!(read(&clean_vault), expected.as_bytes());
+    assert_binary(&clean_vault, &binary);
     assert_eq!(
         fs::read(clean_vault.join("note.md")).unwrap(),
         expected.as_bytes()
