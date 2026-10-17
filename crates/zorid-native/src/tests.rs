@@ -1234,13 +1234,16 @@ fn environmental_failure_keeps_requested_intent_replayable() {
         client_id: prepared.client_id,
         token: prepared.token,
     };
-    stdfs::remove_file(root.path().join(path().as_str())).unwrap();
+    // Temporary absence must restore the proven original inode. Recreating
+    // equal bytes is a different occupant and cannot inherit its authority.
+    let displaced = root.path().join("temporarily-displaced");
+    stdfs::rename(root.path().join(path().as_str()), &displaced).unwrap();
     assert!(vault.commit_host_intent(&reference).is_err());
     assert_eq!(
         vault.query_host_intent(&reference).unwrap().unwrap().state,
         HostIntentState::CommitRequested
     );
-    stdfs::write(root.path().join(path().as_str()), b"base").unwrap();
+    stdfs::rename(&displaced, root.path().join(path().as_str())).unwrap();
     assert_eq!(
         vault.commit_host_intent(&reference).unwrap().state,
         HostIntentState::Committed
