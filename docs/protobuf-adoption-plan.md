@@ -4,8 +4,9 @@ Owner: `/root/protobuf_schema_sol`. Branch: `tingkai-c/protobuf-schema-foundatio
 Worktree: `/Users/ctk/orca/workspaces/Zorid/protobuf-schema-foundation`.
 Base: `454e955`. Main integration belongs exclusively to the root coordinator.
 Status: narrow foundation implemented and independently source-reviewed in isolation;
-focused host/TypeScript/reproducibility checks pass. Not integrated; no runtime
-codecs changed. WASM compilation is unproved because the local target is missing.
+focused host/TypeScript/reproducibility and clean WASM checks pass. Foundation
+is integrated; no runtime codecs changed. See the exact compiler/target evidence
+below.
 
 ## Scope and contract
 
@@ -85,7 +86,9 @@ payloads; schemas add no crypto, authentication or RPC protocol.
 Implemented: IDL, checked-in standard generated Rust/TypeScript, pure no_std crate,
 pinned development tooling/locks, binary fixtures and focused interop tests.
 Reviewed: root approved narrow proposal; independent schema and lock reviews pass.
-Integrated: none. Verification details below.
+Integrated: foundation `17907d8` + `7e29a08`; pnpm correction `07117b1` on main.
+Root main explicit pnpm12 install handle 9473 passed and Node interop passed 4/4.
+Verification details below.
 Dependencies: portable candidate/ref APIs (`desktop_default_sol`), store stage/
 receipt/read freeze (`package_sol`), desktop/browser consumer plans. Runtime
 activation, schema version rollout and native/mobile behavior are separate work.
@@ -175,3 +178,47 @@ pnpm 12 frozen install also passes and preserves lockfile bytes exactly. The
 corrective lock is byte-for-byte equal to root's owned auto-prepended lock, and
 structural checks establish original env-document and foundation project-document
 contents unchanged. No Rust/build commands or shared module changes occurred.
+
+## WASM environment gap closed — 2026-10-17
+
+Root authorized the official target installation and granted an exclusive jobs1
+compile slot. The first explicit `/Users/ctk/.cargo/bin/rustup target add
+wasm32-unknown-unknown` failed: component download/cache cleanup reported
+`No such file or directory (os error 2)`. Inspection found the existing
+`~/.rustup/downloads` and stable toolchain directories root-owned with mode 0755.
+No sudo, chmod, root-owned toolchain modification or target-config workaround was
+used. Root approved an isolated writable official toolchain instead.
+
+Installation command (handle 53615, exit 0):
+
+```sh
+RUSTUP_HOME=/private/tmp/zorid-proto-rustup \
+  /Users/ctk/.cargo/bin/rustup toolchain install 1.95.0 \
+  --profile minimal --target wasm32-unknown-unknown --no-self-update
+```
+
+Official release manifest: 2026-04-16. Verified compiler: Rust 1.95.0, commit
+`59807616e1fa2540724bfbac14d7976d7e4a3860` (2026-04-14), host
+`aarch64-apple-darwin`, LLVM 22.1.2. Both host and WASM targets are installed in
+this isolated Rustup home. The original user Rustup default is unchanged.
+
+Initial checks 8068 and 18680 still failed E0463 because Cargo invoked bare
+`rustc`, and the worktree PATH selected `/opt/homebrew/bin/rustc` (symlink to
+Homebrew Rust 1.99.0), bypassing the installed Rustup compiler. The corrected
+command selects the actual official compiler explicitly, without altering config:
+
+```sh
+RUSTUP_HOME=/private/tmp/zorid-proto-rustup \
+RUSTC=/private/tmp/zorid-proto-rustup/toolchains/1.95.0-aarch64-apple-darwin/bin/rustc \
+CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/private/tmp/zorid-proto-wasm-check-target \
+  /Users/ctk/.cargo/bin/cargo +1.95.0 check --locked -p zorid-proto \
+  --target wasm32-unknown-unknown -j 1
+```
+
+Handle 22884 passed, exit 0 in 8.61 seconds, using the isolated target directory
+created for this gate. Selecting the official compiler caused dependency
+recompilation; no application build outputs were reused.
+This closes the pure generated crate WASM compile gap; it does not prove WASM
+execution, browser adapter activation or the full app's WASM build. The official
+toolchain remains cached at the explicit path for later reviewed checks. Root
+was notified and the heavy slot released before further doc-only work.
