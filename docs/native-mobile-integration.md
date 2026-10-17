@@ -106,3 +106,38 @@ retained draft/conflict recovery and core filesystem locking/fsync/no-clobber.
 Then incrementally connect existing sync under native-owned credentials, and make
 actual signed device archive/TestFlight upload once Apple account access permits.
 Simulator, device, source, compile and signed-upload results stay separate.
+
+## Follow-up checkpoint — 19:28 UTC
+
+Shared toolchain recovered to stable canonical ignored
+`/Users/ctk/Projects/Zorid/tmp/shared-rust-toolchain/toolchains/stable-aarch64-apple-darwin`.
+Actual simulator staticlib build41020 passed exit0 in1m15s (82MiB library; exported
+open/request/startup/refresh/free/close symbols verified). Subsequent ABI guard
+refactor/tests7932b4b requires incremental rebuild before using the app artifact.
+
+Affected host check71034: unit tests8/8 pass; existing subprocess13/15 pass,
+command unoptimized `cargo test --locked -p zorid-desktop-host --lib --test process
+-j1 --offline -- --test-threads=1`. Two failures remain explicitly unaccepted:
+old family fixture startup failed credentials_invalid; streaming test host ended
+at60s watchdog, causing UnexpectedEof. Separate disposable process probe confirms
+same v1/no-transport config fails and v2/grpc starts successfully. Coordinator
+approved fixture-only736cc82 correction, preserving production protocol/budgets.
+Matching prior accepted command-only test opt-level1 rerun remains required;
+watchdog coincidence alone is not regression diagnosis. All owned test hosts exit.
+Exclusive slot released; coordinator Stage4 parser owns the next slot.
+
+Independent source review4d37f97 imported e6c8eaa found three mobile P2s, all now
+addressed in source: release commands omit outer lease dc32278, Android keeps its
+existing adapter until JNI727c985, validated host commit_uncertain is preserved
+d860a67. Native fixed-consumer claims and lowercase lifecycle IDs03ed9cf,
+validated reconciliation+retry f0ea3b5, compiler override8ccaad4 and workspace
+flush/session/ACK seam913618a are integrated only in this isolated branch.
+Combined focused mobile60+workspace7 checks pass67/67; separate affected existing
+platform checks14/14 pass. These use mocks/small DOM harnesses, not app runtime.
+Independent closure source review is running. No Swift link, simulator app, signed
+archive, TestFlight readiness or mobile sync success is claimed.
+
+User asked what the native shell is like and noted no mobile UI discussion had
+occurred. Clarified this is a minimal UIKit/local-vault/nav plus existing-editor
+prototype to prove Rust integration, not a settled mobile product design. Broader
+visual/navigation design remains open; no editor polish redesign is underway.
