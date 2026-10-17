@@ -157,12 +157,29 @@ User supplied `/Users/ctk/Downloads/IMG_1738.PNG` as visual direction: dark nati
 home, top-left settings/avatar control, horizontal pill-style tab row. Users add,
 remove and choose their native page tabs. Full requested default-page inventory:
 Recents, Home, Files, Tasks, Calendar. Implement **Recents and Files only now**;
-Home/Tasks/Calendar stay deferred. Both lists/pages must be native UIKit pages,
+Home/Tasks/Calendar stay deferred. Both lists/pages must be native SwiftUI pages,
 with current Rust metadata/snapshot APIs as data authority; no new Swift Markdown,
 Base or index semantics. Existing shared web editor remains the note editor.
 
 This supersedes the minimal launch-picker/direct-editor prototype as the desired
 shell presentation. Vault creation/selection remains native onboarding/settings.
-Optional question pending: tapping a note pushes editor and returns to the native
-page, or opens note as another top-row tab. Until answered, default push/return;
-keep the layout adaptable. No screenshot-proprietary source/assets copied.
+User confirmed: tapping a note opens the existing editor, then Back returns to
+the originating native page. Notes do not become top-row native page tabs.
+No screenshot-proprietary source/assets copied.
+
+User explicitly requests the installed SwiftUI/iOS skills, Liquid Glass and
+animations. Native Recents/Files use SwiftUI hosted alongside the existing UIKit
+Capacitor editor bridge. Apply iOS26 Liquid Glass to functional navigation and
+controls, group related effects, retain an availability-gated earlier-iOS fallback,
+and respect Reduce Motion/Transparency, Dynamic Type and VoiceOver. Keep animation
+state on the main actor, stable row/control IDs, and expensive Rust work outside
+animation closures. Applied skills: swiftui-liquid-glass, swiftui-animation,
+swiftui-navigation, swiftui-uikit-interop, swift-architecture, ios-accessibility
+and ios-simulator. These are implementation requirements; visual/accessibility
+acceptance still requires actual app verification.
+
+Native Swift worker owns NativeMobile.swift, SceneDelegate.swift and new
+NativePages.swift in mobile-ios-shell. Shared initialPath/noteOpened seams are
+requested from coordinator before edits. Native-owned recent-open history is
+device-local UI state keyed by vault and stable Rust entry ID; current paths and
+file listings come from Rust snapshots. No Swift Markdown/Base/index semantics.
