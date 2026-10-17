@@ -76,6 +76,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
   optimization is ongoing in its isolated worktree. Text-v2/file-v2 and schema8
   work have separate owners and coordinated APIs. Root has released the heavy
   slot after session72147; no root verification process remains running.
+- Current follow-on ownership: desktop admission candidate `20b6973` owns the
+  serialized test slot (owner session99012); optimized namespace verification is
+  queued next. `crdt_interop` and `core_cli` own coordinated text-v2/file-v2;
+  `data_readiness` owns the common family ledger/atomic ingestion. Browser
+  admission design is assigned to `browser_adapter_review`, with no production
+  editor selection changes. `livesync_audit` proposes a purpose-separated random
+  recovery-key bundle and clean-client restore fixture; `recovery_review` owns
+  independent contract review before crypto edits. These are active tasks, not
+  completed implementation or runtime evidence.
 
 - Main `227f084` contains both native/CLI batches and editor E1/E2. Native batch2
   candidate `3df1de8` passed 109 tests in a fresh target (session30255 exit0),
