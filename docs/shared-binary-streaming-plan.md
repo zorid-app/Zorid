@@ -461,3 +461,15 @@ User adopted protobuf discussion direction after this phase began. A separate
 schema owner owns new versioned codec work. This planner remains codec-independent
 at its public boundary; current files-v2 wire encoding is unchanged, and no
 protobuf payload may be substituted under that existing format version.
+
+
+Reference classification is now source-reviewed and exported in
+`reference_materialization.rs`, with12 focused source fixtures. Exact metadata
+and all-history VerifiedBinarySet are checked before classification; every Normal
+binary result retains selected-event/manifest identity and returns BinaryContentRef.
+Equal bytes do not merge causal witnesses. Pending/missing/hidden/tombstone and
+Text identity behavior follows the existing classifier. Normal Text results use
+one existing fully validating client-sync materialization temporary, then enforce
+file and aggregate retained-output budgets. This explicitly does not claim a
+preallocation or total CRDT decoder memory bound. These12 tests remain unrun;
+there is still no activated store/client streaming consumer.
