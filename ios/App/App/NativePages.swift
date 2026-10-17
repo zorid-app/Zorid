@@ -1065,11 +1065,12 @@ private struct NativeNavigationPreferences {
     private(set) var items: [NativeNavigationItem]
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // Missing is the default; an explicitly empty or all-unknown saved bar
-        // stays empty. Root Notes/Settings remain reachable without a tab bar.
+        // Missing, malformed, empty or all-unknown preferences restore Notes.
+        // The native navigation bar always contains an implemented page.
         if let saved = defaults.array(forKey: Self.key) {
             items = Self.clean(saved.compactMap { ($0 as? String).flatMap(NativeNavigationItem.init(rawValue:)) })
         } else { items = [.notes] }
+        if items.isEmpty { items = [.notes] }
         persist()
     }
     private static func clean(_ items: [NativeNavigationItem]) -> [NativeNavigationItem] {
@@ -1077,7 +1078,9 @@ private struct NativeNavigationPreferences {
         return items.filter { seen.insert($0).inserted }
     }
     mutating func replace(_ items: [NativeNavigationItem]) {
-        self.items = Self.clean(items)
+        let cleaned = Self.clean(items)
+        guard !cleaned.isEmpty else { return }
+        self.items = cleaned
         persist()
     }
     private func persist() {
@@ -1094,15 +1097,16 @@ private final class NativePagesModel: ObservableObject {
     private(set) var navigationRevision: UInt64 = 0
     var unusedNavigationItems: [NativeNavigationItem] { NativeNavigationItem.allCases.filter { !navigation.items.contains($0) } }
     func setNavigationItems(_ items: [NativeNavigationItem]) {
+        guard !items.isEmpty else { return }
         navigationRevision &+= 1
         navigation.replace(items)
-        if navigation.items.isEmpty { showPage(.recents) }
     }
     func addNavigationItem(_ item: NativeNavigationItem) {
         guard !navigation.items.contains(item) else { return }
         setNavigationItems(navigation.items + [item])
     }
     func removeNavigationItem(_ item: NativeNavigationItem) {
+        guard navigation.items.count > 1 else { return }
         setNavigationItems(navigation.items.filter { $0 != item })
     }
     func moveNavigationItem(_ item: NativeNavigationItem, by offset: Int) {
@@ -1522,16 +1526,12 @@ private struct NativePagesView: View {
             // Draw glass above the opaque TabView sibling so its diffuse shadow
             // can cross the header boundary rather than being overpainted there.
             topBar.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12).zIndex(1)
-            if model.navigation.items.isEmpty {
-                pageContent // A valid empty bar never locks the user out of Notes/Settings.
-            } else {
-                TabView {
-                    ForEach(model.navigation.items) { item in
-                        navigationPage(item).tabItem {
-                            Label(item.title, systemImage: item.symbol)
-                                .accessibilityIdentifier("native.pages.tab.\(item.rawValue)")
-                        }.tag(item)
-                    }
+            TabView {
+                ForEach(model.navigation.items) { item in
+                    navigationPage(item).tabItem {
+                        Label(item.title, systemImage: item.symbol)
+                            .accessibilityIdentifier("native.pages.tab.\(item.rawValue)")
+                    }.tag(item)
                 }
             }
         }
@@ -1954,7 +1954,8 @@ private struct NativeNavigationDrag {
         switch placement {
         case .unused:
             guard items.contains(payload.item) else { return nil }
-            return items.filter { $0 != payload.item }
+            let remaining = items.filter { $0 != payload.item }
+            return remaining.isEmpty ? nil : remaining
         case .bar(let position): return NativeNavigationOrder.placing(payload.item, before: position, in: items)
         }
     }
@@ -1992,7 +1993,9 @@ private struct NativeNavigationConfigurationView: View {
             NativeSettingsHeader(title: "Navigation bar", identifier: "native.navigation", back: back).zIndex(1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text("Drag items to reorder. Drop an item below to remove it.")
+                    Text(model.navigation.items.count > 1
+                         ? "Drag items to reorder. Drop an item below to remove it."
+                         : "Keep at least one page in the navigation bar.")
                         .font(.subheadline).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
                     Text("Navigation bar").font(.headline).accessibilityAddTraits(.isHeader)
                     barPreview
@@ -2027,6 +2030,7 @@ private struct NativeNavigationConfigurationView: View {
                     Button("Move later") { edit { model.moveNavigationItem(item, by: 1) } }
                         .disabled(index + 1 == model.navigation.items.count)
                     Button("Remove from navigation bar") { edit { model.removeNavigationItem(item) } }
+                        .disabled(model.navigation.items.count <= 1)
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: item.symbol).font(.title3)
@@ -2055,7 +2059,9 @@ private struct NativeNavigationConfigurationView: View {
     private var unusedItems: some View {
         VStack(alignment: .leading, spacing: 12) {
             if model.unusedNavigationItems.isEmpty {
-                Text("All available pages are in the navigation bar. Drop an item here to remove it.")
+                Text(model.navigation.items.count > 1
+                     ? "All available pages are in the navigation bar. Drop an item here to remove it."
+                     : "All available pages are in the navigation bar. Keep at least one page in the bar.")
                     .font(.subheadline).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             ForEach(model.unusedNavigationItems) { item in
@@ -2089,6 +2095,10 @@ private struct NativeNavigationConfigurationView: View {
                                            revision: model.navigationRevision, items: model.navigation.items)
         drag = current
         dropError = ""
+        if current.items.count == 1, current.items.contains(item) {
+            dropError = "Keep at least one page in the navigation bar."
+            UIAccessibility.post(notification: .announcement, argument: dropError)
+        }
         let bytes = (try? JSONEncoder().encode(current.payload)) ?? Data()
         let provider = NSItemProvider()
         provider.registerDataRepresentation(forTypeIdentifier: NativeNavigationDrag.type.identifier, visibility: .ownProcess) { completion in
@@ -2101,7 +2111,7 @@ private struct NativeNavigationConfigurationView: View {
         NativeNavigationDrop(allowed: {
             guard active, let drag = drag, drag.revision == model.navigationRevision,
                   drag.items == model.navigation.items else { return false }
-            if case .unused = placement { return drag.items.contains(drag.payload.item) }
+            if case .unused = placement { return drag.items.count > 1 && drag.items.contains(drag.payload.item) }
             return true
         }, receive: { provider in
             guard let expected = drag else { return false }
