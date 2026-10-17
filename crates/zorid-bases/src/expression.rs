@@ -1044,7 +1044,13 @@ impl<'a> Evaluator<'a> {
         let object = self.evaluate(object, scope);
         let property = match member {
             Member::Named(value) => value.clone(),
-            Member::Computed(value) => plain_string(&self.evaluate(value, scope)),
+            Member::Computed(value) => {
+                let value = self.evaluate(value, scope);
+                if matches!(value, RuntimeValue::Error(_)) {
+                    return value;
+                }
+                plain_string(&value)
+            }
         };
         self.property(object, &property)
     }
@@ -1217,10 +1223,11 @@ impl<'a> Evaluator<'a> {
             return RuntimeValue::String(stringify(&receiver));
         }
         if name == "isType" {
-            let expected = arguments
-                .first()
-                .map(|value| plain_string(&self.evaluate(value, scope)))
-                .unwrap_or_default();
+            let values = match self.evaluate_arguments(arguments, scope) {
+                Ok(values) => values,
+                Err(error) => return error,
+            };
+            let expected = values.first().map(plain_string).unwrap_or_default();
             return RuntimeValue::Bool(value_type(&receiver).eq_ignore_ascii_case(&expected));
         }
         match receiver {
@@ -1256,10 +1263,11 @@ impl<'a> Evaluator<'a> {
                 _ => method_not_found("Object", name),
             },
             RuntimeValue::Regex(pattern, flags) if name == "matches" => {
-                let candidate = arguments
-                    .first()
-                    .map(|value| plain_string(&self.evaluate(value, scope)))
-                    .unwrap_or_default();
+                let values = match self.evaluate_arguments(arguments, scope) {
+                    Ok(values) => values,
+                    Err(error) => return error,
+                };
+                let candidate = values.first().map(plain_string).unwrap_or_default();
                 match regex_is_match(&pattern, &flags, &candidate) {
                     Ok(matches) => RuntimeValue::Bool(matches),
                     Err(error) => RuntimeValue::Error(error),
@@ -1418,22 +1426,29 @@ impl<'a> Evaluator<'a> {
         arguments: &[Expr],
         scope: &Scope,
     ) -> RuntimeValue {
+        let eager = if ["map", "filter", "reduce"].contains(&name) {
+            Vec::new()
+        } else {
+            match self.evaluate_arguments(arguments, scope) {
+                Ok(values) => values,
+                Err(error) => return error,
+            }
+        };
         match name {
             "contains" => {
-                let needle = arguments
-                    .first()
-                    .map(|value| self.evaluate(value, scope))
-                    .unwrap_or(RuntimeValue::Null);
+                let needle = eager.first().cloned().unwrap_or(RuntimeValue::Null);
                 RuntimeValue::Bool(values.iter().any(|value| self.equals(value, &needle)))
             }
-            "containsAll" => RuntimeValue::Bool(arguments.iter().all(|argument| {
-                let needle = self.evaluate(argument, scope);
-                values.iter().any(|value| self.equals(value, &needle))
-            })),
-            "containsAny" => RuntimeValue::Bool(arguments.iter().any(|argument| {
-                let needle = self.evaluate(argument, scope);
-                values.iter().any(|value| self.equals(value, &needle))
-            })),
+            "containsAll" => RuntimeValue::Bool(
+                eager
+                    .iter()
+                    .all(|needle| values.iter().any(|value| self.equals(value, needle))),
+            ),
+            "containsAny" => RuntimeValue::Bool(
+                eager
+                    .iter()
+                    .any(|needle| values.iter().any(|value| self.equals(value, needle))),
+            ),
             "filter" => {
                 let mut result = Vec::new();
                 for (index, value) in values.iter().enumerate() {
@@ -1463,10 +1478,7 @@ impl<'a> Evaluator<'a> {
                     .collect(),
             ),
             "join" => {
-                let separator = arguments
-                    .first()
-                    .map(|value| plain_string(&self.evaluate(value, scope)))
-                    .unwrap_or_default();
+                let separator = eager.first().map(plain_string).unwrap_or_default();
                 let content = values.iter().try_fold(0usize, |total, value| {
                     value_bytes(value).map(|bytes| total.saturating_add(bytes))
                 });
@@ -1514,6 +1526,9 @@ impl<'a> Evaluator<'a> {
                     .get(1)
                     .map(|value| self.evaluate(value, scope))
                     .unwrap_or(RuntimeValue::Null);
+                if matches!(accumulator, RuntimeValue::Error(_)) {
+                    return accumulator;
+                }
                 for (index, value) in values.iter().enumerate() {
                     let mut nested = scope.clone();
                     nested.insert("acc".to_string(), accumulator);
@@ -1523,20 +1538,21 @@ impl<'a> Evaluator<'a> {
                         .first()
                         .map(|expression| self.evaluate(expression, &nested))
                         .unwrap_or(RuntimeValue::Null);
+                    if matches!(accumulator, RuntimeValue::Error(_)) {
+                        return accumulator;
+                    }
                 }
                 accumulator
             }
             "reverse" => RuntimeValue::List(values.iter().cloned().rev().collect()),
             "slice" => {
-                let start = arguments
+                let start = eager
                     .first()
-                    .map(|value| self.evaluate(value, scope))
-                    .and_then(|value| self.number(&value).ok())
+                    .and_then(|value| self.number(value).ok())
                     .unwrap_or(0.0) as isize;
-                let end = arguments
+                let end = eager
                     .get(1)
-                    .map(|value| self.evaluate(value, scope))
-                    .and_then(|value| self.number(&value).ok())
+                    .and_then(|value| self.number(value).ok())
                     .map(|value| value as isize);
                 RuntimeValue::List(slice_values(values, start, end))
             }
@@ -2209,7 +2225,9 @@ fn try_format_date(value: &DateValue, pattern: &str) -> Result<String, String> {
     {
         return Err("unsupported\0Invalid date format".into());
     }
-    let mut output = date.format(&format).to_string();
+    let mut output = String::new();
+    std::fmt::write(&mut output, format_args!("{}", date.format(&format)))
+        .map_err(|_| "unsupported\0Date format requires unavailable fields".to_string())?;
     for (index, literal) in stored.iter().enumerate() {
         output = output.replace(&format!("__L{index}__"), literal);
     }

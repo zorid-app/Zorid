@@ -212,6 +212,12 @@ fn numeric_and_calendar_edges_cannot_panic_or_erase_types() {
             .code,
         "unsupported"
     );
+    assert_eq!(
+        evaluate_expression("date(\"2024-01-15\").format(\"%z\")", &record, &options)
+            .unwrap_err()
+            .code,
+        "unsupported"
+    );
     let huge = format!("duration(\"{} days\")", "9".repeat(400));
     assert_eq!(
         evaluate_expression(&huge, &record, &options)
