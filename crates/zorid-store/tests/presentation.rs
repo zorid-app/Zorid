@@ -2,9 +2,9 @@ use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, Vau
 use zorid_store::{ChangeOrigin, EntryPresentation, Store};
 fn create(name: &str, bytes: &[u8]) -> MutationRequest {
     MutationRequest {
-        operation_id: OperationId::new(name).unwrap(),
+        operation_id: OperationId::new(name.replace('.', "_")).unwrap(),
         mutation: Mutation::Create {
-            id: EntryId::new(name).unwrap(),
+            id: EntryId::new(name.replace('.', "_")).unwrap(),
             path: VaultPath::new(name).unwrap(),
             kind: EntryKind::File,
             content: Some(bytes.to_vec()),
@@ -12,7 +12,10 @@ fn create(name: &str, bytes: &[u8]) -> MutationRequest {
     }
 }
 fn write(store: &Store, op: &str, name: &str, bytes: &[u8]) -> MutationRequest {
-    let prior = store.read(&EntryId::new(name).unwrap()).unwrap().unwrap();
+    let prior = store
+        .read(&EntryId::new(name.replace('.', "_")).unwrap())
+        .unwrap()
+        .unwrap();
     MutationRequest {
         operation_id: OperationId::new(op).unwrap(),
         mutation: Mutation::Write {
