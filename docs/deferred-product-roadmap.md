@@ -116,6 +116,34 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Main4a48a79 integrates reviewed25f6745: whole-text diff trims shared scalar-
+  aligned prefix/suffix, bounds Myers work and falls back to the changed middle
+  when the window/edit count exceeds its budget. Existing256KiB Text, snapshot,
+  actor, identity and wire limits unchanged. Root gate35897 passes39/39 client-
+  sync tests including Unicode, large replacements and external branch merging.
+  Coarse fallback is less precise for overlapping remote deletions; this is not
+  the deferred stale-editor-buffer automatic merge. Native/WASM rebuilt app
+  verification follows the next coherent storage build; current main binaries
+  still predate this source-only library update.
+- Isolated aggregate edf54fd now contains resumable external inventory source
+ 269b4e9+dc0d420, Store checkpoint/proof seama8e970d and importfix7e114fa plus
+  Ready fixture correctionb60c854. First gate10255 exited101 on missing Store
+  OperationId import; fixed explicitly. Gate47817 compiled and six new fixtures
+  are running; do not claim progress implementation validated yet. Root owns
+  heavy slot, external owner runs no build. Current schema remains9.
+- Browser owner found a binary-create race: Vault prechecks absence then calls
+  writeBinary, whose consumer can upsert a peer-created file. Explicit optional
+  adapter.createBinary and fixed Create intent are approved as a separate narrow
+  correctness fix. Browser owner owns isolatedbinary-create-exclusive; recovery
+  UI owner reviews desktop/shared seams.39 focused Node checks and typecheck
+  reported pass; review/integration pending. Unsupported adapters fail clearly,
+  no writeBinary fallback. This is distinct from streaming activation.
+- Streaming source foundations active in isolated worktrees: portable owner
+  desktop_default_sol, Store owner package_sol (schema10 reserved; currently
+  no activation), browser owner and recovery_ui_sol prepare adapter contracts
+  read-only until shared types/commit plan freeze. One immutable exact-plaintext
+  per-update body source plus bound metadata summaries avoids duplicate chunk
+  authorities. No runtime streaming or larger Text framing is claimed.
 - Mainab64af0 now integrates the coherent browser-default/desktop-diagnostic/menu
   batch. src/desktop/crates/scripts/build configs are identical to aggregate
   ebbcc22. Normal-browser actual evidence is in browser-normal-verification.md:
