@@ -1526,3 +1526,191 @@ fn retained_binary_output_budget_precedes_expanded_materialization() {
         Some(vec![])
     );
 }
+
+fn saved_binary_content(state: &State) -> crate::materialization::VerifiedContent {
+    let Effect::Create {
+        content: Some(ContentSeed::Binary { manifest }),
+        ..
+    } = &state.records[&id("namespace-create")].body.events()[0].effect
+    else {
+        panic!("binary fixture expected")
+    };
+    crate::materialization::VerifiedContent {
+        bytes: state
+            .materialize_retained_binary(&identity(), &id("namespace-create"))
+            .unwrap()
+            .unwrap(),
+        digest: manifest.digest,
+        witness: crate::materialization::ContentWitness::Binary {
+            selected_event: id("namespace-create"),
+            manifest: manifest.clone(),
+        },
+    }
+}
+#[test]
+fn retained_verified_content_binds_exact_event_manifest_digest_and_bytes() {
+    let state = retained_binary_fixture();
+    let saved = saved_binary_content(&state);
+    let limit = saved.bytes.len() as u64;
+    state
+        .validate_retained_binary_content(&identity(), &id("namespace-create"), &saved, limit)
+        .unwrap();
+    for fault in 0..5 {
+        let mut wrong = saved.clone();
+        match fault {
+            0 => wrong.digest = Sha256Digest::of(b"wrong"),
+            1 => wrong.bytes[0] ^= 1,
+            2 => wrong.bytes.clear(),
+            3 => {
+                if let crate::materialization::ContentWitness::Binary { selected_event, .. } =
+                    &mut wrong.witness
+                {
+                    *selected_event = id("binary-write")
+                }
+            }
+            _ => {
+                if let crate::materialization::ContentWitness::Binary { manifest, .. } =
+                    &mut wrong.witness
+                {
+                    manifest.pages[0].id = id("other-page")
+                }
+            }
+        }
+        assert!(
+            state
+                .validate_retained_binary_content(
+                    &identity(),
+                    &id("namespace-create"),
+                    &wrong,
+                    limit
+                )
+                .is_err(),
+            "fault {fault}"
+        );
+    }
+    assert_eq!(
+        state
+            .validate_retained_binary_content(
+                &identity(),
+                &id("namespace-create"),
+                &saved,
+                limit - 1
+            )
+            .unwrap_err(),
+        Error::TooLarge
+    );
+    let hidden = apply(&state, event("delete", &["binary-write"], Effect::Delete));
+    restart(&hidden)
+        .validate_retained_binary_content(&identity(), &id("namespace-create"), &saved, limit)
+        .unwrap();
+    let mut wrong_identity = identity();
+    wrong_identity.bootstrap_id = id("other-bootstrap");
+    assert_eq!(
+        state
+            .validate_retained_binary_content(
+                &wrong_identity,
+                &id("namespace-create"),
+                &saved,
+                limit
+            )
+            .unwrap_err(),
+        Error::IdentityMismatch
+    );
+}
+#[test]
+fn retained_verified_content_rejects_equivalent_alternate_manifest_and_missing_dependencies() {
+    let mut state = retained_binary_fixture();
+    let saved = saved_binary_content(&state);
+    let mut alias = state.records[&id("old-page")].clone();
+    alias.id = id("alias-page");
+    state.records.insert(alias.id.clone(), alias);
+    let mut substituted = saved.clone();
+    let crate::materialization::ContentWitness::Binary { manifest, .. } = &mut substituted.witness
+    else {
+        unreachable!()
+    };
+    manifest.pages[0].id = id("alias-page");
+    // The alternate manifest reconstructs exactly the same bytes, but is not the
+    // manifest committed by the selected immutable event.
+    assert_eq!(
+        state.materialize(manifest).unwrap(),
+        Some(saved.bytes.clone())
+    );
+    assert_eq!(
+        state
+            .validate_retained_binary_content(
+                &identity(),
+                &id("namespace-create"),
+                &substituted,
+                1000
+            )
+            .unwrap_err(),
+        Error::InvalidContent
+    );
+    state.records.remove(&id("old-chunk"));
+    assert_eq!(
+        state
+            .materialize_retained_binary(&identity(), &id("namespace-create"))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        state
+            .validate_retained_binary_content(&identity(), &id("namespace-create"), &saved, 1000)
+            .unwrap_err(),
+        Error::InvalidContent
+    );
+}
+#[test]
+fn retained_verified_content_distinguishes_binary_empty_from_text_witness() {
+    let base = retained_binary_fixture();
+    let state = apply(
+        &base,
+        event(
+            "empty-write",
+            &["binary-write"],
+            Effect::SetContent {
+                content: Manifest {
+                    bytes: 0,
+                    digest: Sha256Digest::of(&[]),
+                    pages: vec![],
+                },
+            },
+        ),
+    );
+    let saved = crate::materialization::VerifiedContent {
+        bytes: vec![],
+        digest: Sha256Digest::of(&[]),
+        witness: crate::materialization::ContentWitness::Binary {
+            selected_event: id("empty-write"),
+            manifest: Manifest {
+                bytes: 0,
+                digest: Sha256Digest::of(&[]),
+                pages: vec![],
+            },
+        },
+    };
+    state
+        .validate_retained_binary_content(&identity(), &id("empty-write"), &saved, 0)
+        .unwrap();
+    let text_witness = crate::materialization::VerifiedContent {
+        bytes: vec![],
+        digest: Sha256Digest::of(&[]),
+        witness: crate::materialization::ContentWitness::Text {
+            identity: TextIdentity {
+                realm_id: scope().realm_id,
+                vault_id: scope().vault_id,
+                entry_id: entry("note"),
+                bootstrap_id: id("legacy-text-bootstrap"),
+            },
+            revision: rev("text-revision"),
+            snapshot_digest: Sha256Digest::of(&[]),
+        },
+    };
+    assert_eq!(
+        state
+            .validate_retained_binary_content(&identity(), &id("empty-write"), &text_witness, 0)
+            .unwrap_err(),
+        Error::InvalidContent
+    );
+}

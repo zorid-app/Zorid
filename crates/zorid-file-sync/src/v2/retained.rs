@@ -28,6 +28,55 @@ impl State {
         content_event: &UpdateId,
         max_bytes: u64,
     ) -> Result<Option<Vec<u8>>> {
+        let manifest = self.retained_binary_manifest(identity, content_event, max_bytes)?;
+        self.binary_records().materialize(&manifest)
+    }
+    /// Check a persisted binary value against its exact immutable content event.
+    /// This also binds the saved manifest and selected-event witness; equal bytes
+    /// or a valid unrelated manifest in the same vault are insufficient.
+    /// Missing dependencies are invalid for a previously retained complete value.
+    pub fn validate_retained_binary_content(
+        &self,
+        identity: &EntryIdentity,
+        content_event: &UpdateId,
+        verified: &crate::materialization::VerifiedContent,
+        max_bytes: u64,
+    ) -> Result<()> {
+        if verified.bytes.len() as u64 > max_bytes
+            || verified.bytes.len() as u64 > crate::MAX_FILE_BYTES
+        {
+            return Err(Error::TooLarge);
+        }
+        let crate::materialization::ContentWitness::Binary {
+            selected_event,
+            manifest: saved_manifest,
+        } = &verified.witness
+        else {
+            return Err(Error::InvalidContent);
+        };
+        if selected_event != content_event {
+            return Err(Error::InvalidContent);
+        }
+        let manifest = self.retained_binary_manifest(identity, content_event, max_bytes)?;
+        if *saved_manifest != manifest
+            || verified.digest != manifest.digest
+            || verified.bytes.len() as u64 != manifest.bytes
+            || Sha256Digest::of(&verified.bytes) != verified.digest
+        {
+            return Err(Error::InvalidContent);
+        }
+        let bytes = self.binary_records().materialize(&manifest)?;
+        if bytes.as_ref() != Some(&verified.bytes) {
+            return Err(Error::InvalidContent);
+        }
+        Ok(())
+    }
+    fn retained_binary_manifest(
+        &self,
+        identity: &EntryIdentity,
+        content_event: &UpdateId,
+        max_bytes: u64,
+    ) -> Result<Manifest> {
         let (view, graph) = self.view_and_ancestry()?;
         let event = graph.resolved_event(content_event)?;
         if event.identity != *identity {
@@ -48,6 +97,6 @@ impl State {
         if manifest.bytes > max_bytes {
             return Err(Error::TooLarge);
         }
-        self.binary_records().materialize(manifest)
+        Ok(manifest.clone())
     }
 }
