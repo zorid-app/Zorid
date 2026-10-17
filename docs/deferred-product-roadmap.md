@@ -118,6 +118,21 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 Current authoritative update — 2026-10-17 20:42 UTC. The bullets below
 this update are historical checkpoints where their status differs:
+- Actual desktop transport now passes: run33242 exit0 in1.86s with freshly
+  built CLI `target/stage4-verified/debug/zorid` and desktop host; log
+  tmp/stage4-desktop-actual-run3.log. Earlier run2 reached Base then failed a
+  fixture assertion: column IDs use literal dotted property names. Fixture-only
+  4e7e0b60 (rootd89dbd56) uses an explicit nested-member formula, independently
+  confirmed by the Base owner. No evaluator or source-authority change.
+- Browser storage/transport unit20/20 and focused production TS check pass at
+  a81de486 (160 transitive files,118MiB compiler memory), log
+  tmp/stage4-browser-index-focused-ts-run1.log. These are not real WASM evidence.
+  First actual WASM build63741 is LIVE, official Rust1.95/pinnedbindgen0.2.129,
+  offline/j1, candidate frozen d89dbd56; log tmp/stage4-wasm-build-run1.log.
+  Allowlisted corpus/worker assets staged in tmp/stage4-browser-proof-a81de486,
+  generated WASM not yet copied. Preserve process until terminal; native ACK
+  phone compile15167 and install/launch50642 both terminal0, UI checks only.
+  Native retains owned simulator booted per user; full Rust/Xcode load coordinated.
 - Latest user resource policy supersedes blanket check slots: explicit slots
   only for iOS build/simulator; bounded desktop/frontend checks proceed without
   per-check approval. Full Rust/Xcode still coordinate actual8GB load. Recorded

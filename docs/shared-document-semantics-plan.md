@@ -104,7 +104,7 @@ Heavy builds and integration remain coordinator-serialized on the8GB machine.
 ## Current evidence and remaining acceptance (2026-10-17)
 
 Runtime source is composed in the isolated `stage4-integrated-engine` worktree,
-branch `tingkai-c/stage4-integrated-engine`, currently `a81de486`. Stage4 runtime
+branch `tingkai-c/stage4-integrated-engine`, currently `d89dbd56`. Stage4 runtime
 source has not been promoted to main. Main documentation is the cross-session
 record; native mobile has the exclusive heavy build slot until explicit release.
 
@@ -114,9 +114,9 @@ record; native mobile has the exclusive heavy build slot until explicit release.
 | Revision-aware disposable index/search/backlinks | Native portable contracts7, generations14, metadata-restore2 passed at e8615ecb | Recheck subsequent controlled graph callbacks; actual CLI and browser durable persistence/query execution |
 | Cache publication, concurrency, move/delete and rebuild safety | Store19/19 pass; later changed published-discard preservation case1/1 passes | Execute browser production-worker/IDB acceptance including restart, source races, retained queries and rebuild expiry |
 | Base definitions/formulas/filter/sort/group | Native30 accepted expressions and10 queries passed; corrected generation graph corpus2/2 passes | Current full query/controlled-resource checks, actual WASM same fixtures, equivalent CLI/web/desktop results |
-| Native facade | Current build compiles;4/5 cases pass | Rerun enrolled external-reconciliation fixture8619664e; original failure did not authorize bypassing enrollment |
+| Native facade | Current build compiles;4/5 cases pass | Corrected enrolled fixture8619664e passes1/1; remaining four cases passed previous run; original failure never authorized bypassing enrollment |
 | Normal workspace consumer | Shared backlink hook9f259800; real Workspace/NoteBuffer with controlled adapter/service passes4/4 save/navigation/lifecycle regressions | Actual normal desktop/browser app queries through Rust transports and user-visible rendering |
-| Host/default contract consistency | Shared/frontend and direct-browser clock/row defaults aligned; desktop omitted-clock correction04b7d111 composed | Execute current host clock cases and actual admitted CJS/Rust-child transport fixture |
+| Host/default contract consistency | Shared/frontend and direct-browser clock/row defaults aligned; desktop omitted-clock correction04b7d111 composed | Host clock3/3 and real admitted CJS/Rust-child fixture pass; browser parity and normal app execution still required |
 | No source rewriting or editing regression | Parser/index paths remain read-only; Store preservation tests pass | Integrated app verification with raw-file comparisons, durable edits and generation refresh |
 
 The controlled workspace tests prove navigation/cleanup behavior, not browser,
