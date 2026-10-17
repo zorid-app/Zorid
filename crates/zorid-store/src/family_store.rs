@@ -459,9 +459,9 @@ impl Store {
         family_ingress::persist(&tx, &prepared)?;
         let graph = prepared.graph.next_state.as_ref().unwrap_or(&current);
         let origin = ProjectionOrigin::ReceivedUpdate {
-            realm_id: scope.realm_id.to_string(),
-            vault_id: scope.vault_id.to_string(),
-            update_id: prepared.metadata.key.update_id.to_string(),
+            realm_id: scope.realm_id.as_str().to_owned(),
+            vault_id: scope.vault_id.as_str().to_owned(),
+            update_id: prepared.metadata.key.update_id.as_str().to_owned(),
         };
         let changed_entry_ids = family_materialization::apply(&tx, graph, origin, None)?;
         if prepared.duplicate && !changed_entry_ids.is_empty() {

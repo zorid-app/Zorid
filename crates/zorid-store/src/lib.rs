@@ -133,7 +133,7 @@ fn check_schema(connection: &Connection) -> Result<i64> {
     }
     Ok(version)
 }
-pub(super) fn is_visible(tx: &Connection, id: &EntryId) -> Result<bool> {
+pub(crate) fn is_visible(tx: &Connection, id: &EntryId) -> Result<bool> {
     let value: Option<i64> = tx
         .query_row(
             "SELECT visible FROM entries WHERE id=?1",
