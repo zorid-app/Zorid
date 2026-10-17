@@ -196,3 +196,86 @@ fn authenticated_chunk_retains_exact_plaintext_and_received_plan_fences_prior_wi
     changed[0] ^= 1;
     assert!(retry.check(&next, "{}", &changed).is_err());
 }
+
+#[test]
+fn staged_binary_create_returns_real_child_and_ancestor_metadata_changes() {
+    let folder_payload = files::Payload {
+        family: zorid_file_sync::Family::Files,
+        format_version: 2,
+        scope: scope(),
+        id: id("folder-create").unwrap(),
+        body: files::Body::Events {
+            events: vec![files::EntryEvent {
+                id: id("folder-create").unwrap(),
+                identity: zorid_file_sync::EntryIdentity {
+                    entry_id: EntryId::new("folder").unwrap(),
+                    bootstrap_id: id("folder-create").unwrap(),
+                },
+                parents: vec![],
+                effect: files::Effect::Create {
+                    entry_kind: zorid_core::EntryKind::Folder,
+                    location: zorid_file_sync::Location {
+                        parent: None,
+                        name: "Folder".into(),
+                    },
+                    content: None,
+                },
+            }],
+        },
+    }
+    .encode()
+    .unwrap();
+    let (_, key, record) = meta::GraphRecord::from_authored_exact(&folder_payload).unwrap();
+    let state = meta::MetadataState::from_records(
+        scope(),
+        revision("folder-graph").unwrap(),
+        BTreeMap::from([(key, record)]),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let folder = EntryState {
+        id: EntryId::new("folder").unwrap(),
+        path: VaultPath::new("Folder").unwrap(),
+        kind: zorid_core::EntryKind::Folder,
+        revision: revision("folder-meta").unwrap(),
+        deleted: false,
+    };
+    let mut builder = binary::BinaryManifestBuilder::new(scope());
+    let chunk = builder
+        .push_chunk(id("child-chunk").unwrap(), b"child")
+        .unwrap();
+    let page = builder.flush_page(id("child-page").unwrap()).unwrap();
+    let built = builder.finish().unwrap();
+    let mut batch = planner::AuthoredMetadataBatch::new(scope());
+    batch.push_exact(chunk.payload_bytes()).unwrap();
+    batch.push_exact(page.payload_bytes()).unwrap();
+    let wrapper = WasmMetadataState { state };
+    let input = value!({"entries":[folder],"target":{"type":"create","id":"child","path":"Folder/child.bin"},"final_event_id":"child-create","metadata_revision":"child-meta","next_graph_revision":"child-graph"});
+    let candidate = wrapper
+        .prepare_binary_mutation(
+            &input.to_string(),
+            WasmAuthoredMetadataBatch { batch },
+            WasmBuiltManifest { built },
+        )
+        .unwrap();
+    assert_eq!(candidate.changes.len(), 2);
+    let ancestor = candidate
+        .changes
+        .iter()
+        .find(|change| change.after.id == folder.id)
+        .unwrap();
+    assert_eq!(ancestor.before.as_ref(), Some(&folder));
+    assert_eq!(ancestor.after.revision, revision("child-meta").unwrap());
+    assert_eq!(ancestor.after.path, folder.path);
+    let child = candidate
+        .changes
+        .iter()
+        .find(|change| change.after.id == EntryId::new("child").unwrap())
+        .unwrap();
+    assert!(child.before.is_none());
+    assert_eq!(
+        child.after.path,
+        VaultPath::new("Folder/child.bin").unwrap()
+    );
+    assert_eq!(child.after.revision, revision("child-meta").unwrap());
+}

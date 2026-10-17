@@ -57,6 +57,7 @@ struct BinaryInput {
     entries: Vec<EntryState>,
     target: TargetInput,
     final_event_id: UpdateId,
+    metadata_revision: Revision,
     next_graph_revision: Revision,
 }
 #[derive(Deserialize)]
@@ -358,10 +359,39 @@ impl WasmMetadataState {
     ) -> std::result::Result<WasmMetadataCandidate, JsValue> {
         let run = || -> Result<WasmMetadataCandidate> {
             let input: BinaryInput = bounded(raw, super::super::MAX_STATE_JSON_BYTES)?;
+            if input.metadata_revision == input.next_graph_revision
+                || &input.metadata_revision == self.state.version()
+            {
+                return Err(
+                    "binary metadata and graph revisions must be distinct and fresh".into(),
+                );
+            }
+            let target: binary_mutation::BinaryTarget = input.target.into();
+            let metadata_target = match &target {
+                binary_mutation::BinaryTarget::Create { id, path } => {
+                    zorid_core::FileContentTarget::Create {
+                        id: id.clone(),
+                        path: path.clone(),
+                    }
+                }
+                binary_mutation::BinaryTarget::Write {
+                    id,
+                    expected_revision,
+                    ..
+                } => zorid_core::FileContentTarget::Write {
+                    id: id.clone(),
+                    expected: expected_revision.clone(),
+                },
+            };
+            let changes = domain(zorid_core::plan_file_content_mutation(
+                &metadata_target,
+                &input.entries,
+                &input.metadata_revision,
+            ))?;
             let prepared = domain(binary_mutation::prepare_binary_mutation(
                 &self.state,
                 &input.entries,
-                input.target.into(),
+                target,
                 batch.batch,
                 built.built.manifest(),
                 input.final_event_id,
@@ -377,7 +407,7 @@ impl WasmMetadataState {
                 candidate,
                 guard: Guard::Binary { entries, target },
                 emissions: vec![event.payload_bytes().to_vec()],
-                changes: vec![],
+                changes,
                 allocated,
             })
         };
