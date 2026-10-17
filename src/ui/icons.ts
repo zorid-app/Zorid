@@ -2,7 +2,7 @@ import {
   ArrowUpNarrowWide, BookOpen, Bookmark, Calendar, Check, ChevronDown,
   ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleHelp,
   CodeXml, Columns2, Copy, Ellipsis, File, FileSearch, FolderClosed, FolderPlus, GalleryVertical,
-  GitFork, House, LayoutDashboard, Link, List, Maximize, Minus, PanelLeft, PanelRight, PanelTop,
+  GitFork, GripHorizontal, GripVertical, House, LayoutDashboard, Link, List, Maximize, Minus, PanelLeft, PanelRight, PanelTop,
   Plus, Redo2, RotateCw, Search, Settings, SquarePen, StickyNote, Tag, Terminal, Trash2, Undo2, X, ZoomIn,
 } from 'lucide';
 import type { IconNode } from 'lucide';
@@ -22,6 +22,7 @@ const glyphs: Record<string, IconNode> = {
   'panel-top': PanelTop, 'gallery-vertical': GalleryVertical,
   'chevrons-up-down': ChevronsUpDown, 'chevrons-down-up': ChevronsDownUp,
   'sticky-note': StickyNote, minus: Minus, 'rotate-cw': RotateCw,
+  'grip-horizontal': GripHorizontal, 'grip-vertical': GripVertical,
   maximize: Maximize, 'undo-2': Undo2, 'redo-2': Redo2, dashboard: LayoutDashboard, 'zoom-in': ZoomIn,
 };
 

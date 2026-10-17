@@ -6,6 +6,7 @@ import { defaultKeymap, insertNewline, isolateHistory, redo, undo } from '@codem
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { inline } from '../ui/markdown.ts';
+import { icon } from '../ui/icons.ts';
 import { destroyMathRenders } from '../ui/reading-math.ts';
 import { liveInlineMarkdown } from './live-inline.ts';
 import { alignTableCells, clearTableCells, copyTableCells, deleteTableCells, parseTableClipboard, pasteTableCells, serializeTableClipboard, tableCellRange, decodeTableCellText, deleteTableColumn, deleteTableRow, duplicateTableColumn, duplicateTableRow,
@@ -302,6 +303,7 @@ class TableController {
     const grip = (axis: 'row' | 'column') => {
       const node = this.dom.ownerDocument.createElement('span'); node.className = `cm-table-grip cm-table-grip-${axis}`;
       node.dataset.axis = axis; node.role = 'button'; node.tabIndex = -1;
+      node.append(icon(axis === 'row' ? 'grip-vertical' : 'grip-horizontal', 16, this.dom.ownerDocument));
       node.setAttribute('aria-label', `Select or move ${axis}`);
       node.addEventListener('mousedown', event => {
         if (event.button !== 0) return;

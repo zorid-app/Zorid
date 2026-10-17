@@ -59,10 +59,43 @@
 
 .cm-live-table { --table-grip-size: 16px; --table-selection-border: 2px; padding-inline-start: var(--table-grip-size); padding-top: var(--table-grip-size); }
 .cm-live-table th, .cm-live-table td { position: relative; }
-.cm-table-grip { position: absolute; display: block; z-index: 3; opacity: 0; cursor: grab; border-radius: 3px; background: var(--background-modifier-hover); }
-.cm-table-grip::after { content: ''; position: absolute; inset: 4px; background: radial-gradient(circle, var(--text-muted) 1px, transparent 1px) 0 0 / 4px 4px; pointer-events: none; }
-.cm-table-grip-row { inset-block-start: 0; inset-inline-end: 100%; width: calc(var(--table-grip-size) - var(--table-selection-border)); height: 100%; }
-.cm-table-grip-column { inset-block-end: 100%; inset-inline-start: 0; width: 100%; height: calc(var(--table-grip-size) - var(--table-selection-border)); }
+.cm-table-grip {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+  opacity: 0;
+  cursor: grab;
+  background: var(--table-drag-handle-background, transparent);
+  color: var(--table-drag-handle-color, var(--text-faint));
+  touch-action: none;
+}
+.cm-table-grip > svg { width: 16px; height: 16px; flex: none; }
+.cm-table-grip * { pointer-events: none; }
+.cm-table-grip-row {
+  inset-block-start: 0;
+  inset-inline-end: 100%;
+  width: calc(var(--table-grip-size) - var(--table-selection-border));
+  height: 100%;
+  border-start-start-radius: var(--radius-s, 4px);
+  border-end-start-radius: var(--radius-s, 4px);
+}
+.cm-table-grip-column {
+  inset-block-end: 100%;
+  inset-inline-start: 0;
+  width: 100%;
+  height: calc(var(--table-grip-size) - var(--table-selection-border));
+  border-start-start-radius: var(--radius-s, 4px);
+  border-start-end-radius: var(--radius-s, 4px);
+}
+.cm-table-grip:active {
+  opacity: 1;
+  cursor: grabbing;
+  background: var(--table-drag-handle-background-active, var(--interactive-accent));
+  color: var(--table-drag-handle-color-active, var(--text-on-accent));
+  box-shadow: 0 0 0 var(--table-selection-border) var(--interactive-accent);
+}
 .cm-table-grip:hover, .cm-live-table .is-editing > .cm-table-grip, .cm-live-table .is-selected > .cm-table-grip { opacity: 1; }
 .cm-live-table.mod-dragging .cm-table-grip { cursor: grabbing; }
 .cm-live-table .is-selected { user-select: none; }
