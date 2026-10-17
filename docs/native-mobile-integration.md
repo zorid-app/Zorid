@@ -399,3 +399,41 @@ at20:39:59UTC; support request already submitted privately. No TestFlight app,
 internal tester, distribution provisioning, secrets or upload readiness is claimed.
 Sync next step is read-only exact contract planning under coordinator permission,
 not permission to edit shared host Rust or relax literal-loopback restrictions.
+
+
+## Build4 crash finding — 2026-10-17 21:23 UTC
+
+Build4 source c6e16cf8 is **not accepted**. The user reports any file opening
+crashes the development app. Owner reproduced opening the saved Markdown note
+in the iPhone17 Simulator: process92515 exited, and the app-specific unified log
+contains UIViewControllerHierarchyInconsistency. NativeHistoryControls was
+hosted by a UIHostingController added as a child of NativeEditorContainer, while
+its view was placed in a UIBarButtonItem customView inside UINavigationController.
+UIKit explicitly requires the navigation controller parent for that hierarchy.
+The same phone development build4 crash report has SIGABRT and the corresponding
+UIView hierarchy exception stack. Full device crash report stays private at
+/private/tmp/mobile-phone-build4-crash.ips; no device metadata is copied here.
+Simulator exception evidence: /private/tmp/mobile-v3-simulator-crash.log.
+
+Compilation and installation evidence remain separate: first fresh phone18871
+failed65 with verified ENOSPC. Owner removed only stale agent-generated tmp
+outputs for original Simulator, device-r2/device-r3 and failedv3; retained current
+Simulator and latest phone DerivedData. Incremental Xcode phone retry62876 passed0
+using existing v2 DerivedData, with new build4 metadata; strict codesign, dev
+bundle/environment/name/build-number assertions passed. Install/launch72707 both
+passed0, then user/runtime exposed the crash. Simulator99928 compile passed0,
+install/launch39338 passed0, native Files/Settings/root hidden arrows are visible
+in AX, but the first verified file-open step crashes. These compile/launch passes
+do not establish usable app or keyboard-bar removal.
+
+Native owner is fixing the exact hosting containment error. Next validation must
+build Simulator first, open files and exercise Back/Forward before installing the
+replacement phone build. Preserve the connected glass design with supported view
+ownership; do not silently remove the requested navigation feature. No vault
+migration or user-data repair is justified by this UI exception.
+
+Source-only presentation followups imported after build4: c6ac3518 optional
+adapter UI notification, d77016cb guarded native skeleton dismissal, c81c8812
+PDF password/error/ready callback. Workspace consumer remains unwired at this
+checkpoint; these changes are not present in installed build4 and do not close
+the known bounded eight-second password/error masking gap.
