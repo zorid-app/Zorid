@@ -111,6 +111,13 @@ areas rather than claiming that every upstream edge case has been exhausted.
   `desktop_integration` owns host/bridge consumption, preserving paused editor
   consumer work. `browser_sync_plan` prepared source-reviewed disposable relay
   launcher `8df30f7`, pending the combined launch/build gate.
+- Source-ready aggregation queue (not runtime-verified): native wrapper `a1c0a13`,
+  CLI family `1834b5e` + omitted-mode regression `0ab1e4e`, shared native runner
+  `e0dba5c`, CLI protocol fixtures `1cb296f`/`a2134a0`/`0c05291`, recovery fixture
+  `1523618`. Browser worker `e79ad2f`/`fbcbdc6` is source-reviewed after fatal
+  storage cleanup fix. WASM batch awaits portable witness `af76394` and text
+  revision rebind `a5b8450` plus final boundary review. Combine dependencies in
+  isolated candidates; do not cherry-pick unfinished consumers into main.
 - Editor's next combined build/native slot is granted via `msg_1b2ab3e90af6`
   after its current tests finish. No overlapping core heavy checks are authorized.
 
