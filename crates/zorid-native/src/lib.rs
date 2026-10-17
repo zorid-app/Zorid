@@ -75,7 +75,7 @@ impl From<zorid_core::ContractError> for Error {
         Self::Contract(e)
     }
 }
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 impl From<rustix::io::Errno> for Error {
     fn from(e: rustix::io::Errno) -> Self {
         Self::Io(e.into())
@@ -204,17 +204,17 @@ pub struct ObservationStatus {
     pub byte_length: String,
     pub resolved: bool,
 }
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 mod fs;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 mod fs_stream;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 mod native;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub use native::{select_external_file_mode, ExternalFileMode, NativeVault};
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 pub struct NativeVault;
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalFileMode {
@@ -222,7 +222,7 @@ pub enum ExternalFileMode {
     Text,
     Binary,
 }
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 impl NativeVault {
     pub fn open(_: impl AsRef<std::path::Path>) -> Result<Self> {
         unsupported()
@@ -418,7 +418,7 @@ impl NativeVault {
         unsupported()
     }
 }
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 impl NativeVault {
     pub fn family_enroll(&mut self, _: &FamilyScope) -> Result<FamilyStatus> {
         unsupported()
@@ -485,7 +485,7 @@ impl NativeVault {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 fn unsupported<T>() -> Result<T> {
     Err(Error::Unsupported(
         "platform needs no-clobber descriptor-relative filesystem adapter",
