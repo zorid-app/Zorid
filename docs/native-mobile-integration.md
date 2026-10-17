@@ -327,3 +327,20 @@ This authorization is scoped to Zorid Dev; it grants no deletion or reset of
 production Zorid or unrelated applications/data. Existing signing/account
 authorization remains in effect. Record this explicit authorization in any
 necessary execution approval request; automatic review is still tool-owned.
+
+Latest resource instruction (2026-10-17) supersedes earlier simulator shutdown
+cleanup: keep the owned iOS simulator booted between checks because cold startup
+is slow. Stop only agent test apps/automation streams as appropriate. Explicit
+slots apply to iOS builds/simulator work; ordinary web/desktop builds and focused
+tests may proceed with bounded parallelism and actual memory-aware coordination.
+
+Frozen simulator build64019928: full ios-build.sh simulator22914 exit0, Xcode
+BUILD SUCCEEDED; unchanged official Rust staticlib cached0.34s, production
+webpack/cap copy succeeded. Artifact /private/tmp/zorid-ios-editor-only-20261017/
+DerivedData/Build/Products/Debug-iphonesimulator/App.app. Native history followup
+9c95378f and seamless appearance79076180 were added AFTER this artifact; they
+require the next build/runtime pass. Final pre-artifact TypeScript check clean;
+combined158 focused adapter/commands/navigation/lifecycle checks PASS. Native
+independent review closed earlier save/recovery/lifecycle findings at source
+level, not runtime parity. Simulator bootstatus67270 reached boot terminal after
+2m01s; app install/launch is still tracked by the same process, no restart.
