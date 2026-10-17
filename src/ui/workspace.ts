@@ -252,6 +252,7 @@ export class Workspace {
     this.mobileLifecycleCleanup=platform.mobileLifecycle.subscribe(async(reason,ack)=>{
       if(pending||this.closing||this.startupFailed||this.platform!==platform||this.vaultGeneration!==generation||this.platformReleased)throw new Error('Mobile lifecycle is not ready');
       pending=true;
+      this.nativePresentationEpoch++;
       const wasClosing=this.closing,wasInert=this.root.inert;
       this.closing=true;this.root.inert=true;
       this.hideNativeEditorToolbar();
@@ -314,17 +315,88 @@ export class Workspace {
     return result;
   }
 
+  // At most one pending state per live runtime. No presentation promise joins
+  // admission, saving or lifecycle ACK; the native bridge owns its own delivery.
+  private nativePresentationEpoch=0;
+  private nativePresentations=new WeakMap<TabViewRuntime,{
+    last?:'ready'|'password'|'error'; pending?:'ready'|'password'|'error'; sent?:'ready'|'password'|'error';
+    current:()=>boolean; send:(state:'ready'|'password'|'error')=>void;
+    receive:(state:'ready'|'password'|'error')=>void; checkError:()=>boolean; rearm:(pane:Pane)=>void; dispose:()=>void;
+  }>();
+
+  private nativePresentationCallback(pane:Pane,rearm=false):((state:'ready'|'password'|'error')=>void)|undefined{
+    const platform=this.platform,runtime=pane.runtime,content=pane.content,path=pane.viewPath;
+    if(!platform?.presentationSettled||!runtime||!content||!path)return;
+    const existing=this.nativePresentations.get(runtime);
+    if(existing){if(rearm)existing.rearm(pane);return existing.receive;}
+    const vault=this.vault,generation=this.vaultGeneration,tabId=pane.viewTabId,entryId=vault.entries.get(path)?.entryId;
+    let navigation=this.navigationIntent.get(pane),request=this.vaultRequest,epoch=this.nativePresentationEpoch;
+    if(!entryId)return;
+    const owns=()=>this.platform===platform&&this.vault===vault&&this.vaultGeneration===generation
+      &&!this.closing&&!this.root.inert&&!this.startupFailed&&!this.platformReleased&&!this.platformDrained
+      &&this.activePane===pane&&this.panes.includes(pane)&&pane.runtime===runtime&&runtime.phase==='active'
+      &&pane.content===content&&content.isConnected&&pane.viewTabId===tabId&&pane.viewPath===path
+      &&this.current(pane)?.id===tabId&&this.current(pane)?.path===path
+      &&vault.entries.get(path)?.type==='file'&&vault.entries.get(path)?.entryId===entryId;
+    const current=()=>owns()&&this.vaultRequest===request&&this.navigationIntent.get(pane)===navigation&&this.nativePresentationEpoch===epoch;
+    const receive=(state:'ready'|'password'|'error')=>{
+      if(!['ready','password','error'].includes(state)||!current())return;
+      record.last=state;record.pending=state;this.flushNativePresentation(pane);
+    };
+    const checkError=()=>{
+      if(!current())return false;
+      const password=content.querySelector<HTMLElement>('.zorid-pdf-password');
+      if(password&&!password.closest('[hidden]')){receive('password');return true;}
+      const pdfError=[...content.querySelectorAll<HTMLElement>('.zorid-pdf-status')].some(node=>!node.closest('[hidden]')&&node.textContent?.startsWith('Unable to display PDF:'));
+      const errors=content.querySelectorAll<HTMLElement>('.error-message,.embed-error,.native-unavailable-view,.zorid-media-view.is-error .zorid-media-status');
+      const visible=pdfError||[...errors].some(node=>!!node.textContent?.trim()&&!node.closest('[hidden]'))
+        ||!!pane.baseView?.state.error&&!!content.querySelector('.bases-session-status')?.textContent?.trim();
+      if(visible)receive('error');return visible;
+    };
+    const Observer=content.ownerDocument.defaultView?.MutationObserver;
+    const observer=Observer?new Observer(checkError):undefined;
+    const record={current,send:(state:'ready'|'password'|'error')=>{
+      try{void Promise.resolve(platform.presentationSettled!({path,entryId,state})).catch(()=>{});}catch{/* UI-only host failures cannot fail editing. */}
+    },receive,checkError,rearm:(owner:Pane)=>{
+      // Only an explicit render/activation can rebind the same retained runtime.
+      // Never retarget a callback to a replacement document, entry or content node.
+      const previous=pane;pane=owner;if(!owns()){pane=previous;return;}
+      const next=this.navigationIntent.get(pane);
+      if(next!==navigation||request!==this.vaultRequest||epoch!==this.nativePresentationEpoch||previous!==pane){
+        navigation=next;request=this.vaultRequest;epoch=this.nativePresentationEpoch;record.pending=record.last;record.sent=undefined;
+      }
+    },dispose:()=>observer?.disconnect(),last:undefined as 'ready'|'password'|'error'|undefined,pending:undefined as 'ready'|'password'|'error'|undefined,sent:undefined as 'ready'|'password'|'error'|undefined};
+    this.nativePresentations.set(runtime,record);
+    observer?.observe(content,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','hidden']});
+    return receive;
+  }
+
+  private flushNativePresentation(pane:Pane):void{
+    const record=pane.runtime&&this.nativePresentations.get(pane.runtime);
+    if(!record)return;
+    if(!record.current()){record.pending=undefined;return;}
+    if(this.nativeOpening===this.platform||!pane.viewReady||!record.pending)return;
+    const state=record.pending;record.pending=undefined;
+    if(record.sent===state)return;
+    record.sent=state;record.send(state);
+  }
+
   private nativeReadyViews=new WeakSet<TabViewRuntime>();
   private nativeObservedViews=new WeakSet<TabViewRuntime>();
 
   private observeNativeNoteView(pane:Pane):void{
-    if(!this.platform?.noteOpened||!pane.runtime||!pane.viewReady)return;
+    if((!this.platform?.noteOpened&&!this.platform?.presentationSettled)||!pane.runtime||!pane.viewReady)return;
+    const presentation=this.nativePresentationCallback(pane,true);
+    const presentationRecord=this.nativePresentations.get(pane.runtime);
+    const visibleError=presentationRecord?.checkError();
+    if(!visibleError&&this.nativeReadyViews.has(pane.runtime))presentation?.('ready');
     const runtime=pane.runtime,generation=this.vaultGeneration,path=pane.viewPath,content=pane.content;
     if(this.nativeObservedViews.has(runtime))return;
     this.nativeObservedViews.add(runtime);
     const ready=()=>{
       if(generation!==this.vaultGeneration||runtime.phase==='disposed')return;
       this.nativeReadyViews.add(runtime);
+      presentation?.('ready');
       const owner=this.panes.find(candidate=>candidate.runtime===runtime);
       if(owner)this.notifyNativeNoteOpened(owner);
     };
@@ -387,7 +459,7 @@ export class Workspace {
         if(await platform.recoverCommands?.()){await next.initialize();recovered=await this.recoverDurableBuffers(next);}
         await this.replaceVault(platform,next,recovered);
         if(request===this.vaultRequest&&this.platform===platform)await this.openNativeInitialNote(platform);
-      }finally{if(this.nativeOpening===platform)this.nativeOpening=undefined;}
+      }finally{if(this.nativeOpening===platform){this.nativeOpening=undefined;if(request===this.vaultRequest&&this.platform===platform)this.flushNativePresentation(this.activePane);}}
       if(request===this.vaultRequest&&this.platform===platform)this.notifyNativeNoteOpened(this.activePane);
     }});
     this.vaultTransition=transition.catch(()=>{});
@@ -698,7 +770,7 @@ export class Workspace {
 
   private async selectTab(pane:Pane,tab:Tab):Promise<void>{
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration;this.navigationIntent.set(pane,intent);
-    if(pane.active===tab.id){this.activate(pane);this.focusPane(pane);return;}
+    if(pane.active===tab.id){this.activate(pane);this.observeNativeNoteView(pane);this.flushNativePresentation(pane);this.focusPane(pane);return;}
     await this.flushPane(pane);
     if(intent!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab))return;
     pane.active=tab.id;this.activate(pane);await this.renderPane(pane);this.saveSession();
@@ -708,6 +780,7 @@ export class Workspace {
     await this.renderPaneContent(initialPane,options);
     this.observeNativeNoteView(initialPane);
     this.notifyNativeNoteOpened(initialPane);
+    this.flushNativePresentation(initialPane);
   }
 
   private async renderPaneContent(initialPane:Pane,options:{flush?:boolean;refresh?:boolean}={}):Promise<void>{
@@ -734,6 +807,7 @@ export class Workspace {
     const runtime=createTabViewRuntime({id:tab.id,element:content,owner:this.viewOwner(pane),
       flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flushForNavigation();await pane.baseView?.close();await pane.baseEmbeds?.flush();},
       dispose:async()=>{await pane.baseEmbeds?.close();recoveryCleanup?.();this.releasePaneView(pane,content);},focus:()=>this.focusPane(pane)});pane.runtime=runtime;
+    const nativePresentation=this.nativePresentationCallback(pane);
     let ownerChanged=()=>{};pane.rebindView=owner=>{pane=owner;ownerChanged();};
     const toolbar=el('div','pane-toolbar');
     const back=button('left','Navigate back',()=>this.run(()=>this.navigate(-1,pane)));back.disabled=pane.historyIndex<=0;
@@ -774,7 +848,7 @@ export class Workspace {
       else if(/\.pdf$/i.test(path)){
         host.classList.add('pdf-attachment-view');
         const vault=this.vault,fileToken=this.treeEntryToken(path);
-        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{generateMarkdownLink:(subpath:string,alias:string)=>this.vault===vault&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.treeEntryToken(path)===fileToken?pdfMarkdownLink(vault,path,subpath,alias,this.settings):null,subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches,onOpenMenu:event=>{const entry=this.vault.entries.get(path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}}});
+        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{generateMarkdownLink:(subpath:string,alias:string)=>this.vault===vault&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.treeEntryToken(path)===fileToken?pdfMarkdownLink(vault,path,subpath,alias,this.settings):null,subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches,onPresentationSettled:nativePresentation,onOpenMenu:event=>{const entry=this.vault.entries.get(path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}}});
         pane.pdfView=view;void view.ready.catch(error=>{if(pane.pdfView===view&&version===pane.renderVersion)notice(error instanceof Error?error.message:String(error));});
       }else if(/\.canvas$/i.test(path)){
         host.classList.add('canvas-attachment-view');
@@ -808,7 +882,7 @@ export class Workspace {
           openFileInNewTab:target=>this.vault.entries.has(target)?this.openNote(target,true,pane):Promise.resolve(),openLink:target=>{if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');},onError:error=>notice(error instanceof Error?error.message:String(error))});
         }catch(error){pane.embeds?.destroy();pane.embeds=undefined;host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
       }
-      else host.append(el('p','muted',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
+      else host.append(el('p','muted native-unavailable-view',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
       pane.viewReady=true;this.renderStatus();return;
     }
     const scroll=el('div','note-scroll');scroll.classList.toggle('readable-width',this.settings.readableWidth);
@@ -1140,6 +1214,7 @@ export class Workspace {
   }
   private async clearCachedViews():Promise<void>{for(const [tab,pane] of this.cachedViews){await this.disposePaneViews(pane);this.cachedViews.delete(tab);}}
   private releasePaneView(pane:Pane,content:HTMLElement):void{
+    if(pane.runtime){this.nativePresentations.get(pane.runtime)?.dispose();this.nativePresentations.delete(pane.runtime);}
     this.capturePaneState(pane);destroyMarkdown(content);
     clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
   }

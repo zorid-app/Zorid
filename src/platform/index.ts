@@ -21,6 +21,8 @@ export interface PlatformVault {
   initialEntryId?: string;
   /** Presentation history only; rejection must not fail editing or saving. */
   noteOpened?(path:string,entryId:string):Promise<void>;
+  /** Reveal ready content or actionable UI; password/error never acknowledge a successful open. */
+  presentationSettled?(input:{path:string;entryId:string;state:'ready'|'password'|'error'}):Promise<void>;
   mobileLifecycle?:import('./mobile-native.ts').MobileLifecycle; adapter: VaultAdapter; label: string; id: string; /** Await final consumer checkpoint/flush before release. */ release?(): Promise<void>; recoverCommands?():Promise<boolean>; legacyExport?():void; reconciliation?: {getStatus():DesktopReconciliation|null;subscribe(listener:(status:DesktopReconciliation)=>void):()=>void;retry():Promise<void>} }
 async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<PlatformVault> {
   let reconciliationStatus=info.reconciliation??null;
