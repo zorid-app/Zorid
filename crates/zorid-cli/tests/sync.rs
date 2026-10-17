@@ -347,6 +347,23 @@ fn lost_remote_ack_retries_persisted_ciphertext_after_cli_restart() {
     assert_eq!(read(&f.b), b"private seed");
 }
 
+fn cursor_position(status: &Value) -> &str {
+    let cursor = &status["family"]["cursor"];
+    if cursor.is_null() {
+        "0"
+    } else {
+        cursor["after"].as_str().unwrap()
+    }
+}
+
+fn assert_bound_start_cursor(status: &Value, epoch: &zorid_sync_protocol::ServerEpoch) {
+    let cursor = &status["family"]["cursor"];
+    assert_eq!(cursor["after"], "0");
+    assert_eq!(cursor["realm_id"], "realm");
+    assert_eq!(cursor["vault_id"], "vault");
+    assert_eq!(cursor["server_epoch"], json!(epoch));
+}
+
 #[test]
 fn watch_retries_persisted_ciphertext_after_lost_ack_and_process_restart() {
     let mut f = Fixture::new(true);
@@ -390,7 +407,8 @@ fn watch_retries_persisted_ciphertext_after_lost_ack_and_process_restart() {
     let pending_count = pending["pending_envelope_sample"].as_u64().unwrap();
     assert!(pending_count >= 2);
     assert_eq!(pending["pending_envelopes"][0]["sealed"], true);
-    assert_eq!(pending["family"]["cursor"], before["family"]["cursor"]);
+    assert_eq!(cursor_position(&pending), cursor_position(&before));
+    assert_bound_start_cursor(&pending, &f.epoch);
 
     // This is a fresh foreground process over the same durable local state.
     let restarted = cli(
@@ -432,7 +450,7 @@ fn watch_retries_persisted_ciphertext_after_lost_ack_and_process_restart() {
     assert_eq!(frames[2]["result"]["reason"], "max_cycles");
     let after = success(sync(&f.a, &f.ca, &["status"]));
     assert_eq!(after["pending_envelope_sample"], 0);
-    assert_ne!(after["family"]["cursor"], before["family"]["cursor"]);
+    assert_ne!(cursor_position(&after), cursor_position(&before));
     let wires = f.wires();
     assert_eq!(wires.len(), pending_count as usize);
     assert_eq!(
@@ -487,7 +505,8 @@ fn watch_revoked_credentials_fail_without_retry_or_secret_output() {
         assert!(!diagnostics.contains(secret));
     }
     let after = success(sync(&f.b, &f.cb, &["status"]));
-    assert_eq!(after["family"]["cursor"], before["family"]["cursor"]);
+    assert_eq!(cursor_position(&after), cursor_position(&before));
+    assert_bound_start_cursor(&after, &f.epoch);
     assert_eq!(after["pending_envelope_sample"], 0);
     assert!(!cli(&f.b, &["read", "--id", "note"]).status.success());
 }

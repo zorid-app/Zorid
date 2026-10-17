@@ -115,7 +115,10 @@ existing scope is checked before any local scan, followed by a bounded existing
 sync sweep. The current credential/enrollment restrictions remain unchanged.
 
 Each cycle reopens the same authority and drops it before waiting, so independent
-writers continue to use the shared storage protocol. An authority or enrollment
+writers continue to use the shared storage protocol. As in the existing native
+open contract, an explicitly selected root alias is resolved once; watch pins
+that canonical destination across cycles. Content/private-database traversal
+retains the native no-follow and identity checks. An authority or enrollment
 change stops the process rather than adopting another vault. Enrolled discovery
 runs before projection recovery. Both recovery and network sync are deferred
 when inventory/reconciliation is incomplete: receiving even an existing update
