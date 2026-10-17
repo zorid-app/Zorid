@@ -113,9 +113,40 @@ areas rather than claiming that every upstream edge case has been exhausted.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
 
-### Integration checkpoint — 2026-10-17 09:35 local
+### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- User explicitly skips P2P in this implementation pass (2026-10-17). Continue
+  server-backed E2EE sync and its client integration; P2P stays deferred rather
+  than becoming a gate for this pass. Live update behavior is independent of
+  peer topology: current clients run bounded sync sweeps, and a later server-push
+  subscription can trigger prompt catch-up. No Watch RPC or per-keystroke editor
+  integration is implied by the current Hello/Append/Pull transport migration.
+- Current main3dbcac1 includes tested general metadata planners6bda1b8 and native
+  primitives57aa342+sha2edge5050db9. Aggregatefc886c7 gates68041 pass116file-sync
+  lib+14mutation checks;77528 passes10native streaming primitive checks;50743
+  passes29Storelib+3family checks. Store schema10 foundation remains isolated;
+  schema11 activation is in progress and not main. Matching main5050CLI/host
+  build33360 passed43.90sec; copied binaries plus independentCLI exact41,819-byte
+  read/quiet271-entry rescan recorded in ignored build provenance. Official pinned
+  Electron runtime restored/verified by16609 after frozen-install skipped scripts.
+  No testElectron/host/build process remained at root's latest process audit.
+- Protobuf WASM compile now passes22884 in8.61sec on official Rust1.95 with
+  explicit compiler and matching wasmstd under /private/tmp/zorid-proto-rustup;
+  user's root-owned toolchain unchanged. Evidence main7f46b34. Future plaintext
+  protobuf mapping main3dbcac1 is proposal only: no files/Text codec rewrite yet.
+  RPC FIRST is approved: transportmajor2, explicit fixtureconfigv2/grpc,
+  standard generated protobuf parsing with version/features/presence checks,
+  exact existing ZSE1/envelope1/headerAAD/plaintext retained. No automatic HTTP
+  fallback. Existing HTTP reference fixtures remain only during transition.
+- RPC source ownership: protobuf_schema_sol owns IDL/generated DTO/service crate
+  and portable validators; grpc_server_sol owns grpc-relay-adapter server/startup/
+  bounded shared admission; grpc_native_sol owns grpc-native-transport client/
+  credentials plus named CLI sync/recovery/protocol fixtures; browser owner owns
+  transport selection/WASM RPC bridge, its file-command worker the new Connect
+  adapter/predecode frame guard. All use isolated worktrees; root alone integrates
+  main/locks and grants build slots. Source freeze/compile/actual integrated RPC
+  proof remain pending. Current app sync still uses HTTP transport1.
 - Main2a78b40 also contains the reviewed additive metadata candidate/classifier/
   binary event mapper (portable sourcec319e8d+67493c4+a661bf7, gate50222:97/97)
   and core metadata-only Create/Write helperacda3ed (sourcee7827b0, gate33112:
