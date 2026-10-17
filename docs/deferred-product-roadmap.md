@@ -69,6 +69,32 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- 2026-10-17 10:04 handoff: main f4ec6bf integrates the entire reviewed native
+  namespace/external-edit/publication-handoff and desktop full-command chain,
+  including retry identity guard. Independent source equivalence review confirms
+  native/store/CLI/host sources match tested92673a9; sole Rust difference is the
+  separately tested required-ACK protocol fix. Main focused Node checks10/10 pass.
+- User confirms rename works. Root actual AX observes title rename to
+  TestRename-verified.md; independent CLI reads the same stable entry
+  0e77560f-65ea-4996-a172-cf1b7cd51bec with33 bytes (leading tab plus
+  "Rename and restart verification."). Physical bytes and core agree. User-created
+  folder/nested file and trash move are also visible through independent CLI.
+- Running test app session78880, PID7579, child12514 explicitly uses
+  core-namespace-external-gate/target/debug/zorid-desktop-host; rendered source is
+  desktop-file-commands/dist/index.html. Fresh fixture is
+  /private/tmp/zorid-cli-family-20261017-lockfixed. Old0936 fixture remains broken;
+  never reuse it. CUA AX can lag, screenshots clipped, clipboard paste timed out;
+  do not infer lost data from these UI tool failures. Close test app after pass.
+- Latest real CLI sync through loopback relay succeeded:33 accepted, graph50,
+  authored/dependency/projection pending0, cursor50. Sandbox attempt failed
+  transport; escalated networking succeeded. Relay60287 and browser server52832
+  both polled live. Browser still needs receive of latest rename/trash records.
+- Next: actual fresh desktop/CLI concurrent race and dirty-checkpoint restart;
+  current browser receive/offline rejoin plus client-level account isolation.
+  core_cli supplied bounded authorized-B and B-token/A-scope denial sequence;
+  existing server isolation tests already pass and need no repetition.
+  mobile_readiness assesses new external-file/rename/delete reconciliation,
+  proposal before shared native edits; no heavy builds running.
 - Native lock fix integrated `ac6b09a`, independent subprocess checks2/2 passed.
   Full follow-up candidate9c61837 then passed84 native and18 store namespace
   checks, including mixed obligations, file/directory handoff and external edits.
