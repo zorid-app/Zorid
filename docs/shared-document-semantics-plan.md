@@ -21,6 +21,30 @@ Do not defer the semantics milestone until P2P, full admin/history or native mob
 are finished. Independent infrastructure and shell scaffolding may overlap it.
 Native mobile metadata/Base features should consume the shared engine.
 
+## Reuse-first gate
+
+The completed [source reuse assessment](document-semantics-reuse-assessment.md)
+is preparation evidence, not dependency adoption or runtime verification. Evaluate
+pulldown-cmark/Comrak for Markdown extraction, MDBASE's existing Bases evaluator
+for formulas/queries, and SQLite FTS5 for sound search candidate acceleration
+before implementing custom equivalents. Document concrete fixture/capability gaps
+before choosing a new parser or formula engine.
+
+MDBASE typed Markdown collections and canonical CEL queries are distinct from
+its optional Obsidian Bases adapter. The actual Rust implementation is
+`callumalpass/mdbase-rs`; it contains a Bases evaluator and hosted record-input
+API, but native dependencies and semantic differences prevent assuming a drop-in
+browser replacement. Do not substitute CEL for Base expressions or adopt its
+storage authority to obtain its evaluator.
+
+Prepare dialect fixtures and package-boundary analysis now. Executable evaluation
+and implementation still follow the timing gate above: compare accepted behavior
+on native and browser WASM, check licenses/maintenance, source preservation,
+resource bounds and measured performance. Intentional improvements to current TS
+behavior need explicit fixture decisions. Keep derived indexes disposable and
+client-side evaluation consistent with E2EE. Reuse does not transfer ownership of
+CodeMirror live syntax or source-preserving editing paths.
+
 ## Accepted scope and order
 
 1. **Metadata extraction.** Portable Rust parsing of frontmatter properties,
