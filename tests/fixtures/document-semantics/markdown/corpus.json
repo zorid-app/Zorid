@@ -4964,6 +4964,150 @@
           }
         ]
       }
+    },
+    {
+      "id": "wiki-embed-escaped-tail",
+      "decision": "OFM wiki embed precedence is preserved when a later escaped bracket could close an ordinary Markdown image label. Validate the short atom using the established parser, retain heading text including the escaped literal tail, and keep three-space heading indentation intact.",
+      "request": {
+        "entryId": "fixture-wiki-embed-escaped-tail",
+        "contentRevision": "fixture-1",
+        "source": "![[A#Head|Label]] \\[x](Hidden.md)"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-wiki-embed-escaped-tail",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 33,
+          "utf16": 33
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": true,
+            "target": "A",
+            "fragment": "#Head",
+            "destination": "A#Head",
+            "range": {
+              "bytes": [
+                0,
+                17
+              ],
+              "utf16": [
+                0,
+                17
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                3,
+                4
+              ],
+              "utf16": [
+                3,
+                4
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "wiki-embed-heading-escaped-tail",
+      "decision": "OFM wiki embed precedence is preserved when a later escaped bracket could close an ordinary Markdown image label. Validate the short atom using the established parser, retain heading text including the escaped literal tail, and keep three-space heading indentation intact.",
+      "request": {
+        "entryId": "fixture-wiki-embed-heading-escaped-tail",
+        "contentRevision": "fixture-1",
+        "source": "   # ![[A#Head|Label]] \\[x](Hidden.md)"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-wiki-embed-heading-escaped-tail",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 38,
+          "utf16": 38
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [
+          {
+            "text": "Label [x](Hidden.md)",
+            "level": 1,
+            "line": 0,
+            "range": {
+              "bytes": [
+                3,
+                38
+              ],
+              "utf16": [
+                3,
+                38
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": true,
+            "target": "A",
+            "fragment": "#Head",
+            "destination": "A#Head",
+            "range": {
+              "bytes": [
+                5,
+                22
+              ],
+              "utf16": [
+                5,
+                22
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                8,
+                9
+              ],
+              "utf16": [
+                8,
+                9
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
     }
   ]
 }

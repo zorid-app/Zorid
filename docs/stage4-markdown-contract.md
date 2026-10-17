@@ -320,7 +320,7 @@ notices. [Parser docs](https://docs.rs/saphyr-parser/latest/saphyr_parser/) and
 exact crate, including `Cargo.toml`, `parser.rs`, `scanner.rs` and `LICENSE`, was
 the primary version-specific evidence. No dependency/runtime build is claimed. MDBASE and index/query work have separate owners.
 
-The 46-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
+The 48-case corpus covers valid typed/nested YAML, ordinary/malicious aliases,
 invalid/duplicate/tagged YAML, mixed projections, nonfinite/unsafe numbers,
 BOM/CRLF/bare-CR/astral/decomposed Unicode, empty/partial Markdown, exclusions,
 ATX/Setext/container headings, raw/inline/reference links and task dialect.
@@ -348,7 +348,7 @@ include separate `propertyKeySpellings` source assertions; decoded keys must not
 be mistaken for raw YAML spelling. The TypeScript option checks all
 recorded baseline observations, including intentional mismatches with the target.
 
-Verification at preparation completion: the checker and all 46 current TypeScript
+Verification at preparation completion: the checker and all 48 current TypeScript
 observations pass; 22 existing property/metadata tests pass. The first checker
 run caught an accidentally empty status in the final empty task and was corrected;
 fixture IDs were corrected to the existing strong-ID grammar before completion.
@@ -378,3 +378,31 @@ other errors cover the whole YAML input in original byte/UTF-16 coordinates.
 Depth/node/alias/8 MiB expanded decoded scalar/key byte limits are shared with
 frontmatter. Base may apply its stricter 256 KiB input limit before calling it.
 There is one parser/decoder, rather than a separate Base YAML implementation.
+
+
+## Parser fixture gaps observed during native candidate validation
+
+Root's actual native 1.95 candidate run compiled successfully. The ordered value
+checks passed 5/5 and resource checks passed 7/7 after classifying Saphyr's pinned
+`recursion limit exceeded` scanner error as Resource. The 46-case shared corpus
+then passed 44/46 before the following adapter fixes; see root's recorded
+`tmp/stage4-parser-run2.log`. These observations do not establish the fixed
+candidate's runtime success or native/WASM/consumer equivalence yet.
+
+- Pulldown 0.13.4 interpreted the first `![[A#Head|Label]]` in the `inline-links`
+  case as an ordinary image spanning the rest of the line, closed by a later
+  escaped-bracket sequence and targeting `Hidden.md`. The narrow OFM adapter
+  considers only parser-confirmed ordinary inline images starting `![[`; a short
+  single-line atom is accepted only if the same established parser independently
+  validates that exact slice as one Wiki Image. An escaped opener protects the
+  confirmed atom from the ordinary-image grammar without changing byte positions
+  or indentation. Its isolated parser supplies link/label data; surrounding text,
+  links and exclusions remain parser-owned. Two adjacent corpus cases cover an
+  escaped literal tail, plain heading text and three-space indentation.
+- Pulldown's collapsed-reference event range excludes the trailing `[]`. The
+  source-range adapter extends only a parser-confirmed Collapsed link whose
+  immediately following source is exactly `[]`, preserving the shared complete
+  occurrence range. The reference definition/destination span is unchanged.
+
+These are concrete capability gaps supporting small compatibility adapters,
+not a new Markdown parser or permission to weaken the independent expectations.

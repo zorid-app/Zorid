@@ -57,8 +57,33 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Docu
     let first = std::str::from_utf8(&bytes).expect("whole-source masks");
     let initial_exclusions = excluded(first);
     comments(&mut bytes, &initial_exclusions);
-    let parsing = String::from_utf8(bytes).expect("scalar-aligned masks");
+    let original_parsing = String::from_utf8(bytes).expect("scalar-aligned masks");
+    let mut repairs = wiki_repairs(&original_parsing);
+    let mut protected = original_parsing.into_bytes();
+    // A confirmed OFM wiki embed is opaque to the ordinary image grammar. An
+    // escaped opener preserves block indentation and byte positions while the
+    // validated atom supplies its own link and heading-label semantics.
+    for repair in &repairs {
+        protected[repair.range.start] = b'\\';
+    }
+    let parsing = String::from_utf8(protected).expect("ASCII opener protection");
     let mut visible = parsing.as_bytes().to_vec();
+    for repair in &repairs {
+        let destination_range = wiki_destination(source, repair.range.clone(), true).unwrap();
+        blank(&mut visible, destination_range.clone());
+        let raw = &source[destination_range.clone()];
+        let split = raw.find('#').unwrap_or(raw.len());
+        result.links.push(Link {
+            kind: LinkKind::Wiki,
+            embed: true,
+            target: raw[..split].into(),
+            fragment: raw[split..].into(),
+            destination: raw.into(),
+            range: positions.range(repair.range.clone()),
+            target_range: positions.range(destination_range.start..destination_range.start + split),
+            definition_range: None,
+        });
+    }
     for range in excluded(&parsing) {
         blank(&mut visible, range);
     }
@@ -90,7 +115,7 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Docu
             }
             Event::Text(text) | Event::Code(text) => {
                 if let Some(heading) = &mut current_heading {
-                    heading.text.push_str(&text);
+                    append_heading_text(heading, &text, range, &parsing, &mut repairs);
                 }
             }
             Event::SoftBreak | Event::HardBreak => {
@@ -119,6 +144,12 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Docu
                 id,
                 ..
             }) => {
+                let mut range = range;
+                if matches!(link_type, LinkType::Collapsed)
+                    && source.get(range.end..range.end + 2) == Some("[]")
+                {
+                    range.end += 2;
+                }
                 let embed = source.as_bytes().get(range.start) == Some(&b'!');
                 let definition = match link_type {
                     LinkType::Reference | LinkType::Collapsed | LinkType::Shortcut => iterator
@@ -170,6 +201,7 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Docu
             _ => {}
         }
     }
+    result.links.sort_by_key(|link| link.range.bytes[0]);
     let visible = String::from_utf8(visible).expect("scalar-aligned tag exclusions");
     static TAGS: OnceLock<Regex> = OnceLock::new();
     static DECIMAL: OnceLock<Regex> = OnceLock::new();
@@ -188,6 +220,100 @@ pub(crate) fn extract(source: &str, positions: &Positions<'_>, result: &mut Docu
             name: name.as_str().into(),
             range: positions.range(name.start() - 1..name.end()),
         });
+    }
+}
+
+struct WikiRepair {
+    range: Range<usize>,
+    label: String,
+    heading_inserted: bool,
+}
+
+/// pulldown-cmark 0.13.4 can reinterpret ![[...]] as a giant ordinary image
+/// when a later escaped bracket closes its image label. Recover ONLY a shorter
+/// atom that the same parser independently validates as one exact wiki image,
+/// inside an already parser-confirmed inline image context (never code/HTML).
+fn wiki_repairs(source: &str) -> Vec<WikiRepair> {
+    let mut repairs = Vec::new();
+    for (event, range) in Parser::new_ext(source, options()).into_offset_iter() {
+        if !matches!(
+            event,
+            Event::Start(Tag::Image {
+                link_type: LinkType::Inline,
+                ..
+            })
+        ) || !source[range.clone()].starts_with("![[")
+        {
+            continue;
+        }
+        let Some(close) = source[range.start + 3..range.end].find("]]") else {
+            continue;
+        };
+        let end = range.start + 3 + close + 2;
+        let candidate = &source[range.start..end];
+        if candidate.contains(['\r', '\n']) {
+            continue;
+        }
+        let events: Vec<_> = Parser::new_ext(candidate, options())
+            .into_offset_iter()
+            .collect();
+        if !events.iter().any(|(event, range)| {
+            matches!(
+                event,
+                Event::Start(Tag::Image {
+                    link_type: LinkType::WikiLink { .. },
+                    ..
+                })
+            ) && *range == (0..candidate.len())
+        }) {
+            continue;
+        }
+        let mut label = String::new();
+        for (event, _) in events {
+            match event {
+                Event::Text(text) | Event::Code(text) => label.push_str(&text),
+                Event::SoftBreak | Event::HardBreak => label.push(' '),
+                _ => {}
+            }
+        }
+        repairs.push(WikiRepair {
+            range: range.start..end,
+            label,
+            heading_inserted: false,
+        });
+    }
+    repairs
+}
+fn append_heading_text(
+    heading: &mut Heading,
+    text: &str,
+    range: Range<usize>,
+    parsing: &str,
+    repairs: &mut [WikiRepair],
+) {
+    if !repairs
+        .iter()
+        .any(|repair| range.start < repair.range.end && repair.range.start < range.end)
+    {
+        heading.text.push_str(text);
+        return;
+    }
+    let mut cursor = range.start;
+    for repair in repairs
+        .iter_mut()
+        .filter(|repair| range.start < repair.range.end && repair.range.start < range.end)
+    {
+        if cursor < repair.range.start {
+            heading.text.push_str(&parsing[cursor..repair.range.start]);
+        }
+        if !repair.heading_inserted {
+            heading.text.push_str(&repair.label);
+            repair.heading_inserted = true;
+        }
+        cursor = range.end.min(repair.range.end);
+    }
+    if cursor < range.end {
+        heading.text.push_str(&parsing[cursor..range.end]);
     }
 }
 
