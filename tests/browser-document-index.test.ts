@@ -177,4 +177,11 @@ test('own already-published discard validates its exact header before no-op succ
   const header=f.records.get('control')!.get('document-index:v1/g/'+snapshot.generationEpoch+'/header');header.value+=' ';await assert.rejects(index.discard(snapshot.generationEpoch),{code:'index_rebuild_required'});await index.close();
 });
 
+test('discard of an already-pruning own published locator makes no cache writes',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open(),foreign=f.open('client-b');const older=await f.build(index),current=await f.build(index),pin=await index.open();
+  const control=f.records.get('control')!,catalog=control.get('document-index:v1/catalog');catalog.value.generations.find((g:any)=>g.id===older.generationEpoch).state='deleting';control.delete('document-index:v1/g/'+older.generationEpoch+'/header');
+  const before=structuredClone(control);await index.discard(older.generationEpoch);assert.deepEqual(f.records.get('control'),before);await assert.rejects(foreign.discard(older.generationEpoch),{code:'index_stage_expired'});
+  assert.deepEqual((await index.status()).snapshot,current);assert.deepEqual((await index.search({pinId:pin.pinId,query:'opaque'}) as any).result.value.observed,['text']);await foreign.close();await index.close();
+});
+
 test.after(()=>{(globalThis as any).IDBKeyRange=range;});

@@ -162,13 +162,15 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
   const api:BrowserDocumentIndex={
     initialize(){active();return recover();},
     async discard(stageId){active();if(!validId(stageId))throw fail('index_stage_expired');
-      const result=await run<{published?:{header:string;digest:string;snapshot:BrowserIndexSnapshot}}>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{const stage=c.generations.find(g=>g.id===stageId);
+      const result=await run<{publishedPruned?:true;published?:{header:string;digest:string;snapshot:BrowserIndexSnapshot}}>('readwrite',['control'],(tx,done,abort)=>readCatalog(tx,c=>{const stage=c.generations.find(g=>g.id===stageId);
         if(stage?.clientId!==undefined&&stage.clientId!==host.clientId)throw fail('index_stage_expired');
         if(stage?.wasPublished){on(tx.objectStore('control').get(headerKey(stageId)),row=>{
+          if(row===undefined&&stage.state==='deleting'){done({publishedPruned:true});return;}
           if(typeof row?.value!=='string'||size(row.value)>3*LIMITS.header)throw fail('index_rebuild_required');done({published:{header:row.value,digest:row.digest,snapshot:stage.snapshot}});
         },abort);return;}
         if(stage){stage.state='deleting';putCatalog(tx,c);}done({});
       },abort));
+      if(result.publishedPruned)return;
       if(result.published){const captured=result.published;if(captured.digest!==await digest(captured.header))throw fail('index_rebuild_required');
         const stored=json<StoredHeader>(captured.header,3*LIMITS.header),header=checkedHeader(stored.rust);
         if(!equal(header.nextIndex,captured.snapshot)||!equal(header.entries,stored.capture?.publication?.entries)||header.source.watermark!==stored.capture?.publication?.sequence)throw fail('index_rebuild_required');

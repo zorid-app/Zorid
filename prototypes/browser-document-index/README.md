@@ -28,7 +28,8 @@ and diagnostics, `.MD` parsing, binary-mode exclusion, resolver/backlinks, share
 Base graph evaluation, more than sixteen literal continuation pages, source
 edits/moves/deletion, retained old text/Base definitions, stale source and
 competing index publication, explicit rebuild/expiry, invalid Base preservation,
-and persisted-generation restore through a fresh worker. Query snapshots and
+published-stage discard without expiring retained pins, and persisted-generation
+restore through a fresh worker. Query snapshots and
 source identities are checked independently. Inputs are disposable local vaults
 whose database/client IDs remain in the URL. **Verify persisted cache** also
 works after a browser page reload. **Release workers** closes test consumers.
