@@ -7,6 +7,8 @@ license = "AGPL-3.0-only"
 description = "Conservative native filesystem projection for Zorid's vault authority"
 
 [dependencies]
+zorid-index = { path = "../zorid-index" }
+zorid-bases = { path = "../zorid-bases" }
 zorid-core = { path = "../zorid-core" }
 zorid-store = { path = "../zorid-store" }
 zorid-client-sync = { path = "../zorid-client-sync" }

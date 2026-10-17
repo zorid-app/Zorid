@@ -6,6 +6,8 @@ use zorid_core::{
     CommitResult, EntryId, EntryState, MutationRequest, OperationId, Revision, VaultPath,
 };
 mod client_admission;
+mod document_api;
+pub use document_api::*;
 pub use client_admission::{ClientAdmissionError, ClientLease, ClientLeaseRef};
 pub use zorid_store::{
     AuthoredTextStatus, AuthorityIdentity, ChangeOrigin, ChangePage, Checkpoint, CheckpointError,
