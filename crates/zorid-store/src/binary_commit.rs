@@ -902,6 +902,21 @@ fn commit(
     Err(retry())
 }
 impl Store {
+    /// Original sealed commitment metadata, not a verified read capability.
+    /// Terminal lookup never consults the current graph or backing source bytes.
+    pub fn binary_stage_content_manifest(
+        &self,
+        stage: &BinaryStageRef,
+    ) -> Result<Option<zorid_file_sync::Manifest>> {
+        let tx = self.connection.unchecked_transaction()?;
+        let manifest = match terminal_manifest(&tx, stage)? {
+            Some(manifest) => Some(manifest),
+            None => blob_stage::stage_info(&tx, stage)?.manifest,
+        };
+        tx.commit()?;
+        Ok(manifest)
+    }
+
     pub fn binary_stage_request(&self, stage: &BinaryStageRef) -> Result<BinaryStageRequest> {
         if let Some((_, request)) = committed(&self.connection, stage)? {
             return Ok(request.request);
@@ -1322,10 +1337,10 @@ pub(super) fn terminal_status(
         &raw,
     )?)))
 }
-pub(super) fn terminal_progress(
+fn terminal_manifest(
     tx: &Connection,
     stage: &BinaryStageRef,
-) -> Result<Option<(u64, u32)>> {
+) -> Result<Option<zorid_file_sync::Manifest>> {
     let request = if let Some((_, request)) = committed(tx, stage)? {
         Some(request)
     } else if matches!(
@@ -1340,13 +1355,17 @@ pub(super) fn terminal_progress(
     } else {
         None
     };
-    Ok(request.map(|request| {
+    Ok(request.map(|request| request.manifest))
+}
+
+pub(super) fn terminal_progress(
+    tx: &Connection,
+    stage: &BinaryStageRef,
+) -> Result<Option<(u64, u32)>> {
+    Ok(terminal_manifest(tx, stage)?.map(|manifest| {
         (
-            request.manifest.bytes,
-            request
-                .manifest
-                .bytes
-                .div_ceil(BINARY_STAGE_MAX_CHUNK_BYTES as u64) as u32,
+            manifest.bytes,
+            manifest.bytes.div_ceil(BINARY_STAGE_MAX_CHUNK_BYTES as u64) as u32,
         )
     }))
 }
@@ -1535,6 +1554,12 @@ mod tests {
             &create("file", "file.bin", 3),
             b"old",
         );
+        let manifest = store
+            .binary_stage_content_manifest(&stage)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest.bytes, 3);
+        assert_eq!(manifest.digest, Sha256Digest::of(b"old"));
         store.request_commit_binary_stage(&stage).unwrap();
         let original = store.commit_binary_stage(&stage).unwrap();
         let next = write(&store, "new-write", "file", b"new".to_vec());
@@ -1556,6 +1581,10 @@ mod tests {
             Some(BinaryStageTerminal::Committed(original.clone()))
         );
         assert_eq!(store.commit_binary_stage(&stage).unwrap(), original);
+        assert_eq!(
+            store.binary_stage_content_manifest(&stage).unwrap(),
+            Some(manifest)
+        );
         assert_eq!(effects(&store), before);
         assert!(immutable_payloads::read_exact(&store.connection, &source).is_err());
     }

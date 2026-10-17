@@ -24,7 +24,7 @@ pub use operation_request::{
     BinaryOperationRequest, InlineCallCommitment, InlineCallTarget, OperationRequest,
     StoredOperation,
 };
-pub use zorid_file_sync::Sha256Digest;
+pub use zorid_file_sync::{Manifest as BinaryContentManifest, Sha256Digest};
 mod blob_index;
 mod blob_stage;
 mod checkpoints;

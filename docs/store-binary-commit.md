@@ -48,3 +48,11 @@ atomicity, inline partial restart identity, final-writer rollback/retry, unrelat
 graph reprepare and equal empty writes, oversized receipt rejection, and guarded
 Capture import with retained readability. These fixtures require the coordinated
 integration build gate; their presence is not a passing test claim.
+
+`binary_stage_content_manifest` returns the original sealed manifest metadata,
+including length and whole SHA256, without constructing a private read proof.
+Its terminal path reads the original operation/plan before current graph or
+source bodies. CLI callers can compare retry input against that commitment;
+hosts can populate the existing terminal finalized diagnostic. A manifest alone
+does not authorize reads or publication. `BinaryContentManifest` re-exports the
+portable diagnostic type for native adapters without another direct dependency.
