@@ -70,5 +70,10 @@ already-published stage using its immutable historical target. Every branch chec
 saved parent/inode/baseline authority; changed or recreated occupants stay retained
 and pending. Ordinary hidden-entry publication guards remain intact. Two focused
 fixtures cover interrupted phases followed by Move/Delete and recreated sources.
-This follow-up is independently source-reviewed and runtime-unverified. Active
-directory-create attempts still need the corresponding explicit handoff.
+The directory-create handoff also uses exact saved parent/stage authority. For
+a live Move it publishes the immutable original create target before relocation,
+so the old-path create job cannot be stranded. For an unpublished semantic Delete
+it cancels the attempt and retains its private stage; the namespace transaction
+then retires the exact obsolete create job. A prepared/published interruption
+fixture covers this path. These handoffs are independently source-reviewed and
+runtime-unverified until the combined gate completes.

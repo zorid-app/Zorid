@@ -126,3 +126,111 @@ impl NativeVault {
         Ok(())
     }
 }
+
+impl NativeVault {
+    pub(super) fn settle_namespace_directory(
+        &mut self,
+        a: &zorid_store::DirectoryAttempt,
+    ) -> Result<()> {
+        use zorid_store::DirectoryPhase;
+        self.store.check_directory_for_namespace(a)?;
+        self.paths.verify()?;
+        let proof = self
+            .store
+            .publication_proof(&a.attempt_id)?
+            .ok_or(Error::Busy(
+                "namespace directory publication has no saved proof",
+            ))?;
+        let (parent, name) = self.paths.parent(&a.target.path)?;
+        if proof.kind != PublicationKind::Directory
+            || proof.entry_id != a.target.id
+            || proof.expected_binding.is_some()
+            || fs::identity(&parent)? != proof.parent_inode
+        {
+            return Err(Error::Busy("namespace directory publication proof changed"));
+        }
+        if let Some(dest) = fs::optional_directory(&parent, &name)? {
+            let inode = fs::identity(&dest)?;
+            if a.stage_identity.as_ref() != Some(&inode) {
+                return Err(Error::Busy(
+                    "namespace directory destination is not its saved stage",
+                ));
+            }
+            dest.sync_all()?;
+            parent.sync_all()?;
+            self.paths.verify_parent(&a.target.path, &parent)?;
+            let final_dest = fs::optional_directory(&parent, &name)?
+                .ok_or(Error::Busy("namespace directory publication disappeared"))?;
+            if fs::identity(&final_dest)? != inode {
+                return Err(Error::Busy("namespace directory publication was replaced"));
+            }
+            return Ok(self.store.finish_directory_for_namespace(
+                a,
+                Some(&PhysicalIdentity {
+                    inode,
+                    parent_inode: proof.parent_inode,
+                }),
+            )?);
+        }
+        let staged_name = format!("{}.directory", a.attempt_id.as_str());
+        if let Some(identity) = &a.stage_identity {
+            let stage = fs::optional_directory(&self.paths.private, &staged_name)?
+                .ok_or(Error::Busy("namespace directory stage disappeared"))?;
+            if fs::identity(&stage)? != *identity || a.phase == DirectoryPhase::Published {
+                return Err(Error::Busy("namespace directory stage changed; retained"));
+            }
+        } else if a.phase != DirectoryPhase::Prepared {
+            return Err(Error::Busy("namespace directory lacks staging provenance"));
+        }
+        if self.store.read(&a.target.id)?.is_some() {
+            // A live Move must first fulfill the original create job at its
+            // immutable path; its later namespace journal then owns relocation.
+            // Cancelling here would strand a create obligation for the old path.
+            let identity =
+                if let Some(stage) = fs::optional_directory(&self.paths.private, &staged_name)? {
+                    if !fs::directory_names(&stage, 1, false)?.is_empty() {
+                        return Err(Error::Busy(
+                            "unexpected entries in namespace directory stage",
+                        ));
+                    }
+                    stage.sync_all()?;
+                    self.paths.private.sync_all()?;
+                    fs::identity(&stage)?
+                } else {
+                    fs::stage_directory(&self.paths.private, &staged_name)?
+                };
+            let staged = self.store.stage_directory_for_namespace(a, &identity)?;
+            self.paths.verify_parent(&a.target.path, &parent)?;
+            fs::rename_new(&self.paths.private, &staged_name, &parent, &name)?;
+            self.paths.verify_parent(&a.target.path, &parent)?;
+            let published = fs::optional_directory(&parent, &name)?
+                .ok_or(Error::Busy("namespace directory publication disappeared"))?;
+            if fs::identity(&published)? != identity {
+                return Err(Error::Busy("namespace directory publication replaced"));
+            }
+            published.sync_all()?;
+            parent.sync_all()?;
+            self.paths.verify_parent(&a.target.path, &parent)?;
+            let acknowledged = fs::optional_directory(&parent, &name)?.ok_or(Error::Busy(
+                "namespace directory disappeared before handoff",
+            ))?;
+            if fs::identity(&acknowledged)? != identity {
+                return Err(Error::Busy("namespace directory replaced before handoff"));
+            }
+            return Ok(self.store.finish_directory_for_namespace(
+                &staged,
+                Some(&PhysicalIdentity {
+                    inode: identity,
+                    parent_inode: proof.parent_inode,
+                }),
+            )?);
+        }
+        self.paths.verify_parent(&a.target.path, &parent)?;
+        if fs::optional_directory(&parent, &name)?.is_some() {
+            return Err(Error::Busy("namespace directory destination appeared"));
+        }
+        // The private stage, including any unexpected contents, remains retained.
+        self.store.finish_directory_for_namespace(a, None)?;
+        Ok(())
+    }
+}

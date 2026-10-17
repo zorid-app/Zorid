@@ -529,3 +529,67 @@ fn namespace_handoff_preserves_recreated_source_occupant() {
     assert!(!directory.path().join("renamed.md").exists());
     assert!(!vault.store.projection_attempts(false).unwrap().is_empty());
 }
+
+#[test]
+fn namespace_handoff_settles_interrupted_directory_create_before_move() {
+    let phases: [fn(&str); 2] = [
+        |p| {
+            if p == "directory_prepared" {
+                panic!("interrupt prepared directory");
+            }
+        },
+        |p| {
+            if p == "directory_published_before_record" {
+                panic!("interrupt published directory");
+            }
+        },
+    ];
+    for fault in phases {
+        let directory = tempfile::tempdir().unwrap();
+        let mut vault = enrolled(directory.path());
+        let folder = EntryId::new("interrupted-folder").unwrap();
+        vault
+            .store
+            .family_apply(
+                &request(
+                    "folder-create",
+                    Mutation::Create {
+                        id: folder.clone(),
+                        path: VaultPath::new("old-folder").unwrap(),
+                        kind: EntryKind::Folder,
+                        content: None,
+                    },
+                ),
+                None,
+            )
+            .unwrap();
+        vault.fault = Some(fault);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            vault.project_directory(&folder).unwrap();
+        }))
+        .is_err());
+        drop(vault);
+        let mut vault = NativeVault::open(directory.path()).unwrap();
+        let before = vault.store.read(&folder).unwrap().unwrap().state;
+        vault
+            .store
+            .family_apply(
+                &request(
+                    "folder-move",
+                    Mutation::Move {
+                        id: folder.clone(),
+                        expected: before.revision,
+                        path: VaultPath::new("new-folder").unwrap(),
+                    },
+                ),
+                None,
+            )
+            .unwrap();
+        let report = vault.recover().unwrap();
+        assert!(report.blocked.is_empty(), "{report:?}");
+        assert!(!directory.path().join("old-folder").exists());
+        assert!(directory.path().join("new-folder").is_dir());
+        assert!(vault.store.directory_attempts(false).unwrap().is_empty());
+        assert_eq!(vault.family_status().unwrap().pending_projection, "0");
+    }
+}

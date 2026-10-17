@@ -122,6 +122,16 @@ impl NativeVault {
             .flat_map(|job| job.affected.iter().map(|c| c.after.id.clone()))
             .collect();
         let mut unsettled = BTreeSet::new();
+        for attempt in self.store.directory_attempts(false)? {
+            if member_ids.contains(&attempt.target.id) {
+                if let Err(error) = self.settle_namespace_directory(&attempt) {
+                    unsettled.insert(attempt.target.id.clone());
+                    report
+                        .blocked
+                        .push((attempt.target.path, error.to_string()));
+                }
+            }
+        }
         for attempt in self.store.projection_attempts(false)? {
             if member_ids.contains(&attempt.target.state.id) {
                 if let Err(error) = self.settle_namespace_publication(&attempt) {
