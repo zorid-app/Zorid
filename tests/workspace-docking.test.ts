@@ -139,19 +139,29 @@ test('failed DOM attachment restores both owners, tab order, active pane and spl
   assert.deepEqual((workspace as any).splitLayout.serialize(),before);assert.equal(source.editor,a);assert.equal(target.editor,b);assert.equal(workspace.activePane,target);assert.deepEqual(target.tabs,tabs);assert.equal(source.tabs[0],tab);assert.equal(source.content?.parentElement,source.element);
 });
 
-test('real Canvas pending card draft and focus move intact without committing or reconstructing the view',async t=>{
+test('real Canvas pending Live text and focus move intact without awaiting persistence or reconstructing the view',async t=>{
   const sourceText=JSON.stringify({nodes:[{id:'a',type:'text',x:0,y:0,width:200,height:100,text:'Original'}],edges:[]});
   const {workspace,adapter,dom}=await setup(t,new MemoryAdapter({'Board.canvas':sourceText,'B.md':'Bravo'}));
   await workspace.openNote('B.md');await (workspace as any).split('right');const target=workspace.activePane,source=workspace.panes[0];
   await workspace.openNote('Board.canvas',false,source);const tab=source.tabs[0],view=source.canvasView!,surface=view.element;
   source.element.querySelector<HTMLElement>('[data-node-id="a"]')!.dispatchEvent(new dom.window.MouseEvent('dblclick',{bubbles:true}));
-  const input=surface.querySelector<HTMLTextAreaElement>('textarea')!;input.value='Pending card draft';input.setSelectionRange(8,3,'backward');input.focus();
-  const world=surface.querySelector<HTMLElement>('.zorid-canvas-world')!,transform=world.style.transform;
-  await dock(workspace,{sourcePaneId:source.id,tabId:tab.id,targetPaneId:target.id,edge:'center',index:0});await Promise.resolve();
-  assert.equal(target.canvasView,view);assert.equal(view.element,surface);assert.equal(surface.querySelector('textarea'),input);assert.equal(document.activeElement,input);assert.equal(input.value,'Pending card draft');assert.equal(world.style.transform,transform);
-  assert.equal(await adapter.read('Board.canvas'),sourceText,'moving does not commit the live card editor');assert.equal(view.hasPendingChanges(),true);
+  for(let i=0;i<10;i++)await Promise.resolve();
+  const editor=EditorView.findFromDOM(surface.querySelector('.cm-editor')!)!,buffer=workspace.buffers.get('Board.canvas')!,flush=buffer.flush.bind(buffer);
+  let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});
+  buffer.flush=async()=>{await held;await flush();};
+  try{
+    editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:'Pending card draft'},selection:{anchor:8,head:3},annotations:Transaction.userEvent.of('input.type')});editor.focus();
+    const world=surface.querySelector<HTMLElement>('.zorid-canvas-world')!,transform=world.style.transform;
+    let deadline:ReturnType<typeof setTimeout>|undefined;
+    try{await Promise.race([dock(workspace,{sourcePaneId:source.id,tabId:tab.id,targetPaneId:target.id,edge:'center',index:0}),new Promise<never>((_,reject)=>{deadline=setTimeout(()=>reject(new Error('Docking waited for the held Canvas save')),3000);})]);}
+    finally{clearTimeout(deadline);}
+    await Promise.resolve();
+    assert.equal(target.canvasView,view);assert.equal(view.element,surface);assert.equal(EditorView.findFromDOM(surface.querySelector('.cm-editor')!),editor);assert.equal(document.activeElement,editor.contentDOM);assert.equal(editor.state.doc.toString(),'Pending card draft');assert.equal(world.style.transform,transform);
+    assert.deepEqual([editor.state.selection.main.anchor,editor.state.selection.main.head],[8,3]);assert.equal(undoDepth(editor.state),1);
+    assert.equal(await adapter.read('Board.canvas'),sourceText,'moving does not require the pending Live save to finish');assert.equal(view.hasPendingChanges(),true);
+  }finally{buffer.flush=flush;release();}
   await view.flush();assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text,'Pending card draft');
-  view.undo();await view.flush();assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text,'Original');
+  assert.equal(undo(editor),true);await view.flush();assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text,'Original');
 });
 
 test('PDF semantic state and Markdown embed owners survive same-window moves and cached activation',async t=>{
@@ -234,16 +244,23 @@ test('external deletion retains a parked Markdown editor with dirty text and its
   await adapter.write('A.md','Alpha');await workspace.vault.reload();await workspace.flush();assert.equal(await adapter.read('A.md'),'Recover Alpha');
 });
 
-test('external deletion retains an uncommitted parked Canvas card draft',async t=>{
+test('external deletion retains a parked Canvas Live draft after persistence fails',async t=>{
   const sourceText=JSON.stringify({nodes:[{id:'a',type:'text',x:0,y:0,width:200,height:100,text:'Original'}],edges:[]});
   const {workspace,adapter,dom}=await setup(t,new MemoryAdapter({'Board.canvas':sourceText,'B.md':'Bravo'}));
   await workspace.openNote('Board.canvas');const pane=workspace.activePane,tab=pane.tabs[0],view=pane.canvasView!;
   await workspace.openNote('B.md',true);
   view.element.querySelector<HTMLElement>('[data-node-id="a"]')!.dispatchEvent(new dom.window.MouseEvent('dblclick',{bubbles:true}));
-  const input=view.element.querySelector<HTMLTextAreaElement>('textarea')!;input.value='Retained card draft';
-  await adapter.trash('Board.canvas');await workspace.vault.reload();await new Promise(resolve=>setTimeout(resolve,0));
-  assert.equal(tab.path,'Board.canvas');assert.equal((workspace as any).cachedViews.get(tab)?.canvasView,view);assert.equal(view.hasPendingChanges(),true);assert.equal(input.value,'Retained card draft');
-  await adapter.write('Board.canvas',sourceText);await workspace.vault.reload();await workspace.flush();assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text,'Retained card draft');
+  for(let i=0;i<10;i++)await Promise.resolve();
+  const editor=EditorView.findFromDOM(view.element.querySelector('.cm-editor')!)!,write=adapter.write.bind(adapter);
+  adapter.write=async(path,text)=>{if(path==='Board.canvas')throw new Error('Canvas disk unavailable');await write(path,text);};
+  try{
+    editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:'Retained card draft'},annotations:Transaction.userEvent.of('input.type')});
+    await assert.rejects(view.flush(),/Canvas disk unavailable/);
+    await adapter.trash('Board.canvas');await workspace.vault.reload();await new Promise(resolve=>setTimeout(resolve,0));
+    assert.equal(tab.path,'Board.canvas');assert.equal((workspace as any).cachedViews.get(tab)?.canvasView,view);assert.equal(view.hasPendingChanges(),true);assert.equal(editor.state.doc.toString(),'Retained card draft');
+    assert.match(localStorage.getItem('zorid:draft:test:docking:Board.canvas')!,/Retained card draft/);
+  }finally{adapter.write=write;await write('Board.canvas',sourceText);}
+  await workspace.vault.reload();await workspace.flush();assert.equal(JSON.parse(await adapter.read('Board.canvas')).nodes[0].text,'Retained card draft');
 });
 
 test('rejected cached retirement keeps the deleted tab path and live owner available for recovery',async t=>{
