@@ -280,3 +280,25 @@ fn json_equal(a: &Value, b: &Value) -> bool {
         _ => a == b,
     }
 }
+
+#[test]
+fn repeated_membership_work_is_charged_before_traversal() {
+    let record = DetachedRecord {
+        path: "a.md".into(),
+        properties: vec![(
+            "items".into(),
+            PropertyValue::Array(vec![PropertyValue::Number(1.into()); 50]),
+        )],
+        ..Default::default()
+    };
+    let options = EvaluationOptions {
+        max_steps: 100,
+        ..Default::default()
+    };
+    assert_eq!(
+        evaluate_expression("items.containsAll(1,1,1)", &record, &options)
+            .unwrap_err()
+            .code,
+        "budget"
+    );
+}

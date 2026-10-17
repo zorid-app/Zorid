@@ -1457,6 +1457,19 @@ impl<'a> Evaluator<'a> {
                 Err(error) => return error,
             }
         };
+        let extra = match name {
+            "containsAll" | "containsAny" => {
+                values.len().saturating_mul(eager.len().saturating_sub(1))
+            }
+            "sort" => values
+                .len()
+                .saturating_mul((usize::BITS - values.len().max(1).leading_zeros()) as usize)
+                .saturating_sub(values.len()),
+            _ => 0,
+        };
+        if self.charge(extra).is_err() {
+            return RuntimeValue::Error("budget\0List builtin exceeds work budget".into());
+        }
         match name {
             "contains" => {
                 let needle = eager.first().cloned().unwrap_or(RuntimeValue::Null);
