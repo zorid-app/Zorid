@@ -66,7 +66,25 @@ areas rather than claiming that every upstream edge case has been exhausted.
 5. At handoff/context reset, record unfinished operations, next action and blockers.
    Reconcile stale statements rather than treating chat summaries as authoritative.
 
-### Integration checkpoint — 2026-10-16 23:50 local
+### Integration checkpoint — 2026-10-17 00:01 local
+
+- Main `1362e6f` adds the reviewed shared mutation planner; `01bf40a` bounds
+  retained binary expansion before allocation. Combined current-main session96859
+  passed39 file-sync unit tests plus11 mutation fixtures. Native/browser consumers
+  remain unfinished; this establishes portable planning only.
+- HTTP isolation tests integrated as `4a2f7a1`/`db7264e`: final reviewed candidate
+  session87939 passed2 actual TCP tests. Revocation overlap remains smoke evidence,
+  not deterministic transaction-order proof.
+- Browser admission fixture integrated as `8743ebd`, evidence `d6bbc60`:
+  TypeScript/build and all5 real Chrome multi-worker checks passed, cleanup
+  confirmed. See `browser-admission-verification.md`. `desktop_integration` owns
+  the next actual two-tab fixture; single-page results do not establish that gate.
+- Auth setup discussion is recorded in `user-findings.md`: Better Auth/SQLite
+  with an OAuth/OIDC boundary is a proposal, not an adopted provider. Account
+  login remains distinct from E2EE key recovery.
+- Native/classifier review found incomplete Yrs updates could appear as complete
+  visible text. `crdt_interop` owns a single-load complete-materialization helper;
+  classifier must treat pending insertion/deletion prerequisites as pending.
 
 - Subsequent promotion: `f9e6fc9` integrates the reviewed WASM crate and runtime
   fixtures. Rebuilt candidate `11d2544` passed all10 actual Chrome groups; main
