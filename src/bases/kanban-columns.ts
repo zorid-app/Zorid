@@ -1,3 +1,4 @@
+import { displaySharedBaseValue, sharedBaseGroupKeyId } from './presentation-common.ts';
 import { baseExpressionValue, baseValuesEqual, baseValueToString } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseValue } from './document.ts';
@@ -24,10 +25,10 @@ export interface BaseKanbanColumns {
   hide(key: BaseExpressionValue): Promise<boolean>;
   destroy(): void;
 }
-interface Row { key: BaseExpressionValue; checked: boolean; count: number; stored?: BaseValue }
-function text(key: BaseExpressionValue): string {
+interface Row { key: BaseExpressionValue; sharedKeyId?: string; checked: boolean; count: number; stored?: BaseValue }
+function text(key: BaseExpressionValue, shared = false): string {
   if (key.type === 'null') return 'No value';
-  try { return baseValueToString(key); } catch { return key.type; }
+  try { return shared ? displaySharedBaseValue(key) : baseValueToString(key); } catch { return key.type; }
 }
 function propertyOf(result: BaseQueryResult): string | undefined {
   const group = result.view.groupBy;
@@ -63,10 +64,28 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
   }
   function readRows() {
     const order = Array.isArray(result.view.groupOrder) ? result.view.groupOrder as readonly BaseValue[] : undefined;
+    if (result.shared !== undefined) {
+      let ordinal = 0;
+      const candidates = result.groupOptions.length ? result.groupOptions.map(option => {
+        if (typeof option.sharedKeyId !== 'string') throw new Error('Shared group identity is unavailable.');
+        const actual = result.groups.find(group => group.sharedKeyId === option.sharedKeyId);
+        const index = option.listed ? ordinal++ : undefined;
+        return { key: actual?.key ?? option.key, sharedKeyId: option.sharedKeyId, count: option.count, listed: option.listed,
+          ...(order && index !== undefined ? { stored: order[index] } : {}) };
+      }) : result.groups.filter(group => group.key !== null).map(group => {
+        if (typeof group.sharedKeyId !== 'string') throw new Error('Shared group identity is unavailable.');
+        return { key: group.key!, sharedKeyId: group.sharedKeyId, count: group.rows.length, listed: true };
+      });
+      if (order && ordinal !== order.length) throw new Error('Shared group order does not match its saved configuration.');
+      rows = candidates.map(group => ({ ...group, checked: order ? group.listed : true }));
+      // Every configured entry has a listed Rust option, including empty keys.
+      // Keep its original source value by ordinal; never reparse/rematch it.
+      tail = []; selected = Math.min(selected, Math.max(0, rows.length - 1)); return;
+    }
     const candidates = result.groupOptions.length ? result.groupOptions.map(group => ({ key: result.groups.find(actual => actual.key && matchesBaseGroupKey(group.key, actual.key))?.key ?? group.key, count: group.count, listed: group.listed }))
       : result.groups.filter(group => group.key !== null).map(group => ({ key: group.key!, count: group.rows.length, listed: true }));
     if (!order) candidates.sort((a, b) => a.key.type === 'null' ? -1 : b.key.type === 'null' ? 1 : 0);
-    rows = candidates.filter(group => group.listed).concat(candidates.filter(group => !group.listed).sort((a, b) => text(a.key).localeCompare(text(b.key), undefined, { numeric: true })))
+    rows = candidates.filter(group => group.listed).concat(candidates.filter(group => !group.listed).sort((a, b) => text(a.key, result.shared !== undefined).localeCompare(text(b.key, result.shared !== undefined), undefined, { numeric: true })))
       .map(group => ({ key: group.key, count: group.count, checked: order ? group.listed : true,
         ...(order?.some(value => matches(value, group.key)) ? { stored: order.find(value => matches(value, group.key))! } : {}),
       }));
@@ -127,8 +146,8 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
         const line = doc.createElement('div'); line.className = `bases-columns-row${row.checked ? '' : ' mod-hidden'}`;
         line.tabIndex = index === selected ? 0 : -1; line.setAttribute('role', 'listitem'); line.dataset.index = String(index);
         const grip = doc.createElement('span'); grip.className = 'bases-columns-grip'; grip.append(icon('grip-vertical', 16, doc)); grip.draggable = !pending; grip.setAttribute('aria-label', 'Drag to reorder');
-        const check = doc.createElement('input'); check.type = 'checkbox'; check.checked = row.checked; check.disabled = pending; check.tabIndex = -1; check.setAttribute('aria-label', `Show ${text(row.key)}`);
-        const name = doc.createElement('span'); name.className = 'bases-columns-name'; name.textContent = text(row.key);
+        const check = doc.createElement('input'); check.type = 'checkbox'; check.checked = row.checked; check.disabled = pending; check.tabIndex = -1; check.setAttribute('aria-label', `Show ${text(row.key, result.shared !== undefined)}`);
+        const name = doc.createElement('span'); name.className = 'bases-columns-name'; name.textContent = text(row.key, result.shared !== undefined);
         const count = doc.createElement('span'); count.className = 'bases-columns-count'; count.textContent = String(row.count);
         line.append(grip, check, name, count); list.append(line);
         line.addEventListener('click', event => { if (disposed || pending || popover !== element || !element.contains(line) || (event.target as Element).closest('.bases-columns-grip')) return; selected = index; attempt(() => { row.checked = !row.checked; }); });
@@ -144,7 +163,7 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
         let ownedDrag: typeof rowDrag;
         grip.addEventListener('dragstart', event => {
           if (disposed || pending || popover !== element || !element.contains(line) || !event.dataTransfer) { event.preventDefault(); return; }
-          rowDrag = ownedDrag = { row, token: operation }; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', text(row.key));
+          rowDrag = ownedDrag = { row, token: operation }; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', text(row.key, result.shared !== undefined));
         });
         grip.addEventListener('dragend', () => { if (rowDrag === ownedDrag) rowDrag = undefined; });
         line.addEventListener('dragover', event => { if (rowDrag && !pending && popover === element && element.contains(line)) event.preventDefault(); });
@@ -173,13 +192,17 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
     update(next) {
       if (disposed) return;
       const previousProperty = propertyOf(result);
-      const keepRows = !!popover && pending && previousProperty === propertyOf(next) && Array.isArray(result.view.groupOrder) && Array.isArray(next.view.groupOrder) && JSON.stringify(pendingOrder) === JSON.stringify(next.view.groupOrder);
+      const keepRows = (result.shared !== undefined) === (next.shared !== undefined) && !!popover && pending && previousProperty === propertyOf(next) && Array.isArray(result.view.groupOrder) && Array.isArray(next.view.groupOrder) && JSON.stringify(pendingOrder) === JSON.stringify(next.view.groupOrder);
       if (result.version !== next.version) { operation++; errorMessage = ''; }
       result = next;
       if (previousProperty !== propertyOf(next)) { close(); }
       else if (popover) {
         rowDrag = undefined;
-        if (keepRows) rows.forEach(row => { row.count = next.groupOptions.find(group => matchesBaseGroupKey(group.key, row.key))?.count ?? 0; });
+        if (keepRows) rows.forEach(row => {
+          const option = next.groupOptions.find(group => next.shared !== undefined ? typeof row.sharedKeyId === 'string' && group.sharedKeyId === row.sharedKeyId : matchesBaseGroupKey(group.key, row.key));
+          row.count = option?.count ?? 0;
+          if (next.shared !== undefined && option) row.key = next.groups.find(group => group.sharedKeyId === row.sharedKeyId)?.key ?? option.key;
+        });
         else readRows();
         draw();
       }
@@ -193,7 +216,9 @@ export function createBaseKanbanColumns(container: HTMLElement, options: BaseKan
     },
     async hide(key) {
       if (disposed || pending) return false;
-      readRows(); rows.forEach(row => { if (same(row.key, key)) row.checked = false; });
+      const id = result.shared !== undefined ? sharedBaseGroupKeyId(result, key) : undefined;
+      if (result.shared !== undefined && typeof id !== 'string') return false;
+      readRows(); rows.forEach(row => { if (result.shared !== undefined ? row.sharedKeyId === id : same(row.key, key)) row.checked = false; });
       try { return await save(orderOf()); } catch (error) { report(error); return false; }
     },
     destroy() { if (disposed) return; disposed = true; close(); doc.removeEventListener('pointerdown', outside); doc.removeEventListener('keydown', key); win?.removeEventListener('resize', position); },

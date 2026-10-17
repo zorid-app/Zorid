@@ -1,5 +1,5 @@
 import { icon } from '../ui/icons.ts';
-import { BASE_NULL, baseValueToString } from './expression.ts';
+import { BASE_NULL, baseValueToString, baseValuesEqual } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseQueryGroup, BaseQueryResult, BaseQueryRow } from './query.ts';
 
@@ -30,12 +30,42 @@ export interface BasePresentationHandle {
   hasActiveEdits(): boolean;
   destroy(): void;
 }
-export function displayBaseProperty(value: BaseExpressionValue): string {
+/** Inert formatting only: namespaces are display names, never callbacks. */
+export function displaySharedBaseValue(value: BaseExpressionValue): string {
+  let remaining = 200000;
+  const text = (item: BaseExpressionValue, depth = 0): string => {
+    if (--remaining < 0 || depth > 128) throw new Error('The Base value is too large to display.');
+    if (item.type === 'namespace') return item.name;
+    if (item.type === 'list') return item.value.map(child => text(child, depth + 1)).join(', ');
+    if (item.type === 'object') return JSON.stringify(Object.fromEntries(Object.entries(item.value).map(([key, child]) => [key, text(child, depth + 1)])));
+    return baseValueToString(item);
+  };
+  return text(value);
+}
+export function displayBaseProperty(value: BaseExpressionValue, shared = false): string {
   if (value.type === 'null') return '';
   if (value.type === 'namespace') return value.name;
-  try { return baseValueToString(value); }
+  try { return shared ? displaySharedBaseValue(value) : baseValueToString(value); }
   catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}`; }
 }
+/** Only exact projected keys may name a shared group. Tokens are opaque and
+ * stable across snapshots; absence never falls back to loose JS equality. */
+export function sharedBaseGroupKeyId(result: BaseQueryResult, key: BaseExpressionValue | null): string | null | undefined {
+  if (result.shared === undefined) return undefined;
+  if (key === null) return null;
+  const actual = result.groups.find(group => group.key === key);
+  if (typeof actual?.sharedKeyId === 'string') return actual.sharedKeyId;
+  return result.groupOptions.find(option => option.key === key)?.sharedKeyId;
+}
+export function sameBasePresentationGroup(result: BaseQueryResult, a: BaseExpressionValue | null, b: BaseExpressionValue | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (result.shared !== undefined) {
+    const left = sharedBaseGroupKeyId(result, a), right = sharedBaseGroupKeyId(result, b);
+    return typeof left === 'string' && left === right;
+  }
+  return baseValuesEqual(a, b, true);
+}
+
 export function propertyValue(row: BaseQueryRow, property: string): BaseExpressionValue {
   return Object.hasOwn(row.values, property) ? row.values[property] : BASE_NULL;
 }
@@ -56,6 +86,7 @@ export function disposePresentationResources(disposers: (() => void)[], options:
 export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, property: string,
   result: BaseQueryResult, options: BasePresentationOptions, isCurrent: () => boolean): () => void {
   let value = propertyValue(row, property);
+  const display = (value: BaseExpressionValue) => displayBaseProperty(value, result.shared !== undefined);
   element.classList.add('bases-rendered-value');
   element.dataset.property = property;
   if (options.renderProperty) {
@@ -85,7 +116,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
       const link = element.ownerDocument.createElement('a');
       link.className = 'internal-link';
       link.href = '#';
-      link.textContent = displayBaseProperty(current);
+      link.textContent = display(current);
       const open = (event: MouseEvent) => {
         if (event.defaultPrevented || (event.button !== 0 && event.button !== 1) || disposed || !isCurrent()) return;
         event.preventDefault(); options.openFile(row.path, event);
@@ -109,7 +140,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
       });
       element.append(input);
     } else {
-      element.textContent = displayBaseProperty(current);
+      element.textContent = display(current);
       if (current.type === 'error') { element.classList.add('mod-error'); element.title = current.error.message; }
     }
   };
@@ -119,7 +150,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
     if (element.querySelector('input')) return;
     event.preventDefault(); event.stopPropagation();
     const input = element.ownerDocument.createElement('input');
-    input.type = 'text'; input.value = displayBaseProperty(value);
+    input.type = 'text'; input.value = display(value);
     input.setAttribute('aria-label', options.getPropertyLabel?.(property) ?? property.replace(/^note\./, ''));
     element.dataset.baseEditing = 'draft';
     element.replaceChildren(input); input.focus(); input.select();
@@ -134,7 +165,7 @@ export function mountBaseProperty(element: HTMLElement, row: BaseQueryRow, prope
         ended = false; input.setAttribute('aria-invalid', 'true');
         reportPresentationError(options, new Error('Enter a valid value.')); return;
       }
-      if (raw === displayBaseProperty(value)) { draw(value); return; }
+      if (raw === display(value)) { draw(value); return; }
       const next: BaseExpressionValue = raw === '' ? BASE_NULL : value.type === 'number'
         ? { type: 'number', value: Number(raw) } : { type: 'string', value: raw };
       if (next.type === 'number' && (!raw.trim() || !Number.isFinite(next.value))) {
@@ -303,7 +334,7 @@ export function createBaseVirtualSurface(container: HTMLElement, className: stri
 }
 
 export function groupIdentity(group: BaseQueryGroup): string {
-  return group.key === null ? 'ungrouped' : JSON.stringify(group.key, (_key, value) => value instanceof RegExp ? { regexp: value.source, flags: value.flags } : value);
+  return group.sharedKeyId !== undefined ? group.sharedKeyId === null ? 'ungrouped' : `shared:${group.sharedKeyId}` : group.key === null ? 'ungrouped' : JSON.stringify(group.key, (_key, value) => value instanceof RegExp ? { regexp: value.source, flags: value.flags } : value);
 }
 export function createGroupUnit(document: Document, group: BaseQueryGroup, index: number, collapsed: boolean, toggle: () => void): VirtualUnit {
   return { key: `group:${index}`, height: 36, mount() {
@@ -311,7 +342,7 @@ export function createGroupUnit(document: Document, group: BaseQueryGroup, index
     button.type = 'button'; button.setAttribute('aria-expanded', String(!collapsed));
     const indicator = document.createElement('span'); indicator.className = 'bases-group-collapse'; indicator.setAttribute('aria-hidden', 'true');
     indicator.append(icon(collapsed ? 'right' : 'down', 16, document));
-    const label = document.createElement('span'); label.textContent = group.key?.type === 'null' ? 'No value' : group.key ? displayBaseProperty(group.key) : '';
+    const label = document.createElement('span'); label.textContent = group.key?.type === 'null' ? 'No value' : group.key ? displayBaseProperty(group.key, group.sharedKeyId !== undefined) : '';
     button.append(indicator, label); button.addEventListener('click', toggle);
     return { element: button, dispose() { button.removeEventListener('click', toggle); } };
   } };

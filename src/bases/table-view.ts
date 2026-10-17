@@ -1,3 +1,4 @@
+import { displaySharedBaseValue } from './presentation-common.ts';
 import { BASE_NULL, baseValueToString } from './expression.ts';
 import type { BaseExpressionValue } from './expression.ts';
 import type { BaseQueryResult, BaseQueryRow } from './query.ts';
@@ -52,10 +53,10 @@ function tableClipboard(header: string[], rows: string[][]): Record<string, stri
   };
 }
 const primitiveTypes = new Set(['null', 'string', 'number', 'boolean']);
-function display(value: BaseExpressionValue): string {
+function display(value: BaseExpressionValue, shared = false): string {
   if (value.type === 'null') return '';
   if (value.type === 'namespace') return value.name;
-  try { return baseValueToString(value); }
+  try { return shared ? displaySharedBaseValue(value) : baseValueToString(value); }
   catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}`; }
 }
 
@@ -143,7 +144,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     // Keep number text uncoerced while editing, so malformed input cannot become null/zero.
     if (!multiline) (input as HTMLInputElement).type = value.type === 'boolean' ? 'checkbox' : 'text';
     if (value.type === 'boolean') (input as HTMLInputElement).checked = toggle ? !value.value : value.value;
-    else input.value = value.type === 'null' ? '' : display(value);
+    else input.value = value.type === 'null' ? '' : display(value, result.shared !== undefined);
     // Compare the control baseline, so untouched CRLF values survive textarea normalization.
     const originalText = input.value;
     cell.replaceChildren(input); input.focus(); if (value.type !== 'boolean') input.select();
@@ -192,7 +193,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
     cell.setAttribute('aria-readonly', String(!editable(row, property, value)));
     if (property === 'file.name' || property === 'file.file') {
       const link = doc.createElement('a'); link.className = 'internal-link'; link.href = '#'; link.tabIndex = -1;
-      link.textContent = display(value) || row.path; link.title = row.path;
+      link.textContent = display(value, result.shared !== undefined) || row.path; link.title = row.path;
       link.addEventListener('click', event => { event.preventDefault(); if (current() && !suppressClick && (!event.shiftKey || event.metaKey || event.ctrlKey)) options.openFile(row.path, event); });
       link.addEventListener('auxclick', event => { if (event.button === 1) { event.preventDefault(); if (current() && !suppressClick && (!event.shiftKey || event.metaKey || event.ctrlKey)) options.openFile(row.path, event); } });
       cell.append(link);
@@ -202,7 +203,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       checkbox.addEventListener('click', event => { event.preventDefault(); if (current()) startEdit(cell, row, property, value, true); });
       cell.append(checkbox);
     } else {
-      cell.textContent = display(value); if (value.type === 'error') cell.classList.add('is-error');
+      cell.textContent = display(value, result.shared !== undefined); if (value.type === 'error') cell.classList.add('is-error');
     }
     cell.addEventListener('focus', () => {
       selection = { path: row.path, property, point };
@@ -286,7 +287,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       else {
         el.classList.add('zorid-bases-table-group'); const button = doc.createElement('button'), group = result.groups[item.group], token = revision;
         button.type = 'button'; button.dataset.groupButton = String(item.group); button.setAttribute('aria-expanded', String(!collapsed.has(item.group)));
-        button.textContent = `${collapsed.has(item.group) ? '▸' : '▾'} ${group.key?.type === 'null' ? 'Empty' : display(group.key!)} (${group.rows.length})`;
+        button.textContent = `${collapsed.has(item.group) ? '▸' : '▾'} ${group.key?.type === 'null' ? 'Empty' : display(group.key!, result.shared !== undefined)} (${group.rows.length})`;
         button.addEventListener('click', () => { if (destroyed || token !== revision || !body.contains(button) || editing) return; collapsed.has(item.group) ? collapsed.delete(item.group) : collapsed.add(item.group); rebuildItems(); range = undefined; anchor = undefined;
           if (selection && !items.some(item => item.row?.path === selection!.path)) {
             const first = items.find(item => item.row)?.row;
@@ -333,7 +334,7 @@ export function createBaseTableView(container: HTMLElement, options: BaseTableOp
       const value = row.values[property] ?? BASE_NULL;
       if (value.type === 'null' || value.type === 'error') return '';
       if (value.type === 'namespace') return value.name;
-      try { return baseValueToString(value); } catch { return ''; }
+      try { return result.shared !== undefined ? displaySharedBaseValue(value) : baseValueToString(value); } catch { return ''; }
     }));
     if (!rows.length) return;
     const header = properties.map(property => options.getPropertyLabel?.(property) ?? property.replace(/^(?:note|file|formula)\./, ''));
