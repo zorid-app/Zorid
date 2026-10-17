@@ -299,6 +299,8 @@ struct BaseReadOptions {
     clock_ms: Option<i64>,
     timezone: Option<String>,
     max_rows: Option<usize>,
+    current_entry_id: Option<EntryId>,
+    max_steps: Option<usize>,
 }
 fn base_error(code: &str, diagnostic: &impl Serialize) -> JsValue {
     JsValue::from_str(
@@ -422,6 +424,10 @@ impl WasmDocumentIndexGeneration {
             options.view_index = program
                 .view_index_by_name(&name)
                 .ok_or_else(|| error("index_view_not_found"))?;
+        }
+        options.current_entry_id = input.current_entry_id;
+        if let Some(steps) = input.max_steps {
+            options.max_steps = steps;
         }
         options.search_terms = input.search_terms;
         options.ignore_paths = input.ignore_paths;

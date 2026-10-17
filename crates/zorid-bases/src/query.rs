@@ -65,6 +65,9 @@ pub struct QueryOptions {
     pub search_terms: Vec<String>,
     pub ignore_paths: Vec<String>,
     pub evaluation: EvaluationOptions,
+    /// Select `this` only from the exact query snapshot, never from caller fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_entry_id: Option<crate::EntryId>,
     pub max_steps: usize,
     pub max_scanned: usize,
     pub max_rows: usize,
@@ -78,6 +81,7 @@ impl Default for QueryOptions {
             search_terms: Vec::new(),
             ignore_paths: Vec::new(),
             evaluation: EvaluationOptions::default(),
+            current_entry_id: None,
             max_steps: 2_000_000,
             max_scanned: 50_000,
             max_rows: 10_000,
@@ -331,10 +335,14 @@ pub fn query_base(
     }
     let mut ids = HashSet::new();
     let mut paths = HashSet::new();
+    let mut selected_current = None;
     for record in &snapshot.records {
         let witness = record.witness.as_ref().ok_or_else(|| {
             ExpressionDiagnostic::new("input", "Query records require an entry/revision witness")
         })?;
+        if options.current_entry_id.as_ref() == Some(&witness.entry_id) {
+            selected_current = Some(record);
+        }
         if !ids.insert(&witness.entry_id) || !paths.insert(&record.path) {
             return Err(ExpressionDiagnostic::new(
                 "input",
@@ -342,6 +350,29 @@ pub fn query_base(
             ));
         }
     }
+    let selected_options;
+    let options = if options.current_entry_id.is_some() {
+        let current = selected_current.ok_or_else(|| {
+            ExpressionDiagnostic::new("stale-source", "Current entry is absent from this snapshot")
+        })?;
+        if options
+            .evaluation
+            .current_record
+            .as_ref()
+            .is_some_and(|provided| provided != current)
+        {
+            return Err(ExpressionDiagnostic::new(
+                "stale-source",
+                "Current record conflicts with selected entry",
+            ));
+        }
+        let mut selected = options.clone();
+        selected.evaluation.current_record = Some(current.clone());
+        selected_options = selected;
+        &selected_options
+    } else {
+        options
+    };
     if let Some(current) = &options.evaluation.current_record {
         let witness = current.witness.as_ref().ok_or_else(|| {
             ExpressionDiagnostic::new("input", "Current query record requires a witness")

@@ -93,6 +93,8 @@ struct BaseOptions {
     clock_ms: Option<i64>,
     timezone: String,
     max_rows: usize,
+    current_entry_id: Option<EntryId>,
+    max_steps: usize,
 }
 impl Default for BaseOptions {
     fn default() -> Self {
@@ -103,6 +105,8 @@ impl Default for BaseOptions {
             clock_ms: None,
             timezone: "UTC".into(),
             max_rows: 1000,
+            current_entry_id: None,
+            max_steps: zorid_bases::MAX_QUERY_STEPS,
         }
     }
 }
@@ -114,7 +118,12 @@ impl BaseOptions {
         self,
         capture: impl FnOnce() -> Result<i64, Value>,
     ) -> Result<QueryOptions, Value> {
-        if self.max_rows == 0 || self.max_rows > 10_000 || self.view_index > 1000 {
+        if self.max_rows == 0
+            || self.max_rows > 10_000
+            || self.view_index > 1000
+            || self.max_steps == 0
+            || self.max_steps > zorid_bases::MAX_QUERY_STEPS
+        {
             return Err(failure("invalid_budget"));
         }
         let mut options = QueryOptions::default();
@@ -129,6 +138,8 @@ impl BaseOptions {
         })?;
         options.evaluation.timezone = self.timezone;
         options.max_rows = self.max_rows;
+        options.max_steps = self.max_steps;
+        options.current_entry_id = self.current_entry_id;
         Ok(options)
     }
 }
