@@ -141,3 +141,12 @@ User asked what the native shell is like and noted no mobile UI discussion had
 occurred. Clarified this is a minimal UIKit/local-vault/nav plus existing-editor
 prototype to prove Rust integration, not a settled mobile product design. Broader
 visual/navigation design remains open; no editor polish redesign is underway.
+
+Remote GitHub configuration (2026-10-17, after direct user authorization): GET for
+both delivery environments returned404; created `ios-build` and `ios-testflight`
+with custom branch policies enabled, then added `main` of type `branch`. Follow-up
+GET confirmed each lists exactly that policy. No signing/API secrets written,
+workflow pushed/dispatched, runner build or deployment performed. This configures
+the protected destination for the committed manual workflow; it does not establish
+that workflow/build/sign/upload succeeds. Latest fresh Apple four-endpoint retry
+still returned403 agreement-required after the user acceptance was verified.
