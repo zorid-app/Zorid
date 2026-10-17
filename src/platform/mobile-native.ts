@@ -13,6 +13,7 @@ export interface NativeVaultPlugin {
   refresh(): Promise<{ reconciliation: DesktopReconciliation }>;
   request(input: { header: string; body: string }): Promise<{ header: string; body: string }>;
   editorState(state: NativeEditorState): Promise<void>;
+  addListener(event: 'editorStateRequest', handler: (event: { reason: 'foreground' }) => void): Promise<{ remove(): Promise<void> }>;
   addListener(event: 'editorAction', handler: (event: { action: NativeEditorAction }) => void): Promise<{ remove(): Promise<void> }>;
   addListener(event: 'lifecycleRequest', handler: (event: { id: string; reason: MobileLifecycleReason }) => void): Promise<{ remove(): Promise<void> }>;
   lifecycleAck(input: { id: string; ok: boolean }): Promise<void>;
@@ -25,7 +26,7 @@ export type NativeEditorAction = 'insertLink' | 'insertTable' | 'insertCodeBlock
 export interface NativeEditorState { focused: boolean; editable: boolean; canUndo: boolean; canRedo: boolean }
 export interface NativeEditorBridge {
   setState(state: NativeEditorState): Promise<void>;
-  subscribe(handler: (action: NativeEditorAction) => void | Promise<void>): () => void;
+  subscribe(handler: (action: NativeEditorAction) => void | Promise<void>, onStateRequest?: () => void | Promise<void>): () => void;
 }
 const editorActions = new Set<string>(['insertLink','insertTable','insertCodeBlock','insertHorizontalRule','bold','italic','strikethrough','inlineCode','undo','redo','dismissKeyboard']);
 const disabledEditorState: Readonly<NativeEditorState> = Object.freeze({ focused: false, editable: false, canUndo: false, canRedo: false });
@@ -119,6 +120,8 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     alive: boolean; ready: Promise<void>; handle?: { remove(): Promise<void> };
     latest: NativeEditorState; accepted: NativeEditorState; version: number;
     flushing?: Promise<void>; callbacks: Set<Promise<void>>;
+    requestReady?: Promise<void>; requestHandle?: { remove(): Promise<void> };
+    requestPending: boolean; querying?: Promise<void>; onStateRequest?: () => void | Promise<void>;
   };
   let editorSubscription: EditorSubscription | undefined, editorLifecyclePaused = false;
   const editorRetirements = new Set<Promise<void>>();
@@ -129,6 +132,21 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   function editorActionAllowed(sub: EditorSubscription, action: NativeEditorAction) {
     return editorAlive(sub) && !lifecycleTask && sub.latest.focused && sub.latest.editable && sub.accepted.focused && sub.accepted.editable
       && (action !== 'undo' || sub.latest.canUndo && sub.accepted.canUndo) && (action !== 'redo' || sub.latest.canRedo && sub.accepted.canRedo);
+  }
+  function dispatchStateRequest(sub: EditorSubscription): void {
+    if (!editorAlive(sub) || lifecycleTask || !sub.requestPending || sub.querying) return;
+    // Query outside editorTail: the workspace callback may await setState.
+    const query = Promise.resolve().then(async () => {
+      await sub.ready;
+      if (!editorAlive(sub) || lifecycleTask || !sub.requestPending) return;
+      sub.requestPending = false;
+      await sub.onStateRequest?.(); // Only fresh setState may resume background publication.
+    }).then(() => {},() => {}).finally(() => {
+      sub.querying = undefined;
+      if (sub.requestPending && editorAlive(sub) && !lifecycleTask) dispatchStateRequest(sub);
+    });
+    sub.querying = query; sub.callbacks.add(query);
+    void query.finally(() => { sub.callbacks.delete(query); });
   }
   function publishEditorState(sub: EditorSubscription): Promise<void> {
     if (sub.flushing) return sub.flushing;
@@ -150,7 +168,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   }
   function retireEditor(sub: EditorSubscription): void {
     if (!sub.alive) return;
-    sub.alive = false; sub.latest = disabledEditorState;
+    sub.alive = false; sub.requestPending = false; sub.latest = disabledEditorState;
     if (editorSubscription === sub) editorSubscription = undefined;
     // Disable promptly. Callback draining stays outside the state queue so a
     // callback awaiting its last state update cannot deadlock teardown.
@@ -160,7 +178,9 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     });
     const retired = (async () => {
       await disable;
+      await sub.requestReady;
       await Promise.allSettled([...sub.callbacks]);
+      if (sub.requestHandle) { try { await sub.requestHandle.remove(); } catch { /* Optional listener cleanup is best effort. */ } }
       if (sub.handle) { try { await sub.handle.remove(); } catch { /* Best effort. */ } }
     })();
     editorRetirements.add(retired);
@@ -177,10 +197,10 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       sub.latest = Object.freeze({ focused: input.focused, editable: input.editable, canUndo: input.canUndo, canRedo: input.canRedo }); sub.version++;
       await publishEditorState(sub);
     },
-    subscribe(handler) {
+    subscribe(handler,onStateRequest) {
       active(); if (releasePromise) throw fail('storage_closed');
       if (editorSubscription) throw fail('editor_handler_registered');
-      const sub: EditorSubscription = { alive: true, ready: Promise.resolve(), latest: disabledEditorState, accepted: disabledEditorState, version: 0, callbacks: new Set() };
+      const sub: EditorSubscription = { alive: true, ready: Promise.resolve(), latest: disabledEditorState, accepted: disabledEditorState, version: 0, callbacks: new Set(), requestPending: false, onStateRequest };
       editorSubscription = sub;
       sub.ready = editorQueue(async () => {
         if (!editorAlive(sub)) return;
@@ -196,6 +216,16 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
             sub.callbacks.add(settled); void settled.finally(() => { sub.callbacks.delete(settled); });
           });
         } catch { /* Missing/failed optional native presentation capability stays disabled. */ }
+      });
+      if (onStateRequest) sub.requestReady = Promise.resolve().then(async () => {
+        await sub.ready;
+        if (!editorAlive(sub)) return;
+        try {
+          sub.requestHandle = await bridge.addListener('editorStateRequest',event => {
+            if (!event || Array.isArray(event) || !sameKeys(event,['reason']) || event.reason !== 'foreground' || !editorAlive(sub)) return;
+            sub.requestPending = true; dispatchStateRequest(sub);
+          });
+        } catch { /* Optional foreground refresh must not disable working actions. */ }
       });
       return () => { retireEditor(sub); };
     },
@@ -257,6 +287,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
           editorLifecyclePaused = false; sub.version++;
           void publishEditorState(sub);
         }
+        if (sub && editorAlive(sub)) dispatchStateRequest(sub);
       }
       if (closed) void stopLifecycle().catch(() => {});
     });

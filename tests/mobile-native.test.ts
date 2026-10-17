@@ -20,6 +20,7 @@ function fixture() {
   const state = () => ({ id:entryIdentity, path, kind:'file', revision, deleted:false });
   const presentation = () => ({id:entryIdentity,ctime_ms:1,mtime_ms:2,size_bytes:encoder.encode(content).length});
   const acks: {id:string;ok:boolean}[] = [], lifecycleOrder: string[] = [], expired = new Set<string>();
+  const stateRequestCallbacks=new Set<(event:any)=>void>();let requestInstalls=0,requestRemovals=0,requestInstallHook:(()=>Promise<void>)|undefined;
   const actionCallbacks=new Set<(event:any)=>void>(),editorStates:NativeEditorState[]=[];
   let actionInstalls=0,actionRemovals=0,actionInstallHook:(()=>Promise<void>)|undefined,editorStateHook:((state:NativeEditorState)=>Promise<void>)|undefined;
   const lifecycleCallbacks=new Set<(event:{id:string;reason:MobileLifecycleReason})=>void>();let removals = 0;
@@ -29,7 +30,7 @@ function fixture() {
   let refreshHook: (()=>Promise<void>) | undefined;
   let initialPath: any = undefined, initialEntryId: any = undefined, createNoteOnOpen: any = undefined, openedHook: ((path:string)=>Promise<void>) | undefined; const opened: string[] = [],openedRefs:{path:string;entryId:string}[]=[];
   const plugin: NativeVaultPlugin & {close():Promise<void>} = {
-    async addListener(event:'lifecycleRequest'|'editorAction',handler:(event:any)=>void) { if(event==='editorAction'){actionInstalls++;if(actionInstallHook)await actionInstallHook();actionCallbacks.add(handler);return{remove:async()=>{actionRemovals++;actionCallbacks.delete(handler);}};} assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
+    async addListener(event:'lifecycleRequest'|'editorAction'|'editorStateRequest',handler:(event:any)=>void) { if(event==='editorStateRequest'){requestInstalls++;if(requestInstallHook)await requestInstallHook();stateRequestCallbacks.add(handler);return{remove:async()=>{requestRemovals++;stateRequestCallbacks.delete(handler);}};} if(event==='editorAction'){actionInstalls++;if(actionInstallHook)await actionInstallHook();actionCallbacks.add(handler);return{remove:async()=>{actionRemovals++;actionCallbacks.delete(handler);}};} assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
     async editorState(state) {editorStates.push({...state});if(editorStateHook)await editorStateHook(state);},
     async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
     context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialEntryId===undefined?{}:{initialEntryId}),...(createNoteOnOpen===undefined?{}:{createNoteOnOpen}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
@@ -104,7 +105,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, editorStates, get actionInstalls(){return actionInstalls;},get actionRemovals(){return actionRemovals;}, onActionInstall(hook:()=>Promise<void>){actionInstallHook=hook;}, onEditorState(hook:(state:NativeEditorState)=>Promise<void>){editorStateHook=hook;}, action(event:any){for(const callback of actionCallbacks)callback(event);}, opened, openedRefs, newNote(value:any){createNoteOnOpen=value;}, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, requests, heads, receipts, editorStates, get requestInstalls(){return requestInstalls;},get requestRemovals(){return requestRemovals;}, onRequestInstall(hook:()=>Promise<void>){requestInstallHook=hook;}, stateRequest(event:any={reason:'foreground'}){for(const callback of stateRequestCallbacks)callback(event);}, get actionInstalls(){return actionInstalls;},get actionRemovals(){return actionRemovals;}, onActionInstall(hook:()=>Promise<void>){actionInstallHook=hook;}, onEditorState(hook:(state:NativeEditorState)=>Promise<void>){editorStateHook=hook;}, action(event:any){for(const callback of actionCallbacks)callback(event);}, opened, openedRefs, newNote(value:any){createNoteOnOpen=value;}, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -816,4 +817,61 @@ test('successful background does not replay handler restoration until a fresh fo
   v.mobileLifecycle.subscribe(async(_reason,ack)=>{try{await ack();}finally{await v.nativeEditor.setState(enabledEditor);done.resolve();}});
   appActive=false;f.emit('background');await done.promise;await until(()=>applied.focused===false);await new Promise<void>(r=>setImmediate(r));
   assert.equal(f.editorStates.slice(before).some(s=>s.focused),false);appActive=true;await v.nativeEditor.setState(enabledEditor);assert.deepEqual(applied,enabledEditor);await v.release!();
+});
+
+test('strict foreground state requests coalesce and query current state without editing',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);let queries=0;
+  const actual={focused:false,editable:false,canUndo:true,canRedo:false};
+  v.nativeEditor.subscribe(()=>assert.fail('state query is not an editor action'),async()=>{queries++;await v.nativeEditor.setState(actual);});
+  await until(()=>f.requestInstalls===1);for(const event of [null,[],{},{reason:'background'},{reason:'foreground',extra:true}])f.stateRequest(event);
+  await new Promise<void>(r=>setImmediate(r));assert.equal(queries,0);
+  f.stateRequest();f.stateRequest();await until(()=>f.editorStates.length===1);assert.equal(queries,1);assert.deepEqual(f.editorStates.at(-1),actual);
+  assert.equal(f.requests.some(r=>['file_command','prepare_intent','checkpoint_cas'].includes(r.command.method)),false);await v.release!();assert.equal(f.requestRemovals,1);
+});
+
+test('foreground query received during background lifecycle waits for ACK and workspace restoration',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),restored=deferred();let queries=0,workspaceClosing=true;
+  v.nativeEditor.subscribe(()=>{},async()=>{assert.equal(workspaceClosing,false);queries++;await v.nativeEditor.setState(enabledEditor);});await v.nativeEditor.setState(enabledEditor);await until(()=>f.requestInstalls===1);
+  f.onAck(async input=>{if(input.ok)throw Object.assign(new Error('background canceled by foreground'),{code:'stale_lifecycle'});});
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{try{await gate.promise;await ack();}finally{await v.nativeEditor.setState(disabledEditor);workspaceClosing=false;restored.resolve();}});
+  f.emit('background');f.stateRequest();f.stateRequest();await new Promise<void>(r=>setImmediate(r));assert.equal(queries,0);
+  gate.resolve();await restored.promise;await until(()=>queries===1&&f.editorStates.at(-1)?.focused===true);assert.deepEqual(f.acks.map(a=>a.ok),[true,false]);await v.release!();
+});
+
+test('foreground request after successful background refreshes current state through existing setter',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),done=deferred();let queries=0;
+  v.nativeEditor.subscribe(()=>{},async()=>{queries++;await v.nativeEditor.setState(enabledEditor);});await v.nativeEditor.setState(enabledEditor);await until(()=>f.requestInstalls===1);
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('background');await done.promise;await new Promise<void>(r=>setImmediate(r));await until(()=>f.editorStates.at(-1)?.focused===false);
+  f.stateRequest();await until(()=>queries===1&&f.editorStates.at(-1)?.focused===true);await v.release!();
+});
+
+for(const mode of ['release','switch','unsubscribe','new-generation'] as const)test(`pending foreground query drops on ${mode}`,async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),done=deferred();let oldQueries=0,newQueries=0;
+  const stop=v.nativeEditor.subscribe(()=>{},()=>{oldQueries++;});await v.nativeEditor.setState(enabledEditor);await until(()=>f.requestInstalls===1);
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{await gate.promise;if(mode==='switch')await ack();done.resolve();});
+  f.emit(mode==='switch'?'switchVault':'background');f.stateRequest();let release:Promise<void>|undefined;
+  if(mode==='release')release=v.release!();else if(mode!=='switch'){stop();if(mode==='new-generation')v.nativeEditor.subscribe(()=>{},()=>{newQueries++;});}
+  gate.resolve();await done.promise;await new Promise<void>(r=>setImmediate(r));if(release)await release;
+  assert.equal(oldQueries,0);assert.equal(newQueries,0);
+  if(mode==='new-generation'){await until(()=>f.requestInstalls===2);f.stateRequest();await until(()=>newQueries===1);}
+  await v.release!();assert.equal(f.requestRemovals,f.requestInstalls);assert.equal(f.closes,0);
+});
+
+test('missing optional foreground listener leaves working actions and durable saves available',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);let actions=0,queries=0;f.onRequestInstall(async()=>{throw new Error('unsupported optional event');});
+  v.nativeEditor.subscribe(()=>{actions++;},()=>{queries++;});await v.nativeEditor.setState(enabledEditor);await until(()=>f.requestInstalls===1);
+  f.action({action:'bold'});await until(()=>actions===1);f.stateRequest();await v.adapter.write('Note.md','optional event absent');assert.equal(f.content,'optional event absent');assert.equal(queries,0);await v.release!();assert.equal(f.actionRemovals,1);
+});
+
+test('state-query callback failures do not poison later queries, actions, or saves',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);let queries=0,actions=0;
+  v.nativeEditor.subscribe(()=>{actions++;},async()=>{queries++;if(queries===1)throw new Error('workspace query rejected');await v.nativeEditor.setState(enabledEditor);});await until(()=>f.requestInstalls===1);
+  f.stateRequest();await until(()=>queries===1);await new Promise<void>(r=>setImmediate(r));f.stateRequest();await until(()=>queries===2&&f.editorStates.at(-1)?.focused===true);
+  f.action({action:'bold'});await until(()=>actions===1);await v.adapter.write('Note.md','query rejection survived');await v.release!();
+});
+
+test('unsubscribe drains an in-flight state-query callback before removing both native listeners',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),entered=deferred();
+  const stop=v.nativeEditor.subscribe(()=>{},async()=>{entered.resolve();await gate.promise;await v.nativeEditor.setState(enabledEditor);});await until(()=>f.requestInstalls===1);f.stateRequest();await entered.promise;stop();
+  await new Promise<void>(r=>setImmediate(r));assert.equal(f.requestRemovals,0);assert.equal(f.actionRemovals,0);gate.resolve();await until(()=>f.requestRemovals===1&&f.actionRemovals===1);assert.equal(f.editorStates.some(s=>s.focused),false);await v.release!();
 });
