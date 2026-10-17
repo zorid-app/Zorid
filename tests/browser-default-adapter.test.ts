@@ -74,3 +74,19 @@ test('mounted binary capability snapshots small upsert bytes, deduplicates calls
   const readsBefore=reads;await adapter.createBinary!('explicit.bin',Uint8Array.of(2));assert.equal(reads,readsBefore);assert.equal(calls.filter(call=>call.kind==='begin').at(-1)!.input.target.kind,'create');
   metadata={entry:{id:'close-entry',revision:'close-revision',kind:'file'}};failClose=true;const beforeClose=calls.length,beforeReads=reads;await assert.rejects(adapter.writeBinary('close.bin',Uint8Array.of(3)),{code:'outcome_unknown'});metadata=null;await adapter.writeBinary('close.bin',Uint8Array.of(3));const closing=calls.slice(beforeClose);assert.equal(reads,beforeReads+1);assert.equal(closing.filter(call=>call.kind==='openRead').length,1);assert.deepEqual(closing.filter(call=>call.kind==='closeRead').map(call=>call.input.readId),['pin','pin']);assert.equal(closing.find(call=>call.kind==='begin')!.input.target.entryId,'close-entry');
 });
+
+
+test('owning terminal rejection settles retained binary bytes and permits a fresh operation after path resolution',async()=>{
+  let occupied=true;const begins:any[]=[],stages=new Map<string,any>();
+  const streams={limits:{maxFileBytes:'67108864',maxChunkBytes:131072,smallReadBytes:'16'},
+    async begin(input:any){begins.push(structuredClone(input));const ref={localStoreId:'store',clientId:'client',operationId:input.operationId,stageId:'stage-'+input.operationId};stages.set(input.operationId,{ref,phase:'receiving',acceptedLength:'0',nextSequence:0});return ref;},
+    async append(ref:any,input:any){Object.assign(stages.get(ref.operationId),{acceptedLength:String(input.bytes.length),nextSequence:1});return {sequence:input.sequence,offset:input.offset,bytes:input.bytes.length,digest:'a'.repeat(64),acceptedLength:String(input.bytes.length)};},
+    async seal(ref:any,input:any){const finalized={length:input.finalLength,sha256:'a'.repeat(64)};Object.assign(stages.get(ref.operationId),{phase:'sealed',finalized});return finalized;},
+    async commit(ref:any){const row=stages.get(ref.operationId);if(occupied){row.phase='rejected';row.outcome={status:'rejected',error:{code:'revision_conflict',message:'Destination exists',source:'rust'}};throw new BrowserVaultError('revision_conflict','Destination exists',undefined,'rust');}row.phase='committed';row.outcome={status:'committed',receipt:'receipt'};return 'receipt';},
+    async query(ref:any){return structuredClone(stages.get(ref.operationId));},
+  };
+  const context={durableWrites:{},binaryStreams:streams,recoverCommands:async()=>false,fileCommand:async()=>{throw new Error('legacy binary command forbidden');}} as unknown as BrowserClientContext;
+  const adapter=defaultBrowserAdapter({} as BrowserCoreRuntime,context);
+  await assert.rejects(adapter.createBinary!('occupied.bin',Uint8Array.of(1)),{code:'revision_conflict',message:'Destination exists',source:'rust'});
+  occupied=false;await adapter.createBinary!('occupied.bin',Uint8Array.of(2));assert.equal(begins.length,2);assert.notEqual(begins[0].operationId,begins[1].operationId);assert.notEqual(begins[0].target.entryId,begins[1].target.entryId);
+});

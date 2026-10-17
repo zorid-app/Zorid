@@ -80,7 +80,18 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
         try{const completed=await writeBinarySource(streams!,{operationId:owned.operationId,target:owned.target!},source);owned.ref=completed.ref;}
         catch(error){if(error&&typeof error==='object'&&'binaryStage'in error)owned.ref=structuredClone(error.binaryStage) as BinaryStageRef;throw error;}
       })();
-      const tracked=result.then(()=>{if(binaryPending.get(path)===owned)binaryPending.delete(path);},error=>{
+      const tracked=result.then(()=>{if(binaryPending.get(path)===owned)binaryPending.delete(path);},async error=>{
+        // Only the owning retained stage's terminal evidence can release a
+        // binary request. Transport errors and semantic-looking error codes
+        // alone never permit a replacement operation.
+        if(owned.ref){
+          let rejected:import('../core/binary-streams.ts').BinaryOperationOutcome|undefined;
+          try{const observed=await streams!.query(owned.ref);if(observed.phase==='rejected'&&observed.outcome?.status==='rejected')rejected=observed.outcome;}catch{/* Preserve the original uncertainty when outcome lookup fails. */}
+          if(rejected?.status==='rejected'){
+            if(binaryPending.get(path)===owned)binaryPending.delete(path);
+            const terminal=rejected.error;throw new BrowserVaultError(terminal.code,terminal.message,terminal.details,terminal.source);
+          }
+        }
         // Only metadata-only failures may release the captured destination. Any
         // pin/stage uncertainty retains its original request for an exact retry.
         if(!owned.target&&!owned.identity&&!owned.pin&&!owned.ref&&binaryPending.get(path)===owned)binaryPending.delete(path);
