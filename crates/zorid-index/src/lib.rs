@@ -2,7 +2,10 @@
 //! Pure publication checks are not durable commits. Hosts must recheck heads and
 //! publish rows/head atomically in the same source/index storage transaction.
 mod generation;
+mod import;
 mod literal;
+mod persisted;
+mod relationships;
 mod resolver;
 mod restore;
 mod snapshot;
@@ -25,3 +28,12 @@ pub use literal::{
 
 /// Shared extraction input for native adapters without a second document dependency.
 pub use zorid_document::MetadataRequest;
+
+pub use relationships::{
+    RelationshipDirection, RelationshipPage, RelationshipToken, ResolutionSnapshot, ResolutionView,
+    ResolvedEdge,
+};
+
+pub use import::{GenerationSource, MAX_IMPORT_ENTRIES, MAX_IMPORT_SOURCE_BYTES};
+
+pub use persisted::PersistedIndexRecord;

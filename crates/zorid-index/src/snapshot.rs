@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use zorid_core::{EntryId, EntryKind, EntryState, OperationId};
 
@@ -32,7 +33,8 @@ impl std::fmt::Display for IndexError {
 impl std::error::Error for IndexError {}
 
 /// Local authority sequence; never a remote cursor or content revision.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct SourceWatermark(String);
 impl SourceWatermark {
     pub fn new(value: impl Into<String>) -> Result<Self, IndexError> {
@@ -46,7 +48,8 @@ impl SourceWatermark {
         &self.0
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceSnapshotId {
     local_store_id: OperationId,
     watermark: SourceWatermark,
@@ -66,7 +69,8 @@ impl SourceSnapshotId {
     }
 }
 /// Opaque case-sensitive semantic tags. Equality determines compatibility.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "VersionsWire", into = "VersionsWire")]
 pub struct SemanticVersions {
     schema: u32,
     extraction: String,
@@ -113,7 +117,8 @@ impl SemanticVersions {
     }
 }
 /// Immutable derived row-set identity; serialize generation as decimal at JS boundaries.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "IndexSnapshotWire", into = "IndexSnapshotWire")]
 pub struct IndexSnapshotId {
     local_store_id: OperationId,
     generation_epoch: OperationId,
@@ -259,5 +264,76 @@ impl PublicationFence {
             return Err(IndexError::StaleIndex);
         }
         Ok(())
+    }
+}
+
+impl TryFrom<String> for SourceWatermark {
+    type Error = IndexError;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+impl From<SourceWatermark> for String {
+    fn from(value: SourceWatermark) -> Self {
+        value.0
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VersionsWire {
+    schema: u32,
+    extraction: String,
+    resolver: String,
+    query: String,
+}
+impl TryFrom<VersionsWire> for SemanticVersions {
+    type Error = IndexError;
+    fn try_from(value: VersionsWire) -> Result<Self, Self::Error> {
+        Self::new(value.schema, value.extraction, value.resolver, value.query)
+    }
+}
+impl From<SemanticVersions> for VersionsWire {
+    fn from(value: SemanticVersions) -> Self {
+        Self {
+            schema: value.schema,
+            extraction: value.extraction,
+            resolver: value.resolver,
+            query: value.query,
+        }
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct IndexSnapshotWire {
+    local_store_id: OperationId,
+    generation_epoch: OperationId,
+    generation: String,
+    versions: SemanticVersions,
+}
+impl TryFrom<IndexSnapshotWire> for IndexSnapshotId {
+    type Error = IndexError;
+    fn try_from(value: IndexSnapshotWire) -> Result<Self, Self::Error> {
+        let generation = value
+            .generation
+            .parse::<u64>()
+            .ok()
+            .filter(|n| n.to_string() == value.generation)
+            .ok_or(IndexError::InvalidGeneration)?;
+        Self::new(
+            value.local_store_id,
+            value.generation_epoch,
+            generation,
+            value.versions,
+        )
+    }
+}
+impl From<IndexSnapshotId> for IndexSnapshotWire {
+    fn from(value: IndexSnapshotId) -> Self {
+        Self {
+            local_store_id: value.local_store_id,
+            generation_epoch: value.generation_epoch,
+            generation: value.generation.to_string(),
+            versions: value.versions,
+        }
     }
 }

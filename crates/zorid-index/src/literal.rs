@@ -1,4 +1,5 @@
 use crate::{Generation, IndexError, IndexSnapshotId, MAX_PUMP_BYTES, MAX_PUMP_DOCUMENTS};
+use std::sync::Arc;
 use zorid_core::{EntryKind, EntryState};
 use zorid_document::{SourceRange, MAX_SOURCE_BYTES};
 
@@ -76,8 +77,21 @@ pub struct LiteralPage {
 /// Bounded one-row-at-a-time evaluator. An async IDB host awaits each retained
 /// generation row outside this pure engine and supplies its exact bytes. No
 /// current-source read, whole-vault body collection or network dependency exists.
+enum GenerationHandle<'a> {
+    Borrowed(&'a Generation),
+    Shared(Arc<Generation>),
+}
+impl std::ops::Deref for GenerationHandle<'_> {
+    type Target = Generation;
+    fn deref(&self) -> &Generation {
+        match self {
+            Self::Borrowed(generation) => generation,
+            Self::Shared(generation) => generation,
+        }
+    }
+}
 pub struct LiteralPageBuilder<'a> {
-    generation: &'a Generation,
+    generation: GenerationHandle<'a>,
     query: LiteralQuery,
     row: usize,
     start: usize,
@@ -93,6 +107,24 @@ pub struct LiteralPageBuilder<'a> {
 impl<'a> LiteralPageBuilder<'a> {
     pub fn new(
         generation: &'a Generation,
+        query: LiteralQuery,
+        token: Option<&LiteralToken>,
+        limit: usize,
+    ) -> Result<Self, IndexError> {
+        Self::from_handle(GenerationHandle::Borrowed(generation), query, token, limit)
+    }
+    /// Safe owned async-host state. Arc pins an immutable generation across
+    /// awaited projection reads; no self-referential borrow or body replay.
+    pub fn new_shared(
+        generation: Arc<Generation>,
+        query: LiteralQuery,
+        token: Option<&LiteralToken>,
+        limit: usize,
+    ) -> Result<Self, IndexError> {
+        Self::from_handle(GenerationHandle::Shared(generation), query, token, limit)
+    }
+    fn from_handle(
+        generation: GenerationHandle<'a>,
         query: LiteralQuery,
         token: Option<&LiteralToken>,
         limit: usize,

@@ -339,3 +339,173 @@ fn forged_cache_task_status_cannot_be_an_astral_scalar() {
         Err(IndexError::InvalidRecord)
     );
 }
+
+#[test]
+fn coherent_relationship_pages_keep_exact_witnesses_and_expire_old_tokens() {
+    let documents = [
+        (
+            "A.md",
+            "[[B]] ![[B]] [[Missing]] [web](https://example.org)",
+            true,
+        ),
+        ("B.md", "target", true),
+    ];
+    let generation = build("epoch-a", &documents);
+    let graph = ResolutionView::new(&generation)
+        .snapshot(10, MAX_PUMP_BYTES)
+        .unwrap();
+    assert_eq!(graph.snapshot_id(), generation.id());
+    assert_eq!(graph.source(), generation.manifest().source());
+    assert!(graph.complete());
+    assert_eq!(graph.edges().len(), 4);
+    let a = EntryId::new("entry-0").unwrap();
+    let b = EntryId::new("entry-1").unwrap();
+    assert_eq!(graph.resolve(&a, "B").unwrap()[0].id, b);
+    assert_eq!(graph.edges()[0].source().id, a);
+    assert_eq!(graph.edges()[0].target().unwrap().id, b);
+    assert_eq!(
+        graph.edges()[0].target().unwrap().revision.as_str(),
+        "content-1"
+    );
+    assert!(graph.edges()[2].target().is_none());
+    assert!(graph.edges()[3].target().is_none());
+    let first = graph
+        .query(&b, RelationshipDirection::Incoming, None, 1)
+        .unwrap();
+    assert_eq!(first.edges.len(), 1);
+    assert!(!first.complete);
+    let second = graph
+        .query(&b, RelationshipDirection::Incoming, first.next.as_ref(), 10)
+        .unwrap();
+    assert_eq!(second.edges.len(), 1);
+    assert!(second.complete);
+    assert!(second.edges[0].link().embed);
+    let rebuilt = build("epoch-b", &documents);
+    let other = ResolutionView::new(&rebuilt)
+        .snapshot(10, MAX_PUMP_BYTES)
+        .unwrap();
+    assert!(matches!(
+        other.query(&b, RelationshipDirection::Incoming, first.next.as_ref(), 10),
+        Err(IndexError::SnapshotExpired)
+    ));
+    assert!(matches!(
+        graph.query(&a, RelationshipDirection::Outgoing, first.next.as_ref(), 10),
+        Err(IndexError::QueryMismatch)
+    ));
+    assert!(matches!(
+        ResolutionView::new(&generation).snapshot(1, MAX_PUMP_BYTES),
+        Err(IndexError::GenerationLimit)
+    ));
+    let encoded = serde_json::to_vec(&graph).unwrap();
+    assert!(encoded.len() < MAX_PUMP_BYTES);
+    assert!(serde_json::from_slice::<serde_json::Value>(&encoded)
+        .unwrap()
+        .get("manifest")
+        .is_none());
+}
+
+#[test]
+fn shared_literal_state_safely_pins_owned_generation() {
+    let generation = std::sync::Arc::new(build("epoch-a", &[("A.md", "needle", true)]));
+    let mut page: LiteralPageBuilder<'static> = LiteralPageBuilder::new_shared(
+        generation.clone(),
+        LiteralQuery::new("needle").unwrap(),
+        None,
+        10,
+    )
+    .unwrap();
+    drop(generation);
+    let request = page.next_read().unwrap();
+    page.accept(&request, b"needle").unwrap();
+    let result = page.finish().unwrap();
+    assert!(result.complete);
+    assert_eq!(result.hits.len(), 1);
+}
+
+#[test]
+fn bounded_generation_factory_and_shared_record_transport_preserve_validation() {
+    let original = build(
+        "epoch-a",
+        &[("A.md", "[[B]]", true), ("B.md", "target", true)],
+    );
+    let inputs = vec![
+        GenerationSource::Text {
+            request: MetadataRequest {
+                entry_id: EntryId::new("entry-0").unwrap(),
+                content_revision: Revision::new("content-1").unwrap(),
+                source: "[[B]]".into(),
+            },
+            markdown: true,
+        },
+        GenerationSource::Text {
+            request: MetadataRequest {
+                entry_id: EntryId::new("entry-1").unwrap(),
+                content_revision: Revision::new("content-1").unwrap(),
+                source: "target".into(),
+            },
+            markdown: true,
+        },
+    ];
+    let factory = |sources| {
+        Generation::from_sources(
+            source(),
+            original.id().clone(),
+            original.manifest().entries().to_vec(),
+            sources,
+        )
+    };
+    let imported = factory(inputs.clone()).unwrap();
+    assert_eq!(
+        imported.records().collect::<Vec<_>>(),
+        original.records().collect::<Vec<_>>()
+    );
+    assert!(matches!(
+        factory(vec![inputs[0].clone()]),
+        Err(IndexError::MissingSource)
+    ));
+    assert!(matches!(
+        factory(vec![inputs[0].clone(), inputs[0].clone()]),
+        Err(IndexError::InvalidRecord)
+    ));
+    for row in imported.records() {
+        let encoded = serde_json::to_vec(&PersistedIndexRecord::from(row)).unwrap();
+        let dto: PersistedIndexRecord = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(dto.restore(row.witness().clone()).unwrap(), *row);
+    }
+}
+
+#[test]
+fn restored_cache_rejects_impossible_ranges_task_flags_and_expanded_strings() {
+    let text = "---\ntitle: valid\n---\n- [x] complete\n[[Target]] #tag";
+    let generation = build("epoch-a", &[("A.md", text, true)]);
+    let row = generation.records().next().unwrap();
+    let valid = row.metadata().unwrap();
+    let check = |metadata| {
+        IndexRecord::from_persisted(
+            row.witness().clone(),
+            Some(metadata),
+            row.text_digest().copied(),
+            row.text_bytes(),
+            None,
+        )
+    };
+    assert!(check(valid.clone()).is_ok());
+    let mut bad = valid.clone();
+    bad.links[0].target_range.bytes = [1, 2];
+    bad.links[0].target_range.utf16 = [1, 1];
+    assert!(matches!(check(bad), Err(IndexError::InvalidRecord)));
+    let mut bad = valid.clone();
+    bad.tasks[0].checked = false;
+    assert!(matches!(check(bad), Err(IndexError::InvalidRecord)));
+    let mut bad = valid.clone();
+    bad.tasks[0].status = "\n".into();
+    assert!(matches!(check(bad), Err(IndexError::InvalidRecord)));
+    let mut bad = valid.clone();
+    bad.properties[0].value = zorid_document::PropertyValue::String(
+        "x".repeat(zorid_document::MAX_EXPANDED_YAML_BYTES + 1),
+    );
+    assert!(matches!(check(bad), Err(IndexError::InvalidRecord)));
+    let mut bad = valid.clone();
+    bad.frontmatter.state = zorid_document::FrontmatterState::Absent;
+    assert!(matches!(check(bad), Err(IndexError::InvalidRecord)));
+}

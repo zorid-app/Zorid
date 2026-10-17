@@ -66,3 +66,18 @@ NUL-bearing files remain excluded as Binary, matching existing CLI semantics.
 The page reserve covers worst-case six-byte JSON escaping of a4096-byte query
 plus bounded snapshot/version identity. A control-query near-full page regression
 and NUL/validated-cache restoration fixtures cover the reviewed edge cases.
+
+Shared host seams now include canonical validated serde for source/index IDs,
+`PersistedIndexRecord::of(row).restore(manifest.witness(id)?)`, safe Arc-owned
+literal page state, and a Serialize-only relationship snapshot created from an
+actual immutable generation. Its bounded occurrence query pins full snapshot,
+entry and direction; its private namespace supplies the same resolver to Base
+functions. Serialized graph reports are never deserialized as authority.
+
+`Generation::from_sources` is a convenience fixture/small import factory capped
+at 32 inventory entries and 16MiB aggregate source, requiring one typed source or
+explicit exclusion per file. Hosts must bound transport bytes before decode.
+Production hosts retain incremental pumps; this is not a whole-vault import or
+publication API. Cache restore checks recoverable structural/range and expanded
+string/key budgets, but cannot authenticate source facts or reconstruct original
+YAML alias/other scalar spelling budgets without source provenance.

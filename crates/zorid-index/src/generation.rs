@@ -18,7 +18,8 @@ pub fn document_extraction_version() -> String {
 pub const LITERAL_QUERY_VERSION: &str = "literal-lines-exact-v1";
 /// Initial memory ceiling for derived facts only, never source bodies.
 pub const MAX_GENERATION_METADATA_BYTES: usize = 64 * 1024 * 1024;
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Exclusion {
     Binary,
     Unreadable,
@@ -253,6 +254,9 @@ impl GenerationBuilder {
     }
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+    pub fn record(&self, id: &EntryId) -> Option<&IndexRecord> {
+        self.records.get(id)
     }
     pub fn prepared_records(&self) -> usize {
         self.records.len()

@@ -176,3 +176,46 @@ fn reset_generation_counter_uses_fresh_epoch_and_cannot_match_old_identity() {
         Err(IndexError::StaleIndex)
     );
 }
+
+#[test]
+fn snapshot_json_is_canonical_and_revalidates_private_identities() {
+    let id = IndexSnapshotId::new(
+        OperationId::new("store-a").unwrap(),
+        OperationId::new("epoch-a").unwrap(),
+        9007199254740993,
+        versions("parser-v1"),
+    )
+    .unwrap();
+    let encoded = serde_json::to_value(&id).unwrap();
+    assert_eq!(encoded["generation"], "9007199254740993");
+    assert_eq!(encoded["generationEpoch"], "epoch-a");
+    assert_eq!(
+        serde_json::from_value::<IndexSnapshotId>(encoded.clone()).unwrap(),
+        id
+    );
+    for value in [
+        serde_json::json!("01"),
+        serde_json::json!("0"),
+        serde_json::json!("18446744073709551616"),
+        serde_json::json!(1),
+    ] {
+        let mut wrong = encoded.clone();
+        wrong["generation"] = value;
+        assert!(serde_json::from_value::<IndexSnapshotId>(wrong).is_err());
+    }
+    let mut wrong = encoded.clone();
+    wrong["unknown"] = true;
+    assert!(serde_json::from_value::<IndexSnapshotId>(wrong).is_err());
+    let mut wrong = encoded;
+    wrong["versions"]["schema"] = 0.into();
+    assert!(serde_json::from_value::<IndexSnapshotId>(wrong).is_err());
+    let source = source("store-a", "9007199254740993");
+    assert_eq!(
+        serde_json::from_str::<SourceSnapshotId>(&serde_json::to_string(&source).unwrap()).unwrap(),
+        source
+    );
+    assert!(serde_json::from_str::<SourceSnapshotId>(
+        r#"{"localStoreId":"store-a","watermark":"01"}"#
+    )
+    .is_err());
+}
