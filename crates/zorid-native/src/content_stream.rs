@@ -329,7 +329,7 @@ impl NativeVault {
     /// Existing small-byte fixture oracles still read actual verified content.
     /// Large streaming fixtures must verify bounded chunks instead of this Vec.
     #[cfg(test)]
-    pub(super) fn test_content_bytes(
+    pub(crate) fn test_content_bytes(
         &mut self,
         state: Option<&EntryState>,
         content: &StoredContent,
