@@ -124,6 +124,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   let requestId = 0n, closed = false, closing = false, lease: Wire | undefined;
   const listeners = new Set<(paths?: readonly string[]) => void>();
   let timer: ReturnType<typeof setInterval> | undefined;
+  let watchBaseline: string | undefined, watchGeneration = 0;
   // Presentation calls never enter the authoritative vault request queue.
   let editorTail: Promise<unknown> = Promise.resolve();
   type EditorSubscription = {
@@ -240,7 +241,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { retireEditor(sub); };
     },
   };
-  function stopPolling() { if (timer) { clearInterval(timer); timer = undefined; } listeners.clear(); reconciliationListeners.clear(); }
+  function stopPolling() { watchGeneration++; if (timer) { clearInterval(timer); timer = undefined; } listeners.clear(); reconciliationListeners.clear(); }
   const rejectLifecycle = async (id: string) => { try { await bridge.lifecycleAck({ id, ok: false }); } catch { /* Native may already have expired this request. */ } };
   function onLifecycle(event: { id: string; reason: MobileLifecycleReason }) {
     if (typeof event?.id !== 'string' || !uuid(event.id)) return;
@@ -637,7 +638,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     if (!operations.has(state.operationId)) throw fail('invalid_file_checkpoint');
     return state;
   }
-  async function finishFile(head: Checkpoint, initial: FileState) {
+  async function finishFile(head: Checkpoint, initial: FileState, onCommitted?: () => void) {
     let state = initial;
     if (state.state === 'rejected') throw fail(state.code ?? 'file_operation_rejected');
     if (state.state === 'committed') return;
@@ -658,6 +659,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
         || !['pending','projected'].includes(result.projection?.state)
         || mutation.type === 'move' && change.after.path !== mutation.path
         || mutation.type === 'delete' && change.after.deleted !== true) throw fail('outcome_unknown',true);
+      onCommitted?.();
       state = { ...state, next: state.next + 1, state: state.next + 1 === state.commands.length ? 'committed' : 'requested' };
       head = await persistFile(head,state);
     }
@@ -688,7 +690,13 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   function bodyBinary(data: Uint8Array) { if (!(data instanceof Uint8Array) || data.length > FILE_LIMIT) throw fail('request_limit'); return bytesToBase64(data); }
   const adapter: VaultAdapter = {
     durableWrites, durableNamespace: true, ...(documents ? { documentSemantics: documents.service } : {}),
-    async list() { return (await snapshot()).filter(row => visible(row.state.path)).map(row => ({ path: row.state.path, entryId: row.state.id, revision: row.state.revision, type: row.state.kind, ctime: row.presentation.ctime_ms, mtime: row.presentation.mtime_ms, size: row.presentation.size_bytes } as VaultEntry)); },
+    async list() {
+      const rows = await snapshot();
+      // Seed from the inventory the consumer actually received. Incidental stat
+      // reads must not consume changes that the watch has yet to announce.
+      if (!timer || watchBaseline === undefined) watchBaseline = JSON.stringify(rows);
+      return rows.filter(row => visible(row.state.path)).map(row => ({ path: row.state.path, entryId: row.state.id, revision: row.state.revision, type: row.state.kind, ctime: row.presentation.ctime_ms, mtime: row.presentation.mtime_ms, size: row.presentation.size_bytes } as VaultEntry));
+    },
     async stat(path) { const target = normalizePath(path), row = (await snapshot()).find(row => row.state.path === target); return row ? { path: target, entryId: row.state.id, revision: row.state.revision, type: row.state.kind, ctime: row.presentation.ctime_ms, mtime: row.presentation.mtime_ms, size: row.presentation.size_bytes } : null; },
     // Background metadata/index reads must not consume the initial activation guard.
     read: async path => (await readTextObservation(normalizePath(path))).content,
@@ -712,13 +720,23 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     subscribe(listener) {
       active(); listeners.add(listener);
       if (!timer) {
-        let busy = false, previous: string | undefined;
-        timer = setInterval(() => {
-          if (busy || closing || closed) return; busy = true;
-          void snapshot().then(rows => { const signature = JSON.stringify(rows); if (signature !== previous) { previous = signature; notify(); } }).catch(() => {}).finally(() => { busy = false; });
-        },2000);
+        let busy = false;
+        const generation = ++watchGeneration;
+        const poll = () => {
+          if (busy || closing || closed || releasePromise || generation !== watchGeneration) return; busy = true;
+          void snapshot().then(rows => {
+            if (closing || closed || releasePromise || generation !== watchGeneration) return;
+            const signature = JSON.stringify(rows), changed = watchBaseline !== undefined && signature !== watchBaseline;
+            watchBaseline = signature;
+            if (changed) notify();
+          }).catch(() => {}).finally(() => { busy = false; });
+        };
+        timer = setInterval(poll,2000);
+        // A subscribe before the first list still needs a baseline. If a prior
+        // list exists, this also catches changes between initialization/watch.
+        poll();
       }
-      return () => { listeners.delete(listener); if (!listeners.size && timer) { clearInterval(timer); timer = undefined; } };
+      return () => { listeners.delete(listener); if (!listeners.size && timer) { watchGeneration++; clearInterval(timer); timer = undefined; } };
     },
   };
   return { adapter, ...(documents ? { documentSemantics: documents.service } : {}), mobileLifecycle, nativeEditor, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
@@ -756,16 +774,16 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     },
     label: context.name, id: `mobile-core:${scope.vaultId}:${clientId}`,
     recoverCommands: () => serial(async () => {
-      let cursor: string | undefined;
+      let cursor: string | undefined, changed = false;
       for (let count = 0; count < 100; count++) {
         const page = await checkpoints.list({ limit: 100, cursor });
         for (const item of page.items) {
           if (!item.key.startsWith(prefix)) continue;
           const head = await checkpoints.load(item.key); if (!head?.encodedState) continue;
           const state = decodeFile(head); if (state.state !== 'requested') continue;
-          try { await finishFile(head,state); } catch (error) { if ((error as Wire)?.commitUncertain || !terminal.has((error as Wire)?.code)) throw error; }
+          try { await finishFile(head,state,() => { changed = true; }); } catch (error) { if ((error as Wire)?.commitUncertain || !terminal.has((error as Wire)?.code)) throw error; }
         }
-        if (page.cursor === null) return true; cursor = page.cursor;
+        if (page.cursor === null) return changed; cursor = page.cursor;
       }
       throw fail('file_recovery_limit');
     }),

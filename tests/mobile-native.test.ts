@@ -1029,3 +1029,61 @@ test('successful switch drains documents then forbids queries and skips dead-hos
   f.onDocument(async request=>{if(request.command.op==='metadata'){entered.resolve();await gate.promise;}});const read=pin.metadata('entry');await entered.promise;v.mobileLifecycle.subscribe(async(_reason,ack)=>{await ack();done.resolve();});f.emit('switchVault');await new Promise<void>(r=>setImmediate(r));assert.equal(f.acks.length,0);gate.resolve();await read;await done.promise;
   const before=f.requests.length;await assert.rejects(service.status(),{code:'client_not_admitted'});await v.release!();assert.equal(f.requests.length,before);assert.equal(f.docRequests.some(r=>r.command.op==='close'||r.command.op==='discard'),false);assert.equal(f.closes,0);
 });
+
+test('namespace recovery reports false for empty and settled checkpoints and true only for recovered commits',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);assert.equal(await v.recoverCommands!(),false);
+  await v.adapter.rename('Note.md','Moved.md');assert.equal(await v.recoverCommands!(),false);
+  f.hostError('checkpoint_cas',{code:'checkpoint_storage',message:'persisted before dispatch',commit_uncertain:true},true);
+  await assert.rejects(v.adapter.rename('Moved.md','Recovered.md'),{commitUncertain:true});assert.equal(f.receipts.size,1);
+  assert.equal(await v.recoverCommands!(),true);assert.equal((await v.adapter.list())[0].path,'Recovered.md');assert.equal(await v.recoverCommands!(),false);await v.release!();
+});
+
+test('recovery terminal rejection before any commit reports no inventory change',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);
+  f.hostError('checkpoint_cas',{code:'checkpoint_storage',message:'persisted before dispatch',commit_uncertain:true},true);
+  await assert.rejects(v.adapter.rename('Note.md','Moved.md'),{commitUncertain:true});f.hostError('file_command',{code:'revision_conflict',message:'stale revision',commit_uncertain:false});
+  assert.equal(await v.recoverCommands!(),false);assert.equal(f.receipts.size,0);assert.equal(await v.recoverCommands!(),false);await v.release!();
+});
+
+async function settleWatch(){for(let i=0;i<4;i++)await new Promise<void>(r=>setImmediate(r));}
+function watchClock(t:any){const polls:(()=>void)[]=[];t.mock.method(globalThis,'setInterval',(callback:()=>void)=>{polls.push(callback);return polls.length as any;});t.mock.method(globalThis,'clearInterval',()=>{});return polls;}
+
+test('watch uses listed baseline without initial duplicate notification and catches changes between list and subscribe',async t=>{
+  const polls=watchClock(t),f=fixture(),v=await openNativeMobileVault(f.plugin);await v.adapter.list();let notices=0;
+  const off=v.adapter.subscribe!(()=>{notices++;});await settleWatch();assert.equal(notices,0);polls[0]();await settleWatch();assert.equal(notices,0);off();
+  f.replaceIdentity('updated','new content');await v.adapter.stat('Note.md');const off2=v.adapter.subscribe!(()=>{notices++;});await settleWatch();assert.equal(notices,1);
+  polls[1]();await settleWatch();assert.equal(notices,1);off2();await v.release!();
+});
+
+test('watch before first list establishes baseline silently then reports later removal',async t=>{
+  const polls=watchClock(t),f=fixture(),v=await openNativeMobileVault(f.plugin);let notices=0;const off=v.adapter.subscribe!(()=>{notices++;});await settleWatch();assert.equal(notices,0);
+  await v.adapter.list();f.absent();polls[0]();await settleWatch();assert.equal(notices,1);polls[0]();await settleWatch();assert.equal(notices,1);off();await v.release!();
+});
+
+test('watch catches real update between a pending initial inventory and its first baseline poll',async t=>{
+  watchClock(t);const f=fixture(),v=await openNativeMobileVault(f.plugin),original=f.plugin.request.bind(f.plugin),entered=deferred(),gate=deferred();let snapshots=0;
+  f.plugin.request=async input=>{const reply=await original(input);if(JSON.parse(input.header).command.method==='list_snapshot'&&++snapshots===1){entered.resolve();await gate.promise;}return reply;};
+  const inventory=v.adapter.list();await entered.promise;let notices=0;const off=v.adapter.subscribe!(()=>{notices++;});f.absent();gate.resolve();assert.equal((await inventory).length,1);await settleWatch();assert.equal(notices,1);off();await v.release!();
+});
+
+test('retired watch generation cannot notify successor or swallow its real update',async t=>{
+  const polls=watchClock(t),f=fixture(),v=await openNativeMobileVault(f.plugin);await v.adapter.list();let oldNotices=0,newNotices=0;const off=v.adapter.subscribe!(()=>{oldNotices++;});await settleWatch();
+  const original=f.plugin.request.bind(f.plugin),entered=deferred(),gate=deferred();let blocked=false;
+  f.plugin.request=async input=>{const reply=await original(input);if(JSON.parse(input.header).command.method==='list_snapshot'&&!blocked){blocked=true;entered.resolve();await gate.promise;}return reply;};
+  polls[0]();await entered.promise;off();f.absent();const off2=v.adapter.subscribe!(()=>{newNotices++;});gate.resolve();await settleWatch();assert.equal(oldNotices,0);assert.equal(newNotices,1);
+  polls[0]();polls[1]();await settleWatch();assert.equal(newNotices,1);off2();await v.release!();
+});
+
+test('recovery reports partial committed work even when a later namespace step is rejected',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);f.hostError('checkpoint_cas',{code:'checkpoint_storage',message:'requested persisted',commit_uncertain:true},true);
+  await assert.rejects(v.adapter.rename('Note.md','Final.md'),{commitUncertain:true});const head=[...f.heads.values()][0],saved=JSON.parse(decoder.decode(Uint8Array.from(atob(head.body),c=>c.charCodeAt(0))));
+  const prefix=structuredClone(saved.commands[0]);prefix.family.request.operation_id='prefix-operation';prefix.family.request.mutation.path='Intermediate.md';saved.commands.unshift(prefix);head.body=body(JSON.stringify(saved));head.metadata.byteLength=encoder.encode(JSON.stringify(saved)).length;
+  const original=f.plugin.request.bind(f.plugin);f.plugin.request=async input=>{const reply=await original(input);const c=JSON.parse(input.header).command;if(c.method==='file_command'&&c.family.request.operation_id==='prefix-operation')f.hostError('file_command',{code:'revision_conflict',message:'later step rejected',commit_uncertain:false});return reply;};
+  assert.equal(await v.recoverCommands!(),true);assert.equal((await v.adapter.list())[0].path,'Intermediate.md');assert.equal(await v.recoverCommands!(),false);await v.release!();
+});
+
+test('release suppresses a pending watch result instead of emitting a late inventory notification',async t=>{
+  const polls=watchClock(t),f=fixture(),v=await openNativeMobileVault(f.plugin);await v.adapter.list();let notices=0;v.adapter.subscribe!(()=>{notices++;});await settleWatch();f.absent();
+  const original=f.plugin.request.bind(f.plugin),entered=deferred(),gate=deferred();f.plugin.request=async input=>{const reply=await original(input);if(JSON.parse(input.header).command.method==='list_snapshot'){entered.resolve();await gate.promise;}return reply;};
+  polls[0]();await entered.promise;const released=v.release!();gate.resolve();await released;await settleWatch();assert.equal(notices,0);
+});
