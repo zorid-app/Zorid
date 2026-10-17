@@ -131,7 +131,9 @@ export function createBaseSession(container: HTMLElement, options: BaseSessionOp
         case 'cards': mounted = createBaseCardsView(content, { ...shared, loadThumbnail: options.loadThumbnail }); break;
         case 'list': mounted = createBaseListView(content, shared); break;
         case 'kanban': mounted = createBaseKanbanView(content, { result, openFile: shared.openFile, onError: report,
-          ...(moveEnabled ? { requestMove: request => track(() => actions.requestMove(request)) } : { readOnly: true }),
+          readOnly: !writable,
+          ...(moveEnabled ? { requestMove: request => track(() => actions.requestMove(request)) } : {}),
+          ...(writable ? { requestGroupOrder: request => track(() => actions.requestGroupOrder(request)) } : {}),
         }); break;
         default: content.textContent = `Unsupported base view: ${result.view.type}`;
       }
