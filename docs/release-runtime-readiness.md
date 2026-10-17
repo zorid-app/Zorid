@@ -1,8 +1,8 @@
 # Desktop release runtime readiness
 
-Reviewed 2026-10-16. This records the Electron 31.6.0 baseline and the dependency triage at `500c3be`; it does not select or install an upgrade. The minimum supported macOS version remains a product decision. Successful local unsigned packaging and native smoke checks are recorded in [desktop packaging](desktop-packaging.md), separately from runtime security readiness.
+Reviewed 2026-10-16. This records the Electron 31.6.0 baseline and the dependency triage at `500c3be`; the user subsequently selected macOS 13+ and latest stable Electron. The implementation now pins Electron 44.8.0 with a Ventura minimum; the historical risk assessment below describes the old runtime. Upgrade validation is tracked separately and must not inherit the Electron 31 smoke results. Successful local unsigned packaging and native smoke checks are recorded in [desktop packaging](desktop-packaging.md), separately from runtime security readiness.
 
-## Current release constraint
+## Electron 31 baseline constraint
 
 Electron 31 is outside Electron's [latest-three-major support policy](https://www.electronjs.org/docs/latest/tutorial/electron-timelines). The triage returned 36 open Electron alerts: 11 high, 20 medium and 5 low. This snapshot is not a complete lockfile or Chromium security audit, and alert counts can change.
 
@@ -22,7 +22,7 @@ Current host evidence in `desktop/main.cjs`, `desktop/preload.cjs` and `desktop/
 
 Other triaged advisories have missing or blocked prerequisites in the audited host. Absent features include custom protocols, webviews, Chrome extensions, offscreen rendering, and automatic updates. That is a source-based reachability assessment, not blanket immunity. The isolated plugin-loader foundation is not evidence of community plugin execution in the shipped host.
 
-## Upgrade candidates, not a selection
+## Options reviewed before the macOS 13+ decision
 
 The [official stable release list](https://releases.electronjs.org/) on the review date gives:
 
@@ -32,7 +32,7 @@ The [official stable release list](https://releases.electronjs.org/) on the revi
 | 43.8.0 | 12 Monterey | Retains Monterey while using the newer of the two compatible supported majors. |
 | 44.8.0 | 13 Ventura | Latest stable major; excludes Monterey. |
 
-The minimums follow Electron's [macOS 11 removal in 38](https://www.electronjs.org/docs/latest/breaking-changes#removed-macos-11-support) and [macOS 12 removal in 44](https://www.electronjs.org/docs/latest/breaking-changes#removed-macos-12-support). Recheck supported releases and advisories at implementation time. Do not retain the current `minimumSystemVersion: '10.15'` or Homebrew Catalina requirement when adopting these candidates; declaring an older minimum cannot make the runtime work there.
+The minimums follow Electron's [macOS 11 removal in 38](https://www.electronjs.org/docs/latest/breaking-changes#removed-macos-11-support) and [macOS 12 removal in 44](https://www.electronjs.org/docs/latest/breaking-changes#removed-macos-12-support). Recheck supported releases and advisories at implementation time. Do not retain the old `minimumSystemVersion: '10.15'` or Homebrew Catalina requirement when adopting these candidates; declaring an older minimum cannot make the runtime work there.
 
 ## Validation required for the eventual change
 

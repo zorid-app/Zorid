@@ -11,7 +11,7 @@ The canonical source and release repository is `zorid-app/Zorid`. Stable tags ha
 - `SHA256SUMS`, with SHA-256 entries for the three artifacts.
 - `release-manifest.json`, schema version 1, recording repository, version, tag, source commit, workflow path, run ID, run attempt, and each artifact's name/size/SHA-256.
 
-The cask selects the correct DMG architecture, pins both hashes, and requires macOS Catalina or newer, matching the Electron 31.6 packaging floor. It uses the ordinary `app` artifact and no installer hooks, quarantine bypass, `:no_check`, `:latest`, or user-data removal commands. No Windows/Linux/mobile packaging is added here.
+The cask selects the correct DMG architecture, pins both hashes, and requires macOS Ventura (13) or newer, matching the Electron 44 packaging floor. It uses the ordinary `app` artifact and no installer hooks, quarantine bypass, `:no_check`, `:latest`, or user-data removal commands. No Windows/Linux/mobile packaging is added here.
 
 The source release workflow owns building, signing, notarization, checksum generation, and publishing. The source-side wrapper can generate a cask after publication using:
 

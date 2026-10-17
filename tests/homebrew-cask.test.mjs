@@ -37,7 +37,7 @@ test('stable release produces a two-architecture cask with versioned URLs and re
   assert.match(cask, new RegExp(`sha256 arm:   "${'a'.repeat(64)}",\\n         intel: "${'b'.repeat(64)}"`));
   assert.match(cask, /releases\/download\/v#\{version\}\/Zorid-#\{version\}-#\{arch\}\.dmg/);
   assert.match(cask, /app "Zorid.app"/);
-  assert.match(cask, /depends_on macos: ">= :catalina"/);
+  assert.match(cask, /depends_on macos: ">= :ventura"/);
   assert.doesNotMatch(cask, /no_check|:latest|zap|uninstall|preflight|postflight/);
   assert.equal(generateHomebrewCask(release, checksums, cask), cask);
 });

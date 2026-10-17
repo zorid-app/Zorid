@@ -13,15 +13,18 @@ async function fixture(t) {
   async function write(relative, content = relative) {
     const target = path.join(root, relative); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, content);
   }
-  const metadata = { name: 'zorid', version: '1.2.3', description: 'Original fixture', license: 'AGPL-3.0-only', dependencies: { 'fixture-dependency': '1.0.0' }, devDependencies: { electron: '31.6.0' } };
+  const metadata = { name: 'zorid', version: '1.2.3', description: 'Original fixture', license: 'AGPL-3.0-only', dependencies: { 'fixture-dependency': '1.0.0' }, devDependencies: { electron: '44.8.0' } };
   await write('package.json', JSON.stringify(metadata));
   for (const file of [...desktopFiles, ...requiredRendererFiles, 'LICENSE', 'dist/main.123abc.js', 'dist/main.123abc.js.LICENSE.txt']) await write(file);
   for (const directory of requiredRendererDirectories) await write(`${directory}fixture.js`);
   await write('dist/main.123abc.js.map'); await write('src/private-source.ts'); await write('.env'); await write('recovered/reference.js'); await write('vault/private.md');
   await write('node_modules/fixture-dependency/package.json', JSON.stringify({ name: 'fixture-dependency', version: '1.0.0', license: 'MIT' }));
   await write('node_modules/fixture-dependency/LICENSE', 'Original fixture dependency notice');
-  await write('node_modules/electron/package.json', JSON.stringify({ name: 'electron', version: '31.6.0' }));
-  await write('node_modules/electron/dist/version', '31.6.0');
+  await write('node_modules/electron/package.json', JSON.stringify({ name: 'electron', version: '44.8.0' }));
+  await write('node_modules/electron/dist/version', '44.8.0');
+  await write('node_modules/electron/path.txt', 'Electron.app/Contents/MacOS/Electron');
+  const executable = Buffer.alloc(8); executable.writeUInt32LE(0xfeedfacf, 0); executable.writeUInt32LE(0x0100000c, 4);
+  await write('node_modules/electron/dist/Electron.app/Contents/MacOS/Electron', executable);
   await write('node_modules/electron/dist/LICENSE', 'Electron fixture license');
   await write('node_modules/electron/dist/LICENSES.chromium.html', 'Chromium fixture notices');
   return { root, write, metadata };
@@ -68,7 +71,7 @@ test('staging rejects newly introduced dependencies without distribution notice 
   const f = await fixture(t); await fs.rm(path.join(f.root, 'node_modules/fixture-dependency/LICENSE'));
   await assert.rejects(stageDesktop(f.root), /No distribution license text found/);
   await fs.symlink(path.join(f.root, 'vault/private.md'), path.join(f.root, 'node_modules/fixture-dependency/LICENSE'));
-  await assert.rejects(stageDesktop(f.root), /notice must be a regular file/);
+  await assert.rejects(stageDesktop(f.root), /must be a regular file/);
 });
 
 test('staging never overwrites a symlinked input manifest or reads symlinked Electron version data', async t => {
@@ -80,7 +83,7 @@ test('staging never overwrites a symlinked input manifest or reads symlinked Ele
   await fs.rm(path.join(f.root, '.release/inputs.json'));
   await fs.rm(path.join(f.root, 'node_modules/electron/dist/version'));
   await fs.symlink(path.join(f.root, 'vault/private.md'), path.join(f.root, 'node_modules/electron/dist/version'));
-  await assert.rejects(stageDesktop(f.root), /notice must be a regular file/);
+  await assert.rejects(stageDesktop(f.root), /must be a regular file/);
 });
 
 test('staging rejects extra files outside the compiled chunk and vendor asset allowlist', async t => {

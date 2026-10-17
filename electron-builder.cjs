@@ -24,7 +24,7 @@ module.exports = {
   mac: {
     target: ['dmg'],
     category: 'public.app-category.productivity',
-    minimumSystemVersion: '10.15',
+    minimumSystemVersion: '13.0',
     darkModeSupport: true,
     identity: unsigned ? null : identity,
     type: 'distribution',

@@ -4,7 +4,7 @@ An original, AGPLv3-licensed Markdown workspace pursuing full feature, UI, UX, v
 and plugin compatibility with a fresh Obsidian 1.14.4 installation. Desktop uses
 Electron; the mobile target uses Capacitor; the editor uses CodeMirror 6. The
 renderer is TypeScript and DOM/CSS, built with Webpack following REA's bundle
-format finding. Electron is pinned to the installed reference host's 31.6.0.
+format finding. Electron is pinned to 44.8.0; desktop releases require macOS 13 or newer.
 Other exact upstream dependency versions and the authoring framework remain
 partially unverified.
 
@@ -21,7 +21,8 @@ Use Node.js 26+ and pnpm. Node 26 is currently used for the TypeScript tests.
 The checked-in pnpm lockfile pins the current dependency resolution.
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
+pnpm run desktop:install # macOS; explicitly installs/verifies the runtime
 pnpm test
 pnpm run build
 pnpm run desktop

@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { stageDesktop } from './stage-desktop.mjs';
+import { verifyElectronRuntime } from './electron-runtime.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,6 +22,7 @@ try {
   }
   const architecture = args.find(argument => ['--arm64', '--x64'].includes(argument)) ?? `--${process.arch}`;
   if (!['--arm64', '--x64'].includes(architecture)) throw new Error('Only arm64 and x64 macOS releases are supported');
+  await verifyElectronRuntime(root, architecture.slice(2));
   await stageDesktop(root);
   const result = spawnSync(process.execPath, [require.resolve('electron-builder/cli.js'), '--config', 'electron-builder.cjs', '--mac', '--publish', 'never', architecture, ...(args.includes('--dir') ? ['--dir'] : [])], { cwd: root, env: environment, stdio: 'inherit' });
   if (result.error) throw result.error;

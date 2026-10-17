@@ -101,7 +101,7 @@ export function generateHomebrewCask(release, checksumText, currentCask) {
   desc "Open-source Markdown workspace"
   homepage "${repository}"
 
-  depends_on macos: ">= :catalina"
+  depends_on macos: ">= :ventura"
 
   app "Zorid.app"
 end

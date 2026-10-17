@@ -25,3 +25,13 @@ test('release actions are immutable and credentials never persist through checko
   assert.equal(steps[upload].if, undefined);
   for (const step of steps.filter(step => step.env?.MACOS_CERTIFICATE_P12_BASE64 || step.env?.APPLE_API_KEY_P8_BASE64)) assert.match(step.run, /macos-release.mjs prepare$/);
 });
+
+test('release installs the architecture-specific runtime before build and signing', () => {
+  const steps = workflow.jobs.build.steps;
+  const dependencies = steps.findIndex(step => step.run === 'pnpm install --frozen-lockfile');
+  const runtime = steps.findIndex(step => step.run === 'pnpm run desktop:install "--${RELEASE_ARCH}"');
+  const build = steps.findIndex(step => step.run?.includes('pnpm run build'));
+  const credentials = steps.findIndex(step => step.run?.includes('macos-release.mjs prepare'));
+  assert.ok(dependencies >= 0 && dependencies < runtime && runtime < build && build < credentials);
+  assert.equal(steps[runtime].env, undefined);
+});

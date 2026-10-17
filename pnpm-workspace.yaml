@@ -3,6 +3,10 @@ allowBuilds:
   # Windows installer tooling is transitive; macOS releases do not run it.
   electron-winstaller: false
 
+# Exact latest stable runtime selected for the security upgrade on 2026-10-16.
+minimumReleaseAgeExclude:
+  - electron@44.8.0
+
 # A build/test command must not rewrite dependencies shared by active worktrees.
 # Run pnpm install explicitly when package.json or the lockfile changes.
 verifyDepsBeforeRun: error

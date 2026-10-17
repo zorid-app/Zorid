@@ -68,6 +68,8 @@ jobs:
           run_install: false
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
+      - name: Install and verify pinned Electron runtime
+        run: pnpm run desktop:install "--${RELEASE_ARCH}"
       - name: Test and build
         run: |
           node --test --test-concurrency=2 tests/*.test.*

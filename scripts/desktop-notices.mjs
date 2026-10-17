@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { verifyElectronRuntime } from './electron-runtime.mjs';
 
 const legalFile = /^(licen[cs]e|copying|notice)([._-].*)?$/i;
 const apacheFontPackages = new Set(['@mathjax/mathjax-tex-font', '@mathjax/mathjax-mhchem-font-extension', '@mathjax/mathjax-newcm-font']);
@@ -61,16 +62,10 @@ export async function desktopNotices(root, metadata) {
     for (const notice of pkg.texts) text += `\n--- ${notice.filename} ---\n${notice.text.trim()}\n`;
     text += '\n';
   }
-  const electron = await packageDirectory('electron', root);
-  const electronPackage = JSON.parse(await fs.readFile(path.join(electron, 'package.json'), 'utf8'));
-  if (electronPackage.version !== metadata.devDependencies.electron) throw new Error('Installed Electron version does not match the release pin');
-  const electronDist = await fs.lstat(path.join(electron, 'dist'));
-  if (!electronDist.isDirectory() || electronDist.isSymbolicLink()) throw new Error('Electron distribution must be a real directory');
-  const distributionVersion = (await readNotice(path.join(electron, 'dist/version'))).toString('utf8').trim().replace(/^v/, '');
-  if (distributionVersion !== electronPackage.version) throw new Error('Downloaded Electron distribution does not match its package version');
+  const electron = await verifyElectronRuntime(root);
   return new Map([
     ['THIRD_PARTY_NOTICES.txt', Buffer.from(text)],
-    ['licenses/electron/LICENSE', await readNotice(path.join(electron, 'dist/LICENSE'))],
-    ['licenses/electron/LICENSES.chromium.html', await readNotice(path.join(electron, 'dist/LICENSES.chromium.html'))],
+    ['licenses/electron/LICENSE', electron.license],
+    ['licenses/electron/LICENSES.chromium.html', electron.chromiumNotices],
   ]);
 }
