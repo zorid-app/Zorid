@@ -16,6 +16,44 @@ pub fn validate_snapshot(entries: &[EntryState]) -> Result<(), ContractError> {
     Snapshot::new(entries).map(|_| ())
 }
 
+/// Metadata target for creating or replacing file content supplied separately.
+/// This carries no operation identity, content bytes or authorization evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileContentTarget {
+    Create { id: EntryId, path: VaultPath },
+    Write { id: EntryId, expected: Revision },
+}
+
+/// Plan file metadata without constructing or copying its content bytes.
+///
+/// The complete snapshot must be transaction-current. Create always creates a
+/// file with a never-reused entry ID; Write requires the exact live file revision.
+/// Both revise live ancestors and require a fresh revision in this snapshot.
+/// Historical revision uniqueness remains the host allocator's responsibility.
+///
+/// This creates no operation ID, receipt, journal or outbox authorization. The
+/// host must bind this target to the original staged operation and independently
+/// verified content/source/selected-event evidence, then atomically commit the
+/// metadata, content and operation records. The target alone is not that proof.
+pub fn plan_file_content_mutation(
+    target: &FileContentTarget,
+    entries: &[EntryState],
+    next_revision: &Revision,
+) -> Result<Vec<EntryChange>, ContractError> {
+    let snapshot = Snapshot::new(entries)?;
+    snapshot.require_fresh_revision(next_revision)?;
+    let mut changed = BTreeMap::new();
+    match target {
+        FileContentTarget::Create { id, path } => {
+            snapshot.create_entry(id, path, EntryKind::File, next_revision, &mut changed)?;
+        }
+        FileContentTarget::Write { id, expected } => {
+            snapshot.materialize_file(id, expected, next_revision, &mut changed)?;
+        }
+    }
+    Ok(snapshot.changes(changed))
+}
+
 /// Plan metadata changes for newly materialized content of an existing live file.
 ///
 /// This is not a local command: it creates no operation ID, receipt or outbox
@@ -61,26 +99,7 @@ pub fn plan_mutation(
     let mut changed = BTreeMap::<EntryId, EntryState>::new();
     match &request.mutation {
         Mutation::Create { id, path, kind, .. } => {
-            if snapshot.by_id.contains_key(id) {
-                return Err(invalid(
-                    "entry ID already exists, including retained tombstones",
-                ));
-            }
-            snapshot.require_parent(path)?;
-            if snapshot.live_paths.contains_key(path) {
-                return Err(invalid("destination path is occupied"));
-            }
-            changed.insert(
-                id.clone(),
-                EntryState {
-                    id: id.clone(),
-                    path: path.clone(),
-                    kind: *kind,
-                    revision: next_revision.clone(),
-                    deleted: false,
-                },
-            );
-            snapshot.bump_ancestors(path, next_revision, &mut changed);
+            snapshot.create_entry(id, path, *kind, next_revision, &mut changed)?;
         }
         Mutation::Write { id, expected, .. } => {
             snapshot.materialize_file(id, expected, next_revision, &mut changed)?;
@@ -187,6 +206,37 @@ impl<'a> Snapshot<'a> {
         if self.by_id.values().any(|entry| entry.revision == *revision) {
             return Err(invalid("next revision must be freshly allocated"));
         }
+        Ok(())
+    }
+
+    fn create_entry(
+        &self,
+        id: &EntryId,
+        path: &VaultPath,
+        kind: EntryKind,
+        next_revision: &Revision,
+        changed: &mut BTreeMap<EntryId, EntryState>,
+    ) -> Result<(), ContractError> {
+        if self.by_id.contains_key(id) {
+            return Err(invalid(
+                "entry ID already exists, including retained tombstones",
+            ));
+        }
+        self.require_parent(path)?;
+        if self.live_paths.contains_key(path) {
+            return Err(invalid("destination path is occupied"));
+        }
+        changed.insert(
+            id.clone(),
+            EntryState {
+                id: id.clone(),
+                path: path.clone(),
+                kind,
+                revision: next_revision.clone(),
+                deleted: false,
+            },
+        );
+        self.bump_ancestors(path, next_revision, changed);
         Ok(())
     }
 
