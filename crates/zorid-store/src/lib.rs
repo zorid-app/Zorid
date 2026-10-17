@@ -1,7 +1,10 @@
 //! Native database authority. File projection and encrypted networking are separate
 //! adapters; a database commit must never be mistaken for either of those outcomes.
 
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+
+mod projection;
+pub use projection::{ExternalObservation, ProjectionAttempt, ProjectionBaseline, ProjectionPhase};
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
 use zorid_core::{
@@ -9,7 +12,7 @@ use zorid_core::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const APPLICATION_ID: i64 = 0x5a4f5244; // ZORD
 const SCHEMA: &[(&str, &str)] = &[
     ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB)"),
@@ -22,7 +25,7 @@ const SCHEMA: &[(&str, &str)] = &[
 fn check_schema(connection: &Connection) -> Result<i64> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
-    if version != 0 && version != SCHEMA_VERSION {
+    if !matches!(version, 0 | 1 | SCHEMA_VERSION) {
         return Err(StoreError::UnsupportedSchema(version));
     }
     if version == 0 {
@@ -40,15 +43,39 @@ fn check_schema(connection: &Connection) -> Result<i64> {
         if application != APPLICATION_ID {
             return Err(StoreError::Corrupt("wrong application ID".into()));
         }
-        // Schema version 1 has one canonical layout. A missing constraint/index is
-        // corruption, not an instruction to silently recreate part of the schema.
+        // Every supported version has one canonical layout. Extra objects can
+        // shadow a migration or change write behavior, so reject before WAL too.
+        let names: Vec<String> = connection
+            .prepare("SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'")?
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        let expected_names: Vec<&str> = SCHEMA
+            .iter()
+            .chain(if version >= 2 {
+                projection::SCHEMA
+            } else {
+                &[]
+            })
+            .map(|(name, _)| *name)
+            .collect();
+        if names.len() != expected_names.len()
+            || names
+                .iter()
+                .any(|name| !expected_names.contains(&name.as_str()))
+        {
+            return Err(StoreError::Corrupt("unexpected schema objects".into()));
+        }
         let normalize = |sql: &str| {
             sql.split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ")
                 .to_ascii_lowercase()
         };
-        for (name, expected) in SCHEMA {
+        for (name, expected) in SCHEMA.iter().chain(if version >= 2 {
+            projection::SCHEMA
+        } else {
+            &[]
+        }) {
             let actual = connection
                 .query_row("SELECT sql FROM sqlite_master WHERE name=?1", [name], |r| {
                     r.get::<_, String>(0)
@@ -160,12 +187,33 @@ pub struct Store {
 impl Store {
     /// Opens an explicitly selected database; it does not scan or modify vault files.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let mut connection = Connection::open(path)?;
+        Self::open_mode(path.as_ref(), false, false)
+    }
+    /// Strict native adapter entrypoint: caller supplies a checked canonical path.
+    pub fn open_no_follow(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_mode(path.as_ref(), true, false)
+    }
+    /// Requires an existing initialized database; cannot create a missing/empty DB.
+    pub fn open_existing_no_follow(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_mode(path.as_ref(), true, true)
+    }
+    fn open_mode(path: &Path, no_follow: bool, existing: bool) -> Result<Self> {
+        let mut flags = OpenFlags::default();
+        if no_follow {
+            flags |= OpenFlags::SQLITE_OPEN_NOFOLLOW;
+        }
+        if existing {
+            flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
+        }
+        let mut connection = Connection::open_with_flags(path, flags)?;
         connection.busy_timeout(Duration::from_secs(5))?;
         // Inspect before changing journal mode: do not mutate unknown newer stores.
         {
             let snapshot = connection.transaction()?;
-            check_schema(&snapshot)?;
+            let version = check_schema(&snapshot)?;
+            if existing && version == 0 {
+                return Err(StoreError::Corrupt("vault is not initialized".into()));
+            }
             snapshot.commit()?;
         }
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -173,12 +221,20 @@ impl Store {
         connection.pragma_update(None, "foreign_keys", true)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version = check_schema(&tx)?;
+        if existing && version == 0 {
+            return Err(StoreError::Corrupt("vault is not initialized".into()));
+        }
         if version == 0 {
             // A fresh initialization is atomic and serialized across processes.
             for (_, sql) in SCHEMA {
                 tx.execute_batch(sql)?;
             }
             tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+        }
+        if version < 2 {
+            for (_, sql) in projection::SCHEMA {
+                tx.execute_batch(sql)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -216,10 +272,16 @@ impl Store {
     /// and projection intent. Replay returns the original receipt without new work.
     /// The caller must not upload raw outbox records: they contain local plaintext.
     pub fn apply(&mut self, request: &MutationRequest) -> Result<CommitResult> {
-        request.validate()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let result = Self::apply_transaction(&tx, request)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    fn apply_transaction(tx: &Connection, request: &MutationRequest) -> Result<CommitResult> {
+        request.validate()?;
         let prior = tx
             .query_row(
                 "SELECT request,result FROM operations WHERE operation_id=?1",
@@ -308,7 +370,6 @@ impl Store {
             "INSERT INTO projection_queue(sequence) VALUES (?1)",
             [sql_sequence],
         )?;
-        tx.commit()?;
         Ok(result)
     }
 

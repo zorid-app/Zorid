@@ -16,10 +16,14 @@ vectors. Folder revisions cover descendant changes to guard stale subtree edits.
 
 ## Boundary and outstanding work
 
-This is a database layer, not yet a functioning filesystem vault adapter or sync
-client. The database path must be selected by its caller. It neither edits user
-files nor scans/imports them. File projection needs a bounded cross-process lock,
-persisted projection provenance, recovery and guarded external-file imports.
+This is a database layer; `zorid-native` supplies the first filesystem adapter.
+The database path is selected by its caller. Store itself neither edits user
+files nor scans/imports them. Schema v2 adds baseline/attempt/external-observation
+records and transaction helpers for atomic import and projection completion. A
+canonical v1 schema migrates atomically; foreign/malformed schemas fail before
+changing journal mode. Projection records validate SQL/JSON identities and kinds.
+`open_no_follow` and `open_existing_no_follow` serve the native adapter's checked
+canonical path; ordinary `open` retains explicit-path database-only behavior.
 Only those adapters may retire projection intents. Outbox records currently
 contain **local plaintext**; the encrypted sync adapter must encrypt them before
 network transfer and retire them only after durable remote acceptance.
