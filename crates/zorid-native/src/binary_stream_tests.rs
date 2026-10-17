@@ -1,5 +1,6 @@
 use super::*;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use zorid_store::ExternalNamespaceObservation;
 use zorid_sync_protocol::{RealmId, VaultId};
@@ -132,12 +133,77 @@ fn options() -> ScanOptions {
         ..ScanOptions::default()
     }
 }
+fn authored(vault: &NativeVault) -> BTreeSet<zorid_sync_protocol::UpdateId> {
+    let rows = vault.family_pending_authored(None, 1000).unwrap();
+    assert!(rows.len() < 1000, "fixture authored page must not truncate");
+    let ids: BTreeSet<_> = rows.iter().map(|row| row.update_id.clone()).collect();
+    assert_eq!(ids.len(), rows.len(), "authored IDs must be unique");
+    ids
+}
 fn reconcile(vault: &mut NativeVault) -> ExternalReconcileReport {
-    let report = vault
-        .reconcile_external(options(), ExternalFileMode::Auto)
-        .unwrap();
-    assert!(report.complete, "{report:?}");
-    report
+    // An admitted large file may finish after the soft budget. Resume its
+    // remaining paths, retaining every receipt; the final run is the last pass.
+    let mut imported = Vec::new();
+    let mut namespace = Vec::new();
+    let mut imported_ids = BTreeSet::new();
+    let mut namespace_ids = BTreeSet::new();
+    let mut namespace_authored = BTreeSet::new();
+    let mut known_authored = authored(vault);
+    for pass in 0..8 {
+        let before_cursor = vault
+            .store
+            .external_scan_progress::<serde_json::Value>()
+            .unwrap()
+            .1;
+        let mut report = vault
+            .reconcile_external(options(), ExternalFileMode::Auto)
+            .unwrap();
+        let after_cursor = vault
+            .store
+            .external_scan_progress::<serde_json::Value>()
+            .unwrap()
+            .1;
+        let after_authored = authored(vault);
+        assert!(known_authored.is_subset(&after_authored));
+        let has_receipts = !report.imported.is_empty() || !report.namespace.is_empty();
+        for commit in report.imported.drain(..) {
+            assert!(
+                imported_ids.insert(commit.operation_id.clone()),
+                "import receipt repeated across passes: {commit:?}"
+            );
+            imported.push(commit);
+        }
+        for receipt in report.namespace.drain(..) {
+            assert!(
+                namespace_ids.insert(receipt.observation_id.clone()),
+                "namespace receipt repeated across passes: {receipt:?}"
+            );
+            for id in &receipt.authored {
+                assert!(namespace_authored.insert(id.clone()));
+                assert!(after_authored.contains(id));
+            }
+            namespace.push(receipt);
+        }
+        if report.complete {
+            assert!(report.issues.is_empty());
+            report.imported = imported;
+            report.namespace = namespace;
+            return report;
+        }
+        assert!(
+            !report.issues.is_empty()
+                && report.issues.iter().all(|issue| {
+                    issue.reason == "external reconciliation duration budget exhausted"
+                }),
+            "unexpected incomplete pass {pass}: {report:?}"
+        );
+        assert!(
+            has_receipts || after_authored != known_authored || after_cursor != before_cursor,
+            "incomplete reconciliation made no durable progress on pass {pass}: {report:?}"
+        );
+        known_authored = after_authored;
+    }
+    panic!("large fixture reconciliation did not finish within eight bounded passes");
 }
 fn state_at(vault: &NativeVault, value: &str) -> EntryState {
     vault
