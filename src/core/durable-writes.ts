@@ -1,3 +1,5 @@
+import type { DurableCheckpoints } from './durable-checkpoints.ts';
+
 /** Durable consumer checkpoint data. All identities must survive retries/reload. */
 export interface DurableWritePlan {
   readonly version: 1;
@@ -25,7 +27,7 @@ export type DurableWriteOutcome =
 export type DurableWriteIntent = { readonly ref: DurableWriteRef } & (
   | { readonly state: 'prepared' | 'commit_requested'; readonly acknowledged: false }
   | { readonly state: 'committed'; readonly acknowledged: boolean;
-      readonly receipt: { readonly operationId: string; readonly sequence: string } }
+      readonly receipt: { readonly operationId: string; readonly sequence: string; readonly entryId:string; readonly revision:string } }
   | { readonly state: 'rejected'; readonly acknowledged: boolean;
       readonly error: { readonly operationId: string; readonly code: string; readonly message: string; readonly details?: unknown } }
 );
@@ -40,8 +42,10 @@ export interface DurableWriteInput {
 /** One coherent persisted observation, never assembled from read + stat. */
 export interface DurableWriteRead {
   readonly content: string;
+  readonly path: string;
   readonly entryId: string;
   readonly revision: string;
+  readonly stat: {readonly ctime:number;readonly mtime:number;readonly size:number};
 }
 /** Optional editor capability; it does not replace legacy adapter methods.
  * Persist plan BEFORE prepare; persist returned ref BEFORE commit; reconcile and
@@ -49,7 +53,9 @@ export interface DurableWriteRead {
  * next step. Prepared records are inert. Unknown outcomes reuse the same plan/ref.
  */
 export interface DurableWrites {
+  readonly checkpoints: DurableCheckpoints;
   readText(path: string): Promise<DurableWriteRead>;
+  readTextById(entryId: string): Promise<DurableWriteRead|null>;
   planWrite(input: DurableWriteInput): Promise<DurableWritePlan>;
   prepare(plan: DurableWritePlan): Promise<DurableWriteIntent>;
   commit(ref: DurableWriteRef): Promise<DurableWriteIntent>;
