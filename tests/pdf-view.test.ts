@@ -439,3 +439,64 @@ test('password challenge suspends busy while user input is required and rearms o
   f.task.onPassword!(()=>{},2);assert.equal(root.getAttribute('aria-busy'),'false');assert.equal(form.hidden,false);
   f.view.destroy();assert.equal(root.hasAttribute('data-native-loading'),false);
 });
+
+test('presentation password waits are state-only and do not settle successful readiness',async t=>{
+  const states:string[]=[],visible:boolean[]=[];
+  const f=fixture(t,{onPresentationSettled(state){
+    states.push(state);
+    if(state==='password')visible.push(!f.root.querySelector<HTMLFormElement>('form')!.hidden);
+  }});
+  let ready=false;void f.view.ready.then(()=>{ready=true;});await ticks();
+  f.task.onPassword!(()=>{},1);f.task.onPassword!(()=>{},2);await ticks();
+  assert.deepEqual(states,['password','password']);assert.deepEqual(visible,[true,true]);assert.equal(ready,false);
+  f.resolve();await f.view.ready;assert.deepEqual(states,['password','password','ready']);
+});
+
+test('presentation ready waits for final document labels and pages readiness',async t=>{
+  const states:string[]=[],labels=deferred<string[]|null>();
+  const f=fixture(t,{onPresentationSettled:state=>{states.push(state);}});
+  f.resolve({getPageLabels:()=>labels.promise});await ticks();assert.deepEqual(states,[]);
+  labels.resolve(null);await f.view.ready;assert.deepEqual(states,['ready']);
+  assert.equal(f.root.querySelector('.zorid-pdf-view')!.getAttribute('aria-busy'),'false');
+});
+
+for(const asynchronous of [false,true])test(`presentation callback ${asynchronous?'rejection':'throw'} cannot fail successful PDF readiness`,async t=>{
+  let calls=0;const errors:Error[]=[];
+  const f=fixture(t,{onError:error=>{errors.push(error);},onPresentationSettled:asynchronous
+    ? async()=>{calls++;throw new Error('Host overlay failed');}
+    : ()=>{calls++;throw new Error('Host overlay failed');}});
+  f.resolve();await f.view.ready;await ticks();assert.equal(calls,1);assert.deepEqual(errors,[]);
+  assert.doesNotMatch(f.root.textContent!,/Unable to display PDF/);
+});
+
+test('presentation error is emitted after visible error and callback failure cannot replace the load error',async t=>{
+  const states:string[]=[],snapshots:{visible:boolean;text:string}[]=[];
+  const f=fixture(t,{onPresentationSettled(state){
+    states.push(state);const status=f.root.querySelector<HTMLElement>('.zorid-pdf-status')!;
+    snapshots.push({visible:!status.hidden,text:status.textContent!});throw new Error('Overlay failed');
+  }});
+  await ticks();f.loading.reject(new Error('Invalid PDF'));
+  await assert.rejects(f.view.ready,/Invalid PDF/);assert.deepEqual(states,['error']);
+  assert.equal(snapshots[0].visible,true);assert.match(snapshots[0].text,/Invalid PDF/);
+});
+
+test('disposed or released tasks cannot publish retained password, error or ready callbacks',async t=>{
+  const states:string[]=[];const f=fixture(t,{onPresentationSettled:state=>{states.push(state);}});await ticks();
+  const retainedPassword=f.task.onPassword!;f.view.destroy();retainedPassword(()=>{},1);f.resolve();await f.view.ready;await ticks();assert.deepEqual(states,[]);
+  const failedStates:string[]=[];const failed=fixture(t,{onPresentationSettled:state=>{failedStates.push(state);}});await ticks();
+  const oldPassword=failed.task.onPassword!;failed.loading.reject(new Error('Invalid PDF'));await assert.rejects(failed.view.ready,/Invalid PDF/);
+  oldPassword(()=>{},2);failed.bus.dispatch('pagerendered',{error:new Error('Late worker event')});assert.deepEqual(failedStates,['error']);
+});
+
+test('closing during label wait suppresses ready presentation even when underlying work finishes later',async t=>{
+  const states:string[]=[],labels=deferred<string[]|null>();const f=fixture(t,{onPresentationSettled:state=>{states.push(state);}});
+  f.resolve({getPageLabels:()=>labels.promise});await ticks();f.view.destroy();await f.view.ready;labels.resolve(null);await ticks();assert.deepEqual(states,[]);
+});
+
+for(const expected of ['password','ready','error'] as const)test(`presentation callback may synchronously dispose at ${expected} without late events or duplicate release`,async t=>{
+  const states:string[]=[];const f=fixture(t,{onPresentationSettled(state){states.push(state);f.view.destroy();}});await ticks();
+  const password=f.task.onPassword!;
+  if(expected==='password')password(()=>{},1);else if(expected==='ready')f.resolve();else f.loading.reject(new Error('Invalid PDF'));
+  await f.view.ready;await ticks();password(()=>{},2);assert.deepEqual(states,[expected]);
+  assert.equal(f.root.childElementCount,0);assert.equal(f.disposed.filter(value=>value==='lease').length,1);
+});
