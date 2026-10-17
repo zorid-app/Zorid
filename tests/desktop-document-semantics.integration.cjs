@@ -117,11 +117,25 @@ test('actual desktop semantic transport retains one snapshot through independent
   assert.equal(next.result.value.hits[0].line,6);
   const nextSnapshot=await build(other);
   assert.notDeepEqual(nextSnapshot,snapshot);
-  await assert.rejects(other('discard',{snapshot:nextSnapshot}),{code:'stale_index'});
-  const newPin='1';await other('open',{pinId:newPin});
+  const newPin='1',newOpened=await other('open',{pinId:newPin});
   const updated=await other('metadata',{pinId:newPin,id:'source'});
   assert.notEqual(updated.value.entry.revision,oldRevision);
-  assert.deepEqual((await other('search',{pinId:newPin,query:'needle',limit:10})).result.value.hits,[]);
+  const updatedSearch=await other('search',{pinId:newPin,query:'needle',limit:10});
+  assert.deepEqual(updatedSearch.result.value.hits,[]);
+  // A publish ACK may be lost and its stage later superseded. Discard of an
+  // exact validated published generation is a no-op, including the old one.
+  const publishedStatus=await other('status'),authoritativeSource=await host.listSnapshot();
+  assert.equal(await other('discard',{snapshot:nextSnapshot}),true);
+  assert.equal(await other('discard',{snapshot:nextSnapshot}),true);
+  assert.equal(await other('discard',{snapshot}),true,'superseded published generation is retained');
+  assert.deepEqual(await other('status'),publishedStatus,'published head and source watermark are unchanged');
+  assert.deepEqual(await host.listSnapshot(),authoritativeSource,'discard cannot alter authoritative entries or source cursor');
+  assert.deepEqual(await other('open',{pinId:newPin}),newOpened,'the retained published header still validates the same pin');
+  assert.deepEqual(await other('metadata',{pinId:newPin,id:'source'}),updated);
+  assert.deepEqual(await other('search',{pinId:newPin,query:'needle',limit:10}),updatedSearch);
+  assert.deepEqual(await call('metadata',{pinId,id:'source'}),metadata,'superseded generation pin remains intact');
+  await assert.rejects(other('discard',{snapshot:{...nextSnapshot,localStoreId:'foreign-store'}}),{code:'stale_index'});
+
   await assert.rejects(other('search',{pinId:newPin,query:'needle',cursor:search.cursor,limit:1}),{code:'cursor_expired'});
   assert.deepEqual((await other('metadata',{pinId:newPin,id:'source'})).snapshot,nextSnapshot,'foreign cursor must not evict a valid pin');
   await other('close',{pinId:newPin});await other('close',{pinId:newPin});
