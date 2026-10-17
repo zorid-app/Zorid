@@ -55,3 +55,15 @@ Thus metadata updates from its own first write do not block preserving additiona
 typing during a slow save. Controller disposal invalidates its pending guarded
 writes; closing a view must flush accepted changes before disposal or retain the
 resulting recovery error for the user.
+
+## Empty Kanban groups
+
+The existing static evidence in `docs/bases-kanban-view.md` (app.js range
+3154907–3156600, SHA-256 `958ce57fe22f87fdf121546e46dfccd9c8ee971ce3fd8f801d60d4ece39a2df9`)
+identifies null group destinations as key deletion. `moveToGroup` now removes
+that exact existing frontmatter key through the same guarded shared-buffer
+transaction, including an existing list value. Ordinary property/table null edits
+still store null. The regression checks case-distinct sibling keys, unrelated
+metadata and Markdown body preservation. Scalar-to-multitext coercion still needs
+the reference metadata-type registry integration; it is not inferred blindly from
+a displayed scalar or silently treated as loss of other list members.

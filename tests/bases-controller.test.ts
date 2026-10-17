@@ -189,3 +189,34 @@ test('Kanban refuses to discard list membership through a scalar destination', a
     assert.deepEqual(readProperties(await f.vault.read('One.md'))[0].value, ['Done', 'Later']);
   } finally { await f.stop(); }
 });
+
+test('Kanban empty group removes the exact frontmatter key including list membership', async () => {
+  const source = '---\nStatus: [Todo, Later]\nstatus: keep sibling\nother: 12\n---\nOriginal body\n';
+  const f = await fixture(new MemoryAdapter({ 'Work.base': base, 'One.md': source }));
+  try {
+    await f.controller.moveToGroup({ version: f.controller.state.version, path: 'One.md', value: null });
+    const disk = await f.vault.read('One.md');
+    assert.deepEqual(readProperties(disk).map(item => [item.key, item.value]), [['status', 'keep sibling'], ['other', 12]]);
+    assert.ok(disk.endsWith('Original body\n'));
+    await f.controller.editProperty({ version: f.controller.state.version, path: 'One.md', property: 'Status', value: null });
+    assert.equal(readProperties(await f.vault.read('One.md')).find(item => item.key === 'status')?.value, null);
+  } finally { await f.stop(); }
+});
+
+test('retrying an already-transformed failed draft still attempts persistence and cannot claim false success', async () => {
+  class Fails extends MemoryAdapter {
+    fail = false;
+    override async write(path: string, source: string) { if (this.fail && path === 'One.md') throw new Error('still full'); return super.write(path, source); }
+  }
+  const adapter = new Fails({ 'Work.base': base, 'One.md': note }), f = await fixture(adapter);
+  try {
+    adapter.fail = true;
+    const edit = { version: f.controller.state.version, path: 'One.md', property: 'Status', value: 'Done' };
+    await assert.rejects(f.controller.editProperty(edit), /still full/);
+    await assert.rejects(f.controller.editProperty(edit), /still full/);
+    assert.equal(await f.vault.read('One.md'), note);
+    adapter.fail = false; await f.controller.editProperty(edit);
+    assert.equal(readProperties(await f.vault.read('One.md'))[0].value, 'Done');
+    assert.equal((await f.getBuffer('One.md')).dirty, false);
+  } finally { adapter.fail = false; await f.stop(); }
+});
