@@ -25,6 +25,11 @@ mod external_namespace;
 mod external_namespace_tests;
 #[path = "external_scan.rs"]
 mod external_scan;
+#[path = "external_scan_progress.rs"]
+mod external_scan_progress;
+#[cfg(test)]
+#[path = "external_scan_progress_tests.rs"]
+mod external_scan_progress_tests;
 #[path = "family.rs"]
 mod family;
 #[path = "family_namespace.rs"]
