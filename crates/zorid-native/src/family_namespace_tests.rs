@@ -391,3 +391,141 @@ fn mixed_folder_move_and_child_delete_retire_parent_only_after_remaining_members
     );
     assert_eq!(vault.family_status().unwrap().pending_projection, "0");
 }
+
+#[test]
+fn namespace_handoff_settles_interrupted_file_phases_before_move_or_delete() {
+    let phases: [(&str, fn(&str)); 3] = [
+        ("prepared", |p| {
+            if p == "prepared" {
+                panic!("interrupt prepared");
+            }
+        }),
+        ("displaced_before_record", |p| {
+            if p == "displaced_before_record" {
+                panic!("interrupt displaced");
+            }
+        }),
+        ("published_before_record", |p| {
+            if p == "published_before_record" {
+                panic!("interrupt published");
+            }
+        }),
+    ];
+    for (phase, fault) in phases {
+        for delete in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut vault = enrolled(directory.path());
+            let before = vault.store.read(&entry_id()).unwrap().unwrap().state;
+            vault
+                .store
+                .family_apply(
+                    &request(
+                        "interrupted-write",
+                        Mutation::Write {
+                            id: entry_id(),
+                            expected: before.revision,
+                            content: b"updated".to_vec(),
+                        },
+                    ),
+                    None,
+                )
+                .unwrap();
+            vault.fault = Some(fault);
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    vault.project(&entry_id()).unwrap();
+                }))
+                .is_err(),
+                "fault not reached: {phase}"
+            );
+            drop(vault);
+            let mut vault = NativeVault::open(directory.path()).unwrap();
+            let current = vault.store.read(&entry_id()).unwrap().unwrap().state;
+            if delete {
+                vault
+                    .store
+                    .family_apply(
+                        &request(
+                            "delete-after-interruption",
+                            Mutation::Delete {
+                                id: entry_id(),
+                                expected: current.revision,
+                                recursive: false,
+                            },
+                        ),
+                        None,
+                    )
+                    .unwrap();
+            } else {
+                logical_move(&mut vault);
+            }
+            let report = vault.recover().unwrap();
+            assert!(
+                report.blocked.is_empty(),
+                "{phase} delete={delete}: {report:?}"
+            );
+            assert!(!directory.path().join("note.md").exists());
+            if delete {
+                assert!(vault.store.physical_binding(&entry_id()).unwrap().is_none());
+            } else {
+                assert_eq!(
+                    std::fs::read(directory.path().join("renamed.md")).unwrap(),
+                    b"updated"
+                );
+            }
+            assert!(vault.store.projection_attempts(false).unwrap().is_empty());
+            assert_eq!(vault.family_status().unwrap().pending_projection, "0");
+        }
+    }
+}
+
+#[test]
+fn namespace_handoff_preserves_recreated_source_occupant() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut vault = enrolled(directory.path());
+    let before = vault.store.read(&entry_id()).unwrap().unwrap().state;
+    vault
+        .store
+        .family_apply(
+            &request(
+                "interrupted-write",
+                Mutation::Write {
+                    id: entry_id(),
+                    expected: before.revision,
+                    content: b"updated".to_vec(),
+                },
+            ),
+            None,
+        )
+        .unwrap();
+    vault.fault = Some(|p| {
+        if p == "prepared" {
+            panic!("interrupt prepared");
+        }
+    });
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        vault.project(&entry_id()).unwrap();
+    }))
+    .is_err());
+    drop(vault);
+    std::fs::rename(
+        directory.path().join("note.md"),
+        directory.path().join("external-original.md"),
+    )
+    .unwrap();
+    std::fs::write(directory.path().join("note.md"), b"external replacement").unwrap();
+    let mut vault = NativeVault::open(directory.path()).unwrap();
+    logical_move(&mut vault);
+    let report = vault.recover().unwrap();
+    assert!(!report.blocked.is_empty());
+    assert_eq!(
+        std::fs::read(directory.path().join("note.md")).unwrap(),
+        b"external replacement"
+    );
+    assert_eq!(
+        std::fs::read(directory.path().join("external-original.md")).unwrap(),
+        b"before"
+    );
+    assert!(!directory.path().join("renamed.md").exists());
+    assert!(!vault.store.projection_attempts(false).unwrap().is_empty());
+}

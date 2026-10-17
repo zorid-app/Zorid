@@ -63,6 +63,12 @@ occupant is inferred to belong to an unbound entry. The new mixed folder fixture
 checks that child deletion cannot retire the parent Move before remaining members
 finish. This follow-up is source-only pending its coordinated runtime gate.
 
-A pre-existing active content publication remains pending with retained evidence.
-Explicit publication responsibility transfer is still required; it is not treated
-as a completed namespace operation.
+The file-publication handoff follow-up settles an exact interrupted file attempt
+before namespace attachment. It cancels only an unpublished attempt with proven
+old occupancy, restores a displaced baseline with NOREPLACE, or acknowledges an
+already-published stage using its immutable historical target. Every branch checks
+saved parent/inode/baseline authority; changed or recreated occupants stay retained
+and pending. Ordinary hidden-entry publication guards remain intact. Two focused
+fixtures cover interrupted phases followed by Move/Delete and recreated sources.
+This follow-up is independently source-reviewed and runtime-unverified. Active
+directory-create attempts still need the corresponding explicit handoff.

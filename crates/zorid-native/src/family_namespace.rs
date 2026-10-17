@@ -117,6 +117,21 @@ impl NativeVault {
             ));
             return Ok(());
         }
+        let member_ids: BTreeSet<_> = jobs
+            .iter()
+            .flat_map(|job| job.affected.iter().map(|c| c.after.id.clone()))
+            .collect();
+        let mut unsettled = BTreeSet::new();
+        for attempt in self.store.projection_attempts(false)? {
+            if member_ids.contains(&attempt.target.state.id) {
+                if let Err(error) = self.settle_namespace_publication(&attempt) {
+                    unsettled.insert(attempt.target.state.id.clone());
+                    report
+                        .blocked
+                        .push((attempt.target.state.path, error.to_string()));
+                }
+            }
+        }
         let mut bindings = BTreeMap::new();
         for job in &jobs {
             for change in &job.affected {
@@ -131,6 +146,12 @@ impl NativeVault {
         let groups = connected_jobs(&jobs, &bindings);
         for indexes in groups {
             let group: Vec<_> = indexes.iter().map(|index| jobs[*index].clone()).collect();
+            if group
+                .iter()
+                .any(|job| job.affected.iter().any(|c| unsettled.contains(&c.after.id)))
+            {
+                continue;
+            }
             let diagnostic = group[0].target.path.clone();
             let outcome = self.attach_family_namespace_group(&group);
             if let Err(error) = outcome {

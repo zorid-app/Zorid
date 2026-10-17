@@ -29,6 +29,8 @@ mod namespace;
 #[cfg(test)]
 #[path = "physical_binding_tests.rs"]
 mod physical_binding_tests;
+#[path = "publication_handoff.rs"]
+mod publication_handoff;
 #[path = "rescan.rs"]
 mod rescan;
 #[path = "text_sync.rs"]
