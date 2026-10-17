@@ -94,16 +94,11 @@ impl NativeVault {
             .into_iter()
             .map(|a| a.job.job_id)
             .collect();
-        let covered: BTreeSet<_> = self
-            .store
-            .family_namespace_covered_jobs()?
-            .into_iter()
-            .collect();
         let jobs: Vec<_> = self
             .store
             .pending_namespace_jobs()?
             .into_iter()
-            .filter(|job| !attempts.contains(&job.job_id) && !covered.contains(&job.job_id))
+            .filter(|job| !attempts.contains(&job.job_id))
             .collect();
         if jobs.is_empty() {
             return Ok(());
@@ -137,23 +132,7 @@ impl NativeVault {
         for indexes in groups {
             let group: Vec<_> = indexes.iter().map(|index| jobs[*index].clone()).collect();
             let diagnostic = group[0].target.path.clone();
-            let outcome: Result<()> = (|| {
-                // Store checks the current Normal/Tombstone decision and every
-                // exact pending job, including authenticated family membership.
-                let targets = self.store.family_namespace_targets(&group)?;
-                let evidence = self.family_namespace_evidence(&group, &targets, &bindings)?;
-                self.paths.verify()?;
-                let Some(attempt) = self
-                    .store
-                    .family_namespace_prepare(&group, &targets, &evidence)?
-                else {
-                    // Never-materialized entries retire namespace obligations
-                    // only; pending create/content publication is not success yet.
-                    return Ok(());
-                };
-                self.point("family_namespace_prepared");
-                self.resume_namespace(attempt)
-            })();
+            let outcome = self.attach_family_namespace_group(&group);
             if let Err(error) = outcome {
                 report.blocked.push((diagnostic, error.to_string()));
             }
@@ -161,6 +140,52 @@ impl NativeVault {
             // its IDs projected: ordinary publication must still process them.
         }
         Ok(())
+    }
+
+    fn attach_family_namespace_group(&mut self, original: &[ProjectionJob]) -> Result<()> {
+        // Each successful preparation claims at least one explicit member. The
+        // final extra iteration observes that all remaining work was claimed.
+        let references: usize = original.iter().map(|job| job.affected.len()).sum();
+        for _ in 0..=references {
+            let group = original
+                .iter()
+                .map(|job| self.store.projection_job(&job.job_id))
+                .collect::<zorid_store::Result<Vec<_>>>()?
+                .into_iter()
+                .filter(|job| !job.completed)
+                .collect::<Vec<_>>();
+            if group.is_empty() {
+                return Ok(());
+            }
+            // Store checks exact pending jobs and returns only members not yet
+            // claimed by an active or completed physical attempt.
+            let mut targets = self.store.family_namespace_targets(&group)?;
+            if targets.is_empty() {
+                return Ok(());
+            }
+            // Remove explicitly deleted children before moving their surviving
+            // folder. This does not expand membership from the receiver tree.
+            let deleted = targets.iter().any(|target| target.deleted);
+            targets.retain(|target| target.deleted == deleted);
+            let bindings = targets
+                .iter()
+                .map(|target| Ok((target.id.clone(), self.store.physical_binding(&target.id)?)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            let evidence = self.family_namespace_evidence(&group, &targets, &bindings)?;
+            self.paths.verify()?;
+            if let Some(attempt) = self
+                .store
+                .family_namespace_prepare(&group, &targets, &evidence)?
+            {
+                self.point("family_namespace_prepared");
+                self.resume_namespace(attempt)?;
+            }
+            // None means never-materialized members were satisfied without
+            // touching disk. Reload jobs, claims, and bindings before proceeding.
+        }
+        Err(Error::Busy(
+            "family namespace attachment did not make bounded progress",
+        ))
     }
 
     fn family_namespace_evidence(
@@ -174,11 +199,13 @@ impl NativeVault {
             .flat_map(|j| j.affected.iter().map(|c| c.after.id.clone()))
             .collect();
         let actual: BTreeSet<_> = targets.iter().map(|s| s.id.clone()).collect();
-        if targets.is_empty() || targets.len() != actual.len() || actual != expected {
+        if targets.is_empty() || targets.len() != actual.len() || !actual.is_subset(&expected) {
             return Err(Error::Busy(
-                "family namespace targets differ from exact job members",
+                "family namespace targets are not explicit job members",
             ));
         }
+        // The preparation transaction additionally requires exactly every still
+        // unclaimed member with this disposition; this adapter cannot omit one.
         let deleted = targets[0].deleted;
         if targets.iter().any(|target| target.deleted != deleted) {
             return Err(Error::Busy(
