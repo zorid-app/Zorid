@@ -19,6 +19,10 @@ pub use blob_read::{
     BinaryReadChunk, BinaryReadRef, BinaryReadSession, BINARY_READ_MAX_ACTIVE_PINS,
     BINARY_READ_MAX_RANGE_BYTES,
 };
+pub use document_index::{
+    DocumentIndexError, DocumentIndexProgress, DocumentIndexStage, DocumentIndexStatus,
+    DocumentManifest, DocumentQueryPin, DocumentSourceRead,
+};
 pub use entry_content::FAMILY_MAX_INLINE_BYTES;
 pub use family_external_create::ExternalCreateIntent;
 pub use operation_request::{
