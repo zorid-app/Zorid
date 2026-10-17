@@ -196,7 +196,17 @@ private final class NativeMobileSession {
                       let payload = Data(base64Encoded: body), payload.count <= Self.bodyLimit
                 else { throw MobileFailure.invalidFrame }
                 let json = Data(header.utf8)
-                try Self.validateHeader(json)
+                let object = try Self.validateHeader(json)
+                guard let command = object["command"] as? [String: Any],
+                      let method = command["method"] as? String, !method.isEmpty else {
+                    throw MobileFailure.invalidFrame
+                }
+                if method == "claim_client" {
+                    // Only the persisted native consumer may obtain a lease.
+                    // Rust owns the rest of the typed command schema/validation.
+                    guard let clientId = command["client_id"] as? String,
+                          clientId == self.vault.clientId else { throw MobileFailure.invalidFrame }
+                }
                 var frame = Data()
                 for length in [json.count, payload.count] {
                     var value = UInt32(length).bigEndian
@@ -229,10 +239,12 @@ private final class NativeMobileSession {
         }
     }
 
-    private static func validateHeader(_ data: Data) throws {
+    @discardableResult
+    private static func validateHeader(_ data: Data) throws -> [String: Any] {
         guard String(data: data, encoding: .utf8) != nil,
-              (try JSONSerialization.jsonObject(with: data)) is [String: Any]
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw MobileFailure.invalidFrame }
+        return object
     }
 
     func close(completion: @escaping () -> Void) {
@@ -353,7 +365,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
 
     fileprivate func requestLifecycle(_ reason: String, completion: @escaping (Bool) -> Void) {
         guard pending == nil, hasListeners("lifecycleRequest") else { completion(false); return }
-        let id = UUID().uuidString
+        let id = UUID().uuidString.lowercased()
         pending = (id, reason, completion)
         let timer = DispatchWorkItem { [weak self] in self?.cancelLifecycle() }
         timeout = timer
