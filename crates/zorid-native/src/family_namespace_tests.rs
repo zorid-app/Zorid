@@ -69,6 +69,7 @@ fn family_move_then_delete_replays_against_original_physical_path_after_restart(
                 Mutation::Delete {
                     id: entry_id(),
                     expected: moved.state.revision,
+                    recursive: false,
                 },
             ),
             None,

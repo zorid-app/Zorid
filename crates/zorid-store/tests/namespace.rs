@@ -282,7 +282,7 @@ fn baseline_cas_failure_does_not_retire_job_or_discard_proof() {
     assert!(!s.namespace_attempts(false).unwrap()[0].completed);
 }
 #[test]
-fn schema_six_legacy_namespace_job_migrates_without_fabricated_attempt() {
+fn schema_six_legacy_namespace_job_is_rejected_without_mutation() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("db");
     let mut s = Store::open(&db).unwrap();
@@ -294,11 +294,12 @@ fn schema_six_legacy_namespace_job_migrates_without_fabricated_attempt() {
     c.execute_batch("DROP TABLE namespace_member_progress; DROP TABLE namespace_members; DROP TABLE namespace_attempts; PRAGMA user_version=6;")
         .unwrap();
     drop(c);
-    let mut s = Store::open(&db).unwrap();
-    assert!(s.namespace_attempts(true).unwrap().is_empty());
-    assert_eq!(s.namespace_jobs().unwrap().len(), 1);
-    assert!(s.apply_namespace(&req, &[]).is_err());
-    assert!(!s.namespace_jobs().unwrap()[0].completed);
+    let before = std::fs::read(&db).unwrap();
+    assert!(matches!(
+        Store::open(&db),
+        Err(zorid_store::StoreError::UnsupportedSchema(6))
+    ));
+    assert_eq!(std::fs::read(&db).unwrap(), before);
 }
 #[test]
 fn same_path_move_finishes_without_displacing_inode() {
@@ -569,13 +570,9 @@ fn pending_job_guard_does_not_decode_completed_publication_history() {
 }
 
 #[test]
-fn schema_six_migration_creates_exact_normalized_namespace_layout() {
+fn fresh_schema_has_exact_normalized_namespace_layout() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("db");
-    drop(Store::open(&db).unwrap());
-    let c = rusqlite::Connection::open(&db).unwrap();
-    c.execute_batch("DROP TABLE namespace_member_progress; DROP TABLE namespace_members; DROP TABLE namespace_attempts; PRAGMA user_version=6;").unwrap();
-    drop(c);
     drop(Store::open(&db).unwrap());
     let c = rusqlite::Connection::open(&db).unwrap();
     assert_eq!(c.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('namespace_attempts','namespace_members','namespace_member_progress','namespace_member_targets')",[],|r|r.get::<_,i64>(0)).unwrap(),4);

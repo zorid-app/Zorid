@@ -39,11 +39,20 @@ pending namespace work are gone.
 
 This is fresh schema8 development source; its new tables require a newly created
 disposable fixture. No migration of real vaults is included. The exact approved
-namespace binding patch is applied in this branch. No builds or runtime checks
-have run for this follow-up yet. Focused fixtures cover Move-then-Delete against
-an old physical path across restart, newer logical text during Move, and an
-explicit folder Move preserving child frontiers. Existing namespace fixtures
-cover the capture/stage/publish engine's crash and occupant preservation behavior.
+namespace binding patch is applied in this branch.
+
+The isolated `core-family-namespace` candidate passed 24 native namespace tests
+(session73322) and 18 store namespace tests (session75261), with `-j1` and
+`--test-threads=1` and its own target directory. The commands were
+`cargo test --offline -p zorid-native -j1 namespace -- --test-threads=1` and
+`cargo test --offline -p zorid-store --test namespace -j1 -- --test-threads=1`.
+Focused fixtures cover Move-then-Delete against an old physical path across
+restart, newer logical text during Move, and an explicit folder Move preserving
+child frontiers. Existing fixtures exercise capture/stage/publish crashes and
+occupant preservation. Initial failures were a missing test Delete flag and two
+obsolete migration expectations; the latter now assert rejection without database
+mutation and fresh-schema canonical layout. These checks do not establish
+browser/CLI/Electron cross-client integration or all family recovery scenarios.
 
 Remaining conditions are explicit: a connected group with mixed final Move and
 Delete dispositions, or a pre-existing active content publication, stays pending
