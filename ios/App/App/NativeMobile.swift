@@ -7,7 +7,7 @@ private enum MobileFailure: Error {
     case unavailable, invalidFrame, metadata
 }
 
-private struct LocalVault: Codable {
+struct LocalVault: Codable {
     let id: UUID
     let name: String
     let clientId: String
@@ -107,7 +107,7 @@ private final class LocalVaultCatalog {
     }
 }
 
-private final class NativeMobileSession {
+final class NativeMobileSession {
     // Includes open/request/close and buffer frees, across every session instance.
     private static let worker = DispatchQueue(label: "app.zorid.mobile.core", qos: .userInitiated)
     private var handle: OpaquePointer?
@@ -270,17 +270,20 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "context", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "refresh", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "noteOpened", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "close", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "lifecycleAck", returnType: CAPPluginReturnPromise)
     ]
     private let session: NativeMobileSession
+    private let initialPath: String?
     private var pending: (id: String, reason: String, completion: (Bool) -> Void)?
     private var timeout: DispatchWorkItem?
     private var closeAuthorized = false
 
-    fileprivate init(session: NativeMobileSession) {
+    fileprivate init(session: NativeMobileSession, initialPath: String?) {
         self.session = session
+        self.initialPath = initialPath
         super.init()
     }
 
@@ -302,7 +305,25 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func context(_ call: CAPPluginCall) {
-        session.context { call.resolve($0) }
+        session.context { context in
+            var context = context
+            if let initialPath = self.initialPath { context["initialPath"] = initialPath }
+            call.resolve(context)
+        }
+    }
+
+    @objc func noteOpened(_ call: CAPPluginCall) {
+        guard let path = call.getString("path"), NativeFileEntry.isValidPath(path) else {
+            call.reject("Invalid note path.", "invalid_request")
+            return
+        }
+        // Called after real web activation, never just after tapping a native row.
+        session.recordNoteOpened(path: path) { result in
+            switch result {
+            case .success: call.resolve()
+            case .failure: call.reject("The opened note could not be recorded.", "native_history_failed")
+            }
+        }
     }
 
     @objc func refresh(_ call: CAPPluginCall) {
@@ -386,8 +407,8 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
 private final class NativeEditorBridge: CAPBridgeViewController {
     let vaultPlugin: NativeVaultPlugin
 
-    init(session: NativeMobileSession) {
-        vaultPlugin = NativeVaultPlugin(session: session)
+    init(session: NativeMobileSession, initialPath: String?) {
+        vaultPlugin = NativeVaultPlugin(session: session, initialPath: initialPath)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -418,10 +439,14 @@ final class NativeEditorContainer: UIViewController {
     private let editor: NativeEditorBridge
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var leaving = false
+    private let originTitle: String
+    private let onClosed: () -> Void
 
-    fileprivate init(session: NativeMobileSession) {
+    init(session: NativeMobileSession, initialPath: String? = nil, originTitle: String = "Pages", onClosed: @escaping () -> Void = {}) {
         self.session = session
-        editor = NativeEditorBridge(session: session)
+        self.originTitle = originTitle
+        self.onClosed = onClosed
+        editor = NativeEditorBridge(session: session, initialPath: initialPath)
         super.init(nibName: nil, bundle: nil)
         title = session.vault.name
     }
@@ -433,7 +458,7 @@ final class NativeEditorContainer: UIViewController {
         view.backgroundColor = .systemBackground
         view.accessibilityIdentifier = "native.editor.container"
         navigationItem.hidesBackButton = true
-        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Vaults", style: .plain, target: self, action: #selector(returnToVaults))
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
         navigationItem.leftBarButtonItem?.accessibilityIdentifier = "native.editor.vaults"
         addChild(editor)
         view.addSubview(editor.view)
@@ -468,7 +493,8 @@ final class NativeEditorContainer: UIViewController {
                 return
             }
             self.session.close {
-                self.navigationController?.popViewController(animated: true)
+                self.onClosed()
+                self.navigationController?.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
             }
         }
     }
@@ -595,7 +621,9 @@ final class NativeVaultPicker: UITableViewController {
                 self.tableView.isUserInteractionEnabled = true
                 self.navigationItem.rightBarButtonItem?.isEnabled = true
                 switch result {
-                case .success(let session): self.navigationController?.pushViewController(NativeEditorContainer(session: session), animated: true)
+                case .success(let session):
+                    let pages = NativePagesController(vault: vault, root: root, session: session)
+                    self.navigationController?.pushViewController(pages, animated: !UIAccessibility.isReduceMotionEnabled)
                 case .failure: self.showMessage("Could not open vault", "The local vault could not be opened. Your files remain on this device. Try again when device storage is available.")
                 }
             }
