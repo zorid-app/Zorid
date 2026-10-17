@@ -393,3 +393,102 @@ fn recovery_reports_late_displaced_writes_as_incomplete_across_invocations() {
         );
     }
 }
+
+#[test]
+fn mkdir_then_nested_binary_create_and_exact_folder_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    let mkdir = [
+        "mkdir",
+        "folder",
+        "--id",
+        "folder1",
+        "--operation-id",
+        "mkdir1",
+    ];
+    let created = success(invoke(dir.path(), &mkdir, None));
+    assert_eq!(created["projection"]["state"], "projected");
+    assert!(dir.path().join("folder").is_dir());
+    let file = success(invoke(
+        dir.path(),
+        &[
+            "create",
+            "folder/unknown.bin",
+            "--id",
+            "child1",
+            "--operation-id",
+            "child-create1",
+            "--input",
+            "-",
+        ],
+        Some(&[0, 255, 99]),
+    ));
+    assert_eq!(file["projection"]["state"], "projected");
+    assert_eq!(
+        fs::read(dir.path().join("folder/unknown.bin")).unwrap(),
+        [0, 255, 99]
+    );
+    // Child creation changes the parent revision; original mkdir retry still
+    // returns its original durable receipt without changing the child.
+    assert_eq!(
+        success(invoke(dir.path(), &mkdir, None))["commit"],
+        created["commit"]
+    );
+    assert_eq!(
+        fs::read(dir.path().join("folder/unknown.bin")).unwrap(),
+        [0, 255, 99]
+    );
+}
+
+#[test]
+fn rescan_imports_unknown_nested_files_and_preserves_missing_history() {
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    fs::create_dir(dir.path().join("nested")).unwrap();
+    fs::write(dir.path().join("nested/blob.xyz"), [0, 255, 10]).unwrap();
+    fs::write(dir.path().join("root.bin"), [128, 0]).unwrap();
+    let scan = success(invoke(dir.path(), &["rescan"], None));
+    assert_eq!(scan["complete"], true);
+    assert_eq!(scan["missing_are_deletions"], false);
+    assert_eq!(scan["limits"]["max_total_bytes"], "67108864");
+    let entries = success(invoke(dir.path(), &["list"], None));
+    let file = entries["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["path"] == "nested/blob.xyz")
+        .unwrap();
+    let id = file["id"].as_str().unwrap();
+    let read = invoke(dir.path(), &["read", "--id", id, "--raw"], None);
+    assert!(read.status.success());
+    assert_eq!(read.stdout, [0, 255, 10]);
+    fs::remove_file(dir.path().join("nested/blob.xyz")).unwrap();
+    let scan = success(invoke(dir.path(), &["rescan"], None));
+    assert!(scan["missing"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::String("nested/blob.xyz".into())));
+    let retained = invoke(dir.path(), &["read", "--id", id, "--raw"], None);
+    assert!(retained.status.success());
+    assert_eq!(retained.stdout, [0, 255, 10]);
+}
+
+#[test]
+fn bounded_rescan_reports_incomplete_then_can_retry_full_coverage() {
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    fs::write(dir.path().join("one.bin"), [1]).unwrap();
+    fs::write(dir.path().join("two.bin"), [2]).unwrap();
+    let bounded = success(invoke(dir.path(), &["rescan", "--max-entries", "1"], None));
+    assert_eq!(bounded["complete"], false);
+    assert_eq!(bounded["run"]["issue"], "scan_incomplete");
+    let complete = success(invoke(dir.path(), &["rescan"], None));
+    assert_eq!(complete["complete"], true);
+    assert_eq!(
+        success(invoke(dir.path(), &["list"], None))["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}

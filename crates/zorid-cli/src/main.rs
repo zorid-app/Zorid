@@ -50,6 +50,15 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         input: PathBuf,
     },
+    /// Create one folder without replacing an existing path; parents must exist.
+    Mkdir {
+        path: String,
+        #[arg(long)]
+        id: String,
+        /// Caller-generated operation ID, reused only for an identical retry.
+        #[arg(long)]
+        operation_id: String,
+    },
     /// Replace committed file bytes with an explicit revision precondition.
     Write {
         #[arg(long)]
@@ -66,6 +75,18 @@ enum Command {
     Reconcile {
         #[arg(required = true, num_args = 1..)]
         paths: Vec<String>,
+    },
+    /// Discover external files/folders with bounded work; missing paths are not deleted.
+    Rescan {
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100_000))]
+        max_entries: Option<u32>,
+        #[arg(long)]
+        max_total_bytes: Option<u64>,
+        #[arg(long)]
+        max_depth: Option<u16>,
+        /// Soft work duration limit, checked between operations (not a hard timeout).
+        #[arg(long)]
+        max_duration_ms: Option<u64>,
     },
     /// Resume pending filesystem publications without scanning the whole vault.
     Recover,
@@ -326,6 +347,19 @@ fn run(args: Args) -> Result<Output> {
                 content: input_bytes(input)?,
             },
         }),
+        Command::Mkdir {
+            path,
+            id,
+            operation_id,
+        } => Some(MutationRequest {
+            operation_id: OperationId::new(operation_id.clone())?,
+            mutation: Mutation::Create {
+                id: EntryId::new(id.clone())?,
+                path: VaultPath::new(path.clone())?,
+                kind: EntryKind::Folder,
+                content: None,
+            },
+        }),
         _ => None,
     };
     // The metadata preflight above provides a useful missing-vault error only.
@@ -357,7 +391,7 @@ fn run(args: Args) -> Result<Output> {
             }
             json!({"entry":entry.state,"encoding":"base64","bytes":STANDARD.encode(bytes)})
         }
-        Command::Create { .. } | Command::Write { .. } => {
+        Command::Create { .. } | Command::Write { .. } | Command::Mkdir { .. } => {
             let outcome = vault.apply(request.as_ref().expect("mutation request prepared"))?;
             json!({"durable_local_commit":true,"synced":false,"commit":outcome.commit,"projection":projection_json(outcome.projection)})
         }
@@ -369,6 +403,30 @@ fn run(args: Args) -> Result<Output> {
             report_json(vault.reconcile(&paths)?)
         }
         Command::Recover => report_json(vault.recover()?),
+        Command::Rescan {
+            max_entries,
+            max_total_bytes,
+            max_depth,
+            max_duration_ms,
+        } => {
+            let mut options = zorid_native::ScanOptions::default();
+            if let Some(value) = max_entries {
+                options.max_entries = value;
+            }
+            if let Some(value) = max_total_bytes {
+                options.max_total_bytes = value;
+            }
+            if let Some(value) = max_depth {
+                options.max_depth = value;
+            }
+            if let Some(value) = max_duration_ms {
+                options.max_duration = std::time::Duration::from_millis(value);
+            }
+            let limits = json!({"max_entries":options.max_entries,"max_total_bytes":options.max_total_bytes.to_string(),"max_depth":options.max_depth,"max_duration_ms":options.max_duration.as_millis().to_string()});
+            let report = vault.rescan_with_options(options)?;
+            let issues: Vec<_> = report.issues.into_iter().map(|issue| json!({"path":issue.path,"code":"scan_issue","message":"This path could not be fully reconciled; data is preserved"})).collect();
+            json!({"complete":report.run.complete,"run":{"scan_id":report.run.scan_id,"max_entries":report.run.max_entries,"finished":report.run.finished,"complete":report.run.complete,"observed":report.run.observed,"imported":report.run.imported,"issue":report.run.issue.map(|_| "scan_incomplete")},"issues":issues,"missing":report.missing,"missing_are_deletions":false,"limits":limits,"synced":false})
+        }
         Command::Move | Command::Delete | Command::Search | Command::Sync => unreachable!(),
     };
     Ok(Output::Json(value))
