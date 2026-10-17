@@ -178,8 +178,9 @@ export class Workspace {
       window.addEventListener('beforeunload', this.unloadListener);
       this.initialized = true;
       this.closeCleanup=window.zorid?.onBeforeClose?.(async()=>{
-        const inert=this.root.inert;this.root.inert=true;
-        try{await this.destroy();}catch(error){this.root.inert=inert;throw error;}
+        if(this.closing)throw new Error('Window close already pending');
+        this.closing=true;const inert=this.root.inert;this.root.inert=true;
+        try{await this.destroy();}catch(error){this.closing=false;this.root.inert=inert;throw error;}
       });
     }
     try {
@@ -204,6 +205,7 @@ export class Workspace {
   }
 
   private closeCleanup?:()=>void;
+  private closing=false;
   private platformReleased=false;
   private platformDrained=false;
   private async releasePlatform():Promise<void>{
@@ -212,6 +214,7 @@ export class Workspace {
     await this.platform.release();this.platformReleased=true;
   }
   async chooseVault(): Promise<void> {
+    if(this.closing)throw new Error('Window close is pending');
     await this.flush();
     const releasing=!!this.platform?.release;
     if(releasing)await this.releasePlatform();
@@ -1294,6 +1297,7 @@ export class Workspace {
     for(const root of roots)for(const node of root.querySelectorAll<HTMLElement>('[data-hotkey-command]'))this.updateHotkeyLabel(node);
   }
   private executeHotkey(id:string):void{
+    if(this.closing)return;
     if(id==='new-window'){if(workspaceWindowBridge(window.zorid))this.run(()=>this.newWindow());return;}
     if(!this.vault)return;
     if(id.startsWith('tab-')){
@@ -1438,7 +1442,7 @@ export class Workspace {
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','',`Link to another note with [[note name]]. Customize workspace shortcuts in Settings → Hotkeys. Create note: ${this.hotkeys.label('new-note')||'not assigned'}. Find file: ${this.hotkeys.label('quick-switcher')||'not assigned'}. Command palette: ${this.hotkeys.label('command-palette')||'not assigned'}.`));
   }
   private hotkeySurfaceBlocked(): boolean {
-    return !!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
+    return this.closing||!!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
   }
   private onKey(event:KeyboardEvent):void{
     if(event.defaultPrevented||event.isComposing||event.getModifierState('AltGraph')||this.hotkeySurfaceBlocked())return;
