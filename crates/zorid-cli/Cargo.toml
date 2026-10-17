@@ -1,0 +1,22 @@
+[package]
+name = "zorid-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+description = "Standalone headless access to Zorid's native vault core"
+
+[[bin]]
+name = "zorid"
+path = "src/main.rs"
+
+[dependencies]
+zorid-core = { path = "../zorid-core" }
+zorid-native = { path = "../zorid-native" }
+zorid-store = { path = "../zorid-store" }
+clap = { version = "4.6", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
