@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        111111111111111111111103 /* NativePages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111104 /* NativePages.swift */; };
         111111111111111111111101 /* NativeMobile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111102 /* NativeMobile.swift */; };
 
 		901B9BEBDB164F35B9CB5690 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 33932BC56CAE4CCF9C9AF936 /* PrivacyInfo.xcprivacy */; };
@@ -22,6 +23,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        111111111111111111111104 /* NativePages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePages.swift; sourceTree = "<group>"; };
         111111111111111111111102 /* NativeMobile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMobile.swift; sourceTree = "<group>"; };
 
 		33932BC56CAE4CCF9C9AF936 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -73,6 +75,7 @@
 				33932BC56CAE4CCF9C9AF936 /* PrivacyInfo.xcprivacy */,
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
                 111111111111111111111102 /* NativeMobile.swift */,
+                111111111111111111111104 /* NativePages.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
@@ -170,6 +173,7 @@
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
                 111111111111111111111101 /* NativeMobile.swift in Sources */,
+                111111111111111111111103 /* NativePages.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
