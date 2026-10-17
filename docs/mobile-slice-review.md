@@ -11,6 +11,49 @@ or runtime parity claim. Read AGENTS.md, roadmap execution checkpoint, native
 integration record and relevant findings. Only this report is owned/changed.
 Owner retains validation and coordinator retains sole main integration.
 
+## Viewer-readiness follow-up — 2026-10-17
+
+Read owner inbox `msg_bf65b70f228b` and actual recovery HEAD
+`63040493dfa52df38970a6b776d2284ed447b085`. Tracked owner source was clean;
+untracked node_modules was left untouched. No tests/builds/simulator were run.
+The user reports 112 focused tests passing, exit 0 (95 adapter, seven lifecycle,
+ten navigation). This is reported evidence; reviewer inspected the ten navigation
+tests and did not rerun them. Mobile heavy ABI process 62353 remains owner-owned.
+
+The mobile-only observed/ready runtime WeakSets now fence notification on an
+actual renderer readiness observation. Canvas requires a mounted handle, images
+require load/complete with positive naturalWidth, and media requires metadata
+readyState without media.error, rather than its error-settling promise. PDF
+rejection does not mark ready. Captured generation/runtime ownership plus the
+existing active pane/tab/path/phase guards prevent late readiness from recording
+an old inactive or disposed view; cached valid readiness remains reusable when
+that view is intentionally activated again. Unknown-format placeholders have no
+success branch. These changes address the corresponding prior P2 paths in source.
+
+### Remaining P2 — Base readiness resolves on failure, too
+
+`workspace.ts:294–295` shares `baseView.ready` and `pdfView.ready` through the same
+`pending.then(ready)` branch. Unlike PDF load failure, **Base refresh failure does
+not reject its ready promise**:
+
+- `src/bases/session.ts:205` defines `ready: controller.refresh()` and exposes the
+  controller's `state` separately.
+- `src/bases/controller.ts:147–149` catches Base parse/query/read errors, publishes
+  `state.error`, and returns normally. The surrounding refresh promise resolves.
+
+A visible `.base` file with malformed definition therefore creates a Base session
+whose ready promise resolves while its state reports failure. The new observer
+adds that runtime to nativeReadyViews and records it as a successful open. The
+previous P2 is narrowed, not fully closed. This does not affect durable save data.
+
+Check captured Base session state for a valid result and no error after readiness,
+with the existing ownership checks; preserve PDF's separate rejection semantics.
+A focused malformed-Base activation case would distinguish success from settled
+failure, as the media test already does for its different readiness contract.
+Reported to owner via ordinary status `msg_8ad17efc814b`. No other concrete
+remaining P1/P2 was identified in this readiness delta. Native runtime and broader
+regression acceptance remain open as recorded below.
+
 ## Native SwiftUI pages final source review — 2026-10-17
 
 Read owner inbox messages `msg_3b5739330b5a` and `msg_8953dec1232b`.
