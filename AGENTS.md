@@ -76,6 +76,10 @@
 
 ## Product priorities
 
+- User explicitly permits copying/adapting suitable Obsidian LiveSync logic to
+  accelerate implementation. Reuse code where it fits the accepted Rust/core
+  architecture; preserve applicable upstream license/copyright notices and track
+  source commit provenance. Do not limit reuse to conceptual reference only.
 - Latest direct user confirmation (2026-10-16): prioritize the best Zorid UX.
   Use Obsidian as a starting point and reference, not an exact parity requirement.
   This supersedes older exact-match requirements in project instructions and
