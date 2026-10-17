@@ -116,6 +116,20 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17
 
 Current authoritative update (older bullets below record preceding stages):
+- RPC integration is isolated in `grpc-core-integration`, currently e9b2d63,
+  with root-owned Cargo/pnpm lock resolution still uncommitted. Root gate97900
+  passes6 native transport checks; gate51477 passes16 relay checks (plus one
+  ignored helper explicitly invoked by its parent). Gate54282 passes7 protocol,
+  one encrypted restore and12 sync checks, but the2MiB binary move/delete case
+  reaches a25-second child deadline. Native owner is identifying the command;
+  this is not yet classified as a product defect or a test-budget issue. Browser
+  production RPC adapter/WASM seam is combined for joint validation, not main.
+  Schema depth/read-ID gate60697 passes its2 Rust+2 Node checks, typecheck and
+  exact regeneration. Store/native/desktop/browser large-file activation remains
+  isolated source work. Obsolete agent-owned build caches were removed after
+  process inspection to resolve ENOSPC; source, fixture databases and official
+  toolchain were retained. Completed browser verification's old HTTP relay70921
+  was closed; no current client depends on it. Heavy builds remain serialized.
 - User explicitly skips P2P in this implementation pass (2026-10-17). Continue
   server-backed E2EE sync and its client integration; P2P stays deferred rather
   than becoming a gate for this pass. Live update behavior is independent of
