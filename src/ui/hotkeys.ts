@@ -54,13 +54,23 @@ export function normalizeHotkey(value: unknown): Hotkey | null {
   if(key.length>1&&!/^(?:F(?:[1-9]|1\d|2[0-4])|Arrow(?:Left|Right|Up|Down)|Home|End|PageUp|PageDown|Enter|Escape|Tab|Backspace|Delete|Insert|Space)$/.test(key))return null;
   return {key,modifiers:modifierOrder.filter(mod=>input.modifiers.includes(mod))};
 }
-export function eventHotkey(event: Pick<KeyboardEvent,'key'|'metaKey'|'ctrlKey'|'altKey'|'shiftKey'|'isComposing'|'repeat'> & { getModifierState?(key:string):boolean }, platform:HotkeyPlatform):Hotkey|null {
+export function eventHotkey(event: Pick<KeyboardEvent,'key'|'metaKey'|'ctrlKey'|'altKey'|'shiftKey'|'isComposing'|'repeat'> & { getModifierState?(key:string):boolean; keyCode?:number; which?:number }, platform:HotkeyPlatform):Hotkey|null {
   if(event.isComposing||event.repeat||event.getModifierState?.('AltGraph'))return null;
   const modifiers:HotkeyModifier[]=[];
   if(platform==='mac'?event.metaKey:event.ctrlKey)modifiers.push('Mod');
   if(platform==='mac'?event.ctrlKey:event.metaKey)modifiers.push(platform==='mac'?'Ctrl':'Meta');
   if(event.altKey)modifiers.push('Alt');if(event.shiftKey)modifiers.push('Shift');
-  return normalizeHotkey({key:event.key,modifiers});
+  // macOS Option can turn a shortcut letter into a symbol (e.g. T → †).
+  // Use its layout-aware legacy virtual letter, also used by CodeMirror's
+  // modified-character fallback. event.code describes a physical US key and
+  // would mislabel layouts such as AZERTY. Never reinterpret text-only Option,
+  // dead/composing keys, or an ASCII logical letter supplied by the layout.
+  let key=event.key;
+  const virtual=event.keyCode||event.which||0;
+  if(platform==='mac'&&event.metaKey&&event.altKey&&!event.ctrlKey&&
+    [...key].length===1&&!/^[\x00-\x7f]$/.test(key)&&Number.isInteger(virtual)&&virtual>=65&&virtual<=90)
+    key=String.fromCharCode(virtual).toLowerCase();
+  return normalizeHotkey({key,modifiers});
 }
 export function hotkeyIdentity(binding:Hotkey,platform:HotkeyPlatform):string {
   const modifiers=new Set<string>(binding.modifiers.map(mod=>mod==='Mod'?(platform==='mac'?'Meta':'Ctrl'):mod));

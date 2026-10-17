@@ -50,3 +50,14 @@ test('editor commands are searchable, configurable and conflict with workspace b
   doc.querySelector<HTMLButtonElement>('[aria-label^="Reset"]')!.click();assert.equal(prefs.customized('editor-bold'),false);
   ui.destroy();dom.window.close();
 });
+
+test('macOS Option-letter capture displays the canonical letter and preserves it after reopening',()=>{
+  const dom=new JSDOM('<main></main>',{url:'https://test.local',pretendToBeVisual:true}),doc=dom.window.document;
+  const prefs=new HotkeyPreferences(dom.window.localStorage,'mac'),ui=mountHotkeySettings(doc.querySelector('main')!,prefs,()=>{});
+  const change=doc.querySelector<HTMLButtonElement>('[data-command="new-tab"] .hotkey-binding button')!;change.click();
+  change.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'†',code:'KeyT',keyCode:84,metaKey:true,altKey:true,bubbles:true,cancelable:true}));
+  assert.equal(doc.querySelector('[data-command="new-tab"] kbd')!.textContent,'⌘ ⌥ T');
+  assert.equal(doc.querySelector('.hotkey-status')!.textContent,'Shortcut saved.');
+  assert.equal(new HotkeyPreferences(dom.window.localStorage,'mac').label('new-tab'),'⌘ ⌥ T');
+  ui.destroy();dom.window.close();
+});
