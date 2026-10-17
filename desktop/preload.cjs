@@ -1,6 +1,11 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const invoke = (name, ...args) => ipcRenderer.invoke(`zorid:${name}`, ...args);
+const durable = async (name, ...args) => {
+  const reply = await invoke(name, ...args);
+  if (!reply?.ok) throw Object.assign(new Error('Durable editor request failed; retain pending recovery state.'), reply?.error, {source:'host'});
+  return reply.result;
+};
 contextBridge.exposeInMainWorld('zorid', Object.freeze({
   showContextMenu: request => invoke('showContextMenu', request),
   dismissContextMenu: () => invoke('dismissContextMenu'),
@@ -15,6 +20,9 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
   },
   compareAndWrite: (vault, path, expectedContent, contents) => invoke('compareAndWrite', vault, path, expectedContent, contents),
   getVault: () => invoke('getVault'),
+  getDurableContext: vault => durable('getDurableContext', vault),
+  durableInvoke: (vault, admissionId, method, args) => durable('durableInvoke', vault, admissionId, method, args),
+  releaseDurableContext: (vault, admissionId) => durable('releaseDurableContext', vault, admissionId),
   openVault: () => invoke('openVault'),
   list: vault => invoke('list', vault),
   stat: (vault, path) => invoke('stat', vault, path),

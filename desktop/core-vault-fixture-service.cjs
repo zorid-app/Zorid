@@ -23,7 +23,7 @@ function validText(value) {
 
 
 /** Actual NativeVault-backed filesystem service, enabled only by explicit fixture
- * construction. App startup never imports/selects it. Durable mutation support
+ * construction. Only the trusted disposable-vault startup opt-in selects it. Durable mutation support
  * requires the shared host-intent API, not an in-memory operation-ID substitute.
  */
 class CoreVaultFixtureService {
@@ -36,15 +36,24 @@ class CoreVaultFixtureService {
       for (const capability of ['read_path', 'list_snapshot', 'changes_after', 'rescan', 'prepare_intent', 'commit_intent', 'query_intent', 'list_intents', 'acknowledge_intent']) {
         if (!host.capabilities.includes(capability)) throw error('unsupported_host_capability');
       }
-      const service = new CoreVaultFixtureService(host, { pollMs, rescanMs });
-      const scan = await host.rescan();
-      if (!scan.finished || !scan.complete) throw error('scan_incomplete');
+      const familyMode = options.familyMode === true;
+      const service = new CoreVaultFixtureService(host, { pollMs, rescanMs, familyMode });
+      if (familyMode) {
+        if (!host.capabilities.includes('fixture_family_status')) throw error('unsupported_host_capability');
+        // Must already be enrolled in the trusted startup configuration. Opening
+        // a UI never initializes/migrates storage or adopts physical files.
+        await host.fixtureFamilyStatus();
+      } else {
+        const scan = await host.rescan();
+        if (!scan.finished || !scan.complete) throw error('scan_incomplete');
+      }
       service.adopt(await host.listSnapshot());
       return service;
     } catch (reason) { await host.close(); throw reason; }
   }
-  constructor(host, { pollMs, rescanMs }) {
+  constructor(host, { pollMs, rescanMs, familyMode = false }) {
     this.host = host;
+    this.familyMode = familyMode;
     this.root = host.root;
     this.pollMs = pollMs;
     this.rescanMs = rescanMs;
@@ -101,7 +110,7 @@ class CoreVaultFixtureService {
     this.listeners.add(listener);
     if (!this.timer) {
       try {
-        this.watcher = watch(this.root, { recursive: true }, (_event, file) => {
+        if (!this.familyMode) this.watcher = watch(this.root, { recursive: true }, (_event, file) => {
           if (this.closed) return;
           const relative = file?.toString().replaceAll('\\', '/');
           if (relative === '.zorid' || relative?.startsWith('.zorid/')) return;
@@ -110,7 +119,7 @@ class CoreVaultFixtureService {
             else this.needsScan = true;
           } catch { this.needsScan = true; }
         });
-        this.watcher.on('error', () => { this.needsScan = true; });
+        this.watcher?.on('error', () => { this.needsScan = true; });
       } catch { this.needsScan = true; }
       this.timer = setInterval(() => { void this.poll(); }, this.pollMs);
       this.timer.unref();
@@ -152,12 +161,12 @@ class CoreVaultFixtureService {
   }
   async pollNow() {
     const hints = [...this.hints]; this.hints.clear();
-    if (this.needsScan || Date.now() - this.lastScan >= this.rescanMs) {
+    if (!this.familyMode && (this.needsScan || Date.now() - this.lastScan >= this.rescanMs)) {
       this.needsScan = false;
       const scan = await this.host.rescan();
       this.lastScan = Date.now();
       if (!scan.complete) this.notify({ type: 'error', code: 'scan_incomplete', message: 'Native vault scan is incomplete; existing files are retained.' });
-    } else if (hints.length) {
+    } else if (!this.familyMode && hints.length) {
       const report = await this.host.reconcile(hints);
       if (report.blocked.length) this.notify({ type: 'error', code: 'reconciliation_blocked', message: 'Native vault reconciliation retained conflicting data.' });
       // A new folder or an absent hint needs bounded traversal to discover its

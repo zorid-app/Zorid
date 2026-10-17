@@ -5,6 +5,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { VaultService } = require('./vault-service.cjs');
 const { WindowBroker } = require('./window-broker.cjs');
+const editorCore = require('./editor-core.cjs').createEditorCoreManager();
 const { createContextMenuController } = require('./context-menu.cjs');
 const { validateMenuHotkeys, workspaceFileMenu } = require('./menu-hotkeys.cjs');
 const menuHotkeys = new WeakMap();
@@ -17,7 +18,7 @@ function allowedURL(url) {
   try { const current = new URL(url); current.hash = ''; const expected = new URL(devUrl || packagedUrl); expected.hash = ''; return current.href === expected.href; }
   catch { return false; }
 }
-const broker = new WindowBroker({ openVault: directory => VaultService.open(directory), allowedURL });
+const broker = new WindowBroker({ openVault: directory => editorCore ? editorCore.open(directory) : VaultService.open(directory), allowedURL });
 let lastVaultPath;
 function handle(name, callback) {
   ipcMain.handle(`zorid:${name}`, (event, ...args) => callback(broker.authenticate(event), event, ...args));
@@ -27,12 +28,18 @@ function registerIPC() {
   handle('dismissContextMenu', record => contextMenus.close(record.window));
   handle('getWindowInfo', record => broker.info(record));
   handle('setMenuHotkeys', (record, _event, bindings) => { menuHotkeys.set(record.window, validateMenuHotkeys(bindings)); if (BrowserWindow.getFocusedWindow() === record.window) refreshApplicationMenu(); });
-  handle('newWindow', async record => ({ id: (await createWindow({ source: record })).id }));
+  handle('newWindow', async record => {
+    if (editorCore && record.vault && await editorCore.isCoreRoot(record.vault.service.root)) throw new Error('Rust fixture currently supports one window with split panes.');
+    return { id: (await createWindow({ source: record })).id };
+  });
   handle('getVault', record => broker.describe(record));
   handle('openVault', async (record, event) => {
+    editorCore?.requireReleased(record);
     const selection = await dialog.showOpenDialog(record.window, { title: 'Open folder as vault', properties: ['openDirectory', 'createDirectory'] });
     if (selection.canceled || !selection.filePaths[0]) return null;
     broker.authenticate(event);
+    editorCore?.requireReleased(record);
+    if (editorCore && record.id !== 'main' && await editorCore.isCoreRoot(selection.filePaths[0])) throw new Error('Rust fixture currently supports one primary window.');
     const result = await broker.select(record, selection.filePaths[0]);
     lastVaultPath = result.path;
     const stateFile = path.join(app.getPath('userData'), 'vault.json');
@@ -40,16 +47,32 @@ function registerIPC() {
     await fs.writeFile(stateFile, JSON.stringify({ path: result.path }), { mode: 0o600 });
     return result;
   });
+  const durableReply = async callback => {
+    try { return { ok: true, result: await callback() }; }
+    catch (error) { return { ok: false, error: { code: typeof error?.code === 'string' && /^[a-z_]{1,64}$/.test(error.code) ? error.code : 'durable_request_failed', commitUncertain: error?.commitUncertain === true } }; }
+  };
+  handle('getDurableContext', (record, _event, expectedRoot) => durableReply(() => editorCore ? editorCore.context(broker, record, expectedRoot) : null));
+  handle('durableInvoke', (record, event, expectedRoot, admissionId, method, args) => durableReply(() => {
+    if (!editorCore) throw new Error('No Rust editor context');
+    return editorCore.invoke(broker, record, event, expectedRoot, admissionId, method, args);
+  }));
+  handle('releaseDurableContext', (record, event, expectedRoot, admissionId) => durableReply(() => {
+    if (!editorCore) throw new Error('No Rust editor context');
+    return editorCore.release(broker, record, event, expectedRoot, admissionId);
+  }));
   for (const method of ['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash', 'remove']) {
     handle(method, (record, event, expectedRoot, ...args) => broker.dispatch(record, expectedRoot, method, args, () => broker.authenticate(event)));
   }
 }
 async function createWindow({ source, primary = false, initialState = 'empty' } = {}) {
-  if (source) broker.assertLive(source);
+  if (source) {
+    broker.assertLive(source);
+    if (editorCore && source.vault && await editorCore.isCoreRoot(source.vault.service.root)) throw new Error('Rust fixture currently supports one window with split panes.');
+  }
   const window = new BrowserWindow({ width: 1280, height: 860, minWidth: 640, minHeight: 480, title: 'Zorid', backgroundColor: '#1e1e1e', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 15 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   const record = broker.register(window, { primary, initialState });
   window.on('focus', refreshApplicationMenu);
-  window.on('closed', () => { contextMenus.close(window); broker.remove(record); });
+  window.on('closed', () => { contextMenus.close(window); broker.remove(record); void editorCore?.retire(broker, record).catch(() => {}); });
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -57,7 +80,7 @@ async function createWindow({ source, primary = false, initialState = 'empty' } 
   window.webContents.on('will-navigate', (event, url) => { if (!allowedURL(url)) event.preventDefault(); });
   try {
     if (source) broker.bind(record, source.vault);
-    else if (lastVaultPath) {
+    else if (lastVaultPath && (primary || !editorCore || !await editorCore.isCoreRoot(lastVaultPath).catch(() => false))) {
       try { await broker.select(record, lastVaultPath); } catch { /* Missing previous vault opens the picker. */ }
     }
     if (devUrl) await window.loadURL(devUrl); else await window.loadFile(path.join(__dirname, '../dist/index.html'));
@@ -104,4 +127,10 @@ app.whenReady().then(async () => {
 });
 app.on('window-all-closed', () => { if (familyFixture || process.platform !== 'darwin') app.quit(); });
 // before-quit can still be cancelled by a renderer's unsaved-note guard.
-app.on('will-quit', () => broker.dispose());
+let coreClosed = false, coreClosing;
+app.on('will-quit', event => {
+  if (editorCore && !coreClosed) {
+    event.preventDefault();
+    coreClosing ??= editorCore.close().catch(() => {}).finally(() => { coreClosed = true; broker.dispose(); app.quit(); });
+  } else broker.dispose();
+});

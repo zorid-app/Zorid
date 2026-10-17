@@ -1,0 +1,68 @@
+# Normal editor Rust opt-in
+
+This source slice selects the shared Rust vault for one explicitly configured
+**disposable, already initialized and enrolled** vault in the normal Electron UI.
+Other folders continue using the existing filesystem service. This does not
+migrate real vaults, implement production window identity allocation, or enable
+physical namespace reconciliation. Existing-text durable save also requires the
+separately owned NoteBuffer/Workspace consumer and native enrolled-write intent
+routing (`76dcb2a`). New-file, binary, rename and deletion UI mutations remain
+follow-ups; the legacy mutation methods deliberately reject on this adapter.
+
+## Trusted startup
+
+Run the normal Electron entry point with these environment values set by the
+main-process launcher, using a fresh matching build and protected fixture config:
+
+- `ZORID_EDITOR_RUST=1`
+- `ZORID_FIXTURE_VAULT`: absolute disposable vault root.
+- `ZORID_DESKTOP_HOST_BIN`: absolute freshly built desktop host binary.
+- `ZORID_FIXTURE_SYNC_CONFIG`: absolute protected native relay fixture config.
+- `ZORID_FIXTURE_CLIENT_ID`: fixed canonical UUID for this fixture window; reuse
+  it on restart so durable checkpoints remain attributable to the same consumer.
+
+Do not combine this mode with `ZORID_DESKTOP_FAMILY_FIXTURE=1`, which selects the
+separate core verification window. Pick the configured folder using the normal
+Open vault UI. Only the primary window may select it; split panes share its
+admission. The renderer cannot supply executable/config paths or client identity.
+
+`desktop/editor-core.cjs` acquires the native lifetime lease and supplies a scoped
+DurableWrites capability. Each RPC rechecks the actual WindowBroker sender and
+captured generation, including immediately before queued native dispatch. Text,
+plans, refs and checkpoint bodies use the existing bounded provider protocols.
+The bridge returns sanitized failures and preserves unknown-commit status.
+
+## Consumer lifecycle
+
+`PlatformVault.adapter.durableWrites` is optional; its checkpoint scope contains
+the persistent local authority and trusted client ID. Its platform ID is
+`desktop-core:<local authority>:<client>` so a recreated folder cannot inherit
+another store's recovery data.
+
+The consumer must recover checkpoints before enabling edits, and await final
+flush/checkpoint before `PlatformVault.release()`. Release drains accepted work
+and relinquishes native ownership; it does not fabricate save/ACK success. Call
+release before opening the folder picker. If the picker is cancelled or fails,
+call existing `createPlatformAdapter()` to reacquire the currently selected vault
+and replace the released capability before resuming edits. Exact release retries
+are idempotent even when the IPC acknowledgment was lost.
+
+A closed renderer leaves persisted recovery state intact; closing its child
+releases the kernel lock. Normal Electron quit waits for child closure after the
+renderer unsaved-state guard. The existing family journal drives read/cache
+notifications; this mode does not run the legacy disk importer or filesystem
+watcher. No background relay loop is installed by this slice.
+
+## Integration and evidence
+
+Owner: desktop integration, isolated `tingkai-c/desktop-editor-core` based on
+`1e5ffdb`. Dependencies: host/bridge family commands `3ef94f8`, shared native runner
+`e0dba5c`, matching schema8/native family implementation and enrolled-write intent
+routing. Preserve the separate `dadf4a5` fixture branch when merging main.cjs.
+
+Source syntax and whitespace checks passed. No TypeScript build, Electron launch,
+actual save/restart, or sync verification has run for this slice. The combined
+acceptance is: open configured vault in the normal editor, edit an existing text
+file, observe a durable native receipt and clean checkpoint, restart with the
+same client UUID, and verify bytes through the independent CLI and relay peer.
+Cancelling vault selection must reacquire the original capability before editing.
