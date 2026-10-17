@@ -4,12 +4,13 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { desktopNotices } from './desktop-notices.mjs';
+import { JSDOM } from 'jsdom';
 
 export const desktopFiles = [
   'desktop/main.cjs', 'desktop/preload.cjs', 'desktop/vault-service.cjs',
   'desktop/vault-dispatch.cjs', 'desktop/window-broker.cjs', 'desktop/context-menu.cjs', 'desktop/menu-hotkeys.cjs',
   'desktop/editor-core.cjs', 'desktop/host-location.cjs', 'desktop/client-slots.cjs', 'desktop/client-admission.cjs',
-  'desktop/core-vault-fixture-service.cjs', 'desktop/rust-vault-service.cjs',
+  'desktop/core-vault-fixture-service.cjs', 'desktop/rust-vault-service.cjs', 'desktop/document-semantics.cjs',
   'desktop/durable-writes.cjs', 'desktop/durable-checkpoints.cjs', 'desktop/text-create.cjs',
   'desktop/family-sync-protocol.cjs', 'desktop/family-fixture.cjs', 'desktop/family-fixture-preload.cjs',
   'desktop/family-fixture-renderer.js', 'desktop/family-fixture.html', 'desktop/family-fixture.css',
@@ -59,10 +60,37 @@ export async function readNativeHost(filename, architecture) {
   } finally { await file.close(); }
 }
 
+// Match only the flat hashed output layout selected by the renderer build.
+const rendererAsset = /^dist\/assets\/[A-Za-z0-9_][A-Za-z0-9_.-]*-[A-Za-z0-9_-]{8,64}\.(?:js|css)$/;
 function allowedRendererFile(relative) {
-  if (relative === 'dist/index.html' || /^dist\/(?:main|\d+)\.[\da-f]+\.js(?:\.LICENSE\.txt)?$/.test(relative)) return true;
+  if (relative === 'dist/index.html' || rendererAsset.test(relative)) return true;
   if (!/^dist\/lib\/(?:mathjax|pdfjs|prism)\//.test(relative)) return false;
   return /^LICENSE(?:[_.-].*)?$/i.test(path.basename(relative)) || vendorAssetExtensions.has(path.extname(relative));
+}
+
+/** Validate the entry actually loaded by packaged HTML, rather than guessing a
+ * chunk name. Parsing never executes scripts or fetches referenced resources. */
+async function validateRendererHtml(root, files) {
+  const html = await fs.readFile(path.join(root, 'dist/index.html'));
+  if (html.length > 1024 * 1024) throw new Error('Built renderer HTML exceeds the staging limit');
+  const dom = new JSDOM(html.toString('utf8'));
+  try {
+    const document = dom.window.document, inventory = new Set(files);
+    if (document.querySelector('base[href]')) throw new Error('Built renderer HTML must not override its local base URL');
+    const requireAsset = (reference, extension) => {
+      const relative = typeof reference === 'string' ? `dist/${reference.replace(/^\.\//, '')}` : '';
+      if (!rendererAsset.test(relative) || !relative.endsWith(extension)) throw new Error(`Invalid local renderer reference: ${reference}`);
+      if (!inventory.has(relative)) throw new Error(`Missing HTML-referenced renderer asset: ${relative}`);
+    };
+    const scripts = [...document.querySelectorAll('script')];
+    if (scripts.length !== 1 || scripts[0].getAttribute('type')?.toLowerCase() !== 'module'
+        || scripts[0].textContent.trim()) throw new Error('Built renderer HTML must load one external module entry');
+    requireAsset(scripts[0].getAttribute('src'), '.js');
+    const styles = [...document.querySelectorAll('link')].filter(link => link.relList.contains('stylesheet'));
+    if (!styles.length) throw new Error('Built renderer HTML must load a stylesheet');
+    for (const stylesheet of styles) requireAsset(stylesheet.getAttribute('href'), '.css');
+    for (const preload of document.querySelectorAll('link[rel="modulepreload"]')) requireAsset(preload.getAttribute('href'), '.js');
+  } finally { dom.window.close(); }
 }
 
 /** Enumerate without following symlinks into local data or build caches. */
@@ -99,7 +127,7 @@ export async function stageDesktop(root = projectRoot, options = {}) {
   for (const directory of requiredRendererDirectories) {
     if (!files.some(file => file.startsWith(directory))) throw new Error(`Missing built renderer assets: ${directory}`);
   }
-  if (!files.some(file => /^dist\/main\.[\da-f]+\.js$/.test(file))) throw new Error('Missing production renderer entry chunk');
+  await validateRendererHtml(root, rendererFiles);
   const notices = await desktopNotices(root, pkg);
   const staging = path.join(root, '.release');
   try { if ((await fs.lstat(staging)).isSymbolicLink()) throw new Error('Release staging directory must not be a symlink'); }

@@ -15,9 +15,11 @@ async function fixture(t) {
   }
   const metadata = { name: 'zorid', version: '1.2.3', description: 'Original fixture', license: 'AGPL-3.0-only', dependencies: { 'fixture-dependency': '1.0.0' }, devDependencies: { electron: '44.8.0' } };
   await write('package.json', JSON.stringify(metadata));
-  for (const file of [...desktopFiles, ...requiredRendererFiles, 'LICENSE', 'dist/main.123abc.js', 'dist/main.123abc.js.LICENSE.txt']) await write(file);
+  for (const file of [...desktopFiles, ...requiredRendererFiles, 'LICENSE', 'dist/assets/index-AbCd_12-.js', 'dist/assets/index-BcDe_23-.css',
+    'dist/assets/browser-core-worker-CdEf_34-.js', 'dist/assets/lazy-note-DeFg_45-.js']) await write(file);
+  await write('dist/index.html', '<!doctype html><html><head><link rel="stylesheet" href="./assets/index-BcDe_23-.css"><link rel="modulepreload" href="./assets/lazy-note-DeFg_45-.js"></head><body><script type="module" crossorigin src="./assets/index-AbCd_12-.js"></script></body></html>');
   for (const directory of requiredRendererDirectories) await write(`${directory}fixture.js`);
-  await write('dist/main.123abc.js.map'); await write('src/private-source.ts'); await write('.env'); await write('recovered/reference.js'); await write('vault/private.md');
+  await write('dist/assets/index-AbCd_12-.js.map'); await write('src/private-source.ts'); await write('.env'); await write('recovered/reference.js'); await write('vault/private.md');
   await write('node_modules/fixture-dependency/package.json', JSON.stringify({ name: 'fixture-dependency', version: '1.0.0', license: 'MIT' }));
   await write('node_modules/fixture-dependency/LICENSE', 'Original fixture dependency notice');
   await write('node_modules/electron/package.json', JSON.stringify({ name: 'electron', version: '44.8.0' }));
@@ -39,14 +41,14 @@ test('desktop staging includes runtime assets/notices and excludes source, maps,
   const f = await fixture(t), result = await stageDesktop(f.root);
   const inputs = JSON.parse(await fs.readFile(result.inputManifest));
   assert.ok(inputs.files['desktop/menu-hotkeys.cjs']);
-  for (const module of ['editor-core', 'host-location', 'client-slots', 'rust-vault-service', 'durable-checkpoints', 'durable-writes']) assert.ok(inputs.files[`desktop/${module}.cjs`]);
+  for (const module of ['editor-core', 'host-location', 'client-slots', 'rust-vault-service', 'durable-checkpoints', 'durable-writes', 'document-semantics']) assert.ok(inputs.files[`desktop/${module}.cjs`]);
   assert.equal(inputs.native.architecture, process.arch);
   assert.equal(inputs.native.resource, 'native/zorid-desktop-host');
   assert.equal(inputs.native.signed, undefined);
   assert.deepEqual(await fs.readFile(path.join(f.root, '.release/native/zorid-desktop-host')), f.host);
   assert.ok((await fs.stat(path.join(f.root, '.release/native/zorid-desktop-host'))).mode & 0o111);
   assert.ok(!inputs.files['native/zorid-desktop-host'], 'native executable lives outside ASAR');
-  assert.ok(inputs.files['dist/main.123abc.js.LICENSE.txt']);
+  for (const file of ['index-AbCd_12-.js', 'index-BcDe_23-.css', 'browser-core-worker-CdEf_34-.js', 'lazy-note-DeFg_45-.js']) assert.ok(inputs.files[`dist/assets/${file}`]);
   assert.ok(inputs.files['dist/lib/pdfjs/build/pdf.worker.mjs']);
   assert.ok(inputs.files['licenses/electron/LICENSES.chromium.html']);
   assert.ok(inputs.files['THIRD_PARTY_NOTICES.txt']);
@@ -68,6 +70,36 @@ test('staging rejects incomplete renderer output and mismatched downloaded Elect
   await f.write('dist/lib/pdfjs/build/pdf.worker.mjs');
   await f.write('node_modules/electron/dist/version', '99.0.0');
   await assert.rejects(stageDesktop(f.root), /distribution does not match/);
+});
+
+test('staging requires every actual HTML entry, stylesheet and module-preload reference', async t => {
+  const f = await fixture(t);
+  for (const filename of ['index-AbCd_12-.js', 'index-BcDe_23-.css', 'lazy-note-DeFg_45-.js']) {
+    const relative = `dist/assets/${filename}`, bytes = await fs.readFile(path.join(f.root, relative));
+    await fs.rm(path.join(f.root, relative));
+    await assert.rejects(stageDesktop(f.root), /Missing HTML-referenced renderer asset/);
+    await f.write(relative, bytes);
+  }
+});
+
+test('staging rejects nonlocal, commented-out and missing module/style HTML bindings', async t => {
+  const f = await fixture(t), script = '<script type="module" src="./assets/index-AbCd_12-.js"></script>';
+  const css = '<link rel="stylesheet" href="./assets/index-BcDe_23-.css">';
+  for (const html of [
+    `<!-- ${script} -->${css}`,
+    script,
+    `${css}<script src="./assets/index-AbCd_12-.js"></script>`,
+    `${css}<script type="module">import './assets/index-AbCd_12-.js';</script>`,
+    `${css}<script type="module" src="/assets/index-AbCd_12-.js"></script>`,
+    `${css}<script type="module" src="https://example.test/assets/index-AbCd_12-.js"></script>`,
+    `${css}<script type="module" src="./assets/../assets/index-AbCd_12-.js"></script>`,
+    `${css}<script type="module" src="./assets/index-AbCd_12-.js?cache=1"></script>`,
+    `<base href="https://example.test/">${css}${script}`,
+    `<link rel="stylesheet" href="https://example.test/assets/index-BcDe_23-.css">${script}`,
+  ]) {
+    await f.write('dist/index.html', html);
+    await assert.rejects(stageDesktop(f.root), /Built renderer HTML|Invalid local renderer reference/);
+  }
 });
 
 test('staging rejects symlinked inputs and output directories before copying', async t => {
@@ -105,6 +137,16 @@ test('staging rejects extra files outside the compiled chunk and vendor asset al
   await fs.rm(path.join(f.root, 'dist/notes'), { recursive: true });
   await f.write('dist/lib/pdfjs/signing.p12');
   await assert.rejects(stageDesktop(f.root), /Unexpected renderer output/);
+});
+
+test('staging permits only flat hashed JavaScript and CSS assets', async t => {
+  const f = await fixture(t);
+  for (const relative of ['dist/main.123abc.js', 'dist/assets/unhashed.js', 'dist/assets/index-AbCd_12-.txt',
+    'dist/assets/notes/private-AbCd_12-.js', 'dist/assets/private.md', 'dist/assets/source.ts']) {
+    await f.write(relative);
+    await assert.rejects(stageDesktop(f.root), /Unexpected renderer output/);
+    await fs.rm(path.join(f.root, relative));
+  }
 });
 
 test('ASAR verifier checks exact inventory and content, not just file existence', async t => {
