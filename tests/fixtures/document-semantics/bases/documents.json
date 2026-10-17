@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "f69dc90de0de697dfb75a5a3d1805b69dba982b3",
+  "baselineTimezone": "UTC",
+  "cases": [
+    {
+      "id": "untouched-source",
+      "source": "\ufeff# Keep me\r\nunknown: {option: true}\r\nviews:\r\n  - type: table\r\n    name: \"Table\" # view comment\r\n",
+      "current": {
+        "valid": true,
+        "unchanged": true,
+        "viewTypes": [
+          "table"
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/document.ts",
+        "tests/bases-document.test.ts"
+      ]
+    },
+    {
+      "id": "unknown-view",
+      "source": "unknown: keep\nviews:\n  - type: custom\n    name: Custom\n    customOption: [a, b]\n",
+      "current": {
+        "valid": true,
+        "unchanged": true,
+        "viewTypes": [
+          "custom"
+        ]
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/document.ts",
+        "tests/bases-document.test.ts"
+      ]
+    },
+    {
+      "id": "invalid-yaml",
+      "source": "views: [\n",
+      "current": {
+        "valid": false
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/document.ts",
+        "tests/bases-document.test.ts"
+      ]
+    },
+    {
+      "id": "custom-tag",
+      "source": "views: !custom []\n",
+      "current": {
+        "valid": false
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/document.ts",
+        "tests/bases-document.test.ts"
+      ]
+    },
+    {
+      "id": "duplicate-key",
+      "source": "views: []\nviews: []\n",
+      "current": {
+        "valid": false
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/document.ts",
+        "tests/bases-document.test.ts"
+      ]
+    },
+    {
+      "id": "cyclic-alias",
+      "source": "loop: &loop [*loop]\nviews: []\n",
+      "current": {
+        "valid": false
+      },
+      "decision": "retain",
+      "evidence": [
+        "src/bases/document.ts",
+        "tests/bases-document.test.ts"
+      ]
+    },
+    {
+      "id": "empty-source",
+      "source": "",
+      "current": {
+        "valid": true,
+        "unchanged": false,
+        "viewTypes": [
+          "table"
+        ]
+      },
+      "decision": "proposed-change",
+      "proposal": "Semantic compilation may synthesize an in-memory default view but must return/preserve the original empty source; no Rust parse-and-reserialize writer is authorized.",
+      "evidence": [
+        "src/bases/document.ts",
+        "tests/bases-document.test.ts"
+      ]
+    }
+  ]
+}

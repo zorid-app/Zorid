@@ -3,20 +3,22 @@
 Accepted by the user on 2026-10-16 after reviewing the proposed split between
 headless data semantics and live editor syntax. This is the next shared-core
 milestone (roadmap wave4), not a change to the current first-milestone completion
-criteria. No parser implementation or app migration has started.
+criteria. User explicitly started Stage4 on 2026-10-17. Contract/corpus work is
+active; no parser implementation or consumer migration is yet verified.
 
 ## Timing and dependency gate
 
-Preparation can run now alongside wave3: inventory current behavior, capture
-representative fixtures, specify shared results/diagnostics and review API
-boundaries. Preserve existing editor-session ownership; do not modify its parser,
-Base engine or source-editing paths while storage/recovery integration is underway.
+The wave3 gate passed; preparation now inventories current behavior, captures
+representative fixtures, specifies shared results/diagnostics and reviews API
+boundaries. Preserve existing editor-session ownership; migration of its parser,
+Base consumers or source-editing paths requires a named owner and shared fixtures.
 
 Start Rust implementation after the current integrated web/Electron/standalone
 CLI gate passes: offline/concurrent text convergence, durable-save crash recovery,
 physical moves/deletions/external edits, byte-preserving binary sync, authorization
 and protocol compatibility, and basic encrypted client restore. This gate is
-currently incomplete; passing component tests alone does not unlock migration.
+complete; see `shared-core-milestone-acceptance.md`. Passing new component tests
+alone will not establish migrated consumer or cross-platform behavior.
 Do not defer the semantics milestone until P2P, full admin/history or native mobile
 are finished. Independent infrastructure and shell scaffolding may overlap it.
 Native mobile metadata/Base features should consume the shared engine.

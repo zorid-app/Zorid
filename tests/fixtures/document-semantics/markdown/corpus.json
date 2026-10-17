@@ -1,0 +1,4661 @@
+{
+  "formatVersion": 1,
+  "status": "proposed-contract-not-runtime-verification",
+  "baselineCommit": "f69dc90de0de697dfb75a5a3d1805b69dba982b3",
+  "cases": [
+    {
+      "id": "empty",
+      "decision": "Preserve current supported semantics; add portable provenance and source positions.",
+      "request": {
+        "entryId": "fixture-empty",
+        "contentRevision": "fixture-1",
+        "source": ""
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-empty",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 0,
+          "utf16": 0
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "core-metadata",
+      "decision": "Preserve current supported semantics; add portable provenance and source positions.",
+      "request": {
+        "entryId": "fixture-core-metadata",
+        "contentRevision": "fixture-1",
+        "source": "---\ntags: [science, \"nested/tag\"]\naliases: [First note]\npublished: true\ncount: 3\n---\n# Heading\nText #inline #123 #nested/tag\n[[Visible#Section|Alias]] ![[image.png]]\n[link](<Some note.md#Here>)"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-core-metadata",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 193,
+          "utf16": 193
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              85
+            ],
+            "utf16": [
+              0,
+              85
+            ]
+          },
+          "bodyStart": {
+            "byte": 85,
+            "utf16": 85
+          }
+        },
+        "properties": [
+          {
+            "key": "tags",
+            "value": [
+              "science",
+              "nested/tag"
+            ],
+            "type": "tags",
+            "keyRange": {
+              "bytes": [
+                4,
+                8
+              ],
+              "utf16": [
+                4,
+                8
+              ]
+            }
+          },
+          {
+            "key": "aliases",
+            "value": [
+              "First note"
+            ],
+            "type": "list",
+            "keyRange": {
+              "bytes": [
+                34,
+                41
+              ],
+              "utf16": [
+                34,
+                41
+              ]
+            }
+          },
+          {
+            "key": "published",
+            "value": true,
+            "type": "checkbox",
+            "keyRange": {
+              "bytes": [
+                56,
+                65
+              ],
+              "utf16": [
+                56,
+                65
+              ]
+            }
+          },
+          {
+            "key": "count",
+            "value": 3,
+            "type": "number",
+            "keyRange": {
+              "bytes": [
+                72,
+                77
+              ],
+              "utf16": [
+                72,
+                77
+              ]
+            }
+          }
+        ],
+        "aliases": [
+          "First note"
+        ],
+        "tags": [
+          "science",
+          "nested/tag",
+          "inline"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "inline",
+            "range": {
+              "bytes": [
+                100,
+                107
+              ],
+              "utf16": [
+                100,
+                107
+              ]
+            }
+          },
+          {
+            "name": "nested/tag",
+            "range": {
+              "bytes": [
+                113,
+                124
+              ],
+              "utf16": [
+                113,
+                124
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Heading",
+            "level": 1,
+            "line": 6,
+            "range": {
+              "bytes": [
+                85,
+                94
+              ],
+              "utf16": [
+                85,
+                94
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Visible",
+            "fragment": "#Section",
+            "range": {
+              "bytes": [
+                125,
+                150
+              ],
+              "utf16": [
+                125,
+                150
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                127,
+                134
+              ],
+              "utf16": [
+                127,
+                134
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "wiki",
+            "embed": true,
+            "target": "image.png",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                151,
+                165
+              ],
+              "utf16": [
+                151,
+                165
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                154,
+                163
+              ],
+              "utf16": [
+                154,
+                163
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "Some note.md",
+            "fragment": "#Here",
+            "range": {
+              "bytes": [
+                166,
+                193
+              ],
+              "utf16": [
+                166,
+                193
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                174,
+                186
+              ],
+              "utf16": [
+                174,
+                186
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "yaml-types",
+      "decision": "Preserve current supported semantics; add portable provenance and source positions.",
+      "request": {
+        "entryId": "fixture-yaml-types",
+        "contentRevision": "fixture-1",
+        "source": "---\ntitle: \"false\"\ncreated: 2024-02-29\ninvalid_date: 2026-02-29\nupdated: 2026-10-16T14:30:00-04:00\nenabled: false\ncount: 3.25\nempty:\nconfig: {paths: [one, two], visible: true}\nmixed: [a, 1, null]\n---\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-yaml-types",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 200,
+          "utf16": 200
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              200
+            ],
+            "utf16": [
+              0,
+              200
+            ]
+          },
+          "bodyStart": {
+            "byte": 200,
+            "utf16": 200
+          }
+        },
+        "properties": [
+          {
+            "key": "title",
+            "value": "false",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                4,
+                9
+              ],
+              "utf16": [
+                4,
+                9
+              ]
+            }
+          },
+          {
+            "key": "created",
+            "value": "2024-02-29",
+            "type": "date",
+            "keyRange": {
+              "bytes": [
+                19,
+                26
+              ],
+              "utf16": [
+                19,
+                26
+              ]
+            }
+          },
+          {
+            "key": "invalid_date",
+            "value": "2026-02-29",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                39,
+                51
+              ],
+              "utf16": [
+                39,
+                51
+              ]
+            }
+          },
+          {
+            "key": "updated",
+            "value": "2026-10-16T14:30:00-04:00",
+            "type": "datetime",
+            "keyRange": {
+              "bytes": [
+                64,
+                71
+              ],
+              "utf16": [
+                64,
+                71
+              ]
+            }
+          },
+          {
+            "key": "enabled",
+            "value": false,
+            "type": "checkbox",
+            "keyRange": {
+              "bytes": [
+                99,
+                106
+              ],
+              "utf16": [
+                99,
+                106
+              ]
+            }
+          },
+          {
+            "key": "count",
+            "value": 3.25,
+            "type": "number",
+            "keyRange": {
+              "bytes": [
+                114,
+                119
+              ],
+              "utf16": [
+                114,
+                119
+              ]
+            }
+          },
+          {
+            "key": "empty",
+            "value": null,
+            "type": "unknown",
+            "keyRange": {
+              "bytes": [
+                126,
+                131
+              ],
+              "utf16": [
+                126,
+                131
+              ]
+            }
+          },
+          {
+            "key": "config",
+            "value": {
+              "paths": [
+                "one",
+                "two"
+              ],
+              "visible": true
+            },
+            "type": "unknown",
+            "keyRange": {
+              "bytes": [
+                133,
+                139
+              ],
+              "utf16": [
+                133,
+                139
+              ]
+            }
+          },
+          {
+            "key": "mixed",
+            "value": [
+              "a",
+              1,
+              null
+            ],
+            "type": "unknown",
+            "keyRange": {
+              "bytes": [
+                176,
+                181
+              ],
+              "utf16": [
+                176,
+                181
+              ]
+            }
+          }
+        ],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "yaml-block-alias",
+      "decision": "Preserve current supported semantics; add portable provenance and source positions.",
+      "request": {
+        "entryId": "fixture-yaml-block-alias",
+        "contentRevision": "fixture-1",
+        "source": "---\ndescription: |\n  first line\n  second line\noriginal: &shared [one, two]\ncopy: *shared\n---\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-yaml-block-alias",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 93,
+          "utf16": 93
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              93
+            ],
+            "utf16": [
+              0,
+              93
+            ]
+          },
+          "bodyStart": {
+            "byte": 93,
+            "utf16": 93
+          }
+        },
+        "properties": [
+          {
+            "key": "description",
+            "value": "first line\nsecond line\n",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                4,
+                15
+              ],
+              "utf16": [
+                4,
+                15
+              ]
+            }
+          },
+          {
+            "key": "original",
+            "value": [
+              "one",
+              "two"
+            ],
+            "type": "list",
+            "keyRange": {
+              "bytes": [
+                46,
+                54
+              ],
+              "utf16": [
+                46,
+                54
+              ]
+            }
+          },
+          {
+            "key": "copy",
+            "value": [
+              "one",
+              "two"
+            ],
+            "type": "list",
+            "keyRange": {
+              "bytes": [
+                75,
+                79
+              ],
+              "utf16": [
+                75,
+                79
+              ]
+            }
+          }
+        ],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "bom-crlf-unicode",
+      "decision": "Preserve BOM/CRLF in all coordinates, astral characters count as two UTF-16 units, and no Unicode normalization occurs.",
+      "request": {
+        "entryId": "fixture-bom-crlf-unicode",
+        "contentRevision": "fixture-1",
+        "source": "﻿--- # properties\r\naliases: [\"one, two\", three]\r\ntags: [\"work/project\"]\r\n... # end\r\n# Café 🌱\r\n😀 ![[目標#節|表示]] [shown](Café.md#Here \"Title\")"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-bom-crlf-unicode",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 158,
+          "utf16": 140
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              86
+            ],
+            "utf16": [
+              0,
+              84
+            ]
+          },
+          "bodyStart": {
+            "byte": 86,
+            "utf16": 84
+          }
+        },
+        "properties": [
+          {
+            "key": "aliases",
+            "value": [
+              "one, two",
+              "three"
+            ],
+            "type": "list",
+            "keyRange": {
+              "bytes": [
+                21,
+                28
+              ],
+              "utf16": [
+                19,
+                26
+              ]
+            }
+          },
+          {
+            "key": "tags",
+            "value": [
+              "work/project"
+            ],
+            "type": "tags",
+            "keyRange": {
+              "bytes": [
+                51,
+                55
+              ],
+              "utf16": [
+                49,
+                53
+              ]
+            }
+          }
+        ],
+        "aliases": [
+          "one, two",
+          "three"
+        ],
+        "tags": [
+          "work/project"
+        ],
+        "tagOccurrences": [],
+        "headings": [
+          {
+            "text": "Café 🌱",
+            "level": 1,
+            "line": 4,
+            "range": {
+              "bytes": [
+                86,
+                98
+              ],
+              "utf16": [
+                84,
+                93
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": true,
+            "target": "目標",
+            "fragment": "#節",
+            "range": {
+              "bytes": [
+                105,
+                127
+              ],
+              "utf16": [
+                98,
+                110
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                108,
+                114
+              ],
+              "utf16": [
+                101,
+                103
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "Café.md",
+            "fragment": "#Here",
+            "range": {
+              "bytes": [
+                128,
+                158
+              ],
+              "utf16": [
+                111,
+                140
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                136,
+                144
+              ],
+              "utf16": [
+                119,
+                126
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "empty-frontmatter",
+      "decision": "Preserve current supported semantics; add portable provenance and source positions.",
+      "request": {
+        "entryId": "fixture-empty-frontmatter",
+        "contentRevision": "fixture-1",
+        "source": "---\n# comment\n---\n# Body\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-empty-frontmatter",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 25,
+          "utf16": 25
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              18
+            ],
+            "utf16": [
+              0,
+              18
+            ]
+          },
+          "bodyStart": {
+            "byte": 18,
+            "utf16": 18
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [
+          {
+            "text": "Body",
+            "level": 1,
+            "line": 3,
+            "range": {
+              "bytes": [
+                18,
+                24
+              ],
+              "utf16": [
+                18,
+                24
+              ]
+            }
+          }
+        ],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "eof-frontmatter",
+      "decision": "Preserve current supported semantics; add portable provenance and source positions.",
+      "request": {
+        "entryId": "fixture-eof-frontmatter",
+        "contentRevision": "fixture-1",
+        "source": "---\ntitle: End\n..."
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-eof-frontmatter",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 18,
+          "utf16": 18
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              18
+            ],
+            "utf16": [
+              0,
+              18
+            ]
+          },
+          "bodyStart": {
+            "byte": 18,
+            "utf16": 18
+          }
+        },
+        "properties": [
+          {
+            "key": "title",
+            "value": "End",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                4,
+                9
+              ],
+              "utf16": [
+                4,
+                9
+              ]
+            }
+          }
+        ],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "prototype-keys",
+      "decision": "Preserve current supported semantics; add portable provenance and source positions.",
+      "request": {
+        "entryId": "fixture-prototype-keys",
+        "contentRevision": "fixture-1",
+        "source": "---\n__proto__: literal\nconstructor: {prototype: {polluted: true}}\nprototype: true\n---\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-prototype-keys",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 86,
+          "utf16": 86
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              86
+            ],
+            "utf16": [
+              0,
+              86
+            ]
+          },
+          "bodyStart": {
+            "byte": 86,
+            "utf16": 86
+          }
+        },
+        "properties": [
+          {
+            "key": "__proto__",
+            "value": "literal",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                4,
+                13
+              ],
+              "utf16": [
+                4,
+                13
+              ]
+            }
+          },
+          {
+            "key": "constructor",
+            "value": {
+              "prototype": {
+                "polluted": true
+              }
+            },
+            "type": "unknown",
+            "keyRange": {
+              "bytes": [
+                23,
+                34
+              ],
+              "utf16": [
+                23,
+                34
+              ]
+            }
+          },
+          {
+            "key": "prototype",
+            "value": true,
+            "type": "checkbox",
+            "keyRange": {
+              "bytes": [
+                66,
+                75
+              ],
+              "utf16": [
+                66,
+                75
+              ]
+            }
+          }
+        ],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "singular-projections",
+      "decision": "Preserve current supported semantics; add portable provenance and source positions.",
+      "request": {
+        "entryId": "fixture-singular-projections",
+        "contentRevision": "fixture-1",
+        "source": "---\nalias: \"One, Two\"\ntag: \"#work, nested/tag\"\n---\nText #work #WORK"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-singular-projections",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 67,
+          "utf16": 67
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              51
+            ],
+            "utf16": [
+              0,
+              51
+            ]
+          },
+          "bodyStart": {
+            "byte": 51,
+            "utf16": 51
+          }
+        },
+        "properties": [
+          {
+            "key": "alias",
+            "value": "One, Two",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                4,
+                9
+              ],
+              "utf16": [
+                4,
+                9
+              ]
+            }
+          },
+          {
+            "key": "tag",
+            "value": "#work, nested/tag",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                22,
+                25
+              ],
+              "utf16": [
+                22,
+                25
+              ]
+            }
+          }
+        ],
+        "aliases": [
+          "One",
+          "Two"
+        ],
+        "tags": [
+          "work",
+          "nested/tag",
+          "WORK"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "work",
+            "range": {
+              "bytes": [
+                56,
+                61
+              ],
+              "utf16": [
+                56,
+                61
+              ]
+            }
+          },
+          {
+            "name": "WORK",
+            "range": {
+              "bytes": [
+                62,
+                67
+              ],
+              "utf16": [
+                62,
+                67
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "mixed-projections",
+      "decision": "Intentional correction: retain typed YAML values but project only string entries; diagnose each bad tags/aliases property once instead of inventing names such as [object Object].",
+      "request": {
+        "entryId": "fixture-mixed-projections",
+        "contentRevision": "fixture-1",
+        "source": "---\ntags: [one, true, 2, null, {a: b}]\naliases: [one, true]\n---\n#body"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-mixed-projections",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 69,
+          "utf16": 69
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              64
+            ],
+            "utf16": [
+              0,
+              64
+            ]
+          },
+          "bodyStart": {
+            "byte": 64,
+            "utf16": 64
+          }
+        },
+        "properties": [
+          {
+            "key": "tags",
+            "value": [
+              "one",
+              true,
+              2,
+              null,
+              {
+                "a": "b"
+              }
+            ],
+            "type": "unknown",
+            "keyRange": {
+              "bytes": [
+                4,
+                8
+              ],
+              "utf16": [
+                4,
+                8
+              ]
+            }
+          },
+          {
+            "key": "aliases",
+            "value": [
+              "one",
+              true
+            ],
+            "type": "unknown",
+            "keyRange": {
+              "bytes": [
+                39,
+                46
+              ],
+              "utf16": [
+                39,
+                46
+              ]
+            }
+          }
+        ],
+        "aliases": [
+          "one"
+        ],
+        "tags": [
+          "one",
+          "body"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "body",
+            "range": {
+              "bytes": [
+                64,
+                69
+              ],
+              "utf16": [
+                64,
+                69
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "projection_non_string",
+            "severity": "warning",
+            "range": {
+              "bytes": [
+                4,
+                8
+              ],
+              "utf16": [
+                4,
+                8
+              ]
+            }
+          },
+          {
+            "code": "projection_non_string",
+            "severity": "warning",
+            "range": {
+              "bytes": [
+                39,
+                46
+              ],
+              "utf16": [
+                39,
+                46
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "malformed-yaml",
+      "decision": "Preserve refusal of invalid/unsupported YAML; expose the failure rather than silently swallowing it.",
+      "request": {
+        "entryId": "fixture-malformed-yaml",
+        "contentRevision": "fixture-1",
+        "source": "---\ntitle: [broken\n---\n# Body #visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-malformed-yaml",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 49,
+          "utf16": 49
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              23
+            ],
+            "utf16": [
+              0,
+              23
+            ]
+          },
+          "bodyStart": {
+            "byte": 23,
+            "utf16": 23
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                30,
+                38
+              ],
+              "utf16": [
+                30,
+                38
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Body #visible",
+            "level": 1,
+            "line": 3,
+            "range": {
+              "bytes": [
+                23,
+                38
+              ],
+              "utf16": [
+                23,
+                38
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                39,
+                49
+              ],
+              "utf16": [
+                39,
+                49
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                41,
+                47
+              ],
+              "utf16": [
+                41,
+                47
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_syntax",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                23
+              ],
+              "utf16": [
+                0,
+                23
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "duplicate-keys",
+      "decision": "Preserve refusal of invalid/unsupported YAML; expose the failure rather than silently swallowing it.",
+      "request": {
+        "entryId": "fixture-duplicate-keys",
+        "contentRevision": "fixture-1",
+        "source": "---\ntitle: one\ntitle: two\n---\n# Body #visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-duplicate-keys",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 56,
+          "utf16": 56
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              30
+            ],
+            "utf16": [
+              0,
+              30
+            ]
+          },
+          "bodyStart": {
+            "byte": 30,
+            "utf16": 30
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                37,
+                45
+              ],
+              "utf16": [
+                37,
+                45
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Body #visible",
+            "level": 1,
+            "line": 4,
+            "range": {
+              "bytes": [
+                30,
+                45
+              ],
+              "utf16": [
+                30,
+                45
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                46,
+                56
+              ],
+              "utf16": [
+                46,
+                56
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                48,
+                54
+              ],
+              "utf16": [
+                48,
+                54
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_duplicate_key",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                30
+              ],
+              "utf16": [
+                0,
+                30
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "nested-duplicate",
+      "decision": "Preserve refusal of invalid/unsupported YAML; expose the failure rather than silently swallowing it.",
+      "request": {
+        "entryId": "fixture-nested-duplicate",
+        "contentRevision": "fixture-1",
+        "source": "---\nnested:\n  duplicate: 1\n  duplicate: 2\n---\n# Body #visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-nested-duplicate",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 72,
+          "utf16": 72
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              46
+            ],
+            "utf16": [
+              0,
+              46
+            ]
+          },
+          "bodyStart": {
+            "byte": 46,
+            "utf16": 46
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                53,
+                61
+              ],
+              "utf16": [
+                53,
+                61
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Body #visible",
+            "level": 1,
+            "line": 5,
+            "range": {
+              "bytes": [
+                46,
+                61
+              ],
+              "utf16": [
+                46,
+                61
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                62,
+                72
+              ],
+              "utf16": [
+                62,
+                72
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                64,
+                70
+              ],
+              "utf16": [
+                64,
+                70
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_duplicate_key",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                46
+              ],
+              "utf16": [
+                0,
+                46
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "nonmapping-yaml",
+      "decision": "Preserve refusal of invalid/unsupported YAML; expose the failure rather than silently swallowing it.",
+      "request": {
+        "entryId": "fixture-nonmapping-yaml",
+        "contentRevision": "fixture-1",
+        "source": "---\n- not\n- a mapping\n---\n# Body #visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-nonmapping-yaml",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 52,
+          "utf16": 52
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              26
+            ],
+            "utf16": [
+              0,
+              26
+            ]
+          },
+          "bodyStart": {
+            "byte": 26,
+            "utf16": 26
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                33,
+                41
+              ],
+              "utf16": [
+                33,
+                41
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Body #visible",
+            "level": 1,
+            "line": 4,
+            "range": {
+              "bytes": [
+                26,
+                41
+              ],
+              "utf16": [
+                26,
+                41
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                42,
+                52
+              ],
+              "utf16": [
+                42,
+                52
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                44,
+                50
+              ],
+              "utf16": [
+                44,
+                50
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_mapping",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                26
+              ],
+              "utf16": [
+                0,
+                26
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "null-root",
+      "decision": "Preserve refusal of invalid/unsupported YAML; expose the failure rather than silently swallowing it.",
+      "request": {
+        "entryId": "fixture-null-root",
+        "contentRevision": "fixture-1",
+        "source": "---\nnull\n---\n# Body #visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-null-root",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 39,
+          "utf16": 39
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              13
+            ],
+            "utf16": [
+              0,
+              13
+            ]
+          },
+          "bodyStart": {
+            "byte": 13,
+            "utf16": 13
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                20,
+                28
+              ],
+              "utf16": [
+                20,
+                28
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Body #visible",
+            "level": 1,
+            "line": 3,
+            "range": {
+              "bytes": [
+                13,
+                28
+              ],
+              "utf16": [
+                13,
+                28
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                29,
+                39
+              ],
+              "utf16": [
+                29,
+                39
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                31,
+                37
+              ],
+              "utf16": [
+                31,
+                37
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_mapping",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                13
+              ],
+              "utf16": [
+                0,
+                13
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "custom-yaml-tag",
+      "decision": "Preserve refusal of invalid/unsupported YAML; expose the failure rather than silently swallowing it.",
+      "request": {
+        "entryId": "fixture-custom-yaml-tag",
+        "contentRevision": "fixture-1",
+        "source": "---\nvalue: !unsupported value\n---\n# Body #visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-custom-yaml-tag",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 60,
+          "utf16": 60
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              34
+            ],
+            "utf16": [
+              0,
+              34
+            ]
+          },
+          "bodyStart": {
+            "byte": 34,
+            "utf16": 34
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                41,
+                49
+              ],
+              "utf16": [
+                41,
+                49
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Body #visible",
+            "level": 1,
+            "line": 3,
+            "range": {
+              "bytes": [
+                34,
+                49
+              ],
+              "utf16": [
+                34,
+                49
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                50,
+                60
+              ],
+              "utf16": [
+                50,
+                60
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                52,
+                58
+              ],
+              "utf16": [
+                52,
+                58
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_tag",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                34
+              ],
+              "utf16": [
+                0,
+                34
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing-alias",
+      "decision": "Preserve refusal of invalid/unsupported YAML; expose the failure rather than silently swallowing it.",
+      "request": {
+        "entryId": "fixture-missing-alias",
+        "contentRevision": "fixture-1",
+        "source": "---\nvalue: *missing\n---\n# Body #visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-missing-alias",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 50,
+          "utf16": 50
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              24
+            ],
+            "utf16": [
+              0,
+              24
+            ]
+          },
+          "bodyStart": {
+            "byte": 24,
+            "utf16": 24
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                31,
+                39
+              ],
+              "utf16": [
+                31,
+                39
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Body #visible",
+            "level": 1,
+            "line": 3,
+            "range": {
+              "bytes": [
+                24,
+                39
+              ],
+              "utf16": [
+                24,
+                39
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                40,
+                50
+              ],
+              "utf16": [
+                40,
+                50
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                42,
+                48
+              ],
+              "utf16": [
+                42,
+                48
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_alias",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                24
+              ],
+              "utf16": [
+                0,
+                24
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "cyclic-alias",
+      "decision": "Preserve refusal of invalid/unsupported YAML; expose the failure rather than silently swallowing it.",
+      "request": {
+        "entryId": "fixture-cyclic-alias",
+        "contentRevision": "fixture-1",
+        "source": "---\ncycle: &self [*self]\n---\n# Body #visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-cyclic-alias",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 55,
+          "utf16": 55
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              29
+            ],
+            "utf16": [
+              0,
+              29
+            ]
+          },
+          "bodyStart": {
+            "byte": 29,
+            "utf16": 29
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                36,
+                44
+              ],
+              "utf16": [
+                36,
+                44
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Body #visible",
+            "level": 1,
+            "line": 3,
+            "range": {
+              "bytes": [
+                29,
+                44
+              ],
+              "utf16": [
+                29,
+                44
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                45,
+                55
+              ],
+              "utf16": [
+                45,
+                55
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                47,
+                53
+              ],
+              "utf16": [
+                47,
+                53
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_alias",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                29
+              ],
+              "utf16": [
+                0,
+                29
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "nonfinite-number",
+      "decision": "Closed invalid frontmatter is excluded as a whole; body metadata still succeeds with one stable diagnostic. Nonfinite values are an intentional JSON portability correction.",
+      "request": {
+        "entryId": "fixture-nonfinite-number",
+        "contentRevision": "fixture-1",
+        "source": "---\nvalue: .nan\n---\n# Body #visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-nonfinite-number",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 46,
+          "utf16": 46
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              20
+            ],
+            "utf16": [
+              0,
+              20
+            ]
+          },
+          "bodyStart": {
+            "byte": 20,
+            "utf16": 20
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                27,
+                35
+              ],
+              "utf16": [
+                27,
+                35
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Body #visible",
+            "level": 1,
+            "line": 3,
+            "range": {
+              "bytes": [
+                20,
+                35
+              ],
+              "utf16": [
+                20,
+                35
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                36,
+                46
+              ],
+              "utf16": [
+                36,
+                46
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                38,
+                44
+              ],
+              "utf16": [
+                38,
+                44
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_value",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                20
+              ],
+              "utf16": [
+                0,
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "unclosed-frontmatter",
+      "decision": "Preserve TS body extraction on an unclosed opening delimiter; diagnose without swallowing the remaining source.",
+      "request": {
+        "entryId": "fixture-unclosed-frontmatter",
+        "contentRevision": "fixture-1",
+        "source": "---\ntags: [front]\n# Visible\n[[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-unclosed-frontmatter",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 38,
+          "utf16": 38
+        },
+        "frontmatter": {
+          "state": "unclosed",
+          "range": {
+            "bytes": [
+              0,
+              4
+            ],
+            "utf16": [
+              0,
+              4
+            ]
+          },
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [
+          {
+            "text": "Visible",
+            "level": 1,
+            "line": 2,
+            "range": {
+              "bytes": [
+                18,
+                27
+              ],
+              "utf16": [
+                18,
+                27
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                28,
+                38
+              ],
+              "utf16": [
+                28,
+                38
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                30,
+                36
+              ],
+              "utf16": [
+                30,
+                36
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_unclosed",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                4
+              ],
+              "utf16": [
+                0,
+                4
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "bare-frontmatter-opener",
+      "decision": "Report unclosed opening even at EOF; source remains ordinary Markdown for extraction.",
+      "request": {
+        "entryId": "fixture-bare-frontmatter-opener",
+        "contentRevision": "fixture-1",
+        "source": "---"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-bare-frontmatter-opener",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 3,
+          "utf16": 3
+        },
+        "frontmatter": {
+          "state": "unclosed",
+          "range": {
+            "bytes": [
+              0,
+              3
+            ],
+            "utf16": [
+              0,
+              3
+            ]
+          },
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_unclosed",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                3
+              ],
+              "utf16": [
+                0,
+                3
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "code-and-comments",
+      "decision": "Intentional correction: parser-owned indented code is excluded along with fenced code, inline code, YAML and comments.",
+      "request": {
+        "entryId": "fixture-code-and-comments",
+        "contentRevision": "fixture-1",
+        "source": "```md\n# Fenced #hidden\n[[Hidden]]\n- [ ] hidden\n```\n\n~~~\n# Tilde #hidden\n~~~\n\n    #indented [[Hidden]]\n\n`#inline [[Hidden]]` <!-- #comment [[Hidden]] --> %% #obsidian [[Hidden]] %%\n\nVisible #seen [[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-code-and-comments",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 205,
+          "utf16": 205
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "seen"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "seen",
+            "range": {
+              "bytes": [
+                189,
+                194
+              ],
+              "utf16": [
+                189,
+                194
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                195,
+                205
+              ],
+              "utf16": [
+                195,
+                205
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                197,
+                203
+              ],
+              "utf16": [
+                197,
+                203
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "container-code",
+      "decision": "Intentional correction: code fences inside quotes/lists are excluded by the established Markdown parser.",
+      "request": {
+        "entryId": "fixture-container-code",
+        "contentRevision": "fixture-1",
+        "source": "> ```md\n> # Quoted #hidden\n> [[Hidden]]\n> ```\n\n- ```md\n  # Listed #hidden\n  [[Hidden]]\n  ```\n\n# Visible"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-container-code",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 103,
+          "utf16": 103
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [
+          {
+            "text": "Visible",
+            "level": 1,
+            "line": 10,
+            "range": {
+              "bytes": [
+                94,
+                103
+              ],
+              "utf16": [
+                94,
+                103
+              ]
+            }
+          }
+        ],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "html-block",
+      "decision": "Intentional correction: raw HTML blocks do not produce note metadata. Inline HTML tags alone do not hide visible adjacent text.",
+      "request": {
+        "entryId": "fixture-html-block",
+        "contentRevision": "fixture-1",
+        "source": "<div>\n# Heading #hidden\n[[Hidden]]\n- [ ] hidden\n</div>\n\nVisible #seen"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-html-block",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 69,
+          "utf16": 69
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "seen"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "seen",
+            "range": {
+              "bytes": [
+                64,
+                69
+              ],
+              "utf16": [
+                64,
+                69
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "unclosed-comments",
+      "decision": "Unclosed HTML comment follows CommonMark block exclusion through EOF.",
+      "request": {
+        "entryId": "fixture-unclosed-comments",
+        "contentRevision": "fixture-1",
+        "source": "Before #seen\n<!-- #hidden [[Hidden]]\n# Heading\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-unclosed-comments",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 47,
+          "utf16": 47
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "seen"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "seen",
+            "range": {
+              "bytes": [
+                7,
+                12
+              ],
+              "utf16": [
+                7,
+                12
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "obsidian-comment",
+      "decision": "A paired %% comment is excluded; an unmatched %% opener is literal text, preserving TS behavior.",
+      "request": {
+        "entryId": "fixture-obsidian-comment",
+        "contentRevision": "fixture-1",
+        "source": "Before #seen %% #hidden [[Hidden]] %% after #after\n%% unclosed #literal [[Target]]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-obsidian-comment",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 82,
+          "utf16": 82
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "seen",
+          "after",
+          "literal"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "seen",
+            "range": {
+              "bytes": [
+                7,
+                12
+              ],
+              "utf16": [
+                7,
+                12
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "range": {
+              "bytes": [
+                44,
+                50
+              ],
+              "utf16": [
+                44,
+                50
+              ]
+            }
+          },
+          {
+            "name": "literal",
+            "range": {
+              "bytes": [
+                63,
+                71
+              ],
+              "utf16": [
+                63,
+                71
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                72,
+                82
+              ],
+              "utf16": [
+                72,
+                82
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                74,
+                80
+              ],
+              "utf16": [
+                74,
+                80
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "headings",
+      "decision": "Intentional correction: Setext and container headings are indexed, and heading text is rendered plain text rather than masked/raw Markdown.",
+      "request": {
+        "entryId": "fixture-headings",
+        "contentRevision": "fixture-1",
+        "source": "Title\n=====\n\n> ## Quoted\n\n# **Strong** `code` [label](Target.md) &amp; end ###\n\n#NoHeading\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-headings",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 91,
+          "utf16": 91
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "NoHeading"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "NoHeading",
+            "range": {
+              "bytes": [
+                80,
+                90
+              ],
+              "utf16": [
+                80,
+                90
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "Title",
+            "level": 1,
+            "line": 0,
+            "range": {
+              "bytes": [
+                0,
+                11
+              ],
+              "utf16": [
+                0,
+                11
+              ]
+            }
+          },
+          {
+            "text": "Quoted",
+            "level": 2,
+            "line": 3,
+            "range": {
+              "bytes": [
+                15,
+                24
+              ],
+              "utf16": [
+                15,
+                24
+              ]
+            }
+          },
+          {
+            "text": "Strong code label & end",
+            "level": 1,
+            "line": 5,
+            "range": {
+              "bytes": [
+                26,
+                78
+              ],
+              "utf16": [
+                26,
+                78
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "Target.md",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                46,
+                64
+              ],
+              "utf16": [
+                46,
+                64
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                54,
+                63
+              ],
+              "utf16": [
+                54,
+                63
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "tag-unicode",
+      "decision": "Intentional correction: combining marks belong to a tag; all Unicode decimal-only names are excluded. Names otherwise retain spelling and case; no NFC folding.",
+      "request": {
+        "entryId": "fixture-tag-unicode",
+        "contentRevision": "fixture-1",
+        "source": "😀 #café #café #你好 #123 #１２３ #a/b #a- #/ #_ #café"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-tag-unicode",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 65,
+          "utf16": 50
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "café",
+          "café",
+          "你好",
+          "a/b",
+          "a-",
+          "/",
+          "_"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "café",
+            "range": {
+              "bytes": [
+                5,
+                12
+              ],
+              "utf16": [
+                3,
+                9
+              ]
+            }
+          },
+          {
+            "name": "café",
+            "range": {
+              "bytes": [
+                13,
+                19
+              ],
+              "utf16": [
+                10,
+                15
+              ]
+            }
+          },
+          {
+            "name": "你好",
+            "range": {
+              "bytes": [
+                20,
+                27
+              ],
+              "utf16": [
+                16,
+                19
+              ]
+            }
+          },
+          {
+            "name": "a/b",
+            "range": {
+              "bytes": [
+                44,
+                48
+              ],
+              "utf16": [
+                30,
+                34
+              ]
+            }
+          },
+          {
+            "name": "a-",
+            "range": {
+              "bytes": [
+                49,
+                52
+              ],
+              "utf16": [
+                35,
+                38
+              ]
+            }
+          },
+          {
+            "name": "/",
+            "range": {
+              "bytes": [
+                53,
+                55
+              ],
+              "utf16": [
+                39,
+                41
+              ]
+            }
+          },
+          {
+            "name": "_",
+            "range": {
+              "bytes": [
+                56,
+                58
+              ],
+              "utf16": [
+                42,
+                44
+              ]
+            }
+          },
+          {
+            "name": "café",
+            "range": {
+              "bytes": [
+                59,
+                65
+              ],
+              "utf16": [
+                45,
+                50
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "inline-links",
+      "decision": "Preserve current supported semantics; add portable provenance and source positions.",
+      "request": {
+        "entryId": "fixture-inline-links",
+        "contentRevision": "fixture-1",
+        "source": "😀 ![[A#Head|Label]] [shown](A.md#Head \"Title\") [b](<B name.md>) [paren](folder/a(b).md) [[#Local]] [local](#Here) [web](https://example.com) ![remote](//host/a.png) \\[[Hidden]] \\[x](Hidden.md)"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-inline-links",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 195,
+          "utf16": 193
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": true,
+            "target": "A",
+            "fragment": "#Head",
+            "range": {
+              "bytes": [
+                5,
+                22
+              ],
+              "utf16": [
+                3,
+                20
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                8,
+                9
+              ],
+              "utf16": [
+                6,
+                7
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "A.md",
+            "fragment": "#Head",
+            "range": {
+              "bytes": [
+                23,
+                49
+              ],
+              "utf16": [
+                21,
+                47
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                31,
+                35
+              ],
+              "utf16": [
+                29,
+                33
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "B name.md",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                50,
+                66
+              ],
+              "utf16": [
+                48,
+                64
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                55,
+                64
+              ],
+              "utf16": [
+                53,
+                62
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "folder/a(b).md",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                67,
+                90
+              ],
+              "utf16": [
+                65,
+                88
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                75,
+                89
+              ],
+              "utf16": [
+                73,
+                87
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "",
+            "fragment": "#Local",
+            "range": {
+              "bytes": [
+                91,
+                101
+              ],
+              "utf16": [
+                89,
+                99
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                93,
+                93
+              ],
+              "utf16": [
+                91,
+                91
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "",
+            "fragment": "#Here",
+            "range": {
+              "bytes": [
+                102,
+                116
+              ],
+              "utf16": [
+                100,
+                114
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                110,
+                110
+              ],
+              "utf16": [
+                108,
+                108
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "escaped-openers",
+      "decision": "Intentional correction: even backslash counts leave a real link opener; odd counts escape it, following Markdown escaping.",
+      "request": {
+        "entryId": "fixture-escaped-openers",
+        "contentRevision": "fixture-1",
+        "source": "\\[[Hidden]] \\\\[[Visible]] \\[x](Hidden.md) \\\\[x](Shown.md)"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-escaped-openers",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 57,
+          "utf16": 57
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Visible",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                14,
+                25
+              ],
+              "utf16": [
+                14,
+                25
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                16,
+                23
+              ],
+              "utf16": [
+                16,
+                23
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "Shown.md",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                44,
+                57
+              ],
+              "utf16": [
+                44,
+                57
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                48,
+                56
+              ],
+              "utf16": [
+                48,
+                56
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "task-statuses",
+      "decision": "New headless task records retain established editor distinction: checked for every non-space status; completed only x/X. Status is exactly one UTF-16 code unit to preserve current editor parity.",
+      "request": {
+        "entryId": "fixture-task-statuses",
+        "contentRevision": "fixture-1",
+        "source": "- [ ] unchecked\n- [x] done\n- [X] DONE\n- [-] custom\n- [?] question\n- [é] unicode\n- [ ]"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-task-statuses",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 86,
+          "utf16": 85
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [
+          {
+            "status": " ",
+            "checked": false,
+            "completed": false,
+            "text": "unchecked",
+            "line": 0,
+            "range": {
+              "bytes": [
+                2,
+                5
+              ],
+              "utf16": [
+                2,
+                5
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                3,
+                4
+              ],
+              "utf16": [
+                3,
+                4
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                6,
+                15
+              ],
+              "utf16": [
+                6,
+                15
+              ]
+            }
+          },
+          {
+            "status": "x",
+            "checked": true,
+            "completed": true,
+            "text": "done",
+            "line": 1,
+            "range": {
+              "bytes": [
+                18,
+                21
+              ],
+              "utf16": [
+                18,
+                21
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                19,
+                20
+              ],
+              "utf16": [
+                19,
+                20
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                22,
+                26
+              ],
+              "utf16": [
+                22,
+                26
+              ]
+            }
+          },
+          {
+            "status": "X",
+            "checked": true,
+            "completed": true,
+            "text": "DONE",
+            "line": 2,
+            "range": {
+              "bytes": [
+                29,
+                32
+              ],
+              "utf16": [
+                29,
+                32
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                30,
+                31
+              ],
+              "utf16": [
+                30,
+                31
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                33,
+                37
+              ],
+              "utf16": [
+                33,
+                37
+              ]
+            }
+          },
+          {
+            "status": "-",
+            "checked": true,
+            "completed": false,
+            "text": "custom",
+            "line": 3,
+            "range": {
+              "bytes": [
+                40,
+                43
+              ],
+              "utf16": [
+                40,
+                43
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                41,
+                42
+              ],
+              "utf16": [
+                41,
+                42
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                44,
+                50
+              ],
+              "utf16": [
+                44,
+                50
+              ]
+            }
+          },
+          {
+            "status": "?",
+            "checked": true,
+            "completed": false,
+            "text": "question",
+            "line": 4,
+            "range": {
+              "bytes": [
+                53,
+                56
+              ],
+              "utf16": [
+                53,
+                56
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                54,
+                55
+              ],
+              "utf16": [
+                54,
+                55
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                57,
+                65
+              ],
+              "utf16": [
+                57,
+                65
+              ]
+            }
+          },
+          {
+            "status": "é",
+            "checked": true,
+            "completed": false,
+            "text": "unicode",
+            "line": 5,
+            "range": {
+              "bytes": [
+                68,
+                72
+              ],
+              "utf16": [
+                68,
+                71
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                69,
+                71
+              ],
+              "utf16": [
+                69,
+                70
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                73,
+                80
+              ],
+              "utf16": [
+                72,
+                79
+              ]
+            }
+          },
+          {
+            "status": " ",
+            "checked": false,
+            "completed": false,
+            "text": "",
+            "line": 6,
+            "range": {
+              "bytes": [
+                83,
+                86
+              ],
+              "utf16": [
+                82,
+                85
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                84,
+                85
+              ],
+              "utf16": [
+                83,
+                84
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                86,
+                86
+              ],
+              "utf16": [
+                85,
+                85
+              ]
+            }
+          }
+        ],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "task-containers",
+      "decision": "Only syntactic list-item leading markers count; list and quote containers preserve absolute source lines.",
+      "request": {
+        "entryId": "fixture-task-containers",
+        "contentRevision": "fixture-1",
+        "source": "> 1. [X] parent [z]\n>    - [?] child\n- [ ] end"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-task-containers",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 46,
+          "utf16": 46
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [
+          {
+            "status": "X",
+            "checked": true,
+            "completed": true,
+            "text": "parent [z]",
+            "line": 0,
+            "range": {
+              "bytes": [
+                5,
+                8
+              ],
+              "utf16": [
+                5,
+                8
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                6,
+                7
+              ],
+              "utf16": [
+                6,
+                7
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                9,
+                19
+              ],
+              "utf16": [
+                9,
+                19
+              ]
+            }
+          },
+          {
+            "status": "?",
+            "checked": true,
+            "completed": false,
+            "text": "child",
+            "line": 1,
+            "range": {
+              "bytes": [
+                27,
+                30
+              ],
+              "utf16": [
+                27,
+                30
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                28,
+                29
+              ],
+              "utf16": [
+                28,
+                29
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                31,
+                36
+              ],
+              "utf16": [
+                31,
+                36
+              ]
+            }
+          },
+          {
+            "status": " ",
+            "checked": false,
+            "completed": false,
+            "text": "end",
+            "line": 2,
+            "range": {
+              "bytes": [
+                39,
+                42
+              ],
+              "utf16": [
+                39,
+                42
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                40,
+                41
+              ],
+              "utf16": [
+                40,
+                41
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                43,
+                46
+              ],
+              "utf16": [
+                43,
+                46
+              ]
+            }
+          }
+        ],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "task-literals",
+      "decision": "Task-like prose, escaped markers, code, malformed widths and astral markers remain literal under the current single-UTF16-unit editor dialect.",
+      "request": {
+        "entryId": "fixture-task-literals",
+        "contentRevision": "fixture-1",
+        "source": "plain [ ]\n\n    - [ ] indented\n\n- `[ ] inline`\n- \\[ ] escaped\n- regular [ ] later\n- [xx] too many\n- [] empty\n- [ ]suffix\n- [😀] astral\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-task-literals",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 136,
+          "utf16": 134
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "malformed-markdown",
+      "decision": "Partial Markdown remains extractable; unmatched inline backtick is literal and emits no generic syntax error.",
+      "request": {
+        "entryId": "fixture-malformed-markdown",
+        "contentRevision": "fixture-1",
+        "source": "[[unfinished\n[broken](\n`unclosed #visible [[Target]]\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-malformed-markdown",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 53,
+          "utf16": 53
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                33,
+                41
+              ],
+              "utf16": [
+                33,
+                41
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                42,
+                52
+              ],
+              "utf16": [
+                42,
+                52
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                44,
+                50
+              ],
+              "utf16": [
+                44,
+                50
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "reference-links",
+      "decision": "Intentional addition: full/collapsed/shortcut references resolve through CommonMark label rules. Occurrence ranges differ from the shared definition destination; unresolved references stay literal. This is not authorization to rewrite shared definitions.",
+      "request": {
+        "entryId": "fixture-reference-links",
+        "contentRevision": "fixture-1",
+        "source": "[One][shared] and ![Two][SHARED]\n[short][] and [implicit]\n\n[shared]: <Some note.md#Head> \"Title\"\n[short]: Other.md\n[implicit]: Local.md\n[missing][unknown]\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-reference-links",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 155,
+          "utf16": 155
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "Some note.md",
+            "fragment": "#Head",
+            "range": {
+              "bytes": [
+                0,
+                13
+              ],
+              "utf16": [
+                0,
+                13
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                70,
+                82
+              ],
+              "utf16": [
+                70,
+                82
+              ]
+            },
+            "definitionRange": {
+              "bytes": [
+                59,
+                96
+              ],
+              "utf16": [
+                59,
+                96
+              ]
+            }
+          },
+          {
+            "kind": "markdown",
+            "embed": true,
+            "target": "Some note.md",
+            "fragment": "#Head",
+            "range": {
+              "bytes": [
+                18,
+                32
+              ],
+              "utf16": [
+                18,
+                32
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                70,
+                82
+              ],
+              "utf16": [
+                70,
+                82
+              ]
+            },
+            "definitionRange": {
+              "bytes": [
+                59,
+                96
+              ],
+              "utf16": [
+                59,
+                96
+              ]
+            }
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "Other.md",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                33,
+                42
+              ],
+              "utf16": [
+                33,
+                42
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                106,
+                114
+              ],
+              "utf16": [
+                106,
+                114
+              ]
+            },
+            "definitionRange": {
+              "bytes": [
+                97,
+                114
+              ],
+              "utf16": [
+                97,
+                114
+              ]
+            }
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "Local.md",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                47,
+                57
+              ],
+              "utf16": [
+                47,
+                57
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                127,
+                135
+              ],
+              "utf16": [
+                127,
+                135
+              ]
+            },
+            "definitionRange": {
+              "bytes": [
+                115,
+                135
+              ],
+              "utf16": [
+                115,
+                135
+              ]
+            }
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "unsafe-integer",
+      "decision": "Intentional correction: unsafe integer-valued YAML is diagnosed instead of silently rounded by JavaScript.",
+      "request": {
+        "entryId": "fixture-unsafe-integer",
+        "contentRevision": "fixture-1",
+        "source": "---\nvalue: 9007199254740993\n---\nBody #visible"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-unsafe-integer",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 45,
+          "utf16": 45
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              32
+            ],
+            "utf16": [
+              0,
+              32
+            ]
+          },
+          "bodyStart": {
+            "byte": 32,
+            "utf16": 32
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                37,
+                45
+              ],
+              "utf16": [
+                37,
+                45
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_value",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                32
+              ],
+              "utf16": [
+                0,
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "alias-budget",
+      "decision": "Bound alias-created values to 1000. This nested amplification also fails the current yaml2.9.0 reader, whose amplification accounting differs.",
+      "request": {
+        "entryId": "fixture-alias-budget",
+        "contentRevision": "fixture-1",
+        "source": "---\na: &a [x, x, x, x, x, x, x, x, x, x]\nb: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a, *a]\nc: [*b, *b, *b, *b, *b, *b, *b, *b, *b, *b]\n---\nBody #visible"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-alias-budget",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 149,
+          "utf16": 149
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              136
+            ],
+            "utf16": [
+              0,
+              136
+            ]
+          },
+          "bodyStart": {
+            "byte": 136,
+            "utf16": 136
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                141,
+                149
+              ],
+              "utf16": [
+                141,
+                149
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_resource",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                136
+              ],
+              "utf16": [
+                0,
+                136
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "raw-destinations",
+      "decision": "Preserve raw destination escape/entity spelling and exact source span. The index resolution layer normalizes logical destinations; parser event unescaping must not overwrite raw extraction data.",
+      "request": {
+        "entryId": "fixture-raw-destinations",
+        "contentRevision": "fixture-1",
+        "source": "[escaped](A\\(B\\).md#Head) [entity](A&amp;B.md)"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-raw-destinations",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 46,
+          "utf16": 46
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "A\\(B\\).md",
+            "fragment": "#Head",
+            "range": {
+              "bytes": [
+                0,
+                25
+              ],
+              "utf16": [
+                0,
+                25
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                10,
+                19
+              ],
+              "utf16": [
+                10,
+                19
+              ]
+            },
+            "definitionRange": null
+          },
+          {
+            "kind": "markdown",
+            "embed": false,
+            "target": "A&amp;B.md",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                26,
+                46
+              ],
+              "utf16": [
+                26,
+                46
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                35,
+                45
+              ],
+              "utf16": [
+                35,
+                45
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "bare-cr",
+      "decision": "Intentional correction: CommonMark bare CR is a logical newline, as is CRLF. Neither source bytes nor UTF-16 positions are normalized.",
+      "request": {
+        "entryId": "fixture-bare-cr",
+        "contentRevision": "fixture-1",
+        "source": "# First\r[[Target]] #tag\r- [x] task"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-bare-cr",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 34,
+          "utf16": 34
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "tag"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "tag",
+            "range": {
+              "bytes": [
+                19,
+                23
+              ],
+              "utf16": [
+                19,
+                23
+              ]
+            }
+          }
+        ],
+        "headings": [
+          {
+            "text": "First",
+            "level": 1,
+            "line": 0,
+            "range": {
+              "bytes": [
+                0,
+                7
+              ],
+              "utf16": [
+                0,
+                7
+              ]
+            }
+          }
+        ],
+        "links": [
+          {
+            "kind": "wiki",
+            "embed": false,
+            "target": "Target",
+            "fragment": "",
+            "range": {
+              "bytes": [
+                8,
+                18
+              ],
+              "utf16": [
+                8,
+                18
+              ]
+            },
+            "targetRange": {
+              "bytes": [
+                10,
+                16
+              ],
+              "utf16": [
+                10,
+                16
+              ]
+            },
+            "definitionRange": null
+          }
+        ],
+        "tasks": [
+          {
+            "status": "x",
+            "checked": true,
+            "completed": true,
+            "text": "task",
+            "line": 2,
+            "range": {
+              "bytes": [
+                26,
+                29
+              ],
+              "utf16": [
+                26,
+                29
+              ]
+            },
+            "statusRange": {
+              "bytes": [
+                27,
+                28
+              ],
+              "utf16": [
+                27,
+                28
+              ]
+            },
+            "textRange": {
+              "bytes": [
+                30,
+                34
+              ],
+              "utf16": [
+                30,
+                34
+              ]
+            }
+          }
+        ],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "bom-no-frontmatter",
+      "decision": "Intentional correction: the initial BOM does not hide the first Markdown heading; offsets still count its original bytes and UTF-16 unit.",
+      "request": {
+        "entryId": "fixture-bom-no-frontmatter",
+        "contentRevision": "fixture-1",
+        "source": "﻿# Café"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-bom-no-frontmatter",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 10,
+          "utf16": 7
+        },
+        "frontmatter": {
+          "state": "absent",
+          "range": null,
+          "bodyStart": {
+            "byte": 0,
+            "utf16": 0
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [
+          {
+            "text": "Café",
+            "level": 1,
+            "line": 0,
+            "range": {
+              "bytes": [
+                3,
+                10
+              ],
+              "utf16": [
+                1,
+                7
+              ]
+            }
+          }
+        ],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "yaml-key-spellings",
+      "decision": "Quoted and escaped source key spelling differs from decoded key. Ordinary scalar keys convert to string spelling; source ranges cover original syntax.",
+      "request": {
+        "entryId": "fixture-yaml-key-spellings",
+        "contentRevision": "fixture-1",
+        "source": "---\n\"quoted key\": value\n\"a\\u0062\": escaped\ntrue: boolean key\n12: numeric key\n---\n"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-yaml-key-spellings",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 81,
+          "utf16": 81
+        },
+        "frontmatter": {
+          "state": "valid",
+          "range": {
+            "bytes": [
+              0,
+              81
+            ],
+            "utf16": [
+              0,
+              81
+            ]
+          },
+          "bodyStart": {
+            "byte": 81,
+            "utf16": 81
+          }
+        },
+        "properties": [
+          {
+            "key": "quoted key",
+            "value": "value",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                4,
+                16
+              ],
+              "utf16": [
+                4,
+                16
+              ]
+            }
+          },
+          {
+            "key": "ab",
+            "value": "escaped",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                24,
+                33
+              ],
+              "utf16": [
+                24,
+                33
+              ]
+            }
+          },
+          {
+            "key": "true",
+            "value": "boolean key",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                43,
+                47
+              ],
+              "utf16": [
+                43,
+                47
+              ]
+            }
+          },
+          {
+            "key": "12",
+            "value": "numeric key",
+            "type": "text",
+            "keyRange": {
+              "bytes": [
+                61,
+                63
+              ],
+              "utf16": [
+                61,
+                63
+              ]
+            }
+          }
+        ],
+        "aliases": [],
+        "tags": [],
+        "tagOccurrences": [],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": []
+      },
+      "propertyKeySpellings": [
+        "\"quoted key\"",
+        "\"a\\u0062\"",
+        "true",
+        "12"
+      ]
+    },
+    {
+      "id": "converted-key-duplicate",
+      "decision": "Reject collisions after scalar-key conversion to strings, including YAML boolean true versus quoted string true. Never silently overwrite one JSON mapping entry.",
+      "request": {
+        "entryId": "fixture-converted-key-duplicate",
+        "contentRevision": "fixture-1",
+        "source": "---\ntrue: first\n\"true\": second\n---\nBody #visible"
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "dialectVersion": "zorid-markdown-1",
+        "entryId": "fixture-converted-key-duplicate",
+        "contentRevision": "fixture-1",
+        "sourceLength": {
+          "bytes": 48,
+          "utf16": 48
+        },
+        "frontmatter": {
+          "state": "invalid",
+          "range": {
+            "bytes": [
+              0,
+              35
+            ],
+            "utf16": [
+              0,
+              35
+            ]
+          },
+          "bodyStart": {
+            "byte": 35,
+            "utf16": 35
+          }
+        },
+        "properties": [],
+        "aliases": [],
+        "tags": [
+          "visible"
+        ],
+        "tagOccurrences": [
+          {
+            "name": "visible",
+            "range": {
+              "bytes": [
+                40,
+                48
+              ],
+              "utf16": [
+                40,
+                48
+              ]
+            }
+          }
+        ],
+        "headings": [],
+        "links": [],
+        "tasks": [],
+        "diagnostics": [
+          {
+            "code": "frontmatter_duplicate_key",
+            "severity": "error",
+            "range": {
+              "bytes": [
+                0,
+                35
+              ],
+              "utf16": [
+                0,
+                35
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

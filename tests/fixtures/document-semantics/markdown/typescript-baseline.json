@@ -1,0 +1,1324 @@
+{
+  "sourceCommit": "f69dc90de0de697dfb75a5a3d1805b69dba982b3",
+  "observedRuntime": "v26.10.0",
+  "cases": [
+    {
+      "id": "empty",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "core-metadata",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "tags": [
+            "science",
+            "nested/tag"
+          ],
+          "aliases": [
+            "First note"
+          ],
+          "published": true,
+          "count": 3
+        },
+        "tags": [
+          "science",
+          "nested/tag",
+          "inline"
+        ],
+        "aliases": [
+          "First note"
+        ],
+        "headings": [
+          {
+            "heading": "Heading",
+            "level": 1,
+            "line": 6
+          }
+        ],
+        "links": [
+          {
+            "target": "Visible",
+            "fragment": "#Section",
+            "start": 127,
+            "end": 134,
+            "kind": "wiki",
+            "embed": false
+          },
+          {
+            "target": "image.png",
+            "fragment": "",
+            "start": 154,
+            "end": 163,
+            "kind": "wiki",
+            "embed": true
+          },
+          {
+            "target": "Some note.md",
+            "fragment": "#Here",
+            "start": 174,
+            "end": 186,
+            "kind": "markdown",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [
+        {
+          "key": "tags",
+          "value": [
+            "science",
+            "nested/tag"
+          ],
+          "type": "tags"
+        },
+        {
+          "key": "aliases",
+          "value": [
+            "First note"
+          ],
+          "type": "list"
+        },
+        {
+          "key": "published",
+          "value": true,
+          "type": "checkbox"
+        },
+        {
+          "key": "count",
+          "value": 3,
+          "type": "number"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "yaml-types",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "title": "false",
+          "created": "2024-02-29",
+          "invalid_date": "2026-02-29",
+          "updated": "2026-10-16T14:30:00-04:00",
+          "enabled": false,
+          "count": 3.25,
+          "empty": null,
+          "config": {
+            "paths": [
+              "one",
+              "two"
+            ],
+            "visible": true
+          },
+          "mixed": [
+            "a",
+            1,
+            null
+          ]
+        },
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "title",
+          "value": "false",
+          "type": "text"
+        },
+        {
+          "key": "created",
+          "value": "2024-02-29",
+          "type": "date"
+        },
+        {
+          "key": "invalid_date",
+          "value": "2026-02-29",
+          "type": "text"
+        },
+        {
+          "key": "updated",
+          "value": "2026-10-16T14:30:00-04:00",
+          "type": "datetime"
+        },
+        {
+          "key": "enabled",
+          "value": false,
+          "type": "checkbox"
+        },
+        {
+          "key": "count",
+          "value": 3.25,
+          "type": "number"
+        },
+        {
+          "key": "empty",
+          "value": null,
+          "type": "unknown"
+        },
+        {
+          "key": "config",
+          "value": {
+            "paths": [
+              "one",
+              "two"
+            ],
+            "visible": true
+          },
+          "type": "unknown"
+        },
+        {
+          "key": "mixed",
+          "value": [
+            "a",
+            1,
+            null
+          ],
+          "type": "unknown"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "yaml-block-alias",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "description": "first line\nsecond line\n",
+          "original": [
+            "one",
+            "two"
+          ],
+          "copy": [
+            "one",
+            "two"
+          ]
+        },
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "description",
+          "value": "first line\nsecond line\n",
+          "type": "text"
+        },
+        {
+          "key": "original",
+          "value": [
+            "one",
+            "two"
+          ],
+          "type": "list"
+        },
+        {
+          "key": "copy",
+          "value": [
+            "one",
+            "two"
+          ],
+          "type": "list"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "bom-crlf-unicode",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "aliases": [
+            "one, two",
+            "three"
+          ],
+          "tags": [
+            "work/project"
+          ]
+        },
+        "tags": [
+          "work/project"
+        ],
+        "aliases": [
+          "one, two",
+          "three"
+        ],
+        "headings": [
+          {
+            "heading": "Café 🌱",
+            "level": 1,
+            "line": 4
+          }
+        ],
+        "links": [
+          {
+            "target": "目標",
+            "fragment": "#節",
+            "start": 101,
+            "end": 103,
+            "kind": "wiki",
+            "embed": true
+          },
+          {
+            "target": "Café.md",
+            "fragment": "#Here",
+            "start": 119,
+            "end": 126,
+            "kind": "markdown",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [
+        {
+          "key": "aliases",
+          "value": [
+            "one, two",
+            "three"
+          ],
+          "type": "list"
+        },
+        {
+          "key": "tags",
+          "value": [
+            "work/project"
+          ],
+          "type": "tags"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "empty-frontmatter",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body",
+            "level": 1,
+            "line": 3
+          }
+        ],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "eof-frontmatter",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "title": "End"
+        },
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "title",
+          "value": "End",
+          "type": "text"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "prototype-keys",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "__proto__": "literal",
+          "constructor": {
+            "prototype": {
+              "polluted": true
+            }
+          },
+          "prototype": true
+        },
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "__proto__",
+          "value": "literal",
+          "type": "text"
+        },
+        {
+          "key": "constructor",
+          "value": {
+            "prototype": {
+              "polluted": true
+            }
+          },
+          "type": "unknown"
+        },
+        {
+          "key": "prototype",
+          "value": true,
+          "type": "checkbox"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "singular-projections",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "alias": "One, Two",
+          "tag": "#work, nested/tag"
+        },
+        "tags": [
+          "work",
+          "nested/tag",
+          "WORK"
+        ],
+        "aliases": [
+          "One",
+          "Two"
+        ],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "alias",
+          "value": "One, Two",
+          "type": "text"
+        },
+        {
+          "key": "tag",
+          "value": "#work, nested/tag",
+          "type": "text"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "mixed-projections",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "tags": [
+            "one",
+            true,
+            2,
+            null,
+            {
+              "a": "b"
+            }
+          ],
+          "aliases": [
+            "one",
+            true
+          ]
+        },
+        "tags": [
+          "one",
+          "true",
+          "2",
+          "null",
+          "[object Object]",
+          "body"
+        ],
+        "aliases": [
+          "one",
+          "true"
+        ],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "tags",
+          "value": [
+            "one",
+            true,
+            2,
+            null,
+            {
+              "a": "b"
+            }
+          ],
+          "type": "unknown"
+        },
+        {
+          "key": "aliases",
+          "value": [
+            "one",
+            true
+          ],
+          "type": "unknown"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "malformed-yaml",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body #visible",
+            "level": 1,
+            "line": 3
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 41,
+            "end": 47,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "duplicate-keys",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body #visible",
+            "level": 1,
+            "line": 4
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 48,
+            "end": 54,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "nested-duplicate",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body #visible",
+            "level": 1,
+            "line": 5
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 64,
+            "end": 70,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "nonmapping-yaml",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body #visible",
+            "level": 1,
+            "line": 4
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 44,
+            "end": 50,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "null-root",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body #visible",
+            "level": 1,
+            "line": 3
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 31,
+            "end": 37,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "custom-yaml-tag",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body #visible",
+            "level": 1,
+            "line": 3
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 52,
+            "end": 58,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "missing-alias",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body #visible",
+            "level": 1,
+            "line": 3
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 42,
+            "end": 48,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "cyclic-alias",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body #visible",
+            "level": 1,
+            "line": 3
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 47,
+            "end": 53,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "nonfinite-number",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "value": {
+            "tsNonFiniteNumber": "NaN"
+          }
+        },
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Body #visible",
+            "level": 1,
+            "line": 3
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 38,
+            "end": 44,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [
+        {
+          "key": "value",
+          "value": {
+            "tsNonFiniteNumber": "NaN"
+          },
+          "type": "number"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "unclosed-frontmatter",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Visible",
+            "level": 1,
+            "line": 2
+          }
+        ],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 30,
+            "end": 36,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "bare-frontmatter-opener",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "code-and-comments",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "indented",
+          "seen"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": [
+          {
+            "target": "Hidden",
+            "fragment": "",
+            "start": 93,
+            "end": 99,
+            "kind": "wiki",
+            "embed": false
+          },
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 197,
+            "end": 203,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "container-code",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "hidden"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Listed #hidden",
+            "level": 1,
+            "line": 6
+          }
+        ],
+        "links": [
+          {
+            "target": "Hidden",
+            "fragment": "",
+            "start": 31,
+            "end": 37,
+            "kind": "wiki",
+            "embed": false
+          },
+          {
+            "target": "Hidden",
+            "fragment": "",
+            "start": 78,
+            "end": 84,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "html-block",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "hidden",
+          "seen"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Heading #hidden",
+            "level": 1,
+            "line": 1
+          }
+        ],
+        "links": [
+          {
+            "target": "Hidden",
+            "fragment": "",
+            "start": 26,
+            "end": 32,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "unclosed-comments",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "seen",
+          "hidden"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "Heading",
+            "level": 1,
+            "line": 2
+          }
+        ],
+        "links": [
+          {
+            "target": "Hidden",
+            "fragment": "",
+            "start": 28,
+            "end": 34,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "obsidian-comment",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "seen",
+          "after",
+          "literal"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 74,
+            "end": 80,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "headings",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "NoHeading"
+        ],
+        "aliases": [],
+        "headings": [
+          {
+            "heading": "**Strong**        [label](Target.md) &amp; end",
+            "level": 1,
+            "line": 5
+          }
+        ],
+        "links": [
+          {
+            "target": "Target.md",
+            "fragment": "",
+            "start": 54,
+            "end": 63,
+            "kind": "markdown",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "tag-unicode",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "cafe",
+          "café",
+          "你好",
+          "１２３",
+          "a/b",
+          "a-",
+          "/",
+          "_"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "inline-links",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "Here"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": [
+          {
+            "target": "A",
+            "fragment": "#Head",
+            "start": 6,
+            "end": 7,
+            "kind": "wiki",
+            "embed": true
+          },
+          {
+            "target": "A.md",
+            "fragment": "#Head",
+            "start": 29,
+            "end": 33,
+            "kind": "markdown",
+            "embed": false
+          },
+          {
+            "target": "B name.md",
+            "fragment": "",
+            "start": 53,
+            "end": 62,
+            "kind": "markdown",
+            "embed": false
+          },
+          {
+            "target": "folder/a(b).md",
+            "fragment": "",
+            "start": 73,
+            "end": 87,
+            "kind": "markdown",
+            "embed": false
+          },
+          {
+            "target": "",
+            "fragment": "#Local",
+            "start": 91,
+            "end": 91,
+            "kind": "wiki",
+            "embed": false
+          },
+          {
+            "target": "",
+            "fragment": "#Here",
+            "start": 108,
+            "end": 108,
+            "kind": "markdown",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "escaped-openers",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "task-statuses",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "task-containers",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "task-literals",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "malformed-markdown",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 44,
+            "end": 50,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "reference-links",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "unsafe-integer",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "value": 9007199254740992
+        },
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "value",
+          "value": 9007199254740992,
+          "type": "number"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "alias-budget",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": null,
+      "propertiesError": true
+    },
+    {
+      "id": "raw-destinations",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": [
+          {
+            "target": "A\\(B\\).md",
+            "fragment": "#Head",
+            "start": 10,
+            "end": 19,
+            "kind": "markdown",
+            "embed": false
+          },
+          {
+            "target": "A&amp;B.md",
+            "fragment": "",
+            "start": 35,
+            "end": 45,
+            "kind": "markdown",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "bare-cr",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "tag"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": [
+          {
+            "target": "Target",
+            "fragment": "",
+            "start": 10,
+            "end": 16,
+            "kind": "wiki",
+            "embed": false
+          }
+        ]
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "bom-no-frontmatter",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [],
+      "propertiesError": false
+    },
+    {
+      "id": "yaml-key-spellings",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {
+          "12": "numeric key",
+          "quoted key": "value",
+          "ab": "escaped",
+          "true": "boolean key"
+        },
+        "tags": [],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": [
+        {
+          "key": "quoted key",
+          "value": "value",
+          "type": "text"
+        },
+        {
+          "key": "ab",
+          "value": "escaped",
+          "type": "text"
+        },
+        {
+          "key": "true",
+          "value": "boolean key",
+          "type": "text"
+        },
+        {
+          "key": "12",
+          "value": "numeric key",
+          "type": "text"
+        }
+      ],
+      "propertiesError": false
+    },
+    {
+      "id": "converted-key-duplicate",
+      "metadata": {
+        "path": "Fixture.md",
+        "frontmatter": {},
+        "tags": [
+          "visible"
+        ],
+        "aliases": [],
+        "headings": [],
+        "links": []
+      },
+      "properties": null,
+      "propertiesError": true
+    }
+  ]
+}
