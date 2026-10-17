@@ -1,3 +1,4 @@
+import {pdfMarkdownLink} from './pdf-link.ts';
 import {createCanvasAttachmentCard} from '../canvas/attachment-card.ts';
 import {createCanvasDocumentInput} from './canvas-document-input.ts';
 import { fileTreeLabel } from './file-tree-label.ts';
@@ -504,7 +505,8 @@ export class Workspace {
       }
       else if(/\.pdf$/i.test(path)){
         host.classList.add('pdf-attachment-view');
-        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches,onOpenMenu:event=>{const entry=this.vault.entries.get(path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}}});
+        const vault=this.vault,fileToken=this.treeEntryToken(path);
+        const view=(this.viewFactories.pdf??createPdfView)(host,path,this.attachments!,{generateMarkdownLink:(subpath:string,alias:string)=>this.vault===vault&&pane.runtime===runtime&&runtime.phase!=='disposed'&&this.treeEntryToken(path)===fileToken?pdfMarkdownLink(vault,path,subpath,alias,this.settings):null,subpath:tab.subpath,mobile:matchMedia('(max-width: 700px)').matches,onOpenMenu:event=>{const entry=this.vault.entries.get(path);if(entry){const point=this.menuPoint(event);this.fileMenu(entry,point.x,point.y);}}});
         pane.pdfView=view;void view.ready.catch(error=>{if(pane.pdfView===view&&version===pane.renderVersion)notice(error instanceof Error?error.message:String(error));});
       }else if(/\.canvas$/i.test(path)){
         host.classList.add('canvas-attachment-view');
@@ -522,7 +524,7 @@ export class Workspace {
             renderFile:(target:string,subpath?:string)=>{
               const parent=el('div'),token=this.treeEntryToken(target),available=()=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'&&token!==undefined&&this.treeEntryToken(target)===token&&this.vault.entries.get(target)?.type==='file';
               if(!available()){const element=el('p','error-message',`File not found: ${target}`);return{element,destroy(){element.remove();}};}
-              const view=createCanvasAttachmentCard(parent,{path:target,subpath,resources:this.attachments!,pdfFactory:this.viewFactories.pdf,mediaFactory:this.viewFactories.media,mobile:matchMedia('(max-width: 700px)').matches,
+              const view=createCanvasAttachmentCard(parent,{path:target,subpath,resources:this.attachments!,generateMarkdownLink:(fragment,alias)=>available()?pdfMarkdownLink(this.vault,target,fragment,alias,this.settings):null,pdfFactory:this.viewFactories.pdf,mediaFactory:this.viewFactories.media,mobile:matchMedia('(max-width: 700px)').matches,
                 openFile:(file,fragment)=>available()?this.openNote(file,false,pane,true,fragment??''):Promise.resolve(),onError:error=>{if(available())notice(error instanceof Error?error.message:String(error));}});
               return{element:view.element,destroy:()=>view.destroy()};
             },
@@ -559,7 +561,7 @@ export class Workspace {
           await buffer.flush();
         },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
       }
-      const createEmbeds=()=>new MarkdownEmbeds({vault:this.vault,resources:this.attachments,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
+      const createEmbeds=()=>new MarkdownEmbeds({vault:this.vault,resources:this.attachments,pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'?pdfMarkdownLink(this.vault,target,fragment,alias,this.settings):null,contextMenu:(event,request,source)=>{const target=this.vault.metadata.resolveLink(source,request.target,request.kind);const entry=target?this.vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},open:(source,target,kind)=>this.run(()=>this.followLink(source,target,pane,kind)),read:async target=>{const loaded=this.buffers.get(target);if(loaded){await loaded.load();if(loaded.dirty)return loaded.text;}return this.vault.cachedRead(target);},taskChange:(target,line,checked)=>this.changeTask(target,line,checked)});
       if(tab.mode==='reading'){
         const preview=el('div','markdown-preview');scroll.append(preview);
         pane.refreshPreview=()=>{
@@ -611,7 +613,7 @@ export class Workspace {
     const vault=this.vault,generation=this.vaultGeneration,workspace=this;
     const available=()=>{try{validate();return true;}catch{return false;}};
     const open=(target:string,kind:'wiki'|'markdown'='wiki')=>{if(available())this.run(()=>{if(available())return this.followLink(path,target,owner(),kind);});};
-    const embeds=new MarkdownEmbeds({vault,resources:this.attachments,
+    const embeds=new MarkdownEmbeds({vault,resources:this.attachments,pdfFactory:this.viewFactories.pdf,generatePdfLink:(target,fragment,alias)=>available()?pdfMarkdownLink(vault,target,fragment,alias,this.settings):null,
       open:(source,target,kind)=>{if(available())this.run(()=>{if(available())return this.followLink(source,target,owner(),kind);});},
       read:async target=>{validate();const loaded=this.buffers.get(target);if(loaded){await loaded.load();validate();if(loaded.dirty)return loaded.text;}return vault.cachedRead(target);},
       taskChange:(target,line,checked)=>{validate();return this.changeTask(target,line,checked,validate);},

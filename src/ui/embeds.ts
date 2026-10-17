@@ -23,6 +23,8 @@ interface EmbedOptions {
   contextMenu?: (event: MouseEvent, request: EmbedRequest, source: string) => void;
   /** Test/host injection; the PDF view owns loading errors and its attachment lease. */
   pdfFactory?: typeof createPdfView;
+  /** PDF copy-link formatting is a host capability; PDF menus use no note source. */
+  generatePdfLink?: (path:string,subpath:string,alias:string)=>string|null;
   /** Local media views own their resource lease and readiness/error UI. */
   mediaFactory?: typeof createMediaView;
 }
@@ -260,7 +262,7 @@ export class MarkdownEmbeds {
       const hash=request.target.indexOf('#');
       try {
         // The view acquires the resource itself. An outer lease would duplicate ownership.
-        const view=(this.options.pdfFactory??createPdfView)(state.node,path,this.resources,{embed:true,subpath:hash<0?'':request.target.slice(hash),onOpenMenu:event=>{if(!current())return;if(this.options.contextMenu)this.options.contextMenu(event,request,source);else this.options.open(source,request.target,request.kind);}});
+        const view=(this.options.pdfFactory??createPdfView)(state.node,path,this.resources,{generateMarkdownLink:this.options.generatePdfLink?(subpath:string,alias:string)=>current()?this.options.generatePdfLink!(path,subpath,alias):null:undefined,embed:true,subpath:hash<0?'':request.target.slice(hash),onOpenMenu:event=>{if(!current())return;if(this.options.contextMenu)this.options.contextMenu(event,request,source);else this.options.open(source,request.target,request.kind);}});
         state.pdfView=view;
         // PDF views render their own loading errors. Consume completion without adding
         // stale errors to a replacement widget or duplicating the viewer's status UI.
