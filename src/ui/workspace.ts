@@ -510,10 +510,15 @@ export class Workspace {
         host.classList.add('canvas-attachment-view');
         try{
           const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
-          const generation=this.vaultGeneration,settings=this.settings;pane.canvasSource=buffer.text;
+          const generation=this.vaultGeneration,vault=this.vault,fileToken=this.treeEntryToken(path);pane.canvasSource=buffer.text;
+          const services=this.canvasEditorServices(path,()=>pane,()=>{
+            if(generation!==this.vaultGeneration||vault!==this.vault||pane.runtime!==runtime||runtime.phase==='disposed'||pane.embeds!==services.embeds)throw new Error('The Canvas view is closed.');
+            if(!fileToken||this.treeEntryToken(path)!==fileToken||vault.entries.get(path)?.type!=='file'||this.buffers.get(path)!==buffer||buffer.path!==path)throw new Error('The Canvas file is no longer current.');
+          });
+          pane.embeds=services.embeds;
           pane.canvasView=(this.viewFactories.canvas??createCanvasView)(host,{...{openMarkdownFile:(target:string)=>this.openCanvasMarkdownSession(target,()=>pane,runtime),
             chooseFile:(kind?:'note'|'media')=>this.canvasDocumentInput?.chooseFile(()=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase==='active'&&pane.content?.isConnected===true,kind)??Promise.resolve(null),
-            textEditorOptions:{open:(target:string,kind:'wiki'|'markdown'='wiki')=>{if(generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed')this.run(()=>this.followLink(path,target,pane,kind));},paths:()=>generation===this.vaultGeneration?[...this.vault.entries.keys()]:[],get listOptions(){return{useTab:settings.useTab,tabSize:settings.tabSize,smartIndentList:settings.smartIndentList};}},
+            textEditorOptions:services.options,
             renderFile:(target:string,subpath?:string)=>{
               const parent=el('div'),token=this.treeEntryToken(target),available=()=>generation===this.vaultGeneration&&pane.runtime===runtime&&runtime.phase!=='disposed'&&token!==undefined&&this.treeEntryToken(target)===token&&this.vault.entries.get(target)?.type==='file';
               if(!available()){const element=el('p','error-message',`File not found: ${target}`);return{element,destroy(){element.remove();}};}
@@ -530,7 +535,7 @@ export class Workspace {
             }
           },openFile:(target,fragment)=>this.vault.entries.has(target)?this.openNote(target,false,pane,true,fragment??''):this.followLink(path,target+(fragment??''),pane,'markdown'),
           openFileInNewTab:target=>this.vault.entries.has(target)?this.openNote(target,true,pane):Promise.resolve(),openLink:target=>{if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');},onError:error=>notice(error instanceof Error?error.message:String(error))});
-        }catch(error){host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
+        }catch(error){pane.embeds?.destroy();pane.embeds=undefined;host.append(el('p','error-message',error instanceof Error?error.message:String(error)));}
       }
       else host.append(el('p','muted',`No viewer is available yet for ${path.split('.').at(-1)?.toUpperCase()||'this file type'}.`));
       pane.viewReady=true;this.renderStatus();return;
@@ -550,7 +555,7 @@ export class Workspace {
         const host=el('div','properties-host');scroll.append(host);
         pane.properties=renderProperties(host,{isCurrent:()=>pane.viewPath===path&&pane.renderVersion===version&&this.buffers.get(path)===buffer,onError:error=>notice(error instanceof Error?error.message:String(error)),getSource:()=>buffer.text,onChange:async next=>{
           this.updateMarkdownBuffer(buffer,next);runtime.touch();
-          for(const other of this.loadedViews()){other.embeds?.invalidate(path);if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
+          for(const other of this.loadedViews()){if(this.current(other)?.path===path){other.editor?.setValue(next);other.refreshPreview?.();if(other!==pane)other.properties?.refresh();}}
           await buffer.flush();
         },openLink:target=>this.run(()=>this.followLink(path,target,pane))});
       }
@@ -588,7 +593,7 @@ export class Workspace {
           listOptions:{useTab:this.settings.useTab,tabSize:this.settings.tabSize,smartIndentList:this.settings.smartIndentList},
           renderEmbed:request=>{const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
           transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>this.importAttachment(file,path,generation),nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
-          onChange:value=>{this.updateMarkdownBuffer(buffer,value);runtime.touch();this.renderStatus();for(const other of this.loadedViews()){other.embeds?.invalidate(path);if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);const properties=other.properties,preview=other.refreshPreview;other.propertyTimer=setTimeout(()=>{properties?.refresh();preview?.();},150);}}},open:(target,kind)=>{if(generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path)this.run(()=>this.followLink(path,target,pane,kind));}});
+          onChange:value=>{this.updateMarkdownBuffer(buffer,value);runtime.touch();this.renderStatus();for(const other of this.loadedViews()){if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);const properties=other.properties,preview=other.refreshPreview;other.propertyTimer=setTimeout(()=>{properties?.refresh();preview?.();},150);}}},open:(target,kind)=>{if(generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path)this.run(()=>this.followLink(path,target,pane,kind));}});
       }
       if(tab.viewState){if(tab.viewState.editor)pane.editor?.restoreViewState?.(tab.viewState.editor);if(Number.isFinite(tab.viewState.scrollTop))scroll.scrollTop=Math.max(0,tab.viewState.scrollTop);if(Number.isFinite(tab.viewState.scrollLeft))scroll.scrollLeft=Math.max(0,tab.viewState.scrollLeft);}
       if(buffer.error)notice(buffer.error.message);
@@ -598,6 +603,37 @@ export class Workspace {
       scroll.append(el('p','error-message',error instanceof Error?error.message:String(error)));
     }
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
+  }
+
+  /** Both Canvas text and linked-note cards use the existing Markdown services.
+   * The caller owns the manager and supplies its current source/view guard. */
+  private canvasEditorServices(path:string,owner:()=>Pane,validate:()=>void):{embeds:MarkdownEmbeds;options:Omit<EditorOptions,'value'|'mode'|'onChange'>}{
+    const vault=this.vault,generation=this.vaultGeneration,workspace=this;
+    const available=()=>{try{validate();return true;}catch{return false;}};
+    const open=(target:string,kind:'wiki'|'markdown'='wiki')=>{if(available())this.run(()=>{if(available())return this.followLink(path,target,owner(),kind);});};
+    const embeds=new MarkdownEmbeds({vault,resources:this.attachments,
+      open:(source,target,kind)=>{if(available())this.run(()=>{if(available())return this.followLink(source,target,owner(),kind);});},
+      read:async target=>{validate();const loaded=this.buffers.get(target);if(loaded){await loaded.load();validate();if(loaded.dirty)return loaded.text;}return vault.cachedRead(target);},
+      taskChange:(target,line,checked)=>{validate();return this.changeTask(target,line,checked,validate);},
+      contextMenu:(event,request,source)=>{if(!available())return;const target=vault.metadata.resolveLink(source,request.target,request.kind),entry=target?vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},
+    });
+    const options:Omit<EditorOptions,'value'|'mode'|'onChange'>={paths:()=>available()?[...vault.entries.keys()]:[],open,
+        get listOptions(){return{useTab:workspace.settings.useTab,tabSize:workspace.settings.tabSize,smartIndentList:workspace.settings.smartIndentList};},
+        isUnresolved:(target,kind)=>!available()||!vault.metadata.resolveLink(path,target,kind),
+        wiki:{sourcePath:()=>available()?path:null,
+          metadata:target=>{if(!available())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:vault.entries.get(target)?.mtime};},
+          resolvePath:(target,source)=>available()?vault.metadata.resolveLink(source,target):null,
+          linkText:(target,source)=>{
+            if(!available())return target.replace(/\.md$/i,'');
+            let result=target;const filename=target.split('/').at(-1)!;
+            if(this.settings.newLinkFormat==='shortest'){const matches=vault.metadata.resolveLinkCandidates(source,filename);if(matches.length===1&&matches[0]===target)result=filename;}
+            else if(this.settings.newLinkFormat==='relative'){const from=parentOf(source).split('/').filter(Boolean),to=target.split('/');while(from.length&&to.length&&from[0]===to[0]){from.shift();to.shift();}result=from.length?[...from.map(()=>'..'),...to].join('/'):'./'+to.join('/');}
+            return result.replace(/\.md$/i,'');
+          }},
+        renderEmbed:request=>{validate();const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
+        transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:async file=>{validate();const result=await this.importAttachment(file,path,generation);validate();return result;},nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
+      };
+    return{embeds,options};
   }
 
   private async openCanvasMarkdownSession(path:string,owner:()=>Pane,runtime:TabViewRuntime):Promise<CanvasMarkdownBufferSession>{
@@ -613,41 +649,18 @@ export class Workspace {
     const buffer=await this.bufferFor(path);validateFile();validateSession();
     const validateWrite=()=>{validateFile();if(this.buffers.get(path)!==buffer||buffer.path!==path)throw new Error('The Canvas note buffer was replaced. Your draft is retained.');};
     let disposed=false;
-    const available=()=>{try{if(disposed)return false;validateWrite();validateSession();return true;}catch{return false;}};
-    const open=(target:string,kind:'wiki'|'markdown'='wiki')=>{if(available())this.run(()=>this.followLink(path,target,owner(),kind));};
-    const embeds=new MarkdownEmbeds({vault,resources:this.attachments,
-      open:(source,target,kind)=>{if(available())this.run(()=>this.followLink(source,target,owner(),kind));},
-      read:async target=>{validateWrite();const loaded=this.buffers.get(target);if(loaded){await loaded.load();validateWrite();if(loaded.dirty)return loaded.text;}return vault.cachedRead(target);},
-      taskChange:(target,line,checked)=>{validateWrite();validateSession();return this.changeTask(target,line,checked);},
-      contextMenu:(event,request,source)=>{if(!available())return;const target=vault.metadata.resolveLink(source,request.target,request.kind),entry=target?vault.entries.get(target):undefined;if(entry){const point=this.menuPoint(event);event.preventDefault();event.stopPropagation();this.fileMenu(entry,point.x,point.y);}},
-    });
+    const services=this.canvasEditorServices(path,owner,()=>{if(disposed)throw new Error('The Canvas file card is closed.');validateWrite();validateSession();});
+    const embeds=services.embeds;
     this.canvasMarkdownEmbeds.add(embeds);
-    const workspace=this;
     return createCanvasMarkdownBufferSession({buffer,validateWrite,validateSession,
       subscribe:listener=>this.bufferSubscriptions.subscribe(buffer,listener),
       update:(next,guard)=>{
         this.updateMarkdownBuffer(buffer,next,guard);runtime.touch();
         for(const pane of this.loadedViews()){
-          pane.embeds?.invalidate(path);
           if(pane.viewPath===path){pane.editor?.setValue(next);pane.properties?.refresh();pane.refreshPreview?.();}
         }
       },
-      editorOptions:{paths:()=>available()?[...vault.entries.keys()]:[],open,
-        get listOptions(){return{useTab:workspace.settings.useTab,tabSize:workspace.settings.tabSize,smartIndentList:workspace.settings.smartIndentList};},
-        isUnresolved:(target,kind)=>!available()||!vault.metadata.resolveLink(path,target,kind),
-        wiki:{sourcePath:()=>available()?path:null,
-          metadata:target=>{if(!available())return;const dirty=this.buffers.get(target),metadata=dirty?.dirty?parseMetadata(target,dirty.text):vault.metadata.get(target);return{aliases:metadata?.aliases,headings:metadata?.headings,mtime:vault.entries.get(target)?.mtime};},
-          resolvePath:(target,source)=>available()?vault.metadata.resolveLink(source,target):null,
-          linkText:(target,source)=>{
-            if(!available())return target.replace(/\.md$/i,'');
-            let result=target;const filename=target.split('/').at(-1)!;
-            if(this.settings.newLinkFormat==='shortest'){const matches=vault.metadata.resolveLinkCandidates(source,filename);if(matches.length===1&&matches[0]===target)result=filename;}
-            else if(this.settings.newLinkFormat==='relative'){const from=parentOf(source).split('/').filter(Boolean),to=target.split('/');while(from.length&&to.length&&from[0]===to[0]){from.shift();to.shift();}result=from.length?[...from.map(()=>'..'),...to].join('/'):'./'+to.join('/');}
-            return result.replace(/\.md$/i,'');
-          }},
-        renderEmbed:request=>{validateWrite();validateSession();const dom=embeds.render(request,path);return{dom,destroy:()=>embeds.releaseEmbed(dom)};},
-        transfers:{autoConvertHtml:()=>this.settings.autoConvertHtml,importFile:file=>{validateWrite();validateSession();return this.importAttachment(file,path,generation);},nativePath:file=>window.zorid?.getPathForFile?.(file)??'',onError:error=>notice(error instanceof Error?error.message:String(error))},
-      },
+      editorOptions:services.options,
       dispose:()=>{disposed=true;embeds.destroy();this.canvasMarkdownEmbeds.delete(embeds);},
       onError:error=>notice(error instanceof Error?error.message:String(error)),
     });
@@ -655,7 +668,7 @@ export class Workspace {
 
   private updateMarkdownBuffer(buffer:NoteBuffer,next:string,validateWrite?:()=>void):void{
     const previous=buffer.text;buffer.update(next,{validateWrite});this.mapInactiveSelections(buffer.path,previous,next);
-    for(const embeds of this.canvasMarkdownEmbeds)embeds.invalidate(buffer.path);
+    for(const embeds of new Set([...this.canvasMarkdownEmbeds,...this.loadedViews().flatMap(pane=>pane.embeds?[pane.embeds]:[])]))embeds.invalidate(buffer.path);
   }
 
   private mapInactiveSelections(path:string,previous:string,next:string):void{
@@ -828,12 +841,12 @@ export class Workspace {
     return result.embed;
   }
 
-  private async changeTask(path:string,line:number,checked:boolean):Promise<void>{
-    const buffer=await this.bufferFor(path),lines=buffer.text.split('\n');
+  private async changeTask(path:string,line:number,checked:boolean,validate?:()=>void):Promise<void>{
+    validate?.();const buffer=await this.bufferFor(path);validate?.();const lines=buffer.text.split('\n');
     const marker=lines[line]?.match(/^([ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])[ \t]+\[)([^\]\r\n])(\])(?=[ \t]|\r?$)/);
     if(!marker)throw new Error('The task changed. Reopen the note before toggling it.');
     const at=marker[1].length;lines[line]=lines[line].slice(0,at)+(checked?'x':' ')+lines[line].slice(at+1);this.updateMarkdownBuffer(buffer,lines.join('\n'));await buffer.flush();
-    for(const pane of this.loadedViews()){pane.embeds?.invalidate(path);if(pane.viewPath===path){if(pane.viewMode==='reading')pane.refreshPreview?.();else pane.editor?.setValue(buffer.text);}}
+    for(const pane of this.loadedViews()){if(pane.viewPath===path){if(pane.viewMode==='reading')pane.refreshPreview?.();else pane.editor?.setValue(buffer.text);}}
   }
 
   private renderEmpty(pane:Pane,host=pane.element):void{
