@@ -354,3 +354,24 @@ hyphens to underscores (`stale_source`, `numeric_domain`) to obey its existing
 strict frame grammar; typed diagnostics inside successful query reports retain
 the shared codes. Unexpected non-category spellings become
 `document_query_failed`, never an invalid frame or arbitrary caught text.
+
+
+## Opaque group presentation identity
+
+Rust returns `BaseGroup.keyId: string | null` and `GroupOption.keyId: string`.
+The only null identity is the ungrouped sentinel (`BaseGroup.key == null` at the
+outer optional level). A real grouped typed-null value has its own non-null
+identity. Tokens currently use `base-key-v1:` plus the existing canonical typed
+value representation; they are stable across snapshots and refreshes but are not
+snapshot capabilities, source IDs or an editing authority. Consumers copy and
+compare tokens exactly without parsing, normalizing, hashing or rebuilding them.
+They must not use JavaScript's loose expression equality for group membership.
+
+The existing canonical policy preserves number/string/list distinctions and date
+`hasTime`, normalizes signed numeric zero, and recursively ignores object entry
+order for grouping. No expression equality, formulas, ordering or source values
+change. Tokens are included in the existing serialized result byte ceiling.
+Native source tests cover those distinctions and recursive object equivalence;
+accepted query expectations include reviewed literal identities for shared
+native/WASM checks. TypeScript fixture projection carries those literals and
+implements no independent canonicalization algorithm.

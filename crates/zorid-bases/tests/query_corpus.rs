@@ -151,3 +151,33 @@ fn json_equal(a: &Value, b: &Value) -> bool {
         _ => a == b,
     }
 }
+
+#[test]
+fn opaque_group_ids_count_toward_the_existing_output_byte_ceiling() {
+    let corpus: Corpus = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/document-semantics/bases/accepted-queries.json"
+    ))
+    .unwrap();
+    let case = corpus
+        .cases
+        .into_iter()
+        .find(|case| case.id == "typed-group-keys")
+        .unwrap();
+    let program = compile_base(case.request.configuration).unwrap();
+    let mut options = case.request.options;
+    let result = query_base(&program, &case.request.snapshot, &options).unwrap();
+    let mut without_ids = serde_json::to_value(&result).unwrap();
+    for group in without_ids["groups"].as_array_mut().unwrap() {
+        group.as_object_mut().unwrap().remove("keyId");
+    }
+    for option in without_ids["groupOptions"].as_array_mut().unwrap() {
+        option.as_object_mut().unwrap().remove("keyId");
+    }
+    options.max_output_bytes = serde_json::to_vec(&without_ids).unwrap().len();
+    assert_eq!(
+        query_base(&program, &case.request.snapshot, &options)
+            .unwrap_err()
+            .code,
+        "budget"
+    );
+}

@@ -39,6 +39,22 @@ async function publish(name,value) {
 await publish('accepted-expressions.json',projected);
 const queryBaseline=JSON.parse(await readFile(resolve(here,'queries.json'),'utf8'));
 const approvedQueryChanges=new Map([['default-natural-order','current'],['typed-group-keys','proposed'],['empty-or-composed','proposed'],['unsupported-link-metadata','proposed']]);
+// Reviewed literal Rust canonical-key oracles, not a second canonicalizer.
+// Number payloads use serde_json's f64 spelling; consumers treat every token opaque.
+const acceptedGroupIds=new Map([
+  ['typed-group-keys',{groups:[
+    'base-key-v1:{"type":"list","value":[{"type":"number","value":1.0},{"type":"number","value":2.0}]}',
+    'base-key-v1:{"type":"string","value":"2"}',
+    'base-key-v1:{"type":"number","value":2.0}',
+    'base-key-v1:{"type":"null"}',
+  ]}],
+  ['group-search-limit-pipeline',{groupOptions:[
+    'base-key-v1:{"type":"string","value":"todo"}',
+    'base-key-v1:{"type":"string","value":"done"}',
+    'base-key-v1:{"type":"string","value":"empty"}',
+    'base-key-v1:{"type":"string","value":"unlisted"}',
+  ]}],
+]);
 const snapshotId={localStoreId:'fixture-store',generationEpoch:'fixture-epoch',generation:'1',versions:{schema:1,extraction:'zorid-markdown-1:metadata-1',resolver:'link-nfc-lower-segment-utf16-v1',query:'literal-lines-exact-v1'}};
 const queryCases=queryBaseline.cases.map(item=>{
   let expectation='current';
@@ -48,7 +64,8 @@ const queryCases=queryBaseline.cases.map(item=>{
   const records=item.snapshot.files.map((file,index)=>({witness:{entryId:`fixture-${index}`,revision:'r1'},path:file.path,properties:Object.entries(file.properties ?? {}),tags:file.tags ?? [],size:file.size ?? null,ctimeMs:file.ctime ?? null,mtimeMs:file.mtime ?? null}));
   const ids=new Map(records.map(record=>[record.path,record.witness.entryId]));
   const expected=structuredClone(item[expectation]);
-  if(expected.groups) expected.groups=expected.groups.map(group=>({key:group.key,entryIds:group.paths.map(path=>{assert.ok(ids.has(path),`${item.id}: expected group path absent`);return ids.get(path);})}));
+  if(expected.groups){const tokens=acceptedGroupIds.get(item.id)?.groups;assert.equal(tokens?.length,expected.groups.length,`${item.id}: reviewed group identity literals required`);expected.groups=expected.groups.map((group,index)=>({key:group.key,keyId:tokens[index],entryIds:group.paths.map(path=>{assert.ok(ids.has(path),`${item.id}: expected group path absent`);return ids.get(path);})}));}
+  if(expected.groupOptions){const tokens=acceptedGroupIds.get(item.id)?.groupOptions;assert.equal(tokens?.length,expected.groupOptions.length,`${item.id}: reviewed option identity literals required`);expected.groupOptions=expected.groupOptions.map((option,index)=>({...option,keyId:tokens[index]}));}
   const options={searchTerms:item.options.searchTerms ?? [],evaluation:{clockMs:Date.parse('2024-01-15T10:20:30Z'),timezone:'UTC',currentRecord:records.find(record=>record.path===item.options.currentFilePath) ?? null}};
   const result={id:item.id,request:{configuration:item.document,snapshot:{snapshotId,records},options},expected,expectationSource:expectation,evidence:item.evidence};scalarStrings(result,item.id);return result;
 });

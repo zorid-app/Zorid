@@ -343,6 +343,7 @@
                 }
               ]
             },
+            "keyId": "base-key-v1:{\"type\":\"list\",\"value\":[{\"type\":\"number\",\"value\":1.0},{\"type\":\"number\",\"value\":2.0}]}",
             "entryIds": [
               "fixture-2"
             ]
@@ -352,6 +353,7 @@
               "type": "string",
               "value": "2"
             },
+            "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"2\"}",
             "entryIds": [
               "fixture-1"
             ]
@@ -361,6 +363,7 @@
               "type": "number",
               "value": 2
             },
+            "keyId": "base-key-v1:{\"type\":\"number\",\"value\":2.0}",
             "entryIds": [
               "fixture-0"
             ]
@@ -369,6 +372,7 @@
             "key": {
               "type": "null"
             },
+            "keyId": "base-key-v1:{\"type\":\"null\"}",
             "entryIds": [
               "fixture-3"
             ]
@@ -1141,7 +1145,8 @@
               "value": "todo"
             },
             "count": 1,
-            "listed": true
+            "listed": true,
+            "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"todo\"}"
           },
           {
             "key": {
@@ -1149,7 +1154,8 @@
               "value": "done"
             },
             "count": 2,
-            "listed": true
+            "listed": true,
+            "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"done\"}"
           },
           {
             "key": {
@@ -1157,7 +1163,8 @@
               "value": "empty"
             },
             "count": 0,
-            "listed": true
+            "listed": true,
+            "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"empty\"}"
           },
           {
             "key": {
@@ -1165,7 +1172,8 @@
               "value": "unlisted"
             },
             "count": 1,
-            "listed": false
+            "listed": false,
+            "keyId": "base-key-v1:{\"type\":\"string\",\"value\":\"unlisted\"}"
           }
         ]
       },

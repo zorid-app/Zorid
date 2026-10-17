@@ -847,3 +847,50 @@ pub fn query_base(
     crate::encoded_size(&result, options.max_output_bytes)?;
     Ok(result)
 }
+
+#[cfg(test)]
+mod group_identity_tests {
+    use super::*;
+    #[test]
+    fn opaque_group_ids_preserve_existing_canonical_type_and_date_distinctions() {
+        let number = BaseValue::Number { value: 2.0 };
+        let string = BaseValue::String { value: "2".into() };
+        let list = BaseValue::List {
+            value: vec![number.clone()],
+        };
+        let date = BaseValue::Date {
+            timestamp: 0,
+            has_time: false,
+        };
+        let datetime = BaseValue::Date {
+            timestamp: 0,
+            has_time: true,
+        };
+        let values = [&number, &string, &list, &date, &datetime, &BaseValue::Null];
+        let ids = values.into_iter().map(group_key_id).collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 6);
+        assert!(ids.iter().all(|id| id.starts_with("base-key-v1:")));
+        assert_eq!(
+            group_key_id(&BaseValue::Number { value: -0.0 }),
+            group_key_id(&BaseValue::Number { value: 0.0 })
+        );
+    }
+    #[test]
+    fn opaque_group_ids_reuse_recursive_canonical_object_equivalence() {
+        let first = BaseValue::Object {
+            value: vec![
+                ("z".into(), BaseValue::Number { value: 2.0 }),
+                ("a".into(), BaseValue::String { value: "2".into() }),
+            ],
+        };
+        let mut reversed = first.clone();
+        if let BaseValue::Object { value } = &mut reversed {
+            value.reverse();
+        }
+        let first = BaseValue::List { value: vec![first] };
+        let reversed = BaseValue::List {
+            value: vec![reversed],
+        };
+        assert_eq!(group_key_id(&first), group_key_id(&reversed));
+    }
+}
