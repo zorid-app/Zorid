@@ -131,3 +131,19 @@ retention diagnostics and a child arriving during directory capture.
 No browser/Electron/CLI subprocess namespace convergence or received namespace
 sync claim follows from these native/store results. Managed-text namespace
 linkage and received physical-binding integration remain separate work.
+
+## Current-main integration verification
+
+Candidate `8ba5c55` assembles the four reviewed namespace commits on main
+`a75b6ad`, including existing desktop client admission. No lockfile changes.
+On macOS arm64, session12395 exited0 with **158 passing tests**:
+
+```sh
+cargo test --offline -p zorid-native -p zorid-store -p zorid-desktop-host -j1 -- --test-threads=1
+```
+
+Log: `/private/tmp/zorid-namespace-integration-8ba5c55.log`. This adds integrated
+native/store/host evidence to the earlier isolated144 checks. It does not prove
+distributed namespace sync, Electron UI behavior, browser integration or the
+future received-file PhysicalBinding pipeline. No app or deployed service was
+opened; test subprocesses completed.
