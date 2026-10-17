@@ -836,10 +836,9 @@ fn discarding_one_stale_stage_preserves_source_published_pins_and_other_stages()
         store.resume_document_index(other.snapshot()),
         Err(DocumentIndexError::Contract(IndexError::StaleSource))
     ));
-    assert!(matches!(
-        store.discard_document_index_stage(published.snapshot()),
-        Err(DocumentIndexError::Contract(IndexError::StaleIndex))
-    ));
+    store
+        .discard_document_index_stage(published.snapshot())
+        .unwrap();
     assert_eq!(remaining_cache(), before_cache);
     assert_eq!(
         store
@@ -858,6 +857,21 @@ fn discarding_one_stale_stage_preserves_source_published_pins_and_other_stages()
         Err(DocumentIndexError::Contract(IndexError::StaleIndex))
     ));
     assert_eq!(authority(&foreign_path), foreign_before);
+    build(&mut store);
+    let superseded_cache = remaining_cache();
+    store
+        .discard_document_index_stage(published.snapshot())
+        .unwrap();
+    assert_eq!(remaining_cache(), superseded_cache);
+    assert_eq!(authority(&path), before_authority);
+    assert_eq!(
+        store
+            .literal_document_page(&pin, LiteralQuery::new("needle").unwrap(), None, 1)
+            .unwrap()
+            .hits[0]
+            .snippet,
+        "needle committed"
+    );
     store.rebuild_document_index().unwrap();
     let current = store.begin_document_index().unwrap();
     store.pump_document_index(&current).unwrap();

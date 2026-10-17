@@ -809,10 +809,10 @@ impl Store {
         Ok(DocumentIndexStage { snapshot })
     }
     /// Discard only this unpublished staging attempt, even after source/index
-    /// heads advance. The locator's actual store identity must match. Missing
-    /// attempts without retained rows, or expired epochs in a healthy same-store
-    /// cache, are no-ops;
-    /// retained published descriptors and the current published head reject.
+    /// heads advance. The locator's actual store identity must match. Exact
+    /// validated published descriptors, missing attempts without retained rows,
+    /// and expired epochs in a healthy same-store cache are no-ops. Published
+    /// rows, heads and query pins are never removed by cleanup.
     pub fn discard_document_index_stage(&mut self, snapshot: &IndexSnapshotId) -> IndexResult<()> {
         let tx = self
             .connection
@@ -825,9 +825,7 @@ impl Store {
             tx.commit()?;
             return Ok(());
         }
-        if c.head.as_ref() == Some(&Snapshot::of(snapshot)) {
-            return Err(IndexError::StaleIndex.into());
-        }
+        let is_head = c.head.as_ref() == Some(&Snapshot::of(snapshot));
         if snapshot.generation() > c.allocated {
             return Err(DocumentIndexError::RebuildRequired);
         }
@@ -838,6 +836,9 @@ impl Store {
             |r| r.get(0),
         )?;
         if !exists {
+            if is_head {
+                return Err(DocumentIndexError::RebuildRequired);
+            }
             let orphan_rows: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM document_index_rows WHERE snapshot_key=?1)",
                 [&key],
@@ -851,7 +852,13 @@ impl Store {
         }
         let h = header(&tx, snapshot)?;
         if h.published {
-            return Err(IndexError::StaleIndex.into());
+            // Publish may have committed before its RPC acknowledgment was lost.
+            // The exact descriptor is validated; completed work needs no cleanup.
+            tx.commit()?;
+            return Ok(());
+        }
+        if is_head {
+            return Err(DocumentIndexError::RebuildRequired);
         }
         // No source/head freshness fence: cleanup specifically accepts stale
         // attempts. Exact descriptor identity is validated under this write Tx.
