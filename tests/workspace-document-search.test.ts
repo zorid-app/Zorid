@@ -240,3 +240,54 @@ test('workspace search caps low-byte pagination and preserves a whitespace liter
   assert.equal(ui.root.querySelector('.search-results')?.getAttribute('data-state'), 'incomplete');
   assert.equal(f.pins[0].closed, 1);
 });
+
+test('successful old-vault release retires lost-close acknowledgments before a new service searches', async t => {
+  const ui = await setup(t), old = fixture(async () => page([hit()]));
+  const realOpen = old.service.open; let released = false, closes = 0;
+  old.service.open = async () => ({ ...await realOpen(), close: async () => {
+    closes++; throw Object.assign(new Error(released ? 'Released owner' : 'Lost close ACK'), { code: released ? 'client_not_admitted' : 'transport_error' });
+  } });
+  ui.workspace.platform.release = async () => { released = true; };
+  ui.setService(old.service); await ui.search('old');
+  assert.equal(ui.root.querySelector('.search-results')?.getAttribute('data-state'), 'unavailable');
+  const fresh = fixture(async () => page([hit('fresh', 'Fresh.md')]));
+  const adapter = new MemoryAdapter({ 'Fresh.md': 'fresh' }) as MemoryAdapter & { documentSemantics: DocumentService };
+  adapter.documentSemantics = fresh.service;
+  await ui.workspace.openVault({ adapter, id: 'test:released-search-owner', label: 'Fresh' });
+  await until(() => fresh.pins.length === 1 && fresh.pins[0].closed === 1, 'new service can search after final old cleanup');
+  assert.equal(released, true); assert.equal(ui.root.querySelector('.search-result-title')?.textContent, 'Fresh');
+  const settled = closes; await ui.internal.search();
+  assert.equal(closes, settled, 'successful platform cleanup forbids retrying revoked old-service handles');
+  assert.equal(fresh.pins.length, 2);
+});
+
+test('a pending old-vault open neither delays new-vault search nor resurrects released pin ownership', async t => {
+  const ui = await setup(t), opened = deferred<DocumentPin>(), old = fixture(async () => page([hit()]));
+  const realOpen = old.service.open; let entered = false, released = false, closes = 0;
+  old.service.open = async () => { entered = true; return opened.promise; };
+  ui.workspace.platform.release = async () => { released = true; };
+  ui.setService(old.service); const pending = ui.search('old'); await until(() => entered, 'old service open pending');
+  const fresh = fixture(async () => page([hit('fresh', 'Fresh.md')]));
+  const adapter = new MemoryAdapter({ 'Fresh.md': 'fresh' }) as MemoryAdapter & { documentSemantics: DocumentService };
+  adapter.documentSemantics = fresh.service;
+  await ui.workspace.openVault({ adapter, id: 'test:late-released-search-owner', label: 'Fresh' });
+  await until(() => fresh.pins.length === 1 && fresh.pins[0].closed === 1, 'new search does not await old pending open');
+  assert.equal(released, true);
+  opened.resolve({ ...await realOpen(), close: async () => { closes++; throw new Error('Released service cannot accept close'); } });
+  await pending; assert.equal(closes, 0, 'backend final cleanup already retired this late transport handle');
+  assert.equal(ui.root.querySelector('.search-result-title')?.textContent, 'Fresh');
+  await ui.internal.search(); assert.equal(fresh.pins.length, 2);
+});
+
+test('failed platform release preserves old-owner close retries', async t => {
+  const ui = await setup(t), f = fixture(async () => page([hit()]));
+  const realOpen = f.service.open; let closes = 0;
+  f.service.open = async () => ({ ...await realOpen(), close: async () => { closes++; throw new Error('Lost close ACK'); } });
+  ui.setService(f.service); await ui.search('old');
+  ui.workspace.platform.release = async () => { throw new Error('Release failed'); };
+  await assert.rejects(ui.internal.releasePlatform(), /Release failed/);
+  const before = closes; await ui.search('retry');
+  assert.ok(closes > before, 'no final cleanup ACK means ownership must remain retryable');
+  assert.equal(f.pins.length, 1, 'failed closes still block replacement pins from the same service');
+  ui.workspace.platform.release = async () => {};
+});

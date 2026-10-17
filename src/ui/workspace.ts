@@ -1,6 +1,6 @@
 import { mountDocumentBacklinks } from './document-backlinks.ts';
 import { catchUpDocumentIndex, documentErrorCode, DocumentSemanticsError } from '../core/document-semantics.ts';
-import type { DocumentCursor, DocumentPin, DocumentSnapshotId, DocumentSourceId } from '../core/document-semantics.ts';
+import type { DocumentCursor, DocumentPin, DocumentService, DocumentSnapshotId, DocumentSourceId } from '../core/document-semantics.ts';
 import { mountImportStatus } from './import-status.ts';
 import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS, EDITOR_HOTKEY_COMMANDS } from './hotkeys.ts';
 import { mountHotkeySettings } from './hotkey-settings.ts';
@@ -56,6 +56,10 @@ import { resolveWorkspaceShortcut } from './workspace-keymap.ts';
 import { createSidebarControls } from './sidebar-controls.ts';
 import { buildFileListBackgroundMenu, installFileListBackgroundMenu } from './file-list-background-menu.ts';
 
+interface DocumentSearchOwner {
+  vault:Vault; service:DocumentService; released:boolean; runs:number;
+  pins:Set<DocumentPin>; closing:Map<DocumentPin,Promise<void>>; acquisition:Promise<void>;
+}
 type Mode = 'live' | 'reading';
 interface Tab {
   id:string; path:string|null; mode:Mode; kind:'note'|'graph'; subpath?:string;
@@ -122,9 +126,7 @@ export class Workspace {
   private query = '';
   private searchGeneration = 0;
   private documentSearchSuspended = false;
-  private documentSearchPins = new Set<DocumentPin>();
-  private documentSearchClosing = new Map<DocumentPin,Promise<void>>();
-  private documentSearchAcquisition:Promise<void> = Promise.resolve();
+  private documentSearchOwners = new Set<DocumentSearchOwner>();
   private reverseSort = false;
   private autoRevealFiles = false;
   private disposers: (() => void)[] = [];
@@ -227,8 +229,8 @@ export class Workspace {
     try{
     if(!this.platformDrained){await this.flush();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
     this.clearDocumentBacklinks();
-    await this.closeDocumentSearchPins();
-    await this.platform.release();this.platformReleased=true;
+    await this.closeDocumentSearchPins().catch(()=>{});
+    await this.platform.release();this.releaseDocumentSearchOwner(this.vault);this.platformReleased=true;
     }catch(error){this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
   async chooseVault(): Promise<void> {
@@ -288,7 +290,7 @@ export class Workspace {
     clearTimeout(this.reloadTimer);
     this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();
     for(const pane of this.panes)await this.disposePaneViews(pane);if(!this.platformReleased)for(const buffer of this.buffers.values())await buffer.dispose(); this.buffers.clear();
-    if(!this.platformReleased&&this.platform?.release)await this.platform.release();
+    if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}
     this.attachments?.destroy();
     this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;
     this.treeDrag?.destroy(); this.treeDrag=undefined; this.treeRename?.session.dispose(); this.treeRename=undefined; this.folderCreationIntent++;
@@ -1137,17 +1139,28 @@ export class Workspace {
     void this.closeDocumentSearchPins().catch(()=>{});
   }
 
-  private closeDocumentSearchPin(pin:DocumentPin):Promise<void> {
-    const pending=this.documentSearchClosing.get(pin);if(pending)return pending;
-    if(!this.documentSearchPins.has(pin))return Promise.resolve();
-    const closing=Promise.resolve().then(()=>pin.close()).then(()=>{this.documentSearchPins.delete(pin);})
-      .finally(()=>{this.documentSearchClosing.delete(pin);});
-    // Failed acknowledgments retain ownership for the next query/teardown.
-    this.documentSearchClosing.set(pin,closing);return closing;
+  private releaseDocumentSearchOwner(vault:Vault):void {
+    // Successful platform release is the final backend cleanup acknowledgment,
+    // including opens whose transport responses have not reached the renderer.
+    for(const owner of this.documentSearchOwners)if(owner.vault===vault){
+      owner.released=true;owner.pins.clear();this.documentSearchOwners.delete(owner);
+    }
   }
 
-  private closeDocumentSearchPins():Promise<void> {
-    return Promise.all([...this.documentSearchPins].map(pin=>this.closeDocumentSearchPin(pin))).then(()=>{});
+  private closeDocumentSearchPin(owner:DocumentSearchOwner,pin:DocumentPin):Promise<void> {
+    if(owner.released)return Promise.resolve();
+    const pending=owner.closing.get(pin);if(pending)return pending;
+    if(!owner.pins.has(pin))return Promise.resolve();
+    const closing=Promise.resolve().then(()=>owner.released?undefined:pin.close()).then(()=>{owner.pins.delete(pin);})
+      .finally(()=>{owner.closing.delete(pin);if(!owner.runs&&!owner.pins.size)this.documentSearchOwners.delete(owner);});
+    // Failed acknowledgments retain ownership for the same service's next query
+    // or teardown. They can never block an unrelated vault's acquisition.
+    owner.closing.set(pin,closing);return closing;
+  }
+
+  private closeDocumentSearchPins(owner?:DocumentSearchOwner):Promise<void> {
+    const owners=owner?[owner]:[...this.documentSearchOwners];
+    return Promise.all(owners.flatMap(item=>[...item.pins].map(pin=>this.closeDocumentSearchPin(item,pin)))).then(()=>{});
   }
 
   private async openDocumentSearchEntry(id:string,query:string):Promise<void> {
@@ -1193,6 +1206,9 @@ export class Workspace {
     const sameSource=(a:DocumentSourceId,b:DocumentSourceId)=>a.localStoreId===b.localStoreId&&a.watermark===b.watermark;
     const sameSnapshot=(a:DocumentSnapshotId,b:DocumentSnapshotId)=>a.localStoreId===b.localStoreId&&a.generationEpoch===b.generationEpoch&&a.generation===b.generation
       &&a.versions.schema===b.versions.schema&&a.versions.extraction===b.versions.extraction&&a.versions.resolver===b.versions.resolver&&a.versions.query===b.versions.query;
+    let owner=[...this.documentSearchOwners].find(item=>item.vault===vault&&item.service===service&&!item.released);
+    if(!owner){owner={vault,service,released:false,runs:0,pins:new Set(),closing:new Map(),acquisition:Promise.resolve()};this.documentSearchOwners.add(owner);}
+    owner.runs++;
     let pin:DocumentPin|undefined;
     try{
       const maintained=await catchUpDocumentIndex(service,{isCurrent:current,rebuild,onProgress:progress=>{
@@ -1204,14 +1220,14 @@ export class Workspace {
       if(!maintained.snapshot){show('indexing','The saved-text index is still updating.');retry('Continue indexing');return;}
       // Serialize pending opens. Rapid typing cannot consume all four shared
       // pin slots with requests that are already obsolete when they resolve.
-      const previous=this.documentSearchAcquisition;let release!:()=>void;
-      this.documentSearchAcquisition=new Promise<void>(resolve=>{release=resolve;});
+      const previous=owner.acquisition;let release!:()=>void;
+      owner.acquisition=new Promise<void>(resolve=>{release=resolve;});
       try{
         await previous;if(!current())return;
-        await this.closeDocumentSearchPins();if(!current())return;
-        pin=await service.open();this.documentSearchPins.add(pin);
+        await this.closeDocumentSearchPins(owner);if(!current()||owner.released)return;
+        pin=await service.open();if(!owner.released)owner.pins.add(pin);
       }finally{release();}
-      if(!current())return;
+      if(!current()||owner.released)return;
       if(pin.snapshot.localStoreId!==maintained.source.localStoreId||pin.source.localStoreId!==pin.snapshot.localStoreId)throw new DocumentSemanticsError('invalid_document_response');
       show('loading','Searching saved text…');
       const groups=new Map<string,{element:HTMLElement;path:string;revision:string;snippets:number}>(),cursors=new Set<DocumentCursor>();
@@ -1267,12 +1283,13 @@ export class Workspace {
     }finally{
       if(pin){
         // Retire only this operation's pin; another search may already own one.
-        try{await this.closeDocumentSearchPin(pin);}catch{
+        try{await this.closeDocumentSearchPin(owner,pin);}catch{
           // A late open after shell disposal has no future refresh to retry it.
-          if(!current())try{await this.closeDocumentSearchPin(pin);}catch{}
+          if(!current())try{await this.closeDocumentSearchPin(owner,pin);}catch{}
           else{show('unavailable','Search could not release its saved snapshot. Refresh to try again.');retry('Refresh search');}
         }
       }
+      owner.runs--;if(!owner.runs&&!owner.pins.size)this.documentSearchOwners.delete(owner);
     }
   }
 
@@ -1726,5 +1743,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased)await this.platform?.release?.();this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}catch(error){if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
+  async destroy():Promise<void>{const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}catch(error){if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
 }
