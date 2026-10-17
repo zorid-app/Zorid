@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'">
+<title>Zorid browser client admission verification</title>
+<style>body{max-width:960px;margin:32px auto;padding:0 20px;font:16px/1.5 system-ui}button{padding:10px;font:inherit}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:20px}</style>
+<h1>Browser client admission verification</h1>
+<p>Real application workers, Web Locks, IndexedDB and Rust/WASM. Uses fresh synthetic databases only, then closes workers and deletes those databases. No editor or production vault is opened.</p>
+<button id="run">Run browser admission checks</button>
+<pre id="result" aria-live="polite">Ready.</pre>
+</html>

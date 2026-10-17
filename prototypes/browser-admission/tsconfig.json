@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["./fixture.ts", "../../src/platform/browser-core-worker.ts"],
+  "compilerOptions": { "types": [] }
+}
