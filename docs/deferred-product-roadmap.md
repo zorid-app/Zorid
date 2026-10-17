@@ -116,6 +116,24 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- User accepts the transport direction (2026-10-17): keep platform-appropriate
+  local connections (Electron IPC/pipes, browser WASM/worker, native bindings,
+  direct Rust CLI calls), and favor gRPC for remote sync after a small real-browser
+  compatibility proof. default_lifecycle_review_sol owns an isolated prototype
+  using a Rust gRPC/gRPC-Web endpoint and generated browser client. Verify bounded
+  binary upload/download, statuses, cancellation and exact retries after uncertain
+  outcomes before activating production transport. Protobuf adoption is already
+  approved; gRPC runtime adoption remains gated by this proof. No required local
+  server/daemon is introduced. Transport retries do not replace durable sync IDs,
+  receipts, encryption or recovery semantics.
+- Root revalidated main2ad1712 clean and the Orca inbox empty; no heavy/native app
+  process was live. Protobuf generation, four Rust and four Node checks, full TS
+  typecheck, frozen install and byte-identical regeneration pass in isolation.
+  Optional WASM check cannot run on the selected toolchain: wasm32 target missing.
+  No runtime codec switched. Slot released to portable mapper gate50222 at
+  a661bf7; Store277adb0+ada6e8b passed29 library+3 family/schema tests and is frozen.
+  Native CLI/host build56614 exited0; actual independent-process directory/Text
+  proof is running. Native scanner and Store schema10 are not on main yet.
 - User explicitly chooses protobuf (2026-10-17), superseding the earlier codec
   hold. Apply it to serialized Rust/client command/result boundaries and sync
   messages/chunks, with generated Rust/TypeScript types and bytes fields. Human
