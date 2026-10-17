@@ -250,3 +250,39 @@ operation retries;14 added race/input cases inspected. Owner reports180 mobile
 checks +scopedTS passing. Canonical contract/codec and workspace lifecycle/search
 unions preserved. Source blocker closed; composed build/link and actual simulator/
 phone behavior remain pending. Existing exclusive native validation grant continues.
+
+### 2026-10-17 — Vite migration and mobile keyboard continuity
+
+User explicitly authorizes migration to Vite, then Stage5; native mobile UX work
+continues in parallel. Root owns package/lock/root renderer build configuration and
+asset scripts in isolated tingkai-c/vite-renderer-migration (base4cdafd33). Asset
+extraction worker owns isolated vite-asset-pipeline; source/packaging reviewers
+read-only. Native owner freezes root build files and retains mobile source/UI.
+Preserve validated Rust/WASM provenance, worker/vendor assets, relative local URLs,
+Electron security and iOS dist/capcopy interface; verify actual affected clients
+before default integration. No automatic runtime performance improvement claim.
+
+User reports title→body focus while keyboard is already open collapses/reopens
+keyboard. Expected uninterrupted keyboard visibility. Relayed msg5dc07b64e4ef to
+native owner for scoped focus fix and actual software-keyboard verification,
+preserving edits/title commits. Pending implementation and runtime evidence.
+Phone6 source829cd2c9 installed/launched successfully per owner, build52508 and
+install/launch24342 exit0; detailed interaction checks still pending separately.
+
+### 2026-10-17 — Bases/tasks/calendar before Stage5
+
+User explicitly requests Bases, tasks and calendar before Stage5. Accepted order:
+active Vite migration → first-party Bases/task/calendar milestone → Stage5.
+Earlier task/calendar deferral is superseded. Shared Rust Base/index semantics
+remain the foundation, web/native presentation respects existing ownership. This
+request is recorded for implementation after Vite, not marked complete by the
+existing Stage4 query engine. Mobile UX work continues in parallel.
+
+Mobile follow-up per owner msg9bf2f3292f1c: user asks silent refresh on Notes Files
+page (remove Updating vault spinner while retaining list; keep initial skeleton
+and actionable errors). NativePages source assigned371. Actual invalid-PDF build6
+error appears but loading overlay clears only at8s editorTimeout, without ready;
+source-only callbacks were insufficient. Native owner diagnoses bounded shared
+presentation seam; root Vite pdf-view changes only import ignore comments. Neither
+finding is complete until actual behavior passes. Search field leading icon toggle
+confirmed for Zorid app actions, not shell commands; owner notified.
