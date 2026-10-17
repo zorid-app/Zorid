@@ -80,6 +80,10 @@ test('staging requires every actual HTML entry, stylesheet and module-preload re
     await assert.rejects(stageDesktop(f.root), /Missing HTML-referenced renderer asset/);
     await f.write(relative, bytes);
   }
+  const html = await fs.readFile(path.join(f.root, 'dist/index.html'), 'utf8');
+  await f.write('dist/index.html', html.replace('rel="modulepreload"', 'rel="alternate modulepreload"'));
+  await fs.rm(path.join(f.root, 'dist/assets/lazy-note-DeFg_45-.js'));
+  await assert.rejects(stageDesktop(f.root), /Missing HTML-referenced renderer asset/);
 });
 
 test('staging rejects nonlocal, commented-out and missing module/style HTML bindings', async t => {

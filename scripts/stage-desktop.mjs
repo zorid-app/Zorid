@@ -89,7 +89,7 @@ async function validateRendererHtml(root, files) {
     const styles = [...document.querySelectorAll('link')].filter(link => link.relList.contains('stylesheet'));
     if (!styles.length) throw new Error('Built renderer HTML must load a stylesheet');
     for (const stylesheet of styles) requireAsset(stylesheet.getAttribute('href'), '.css');
-    for (const preload of document.querySelectorAll('link[rel="modulepreload"]')) requireAsset(preload.getAttribute('href'), '.js');
+    for (const preload of document.querySelectorAll('link')) if (preload.relList.contains('modulepreload')) requireAsset(preload.getAttribute('href'), '.js');
   } finally { dom.window.close(); }
 }
 
