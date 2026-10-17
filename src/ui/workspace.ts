@@ -11,7 +11,7 @@ import { shouldOverrideInputContextMenu } from '../platform/input-context-menu.t
 import { bindNoteTitleFocus } from './note-title-focus.ts';
 import { Vault, parseMetadata } from '../core/index.ts';
 import type { VaultEntry } from '../core/index.ts';
-import { pickDesktopVault } from '../platform/index.ts';
+import { pickDesktopVault, createPlatformAdapter } from '../platform/index.ts';
 import type { PlatformVault } from '../platform/index.ts';
 import { el, icon, button, textButton, modal, notice, promptName } from './dom.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -199,11 +199,41 @@ export class Workspace {
     row.append(description, textButton('Open', () => this.run(() => this.chooseVault()), 'mod-cta')); panel.append(row); screen.append(panel); this.root.append(screen);
   }
 
+  private platformReleased=false;
+  private platformDrained=false;
+  private async releasePlatform():Promise<void>{
+    if(this.platformReleased||!this.platform?.release)return;
+    if(!this.platformDrained){await this.flush();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
+    await this.platform.release();this.platformReleased=true;
+  }
   async chooseVault(): Promise<void> {
     await this.flush();
-    const next = await pickDesktopVault();
-    if (next) await this.openVault(next);
-    else if (!window.zorid) notice('This vault is stored on this device. Folder selection requires the desktop app.');
+    const releasing=!!this.platform?.release;
+    if(releasing)await this.releasePlatform();
+    let next:PlatformVault|null=null;
+    try{next=await pickDesktopVault();}
+    finally{if(releasing&&!next)next=await createPlatformAdapter();}
+    if(next)await this.openVault(next);
+    else if(!window.zorid)notice('This vault is stored on this device. Folder selection requires the desktop app.');
+  }
+
+  private async recoverDurableBuffers(vault:Vault):Promise<Map<string,NoteBuffer>>{
+    const result=new Map<string,NoteBuffer>(),checkpoints=vault.adapter.durableWrites?.checkpoints;
+    if(!checkpoints)return result;
+    const keys=new Set<string>();let cursor:string|undefined,highWater='0';
+    do{const page=await checkpoints.list({limit:100,cursor});highWater=page.highWater;for(const row of page.items)if(!row.deleted&&row.key.startsWith('note/v1/'))keys.add(row.key);cursor=page.cursor??undefined;}while(cursor);
+    do{const page=await checkpoints.changes({after:highWater,limit:100,cursor});for(const row of page.items)if(row.key.startsWith('note/v1/'))keys.add(row.key);cursor=page.cursor??undefined;}while(cursor);
+    for(const key of keys){
+      const head=await checkpoints.load(key);if(!head?.encodedState)continue;
+      const raw=JSON.parse(head.encodedState),entryId=key.slice('note/v1/'.length);
+      if(raw.version!==1||raw.base?.entryId!==entryId)throw new Error('Unsupported durable note recovery checkpoint; retained');
+      const current=await vault.readDurableTextById(entryId);
+      if(!current){if(raw.operation||raw.draft!==raw.base.content)throw new Error('Recovered note entry is missing; draft retained');continue;}
+      let buffer:NoteBuffer;
+      buffer=new NoteBuffer(vault,current.path,{onState:()=>{if(this.vault===vault){this.bufferSubscriptions.publish(buffer);this.renderStatus();}}});
+      await buffer.load();result.set(current.path,buffer);
+    }
+    return result;
   }
 
   async openVault(platform: PlatformVault): Promise<void> {
@@ -213,26 +243,27 @@ export class Workspace {
     // a new adapter initializes, and a late request cannot acquire a watcher.
     await next.initialize();
     if(request!==this.vaultRequest)return;
-    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest)await this.replaceVault(platform,next);});
+    const transition=this.vaultTransition.then(async()=>{if(request===this.vaultRequest){const recovered=await this.recoverDurableBuffers(next);await this.replaceVault(platform,next,recovered);}});
     this.vaultTransition=transition.catch(()=>{});
     await transition;
   }
 
-  private async replaceVault(platform:PlatformVault,next:Vault):Promise<void>{
+  private async replaceVault(platform:PlatformVault,next:Vault,recovered=new Map<string,NoteBuffer>()):Promise<void>{
     // Migration failures must abort before teardown/save can replace legacy recovery.
     this.storageScope.migrateLegacy(localStorage, platform.id);
     this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
-    await this.flush();
+    if(!this.platformReleased)await this.flush();
     this.saveSession();
     for (const dispose of this.disposers) dispose(); this.disposers = [];
     clearTimeout(this.reloadTimer);
     this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();
-    for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose(); this.buffers.clear();
+    for(const pane of this.panes)await this.disposePaneViews(pane);if(!this.platformReleased)for(const buffer of this.buffers.values())await buffer.dispose(); this.buffers.clear();
+    if(!this.platformReleased&&this.platform?.release)await this.platform.release();
     this.attachments?.destroy();
     this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;
     this.treeDrag?.destroy(); this.treeDrag=undefined; this.treeRename?.session.dispose(); this.treeRename=undefined; this.folderCreationIntent++;
     this.treeRows=[]; this.treeSelection.clear(); this.treeSelectionAnchor=undefined; this.entryTokens.clear();
-    this.platform = platform; this.vault = next; this.vaultGeneration++;
+    this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.buffers=recovered; this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
     this.splitLayout?.destroy(); this.splitLayout=undefined; this.restoringLayout=true;
@@ -1424,6 +1455,6 @@ export class Workspace {
     if(primary&&!event.shiftKey&&!event.altKey&&!event.repeat&&event.key.toLowerCase()==='f'&&this.activePane?.pdfView){event.preventDefault();this.activePane.pdfView.showSearch();}
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flush();}
-  async flush():Promise<void>{for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
+  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
+  async destroy():Promise<void>{this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased)await this.platform?.release?.();this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.disposeShell();this.root.replaceChildren();}
 }

@@ -1,3 +1,4 @@
+import { DurableNoteState } from './note-durable-state.ts';
 import type { Vault } from '../core/vault.ts';
 import { normalizePath } from '../core/types.ts';
 
@@ -24,6 +25,7 @@ export class NoteBuffer {
   error: Error | null = null;
   private vault: Vault;
   private options: NoteBufferOptions;
+  private durable?: DurableNoteState;
   private loaded = false;
   private disposed = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -44,8 +46,14 @@ export class NoteBuffer {
     this.vault = vault;
     this.path = normalizePath(path);
     this.options = options;
+    if(vault.adapter.durableWrites)this.durable=new DurableNoteState(vault,vault.adapter.durableWrites,()=>this.syncDurable());
   }
 
+  private syncDurable():void {
+    if(!this.durable)return;
+    if(this.durable.ready){this.text=this.durable.text;this.savedText=this.durable.base.content;this.path=this.durable.base.path;}
+    this.dirty=this.durable.dirty;this.error=this.durable.error;this.notify();
+  }
   private key(path = this.path): string {
     return `${this.options.storageKey ?? 'zorid:draft'}:${encodeURIComponent(path)}`;
   }
@@ -148,6 +156,7 @@ export class NoteBuffer {
     return this.enqueue(async () => {
       if (this.loaded) return;
       if (this.disposed) throw new Error('This note buffer is disposed');
+      if(this.durable){await this.durable.load(this.path);this.loaded=true;this.syncDurable();return;}
       const disk = await this.vault.read(this.path);
       this.text = this.savedText = disk;
       this.error = null;
@@ -175,9 +184,9 @@ export class NoteBuffer {
     if (options.validateWrite) { options.validateWrite(); this.writeValidators.add(options.validateWrite); }
     const changed = text !== this.text;
     this.text = text;
-    this.updateDirty();
+    if(this.durable){this.durable.update(text);this.dirty=this.durable.dirty;}else this.updateDirty();
     if (!this.dirty) this.writeValidators.clear();
-    this.persist();
+    if(!this.durable)this.persist();
     if (changed) this.cancelTimer();
     // Repeated delivery of the same snapshot must not postpone a pending save.
     // persist still retries if its previous attempt failed.
@@ -192,6 +201,7 @@ export class NoteBuffer {
 
   private async save(): Promise<void> {
     this.requireLoaded();
+    if(this.durable){await this.durable.flush(()=>this.validateWrite());this.syncDurable();if(!this.dirty)this.writeValidators.clear();return;}
     this.validateWrite();
     if (this.writeIntent !== undefined || this.conflict) {
       const disk = await this.readForReconciliation();
@@ -229,6 +239,7 @@ export class NoteBuffer {
   reload(): Promise<void> {
     return this.enqueue(async () => {
       this.requireLoaded();
+      if(this.durable){await this.durable.reload();this.syncDurable();return;}
       const disk = await this.readForReconciliation();
       if (this.writeIntent !== undefined) { this.reconcileWrite(disk); this.persist(); this.notify(); return; }
       // Recheck after read: typing may have started while the adapter was busy.
@@ -245,6 +256,7 @@ export class NoteBuffer {
   }
 
   private async relocateNow(destination: string): Promise<void> {
+    if(this.durable){await this.durable.reload();this.syncDurable();return;}
     const oldPath = this.path;
     this.path = destination;
     const migrated = this.persist();
