@@ -590,3 +590,39 @@ fn corrupt_cache_entry_keys_require_rebuild_without_blocking_authority_saves() {
         ));
     }
 }
+
+#[test]
+fn copied_cache_cannot_be_queried_under_another_authority_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let a_path = dir.path().join("a");
+    let b_path = dir.path().join("b");
+    let mut a = Store::open(&a_path).unwrap();
+    let mut b = Store::open(&b_path).unwrap();
+    a.apply(&create("a", "a.md", b"private A")).unwrap();
+    b.apply(&create("b", "b.md", b"private B")).unwrap();
+    a.initialize_document_index().unwrap();
+    build(&mut a);
+    b.initialize_document_index().unwrap();
+    let before = authority(&b_path);
+    let db = Connection::open(&b_path).unwrap();
+    db.execute(
+        "ATTACH DATABASE ?1 AS foreign_cache",
+        [a_path.to_str().unwrap()],
+    )
+    .unwrap();
+    db.execute_batch("DELETE FROM document_index_control; INSERT INTO document_index_control SELECT * FROM foreign_cache.document_index_control; INSERT INTO document_index_generations SELECT * FROM foreign_cache.document_index_generations; INSERT INTO document_index_rows SELECT * FROM foreign_cache.document_index_rows;").unwrap();
+    assert!(matches!(
+        b.document_index_status().unwrap(),
+        DocumentIndexStatus::RebuildRequired
+    ));
+    assert!(matches!(
+        b.open_document_snapshot(),
+        Err(DocumentIndexError::RebuildRequired)
+    ));
+    assert_eq!(authority(&b_path), before);
+    write(&mut b, "save", "b", b"private B retained");
+    b.rebuild_document_index().unwrap();
+    build(&mut b);
+    assert!(hits(&b, "private A").is_empty());
+    assert_eq!(hits(&b, "private B").len(), 1);
+}

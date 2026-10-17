@@ -330,6 +330,11 @@ fn control(tx: &Connection) -> IndexResult<Control> {
     {
         return Err(DocumentIndexError::RebuildRequired);
     }
+    // Do not mask authority identity read errors as cache diagnostics.
+    let actual = text_sync::identity(tx)?.local_store_id;
+    if c.head.as_ref().is_some_and(|h| h.local != actual) {
+        return Err(DocumentIndexError::RebuildRequired);
+    }
     Ok(c)
 }
 fn source(tx: &Connection) -> IndexResult<SourceSnapshotId> {
@@ -377,7 +382,11 @@ fn header(tx: &Connection, snapshot: &IndexSnapshotId) -> IndexResult<Header> {
         )
         .optional()?;
     let h: Header = decode(&raw.ok_or(DocumentIndexError::RebuildRequired)?)?;
-    if h.snapshot.id()? != *snapshot || h.manifest.local_store_id != *snapshot.local_store_id() {
+    if h.snapshot.id()? != *snapshot
+        || h.manifest.local_store_id != *snapshot.local_store_id()
+        || h.manifest.local_store_id != text_sync::identity(tx)?.local_store_id
+        || snapshot.generation() > c.allocated
+    {
         return Err(DocumentIndexError::RebuildRequired);
     }
     h.fence()?;
