@@ -22,3 +22,12 @@ test('normal adapter snapshots binary bytes before asynchronous command dispatch
   const operation=adapter.writeBinary!('blob.bin',bytes);bytes.fill(9);await operation;
   assert.deepEqual([...request.data],[0,255,7]);
 });
+
+test('ordinary browser selection requires Rust assets rather than falling back to the preview vault',async()=>{
+  const saved=Object.getOwnPropertyDescriptor(globalThis,'window');
+  try{
+    Object.defineProperty(globalThis,'window',{configurable:true,value:{}});
+    const {createPlatformAdapter}=await import('../src/platform/index.ts');
+    await assert.rejects(createPlatformAdapter(),{code:'core_assets_missing'});
+  }finally{if(saved)Object.defineProperty(globalThis,'window',saved);else Reflect.deleteProperty(globalThis,'window');}
+});

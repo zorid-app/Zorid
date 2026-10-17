@@ -4,7 +4,7 @@ import { browserCoreFixtureConfig } from '../src/platform/browser-core-fixture.t
 
 const build = '7ab190d';
 const vault = '11111111-1111-4111-8111-111111111111', one = '22222222-2222-4222-8222-222222222222', two = '33333333-3333-4333-8333-333333333333';
-test('ordinary builds and ordinary URLs keep the existing browser adapter path', () => {
+test('fixture selector leaves ordinary builds and ordinary URLs to normal platform selection', () => {
   assert.equal(browserCoreFixtureConfig(false,new URL(`https://zorid.test/?zorid-core-vault=${vault}&zorid-core-client=${one}`),build),null);
   assert.equal(browserCoreFixtureConfig(true,new URL('https://zorid.test/'),build),null);
 });
