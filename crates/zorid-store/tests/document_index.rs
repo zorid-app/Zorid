@@ -679,3 +679,90 @@ fn oversized_control_headers_and_excess_generation_rows_require_rebuild() {
         assert_eq!(hits(&store, "after").len(), 1);
     }
 }
+
+#[test]
+fn checked_snapshot_accessors_keep_frozen_manifest_and_base_definition_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    let old = b"views:\n - type: table\n";
+    let new = b"views:\n - type: list\n";
+    store
+        .apply_at(&create("base", "view.base", old), 100)
+        .unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let pin = store.open_document_snapshot().unwrap();
+    let manifest = store.document_snapshot_manifest(&pin).unwrap();
+    let before = store.read_document_projection(&pin, &id("base")).unwrap();
+    assert_eq!(before.content, Some(old.to_vec()));
+    assert!(before.exclusion.is_none());
+    assert_eq!(manifest.presentations()[0].size_bytes, old.len() as u64);
+    assert_eq!(manifest.presentations()[0].mtime_ms, 100);
+    write(&mut store, "edit", "base", new);
+    build(&mut store);
+    let frozen = store.document_snapshot_manifest(&pin).unwrap();
+    assert_eq!(frozen, manifest);
+    let read = store.read_document_projection(&pin, &id("base")).unwrap();
+    assert_eq!(read.content, Some(old.to_vec()));
+    assert_eq!(read.witness.entry(), before.witness.entry());
+    let current = store.open_document_snapshot().unwrap();
+    assert_eq!(
+        store
+            .read_document_projection(&current, &id("base"))
+            .unwrap()
+            .content,
+        Some(new.to_vec())
+    );
+    let reopened = Store::open(&path).unwrap();
+    assert!(matches!(
+        reopened.document_snapshot_manifest(&pin),
+        Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+    ));
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE document_index_rows SET text=?1 WHERE snapshot_key=?2",
+            rusqlite::params![
+                b"tampered".to_vec(),
+                format!(
+                    "{}:{}",
+                    pin.generation().id().generation_epoch().as_str(),
+                    pin.generation().id().generation()
+                )
+            ],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.read_document_projection(&pin, &id("base")),
+        Err(DocumentIndexError::RebuildRequired)
+    ));
+    store.rebuild_document_index().unwrap();
+    assert!(matches!(
+        store.document_snapshot_manifest(&pin),
+        Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+    ));
+    assert!(matches!(
+        store.read_document_projection(&pin, &id("base")),
+        Err(DocumentIndexError::Contract(IndexError::SnapshotExpired))
+    ));
+}
+#[test]
+fn checked_retained_projection_reports_exclusions_without_binary_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .apply(&create("nul", "nul.txt", b"text\0hidden"))
+        .unwrap();
+    store.initialize_document_index().unwrap();
+    build(&mut store);
+    let pin = store.open_document_snapshot().unwrap();
+    let read = store.read_document_projection(&pin, &id("nul")).unwrap();
+    assert!(read.content.is_none());
+    assert_eq!(read.exclusion, Some(zorid_index::Exclusion::Binary));
+    assert!(matches!(
+        store.read_document_projection(&pin, &id("missing")),
+        Err(DocumentIndexError::Contract(IndexError::MissingSource))
+    ));
+}

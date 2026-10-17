@@ -518,6 +518,62 @@ fn check_stage(tx: &Connection, h: &Header) -> IndexResult<()> {
     Ok(())
 }
 
+fn pinned_header(
+    tx: &Connection,
+    pin: &DocumentQueryPin,
+    owner: &OperationId,
+) -> IndexResult<Header> {
+    if &pin.owner != owner {
+        return Err(IndexError::SnapshotExpired.into());
+    }
+    let c = control(tx)?;
+    if c.epoch != *pin.generation.id().generation_epoch() {
+        return Err(IndexError::SnapshotExpired.into());
+    }
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM document_index_generations WHERE snapshot_key=?1)",
+        [Snapshot::of(pin.generation.id()).key()],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Err(IndexError::SnapshotExpired.into());
+    }
+    let h = header(tx, pin.generation.id())?;
+    if !h.published {
+        return Err(IndexError::SnapshotExpired.into());
+    }
+    if h.manifest.manifest()? != *pin.generation.manifest() {
+        return Err(DocumentIndexError::RebuildRequired);
+    }
+    Ok(h)
+}
+fn retained_projection(
+    tx: &Connection,
+    h: &Header,
+    generation: &Generation,
+    id: &EntryId,
+) -> IndexResult<DocumentSourceRead> {
+    let record = generation.record(id).ok_or(IndexError::MissingSource)?;
+    let row:Option<(String,Option<i64>,Option<Vec<u8>>)>=tx.query_row("SELECT record,length(text),text FROM document_index_rows WHERE snapshot_key=?1 AND entry_id=?2 AND length(CAST(record AS BLOB)) BETWEEN 1 AND ?3 AND (text IS NULL OR length(text)<=?4)",params![h.snapshot.key(),id.as_str(),MAX_GENERATION_METADATA_BYTES as i64,FAMILY_MAX_INLINE_BYTES as i64],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    let (raw, length, text) = row.ok_or(DocumentIndexError::RebuildRequired)?;
+    let stored = decode::<Record>(&raw)?.restore(record.witness().clone())?;
+    if stored != *record || length != text.as_ref().map(|b| b.len() as i64) {
+        return Err(DocumentIndexError::RebuildRequired);
+    }
+    match (&text, record.text_digest()) {
+        (Some(bytes), Some(_)) => record
+            .check_text(bytes)
+            .map_err(|_| DocumentIndexError::RebuildRequired)?,
+        (None, None) => {}
+        _ => return Err(DocumentIndexError::RebuildRequired),
+    }
+    Ok(DocumentSourceRead {
+        witness: record.witness().clone(),
+        content: text,
+        exclusion: record.exclusion().cloned(),
+    })
+}
+
 fn prune(tx: &Connection, published: bool, retain: usize) -> IndexResult<()> {
     generation_bounds(tx, true)?;
     let mut expired = Vec::new();
@@ -1026,6 +1082,30 @@ impl Store {
             pins: self.document_query_pins.clone(),
         })
     }
+    /// Frozen source-mode and presentation facts from this exact generation.
+    /// Advancing source heads do not invalidate retained immutable snapshots.
+    pub fn document_snapshot_manifest(
+        &self,
+        pin: &DocumentQueryPin,
+    ) -> IndexResult<DocumentManifest> {
+        let tx = self.connection.unchecked_transaction()?;
+        let h = pinned_header(&tx, pin, &self.document_query_owner)?;
+        tx.commit()?;
+        Ok(h.manifest)
+    }
+    /// One retained generation projection, never a current-authority body read.
+    /// Eligible UTF-8 text is bounded to16MiB; excluded content retains its reason.
+    pub fn read_document_projection(
+        &self,
+        pin: &DocumentQueryPin,
+        id: &EntryId,
+    ) -> IndexResult<DocumentSourceRead> {
+        let tx = self.connection.unchecked_transaction()?;
+        let h = pinned_header(&tx, pin, &self.document_query_owner)?;
+        let read = retained_projection(&tx, &h, &pin.generation, id)?;
+        tx.commit()?;
+        Ok(read)
+    }
     pub fn close_document_snapshot(&self, _pin: DocumentQueryPin) {}
     pub fn literal_document_page(
         &self,
@@ -1034,24 +1114,15 @@ impl Store {
         token: Option<&LiteralToken>,
         limit: usize,
     ) -> IndexResult<LiteralPage> {
-        if pin.owner != self.document_query_owner {
-            return Err(IndexError::SnapshotExpired.into());
-        }
         let tx = self.connection.unchecked_transaction()?;
-        let h = header(&tx, pin.generation.id()).map_err(|e| match e {
-            DocumentIndexError::RebuildRequired => {
-                DocumentIndexError::Contract(IndexError::SnapshotExpired)
-            }
-            other => other,
-        })?;
-        if !h.published {
-            return Err(IndexError::SnapshotExpired.into());
-        }
+        let h = pinned_header(&tx, pin, &self.document_query_owner)?;
         let mut page = LiteralPageBuilder::new(&pin.generation, query, token, limit)?;
         while let Some(read) = page.next_read() {
-            let row:Option<(i64,Vec<u8>)>=tx.query_row("SELECT length(text),text FROM document_index_rows WHERE snapshot_key=?1 AND entry_id=?2 AND length(text)<=?3",params![h.snapshot.key(),read.entry().id.as_str(),FAMILY_MAX_INLINE_BYTES as i64],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-            let (length, text) = row.ok_or(DocumentIndexError::RebuildRequired)?;
-            if length != read.bytes() as i64 {
+            let projection = retained_projection(&tx, &h, &pin.generation, &read.entry().id)?;
+            let text = projection
+                .content
+                .ok_or(DocumentIndexError::RebuildRequired)?;
+            if text.len() != read.bytes() {
                 return Err(DocumentIndexError::RebuildRequired);
             }
             page.accept(&read, &text)
