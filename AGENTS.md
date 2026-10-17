@@ -59,6 +59,15 @@
 - The development machine is an 8 GB MacBook Air. Keep heavy builds and full
   test suites serialized; use bounded test concurrency. Parallel agents should
   coordinate local resource use rather than launch overlapping full checks.
+- Latest user mobile verification permissions (2026-10-17, native relays
+  msg_df11e44a6746 and msg_03ea8ab884f1): the physical iPhone's Zorid Dev app
+  (`app.zorid.notes.dev`) and its development data are disposable. Rebuild,
+  sign, install, update, overwrite or reset that development app/data as needed
+  without asking again; production apps and unrelated data are excluded. Include
+  this standing authorization in any required tool approval; approval policy
+  itself is unchanged. Keep the exact owned simulator booted between passes
+  because startup is slow. Do not shut it down for routine cleanup; terminate
+  the test app or automation stream if useful, and do not boot extra devices.
 - Close the test Electron app opened by the agent after each native verification
   pass. User-designated test vaults and agent-created disposable fixture vaults
   contain disposable content: agents may create, edit, rename, delete or reset

@@ -167,3 +167,12 @@ combined production build and short native practical pass now passed (see
 resize/zoom/rich-block polish remains unverified. This scoped UI task does not resume the older fenced-Base work. The separate
 core coordinator now owns the explicitly resumed Rust durable-save integration,
 including its NoteBuffer/workspace seams.
+
+### 2026-10-17 — mobile development verification permissions
+
+Native relays msg_df11e44a6746/msg_03ea8ab884f1 carry explicit user directions:
+physical iPhone Zorid Dev (`app.zorid.notes.dev`) data is disposable, including
+reset/overwrite for builds without repeat confirmation; unrelated/production
+apps are excluded. Keep the owned simulator booted between passes; test app or
+automation streams may be terminated to reduce load. Recorded in AGENTS.md.
+This is verification policy, not a product feature or completed mobile gate.
