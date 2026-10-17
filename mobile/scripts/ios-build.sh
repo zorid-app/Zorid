@@ -94,13 +94,12 @@ CARGO_ARGS=(build --locked --manifest-path mobile/rust/Cargo.toml --target "$TAR
 XCODE_ARGS=(-project ios/App/App.xcodeproj -scheme "$SCHEME" -configuration "$CONFIG" -sdk "$SDK" -destination "$DEST" -derivedDataPath "$OUTPUT/DerivedData" -jobs 1 "ARCHS=arm64" "CURRENT_PROJECT_VERSION=$IOS_BUILD_NUMBER" 'MARKETING_VERSION=0.1.0' )
 if [[ "$MODE" == development ]]; then
   # Command-line overrides only: preserve the project's OTHER_LDFLAGS and native source.
-  # Override both general and SDK-specific paths so no iphoneos Release library is selected.
+  # Use one unqualified CLI assignment: xcodebuild misparses = inside SDK qualifiers.
   XCODE_ARGS+=(
     'PRODUCT_BUNDLE_IDENTIFIER=app.zorid.notes.dev'
     'ZORID_APP_DISPLAY_NAME=Zorid Dev'
     "DEVELOPMENT_TEAM=$IOS_TEAM_ID" 'PROVISIONING_PROFILE='
-    'LIBRARY_SEARCH_PATHS="$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/debug"'
-    'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]="$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/debug"'
+    "LIBRARY_SEARCH_PATHS=\"$CARGO_TARGET_DIR/$TARGET/$PROFILE\" \$(inherited)"
   )
   if [[ "$DEV_SIGNING_STYLE" == Manual ]]; then
     XCODE_ARGS+=(CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=$IOS_DEV_SIGNING_IDENTITY" "PROVISIONING_PROFILE_SPECIFIER=$IOS_DEV_PROFILE_UUID")

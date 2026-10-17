@@ -178,9 +178,26 @@ Observed owner device build `87781` failed Xcode exit 65: the existing wildcard
 profile is Xcode-managed, and Manual signing rejects a managed profile even when
 its key, bundle and phone match. Owner separately reported the device Debug Rust
 build passed in 1m05s; that does not establish Xcode signing or installation.
-Owner retry `63867` is using Automatic signing with the cached profile, both manual
-variables unset and `IOS_ALLOW_PROVISIONING_UPDATES=0`, without provisioning flags
-or new signing assets. Its outcome is **pending** at this source checkpoint.
+Owner retry `63867` passed Swift compilation/framework signing with cached
+Automatic signing, but failed linking (exit 65): the SDK-qualified CLI assignment
+`LIBRARY_SEARCH_PATHS[sdk=iphoneos*]=...` was split at its first equals sign,
+producing malformed `-Liphoneos*]=...` and a missing `zorid_mobile_ffi` library.
+The script now emits only the plain unqualified `LIBRARY_SEARCH_PATHS` setting,
+with `$(inherited)` plus the quoted absolute Debug library path. SDK-qualified
+settings belong in native project/xcconfig source, never this CLI argument.
+
+Owner reports subsequent physical-phone build `39896` **BUILD SUCCEEDED** after
+replacing that argument. Cached Automatic signing used the existing profile,
+manual variables unset, team from the private contract, and no provisioning flags
+or new signing assets. `codesign` verification passed, device install `80894` and
+launch `63110` exited zero for `app.zorid.notes.dev`, display name **Zorid Dev**.
+These are owner-observed device results, not runs performed by the delivery worker.
+The installed artifact **predates the native environment marker**: it proves that
+artifact built/signed/installed/launched, not that the formal variants/runtime
+marker were verified on the phone. Native variant source `9f507594` / `a98afc11`
+and delivery `e7776589` are separately reported imported; the new variant build and
+its environment-marker check still need actual runtime evidence. No TestFlight
+upload or full mobile behavior parity is established by this device pass.
 
 Manual signing requires a **manually managed development provisioning profile**,
 not the existing Xcode-managed wildcard profile. Only for such a profile, set both
@@ -242,10 +259,10 @@ Build sequence is the production `webpack --env target=desktop` bundle plus
 --target aarch64-apple-ios -j1` **without `--release`**, and Xcode App project,
 **App-Dev** scheme / **Debug-Dev** configuration, iphoneos, arm64, `-jobs 1`, selected phone destination, manual or automatic
 development signing as selected above, explicit development team and display name
-**Zorid Dev**. Both general and `iphoneos` SDK-specific
-`LIBRARY_SEARCH_PATHS` are overridden to
-`mobile/rust/target/aarch64-apple-ios/debug`; the existing project's iphoneos
-Release path cannot accidentally supply this library. `OTHER_LDFLAGS` stays under
+**Zorid Dev**. A single plain CLI `LIBRARY_SEARCH_PATHS` setting preserves
+`$(inherited)` and adds the quoted absolute
+`mobile/rust/target/aarch64-apple-ios/debug` path. Native variant configs own
+SDK-specific paths; no SDK-qualified CLI assignment is emitted. `OTHER_LDFLAGS` stays under
 native project ownership. Output is
 `$IOS_OUTPUT_DIR/DerivedData/Build/Products/Debug-Dev-iphoneos/App.app`, with version
 0.1.0 and supplied build number. This is not a distribution archive or IPA.
