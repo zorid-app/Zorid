@@ -21,6 +21,7 @@
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 		7758A6C7811392A07AB7FAD6 /* AppVariant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03E00A6AFEE742BE7D20D914 /* AppVariant.swift */; };
+		FD9F126313343F4D57AFAD1B /* NativeKeyboardToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8748961360FAB562D575A87 /* NativeKeyboardToolbar.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -47,6 +48,7 @@
 		0EF78CFF3AC8C51115C8251C /* Release-Prod.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release-Prod.xcconfig; sourceTree = "<group>"; };
 		D24652011019453649FF6857 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		03E00A6AFEE742BE7D20D914 /* AppVariant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVariant.swift; sourceTree = "<group>"; };
+		A8748961360FAB562D575A87 /* NativeKeyboardToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeKeyboardToolbar.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +90,7 @@
                 111111111111111111111104 /* NativePages.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
+				A8748961360FAB562D575A87 /* NativeKeyboardToolbar.swift */,
 				03E00A6AFEE742BE7D20D914 /* AppVariant.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
@@ -196,6 +199,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				FD9F126313343F4D57AFAD1B /* NativeKeyboardToolbar.swift in Sources */,
 				7758A6C7811392A07AB7FAD6 /* AppVariant.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
                 111111111111111111111101 /* NativeMobile.swift in Sources */,

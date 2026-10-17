@@ -1,4 +1,5 @@
 import UIKit
+import SwiftUI
 import Capacitor
 import Darwin
 
@@ -263,6 +264,12 @@ final class NativeMobileSession {
     }
 }
 
+// The launch intent makes New note mutually exclusive with an existing entry.
+enum NativeEditorLaunch {
+    case entry(NativeFileEntry)
+    case newNote
+}
+
 @objc(NativeVaultPlugin)
 final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     let identifier = "NativeVaultPlugin"
@@ -271,48 +278,94 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "context", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "refresh", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "noteOpened", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "editorState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "close", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "lifecycleAck", returnType: CAPPluginReturnPromise)
     ]
     private let session: NativeMobileSession
-    private let initialEntry: NativeFileEntry?
+    private let launch: NativeEditorLaunch
     private var pending: (id: String, reason: String, completion: (Bool) -> Void)?
     private var timeout: DispatchWorkItem?
     private var closeAuthorized = false
+    private var currentEditorState = NativeEditorState.inactive
+    fileprivate var onEditorState: ((NativeEditorState, Bool) -> Void)?
 
-    fileprivate init(session: NativeMobileSession, initialEntry: NativeFileEntry?) {
+    fileprivate init(session: NativeMobileSession, launch: NativeEditorLaunch) {
         self.session = session
-        self.initialEntry = initialEntry
+        self.launch = launch
         super.init()
     }
 
     // Capacitor invokes plugin methods on its own queue. Keep listener mutation
     // on main too, so UIKit requests cannot race inherited listener operations.
     override func addListener(_ call: CAPPluginCall) {
-        if Thread.isMainThread { super.addListener(call) }
+        if Thread.isMainThread {
+            super.addListener(call)
+            if call.getString("eventName") == "editorAction" { currentEditorState = .inactive }
+            publishEditorState()
+        }
         else { DispatchQueue.main.sync { self.addListener(call) } }
     }
 
     override func removeListener(_ call: CAPPluginCall) {
-        if Thread.isMainThread { super.removeListener(call) }
+        if Thread.isMainThread {
+            super.removeListener(call)
+            if call.getString("eventName") == "editorAction" { currentEditorState = .inactive }
+            publishEditorState()
+        }
         else { DispatchQueue.main.sync { self.removeListener(call) } }
     }
 
     override func removeAllListeners(_ call: CAPPluginCall) {
-        if Thread.isMainThread { super.removeAllListeners(call) }
+        if Thread.isMainThread { super.removeAllListeners(call); resetEditorState() }
         else { DispatchQueue.main.sync { self.removeAllListeners(call) } }
     }
 
     @objc func context(_ call: CAPPluginCall) {
         session.context { context in
             var context = context
-            if let entry = self.initialEntry {
+            switch self.launch {
+            case .entry(let entry):
                 context["initialPath"] = entry.path
                 context["initialEntryId"] = entry.id
+            case .newNote:
+                context["createNoteOnOpen"] = true
             }
             call.resolve(context)
         }
+    }
+
+    @objc func editorState(_ call: CAPPluginCall) {
+        guard let state = NativeEditorState.decode(call.jsObjectRepresentation) else {
+            call.reject("Invalid editor state.", "invalid_request")
+            return
+        }
+        DispatchQueue.main.async {
+            self.currentEditorState = self.hasListeners("editorAction") && !self.closeAuthorized
+                && self.pending == nil && UIApplication.shared.applicationState == .active ? state : .inactive
+            self.publishEditorState()
+            call.resolve()
+        }
+    }
+
+    private func publishEditorState() {
+        onEditorState?(currentEditorState, hasListeners("editorAction"))
+    }
+
+    fileprivate func resetEditorState() {
+        currentEditorState = .inactive
+        publishEditorState()
+    }
+
+    fileprivate func sendEditorAction(_ action: NativeEditorAction) -> Bool {
+        guard UIApplication.shared.applicationState == .active, !closeAuthorized,
+              pending == nil, currentEditorState.focused, currentEditorState.editable,
+              hasListeners("editorAction") else { return false }
+        if action == .undo && !currentEditorState.canUndo { return false }
+        if action == .redo && !currentEditorState.canRedo { return false }
+        notifyListeners("editorAction", data: ["action": action.rawValue])
+        return true
     }
 
     @objc func noteOpened(_ call: CAPPluginCall) {
@@ -383,6 +436,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             self.timeout = nil
             self.pending = nil
             self.closeAuthorized = ok && pending.reason == "switchVault"
+            if self.closeAuthorized { self.resetEditorState() }
             call.resolve()
             pending.completion(ok)
         }
@@ -411,8 +465,8 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
 private final class NativeEditorBridge: CAPBridgeViewController {
     let vaultPlugin: NativeVaultPlugin
 
-    init(session: NativeMobileSession, initialEntry: NativeFileEntry?) {
-        vaultPlugin = NativeVaultPlugin(session: session, initialEntry: initialEntry)
+    init(session: NativeMobileSession, launch: NativeEditorLaunch) {
+        vaultPlugin = NativeVaultPlugin(session: session, launch: launch)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -445,12 +499,19 @@ final class NativeEditorContainer: UIViewController {
     private var leaving = false
     private let originTitle: String
     private let onClosed: () -> Void
+    private let toolbarModel = NativeKeyboardToolbarModel()
+    private var toolbarHost: UIHostingController<NativeKeyboardToolbarView>?
+    private var toolbarHeight: NSLayoutConstraint?
+    private var editorBottom: NSLayoutConstraint?
+    private var keyboardObservers: [NSObjectProtocol] = []
+    private var keyboardFrame: CGRect?
+    private var toolbarVisible = false
 
-    init(session: NativeMobileSession, initialEntry: NativeFileEntry? = nil, originTitle: String = "Pages", onClosed: @escaping () -> Void = {}) {
+    init(session: NativeMobileSession, launch: NativeEditorLaunch, originTitle: String = "Pages", onClosed: @escaping () -> Void = {}) {
         self.session = session
         self.originTitle = originTitle
         self.onClosed = onClosed
-        editor = NativeEditorBridge(session: session, initialEntry: initialEntry)
+        editor = NativeEditorBridge(session: session, launch: launch)
         super.init(nibName: nil, bundle: nil)
         title = session.vault.name
     }
@@ -464,17 +525,26 @@ final class NativeEditorContainer: UIViewController {
         navigationItem.hidesBackButton = true
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
         navigationItem.leftBarButtonItem?.accessibilityIdentifier = "native.editor.vaults"
+        editor.vaultPlugin.onEditorState = { [weak self] state, available in
+            guard let self = self else { return }
+            self.toolbarModel.state = state
+            self.toolbarModel.actionsAvailable = available
+            self.updateToolbarLayout()
+        }
         addChild(editor)
         view.addSubview(editor.view)
         editor.view.translatesAutoresizingMaskIntoConstraints = false
         let safe = view.safeAreaLayoutGuide
+        let bottom = editor.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
+        editorBottom = bottom
         NSLayoutConstraint.activate([
             editor.view.topAnchor.constraint(equalTo: safe.topAnchor),
             editor.view.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
             editor.view.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
-            editor.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
+            bottom
         ])
         editor.didMove(toParent: self)
+        installKeyboardToolbar()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -482,14 +552,118 @@ final class NativeEditorContainer: UIViewController {
         navigationController?.interactivePopGestureRecognizer?.isEnabled = false
     }
 
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        editor.vaultPlugin.resetEditorState()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateToolbarLayout()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.preferredContentSizeCategory != traitCollection.preferredContentSizeCategory {
+            toolbarHeight?.constant = preferredToolbarHeight
+            updateToolbarLayout()
+        }
+    }
+
+    private var preferredToolbarHeight: CGFloat {
+        max(44, UIFont.preferredFont(forTextStyle: .body).lineHeight + 16) + 16
+    }
+
+    private func installKeyboardToolbar() {
+        let host = UIHostingController(rootView: NativeKeyboardToolbarView(model: toolbarModel) { [weak self] action in
+            guard let self = self, self.toolbarVisible, self.editor.vaultPlugin.sendEditorAction(action) else { return }
+            if action == .dismissKeyboard {
+                self.view.endEditing(true)
+                self.editor.vaultPlugin.resetEditorState()
+            }
+        })
+        toolbarHost = host
+        addChild(host)
+        view.addSubview(host.view)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        host.view.backgroundColor = .clear
+        host.view.accessibilityIdentifier = "native.editor.keyboard-toolbar"
+        host.view.isHidden = true
+        let height = host.view.heightAnchor.constraint(equalToConstant: preferredToolbarHeight)
+        toolbarHeight = height
+        NSLayoutConstraint.activate([
+            host.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 8),
+            host.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -8),
+            host.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -4),
+            height
+        ])
+        host.didMove(toParent: self)
+        // Keep the guide's docked-only behavior. No keyboard frame height is
+        // added to the viewport: that remains the guide's sole responsibility.
+        view.keyboardLayoutGuide.followsUndockedKeyboard = false
+        for name in [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardWillHideNotification] {
+            keyboardObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                guard let self = self else { return }
+                let local = notification.userInfo?[UIResponder.keyboardIsLocalUserInfoKey] as? Bool ?? true
+                self.keyboardFrame = name == UIResponder.keyboardWillHideNotification || !local ? nil
+                    : (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+                self.updateToolbarLayout(notification: notification)
+            })
+        }
+        keyboardObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.keyboardFrame = nil
+            self?.editor.vaultPlugin.resetEditorState()
+        })
+    }
+
+    private var hasDockedSoftwareKeyboard: Bool {
+        guard let window = view.window, let frame = keyboardFrame else { return false }
+        let local = window.screen.coordinateSpace.convert(frame, to: view)
+        let intersection = view.bounds.intersection(local)
+        // Floating/undocked keyboards and hardware accessory strips do not
+        // reserve a full-width software-keyboard viewport for this toolbar.
+        return !intersection.isNull && intersection.height > 100
+            && intersection.width >= view.bounds.width - 2
+            && local.maxY >= view.bounds.maxY - 2
+            && local.minX <= view.bounds.minX + 2 && local.maxX >= view.bounds.maxX - 2
+    }
+
+    private func updateToolbarLayout(notification: Notification? = nil) {
+        guard isViewLoaded, let host = toolbarHost, let bottom = editorBottom else { return }
+        let visible = toolbarModel.canAct && hasDockedSoftwareKeyboard
+            && UIApplication.shared.applicationState == .active && !leaving
+        let inset = visible ? (toolbarHeight?.constant ?? preferredToolbarHeight) + 8 : 0
+        guard visible != toolbarVisible || bottom.constant != -inset else { return }
+        toolbarVisible = visible
+        // One native viewport boundary clears BOTH guide-owned keyboard space
+        // and the floating toolbar. Web must not apply a second toolbar inset.
+        bottom.constant = -inset
+        host.view.isHidden = !visible
+        let duration = notification?.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.15
+        let curve = notification?.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
+        if UIAccessibility.isReduceMotionEnabled {
+            UIView.performWithoutAnimation { self.view.layoutIfNeeded() }
+        } else {
+            UIView.animate(withDuration: duration, delay: 0, options: [UIView.AnimationOptions(rawValue: curve << 16), .beginFromCurrentState, .allowUserInteraction]) {
+                self.view.layoutIfNeeded()
+            }
+        }
+    }
+
+    deinit {
+        for observer in keyboardObservers { NotificationCenter.default.removeObserver(observer) }
+    }
+
     @objc private func returnToVaults() {
         guard !leaving else { return }
         leaving = true
+        editor.vaultPlugin.resetEditorState()
         navigationItem.leftBarButtonItem?.isEnabled = false
         editor.vaultPlugin.requestLifecycle("switchVault") { [weak self] ok in
             guard let self = self else { return }
             guard ok else {
                 self.leaving = false
+                self.updateToolbarLayout()
                 self.navigationItem.leftBarButtonItem?.isEnabled = true
                 if UIApplication.shared.applicationState == .active {
                     self.showMessage("Vault stays open", "The editor has not confirmed that it is safe to leave. Your workspace remains open. Try again after saving is ready.")
@@ -505,6 +679,8 @@ final class NativeEditorContainer: UIViewController {
 
     func enterBackground() {
         guard backgroundTask == .invalid else { return }
+        keyboardFrame = nil
+        editor.vaultPlugin.resetEditorState()
         // Cancel a foreground navigation request; it must never pop on suspension.
         editor.vaultPlugin.cancelLifecycle()
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Vault draft checkpoint") { [weak self] in
