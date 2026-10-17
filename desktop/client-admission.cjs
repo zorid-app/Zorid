@@ -11,7 +11,7 @@ function fail(code, uncertain = false) { return Object.assign(new Error('Desktop
 async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwner } = {}) {
   if (fixture !== true || !uuid(clientId) || typeof assertOwner !== 'function') throw fail('invalid_admission');
   const host = service.host;
-  let phase = 'admitting', closing = null, flushed = false;
+  let phase = 'admitting', closing = null, flushed = false, activeFlush = null;
   const pending = new Set();
   function live() {
     if (service.closed || host.fatal || host.exited) throw fail('client_ownership_lost', true);
@@ -32,33 +32,32 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     if (capability.checkpoints.scope.vaultId !== reference.local_store_id || capability.checkpoints.scope.clientId !== reference.client_id) throw fail('client_scope_mismatch');
     live(); phase = 'active';
     const scope = capability.checkpoints.scope;
-    function allowed(flush) {
-      if (phase !== (flush ? 'flushing' : 'active')) throw fail('client_not_admitted');
+    function allowed(flushToken = null) {
+      if (flushToken === null ? phase !== 'active' : phase !== 'flushing' || activeFlush !== flushToken) throw fail('client_not_admitted');
       live();
     }
-    function invoke(action, flush) {
+    function invoke(action, flushToken) {
       try {
-        allowed(flush);
+        allowed(flushToken);
         const result = action(); // Snapshot provider args synchronously, before any await.
         const tracked = Promise.resolve(result).finally(() => pending.delete(tracked));
         pending.add(tracked);
         return tracked;
       } catch (reason) { return Promise.reject(reason); }
     }
-    function wrap(flush) {
+    function wrap(flushToken) {
       const methods = ['readText', 'readTextById', 'planWrite', 'prepare', 'commit', 'query', 'listUnacknowledged', 'acknowledge'];
       return Object.freeze({
-        ...Object.fromEntries(methods.map(name => [name, (...args) => invoke(() => capability[name](...args), flush)])),
+        ...Object.fromEntries(methods.map(name => [name, (...args) => invoke(() => capability[name](...args), flushToken)])),
         checkpoints: Object.freeze({ scope,
-          ...Object.fromEntries(['load', 'compareAndSwap', 'list', 'changes'].map(name => [name, (...args) => invoke(() => capability.checkpoints[name](...args), flush)])),
+          ...Object.fromEntries(['load', 'compareAndSwap', 'list', 'changes'].map(name => [name, (...args) => invoke(() => capability.checkpoints[name](...args), flushToken)])),
         }),
       });
     }
-    const writes = wrap(false), flushWrites = wrap(true);
-    const flushContext = Object.freeze({ scope, durableWrites: flushWrites, assertActive: () => allowed(true) });
+    const writes = wrap(null);
     async function drain() { while (pending.size) await Promise.allSettled([...pending]); }
     const context = Object.freeze({
-      scope, durableWrites: writes, assertActive: () => allowed(false),
+      scope, durableWrites: writes, assertActive: () => allowed(),
       release(flushGate) {
         if (phase === 'released') return Promise.resolve();
         if (closing) return closing;
@@ -72,8 +71,20 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
               // Stop external admission, settle accepted work, then let the
               // editor persist/flush through the dedicated gate capability.
               await drain();
-              await flushGate(flushContext);
+              const token = Symbol('flush-attempt');
+              activeFlush = token;
+              const flushContext = Object.freeze({ scope, durableWrites: wrap(token), assertActive: () => allowed(token) });
+              let gateFailed = false, gateError;
+              try {
+                const result = flushGate(flushContext);
+                if (result && typeof result.then === 'function') await result;
+              } catch (reason) { gateFailed = true; gateError = reason; }
+              finally { activeFlush = null; }
+              // Revocation blocks new calls, including a retained capability
+              // from this attempt. Already accepted calls still finish while
+              // the native lease and dispatch guard remain in flushing phase.
               await drain();
+              if (gateFailed) throw gateError;
               flushed = true;
             } catch (reason) { phase = 'active'; throw reason; }
           }

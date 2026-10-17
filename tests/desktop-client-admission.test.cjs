@@ -30,7 +30,7 @@ function fixture() {
         entry_id: 'entry', mutation_kind: 'write', state: 'prepared', acknowledged: false, receipt: null, error: null, order: '1' } }; break;
       case 'query_intent': if (queryGate) await queryGate.promise; result = { intent: row }; break;
       case 'commit_intent': result = { intent: row = { ...row, state: 'committed', receipt: { operation_id: row.operation_id, sequence: '1',
-        changes: [{ before: null, after: { id: 'entry', revision: 'new-rev' } }] } } }; break;
+        changes: [{ before: null, after: { id: 'entry', revision: 'new-rev', kind: 'file', deleted: false } }] } } }; break;
       case 'checkpoint_load': result = { checkpoint }; break;
       case 'checkpoint_cas': checkpoint = { version: 1, vaultId: 'authority', clientId, key: command.key,
         revision: command.next_revision, sequence: '1', deleted: !command.has_state, byteLength: bytes.length };
@@ -115,4 +115,62 @@ test('queued mutation rechecks ownership at actual transport dispatch', async ()
   await assert.rejects(pending, { code: 'grant_retired' });
   await host.tail;
   assert.deepEqual(frames, []); assert.equal(host.queuedCount, 0); assert.equal(host.queuedBytes, 0);
+});
+
+test('a retained flush capability never revives on a later release attempt', async () => {
+  const f = fixture(), context = await admitDesktopFixtureClient(f.service, f.options);
+  let retired;
+  await assert.rejects(context.release(admitted => { retired = admitted; throw new Error('first gate failed'); }), /first gate failed/);
+  assert.throws(() => retired.assertActive(), { code: 'client_not_admitted' });
+  await context.release(async current => {
+    current.assertActive();
+    assert.throws(() => retired.assertActive(), { code: 'client_not_admitted' });
+    await assert.rejects(retired.durableWrites.checkpoints.load('note'), { code: 'client_not_admitted' });
+    assert.equal((await current.durableWrites.readText('note.md')).content, 'base');
+  });
+  await assert.rejects(retired.durableWrites.readText('note.md'), { code: 'client_not_admitted' });
+  assert.equal(f.calls.filter(name => name === 'release_client').length, 1);
+});
+
+test('successful gate revokes its capability before draining an already accepted async commit', async () => {
+  const f = fixture(), context = await admitDesktopFixtureClient(f.service, f.options), writes = context.durableWrites;
+  const read = await writes.readText('note.md');
+  const intent = await writes.prepare(await writes.planWrite({ operationId: 'op', path: read.path,
+    expectedEntryId: read.entryId, expectedRevision: read.revision, expectedContent: read.content, content: 'next' }));
+  const query = deferred(), entered = deferred(); f.queryGate = query;
+  let retained, accepted;
+  const closing = context.release(admitted => {
+    retained = admitted;
+    accepted = admitted.durableWrites.commit(intent.ref);
+    entered.resolve();
+    // Return synchronously while the accepted operation awaits queryIntent.
+  });
+  await entered.promise;
+  assert.throws(() => retained.assertActive(), { code: 'client_not_admitted' });
+  await assert.rejects(retained.durableWrites.checkpoints.load('late'), { code: 'client_not_admitted' });
+  assert.ok(f.active); assert.equal(f.calls.includes('commit_intent'), false);
+  query.resolve();
+  assert.equal((await accepted).state, 'committed');
+  await closing;
+  assert.ok(f.calls.indexOf('commit_intent') < f.calls.indexOf('release_client'));
+  assert.equal(f.active, null);
+});
+
+test('failed gate revokes before drain and restores active ownership only after accepted work settles', async () => {
+  const f = fixture(), context = await admitDesktopFixtureClient(f.service, f.options);
+  const gate = deferred(), entered = deferred(); f.readGate = gate;
+  let retained, accepted, settled = false;
+  const closing = context.release(admitted => {
+    retained = admitted; accepted = admitted.durableWrites.readText('note.md'); entered.resolve();
+    throw new Error('persist failed');
+  });
+  const rejected = assert.rejects(closing, /persist failed/).then(() => { settled = true; });
+  await entered.promise;
+  assert.throws(() => retained.assertActive(), { code: 'client_not_admitted' });
+  assert.throws(() => context.assertActive(), { code: 'client_not_admitted' });
+  await assert.rejects(context.durableWrites.readText('note.md'), { code: 'client_not_admitted' });
+  assert.equal(settled, false); assert.ok(f.active);
+  gate.resolve(); await accepted; await rejected;
+  context.assertActive(); assert.ok(f.active);
+  assert.equal(f.calls.includes('release_client'), false);
 });

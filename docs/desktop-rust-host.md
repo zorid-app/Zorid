@@ -312,3 +312,33 @@ This is fixture ownership and storage/transport evidence. It does not enable or
 verify production persistent window allocation, WindowBroker/preload selection,
 NoteBuffer checkpoint/flush integration, native UI, mobile, or full encrypted
 web/desktop/CLI convergence. The paused editor consumer remains untouched.
+
+
+### Per-attempt flush capability fence — 2026-10-16
+
+Follow-up based on main `a75b6ad`: each release attempt now creates an unforgeable
+flush token. New calls through that capability are revoked as soon as its gate
+returns or rejects, including synchronous gates. A retained capability from a
+failed attempt never becomes usable during a later attempt. Accepted operations
+continue to dispatch under the held native lease while draining; even a failed
+gate drains accepted work before ordinary admission becomes active again.
+
+Independent browser-admission owner source review approved the lifecycle change.
+Three new regressions fail against the original module (all three report missing
+expected rejection) and pass with the fix. Full focused admission suite:
+
+```sh
+node --test --test-concurrency=1 --test-timeout=5000 tests/desktop-client-admission.test.cjs
+```
+
+Result: 8/8 passed, exit 0, 0.124 seconds, Node v26.10.0. Logs:
+`/private/tmp/zorid-flush-before-retry.log` and
+`/private/tmp/zorid-flush-fixed-retry.log`. The baseline used an isolated temporary
+copy of the original admission module plus the new tests; no tracked source was
+swapped. The initial baseline attempt blocked on the behavior being tested and
+was stopped; an immediate phase assertion plus a 5-second test timeout made the
+regression bounded. The first fixed run passed 7/8 because a previously unused
+fake commit reply lacked file-kind metadata; correcting that fixture to the
+existing receipt contract produced the final pass. No production receipt or
+transport behavior was weakened. No additional Rust/build/UI checks were needed
+for this JavaScript-only lifecycle follow-up.
