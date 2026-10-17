@@ -161,6 +161,9 @@ fn immutable_distinct_bootstraps_and_strict_version_boundary() {
 fn namespace_frontier_is_bounded_canonical_and_cannot_reference_self() {
     let state = empty();
     let request = request(&state, "update", 1, vec![]);
+    let valid = plan_authored_text(&state, &request, &context(&["namespace-bootstrap"])).unwrap();
+    let mut payload: serde_json::Value =
+        serde_json::from_slice(&valid.plan.authored.payload_bytes).unwrap();
     for ctx in [
         context(&[]),
         context(&["z", "a"]),
@@ -171,6 +174,11 @@ fn namespace_frontier_is_bounded_canonical_and_cannot_reference_self() {
             parents: vec![id("other")],
         },
     ] {
+        payload["namespace"] = serde_json::to_value(&ctx).unwrap();
+        assert!(matches!(
+            open(&serde_json::to_vec(&payload).unwrap(), &request.update_id),
+            Err(SyncError::InvalidPayload)
+        ));
         assert!(matches!(
             plan_authored_text(&state, &request, &ctx),
             Err(SyncError::InvalidPayload)
@@ -183,6 +191,46 @@ fn namespace_frontier_is_bounded_canonical_and_cannot_reference_self() {
             .collect(),
     };
     assert!(plan_authored_text(&state, &request, &oversized).is_err());
+    payload["namespace"] = serde_json::to_value(oversized).unwrap();
+    assert!(matches!(
+        open(&serde_json::to_vec(&payload).unwrap(), &request.update_id),
+        Err(SyncError::InvalidPayload)
+    ));
+}
+
+#[test]
+fn encrypted_namespace_tampering_cannot_mint_activity() {
+    use zorid_sync_protocol::Envelope;
+    let state = empty();
+    let request = request(&state, "sealed", 1, vec![insert(0, "text")]);
+    let plan = plan_authored_text(&state, &request, &context(&["namespace-bootstrap"])).unwrap();
+    let plaintext = &plan.plan.authored.payload_bytes;
+    let wire = seal(plaintext, &request.update_id);
+    let envelope = Envelope::decode(&wire).unwrap();
+    // XChaCha20 preserves plaintext/ciphertext byte offsets. Flip the ciphertext
+    // covering the namespace bootstrap, keeping valid framing/header/nonce/tag.
+    let at = plaintext
+        .windows(b"namespace-bootstrap".len())
+        .position(|part| part == b"namespace-bootstrap")
+        .unwrap();
+    let mut ciphertext = envelope.ciphertext().to_vec();
+    ciphertext[at] ^= 1;
+    let tampered = Envelope::from_parts(envelope.header_bytes(), *envelope.nonce(), &ciphertext)
+        .unwrap()
+        .encode();
+    assert!(matches!(
+        AuthenticatedText::open(
+            &tampered,
+            &ExpectedContext {
+                realm_id: state.identity.realm_id,
+                vault_id: state.identity.vault_id,
+                update_id: request.update_id,
+                key_epoch: 1
+            },
+            &VaultKey::from_bytes([5; 32])
+        ),
+        Err(SyncError::AuthenticationFailed)
+    ));
 }
 
 #[test]
@@ -304,6 +352,12 @@ fn external_observation_preserves_old_namespace_and_exact_physical_witness() {
         .unwrap();
     let mut changed = physical.clone();
     changed.location.path = VaultPath::new("new-parent/note.md").unwrap();
+    assert!(matches!(
+        result.check_preconditions(current, &changed, true),
+        Err(SyncError::InvalidState)
+    ));
+    changed = physical.clone();
+    changed.location.location_event = id("different-location-event");
     assert!(matches!(
         result.check_preconditions(current, &changed, true),
         Err(SyncError::InvalidState)
