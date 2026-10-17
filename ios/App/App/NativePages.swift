@@ -140,7 +140,7 @@ extension NativeMobileSession {
         }
     }
 
-    func recordNoteOpened(path: String, entryId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    func recordNoteOpened(path: String, entryId: String, onValidated: @escaping (String) -> Void = { _ in }, completion: @escaping (Result<Void, Error>) -> Void) {
         guard NativeFileEntry.isVisiblePath(path), NativeFileEntry.isValidEntryId(entryId) else {
             completion(.failure(NativePageError.invalidResponse)); return
         }
@@ -150,6 +150,8 @@ extension NativeMobileSession {
                     guard let entry = listing.entries.first(where: { $0.id == entryId && NativeFileEntry.samePath($0.path, path) && $0.kind == .file }) else {
                         throw NativePageError.unavailable
                     }
+                    // Valid activation is independent of device-local history IO.
+                    onValidated(entry.id)
                     try NativeRecentStore.record(entryId: entry.id, vaultId: self.vault.id, storeId: listing.localStoreId)
                 }
             })
@@ -195,6 +197,13 @@ private enum NativePage: String, CaseIterable {
     var symbol: String { self == .recents ? "clock" : "folder" }
 }
 
+// Folder/note identities survive rename; root has no entry ID. Paths are only
+// fresh snapshot locators. History is bounded RAM owned by one vault coordinator.
+private enum NativeRoute: Equatable {
+    case page(NativePage, folderId: String?)
+    case note(String)
+}
+
 private struct NativePagePreferences {
     private static let key = "native.pages.v1"
     var pages: [NativePage]
@@ -230,12 +239,90 @@ private final class NativePagesCoordinator {
     private var refreshRequested = false
     private var refreshWork: DispatchWorkItem?
     private var refreshGeneration = 0
+    private var history: [NativeRoute] = []
+    private var historyStoreId: String?
+    private var historyIndex = -1
+    private var pendingHistoryIndex: Int?
+    private var awaitingNoteActivation = false
+    private var routeFailureOnReturn = false
+    private weak var activeEditor: NativeEditorContainer?
     weak var owner: NativePagesController?
 
     init(vault: LocalVault, root: URL, session: NativeMobileSession) {
         self.vault = vault
         self.root = root
         self.session = session
+    }
+
+    func record(_ route: NativeRoute) {
+        guard pendingHistoryIndex == nil else { return }
+        if history.indices.contains(historyIndex), history[historyIndex] == route { updateRouteControls(); return }
+        history = Array(history.prefix(historyIndex + 1))
+        history.append(route)
+        if history.count > 100 { history.removeFirst(history.count - 100) }
+        historyIndex = history.count - 1
+        updateRouteControls()
+    }
+
+    private func updateRouteControls() {
+        let available = pendingHistoryIndex == nil && !busy
+        let back = available && historyIndex > 0
+        let forward = available && historyIndex + 1 < history.count
+        owner?.setRouteAvailability(back: back, forward: forward)
+        activeEditor?.setRouteAvailability(back: back, forward: forward)
+    }
+
+    func traverse(_ direction: Int) {
+        guard direction == -1 || direction == 1, !busy, pendingHistoryIndex == nil,
+              UIApplication.shared.applicationState == .active else { return }
+        let target = historyIndex + direction
+        guard history.indices.contains(target) else { return }
+        if editorActive {
+            guard let editor = activeEditor, editor.navigationController?.topViewController === editor else { return }
+            pendingHistoryIndex = target
+            updateRouteControls()
+            editor.leaveForNativeRoute { [weak self] ok in
+                guard let self = self else { return }
+                if !ok { self.pendingHistoryIndex = nil; self.updateRouteControls() }
+            }
+        } else {
+            guard pageActive else { return }
+            pendingHistoryIndex = target
+            updateRouteControls()
+            cancelQueuedRefresh()
+            load(refresh: true)
+        }
+    }
+
+    private func completeTraversal(_ listing: NativeVaultListing, session: NativeMobileSession) {
+        guard let target = pendingHistoryIndex, history.indices.contains(target) else { return }
+        let route = history[target]
+        switch route {
+        case .page(let page, let folderId):
+            let folder = folderId.flatMap { id in listing.entries.first { $0.id == id && $0.kind == .folder } }
+            guard (folderId == nil || folder != nil), owner?.supports(page) == true else {
+                traversalUnavailable(); return
+            }
+            historyIndex = target
+            pendingHistoryIndex = nil
+            owner?.applyRoute(page: page, folder: folder)
+            updateRouteControls()
+        case .note(let id):
+            guard let entry = listing.entries.first(where: { $0.id == id && $0.kind == .file }) else {
+                traversalUnavailable(); return
+            }
+            // Resolving identity authorizes handoff, not successful activation.
+            // Keep the cursor staged until the web confirms this exact entry.
+            awaitingNoteActivation = true
+            transfer(session, initialEntry: entry, origin: owner?.originTitle ?? "Pages")
+            updateRouteControls()
+        }
+    }
+
+    private func traversalUnavailable() {
+        pendingHistoryIndex = nil
+        owner?.showRouteUnavailable()
+        updateRouteControls()
     }
 
     private var pageActive: Bool {
@@ -287,6 +374,7 @@ private final class NativePagesCoordinator {
             self?.drainAutomaticRefresh()
         }
         busy = true
+        updateRouteControls()
         generation += 1
         let ticket = generation
         owner?.setLoading()
@@ -309,6 +397,8 @@ private final class NativePagesCoordinator {
             case .failure:
                 self.busy = false
                 if self.pageActive { self.owner?.showLoadFailure() }
+                self.pendingHistoryIndex = nil
+                self.updateRouteControls()
                 finished()
             }
         }
@@ -332,7 +422,25 @@ private final class NativePagesCoordinator {
             switch result {
             case .success(let listing):
                 self.busy = false
-                if self.pageActive { self.owner?.showListing(listing) }
+                if self.pageActive {
+                    if let priorStore = self.historyStoreId, priorStore != listing.localStoreId {
+                        self.history = []
+                        self.historyIndex = -1
+                        self.pendingHistoryIndex = nil
+                        self.awaitingNoteActivation = false
+                        self.routeFailureOnReturn = true
+                        self.owner?.resetFolderRoute()
+                    }
+                    self.historyStoreId = listing.localStoreId
+                    self.owner?.showListing(listing)
+                    if self.pendingHistoryIndex != nil { self.completeTraversal(listing, session: session) }
+                    else if let route = self.owner?.currentRoute { self.record(route) }
+                    if self.routeFailureOnReturn {
+                        self.routeFailureOnReturn = false
+                        self.owner?.showRouteUnavailable()
+                    }
+                }
+                self.updateRouteControls()
                 completion()
             case .failure: self.fail(session, ticket: ticket, completion: completion)
             }
@@ -347,6 +455,8 @@ private final class NativePagesCoordinator {
         session.close { [weak self] in
             guard let self = self, self.generation == ticket else { completion(); return }
             self.busy = false
+            self.pendingHistoryIndex = nil
+            self.updateRouteControls()
             if self.pageActive { self.owner?.showLoadFailure(missingSelection: missingSelection) }
             completion()
             self.drainAutomaticRefresh()
@@ -392,8 +502,34 @@ private final class NativePagesCoordinator {
         editorActive = true
         let launch = initialEntry.map(NativeEditorLaunch.entry) ?? .newNote
         let editor = NativeEditorContainer(session: session, launch: launch, originTitle: origin) { [weak self] in
-            self?.editorActive = false
+            guard let self = self else { return }
+            self.editorActive = false
+            self.activeEditor = nil
+            if self.awaitingNoteActivation {
+                self.awaitingNoteActivation = false
+                self.pendingHistoryIndex = nil
+                self.routeFailureOnReturn = true
+            }
+            if self.pendingHistoryIndex == nil, let route = self.owner?.currentRoute { self.record(route) }
         }
+        activeEditor = editor
+        editor.onNoteOpened = { [weak self, weak editor] id in
+            guard let self = self, let editor = editor, self.activeEditor === editor, self.editorActive else { return }
+            if self.awaitingNoteActivation {
+                self.awaitingNoteActivation = false
+                if let target = self.pendingHistoryIndex, self.history.indices.contains(target), self.history[target] == .note(id) {
+                    self.historyIndex = target
+                    self.pendingHistoryIndex = nil
+                    self.updateRouteControls()
+                    return
+                }
+                // A different successfully activated note is a new user route.
+                self.pendingHistoryIndex = nil
+            }
+            self.record(.note(id))
+        }
+        editor.onNavigate = { [weak self] direction in self?.traverse(direction) }
+        updateRouteControls()
         navigation.pushViewController(editor, animated: !UIAccessibility.isReduceMotionEnabled)
     }
 
@@ -426,6 +562,27 @@ private final class NativePagesModel: ObservableObject {
     @Published private(set) var emptyMessage = ""
     @Published private(set) var focusGeneration = 0
     private var listing: NativeVaultListing?
+    private var folderId: String?
+    var onRouteChanged: ((NativeRoute) -> Void)?
+    @Published private(set) var canGoBack = false
+    @Published private(set) var canGoForward = false
+    var currentRoute: NativeRoute { .page(preferences.selected, folderId: preferences.selected == .files ? folderId : nil) }
+
+    func setRouteAvailability(back: Bool, forward: Bool) { canGoBack = back; canGoForward = forward }
+    func supports(_ page: NativePage) -> Bool { preferences.pages.contains(page) }
+    func applyRoute(page: NativePage, folder: NativeFileEntry?) {
+        preferences.selected = page
+        preferences.persist()
+        self.folder = folder?.path ?? ""
+        folderId = folder?.id
+        focusedEntryId = nil
+        render()
+        focusGeneration += 1
+    }
+    func showRouteUnavailable() {
+        status = "That route is no longer available. Choose a current file or folder."
+        UIAccessibility.post(notification: .announcement, argument: status)
+    }
     @Published private(set) var expandedFolderIds: Set<String> = []
     private var rowDepths: [String: Int] = [:]
     private var childCounts: [String: Int] = [:]
@@ -458,7 +615,8 @@ private final class NativePagesModel: ObservableObject {
         loading = false
         self.listing = listing
         status = listing.scanComplete ? "" : "The vault scan is incomplete. Some files may be unavailable. Pull down to retry."
-        if !folder.isEmpty && !listing.entries.contains(where: { NativeFileEntry.samePath($0.path, folder) && $0.kind == .folder }) { folder = "" }
+        if let id = folderId, let current = listing.entries.first(where: { $0.id == id && $0.kind == .folder }) { folder = current.path }
+        else { folder = ""; folderId = nil }
         render()
         if restoringFocus {
             if !rows.contains(where: { $0.id == focusedEntryId }) { focusedEntryId = nil }
@@ -467,12 +625,15 @@ private final class NativePagesModel: ObservableObject {
         }
     }
     func select(_ page: NativePage) {
+        guard !loading, preferences.pages.contains(page) else { return }
         preferences.selected = page
         preferences.persist()
         focusedEntryId = nil
         render()
+        onRouteChanged?(currentRoute)
     }
     func toggle(_ page: NativePage) {
+        guard !loading else { return }
         if preferences.pages.contains(page) {
             guard preferences.pages.count > 1 else { return }
             preferences.pages.removeAll { $0 == page }
@@ -480,11 +641,22 @@ private final class NativePagesModel: ObservableObject {
         } else { preferences.pages.append(page) }
         preferences.persist()
         render()
+        onRouteChanged?(currentRoute)
     }
-    func enter(_ folder: NativeFileEntry) { self.folder = folder.path; render() }
-    func parentFolder() {
-        folder = NativeFileEntry.pathComponents(folder).dropLast().joined(separator: "/")
+    func enter(_ folder: NativeFileEntry) {
+        guard !loading, folder.kind == .folder else { return }
+        self.folder = folder.path
+        folderId = folder.id
         render()
+        onRouteChanged?(currentRoute)
+    }
+    func parentFolder() {
+        guard !loading else { return }
+        folder = NativeFileEntry.pathComponents(folder).dropLast().joined(separator: "/")
+        folderId = listing?.entries.first(where: { $0.kind == .folder && NativeFileEntry.samePath($0.path, folder) })?.id
+        if folderId == nil { folder = "" }
+        render()
+        onRouteChanged?(currentRoute)
     }
     func willOpen(_ entry: NativeFileEntry?) {
         focusedEntryId = entry?.id
@@ -575,7 +747,9 @@ final class NativePagesController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        let pages = NativePagesView(model: model, open: { [weak self] entry in
+        model.onRouteChanged = { [weak self] route in self?.coordinator.record(route) }
+        coordinator.record(model.currentRoute)
+        let pages = NativePagesView(model: model, navigate: { [weak self] direction in self?.coordinator.traverse(direction) }, open: { [weak self] entry in
             guard let self = self else { return }
             self.model.willOpen(entry)
             self.coordinator.openEditor(entry: entry, origin: self.model.preferences.selected.title)
@@ -634,6 +808,13 @@ final class NativePagesController: UIViewController {
     deinit {
         for observer in activityObservers { NotificationCenter.default.removeObserver(observer) }
     }
+    fileprivate var currentRoute: NativeRoute { model.currentRoute }
+    fileprivate var originTitle: String { model.preferences.selected.title }
+    fileprivate func supports(_ page: NativePage) -> Bool { model.supports(page) }
+    fileprivate func applyRoute(page: NativePage, folder: NativeFileEntry?) { model.applyRoute(page: page, folder: folder) }
+    fileprivate func showRouteUnavailable() { model.showRouteUnavailable() }
+    fileprivate func resetFolderRoute() { model.applyRoute(page: model.preferences.selected, folder: nil) }
+    fileprivate func setRouteAvailability(back: Bool, forward: Bool) { model.setRouteAvailability(back: back, forward: forward) }
     fileprivate func setLoading() { model.setLoading() }
     fileprivate func showListing(_ listing: NativeVaultListing) { model.showListing(listing) }
     fileprivate func showLoadFailure(missingSelection: Bool = false) { model.showLoadFailure(missingSelection: missingSelection) }
@@ -642,6 +823,7 @@ final class NativePagesController: UIViewController {
 @MainActor
 private struct NativePagesView: View {
     @ObservedObject var model: NativePagesModel
+    let navigate: (Int) -> Void
     let open: (NativeFileEntry?) -> Void
     let chooseVault: () -> Void
     let refresh: () async -> Void
@@ -696,6 +878,12 @@ private struct NativePagesView: View {
 
     private var pageContent: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text(model.vault.name)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 20)
+                .accessibilityIdentifier("native.pages.vault-name")
             Text(model.heading)
                 .font(.title2.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
@@ -717,6 +905,7 @@ private struct NativePagesView: View {
                 }
                 .padding(.horizontal, 20)
                 .accessibilityIdentifier("native.files.parent")
+                .disabled(model.loading)
             }
             entryList
         }
@@ -729,7 +918,17 @@ private struct NativePagesView: View {
     }
 
     private var tabControls: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 4) {
+            Button { navigate(-1) } label: { Image(systemName: "chevron.left").frame(minWidth: 44, minHeight: 44) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back")
+                .accessibilityIdentifier("native.pages.back")
+                .disabled(!model.canGoBack || model.loading)
+            Button { navigate(1) } label: { Image(systemName: "chevron.right").frame(minWidth: 44, minHeight: 44) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Forward")
+                .accessibilityIdentifier("native.pages.forward")
+                .disabled(!model.canGoForward || model.loading)
             Button {
                 sheetOrigin = .settings
                 sheet = .settings
@@ -739,8 +938,7 @@ private struct NativePagesView: View {
                 .accessibilityLabel("Settings")
                 .accessibilityIdentifier("native.pages.settings")
                 .accessibilityFocused($focus, equals: .settings)
-            Text(model.vault.name).font(.headline).lineLimit(1)
-            Spacer(minLength: 8)
+            Spacer(minLength: 0)
             Button {
                 sheetOrigin = .plus
                 sheet = .pages
@@ -761,7 +959,7 @@ private struct NativePagesView: View {
                 .disabled(!model.canCreateNote)
                 .accessibilityFocused($focus, equals: .compose)
         }
-        .font(.body)
+        .font(.system(size: 17))
         .foregroundColor(.primary)
     }
 

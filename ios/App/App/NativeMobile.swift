@@ -290,6 +290,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     private var closeAuthorized = false
     private var currentEditorState = NativeEditorState.inactive
     fileprivate var onEditorState: ((NativeEditorState, Bool) -> Void)?
+    fileprivate var onNoteOpened: ((String) -> Void)?
 
     fileprivate init(session: NativeMobileSession, launch: NativeEditorLaunch) {
         self.session = session
@@ -375,7 +376,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         // Called after real web activation, never just after tapping a native row.
-        session.recordNoteOpened(path: path, entryId: entryId) { result in
+        session.recordNoteOpened(path: path, entryId: entryId, onValidated: { [weak self] id in self?.onNoteOpened?(id) }) { result in
             switch result {
             case .success: call.resolve()
             case .failure: call.reject("The opened note could not be recorded.", "native_history_failed")
@@ -489,6 +490,12 @@ private final class NativeEditorBridge: CAPBridgeViewController {
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(vaultPlugin)
         webView?.accessibilityIdentifier = "native.editor.webview"
+        // Use the same adaptive native surface behind web content and overscroll.
+        // The shared editor owns its CSS/theme; native adds no frame or clipping.
+        webView?.isOpaque = true
+        webView?.backgroundColor = .systemBackground
+        webView?.scrollView.backgroundColor = .systemBackground
+        if #available(iOS 15, *) { webView?.underPageBackgroundColor = .systemBackground }
     }
 }
 
@@ -499,6 +506,12 @@ final class NativeEditorContainer: UIViewController {
     private var leaving = false
     private let originTitle: String
     private let onClosed: () -> Void
+    var onNoteOpened: ((String) -> Void)?
+    var onNavigate: ((Int) -> Void)?
+    private var canGoBack = false
+    private var canGoForward = false
+    private var routeBack: UIBarButtonItem?
+    private var routeForward: UIBarButtonItem?
     private let toolbarModel = NativeKeyboardToolbarModel()
     private var toolbarHost: UIHostingController<NativeKeyboardToolbarView>?
     private var toolbarHeight: NSLayoutConstraint?
@@ -523,8 +536,17 @@ final class NativeEditorContainer: UIViewController {
         view.backgroundColor = .systemBackground
         view.accessibilityIdentifier = "native.editor.container"
         navigationItem.hidesBackButton = true
-        navigationItem.leftBarButtonItem = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
-        navigationItem.leftBarButtonItem?.accessibilityIdentifier = "native.editor.vaults"
+        let back = routeButton(symbol: "chevron.left", label: "Back", identifier: "native.editor.back", action: #selector(routeBackward))
+        let forward = routeButton(symbol: "chevron.right", label: "Forward", identifier: "native.editor.forward", action: #selector(routeForwardAction))
+        routeBack = back
+        routeForward = forward
+        navigationItem.leftBarButtonItems = [back, forward]
+        let done = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
+        done.accessibilityIdentifier = "native.editor.vaults"
+        done.accessibilityLabel = "Return to " + originTitle
+        navigationItem.rightBarButtonItem = done
+        editor.vaultPlugin.onNoteOpened = { [weak self] id in self?.onNoteOpened?(id) }
+        updateRouteControls()
         editor.vaultPlugin.onEditorState = { [weak self] state, available in
             guard let self = self else { return }
             self.toolbarModel.state = state
@@ -654,17 +676,47 @@ final class NativeEditorContainer: UIViewController {
         for observer in keyboardObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
-    @objc private func returnToVaults() {
-        guard !leaving else { return }
+    private func routeButton(symbol: String, label: String, identifier: String, action: Selector) -> UIBarButtonItem {
+        let button = UIButton(type: .system)
+        button.setImage(UIImage(systemName: symbol), for: .normal)
+        button.accessibilityLabel = label
+        button.accessibilityIdentifier = identifier
+        button.addTarget(self, action: action, for: .touchUpInside)
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        return UIBarButtonItem(customView: button)
+    }
+
+    func setRouteAvailability(back: Bool, forward: Bool) {
+        canGoBack = back
+        canGoForward = forward
+        updateRouteControls()
+    }
+
+    private func updateRouteControls() {
+        (routeBack?.customView as? UIButton)?.isEnabled = canGoBack && !leaving
+        (routeForward?.customView as? UIButton)?.isEnabled = canGoForward && !leaving
+        navigationItem.rightBarButtonItem?.isEnabled = !leaving
+    }
+
+    @objc private func routeBackward() { if !leaving && canGoBack { onNavigate?(-1) } }
+    @objc private func routeForwardAction() { if !leaving && canGoForward { onNavigate?(1) } }
+    @objc private func returnToVaults() { leaveForNativeRoute { _ in } }
+
+    // Both ordinary return and history traversal use the same save/ACK fence.
+    // The coordinator stages a destination; a rejected ACK leaves this host live.
+    func leaveForNativeRoute(completion: @escaping (Bool) -> Void) {
+        guard !leaving else { completion(false); return }
         leaving = true
         editor.vaultPlugin.resetEditorState()
-        navigationItem.leftBarButtonItem?.isEnabled = false
+        updateRouteControls()
         editor.vaultPlugin.requestLifecycle("switchVault") { [weak self] ok in
             guard let self = self else { return }
             guard ok else {
                 self.leaving = false
                 self.updateToolbarLayout()
-                self.navigationItem.leftBarButtonItem?.isEnabled = true
+                self.updateRouteControls()
+                completion(false)
                 if UIApplication.shared.applicationState == .active {
                     self.showMessage("Vault stays open", "The editor has not confirmed that it is safe to leave. Your workspace remains open. Try again after saving is ready.")
                 }
@@ -672,6 +724,7 @@ final class NativeEditorContainer: UIViewController {
             }
             self.session.close {
                 self.onClosed()
+                completion(true)
                 self.navigationController?.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
             }
         }
