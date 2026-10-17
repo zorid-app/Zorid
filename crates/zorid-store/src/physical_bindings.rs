@@ -174,6 +174,7 @@ fn validate_observation(
         if expected.state.kind != EntryKind::File
             || observation.baseline.as_ref().map(|b| &b.state) != Some(&expected.state)
             || expected.state.path != observation.path
+            || expected.physical.parent_inode != proof.physical.parent_inode
         {
             return Err(invalid("observation physical baseline mismatch"));
         }
@@ -739,5 +740,26 @@ mod tests {
         put_publication_proof(&store.connection, &proof).unwrap();
         store.connection.execute("UPDATE directory_attempts SET record=json_set(record,'$.phase','published') WHERE attempt_id=?1",[a.attempt_id.as_str()]).unwrap();
         assert!(store.publication_proof(&a.attempt_id).is_err());
+    }
+    #[test]
+    fn observed_atomic_save_cannot_rebind_a_replaced_parent() {
+        let (_dir, mut store, b) = setup(EntryKind::File);
+        put_binding(&store.connection, &b).unwrap();
+        let id = observation(&mut store, &b);
+        let mut proof = ObservationPhysical {
+            physical: PhysicalIdentity {
+                inode: "atomic-save-inode".into(),
+                parent_inode: "replaced-parent".into(),
+            },
+            expected_binding: Some(b.clone()),
+        };
+        assert!(put_observation_proof(&store.connection, &id, &proof).is_err());
+        assert!(observation_proof(&store.connection, &id).unwrap().is_none());
+        proof.physical.parent_inode = b.physical.parent_inode.clone();
+        put_observation_proof(&store.connection, &id, &proof).unwrap();
+        assert_eq!(
+            check_observation(&store.connection, &id, &b.state.id).unwrap(),
+            Some(proof)
+        );
     }
 }
