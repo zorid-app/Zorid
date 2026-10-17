@@ -1,3 +1,6 @@
+packages:
+  - '.'
+
 allowBuilds:
   electron: true
   # Windows installer tooling is transitive; macOS releases do not run it.

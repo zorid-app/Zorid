@@ -1,0 +1,171 @@
+syntax = "proto3";
+package zorid.stream.v1;
+import "zorid/common/v1/common.proto";
+
+// Local, owner-bound locator. Resolve through the owning admitted store/client.
+// Caller-controlled protobuf must never construct a trusted store proof.
+message StageLocator {
+  string local_store_id = 1;
+  string client_id = 2;
+  string operation_id = 3;
+  string stage_id = 4;
+}
+message StageOwner { string local_store_id = 1; string client_id = 2; }
+message BinaryCreate { string id = 1; string path = 2; }
+message BinaryWrite {
+  string id = 1;
+  string expected_revision = 2;
+  string expected_content_event = 3;
+}
+message BinaryTarget {
+  // Absence is invalid, never defaulted to create or write.
+  oneof target { BinaryCreate create = 1; BinaryWrite write = 2; }
+}
+message BeginStage {
+  StageOwner owner = 1;
+  string operation_id = 2;
+  BinaryTarget target = 3;
+  // Absence supports stdin; present zero is a known empty file.
+  optional uint64 expected_length = 4;
+}
+message AppendChunk {
+  StageLocator stage = 1;
+  uint32 sequence = 2;
+  uint64 offset = 3;
+  // Consumer must enforce 1..131072 bytes before persistence.
+  bytes data = 4;
+}
+// Resolve the original stage after a lost begin acknowledgement; never allocate
+// a new operation ID for an uncertain outcome.
+message ResumeStage { StageOwner owner = 1; string operation_id = 2; }
+message QueryStage { StageLocator stage = 1; }
+message SealStage {
+  StageLocator stage = 1;
+  uint64 final_length = 2;
+  // Absence means no caller digest; present digest must contain exactly 32 bytes.
+  optional bytes expected_digest = 3;
+}
+// Only a locator is accepted; sealed manifests/proofs are looked up in the store.
+message CommitStage { StageLocator stage = 1; }
+message AbortStage { StageLocator stage = 1; }
+message StageBegun { StageLocator stage = 1; }
+message ChunkReceipt {
+  uint32 sequence = 1;
+  uint64 offset = 2;
+  uint32 bytes = 3;
+  bytes digest = 4;
+  uint64 accepted_length = 5;
+}
+// Response-only diagnostics. Does not grant a verified or sealed capability.
+message SealedStage { zorid.common.v1.Manifest manifest = 1; }
+message Receiving {}
+message Sealed {}
+message CommitRequested {}
+message Aborted {}
+message Projected {}
+message ProjectionPending { string reason = 1; }
+message ProjectionStatus {
+  oneof status { Projected projected = 1; ProjectionPending pending = 2; }
+}
+message StageCommitted {
+  zorid.common.v1.CommitReceipt receipt = 1;
+  ProjectionStatus projection = 2;
+}
+// Typed, finite failures; text is diagnostic and must not drive decisions.
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID_REQUEST = 1;
+  ERROR_CODE_UNSUPPORTED_VERSION = 2;
+  ERROR_CODE_UNSUPPORTED_REQUIRED_FEATURE = 3;
+  ERROR_CODE_NOT_FOUND = 4;
+  ERROR_CODE_REVISION_CONFLICT = 5;
+  ERROR_CODE_IDEMPOTENCY_CONFLICT = 6;
+  ERROR_CODE_OWNER_MISMATCH = 7;
+  ERROR_CODE_TOO_LARGE = 8;
+  ERROR_CODE_INVALID_STAGE_STATE = 9;
+  ERROR_CODE_CONTENT_MISMATCH = 10;
+  ERROR_CODE_BUSY = 11;
+  ERROR_CODE_IO = 12;
+  ERROR_CODE_CORRUPT = 13;
+  ERROR_CODE_OUTCOME_UNKNOWN = 14;
+}
+message Failure { ErrorCode code = 1; string message = 2; }
+message StageStatus {
+  StageLocator stage = 1;
+  uint64 accepted_length = 2;
+  uint32 next_sequence = 3;
+  // Missing/unknown state is invalid. Terminal state retains original receipt
+  // or typed rejection; never infer rejection from an uncertain transport error.
+  oneof state {
+    Receiving receiving = 4;
+    Sealed sealed = 5;
+    CommitRequested commit_requested = 6;
+    StageCommitted committed = 7;
+    Failure rejected = 8;
+    Aborted aborted = 9;
+  }
+  bool seal_requested = 10;
+  // Available after sealing, including commit-requested/terminal states.
+  SealedStage finalized = 11;
+}
+message StageSealed { StageLocator stage = 1; SealedStage diagnostic = 2; }
+message StageAborted { StageLocator stage = 1; }
+
+// Owner-bound pin resolved by store. Content/manifest is not accepted as proof.
+message ReadLocator { StageOwner owner = 1; string read_id = 2; }
+message OpenRead {
+  StageOwner owner = 1;
+  string id = 2;
+  optional string expected_revision = 3;
+}
+message ReadChunk { ReadLocator read = 1; uint64 offset = 2; uint32 max_bytes = 3; }
+message CloseRead { ReadLocator read = 1; }
+// Metadata only; backing bytes must still be checked by the store reader.
+message BinaryContent {
+  zorid.common.v1.Scope scope = 1;
+  zorid.common.v1.EntryIdentity entry = 2;
+  string selected_event = 3;
+  zorid.common.v1.Manifest manifest = 4;
+}
+message ReadOpened { ReadLocator read = 1; BinaryContent content = 2; string entry_revision = 3; }
+message ReadChunkResult {
+  uint64 offset = 1;
+  // Consumer must enforce <=131072 bytes; zero bytes valid only at EOF.
+  bytes data = 2;
+  bool eof = 3;
+}
+message ReadClosed {}
+
+// Additive byte-oriented command family only, not a transport or RPC service.
+message BinaryCommand {
+  uint32 schema_version = 1;
+  repeated string required_features = 2;
+  oneof command {
+    BeginStage begin = 10;
+    AppendChunk append = 11;
+    QueryStage query = 12;
+    SealStage seal = 13;
+    CommitStage commit = 14;
+    AbortStage abort = 15;
+    OpenRead open_read = 16;
+    ReadChunk read_chunk = 17;
+    CloseRead close_read = 18;
+    ResumeStage resume = 19;
+  }
+}
+message BinaryResult {
+  uint32 schema_version = 1;
+  repeated string required_features = 2;
+  oneof result {
+    StageBegun begun = 10;
+    ChunkReceipt appended = 11;
+    StageStatus status = 12;
+    StageSealed sealed = 13;
+    StageCommitted committed = 14;
+    StageAborted aborted = 15;
+    ReadOpened read_opened = 16;
+    ReadChunkResult read_chunk = 17;
+    ReadClosed read_closed = 18;
+    Failure failure = 19;
+  }
+}

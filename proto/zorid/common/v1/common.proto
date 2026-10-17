@@ -1,0 +1,32 @@
+syntax = "proto3";
+package zorid.common.v1;
+
+// Wire data only. IDs/revisions/paths require existing domain validation.
+message Scope { string realm_id = 1; string vault_id = 2; }
+message EntryIdentity { string entry_id = 1; string bootstrap_id = 2; }
+// Every digest must contain exactly 32 bytes. These are not verification proofs.
+// bytes is chunk data length; digest is SHA256 of that raw chunk data.
+message ChunkRef { string id = 1; uint32 bytes = 2; bytes digest = 3; }
+message ChunkPage { repeated ChunkRef chunks = 1; }
+// bytes is aggregate chunk data length. digest preserves the domain page
+// commitment verbatim (current files-v2 hashes its JSON ChunkPage). It is NOT
+// a hash of this protobuf message or the exact accepted payload/ciphertext.
+message PageRef { string id = 1; uint64 bytes = 2; bytes digest = 3; }
+// bytes is whole file length; digest is SHA256 of concatenated raw chunk data.
+message Manifest { uint64 bytes = 1; bytes digest = 2; repeated PageRef pages = 3; }
+
+enum EntryKind { ENTRY_KIND_UNSPECIFIED = 0; ENTRY_KIND_FILE = 1; ENTRY_KIND_FOLDER = 2; }
+message EntryState {
+  string id = 1;
+  string path = 2;
+  EntryKind kind = 3;
+  string revision = 4;
+  bool deleted = 5;
+}
+message EntryChange { EntryState before = 1; EntryState after = 2; }
+// Parsing cannot establish a durable commit; only the owning store can issue it.
+message CommitReceipt {
+  string operation_id = 1;
+  uint64 sequence = 2;
+  repeated EntryChange changes = 3;
+}

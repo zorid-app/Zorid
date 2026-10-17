@@ -1,0 +1,13 @@
+[package]
+name = "zorid-proto-codegen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+# Development-only tool. Do not put generator dependencies in app builds.
+[workspace]
+
+[dependencies]
+prost-build = "=0.14.4"
+protoc-bin-vendored = "=3.3.0"
