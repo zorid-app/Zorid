@@ -57,3 +57,10 @@ confirms committed rename and completed backlinks survive a later CAS failure.
 CJS syntax and whitespace checks pass. Heavy TypeScript/webpack/host compilation
 and actual normal-app New folder/rename/trash plus real-host binary operations
 remain pending. No live editor window or user document was changed by this work.
+
+Platform retry follow-up: two regressions failed before the fix and pass afterward.
+A late duplicate success or terminal error cannot clear a newer pending request;
+its uncertain-ACK retry retains both operation and entry IDs. Command:
+`node --experimental-strip-types --test --test-concurrency=1 tests/platform-desktop-durable.test.ts tests/desktop-text-create.test.cjs`
+passed 10/10. This uses the real platform adapter with a controlled bridge, not
+Electron/runtime evidence.

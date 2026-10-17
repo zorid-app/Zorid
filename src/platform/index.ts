@@ -27,8 +27,8 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
       if(prior&&!same(prior,input))throw new Error('A different file operation is still pending for this path');
       const request=prior??{...input,...(input.data?{data:new Uint8Array(input.data)}:{}),operationId:crypto.randomUUID(),entryId:crypto.randomUUID()};
       pending.set(key,request);
-      try{await call<void>('fileCommand',request);pending.delete(key);}
-      catch(error){if(error&&typeof error==='object'&&'code'in error&&['invalid_request','not_found','revision_conflict','idempotency_conflict'].includes(String(error.code))&&(!('commitUncertain'in error)||!error.commitUncertain))pending.delete(key);throw error;}
+      try{await call<void>('fileCommand',request);if(pending.get(key)===request)pending.delete(key);}
+      catch(error){if(error&&typeof error==='object'&&'code'in error&&['invalid_request','not_found','revision_conflict','idempotency_conflict'].includes(String(error.code))&&(!('commitUncertain'in error)||!error.commitUncertain)&&pending.get(key)===request)pending.delete(key);throw error;}
     };
     createText=(path,content)=>execute({kind:'createText',path,content});
     commands={durableNamespace:true,
