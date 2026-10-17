@@ -116,3 +116,22 @@ test('semantic admission captures arguments, drains accepted queries and rejects
   owner=false;finish();await assert.rejects(stale,{code:'grant_retired'});
   await second.retire();assert.equal(active,false);
 });
+
+test('shared codec runs without Buffer with identical UTF-8 limits and owner validation',async()=>{
+  const fs=require('node:fs'),vm=require('node:vm'),module={exports:{}};
+  const text=fs.readFileSync(require.resolve('../desktop/document-semantics.cjs'),'utf8');
+  vm.runInNewContext(text,{module,TextEncoder,TextDecoder,Uint8Array,structuredClone,Buffer:undefined});
+  const portable=module.exports;
+  const accepted=request('search',{pinId:'1',query:'😀'.repeat(1024),limit:1});
+  assert.equal(JSON.stringify(portable.captureDocumentRequest(accepted)),JSON.stringify(captureDocumentRequest(accepted)));
+  assert.throws(()=>portable.captureDocumentRequest({...accepted,command:{...accepted.command,query:accepted.command.query+'a'}}),{code:'invalid_query'});
+  const base=request('base',{pinId:'1',id:'base',options:{searchTerms:['你'.repeat(1365)],ignorePaths:['😀'.repeat(1024)],timezone:'你'.repeat(42),clockMs:0}});
+  assert.equal(JSON.stringify(portable.captureDocumentRequest(base)),JSON.stringify(captureDocumentRequest(base)));
+  assert.throws(()=>portable.captureDocumentRequest(request('base',{pinId:'1',id:'base',options:{timezone:'你'.repeat(43)}})),{code:'invalid_document_request'});
+  assert.throws(()=>portable.captureDocumentRequest(request('base',{pinId:'1',id:'base',options:{searchTerms:Array(17).fill('😀'.repeat(1024))}})),{code:'request_limit'});
+  const controller=portable.createDesktopDocumentSemantics({async documentCommand(_client,input){const op=input.command.op;const value=op==='open'?{pinId:'1',snapshot,source,coverageComplete:true}:op==='close'?true:metadata();return portable.decodeDocumentReply(input,...wire(op,value));}},'client','store');
+  await controller.invoke(request('open',{pinId:'1'}));
+  const result=await controller.invoke(request('metadata',{pinId:'1',id:'note'}));
+  assert.equal(result.value.entry.path,'😀.md');assert.equal(JSON.stringify(Object.keys(result.value.metadata.properties[0].value)),JSON.stringify(['Title','title']));
+  await controller.invoke(request('close',{pinId:'1'}));await assert.rejects(controller.invoke(request('metadata',{pinId:'1',id:'note'})),{code:'snapshot_expired'});
+});
