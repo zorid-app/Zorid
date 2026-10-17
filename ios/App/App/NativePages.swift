@@ -727,7 +727,15 @@ private final class NativePagesCoordinator {
         owner?.cancelSearchDisplay()
     }
 
-    func search(_ query: String) {
+    func search(_ query: String, userIntent: Bool = true) {
+        if userIntent {
+            // Typing/toggling is newer intent than a pending note/history open.
+            // Automatic query refresh must not cancel a staged traversal.
+            editorOpenGeneration += 1
+            pendingHistoryIndex = nil
+            awaitingNoteActivation = false
+            updateRouteControls()
+        }
         cancelSearch()
         guard !query.isEmpty else { return }
         pendingSearch = query
@@ -845,7 +853,7 @@ private final class NativePagesCoordinator {
                     }
                     self.historyStoreId = listing.localStoreId
                     self.owner?.showListing(listing)
-                    if let query = self.owner?.searchQuery, !query.isEmpty { self.search(query) }
+                    if let query = self.owner?.searchQuery, !query.isEmpty { self.search(query, userIntent: false) }
                     if self.pendingHistoryIndex != nil { self.completeTraversal(listing, session: session) }
                     else if let route = self.owner?.currentRoute { self.record(route) }
                     if self.routeFailureOnReturn {
@@ -962,6 +970,9 @@ private final class NativePagesCoordinator {
         guard !editorActive else { return }
         // A full-screen Settings sheet may finish dismissal before UIKit sends
         // viewDidAppear. Retain intent until the page is active and reads drain.
+        editorOpenGeneration += 1
+        pendingHistoryIndex = nil
+        awaitingNoteActivation = false
         chooseVaultRequested = true
         cancelSearch()
         finishChooseVault()
@@ -983,12 +994,63 @@ private final class NativePagesCoordinator {
     }
 }
 
+// This is the approved native navigation subset, not an editor command registry.
+private enum NativePageAction: String, CaseIterable, Identifiable {
+    case newNote, recents, files, settings, chooseVault
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .newNote: return "New note"
+        case .recents: return "Show Recents"
+        case .files: return "Show Files"
+        case .settings: return "Settings"
+        case .chooseVault: return "Choose vault"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .newNote: return "square.and.pencil"
+        case .recents: return "clock"
+        case .files: return "folder"
+        case .settings: return "gearshape"
+        case .chooseVault: return "externaldrive"
+        }
+    }
+}
+private enum NativeNotesFieldMode { case search, actions }
+
 // Presentation state and local preferences belong to this model; UIKit owns the
 // push/pop flow and Rust owns the snapshot. No parallel SwiftUI navigation stack.
 @MainActor
 private final class NativePagesModel: ObservableObject {
     let vault: LocalVault
+    @Published private(set) var fieldMode: NativeNotesFieldMode = .search
     @Published private(set) var searchQuery = ""
+    func toggleFieldMode() {
+        fieldMode = fieldMode == .search ? .actions : .search
+        searchHits = []
+        searchStatus = ""
+        onSearch?(fieldMode == .search ? searchQuery : "")
+    }
+    func leaveActionMode() {
+        fieldMode = .search
+        setSearch("")
+    }
+    func showPage(_ page: NativePage) {
+        applyRoute(page: page, folder: nil)
+        onRouteChanged?(currentRoute)
+    }
+    func canPerform(_ action: NativePageAction) -> Bool {
+        switch action {
+        case .newNote: return canCreateNote && !searchLoading && !searchAdmissionBusy
+        case .recents: return !loading && !searchAdmissionBusy && preferences.selected != .recents
+        case .files: return !loading && !searchAdmissionBusy && (preferences.selected != .files || isInFolder)
+        case .settings, .chooseVault: return true // Cancel/drain through existing coordinator.
+        }
+    }
+    var matchingActions: [NativePageAction] {
+        NativePageAction.allCases.filter { searchQuery.isEmpty || $0.title.localizedCaseInsensitiveContains(searchQuery) }
+    }
     @Published private(set) var searchAdmissionBusy = false
     @Published private(set) var searchLoading = false
     @Published private(set) var searchHits: [NativeSearchHit] = []
@@ -998,7 +1060,7 @@ private final class NativePagesModel: ObservableObject {
         searchQuery = query
         searchHits = []
         searchStatus = ""
-        onSearch?(query)
+        onSearch?(fieldMode == .search ? query : "")
     }
     func setSearchAdmissionBusy(_ busy: Bool) { searchAdmissionBusy = busy }
     func beginSearchDisplay() { searchLoading = true; searchHits = []; searchStatus = "" }
@@ -1041,6 +1103,7 @@ private final class NativePagesModel: ObservableObject {
     func setRouteAvailability(back: Bool, forward: Bool) { canGoBack = back; canGoForward = forward }
     func supports(_ page: NativePage) -> Bool { NativePage.allCases.contains(page) }
     func applyRoute(page: NativePage, folder: NativeFileEntry?) {
+        fieldMode = .search
         if !searchQuery.isEmpty { setSearch("") }
         preferences.selected = page
         preferences.persist()
@@ -1096,7 +1159,8 @@ private final class NativePagesModel: ObservableObject {
         }
     }
     func select(_ page: NativePage) {
-        guard supports(page), preferences.selected != page else { return }
+        guard supports(page), preferences.selected != page || fieldMode == .actions else { return }
+        fieldMode = .search
         if !searchQuery.isEmpty { setSearch("") }
         preferences.selected = page
         preferences.persist()
@@ -1105,6 +1169,7 @@ private final class NativePagesModel: ObservableObject {
         onRouteChanged?(currentRoute)
     }
     func beginSettingsPresentation() {
+        fieldMode = .search
         if !searchQuery.isEmpty { setSearch("") }
         // Opening a sheet is newer UI intent too. Cancel any staged route/file
         // admission without changing the current Notes mode or route history.
@@ -1112,6 +1177,7 @@ private final class NativePagesModel: ObservableObject {
     }
     func enter(_ folder: NativeFileEntry) {
         guard !loading, folder.kind == .folder else { return }
+        fieldMode = .search
         if !searchQuery.isEmpty { setSearch("") }
         self.folder = folder.path
         folderId = folder.id
@@ -1120,6 +1186,7 @@ private final class NativePagesModel: ObservableObject {
     }
     func parentFolder() {
         guard !loading else { return }
+        fieldMode = .search
         if !searchQuery.isEmpty { setSearch("") }
         folder = NativeFileEntry.pathComponents(folder).dropLast().joined(separator: "/")
         folderId = listing?.entries.first(where: { $0.kind == .folder && NativeFileEntry.samePath($0.path, folder) })?.id
@@ -1280,7 +1347,7 @@ final class NativePagesController: UIViewController {
     deinit {
         for observer in activityObservers { NotificationCenter.default.removeObserver(observer) }
     }
-    fileprivate var searchQuery: String { model.searchQuery }
+    fileprivate var searchQuery: String { model.fieldMode == .search ? model.searchQuery : "" }
     fileprivate func setSearchAdmissionBusy(_ busy: Bool) { model.setSearchAdmissionBusy(busy) }
     fileprivate func beginSearchDisplay() { model.beginSearchDisplay() }
     fileprivate func cancelSearchDisplay() { model.cancelSearchDisplay() }
@@ -1309,10 +1376,12 @@ private struct NativePagesView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Namespace private var glassNamespace
     @AccessibilityFocusState private var focus: Focus?
+    @FocusState private var fieldFocused: Bool
     @State private var showingSettings = false
     @State private var chooseVaultAfterDismiss = false
+    @State private var settingsReturnFocus: Focus = .settings
 
-    private enum Focus: Hashable { case settings, compose, heading, folderHeading, entry(String) }
+    private enum Focus: Hashable { case settings, fieldMode, compose, heading, folderHeading, entry(String) }
     private var currentHeadingFocus: Focus { model.isInFolder ? .folderHeading : .heading }
     private var motion: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9) }
 
@@ -1340,7 +1409,7 @@ private struct NativePagesView: View {
             if chooseVaultAfterDismiss {
                 chooseVaultAfterDismiss = false
                 chooseVault()
-            } else { focus = .settings }
+            } else { focus = settingsReturnFocus }
         }) { settingsContent }
     }
 
@@ -1403,7 +1472,8 @@ private struct NativePagesView: View {
                 .accessibilityIdentifier("native.files.parent")
                 .disabled(model.loading)
             }
-            if model.searchQuery.isEmpty { entryList } else { searchList }
+            if model.fieldMode == .actions { actionList }
+            else if model.searchQuery.isEmpty { entryList } else { searchList }
         }
     }
 
@@ -1421,6 +1491,7 @@ private struct NativePagesView: View {
                                       identifierPrefix: "native.pages", navigate: navigate)
             } else {
                 Button {
+                    settingsReturnFocus = .settings
                     model.beginSettingsPresentation()
                     showingSettings = true
                 } label: {
@@ -1433,24 +1504,39 @@ private struct NativePagesView: View {
                 .accessibilityFocused($focus, equals: .settings)
             }
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").accessibilityHidden(true)
-                TextField("Search notes", text: Binding(get: { model.searchQuery }, set: { model.setSearch($0) }))
+                Button {
+                    withAnimation(motion) { model.toggleFieldMode() }
+                } label: {
+                    Image(systemName: model.fieldMode == .search ? "magnifyingglass" : "command")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(model.fieldMode == .search ? "Switch to app actions" : "Switch to note search")
+                .accessibilityValue(model.fieldMode == .search ? "Note content search" : "App actions")
+                .accessibilityIdentifier("native.search.mode")
+                .accessibilityFocused($focus, equals: .fieldMode)
+                TextField(model.fieldMode == .search ? "Search note content" : "Find an action", text: Binding(get: { model.searchQuery }, set: { model.setSearch($0) }))
                     .font(.body)
                     .textInputAutocapitalization(.never)
                     .disableAutocorrection(true)
                     .submitLabel(.search)
-                    .onSubmit { model.setSearch(model.searchQuery) }
+                    .focused($fieldFocused)
+                    .onSubmit {
+                        if model.fieldMode == .actions {
+                            if let action = model.matchingActions.first(where: { model.canPerform($0) }) { perform(action) }
+                        } else { model.setSearch(model.searchQuery) }
+                    }
                     .accessibilityIdentifier("native.search.field")
                 if !model.searchQuery.isEmpty {
                     Button { model.setSearch("") } label: {
                         Image(systemName: "xmark.circle.fill").frame(minWidth: 44, minHeight: 44)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
+                    .accessibilityLabel(model.fieldMode == .search ? "Clear search" : "Clear action filter")
                     .accessibilityIdentifier("native.search.clear")
                 }
             }
-            .padding(.leading, 14).padding(.trailing, model.searchQuery.isEmpty ? 14 : 0)
+            .padding(.trailing, model.searchQuery.isEmpty ? 14 : 0)
             .frame(maxWidth: .infinity, minHeight: 44)
             .modifier(PageControlSurface(id: "search", namespace: glassNamespace))
             Button { open(nil) } label: {
@@ -1465,6 +1551,48 @@ private struct NativePagesView: View {
         }
         .font(.system(size: 17))
         .foregroundColor(.primary)
+    }
+
+    private func perform(_ action: NativePageAction) {
+        guard model.canPerform(action) else { return }
+        fieldFocused = false
+        model.leaveActionMode()
+        switch action {
+        case .newNote: open(nil)
+        case .recents: withAnimation(motion) { model.showPage(.recents) }; focus = .heading
+        case .files: withAnimation(motion) { model.showPage(.files) }; focus = .heading
+        case .settings:
+            settingsReturnFocus = .fieldMode
+            model.beginSettingsPresentation()
+            showingSettings = true
+        case .chooseVault: chooseVault()
+        }
+    }
+
+    private var actionList: some View {
+        List {
+            if model.matchingActions.isEmpty {
+                Text("No matching app actions.").foregroundColor(.secondary)
+                    .accessibilityIdentifier("native.actions.empty")
+            }
+            ForEach(model.matchingActions) { action in
+                Button { perform(action) } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: action.symbol).frame(width: 28).accessibilityHidden(true)
+                        Text(action.title).font(.body)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.canPerform(action))
+                .accessibilityIdentifier("native.actions.\(action.rawValue)")
+            }
+        }
+        .listStyle(.plain)
+        .environment(\.defaultMinListRowHeight, 44)
+        .accessibilityIdentifier("native.actions.entries")
     }
 
     private var searchList: some View {
