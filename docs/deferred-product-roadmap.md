@@ -116,8 +116,25 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
-Current authoritative update — 2026-10-17 20:30 UTC. The bullets below
+Current authoritative update — 2026-10-17 20:42 UTC. The bullets below
 this update are historical checkpoints where their status differs:
+- Latest user resource policy supersedes blanket check slots: explicit slots
+  only for iOS build/simulator; bounded desktop/frontend checks proceed without
+  per-check approval. Full Rust/Xcode still coordinate actual8GB load. Recorded
+  in AGENTS.md from native relaymsg_e825ad204547. Native ACKmsg_80f4472a25a9
+  owns iOS slot now; root has no live Rust job and defers fullRust/WASM until
+  compile terminal. Bounded Node/CJS work may continue.
+- New actual candidatea81de486 evidence: native enrolled reconciliation57303
+  passes1/1 (remaining four facade cases passed run2); CLI34144 passes3 indexed
+  documents+4 metadata subprocess cases, including moves/deletes/rebuild and
+  raw-source preservation. Logs tmp/stage4-native-documents-run3.log and
+  tmp/stage4-cli-documents-run1.log. Desktop host31416 compiles and clock3/3
+  passes (tmp/stage4-host-clock-run1.log). Real host child fixture still pending.
+- Focused frontend candidate checks pass3/3 maintenance/default probes with
+  strict shared-service/desktop-adapter TS0 diagnostics (owner report). Root
+  CJS protocol4/4 and desktop adapter3/3 pass, logs
+  tmp/stage4-desktop-protocol-run1.log and stage4-desktop-adapter-run1.log.
+  These controlled transports are not substitutes for actual Rust child proof.
 - Workspace backlink hook9f259800 is now committed on the isolated candidate;
   actual Node/JSDOM run2 passed4/4 in0.77s, covering post-save pane/replaced-ID
   cancellation, valid navigation after save, and blank-tab pin retirement.

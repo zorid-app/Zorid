@@ -49,6 +49,13 @@
 
 ## Local resource use
 
+- Latest user resource steering (2026-10-17, native relay msg_e825ad204547):
+  explicit validation slots are required only for iOS builds and simulator
+  passes. Bounded frontend/desktop builds and focused tests may proceed without
+  per-check permission. Coordinate actual load for full Rust compilation and
+  Xcode on this 8 GB machine; this does not authorize overlapping full suites or
+  interrupting another owner's live process. Main integration ownership is
+  unchanged. This supersedes the earlier blanket slot for every check.
 - The development machine is an 8 GB MacBook Air. Keep heavy builds and full
   test suites serialized; use bounded test concurrency. Parallel agents should
   coordinate local resource use rather than launch overlapping full checks.
