@@ -44,7 +44,7 @@ pub struct FamilyMaterialization {
     /// Witness of bytes retained in entries, NOT proof of filesystem publication.
     pub retained_content: Option<FamilyContentWitness>,
 }
-fn get(tx: &Connection, id: &EntryId) -> Result<Option<FamilyMaterialization>> {
+pub(super) fn get(tx: &Connection, id: &EntryId) -> Result<Option<FamilyMaterialization>> {
     let raw: Option<String> = tx
         .query_row(
             "SELECT record FROM family_materializations WHERE entry_id=?1",
@@ -819,4 +819,173 @@ mod directory_publication_tests {
             assert!(!same_directory_publication(&store.connection, &before, &after).unwrap());
         }
     }
+}
+
+/// Prepare immutable provenance for bytes actually being moved. This allocates
+/// history only: the namespace journal owns filesystem proof and final baseline CAS.
+pub(super) fn prepare_physical_move(
+    tx: &Connection,
+    before: &EntryState,
+    desired: &EntryState,
+    members: &[EntryState],
+) -> Result<EntryState> {
+    let invalid = |reason: &str| StoreError::Corrupt(reason.into());
+    if before.id != desired.id || before.kind != desired.kind || before.deleted || desired.deleted {
+        return Err(invalid("physical move identity/kind mismatch"));
+    }
+    let (actual, visible) = retained_entry(tx, &desired.id)?
+        .ok_or_else(|| invalid("physical move desired entry missing"))?;
+    if !visible || actual.state != *desired || !members.contains(desired) {
+        return Err(invalid("physical move desired state changed"));
+    }
+    let binding = physical_bindings::binding(tx, &before.id)?
+        .ok_or_else(|| invalid("physical move binding missing"))?;
+    if binding.state != *before {
+        return Err(invalid("physical move binding changed"));
+    }
+    let bytes = match before.kind {
+        EntryKind::File => {
+            let baseline = projection::baseline(tx, &before.id)?
+                .ok_or_else(|| invalid("physical move file baseline missing"))?;
+            if baseline.state != *before {
+                return Err(invalid("physical move file baseline changed"));
+            }
+            Some(baseline.content)
+        }
+        EntryKind::Folder => {
+            let baseline = directory::baseline(tx, &before.id)?
+                .ok_or_else(|| invalid("physical move folder baseline missing"))?;
+            if baseline.state != *before {
+                return Err(invalid("physical move folder baseline changed"));
+            }
+            None
+        }
+    };
+    check_publication(tx, before, bytes.as_deref())?;
+    let mut old = history(tx, &before.id, &before.revision)?
+        .ok_or_else(|| invalid("physical move old history missing"))?;
+    let current =
+        get(tx, &desired.id)?.ok_or_else(|| invalid("physical move target history missing"))?;
+    if history(tx, &desired.id, &desired.revision)?.as_ref() != Some(&current)
+        || old.identity != current.identity
+    {
+        return Err(invalid("physical move immutable identity/history mismatch"));
+    }
+    let FamilyPublication::Normal {
+        path: current_path,
+        kind: current_kind,
+        location_event: selected,
+        ..
+    } = &current.publication
+    else {
+        return Err(invalid("physical move target is not Normal"));
+    };
+    if current_path != &desired.path || current_kind != &desired.kind {
+        return Err(invalid("physical move target path/kind mismatch"));
+    }
+    let authority = text_sync::identity(tx)?;
+    let (Some(realm_id), Some(vault_id)) = (authority.realm_id, authority.vault_id) else {
+        return Err(invalid("physical move family scope missing"));
+    };
+    let graph = file_state::load(tx, &FamilyScope { realm_id, vault_id })?
+        .ok_or_else(|| invalid("physical move graph missing"))?;
+    let FamilyPublication::Normal {
+        path,
+        namespace_heads,
+        location_event,
+        ..
+    } = &mut old.publication
+    else {
+        return Err(invalid("physical move old publication is not Normal"));
+    };
+    if location_event != selected {
+        *namespace_heads =
+            graph.join_physical_move_frontier(&old.identity, namespace_heads, selected)?;
+        *location_event = selected.clone();
+    } else if before.path != desired.path {
+        let mut witnessed = false;
+        for ancestor in members
+            .iter()
+            .filter(|m| m.kind == EntryKind::Folder && !m.deleted && m.id != before.id)
+        {
+            let Some(bound) = physical_bindings::binding(tx, &ancestor.id)? else {
+                continue;
+            };
+            let prefix = format!("{}/", bound.state.path.as_str());
+            let Some(suffix) = before.path.as_str().strip_prefix(&prefix) else {
+                continue;
+            };
+            if desired.path.as_str() != format!("{}/{}", ancestor.path.as_str(), suffix) {
+                continue;
+            }
+            let Some((row, true)) = retained_entry(tx, &ancestor.id)? else {
+                continue;
+            };
+            if row.state != *ancestor {
+                return Err(invalid("physical ancestor target changed"));
+            }
+            let prior = history(tx, &ancestor.id, &bound.state.revision)?
+                .ok_or_else(|| invalid("physical ancestor history missing"))?;
+            let next = get(tx, &ancestor.id)?
+                .ok_or_else(|| invalid("physical ancestor target missing"))?;
+            if prior.identity != next.identity {
+                return Err(invalid("physical ancestor identity changed"));
+            }
+            if let (
+                FamilyPublication::Normal {
+                    path: old_path,
+                    kind: EntryKind::Folder,
+                    namespace_heads: heads,
+                    location_event: old_event,
+                },
+                FamilyPublication::Normal {
+                    path: new_path,
+                    kind: EntryKind::Folder,
+                    location_event: new_event,
+                    ..
+                },
+            ) = (&prior.publication, &next.publication)
+            {
+                if old_path == &bound.state.path
+                    && new_path == &ancestor.path
+                    && old_event != new_event
+                {
+                    graph.join_physical_move_frontier(&prior.identity, heads, new_event)?;
+                    witnessed = true;
+                    break;
+                }
+            }
+        }
+        if !witnessed {
+            return Err(invalid(
+                "physical descendant move lacks explicit ancestor lineage",
+            ));
+        }
+    }
+    *path = desired.path.clone();
+    let mut physical = before.clone();
+    physical.path = desired.path.clone();
+    physical.revision = Revision::new(uuid::Uuid::new_v4().to_string())?;
+    text_sync::reserve_revision(tx, &physical.revision)?;
+    if let Some(FamilyContentWitness {
+        witness: ContentWitness::Text { revision, .. },
+        ..
+    }) = &mut old.retained_content
+    {
+        let mut text = text_sync::revision(tx, &before.id, revision)?
+            .ok_or_else(|| invalid("physical text branch missing"))?;
+        text.version = physical.revision.clone();
+        text_sync::put_revision(tx, &text)?;
+        *revision = physical.revision.clone();
+    }
+    tx.execute(
+        "INSERT INTO family_materialization_history(entry_id,revision,record) VALUES(?1,?2,?3)",
+        params![
+            physical.id.as_str(),
+            physical.revision.as_str(),
+            serde_json::to_string(&old)?
+        ],
+    )?;
+    check_publication(tx, &physical, bytes.as_deref())?;
+    Ok(physical)
 }

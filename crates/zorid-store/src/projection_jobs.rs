@@ -122,7 +122,11 @@ pub(super) fn pending(
         .collect::<Result<Vec<_>>>()?;
     Ok(jobs.into_iter().filter(|j| j.work == work).collect())
 }
-fn insert(tx: &Connection, mut job: ProjectionJob, ordinal: Option<i64>) -> Result<ProjectionJob> {
+pub(super) fn insert(
+    tx: &Connection,
+    mut job: ProjectionJob,
+    ordinal: Option<i64>,
+) -> Result<ProjectionJob> {
     if let Some(ordinal) = ordinal {
         tx.execute("INSERT INTO projection_jobs(ordinal,job_id,entry_id,completed,record) VALUES(?1,?2,?3,?4,'')",params![ordinal,job.job_id.as_str(),job.target.id.as_str(),job.completed])?;
     } else {
