@@ -52,3 +52,14 @@ runtime with original disposable content after the reviewed 1,587-test gate.
 The owned Electron process exited normally after the pass. These observations
 establish actual text-card editing and persistence, not complete media, visual,
 mobile, drag/drop, or source-reference parity.
+
+## Native-control follow-up on 5ab350d
+
+A fresh production build passed 54 focused Canvas/embed tests, TypeScript and
+Webpack checks. Native verification on Electron 31.6.0 still reproduced the
+first-click playback failure when the accessibility Play action was used: the
+Live text editor disappeared, its Reading renderer replaced it, and the new
+player remained at 0:00. The pointer-path repair alone therefore does not close
+this finding. The temporary audio insertion was undone, preserving the existing
+card text, and the owned desktop process exited normally. A missing-pointer
+focus path is being repaired and requires another native check.
