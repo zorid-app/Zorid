@@ -1,0 +1,14 @@
+/* Original scoped preview styling; bounded reference app.css character range
+   564579–565147 and default token at 66750 (SHA866e50ac…d7ba).
+   Runtime parent dimensions remain host-owned. */
+.zorid-canvas-embed-preview { display: block; max-inline-size: 100%; color: var(--text-normal); cursor: pointer; }
+.zorid-canvas-embed-preview:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.zorid-canvas-embed-title { display: flex; align-items: center; gap: .4em; overflow-wrap: anywhere; }
+.zorid-canvas-embed-title > svg { flex: none; color: var(--text-muted); }
+.zorid-canvas-embed-thumbnail { min-inline-size: 0; }
+.zorid-canvas-minimap { display: block; inline-size: 100%; block-size: auto; padding: var(--size-4-1, 4px); box-sizing: border-box; }
+.zorid-canvas-embed-preview.is-inline .zorid-canvas-minimap { max-block-size: var(--embed-canvas-max-height, 400px); }
+.zorid-canvas-minimap rect { --preview-shape-color: var(--background-modifier-border, #7e7e7e); stroke: var(--preview-shape-color); fill: var(--preview-shape-color); stroke-width: 5px; fill-opacity: .65; }
+.zorid-canvas-minimap rect.is-themed { fill-opacity: .5; }
+.zorid-canvas-minimap path { stroke: var(--preview-shape-color, #c0c0c0); fill: none; }
+.zorid-canvas-embed-status:not(:empty) { color: var(--text-error, var(--text-muted)); font-size: var(--font-smaller, .875em); }
