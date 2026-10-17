@@ -33,6 +33,7 @@ pub enum Error {
     Files(crate::Error),
     Text(zorid_client_sync::SyncError),
     InvalidMode,
+    UnsupportedCommandVersion,
     InvalidAllocation,
     SnapshotMismatch,
 }
@@ -65,6 +66,99 @@ pub enum CreateMode {
     Text,
     Binary,
 }
+/// Complete durable local command identity for an enrolled family vault.
+/// Persist this at PREPARE, before authorization. Receipts and prepared intents
+/// compare the entire value before import, allocation or planning. This is not a
+/// sync wire payload. The write-only editor capability can construct `None`;
+/// generic file creation must obtain an explicit mode from its caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RawFamilyCommand")]
+pub struct FamilyCommand {
+    pub version: u32,
+    pub request: MutationRequest,
+    pub create_mode: Option<CreateMode>,
+}
+// A custom field decoder without a default makes create_mode REQUIRED even
+// when its explicit value is null. Plain Option<T> accepts an omitted field.
+fn required_mode<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> std::result::Result<Option<CreateMode>, D::Error> {
+    Option::<CreateMode>::deserialize(decoder)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFamilyCommand {
+    version: u32,
+    request: MutationRequest,
+    #[serde(deserialize_with = "required_mode")]
+    create_mode: Option<CreateMode>,
+}
+impl TryFrom<RawFamilyCommand> for FamilyCommand {
+    type Error = Error;
+    fn try_from(raw: RawFamilyCommand) -> Result<Self> {
+        let command = Self {
+            version: raw.version,
+            request: raw.request,
+            create_mode: raw.create_mode,
+        };
+        command.validate()?;
+        Ok(command)
+    }
+}
+impl FamilyCommand {
+    pub fn new(request: MutationRequest, create_mode: Option<CreateMode>) -> Result<Self> {
+        let command = Self {
+            version: 1,
+            request,
+            create_mode,
+        };
+        command.validate()?;
+        Ok(command)
+    }
+    /// Required for direct Rust construction as well as strict serde decoding.
+    /// Hosts bound the encoded input BEFORE parsing; serde validation is not an
+    /// allocation limit. No filename/content guessing or implicit default mode.
+    pub fn validate(&self) -> Result<()> {
+        if self.version != 1 {
+            return Err(Error::UnsupportedCommandVersion);
+        }
+        self.request.validate()?;
+        match (&self.request.mutation, self.create_mode) {
+            (
+                Mutation::Create {
+                    kind: EntryKind::File,
+                    ..
+                },
+                Some(_),
+            ) => Ok(()),
+            (
+                Mutation::Create {
+                    kind: EntryKind::File,
+                    ..
+                },
+                None,
+            ) => Err(Error::InvalidMode),
+            (_, None) => Ok(()),
+            (_, Some(_)) => Err(Error::InvalidMode),
+        }
+    }
+    /// The caller finds `prior` by operation ID in its scoped durable journal.
+    /// This does NOT authorize a prepared intent or validate an attached receipt.
+    /// On success the host returns that original receipt, without replanning or
+    /// checking current target revisions. Legacy plain requests are not matches.
+    pub fn check_replay(&self, prior: &Self) -> Result<()> {
+        self.validate()?;
+        prior.validate()?;
+        if self != prior {
+            return Err(ContractError::IdempotencyConflict {
+                operation_id: self.request.operation_id.clone(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextRequirement {

@@ -672,3 +672,138 @@ fn requirements_reject_oversize_binary_and_invalid_utf8_without_building_graph()
     assert!(requirements(&req, &[], &graph, Some(CreateMode::Binary), None).is_ok());
     assert!(graph.records().is_empty());
 }
+
+#[test]
+fn durable_family_command_requires_explicit_mode_and_strict_complete_shape() {
+    let binary = FamilyCommand::new(
+        create("file", "file", EntryKind::File, Some(vec![255])),
+        Some(CreateMode::Binary),
+    )
+    .unwrap();
+    let json = serde_json::to_value(&binary).unwrap();
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["create_mode"], "binary");
+    assert_eq!(
+        serde_json::from_value::<FamilyCommand>(json.clone()).unwrap(),
+        binary
+    );
+    for mode in [serde_json::Value::Null, serde_json::json!("guess")] {
+        let mut invalid = json.clone();
+        invalid["create_mode"] = mode;
+        assert!(serde_json::from_value::<FamilyCommand>(invalid).is_err());
+    }
+    let folder =
+        FamilyCommand::new(create("folder", "folder", EntryKind::Folder, None), None).unwrap();
+    let json = serde_json::to_value(&folder).unwrap();
+    assert!(json["create_mode"].is_null());
+    let mut missing = json.clone();
+    missing.as_object_mut().unwrap().remove("create_mode");
+    assert!(serde_json::from_value::<FamilyCommand>(missing).is_err());
+    for version in [0, 2] {
+        let mut invalid = json.clone();
+        invalid["version"] = serde_json::json!(version);
+        assert!(serde_json::from_value::<FamilyCommand>(invalid).is_err());
+    }
+    let mut unknown = json.clone();
+    unknown["mode"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<FamilyCommand>(unknown).is_err());
+    let encoded = serde_json::to_string(&folder).unwrap();
+    let duplicate = encoded.replacen("{", "{\"create_mode\":null,", 1);
+    assert!(serde_json::from_str::<FamilyCommand>(&duplicate).is_err());
+    assert!(serde_json::from_value::<FamilyCommand>(
+        serde_json::to_value(&folder.request).unwrap()
+    )
+    .is_err());
+}
+
+#[test]
+fn durable_family_command_replay_binds_mode_bytes_path_and_operation_id() {
+    let command = FamilyCommand::new(
+        create("file", "file", EntryKind::File, Some(b"bytes".to_vec())),
+        Some(CreateMode::Binary),
+    )
+    .unwrap();
+    command.check_replay(&command.clone()).unwrap();
+    let mut changes = Vec::new();
+    let mut changed = command.clone();
+    changed.create_mode = Some(CreateMode::Text);
+    changes.push(changed);
+    let mut changed = command.clone();
+    if let Mutation::Create { content, .. } = &mut changed.request.mutation {
+        *content = Some(b"changed".to_vec());
+    }
+    changes.push(changed);
+    let mut changed = command.clone();
+    if let Mutation::Create {
+        path: destination, ..
+    } = &mut changed.request.mutation
+    {
+        *destination = path("other");
+    }
+    changes.push(changed);
+    let mut changed = command.clone();
+    changed.request.operation_id = OperationId::new("other").unwrap();
+    changes.push(changed);
+    for changed in changes {
+        assert!(matches!(
+            changed.check_replay(&command),
+            Err(Error::Contract(
+                zorid_core::ContractError::IdempotencyConflict { .. }
+            ))
+        ));
+    }
+    let mut omitted = command.clone();
+    omitted.create_mode = None;
+    assert_eq!(omitted.check_replay(&command), Err(Error::InvalidMode));
+    let mut future = command.clone();
+    future.version = 2;
+    assert_eq!(future.validate(), Err(Error::UnsupportedCommandVersion));
+}
+
+#[test]
+fn durable_family_command_noncreate_mode_matrix_and_replay_without_current_state() {
+    let commands = [
+        create("folder", "folder", EntryKind::Folder, None),
+        request(
+            "write",
+            Mutation::Write {
+                id: id("entry"),
+                expected: rev("old"),
+                content: vec![0],
+            },
+        ),
+        request(
+            "move",
+            Mutation::Move {
+                id: id("entry"),
+                expected: rev("old"),
+                path: path("new"),
+            },
+        ),
+        request(
+            "delete",
+            Mutation::Delete {
+                id: id("entry"),
+                expected: rev("old"),
+                recursive: true,
+            },
+        ),
+    ];
+    for request in commands {
+        let command = FamilyCommand::new(request.clone(), None).unwrap();
+        assert_eq!(
+            FamilyCommand::new(request.clone(), Some(CreateMode::Text)),
+            Err(Error::InvalidMode)
+        );
+        assert_eq!(
+            FamilyCommand::new(request, Some(CreateMode::Binary)),
+            Err(Error::InvalidMode)
+        );
+        // Target can now be gone/stale; receipt replay compares exact command,
+        // independently of the planner's current snapshot preconditions.
+        command.check_replay(&command).unwrap();
+        let decoded: FamilyCommand =
+            serde_json::from_str(&serde_json::to_string(&command).unwrap()).unwrap();
+        assert_eq!(decoded, command);
+    }
+}
