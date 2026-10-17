@@ -201,7 +201,7 @@ type Result<T> = std::result::Result<T, Failure>;
 enum Output {
     Json(Value),
     Raw(Vec<u8>),
-    /// A foreground command already emitted bounded JSONL frames.
+    /// The command already delivered its bounded stream directly to stdout.
     Streamed,
 }
 

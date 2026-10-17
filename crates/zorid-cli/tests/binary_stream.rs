@@ -283,6 +283,7 @@ fn independent_cli_streams_large_binary_stdin_file_read_write_and_exact_retries(
     compare(File::open(root.join("large.bin")).unwrap(), 37);
     let (status, errors) = invoke(&root, &create, Some(37), &output);
     assert!(!status.success());
+    assert_eq!(fs::metadata(&output).unwrap().len(), 0);
     let error: Value = serde_json::from_slice(&errors).unwrap();
     assert_eq!(error["error"]["code"], "idempotency_conflict");
     let encoded = temp.path().join("read.json");
