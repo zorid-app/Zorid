@@ -174,3 +174,17 @@ test('failed gate revokes before drain and restores active ownership only after 
   context.assertActive(); assert.ok(f.active);
   assert.equal(f.calls.includes('release_client'), false);
 });
+
+
+test('unexpected window retirement drains work and releases lease without clearing recovery', async () => {
+  const f=fixture(),context=await admitDesktopFixtureClient(f.service,f.options);
+  const gate=deferred();f.readGate=gate;
+  const read=context.durableWrites.readText('note.md');
+  const retiring=context.retire();
+  assert.ok(f.active);
+  await assert.rejects(context.durableWrites.readText('note.md'),{code:'client_not_admitted'});
+  gate.resolve();await read;await retiring;
+  assert.equal(f.active,null);
+  assert.equal(f.calls.includes('checkpoint_cas'),false);
+  assert.equal(f.calls.includes('acknowledge_intent'),false);
+});

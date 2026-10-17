@@ -8,7 +8,7 @@ const { WindowBroker } = require('../desktop/window-broker.cjs');
 
 test('main wiring creates empty authenticated windows and scopes vault picking to its caller', async () => {
   const windows = [], handlers = new Map();
-  let template, pickerOwner, nextPick = '/second';
+  let template, pickerOwner, nextPick = '/second',pickerWait;
   class FakeWindow extends EventEmitter {
     constructor() {
       super(); this.destroyed = false;
@@ -24,22 +24,27 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
     static getAllWindows() { return windows.filter(window => !window.destroyed); }
   }
   const app = new EventEmitter();
-  Object.assign(app, { setName() {}, whenReady: () => Promise.resolve(), getPath: () => '/state', quit() {} });
+  Object.assign(app, { setName() {}, whenReady: () => Promise.resolve(), getPath: () => '/state', requestSingleInstanceLock: () => true, quit() {} });
   const services = new Map(), removals = [];
   const electron = { app, BrowserWindow: FakeWindow, ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
-    dialog: { showOpenDialog: async owner => { pickerOwner = owner; return { filePaths: [nextPick], canceled: false }; }, showErrorBox: assert.fail },
+    dialog: { showOpenDialog: async owner => { pickerOwner = owner; if(pickerWait)await pickerWait; return { filePaths: [nextPick], canceled: false }; }, showErrorBox: assert.fail },
     Menu: { buildFromTemplate: value => { template = value; return value; }, setApplicationMenu() {} }, shell: { openExternal() {} } };
   const mainPath = path.resolve(__dirname, '../desktop/main.cjs');
+  let slotNumber=0;
+  const retirements=[];
+  const openService=async root=>{
+    if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {}, remove: async (target, force) => { removals.push([root, target, force]); } });
+    return services.get(root);
+  };
   const nativeRequire = name => {
+    if (name === './editor-core.cjs') return { createEditorCoreManager: () => ({open:openService,owns:()=>false,requireReleased(){},retire:async(_broker,_record,service)=>{retirements.push(service.root);},close:async()=>{}}) };
+    if (name === './client-slots.cjs') return {openClientSlots:async()=>({listRestorable:async()=>[],claim:async({primary}={})=>({slotId:primary?'primary':`window-${++slotNumber}`,clientId:'client',vaultPath:null}),setVault:async()=>{},release:async()=>{}})};
     if (name === 'electron') return electron;
     if (name === 'node:fs/promises') return { readFile: async () => '{"path":"/first"}', mkdir: async () => {}, writeFile: async () => {} };
     if (name === './menu-hotkeys.cjs') return require('../desktop/menu-hotkeys.cjs');
     if (name === './window-broker.cjs') return { WindowBroker };
     if (name === './context-menu.cjs') return { createContextMenuController: () => ({ close() {}, popup() {} }) };
-    if (name === './vault-service.cjs') return { VaultService: { open: async root => {
-      if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {}, remove: async (target, force) => { removals.push([root, target, force]); } });
-      return services.get(root);
-    } } };
+    if (name === './vault-service.cjs') return {VaultService:{open:openService}};
     return require(name);
   };
   vm.runInNewContext(fs.readFileSync(mainPath, 'utf8'), { require: nativeRequire, __dirname: path.dirname(mainPath), process: { platform: 'darwin', env: {} }, URL });
@@ -52,10 +57,14 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.equal(invoke(windows[1], 'getWindowInfo').initialState, 'empty');
   assert.equal(invoke(windows[1], 'getWindowInfo').id, created.id);
   assert.equal(invoke(windows[1], 'getVault').path, '/first');
-  await invoke(windows[1], 'openVault');
+  let finishPicker;pickerWait=new Promise(resolve=>{finishPicker=resolve;});
+  const switching=invoke(windows[1], 'openVault');
+  await assert.rejects(invoke(windows[1], 'openVault'),/switching/);
+  finishPicker();await switching;pickerWait=null;
   assert.equal(pickerOwner, windows[1]);
   assert.equal(invoke(windows[1], 'getVault').path, '/second');
   assert.equal(invoke(windows[0], 'getVault').path, '/first');
+  assert.deepEqual(retirements,['/first'],'switch retires its old admission without detaching the surviving window');
   // Exercise actual main registration, broker grants, and service forwarding.
   assert.ok(handlers.has('zorid:remove'));
   await invoke(windows[0], 'remove', '/first', 'Owned.md', false);
@@ -85,10 +94,12 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.equal(invoke(windows[0], 'getVault').path, '/first');
   assert.equal(await invoke(windows[0], 'read', '/first', 'Note.md'), 'base');
   await invoke(windows[0], 'compareAndWrite', '/first', 'Note.md', 'base', 'saved');
-  app.emit('will-quit');
+  app.emit('will-quit',{preventDefault(){}});
+  await new Promise(resolve=>setImmediate(resolve));
   assert.equal(services.get('/first').watchers, 0);
   assert.equal(services.get('/first').stops, 1);
-  app.emit('will-quit');
+  app.emit('will-quit',{preventDefault(){}});
+  await new Promise(resolve=>setImmediate(resolve));
   assert.equal(services.get('/first').stops, 1);
   assert.throws(() => invoke(windows[0], 'getVault'), /Untrusted sender/);
 });

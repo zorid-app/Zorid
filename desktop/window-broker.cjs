@@ -11,8 +11,9 @@ class WindowBroker {
     this.windows = new Map();
     this.vaults = new Map();
   }
-  register(window, { primary = false, initialState = 'empty' } = {}) {
-    const id = primary ? 'main' : randomUUID();
+  register(window, { primary = false, initialState = 'empty', persistentId } = {}) {
+    const id = primary ? 'main' : persistentId ?? randomUUID();
+    if(typeof id!=='string'||!id.length)throw new Error('Invalid window identity');
     if ([...this.windows.values()].some(record => record.id === id)) throw new Error('Window identity already in use');
     const record = { id, window, webContentsId: window.webContents.id, initialState, vault: null, generation: 0 };
     this.windows.set(record.webContentsId, record);
@@ -33,13 +34,19 @@ class WindowBroker {
   async select(record, directory) {
     this.assertLive(record);
     const generation = ++record.generation;
-    const service = await this.openVault(directory);
-    this.assertLive(record);
-    if (generation !== record.generation) throw new Error('Vault selection superseded');
-    let entry = this.vaults.get(service.root);
-    if (!entry) {
-      entry = { service, tail: Promise.resolve(), members: new Set(), unsubscribe: null };
-      this.vaults.set(service.root, entry);
+    let entry;
+    for (;;) {
+      const service = await this.openVault(directory);
+      this.assertLive(record);
+      if (generation !== record.generation) throw new Error('Vault selection superseded');
+      entry = this.vaults.get(service.root);
+      if (entry?.retiring) { await entry.retiring; continue; }
+      if (service.closed) continue;
+      if (!entry) {
+        entry = { service, tail: Promise.resolve(), members: new Set(), unsubscribe: null };
+        this.vaults.set(service.root, entry);
+      }
+      break;
     }
     this.bind(record, entry);
     return this.describe(record);

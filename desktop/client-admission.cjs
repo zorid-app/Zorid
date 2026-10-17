@@ -66,6 +66,14 @@ async function admitDesktopFixtureClient(service, { fixture, clientId, assertOwn
     const context = Object.freeze({
       scope, durableWrites: writes, assertActive: () => allowed(),
       ...(creates?{createText:input=>invoke(()=>creates.create(input),null),fileCommand:input=>invoke(()=>creates.execute(input),null)}:{}),
+      async retire() {
+        // Window has gone away. Drain accepted calls and drop ownership only;
+        // leave every checkpoint/intent intact for the same slot on restart.
+        if(phase==='released')return;
+        if(closing)await closing.catch(()=>{});
+        phase='retiring';activeFlush=null;
+        await drain();await host.releaseClient(reference);phase='released';
+      },
       release(flushGate) {
         if (phase === 'released') return Promise.resolve();
         if (closing) return closing;

@@ -1,0 +1,23 @@
+'use strict';
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const os=require('node:os');
+const path=require('node:path');
+const {resolveDesktopHost}=require('../desktop/host-location.cjs');
+const {createEditorCoreManager}=require('../desktop/editor-core.cjs');
+test('default manager exists without opt-in and host discovery has no filesystem fallback',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'zorid-host-location-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const manager=createEditorCoreManager({}, {appRoot:root});
+  assert.ok(manager);assert.equal(await manager.isCoreRoot(root),true);
+  await assert.rejects(manager.open(root),{code:'native_host_missing'});
+  assert.deepEqual(await fs.readdir(root),[],'missing host must not initialize or import through JS');
+  await manager.close();
+  const host=path.join(root,'target','debug','zorid-desktop-host');
+  await fs.mkdir(path.dirname(host),{recursive:true});await fs.writeFile(host,'fixture',{mode:0o700});
+  assert.equal(await resolveDesktopHost({appRoot:root,override:undefined}),host);
+  const bundled=path.join(root,'native','zorid-desktop-host');
+  await fs.mkdir(path.dirname(bundled));await fs.writeFile(bundled,'fixture',{mode:0o700});
+  assert.equal(await resolveDesktopHost({resourcesPath:root,isPackaged:true,override:undefined}),bundled);
+  await assert.rejects(resolveDesktopHost({appRoot:root,override:path.join(root,'missing')}),{code:'ENOENT'});
+});

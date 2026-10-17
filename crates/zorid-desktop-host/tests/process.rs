@@ -17,10 +17,20 @@ impl Host {
         Self::spawn_config(root, None)
     }
     fn spawn_config(root: &std::path::Path, config: Option<&std::path::Path>) -> Self {
+        Self::spawn_options(root, config, false)
+    }
+    fn spawn_options(
+        root: &std::path::Path,
+        config: Option<&std::path::Path>,
+        initialize: bool,
+    ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_zorid-desktop-host"));
         command.args([std::ffi::OsStr::new("--vault"), root.as_os_str()]);
         if let Some(config) = config {
             command.arg("--fixture-sync-config").arg(config);
+        }
+        if initialize {
+            command.arg("--initialize-local");
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -426,4 +436,70 @@ fn leased_editor_scope_cannot_invoke_generic_family_mutations() {
         );
     }
     host.close();
+}
+
+#[test]
+fn default_local_startup_imports_bytes_and_mutates_without_relay_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("Empty")).unwrap();
+    let text = b"\xef\xbb\xbfExisting note\n";
+    let binary = [0, 255, 128, 1];
+    std::fs::write(root.path().join("existing.md"), text).unwrap();
+    std::fs::write(root.path().join("data.bin"), binary).unwrap();
+    let mut host = Host::spawn_options(root.path(), None, true);
+    assert_eq!(host.recv().0["ok"], true);
+    let status = host.request(json!({"method":"local_family_status"}), &[]).0;
+    assert_eq!(status["ok"], true, "{status}");
+    let scope = status["result"]["family"]["scope"].clone();
+    for (path, expected) in [
+        ("existing.md", text.as_slice()),
+        ("data.bin", binary.as_slice()),
+    ] {
+        let (reply, bytes) = host.request(json!({"method":"read_path","path":path}), &[]);
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(bytes, expected);
+    }
+    std::fs::write(root.path().join("external.txt"), b"Created outside Zorid").unwrap();
+    let scan = host.request(json!({"method":"rescan"}), &[]).0;
+    assert_eq!(scan["ok"], true, "{scan}");
+    assert_eq!(scan["result"]["complete"], true, "{scan}");
+    assert_eq!(
+        host.request(json!({"method":"read_path","path":"external.txt"}), &[])
+            .1,
+        b"Created outside Zorid"
+    );
+    let client = "10000000-0000-4000-8000-000000000001";
+    let lease = host
+        .request(json!({"method":"claim_client","client_id":client}), &[])
+        .0["result"]["lease"]
+        .clone();
+    let command = json!({"method":"file_command","client_id":client,"family":{"version":1,"create_mode":"text","request":{
+        "operation_id":"local-create","mutation":{"type":"create","id":"local-file","path":"new.md","kind":"file"}}}});
+    host.send_header(
+        json!({"version":1,"request_id":"1","command":command,"lease":lease}),
+        b"Local save",
+    );
+    let receipt = host.recv().0;
+    assert_eq!(receipt["ok"], true, "{receipt}");
+    host.close();
+    assert_eq!(
+        std::fs::read(root.path().join("new.md")).unwrap(),
+        b"Local save"
+    );
+    assert!(root.path().join("Empty").is_dir());
+    let mut reopened = Host::spawn_options(root.path(), None, true);
+    assert_eq!(reopened.recv().0["ok"], true);
+    assert_eq!(
+        reopened
+            .request(json!({"method":"local_family_status"}), &[])
+            .0["result"]["family"]["scope"],
+        scope
+    );
+    assert_eq!(
+        reopened
+            .request(json!({"method":"read_path","path":"new.md"}), &[])
+            .1,
+        b"Local save"
+    );
+    reopened.close();
 }

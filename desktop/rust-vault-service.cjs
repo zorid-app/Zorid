@@ -123,6 +123,7 @@ function successful(command, result, bytes, expectedBytes) {
     case 'file_command':
     case 'fixture_family_apply': return familyCommand(command.family)
       && successful({ method: 'apply', ...command.family.request }, result, bytes, expectedBytes);
+    case 'local_family_status': return familyStatus(result.family)&&result.family.scope!==null;
     case 'claim_client': return object(result.lease) && identity(result.lease.local_store_id) && result.lease.client_id === command.client_id && uuid(result.lease.token);
     case 'release_client': return result.released === true && object(result.reference) && ['local_store_id', 'client_id', 'token'].every(key => result.reference[key] === command.reference[key]);
     case 'checkpoint_load': return result.checkpoint === null ? bytes.length === 0 : checkpointMetadata(result.checkpoint, command.scope) && result.checkpoint.key === command.key && checkpointBody(result.checkpoint, bytes);
@@ -197,7 +198,7 @@ function successful(command, result, bytes, expectedBytes) {
  * Explicit family fixture sync delegates entirely to the shared native runner.
  */
 class RustVaultService {
-  static async open(root, { executable, timeoutMs = 30000, fixtureSyncConfig } = {}) {
+  static async open(root, { executable, timeoutMs = 30000, fixtureSyncConfig, initializeLocal = false } = {}) {
     if (typeof root !== 'string' || !path.isAbsolute(root)
       || typeof executable !== 'string' || !path.isAbsolute(executable)
       || (fixtureSyncConfig !== undefined && (typeof fixtureSyncConfig !== 'string' || !path.isAbsolute(fixtureSyncConfig)))
@@ -208,13 +209,13 @@ class RustVaultService {
     if (!(await fs.stat(canonical)).isDirectory()) throw failure('invalid_vault');
     // executable is an explicitly selected trusted app resource, never an env var
     // or renderer-supplied command. shell:false preserves arguments literally.
-    const service = new RustVaultService(canonical, executable, timeoutMs, fixtureSyncConfig);
+    const service = new RustVaultService(canonical, executable, timeoutMs, fixtureSyncConfig, initializeLocal);
     try { await service.ready; }
     catch (error) { service.abort(error); await service.exit; throw error; }
     return service;
   }
 
-  constructor(root, executable, timeoutMs, fixtureSyncConfig) {
+  constructor(root, executable, timeoutMs, fixtureSyncConfig, initializeLocal = false) {
     this.root = root;
     this.timeoutMs = timeoutMs;
     this.sequence = 0n;
@@ -229,7 +230,7 @@ class RustVaultService {
     this.frameUsed = 0;
     this.exited = false;
     // Only trusted main selects this protected fixture config. No framed RPC can change it.
-    const args = ['--vault', root, ...(fixtureSyncConfig === undefined ? [] : ['--fixture-sync-config', fixtureSyncConfig])];
+    const args = ['--vault', root, ...(initializeLocal ? ['--initialize-local'] : []), ...(fixtureSyncConfig === undefined ? [] : ['--fixture-sync-config', fixtureSyncConfig])];
     this.child = spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true });
     this.exit = new Promise(resolve => { this.resolveExit = resolve; });
     this.ready = this.expect('0').then(({ result, bytes }) => {
@@ -361,6 +362,7 @@ class RustVaultService {
     return this.request({method:'file_command',client_id:clientId,family},bytes).then(reply=>reply.result);
   }
   createText(clientId, request, bytes) { return this.request({method:'create_text',client_id:clientId,operation_id:request.operationId,id:request.entryId,path:request.path}, bytes).then(reply=>reply.result); }
+  localFamilyStatus() { return this.request({method:'local_family_status'}).then(reply=>reply.result.family); }
   claimClient(clientId) { return this.request({ method: 'claim_client', client_id: clientId }).then(reply => Object.freeze({ ...reply.result.lease })); }
   releaseClient(reference) { return this.request({ method: 'release_client', reference }).then(reply => reply.result); }
   withClientLease(reference, beforeRequest = () => {}) {

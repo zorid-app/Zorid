@@ -18,7 +18,9 @@ function validate(state) {
 }
 /** Main-process only. Caller MUST hold Electron's single-instance lock for this
  * userData profile for the entire registry lifetime. This is not a process lock.
- * Claim before admitting a native client; release only after admission drains.
+ * Claim before admitting a native client. Changing vault or release(restore:false)
+ * requires successful editor flush and terminal checkpoint handling, then admission
+ * drain. On failure preserve the stored path and restore eligibility.
  * Renderer reload retains its claim. Never delete identities on normal close.
  */
 async function openClientSlots(file) {

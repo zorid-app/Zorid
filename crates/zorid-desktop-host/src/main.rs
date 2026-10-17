@@ -38,7 +38,10 @@ enum Command {
     FixtureFamilyApply {
         family: WireFamilyCommand,
     },
-    FileCommand { client_id: OperationId, family: WireFamilyCommand },
+    FileCommand {
+        client_id: OperationId,
+        family: WireFamilyCommand,
+    },
     CreateText {
         client_id: OperationId,
         operation_id: OperationId,
@@ -118,6 +121,7 @@ enum Command {
     },
     Recover,
     Rescan,
+    LocalFamilyStatus,
     Status,
 }
 #[derive(Deserialize)]
@@ -304,9 +308,10 @@ impl ClientLeases {
         reference: Option<&ClientLeaseRef>,
     ) -> Result<(), Value> {
         let client = match command {
-            Command::PrepareIntent { client_id, .. } | Command::ListIntents { client_id, .. } | Command::CreateText { client_id, .. } | Command::FileCommand { client_id, .. } => {
-                Some(client_id)
-            }
+            Command::PrepareIntent { client_id, .. }
+            | Command::ListIntents { client_id, .. }
+            | Command::CreateText { client_id, .. }
+            | Command::FileCommand { client_id, .. } => Some(client_id),
             Command::CommitIntent { reference }
             | Command::QueryIntent { reference }
             | Command::AcknowledgeIntent { reference, .. } => Some(&reference.client_id),
@@ -660,16 +665,36 @@ fn execute(
             }
             report(vault.reconcile(&paths).map_err(native_fault)?)
         }
+        Command::LocalFamilyStatus => {
+            empty(&body)?;
+            json!({"family":vault.family_status().map_err(native_fault)?})
+        }
         Command::Rescan => {
             empty(&body)?;
-            let report = vault.rescan().map_err(native_fault)?;
-            let issues: Vec<_> = report
-                .issues
-                .into_iter()
-                .map(|issue| json!({"path":issue.path,"code":"scan_incomplete"}))
-                .collect();
-            json!({"scan_id":report.run.scan_id,"complete":report.run.complete,"finished":report.run.finished,
-                "observed":report.run.observed,"imported":report.run.imported,"missing":report.missing,"issues":issues})
+            if vault.family_status().map_err(native_fault)?.scope.is_some() {
+                let report = vault
+                    .reconcile_external(
+                        zorid_native::ScanOptions::default(),
+                        zorid_native::ExternalFileMode::Auto,
+                    )
+                    .map_err(native_fault)?;
+                let issues: Vec<_> = report
+                    .issues
+                    .into_iter()
+                    .map(|issue| json!({"path":issue.path,"code":"scan_incomplete"}))
+                    .collect();
+                json!({"scan_id":report.run.scan_id,"complete":report.complete,"finished":report.run.finished,
+                    "observed":report.run.observed,"imported":report.run.imported,"missing":[],"issues":issues})
+            } else {
+                let report = vault.rescan().map_err(native_fault)?;
+                let issues: Vec<_> = report
+                    .issues
+                    .into_iter()
+                    .map(|issue| json!({"path":issue.path,"code":"scan_incomplete"}))
+                    .collect();
+                json!({"scan_id":report.run.scan_id,"complete":report.run.complete,"finished":report.run.finished,
+                    "observed":report.run.observed,"imported":report.run.imported,"missing":report.missing,"issues":issues})
+            }
         }
         Command::Recover => {
             empty(&body)?;
@@ -682,20 +707,60 @@ fn execute(
     };
     Ok((result, vec![]))
 }
+fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<(), Value> {
+    if vault.family_status().map_err(native_fault)?.scope.is_none() {
+        let identity = vault.identity().map_err(native_fault)?;
+        let scope: zorid_native::FamilyScope = serde_json::from_value(json!({
+            "realm_id":format!("local_{}",identity.local_store_id.as_str()),
+            "vault_id":format!("vault_{}",identity.local_store_id.as_str())
+        }))
+        .map_err(|_| fault("invalid_local_authority"))?;
+        vault.family_enroll(&scope).map_err(native_fault)?;
+    }
+    // Shared native import policy owns bytes, family mode and safe filesystem observation.
+    let report = vault
+        .reconcile_external(
+            zorid_native::ScanOptions::default(),
+            zorid_native::ExternalFileMode::Auto,
+        )
+        .map_err(native_fault)?;
+    if !report.complete {
+        return Err(fault("scan_incomplete"));
+    }
+    Ok(())
+}
 fn run() -> io::Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    // Only the trusted main process supplies this startup root. Requests cannot
-    // initialize storage or change it. Fixture initialization uses the CLI/core.
-    if !(args.len() == 2 || args.len() == 4 && args[2] == "--fixture-sync-config")
-        || args[0] != "--vault"
-    {
+    // Initialization is a trusted main-process startup decision, never a framed RPC.
+    if args.len() < 2 || args[0] != "--vault" {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "usage"));
     }
-    if args.len() == 4 && !std::path::Path::new(&args[3]).is_absolute() {
+    let mut initialize_local = false;
+    let mut config = None;
+    let mut index = 2;
+    while index < args.len() {
+        if args[index] == "--initialize-local" && !initialize_local {
+            initialize_local = true;
+            index += 1;
+        } else if args[index] == "--fixture-sync-config"
+            && config.is_none()
+            && index + 1 < args.len()
+        {
+            config = Some(std::path::Path::new(&args[index + 1]));
+            index += 2;
+        } else {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "usage"));
+        }
+    }
+    if config.is_some_and(|path| !path.is_absolute()) || initialize_local && config.is_some() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "usage"));
     }
     let mut output = io::stdout().lock();
-    let mut vault = match NativeVault::open_existing(std::path::Path::new(&args[1])) {
+    let mut vault = match if initialize_local {
+        NativeVault::open(std::path::Path::new(&args[1]))
+    } else {
+        NativeVault::open_existing(std::path::Path::new(&args[1]))
+    } {
         Ok(vault) => vault,
         Err(error) => {
             write_frame(
@@ -708,11 +773,8 @@ fn run() -> io::Result<()> {
     };
     // The trusted main process selects a protected config path once. No framed
     // command accepts credential bytes, paths, endpoints or key material.
-    let sync = if args.len() == 4 {
-        match FixtureSync::load(
-            std::path::Path::new(&args[3]),
-            std::path::Path::new(&args[1]),
-        ) {
+    let sync = if let Some(config) = config {
+        match FixtureSync::load(config, std::path::Path::new(&args[1])) {
             Ok(sync) => Some(sync),
             Err(error) => {
                 write_frame(
@@ -727,9 +789,19 @@ fn run() -> io::Result<()> {
     } else {
         None
     };
+    if initialize_local {
+        if let Err(error) = initialize_desktop_vault(&mut vault) {
+            write_frame(
+                &mut output,
+                &json!({"version":1,"request_id":"0","ok":false,"error":error}),
+                &[],
+            )?;
+            return Ok(());
+        }
+    }
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"capabilities":["file_command","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"capabilities":["local_family_status","file_command","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();

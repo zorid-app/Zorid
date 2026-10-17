@@ -1,78 +1,102 @@
 'use strict';
-// Guarded normal-editor selection for ONE explicitly configured disposable vault.
-// No migration/initialization or renderer-chosen host/credentials/client identity.
+// All normal desktop vaults use Rust. Configuration and client ownership remain
+// main-process authorities; no renderer-chosen executable or client identity.
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const {randomUUID}=require('node:crypto');
 const {VaultService}=require('./vault-service.cjs');
 const {admitDesktopFixtureClient}=require('./client-admission.cjs');
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
-const fail=code=>Object.assign(new Error('Rust editor fixture operation failed.'),{code});
+const fail=code=>Object.assign(new Error('Rust vault operation failed.'),{code});
 const methods=new Set(['readText','readTextById','planWrite','prepare','commit','query','listUnacknowledged','acknowledge']);
 const checkpointMethods=new Set(['load','compareAndSwap','list','changes']);
-function createEditorCoreManager(environment=process.env){
-  if(environment.ZORID_EDITOR_RUST!=='1')return null;
+function createEditorCoreManager(environment=process.env, options={}){
+  if(environment.ZORID_DESKTOP_FAMILY_FIXTURE==='1')return null;
   const config={root:environment.ZORID_FIXTURE_VAULT,executable:environment.ZORID_DESKTOP_HOST_BIN,
     fixtureSyncConfig:environment.ZORID_FIXTURE_SYNC_CONFIG,clientId:environment.ZORID_FIXTURE_CLIENT_ID};
-  if(environment.ZORID_DESKTOP_FAMILY_FIXTURE==='1'||!['root','executable','fixtureSyncConfig'].every(key=>typeof config[key]==='string'&&path.isAbsolute(config[key]))||!uuid(config.clientId))throw fail('invalid_editor_core_configuration');
-  let rootPromise, servicePromise, closePromise, closed=false;
-  const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set();
-  const root=()=>rootPromise??=(fs.realpath(config.root));
+  const fixture=environment.ZORID_EDITOR_RUST==='1'&&!!config.root;
+  if(fixture&&(!['root','executable','fixtureSyncConfig'].every(key=>typeof config[key]==='string'&&path.isAbsolute(config[key]))||!uuid(config.clientId)))throw fail('invalid_editor_core_configuration');
+  let closePromise,closed=false;
+  const contexts=new Map(), admissions=new Map(), released=new WeakMap(), services=new Set(), openings=new Map(), retirements=new Map();
+  const executable=()=>require('./host-location.cjs').resolveDesktopHost({...options,override:config.executable});
   function checked(broker,record,expectedRoot,admissionId){
     broker.assertLive(record);
     const saved=contexts.get(record);
     if(closed||!saved||saved.id!==admissionId||saved.service.root!==expectedRoot)throw fail('durable_scope_changed');
     saved.check();return saved;
   }
-  async function isCoreRoot(input){return await fs.realpath(input)===await root();}
-  async function retire(broker,record){
-    const pending=admissions.get(record);
-    if(pending)await pending.catch(()=>{});
-    const saved=contexts.get(record)??released.get(record);if(!saved)return;
-    released.delete(record);
-    contexts.delete(record);servicePromise=undefined;
-    // The renderer is gone: retain its durable checkpoints/intents; no synthetic
-    // successful flush/ACK. Child exit releases its kernel lease after draining.
-    await saved.service.close();services.delete(saved.service);
-    if(broker.vaults.get(saved.service.root)?.service===saved.service)broker.vaults.delete(saved.service.root);
+  async function isCoreRoot(input){await fs.realpath(input);return true;}
+  function retire(broker,record,selectedService){
+    const initial=contexts.get(record)??released.get(record)??(selectedService?{service:selectedService}:null);
+    if(!initial)return Promise.resolve();
+    const service=initial.service,root=service.root,entry=broker.vaults.get(root);
+    const previous=retirements.get(root);
+    // Install before any await: open/selection must not borrow a service whose
+    // last owner is draining. Other live members keep their existing service.
+    const pending=(async()=>{
+      if(previous)await previous;
+      const admission=admissions.get(record);
+      if(admission)await admission.catch(()=>{});
+      const saved=contexts.get(record)??released.get(record)??initial;
+      released.delete(record);contexts.delete(record);
+      if(saved.admission)await saved.admission.retire();
+      const current=broker.vaults.get(root);
+      if(current?.service===service&&current.members.size||[...contexts.values()].some(value=>value.service===service))return;
+      // Remove only this service's cache entries. A newer entry must survive an
+      // older retirement, even if a caller has already rebound this root.
+      const opening=openings.get(root);
+      if(opening&&await opening===service&&openings.get(root)===opening)openings.delete(root);
+      await service.close();services.delete(service);
+      if(broker.vaults.get(root)===entry&&entry?.service===service)broker.vaults.delete(root);
+    })();
+    retirements.set(root,pending);
+    if(entry?.service===service&&!entry.members.size)entry.retiring=pending;
+    void pending.then(()=>{
+      if(retirements.get(root)===pending)retirements.delete(root);
+      if(entry?.retiring===pending)delete entry.retiring;
+    },()=>{ /* Failed drain remains fenced until process shutdown/restart. */ });
+    return pending;
   }
+
   return {
     isCoreRoot,
     owns(record){return !!record.vault&&services.has(record.vault.service);},
     async open(input){
       if(closed)throw fail('editor_core_closed');
-      if(!await isCoreRoot(input))return VaultService.open(input);
-      if(!servicePromise){
-        servicePromise=VaultService.open(await root(),{coreFixture:{executable:config.executable,
-          fixtureSyncConfig:config.fixtureSyncConfig,familyMode:true}}).then(async service=>{
-            if(closed){await service.close();throw fail('editor_core_closed');}
-            services.add(service);return service;
-          });
-        servicePromise.catch(()=>{servicePromise=undefined;});
+      const canonical=await fs.realpath(input);
+      while(retirements.has(canonical)){await retirements.get(canonical);if(closed)throw fail('editor_core_closed');}
+      if(!openings.has(canonical)){
+        const pending=(async()=>{
+          const fixtureSelected=fixture&&canonical===await fs.realpath(config.root);
+          const service=await VaultService.open(canonical,{coreFixture:{executable:await executable(),
+            ...(fixtureSelected?{fixtureSyncConfig:config.fixtureSyncConfig}:{initializeLocal:true}),familyMode:true}});
+          if(closed){await service.close();throw fail('editor_core_closed');}
+          services.add(service);return service;
+        })();
+        openings.set(canonical,pending);pending.catch(()=>{if(openings.get(canonical)===pending)openings.delete(canonical);});
       }
-      return servicePromise;
+      return openings.get(canonical);
     },
     requireReleased(record){if(contexts.has(record)||admissions.has(record))throw fail('durable_release_required');},
     async context(broker,record,expectedRoot){
       broker.assertLive(record);
       const entry=record.vault;
-      if(!entry||entry.service.root!==expectedRoot)throw fail('durable_scope_changed');
+      if(record.vaultSelectionPending||!entry||entry.service.root!==expectedRoot)throw fail('durable_scope_changed');
+      if(!fixture&&record.persistedVaultRoot!==expectedRoot)throw fail('client_registry_unsettled');
       if(!services.has(entry.service))return null;
-      if(record.id!=='main')throw fail('core_fixture_single_window');
       const existing=contexts.get(record);if(existing){existing.check();return {admissionId:existing.id,scope:existing.admission.scope};}
       const inFlight=admissions.get(record);if(inFlight)return inFlight;
       const generation=record.generation,service=entry.service;
       const check=()=>{
         broker.assertLive(record);
-        if(closed||record.generation!==generation||record.vault!==entry||service.closed
+        if(closed||record.vaultSelectionPending||record.generation!==generation||record.vault!==entry||service.closed
           ||!broker.allowedURL(record.window.webContents.mainFrame.url))throw fail('durable_scope_changed');
       };
       check();
       const pending=(async()=>{
-        const admission=await admitDesktopFixtureClient(service,{fixture:true,clientId:config.clientId,assertOwner:check});
+        const admission=await admitDesktopFixtureClient(service,{fixture:true,clientId:fixture&&record.id==='main'?config.clientId:record.clientSlot?.clientId,assertOwner:check});
         try {check();}
-        catch(error){await service.close();services.delete(service);servicePromise=undefined;
-          if(broker.vaults.get(service.root)?.service===service)broker.vaults.delete(service.root);throw error;}
+        catch(error){await admission.retire();throw error;}
         const saved={id:randomUUID(),admission,service,check};contexts.set(record,saved);
         return {admissionId:saved.id,scope:admission.scope};
       })();
@@ -105,14 +129,14 @@ function createEditorCoreManager(environment=process.env){
       // requesting release. The admission layer drains already accepted RPCs.
       await saved.admission.release(()=>{});
       if(contexts.get(record)===saved)contexts.delete(record);
-      released.set(record,{id:admissionId,root:expectedRoot,service:saved.service});
+      released.set(record,{id:admissionId,root:expectedRoot,service:saved.service,admission:saved.admission});
     },
     retire,
     close(){
       if(closePromise)return closePromise;
       closed=true;
       closePromise=(async()=>{
-        await Promise.allSettled([servicePromise,...admissions.values()].filter(Boolean));
+        await Promise.allSettled([...openings.values(),...admissions.values(),...retirements.values()].filter(Boolean));
         contexts.clear();await Promise.all([...services].map(service=>service.close()));services.clear();
       })();return closePromise;
     },

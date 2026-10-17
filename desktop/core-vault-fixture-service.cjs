@@ -3,7 +3,7 @@ const { watch } = require('node:fs');
 const { RustVaultService } = require('./rust-vault-service.cjs');
 const { normalizePath } = require('./vault-service.cjs');
 
-function error(code) { const value = new Error('Core vault fixture operation failed.'); value.code = code; return value; }
+function error(code) { const value = new Error('Rust vault operation failed.'); value.code = code; return value; }
 function metadata(state, presentation) {
   return { path: state.path, type: state.kind, mtime: presentation.mtime_ms, size: presentation.size_bytes,
     ...(presentation.ctime_ms ? { ctime: presentation.ctime_ms } : {}) };
@@ -22,8 +22,8 @@ function validText(value) {
 }
 
 
-/** Actual NativeVault-backed filesystem service, enabled only by explicit fixture
- * construction. Only the trusted disposable-vault startup opt-in selects it. Durable mutation support
+/** NativeVault-backed filesystem service selected by trusted main startup.
+ * The historical fixture option is internal, never a renderer capability. Durable mutation support
  * requires the shared host-intent API, not an in-memory operation-ID substitute.
  */
 class CoreVaultFixtureService {
@@ -39,10 +39,13 @@ class CoreVaultFixtureService {
       const familyMode = options.familyMode === true;
       const service = new CoreVaultFixtureService(host, { pollMs, rescanMs, familyMode });
       if (familyMode) {
-        if (!host.capabilities.includes('fixture_family_status')) throw error('unsupported_host_capability');
-        // Must already be enrolled in the trusted startup configuration. Opening
-        // a UI never initializes/migrates storage or adopts physical files.
-        await host.fixtureFamilyStatus();
+        if(options.initializeLocal){
+          if(!host.capabilities.includes('local_family_status'))throw error('unsupported_host_capability');
+          await host.localFamilyStatus();
+        }else{
+          if(!host.capabilities.includes('fixture_family_status'))throw error('unsupported_host_capability');
+          await host.fixtureFamilyStatus();
+        }
       } else {
         const scan = await host.rescan();
         if (!scan.finished || !scan.complete) throw error('scan_incomplete');
@@ -161,7 +164,7 @@ class CoreVaultFixtureService {
   }
   async pollNow() {
     const hints = [...this.hints]; this.hints.clear();
-    if (!this.familyMode && (this.needsScan || Date.now() - this.lastScan >= this.rescanMs)) {
+    if (this.needsScan || (this.familyMode && hints.length) || Date.now() - this.lastScan >= this.rescanMs) {
       this.needsScan = false;
       const scan = await this.host.rescan();
       this.lastScan = Date.now();

@@ -6,7 +6,8 @@ const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { VaultService } = require('./vault-service.cjs');
 const { WindowBroker } = require('./window-broker.cjs');
-const editorCore = require('./editor-core.cjs').createEditorCoreManager();
+const editorCore = require('./editor-core.cjs').createEditorCoreManager(process.env,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath});
+let clientSlots;
 const { createContextMenuController } = require('./context-menu.cjs');
 const { validateMenuHotkeys, workspaceFileMenu } = require('./menu-hotkeys.cjs');
 const menuHotkeys = new WeakMap();
@@ -32,7 +33,6 @@ function registerIPC() {
   handle('getWindowInfo', record => broker.info(record));
   handle('setMenuHotkeys', (record, _event, bindings) => { menuHotkeys.set(record.window, validateMenuHotkeys(bindings)); if (BrowserWindow.getFocusedWindow() === record.window) refreshApplicationMenu(); });
   handle('newWindow', async record => {
-    if (editorCore && record.vault && await editorCore.isCoreRoot(record.vault.service.root)) throw new Error('Rust fixture currently supports one window with split panes.');
     return { id: (await createWindow({ source: record })).id };
   });
   handle('getVault', record => broker.describe(record));
@@ -59,19 +59,26 @@ function registerIPC() {
     setImmediate(() => { if (!record.window.isDestroyed()) { if (quitRequested) app.quit(); else record.window.close(); } });
   });
   handle('openVault', async (record, event) => {
-    if (closeStates.get(record)?.pending) throw new Error('Finish closing or saving before switching vaults.');
+    if (closeStates.get(record)?.pending||record.vaultSelectionPending) throw new Error('Finish closing, saving or switching before opening another vault.');
     editorCore?.requireReleased(record);
-    const selection = await dialog.showOpenDialog(record.window, { title: 'Open folder as vault', properties: ['openDirectory', 'createDirectory'] });
-    if (selection.canceled || !selection.filePaths[0]) return null;
-    broker.authenticate(event);
-    editorCore?.requireReleased(record);
-    if (editorCore && record.id !== 'main' && await editorCore.isCoreRoot(selection.filePaths[0])) throw new Error('Rust fixture currently supports one primary window.');
-    const result = await broker.select(record, selection.filePaths[0]);
-    lastVaultPath = result.path;
-    const stateFile = path.join(app.getPath('userData'), 'vault.json');
-    await fs.mkdir(path.dirname(stateFile), { recursive: true });
-    await fs.writeFile(stateFile, JSON.stringify({ path: result.path }), { mode: 0o600 });
-    return result;
+    record.vaultSelectionPending=true;
+    try {
+      const selection = await dialog.showOpenDialog(record.window, { title: 'Open folder as vault', properties: ['openDirectory', 'createDirectory'] });
+      if (selection.canceled || !selection.filePaths[0]) return null;
+      broker.authenticate(event);
+      editorCore?.requireReleased(record);
+      const previousService=record.vault?.service;
+      const result = await broker.select(record, selection.filePaths[0]);
+      if(previousService&&previousService!==record.vault?.service)await editorCore?.retire(broker,record,previousService);
+      record.persistedVaultRoot=null;
+      await clientSlots?.setVault(record.clientSlot.slotId,result.path);
+      record.persistedVaultRoot=result.path;
+      lastVaultPath = result.path;
+      const stateFile = path.join(app.getPath('userData'), 'vault.json');
+      await fs.mkdir(path.dirname(stateFile), { recursive: true });
+      await fs.writeFile(stateFile, JSON.stringify({ path: result.path }), { mode: 0o600 });
+      return result;
+    } finally {record.vaultSelectionPending=false;}
   });
   const durableReply = async callback => {
     try { return { ok: true, result: await callback() }; }
@@ -90,13 +97,14 @@ function registerIPC() {
     handle(method, (record, event, expectedRoot, ...args) => broker.dispatch(record, expectedRoot, method, args, () => broker.authenticate(event)));
   }
 }
-async function createWindow({ source, primary = false, initialState = 'empty' } = {}) {
+async function createWindow({ source, primary = false, initialState = 'empty', restoreSlot } = {}) {
   if (source) {
     broker.assertLive(source);
-    if (editorCore && source.vault && await editorCore.isCoreRoot(source.vault.service.root)) throw new Error('Rust fixture currently supports one window with split panes.');
   }
+  const clientSlot=clientSlots?await clientSlots.claim(restoreSlot?{slotId:restoreSlot.slotId}:primary?{primary:true}:{}):null;
   const window = new BrowserWindow({ width: 1280, height: 860, minWidth: 640, minHeight: 480, title: 'Zorid', backgroundColor: '#1e1e1e', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 15 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-  const record = broker.register(window, { primary, initialState });
+  const record = broker.register(window, { primary, initialState, persistentId:clientSlot?.slotId });
+  record.clientSlot=clientSlot;
   const closeState = {ready: false, pending: null, allowed: false};
   closeStates.set(record, closeState);
   window.on('close', event => {
@@ -113,7 +121,13 @@ async function createWindow({ source, primary = false, initialState = 'empty' } 
     window.webContents.send('zorid:prepare-close', token);
   });
   window.on('focus', refreshApplicationMenu);
-  window.on('closed', () => { contextMenus.close(window); broker.remove(record); void editorCore?.retire(broker, record).catch(() => {}); });
+  window.on('closed', () => {
+    const selectedService=record.vault?.service;
+    contextMenus.close(window);broker.remove(record);
+    void (async()=>{await editorCore?.retire(broker,record,selectedService);
+      if(clientSlot)await clientSlots.release(clientSlot.slotId,{restore:quitRequested||!closeState.allowed});
+    })().catch(error=>console.error('Window recovery ownership retained:',error.code||'close_failed'));
+  });
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -121,9 +135,14 @@ async function createWindow({ source, primary = false, initialState = 'empty' } 
   window.webContents.on('will-navigate', (event, url) => { if (!allowedURL(url)) event.preventDefault(); });
   try {
     if (source) broker.bind(record, source.vault);
-    else if (lastVaultPath && (primary || !editorCore || !await editorCore.isCoreRoot(lastVaultPath).catch(() => false))) {
-      try { await broker.select(record, lastVaultPath); } catch { /* Missing previous vault opens the picker. */ }
+    else {
+      const selected=restoreSlot?.vaultPath||(primary?clientSlot?.vaultPath||lastVaultPath:null);
+      if(selected){
+        try {await broker.select(record,selected);}
+        catch(error){dialog.showErrorBox('Could not open Rust vault',`${error.code||'vault_open_failed'}: ${error.message}`);}
+      }
     }
+    if(record.vault&&clientSlot){await clientSlots.setVault(clientSlot.slotId,record.vault.service.root);record.persistedVaultRoot=record.vault.service.root;}
     if (devUrl) await window.loadURL(devUrl); else await window.loadFile(path.join(__dirname, '../dist/index.html'));
     return record;
   } catch (error) { if (!window.isDestroyed()) window.destroy(); throw error; }
@@ -147,7 +166,11 @@ function refreshApplicationMenu() {
     { role:'windowMenu', submenu:[{role:'minimize'},{role:'zoom'},...(process.platform==='darwin'?[{type:'separator'},{role:'front'}]:[{label:'Close window',click:()=>{const owner=BrowserWindow.getFocusedWindow();if(owner&&broker.windows.has(owner.webContents.id))owner.close();}}])] },
   ]));
 }
+const ownsApplication=app.requestSingleInstanceLock();
+if(!ownsApplication)app.quit();
+app.on('second-instance',()=>{const first=BrowserWindow.getAllWindows()[0];if(first){if(first.isMinimized())first.restore();first.focus();}});
 app.whenReady().then(async () => {
+  if(!ownsApplication)return;
   if (familyFixture) {
     try {
       await require('./family-fixture.cjs').launchFamilyFixture({app,BrowserWindow,ipcMain}, {
@@ -159,13 +182,16 @@ app.whenReady().then(async () => {
     } catch { dialog.showErrorBox('Core fixture unavailable', 'Check the trusted fixture configuration and matching native host build.'); app.quit(); }
     return;
   }
+  clientSlots=await require('./client-slots.cjs').openClientSlots(path.join(app.getPath('userData'),'client-slots.json'));
+  const restoreSlots=await clientSlots.listRestorable();
   try { lastVaultPath = JSON.parse(await fs.readFile(path.join(app.getPath('userData'), 'vault.json'), 'utf8')).path; }
   catch { /* A missing previous vault returns to the vault picker. */ }
   registerIPC();
   refreshApplicationMenu();
   await createWindow({ primary: true, initialState: 'restore' });
+  for(const restoreSlot of restoreSlots)await createWindow({restoreSlot,initialState:'restore'});
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow({ primary: true, initialState: 'restore' }).catch(error => dialog.showErrorBox('Could not open window', error.message)); });
-});
+}).catch(error=>{dialog.showErrorBox('Could not start Zorid',error.message);app.quit();});
 app.on('before-quit', () => { quitRequested = true; });
 app.on('window-all-closed', () => { if (familyFixture || process.platform !== 'darwin') app.quit(); });
 // before-quit can still be cancelled by a renderer's unsaved-note guard.

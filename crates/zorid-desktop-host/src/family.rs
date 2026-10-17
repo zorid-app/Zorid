@@ -53,14 +53,15 @@ pub(super) fn execute(
     command: Command,
     body: Vec<u8>,
 ) -> Result<(Value, Vec<u8>), Value> {
-    let sync = sync.ok_or_else(|| fault("fixture_sync_not_configured"))?;
     let result = match command {
         Command::FixtureFamilyEnroll => {
             empty(&body)?;
+            let sync = sync.ok_or_else(|| fault("fixture_sync_not_configured"))?;
             json!({"family":sync.enroll(vault).map_err(|error| sync_fault(error, true))?})
         }
         Command::FixtureFamilyStatus => {
             empty(&body)?;
+            let sync = sync.ok_or_else(|| fault("fixture_sync_not_configured"))?;
             json!({"sync":sync.status(vault).map_err(|error| sync_fault(error, false))?})
         }
         Command::FixtureFamilyOnce {
@@ -68,6 +69,7 @@ pub(super) fn execute(
             max_pages,
         } => {
             empty(&body)?;
+            let sync = sync.ok_or_else(|| fault("fixture_sync_not_configured"))?;
             if max_push > 1000 || max_pages > 100 {
                 return Err(fault("request_limit"));
             }
@@ -77,25 +79,47 @@ pub(super) fn execute(
             json!({"sync":sync.once(vault, SyncLimits { max_push, max_pages })
                 .map_err(|error| sync_fault(error, true))?})
         }
-        Command::CreateText { operation_id, id, path, .. } => {
+        Command::CreateText {
+            operation_id,
+            id,
+            path,
+            ..
+        } => {
             std::str::from_utf8(&body).map_err(|_| fault("invalid_text"))?;
             let command = FamilyCommand {
                 version: 1,
-                request: MutationRequest { operation_id, mutation: Mutation::Create {
-                    id, path, kind: EntryKind::File, content: Some(body),
-                }},
+                request: MutationRequest {
+                    operation_id,
+                    mutation: Mutation::Create {
+                        id,
+                        path,
+                        kind: EntryKind::File,
+                        content: Some(body),
+                    },
+                },
                 create_mode: Some(CreateMode::Text),
             };
-            command.validate().map_err(|_| fault("invalid_family_command"))?;
-            sync.check_binding(vault).map_err(|error| sync_fault(error, false))?;
-            apply_reply(vault.family_apply(&command.request, command.create_mode).map_err(native_fault)?)
+            command
+                .validate()
+                .map_err(|_| fault("invalid_family_command"))?;
+            if let Some(sync) = sync {
+                sync.check_binding(vault)
+                    .map_err(|error| sync_fault(error, false))?;
+            }
+            apply_reply(
+                vault
+                    .family_apply(&command.request, command.create_mode)
+                    .map_err(native_fault)?,
+            )
         }
         Command::FixtureFamilyApply { family } | Command::FileCommand { family, .. } => {
             let command = family.decode(body)?;
             // Validate the already-enrolled authority against this startup-only
             // configuration through the common runner before touching the vault.
-            sync.check_binding(vault)
-                .map_err(|error| sync_fault(error, false))?;
+            if let Some(sync) = sync {
+                sync.check_binding(vault)
+                    .map_err(|error| sync_fault(error, false))?;
+            }
             let outcome = vault
                 .family_apply(&command.request, command.create_mode)
                 .map_err(native_fault)?;
