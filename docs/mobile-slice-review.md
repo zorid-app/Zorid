@@ -11,6 +11,101 @@ or runtime parity claim. Read AGENTS.md, roadmap execution checkpoint, native
 integration record and relevant findings. Only this report is owned/changed.
 Owner retains validation and coordinator retains sole main integration.
 
+## Native SwiftUI pages final source review — 2026-10-17
+
+Read owner inbox messages `msg_3b5739330b5a` and `msg_8953dec1232b`.
+Reviewed actual recovery checkout source at
+`aa945e7dc6eabb993370f56936b51ee892b2ade9`, including native shell imports
+`293f52abadedfd37dcd9fc6ffd24de6ad02a406b` → `bb69fbee`,
+`a9bc3b34cff47b1171167ba754a57dbc16a4478f` → `77531ff3`,
+`676e5b52107e12a1a885410c015fe928b829a73d` → `aa945e7d`, and adapter imports
+`432472179557a6a1b17e80cebb1b5843460717bc` → `3368f734`,
+`3686c84472b5f5262214e2407b370828eb6b686b` → `270c84b9`.
+PBX source inclusion is `fec0c7bb`. During inspection HEAD advanced to
+`4810ddf636663ca0f79752d95bf19806a4578c34`; the intervening changes affect only
+Apple credential helper/docs, not the reviewed shell/adapter/seam.
+
+Also inspected the owner's uncommitted narrow seam and new test. Exact reviewed
+Git blob hashes (not commits):
+
+- `src/ui/workspace.ts`: `5e366117269c5dac5c686ee52a1f66604187ff96`.
+- `src/platform/index.ts`: `b8e76ddaf19c4c03e1dc6f4ffafa6a9a56518fee`.
+- `tests/workspace-mobile-navigation.test.ts`:
+  `018c22cf54a7b2a711ff2bbb3ae45eeed04a1f40`.
+
+Only this report is edited in the review branch. No owner edits, builds, tests,
+simulator or main/push operations. The user reports the combined focused check
+passed 107 tests (95 adapter, seven lifecycle, five navigation), exit 0. This
+review inspected test source and did not rerun or independently observe that pass.
+
+### Open P2 — Failed non-Markdown viewers enter successful-open history
+
+In the reviewed workspace blob, `notifyNativeNoteOpened` at lines 280–294 checks
+renderer presence only for Markdown. The new `renderPane` wrapper invokes it
+after `renderPaneContent` returns. However, the non-Markdown branch catches failed
+Base readiness at line 682 and Canvas loading/parsing at line 725, renders an
+error, then still sets `pane.viewReady=true` at line 728. The runtime remains
+active, so these error views satisfy the notification guard.
+
+Concrete trigger: open a validly identified `.canvas` file containing invalid
+JSON. `CanvasDocument.parse` throws; the workspace shows the error without a
+Canvas viewer, then `noteOpened(path, entryId)` is sent and native history records
+it as an actual successful open. The identity validation does not detect this
+because the file identity is valid. Media/PDF readiness is asynchronous at lines
+688/694 and also does not gate notification; history can be recorded before a
+later load failure. Unknown-format placeholder views pass the same predicate.
+
+Gate notification on actual viewer success/readiness, with the same current
+pane/tab/generation checks after any asynchronous completion. Cover at least
+malformed Canvas and rejected asynchronous viewer readiness; the five inspected
+navigation tests only exercise the failed Markdown editor factory. This affects
+Recents correctness, not durable note-save outcomes. Reported to owner and both
+shell/adapter owners via ordinary status messages `msg_e34c66003671`,
+`msg_6e8dc90dbcbf`, `msg_0a16bf8c364d`. No shell-owned P1/P2 was identified in
+this final scoped source review.
+
+### Earlier structural concerns resolved in ready source
+
+- Handoff uses a fresh snapshot to resolve the tapped opaque entry ID to its
+  current visible file path, then passes both ID and path through native context.
+  Workspace checks initial metadata identity after recovery; adapter explicit
+  durable text/binary activation reads check the selected identity. Incidental
+  metadata text and ID recovery reads do not consume that one-shot guard. History
+  forwards the actual path/ID pair and native validates both against a new snapshot.
+- Native identity validation matches Rust's opaque case-sensitive token syntax;
+  it does not assume file IDs are UUIDs. Paths use ASCII UTF-8 slash splitting,
+  byte equality and byte-keyed uniqueness, avoiding Swift canonical Unicode
+  equality when locating files. Ordinary rename preserves Recents identity;
+  deletion, replacement and hidden/trash moves do not resolve to visible history
+  entries. Local-store scope prevents reusing history for a recreated authority.
+- Files and Recents exclude dot path components. Reload invokes trusted native
+  refresh before listing; failed/fenced listing closes the session before enabling
+  a new open. Empty/incomplete scan state is distinguished from ready emptiness.
+
+### Review checklist and source outcome
+
+Read installed main `.agents/skills/swiftui-liquid-glass/SKILL.md`,
+`swiftui-animation/SKILL.md`, `swiftui-uikit-interop/SKILL.md`, and
+`ios-accessibility/SKILL.md`; applied their source review checklists.
+
+| Gate | Source inspection outcome / required runtime follow-up |
+| --- | --- |
+| Session ownership | Native coordinator transfers its session to the editor and clears its own reference; editorActive prevents another host while hidden. Successful lifecycle ACK closes before callback/pop; returning pages opens only afterward. Failed/stale ACK preserves editor. Native pages choose-vault closes before pop. Exercise navigation interruption and failure in app. |
+| Scene/lifecycle | SceneDelegate still forwards background to the top native editor container; no second native navigation stack or duplicate editor implementation. Verify real background deadlines, OS expiry and terminate/reopen. |
+| Rust snapshot framing | Fixed read-only identity/list_snapshot commands share existing bounded frame construction, serial queue and owned-buffer consumption. Response IDs/version/success/body emptiness and snapshot uniqueness are checked. Oversized/unavailable snapshots fail visibly; no paging or large-vault runtime acceptance is claimed. |
+| Origin and identity | The same native pages controller retains selected tab/folder; editor Back title uses origin and close returns there. Focus restoration uses stable entry ID with heading fallback after deletion. Verify return after rename/move and restored/recovery buffers. |
+| SwiftUI/UIKit seam | UIHostingController is retained and correctly contained with addChild/constraints/didMove. UIKit owns push/pop; model/coordinator/UI state are MainActor-owned. PBX includes NativePages.swift. Actual SDK typecheck/link remains unproven here. |
+| Availability and glass | iOS 26 glass container/effects/transitions are availability gated; opaque capsule controls preserve pre-26 functionality and Reduce Transparency/increased-contrast fallback. Glass applies to interactive top controls, with stable namespace IDs; content remains solid. Verify glass clipping/blending/contrast on hardware. |
+| Animation | Scoped state animations, transitions and native push/pop honor Reduce Motion in source. No independent motion/parity result follows. |
+| Accessibility | Semantic buttons, selected traits, labels, 44-point minimum controls, scalable text, accessibility-size vertical actions, sheet dismissal restoration and row-ID focus are present. Exercise largest Dynamic Type, long folder/note labels, screen reader traversal and duplicate filenames, off-screen horizontal pills, Voice Control, keyboard/Switch Control, and modal escape/focus. No accessibility support declaration is established by this audit. |
+
+The remaining P2 requires a source fix and review at its resulting SHA. Native
+SwiftUI launch, actual editor activation and Back-origin behavior, keyboard and
+safe-area layout, native ABI execution, restart/draft/namespace recovery and
+signed delivery remain independent runtime gates. Existing subprocess/streaming
+regression results must be recorded by the validation owner; this final source
+review adds no passing subprocess, desktop/browser/CLI, or mobile runtime claim.
+
 ## Follow-up source resolution review — 2026-10-17
 
 Inspected the actual owner checkout at
