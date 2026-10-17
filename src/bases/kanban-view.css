@@ -15,3 +15,20 @@
 .bases-kanban-status { position: sticky; bottom: 0; left: 0; color: var(--text-error, #b33); background: var(--background-primary, #fff); }
 .bases-kanban-status:empty { display: none; }
 .bases-kanban-empty { padding: 24px; color: var(--text-muted, #777); }
+.bases-kanban-controls { position: sticky; left: 0; height: 32px; display: flex; align-items: flex-start; z-index: 1; }
+.bases-kanban-edit-columns { display: inline-flex; gap: 6px; align-items: center; background: transparent; border: 0; color: var(--text-muted, #777); padding: 4px 8px; cursor: pointer; }
+.bases-kanban-edit-columns:hover { background: var(--background-modifier-hover, #eee); }
+.bases-kanban-view.has-column-controls .bases-kanban-board { height: calc(100% - 32px); }
+.bases-columns-popover { position: fixed; width: 320px; max-width: calc(100vw - 16px); max-height: min(500px, calc(100vh - 16px)); overflow: auto; z-index: 1000; padding: 8px; box-sizing: border-box; border: 1px solid var(--background-modifier-border, #ddd); border-radius: var(--radius-m, 8px); background: var(--background-primary, #fff); color: var(--text-normal, #222); box-shadow: 0 5px 20px #0003; font-size: var(--font-ui-small, 14px); }
+.bases-columns-title { font-weight: 600; padding: 6px 8px 10px; }
+.bases-columns-by { padding: 8px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--background-modifier-border, #ddd); }
+.bases-columns-by > span { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.bases-columns-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; min-height: 30px; box-sizing: border-box; border-radius: 4px; outline: none; }
+.bases-columns-row:hover, .bases-columns-row:focus { background: var(--background-modifier-hover, #eee); }
+.bases-columns-row.mod-hidden .bases-columns-name { color: var(--text-faint, #999); }
+.bases-columns-grip { display: flex; cursor: grab; color: var(--text-faint, #999); }
+.bases-columns-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bases-columns-count { color: var(--text-muted, #777); }
+.bases-columns-toggle { width: 100%; display: flex; align-items: center; gap: 8px; text-align: left; padding: 8px; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; }
+.bases-columns-toggle:hover { background: var(--background-modifier-hover, #eee); }
+.bases-columns-error { padding: 8px; color: var(--text-error, #b33); }
