@@ -176,6 +176,13 @@ impl NativeVault {
         self.apply_locked(request)
     }
     fn apply_locked(&mut self, request: &MutationRequest) -> Result<ApplyOutcome> {
+        self.paths.verify()?;
+        // Enrolled commands must check the complete family identity before a
+        // legacy receipt or filesystem import can bypass its mode/outbox fence.
+        // File Create with no explicit mode is rejected by FamilyCommand.
+        if self.store.family_is_enrolled()? {
+            return self.family_apply_locked(request, None);
+        }
         if let Some(commit) = self.store.replay(request)? {
             let projection = if matches!(
                 request.mutation,
