@@ -233,8 +233,10 @@ export class Workspace {
       const state=this.activePane?.editor?.nativeState?.();
       if(state)this.sendNativeEditorState(state,platform);
     };
-    document.addEventListener('visibilitychange',resume);window.addEventListener('focus',resume);
-    this.nativeEditorCleanup=()=>{unsubscribe();document.removeEventListener('visibilitychange',resume);window.removeEventListener('focus',resume);};
+    const appearance=window.matchMedia('(prefers-color-scheme: dark)');
+    const updateAppearance=()=>{if(this.platform===platform&&this.vaultGeneration===generation&&this.settings.theme==='system')this.applySettings();};
+    document.addEventListener('visibilitychange',resume);window.addEventListener('focus',resume);appearance.addEventListener('change',updateAppearance);
+    this.nativeEditorCleanup=()=>{unsubscribe();document.removeEventListener('visibilitychange',resume);window.removeEventListener('focus',resume);appearance.removeEventListener('change',updateAppearance);};
   }
 
   private mobileLifecycleCleanup?:()=>void;

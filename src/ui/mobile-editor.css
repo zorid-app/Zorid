@@ -34,3 +34,9 @@
 .workspace.native-editor-only .native-document-status[hidden] { display: none; }
 .workspace.native-editor-only .native-document-notice p { margin: 4px 0 8px; }
 .workspace.native-editor-only .native-document-notice button { min-height: 44px; }
+
+/* Match UIColor.systemBackground at the native/WebKit boundary in dark mode. */
+html[data-theme="dark"] .workspace.native-editor-only {
+  --background-primary: #000;
+  --background-secondary: #1c1c1e;
+}
