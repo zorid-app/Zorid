@@ -1,5 +1,10 @@
 # Bases integration checkpoint
 
+Current status: standalone workspace mounting and guarded shared-buffer property
+writes are now integrated. See [the workspace checkpoint](bases-workspace-integration-checkpoint.md)
+and [current Bases status](bases-status.md). Older module-only verification below
+is historical and does not imply those host features are still missing.
+
 The isolated integration branch combines the reviewed query executor and Table,
 Cards, List and Kanban presentation modules. These are original implementations
 with bounded reference evidence in their individual documents. Their inclusion
