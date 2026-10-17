@@ -13,7 +13,9 @@ module.exports = {
   productName: 'Zorid',
   electronVersion: pkg.devDependencies.electron,
   directories: { app: '.release/app', output: 'release', buildResources: 'build' },
-  files: ['**/*'],
+  // The dependency collector can fall back from the staged app to the project.
+  // Renderer dependencies are already bundled; exclude that separate collector.
+  files: ['**/*', '!**/node_modules/**'],
   asar: true,
   npmRebuild: false,
   forceCodeSigning: !unsigned,
