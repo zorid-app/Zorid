@@ -10,4 +10,38 @@ The original implementation follows the image-specific observations in [embed-co
 
 Six focused tests cover selection/action dispatch, width gating and CSS applicability, mobile controls, image replacement, detached/disposed ownership, queued callbacks, and independent destination documents. Strict scoped TypeScript and whitespace checks pass. These checks do not measure browser layout or establish image/lightbox native parity.
 
-At this helper checkpoint, shared Live host wiring, URL-segment mapping and application CSS import are separate integration work. Resize-corner dragging/reset, its source width writes, the reference's separate image reveal tooltip, image context-menu parity and complete image keyboard behavior remain explicitly deferred. No resize affordance is shown until its operation and ownership are implemented; the current host's retained source-plus-renderer architecture is not advertised as the reference tooltip implementation.
+Resize-corner dragging/reset, its source width writes, the reference's separate image reveal tooltip, image context-menu parity and complete image keyboard behavior remain explicitly deferred. No resize affordance is shown until its operation and ownership are implemented; the current host's retained source-plus-renderer architecture is not advertised as the reference tooltip implementation.
+
+## Desktop Live host integration
+
+The Live embed host now mounts the helper only for an actual resolved image root,
+removes the generic image source button, and imports its CSS in the application.
+A per-editor selected identity maps through source edits. Desktop first-click
+selection focuses the editor and puts a collapsed caret at the image source start
+without revealing syntax; a selected-image click invokes the current image's
+viewer capability directly. Explicit movement to either source boundary retains
+selection; other editor selection or a mousedown outside that image clears it.
+The document listener exists only while an image is selected and is removed on
+editor destruction. A stale helper cannot dispatch after type change or teardown.
+
+The source action selects the current parsed target substring: wiki target excluding
+outer spaces and alias, or Markdown destination excluding angle delimiters and
+optional title. It keeps the rendered image mounted beside revealed source. Target
+positions are reparsed/mapped with document edits, and duplicate images have separate
+identities. Controls are disposed before their renderer, including async type changes.
+The host does not acquire or release a second image resource lease.
+
+The supplemental static evidence supplied by the image audit is `app.js`
+1710824–1711054 (physical-keyboard or focused-editor selection focuses and sets the
+caret to widget start), 1711267–1711610 (selection retained at either boundary), and
+1714375–1714570 (outside mousedown clears). These offsets use the character-offset
+convention and artifact hashes in the shared reference document. Touch selection
+without a focused editor differs; the current desktop integration does not claim
+that path. There is no canonical mobile hint in `EditorOptions` yet; the helper's
+mobile option remains available for later host plumbing rather than viewport guesses.
+
+At this checkpoint 52 focused tests pass (46 editor cases and 6 helper cases), with
+scoped TypeScript and whitespace checks. Tests cover real CodeMirror selection,
+source mapping after insertion, multiple image identities, source/render ownership,
+async type changes and observer teardown. Native visual/interaction verification,
+mobile plumbing, resize writes, reveal tooltip and full keyboard parity remain gaps.

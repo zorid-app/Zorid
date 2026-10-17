@@ -552,3 +552,84 @@ test('typed renderer failure exposes fallback source action but nested viewer er
   click(wrapper.querySelector('.cm-live-embed-edit')!); assert.equal(view.state.selection.main.from, 7);
   assert.equal(renders[0].destroys, 0);
 });
+
+async function resolveTestImage(root: HTMLElement) {
+  root.className = 'internal-embed image-embed';
+  const image = document.createElement('img'); image.alt = 'Owned image';
+  Object.defineProperty(image, 'offsetWidth', { value: 240 });
+  let zooms = 0; image.onclick = () => { zooms++; };
+  root.replaceChildren(image); await settleControls();
+  return { image, zooms: () => zooms };
+}
+
+test('actual image first click selects source-start without reveal; selected click zooms and editor movement clears selection', async t => {
+  const source = 'before\n![[photo.png|240]]\nafter';
+  const { renders, click, view, host } = setup(t, source, true);
+  const root = renders[0].node, { image, zooms } = await resolveTestImage(root);
+  assert.equal(root.parentElement!.querySelector('.cm-live-embed-edit'), null);
+  click(image);
+  assert.equal(zooms(), 0); assert.equal(view.state.selection.main.from, 7); assert.equal(view.state.selection.main.empty, true);
+  assert.equal(root.classList.contains('zorid-image-selected'), true);
+  assert.doesNotMatch(view.contentDOM.textContent!, /!\[\[/);
+  click(image); assert.equal(zooms(), 1);
+  view.dispatch({ selection: { anchor: 7 + '![[photo.png|240]]'.length } });
+  assert.equal(root.classList.contains('zorid-image-selected'), true, 'image end retains selected identity');
+  view.dispatch({ selection: { anchor: source.length } });
+  assert.equal(root.classList.contains('zorid-image-selected'), false);
+  click(image); assert.equal(zooms(), 1); assert.equal(root.classList.contains('zorid-image-selected'), true);
+  host.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+  assert.equal(root.classList.contains('zorid-image-selected'), false);
+  assert.equal(renders[0].destroys, 0);
+});
+
+for (const [syntax, target] of [
+  ['![[  photo.png#part |240]]', 'photo.png#part'],
+  ['![label](<images/photo one.png> "caption")', 'images/photo one.png'],
+  ['![label](images/photo.png)', 'images/photo.png'],
+]) test(`image source action selects only mapped target in ${syntax}`, async t => {
+  const { renders, click, view } = setup(t, `before\n${syntax}\nafter`, true);
+  const root = renders[0].node; await resolveTestImage(root);
+  view.dispatch({ changes: { from: 0, insert: 'prefix\n' } });
+  const wrapper = root.parentElement!;
+  click(root.querySelector('[aria-label="Edit image source"]')!);
+  assert.equal(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to), target);
+  assert.equal(view.state.selection.main.from, view.state.doc.toString().indexOf(target));
+  assert.equal(root.classList.contains('zorid-image-selected'), true);
+  assert.equal(root.parentElement, wrapper); assert.equal(renders.length, 1); assert.equal(renders[0].destroys, 0);
+  assert.ok(view.contentDOM.textContent!.includes(syntax));
+  view.dispatch({ selection: { anchor: 0 } });
+  assert.equal(root.classList.contains('zorid-image-selected'), false);
+  assert.equal(root.parentElement, wrapper); assert.equal(renders[0].destroys, 0);
+});
+
+test('image selection is exclusive per editor and follows identity through inserted source', async t => {
+  const { renders, click, view } = setup(t, 'before\n![[one.png]]\n![[two.png]]\nafter', true);
+  const first = await resolveTestImage(renders[0].node), second = await resolveTestImage(renders[1].node);
+  click(first.image); assert.equal(renders[0].node.classList.contains('zorid-image-selected'), true);
+  view.dispatch({ changes: { from: 0, insert: 'prefix\n' } });
+  assert.equal(renders[0].node.classList.contains('zorid-image-selected'), true);
+  click(second.image);
+  assert.equal(renders[0].node.classList.contains('zorid-image-selected'), false);
+  assert.equal(renders[1].node.classList.contains('zorid-image-selected'), true);
+  assert.equal(view.state.selection.main.from, view.state.doc.toString().indexOf('![[two'));
+  assert.ok(renders.every(record => record.destroys === 0));
+});
+
+test('image helpers end before renderer release and do not survive type changes or editor destruction', async t => {
+  const { renders, click, view, destroy, mutations } = setup(t, 'before\n![[photo.png]]\nafter', true);
+  const root = renders[0].node; const { image } = await resolveTestImage(root);
+  click(image);
+  const source = root.querySelector('[aria-label="Edit image source"]')!;
+  const imageObserver = mutations.find(item => item.target === root && !item.options?.attributes)!;
+  assert.ok(imageObserver);
+  root.className = 'internal-embed media-embed audio-embed'; root.replaceChildren(document.createElement('audio'));
+  await settleControls();
+  assert.equal(imageObserver.disconnected, true); assert.equal(root.querySelector('.zorid-image-embed-actions'), null);
+  const selected = view.state.selection.main.from; click(source); assert.equal(view.state.selection.main.from, selected);
+  await resolveTestImage(root); assert.equal(root.querySelectorAll('.zorid-image-embed-actions').length, 1);
+  assert.equal(root.classList.contains('zorid-image-selected'), false, 'definitive type change does not resurrect selected-image state');
+  const secondObserver = mutations.filter(item => item.target === root && !item.options?.attributes).at(-1)!;
+  destroy(); assert.equal(secondObserver.disconnected, true); assert.equal(renders[0].destroys, 1);
+  assert.equal(root.querySelector('.zorid-image-embed-actions'), null);
+  document.body.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+});

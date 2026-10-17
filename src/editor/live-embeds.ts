@@ -2,23 +2,27 @@ import { renderExclusions, sameRenderExclusions, intersectsRenderExclusion } fro
 import type { RenderExclusionOptions } from './render-exclusions.ts';
 import { EditorState, StateEffect, StateField } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
-import { Decoration, EditorView, WidgetType } from '@codemirror/view';
+import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import type { EmbedRequest } from '../ui/markdown.ts';
 import { bodyStart } from './live-properties.ts';
 import { icon } from '../ui/icons.ts';
+import { createImageEmbedControls } from './image-embed-controls.ts';
+import type { ImageEmbedControls } from './image-embed-controls.ts';
 
 interface EmbedSpan {
   from: number;
   to: number;
+  targetFrom: number;
+  targetTo: number;
   blockFrom: number;
   blockTo: number;
   block: boolean;
   request: EmbedRequest;
   identity: object;
 }
-interface EmbedState { exclusions: ReturnType<typeof renderExclusions>; spans: readonly EmbedSpan[]; revealed: object | null; decorations: DecorationSet }
+interface EmbedState { exclusions: ReturnType<typeof renderExclusions>; spans: readonly EmbedSpan[]; revealed: object | null; selectedImage: object | null; decorations: DecorationSet }
 type Renderer = (request: EmbedRequest) => { dom: HTMLElement; destroy: () => void };
 
 const excludedNodes = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'Comment', 'CommentBlock', 'LiveInlineComment', 'Table', 'LinkReference', 'URL', 'LinkTitle', 'ZoridFrontmatter', 'ZoridMathInline', 'ZoridMathDisplay', 'ZoridMathBlock']);
@@ -47,7 +51,7 @@ function unescape(value: string): string {
 function findEmbeds(state: EditorState): Omit<EmbedSpan, 'identity'>[] {
   const tree = syntaxTree(state), prefix = bodyStart(state);
   const blocked: { from: number; to: number }[] = [];
-  const found: { from: number; to: number; request: EmbedRequest }[] = [];
+  const found: { from: number; to: number; targetFrom: number; targetTo: number; request: EmbedRequest }[] = [];
   tree.iterate({ enter(node) {
     if (excludedNodes.has(node.name)) { blocked.push({ from: node.from, to: node.to }); return false; }
     if (node.name !== 'Image') return;
@@ -58,6 +62,8 @@ function findEmbeds(state: EditorState): Omit<EmbedSpan, 'identity'>[] {
     if (url && close && !source.includes('\n')) {
       const target = unescape(state.doc.sliceString(url.from, url.to).replace(/^<|>$/g, ''));
       if (target) found.push({ from: node.from, to: node.to,
+        targetFrom: url.from + (state.doc.sliceString(url.from, url.from + 1) === '<' ? 1 : 0),
+        targetTo: url.to - (state.doc.sliceString(url.to - 1, url.to) === '>' ? 1 : 0),
         request: { kind: 'markdown', target, label: unescape(state.doc.sliceString(node.from + 2, close.from)) } });
     } else blocked.push({ from: node.from, to: node.to });
     return false;
@@ -72,7 +78,9 @@ function findEmbeds(state: EditorState): Omit<EmbedSpan, 'identity'>[] {
     if (slashes % 2) continue;
     const separator = match[1].indexOf('|');
     const target = (separator < 0 ? match[1] : match[1].slice(0, separator)).trim();
-    if (target) found.push({ from, to, request: { kind: 'wiki', target,
+    const rawTarget = separator < 0 ? match[1] : match[1].slice(0, separator);
+    if (target) found.push({ from, to, targetFrom: from + 3 + rawTarget.length - rawTarget.trimStart().length,
+      targetTo: from + 3 + rawTarget.trimEnd().length, request: { kind: 'wiki', target,
       ...(separator < 0 ? {} : { label: match[1].slice(separator + 1).trim() }) } });
   }
   found.sort((left, right) => left.from - right.from || right.to - left.to);
@@ -94,17 +102,20 @@ function findEmbeds(state: EditorState): Omit<EmbedSpan, 'identity'>[] {
  * Persistent rendered wiki embeds and inline Markdown images for Live Edit.
  * Mount only in live mode. Render owns resources for one DOM instance and must
  * release them in destroy. Source editing keeps the rendered child mounted
- * after its editable syntax. Obsidian's separate image tooltip/selection/resize
- * keyboard model isn't implemented by this shared embed extension.
+ * after its editable syntax. Image controls use a selected identity and mapped
+ * target selection; the separate reference tooltip and resize model remain gaps.
  */
 export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {}): Extension {
   const reveal = StateEffect.define<object>();
+  const selectImage = StateEffect.define<object | null>();
+  const imageHandles = new WeakMap<EditorView, Map<object, { controls: ImageEmbedControls; root: HTMLElement }>>();
   const mounted = new WeakMap<HTMLElement, () => void>();
-  const editSource = (view: EditorView, identity: object) => {
+  const editSource = (view: EditorView, identity: object, image = false) => {
     const span = view.state.field(field, false)?.spans.find(item => item.identity === identity);
     if (!span) return;
     view.focus();
-    view.dispatch({ effects: reveal.of(identity), selection: { anchor: span.from, head: span.to },
+    view.dispatch({ effects: image ? [reveal.of(identity), selectImage.of(identity)] : reveal.of(identity),
+      selection: { anchor: image ? span.targetFrom : span.from, head: image ? span.targetTo : span.to },
       userEvent: 'select.pointer', scrollIntoView: true });
   };
   class EmbedWidget extends WidgetType {
@@ -122,6 +133,16 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
       wrapper.contentEditable = 'false';
       const instance = render(this.span.request);
       wrapper.append(instance.dom);
+      let imageControls: ImageEmbedControls | undefined;
+      let pendingSelectionClear = false;
+      const releaseImageControls = () => {
+        const controls = imageControls;
+        if (!controls) return;
+        controls.destroy();
+        const handles = imageHandles.get(view);
+        if (handles?.get(this.span.identity)?.controls === controls) handles.delete(this.span.identity);
+        imageControls = undefined;
+      };
       let disposed = false, action: HTMLButtonElement | undefined, noteLink: HTMLAnchorElement | undefined;
       const edit = (event: MouseEvent) => { event.preventDefault(); event.stopPropagation(); if (!disposed) editSource(view, this.span.identity); };
       const links = new WeakMap<HTMLAnchorElement, { navigate: HTMLAnchorElement['onclick']; children: ChildNode[]; title: string; label: string | null; styled: boolean }>();
@@ -132,7 +153,41 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
         if (disposed) return;
         const kind = embedControlKind(instance.dom);
         wrapper.dataset.embedType = kind;
-        const needsSource = ['image', 'pdf', 'base', 'unknown', 'unavailable'].includes(kind);
+        const needsSource = ['pdf', 'base', 'unknown', 'unavailable'].includes(kind);
+        if (kind === 'image') {
+          if (!imageControls) {
+            imageControls = createImageEmbedControls(instance.dom, {
+              onSelect: () => {
+                const span = view.state.field(field, false)?.spans.find(item => item.identity === this.span.identity);
+                if (!span || disposed) return;
+                view.focus();
+                view.dispatch({ effects: selectImage.of(span.identity), selection: { anchor: span.from }, userEvent: 'select.pointer' });
+              },
+              onEditSource: () => { if (!disposed) editSource(view, this.span.identity, true); },
+              onZoom: (image, event) => {
+                const open = image.onclick as ((event: MouseEvent) => unknown) | null;
+                if (!disposed) open?.call(image, event);
+              },
+            });
+            let handles = imageHandles.get(view);
+            if (!handles) { handles = new Map(); imageHandles.set(view, handles); }
+            handles.set(this.span.identity, { controls: imageControls, root: instance.dom });
+          }
+          imageControls.refresh();
+          imageControls.setSelected(view.state.field(field, false)?.selectedImage === this.span.identity);
+        } else {
+          releaseImageControls();
+          if (kind !== 'loading' && !pendingSelectionClear && view.state.field(field, false)?.selectedImage === this.span.identity) {
+            // toDOM can run during a CM update. Reconcile a definitive type
+            // change afterward, without dispatching inside that update.
+            pendingSelectionClear = true;
+            queueMicrotask(() => {
+              pendingSelectionClear = false;
+              if (disposed || ['image', 'loading'].includes(embedControlKind(instance.dom)) || imageHandles.get(view)?.has(this.span.identity)) return;
+              if (view.state.field(field, false)?.selectedImage === this.span.identity) view.dispatch({ effects: selectImage.of(null) });
+            });
+          }
+        }
         if (needsSource && !action) {
           action = view.dom.ownerDocument.createElement('button');
           action.type = 'button'; action.className = 'edit-block-button cm-live-embed-edit';
@@ -199,6 +254,7 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
       mounted.set(wrapper, () => {
         if (disposed) return;
         disposed = true; observer?.disconnect(); controlsObserver?.disconnect(); releaseNoteLink();
+        releaseImageControls();
         wrapper.removeEventListener('mousedown', down); wrapper.removeEventListener('click', click); action?.removeEventListener('click', edit);
         instance.destroy();
       });
@@ -221,7 +277,7 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
     create(state) {
       const spans = findEmbeds(state).map(span => ({ ...span, identity: {} }));
       const exclusions = renderExclusions(state, options.excludes);
-      return { spans, revealed: null, exclusions, decorations: decorate(spans, null, exclusions) };
+      return { spans, revealed: null, selectedImage: null, exclusions, decorations: decorate(spans, null, exclusions) };
     },
     update(previous, transaction) {
       let spans = previous.spans;
@@ -243,11 +299,50 @@ export function liveEmbeds(render: Renderer, options: RenderExclusionOptions = {
         const active = spans.find(span => span.identity === revealed);
         if (!active || !transaction.newSelection.ranges.some(range => range.from <= active.to && range.to >= active.from)) revealed = null;
       }
+      let selectedImage = previous.selectedImage;
+      if (selectedImage) {
+        const selected = spans.find(span => span.identity === selectedImage);
+        const selection = transaction.newSelection;
+        if (!selected || (transaction.selection && !(selection.ranges.length === 1 && selection.main.empty
+          && (selection.main.from === selected.from || selection.main.from === selected.to)))) selectedImage = null;
+      }
+      for (const effect of transaction.effects) if (effect.is(selectImage)) selectedImage = effect.value;
+      if (selectedImage && !spans.some(span => span.identity === selectedImage)) selectedImage = null;
       const exclusions = renderExclusions(transaction.state, options.excludes);
-      return !changed && revealed === previous.revealed && sameRenderExclusions(exclusions, previous.exclusions) ? previous
-        : { spans, revealed, exclusions, decorations: decorate(spans, revealed, exclusions) };
+      return !changed && revealed === previous.revealed && selectedImage === previous.selectedImage && sameRenderExclusions(exclusions, previous.exclusions) ? previous
+        : { spans, revealed, selectedImage, exclusions, decorations: decorate(spans, revealed, exclusions) };
     },
     provide: field => EditorView.decorations.from(field, value => value.decorations),
   });
-  return field;
+  const selectionEvents = ViewPlugin.fromClass(class {
+    listening = false;
+    readonly view: EditorView;
+    constructor(view: EditorView) { this.view = view; this.listen(); }
+    outside = (event: MouseEvent) => {
+      const selected = this.view.state.field(field).selectedImage;
+      const root = selected && imageHandles.get(this.view)?.get(selected)?.root;
+      const target = event.target;
+      if (selected && (!root || !(target instanceof this.view.dom.ownerDocument.defaultView!.Node) || !root.contains(target)))
+        this.view.dispatch({ effects: selectImage.of(null) });
+    };
+    listen() {
+      const selected = !!this.view.state.field(field).selectedImage;
+      if (selected === this.listening) return;
+      this.listening = selected;
+      const doc = this.view.dom.ownerDocument;
+      if (selected) doc.addEventListener('mousedown', this.outside, true);
+      else doc.removeEventListener('mousedown', this.outside, true);
+    }
+    update(update: import('@codemirror/view').ViewUpdate) {
+      const before = update.startState.field(field).selectedImage, after = update.state.field(field).selectedImage;
+      if (before !== after) {
+        const handles = imageHandles.get(this.view);
+        if (before) handles?.get(before)?.controls.setSelected(false);
+        if (after) handles?.get(after)?.controls.setSelected(true);
+      }
+      this.listen();
+    }
+    destroy() { this.view.dom.ownerDocument.removeEventListener('mousedown', this.outside, true); }
+  });
+  return [field, selectionEvents];
 }
