@@ -1,6 +1,6 @@
 import { showContextMenu, dismissContextMenu } from '../platform/context-menu.ts';
 import { createPdfSidebar, type PdfSidebar, type PdfSidebarDocument } from './pdf-sidebar.ts';
-import { createPdfDisplayMenu, createPdfSidebarMenu } from './pdf-menus.ts';
+import { createPdfDisplayMenu, createPdfSidebarMenu, createPdfPageMenu, createPdfThumbnailMenu, type PdfMenuSession } from './pdf-menus.ts';
 import type { AttachmentLease, AttachmentResources } from './attachments.ts';
 
 /** Small boundary around the public PDF.js components; no recovered viewer code. */
@@ -8,7 +8,8 @@ type EventData = { pageNumber?:number; pageLabel?:string; pagesCount?:number; so
 interface Bus { on(name:string,callback:(event:EventData)=>void):void; off(name:string,callback:(event:EventData)=>void):void; dispatch(name:string,event:Record<string,unknown>):void }
 interface PdfDocument extends PdfSidebarDocument { numPages:number; getPageLabels():Promise<string[]|null>; destroy():Promise<void> }
 interface LoadingTask { promise:Promise<PdfDocument>; destroy():Promise<void>; onPassword?:((update:(password:string)=>void,reason:number)=>void)|null }
-interface PageView { div:HTMLElement; viewport?:{height:number}; textLayer?:{highlighter?:{textDivs:Node[];textContentItemsStr:string[]}} }
+interface PdfAnnotation { id:string; subtype:string; quadPoints?:ArrayLike<number> | null }
+interface PageView { div:HTMLElement; viewport?:{height:number;width?:number;convertToPdfPoint?(x:number,y:number):number[]}; textLayer?:{highlighter?:{textDivs:Node[];textContentItemsStr:string[]}}; pdfPage?:{getAnnotations(options:{intent:string}):Promise<PdfAnnotation[]>} }
 interface Viewer {
   currentPageNumber:number; currentScaleValue:string; currentScale:number; pagesRotation:number; spreadMode:number;
   setDocument(doc:PdfDocument|null):void; setPageLabels(labels:string[]|null):void; update():void;
@@ -19,7 +20,7 @@ interface Viewer {
 }
 interface LinkService { setViewer(viewer:Viewer):void; setDocument(doc:PdfDocument|null):void; setHash(hash:string):void; goToPage(page:string|number):void; goToDestination(destination:string|unknown[]):void }
 export interface PdfEngine {
-  core:{ version?:string; GlobalWorkerOptions:{workerSrc:string}; getDocument(options:Record<string,unknown>):LoadingTask };
+  core:{ version?:string; normalizeUnicode?:(text:string)=>string; GlobalWorkerOptions:{workerSrc:string}; getDocument(options:Record<string,unknown>):LoadingTask };
   viewer:{ EventBus:new()=>Bus; PDFLinkService:new(options:Record<string,unknown>)=>LinkService; PDFFindController:new(options:Record<string,unknown>)=>unknown; PDFViewer:new(options:Record<string,unknown>)=>Viewer };
 }
 export interface PdfViewOptions {
@@ -31,6 +32,9 @@ export interface PdfViewOptions {
   onPageChange?:(page:number)=>void;
   /** Host file/link actions shown at the right of an embedded viewer. */
   onOpenMenu?:(event:MouseEvent)=>void;
+  /** Internal host capability: uses this PDF's path and the containing note's link settings. */
+  generateMarkdownLink?:(subpath:string,alias:string)=>string|null;
+  writeClipboard?:(text:string)=>void|Promise<void>;
 }
 export interface PdfView {
   /** Resolves after document/pages initialization or immediately on destroy; not a canvas-render guarantee. */
@@ -86,6 +90,7 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','PDF controls');scroller.tabIndex=0;scroller.style.position='absolute';scroller.append(pages);stage.append(scroller);root.append(toolbar,stage);parent.append(root);
   let closed=false,lease:AttachmentLease|undefined,task:LoadingTask|undefined,pdf:PdfDocument|undefined,viewer:Viewer|undefined,links:LinkService|undefined,bus:Bus|undefined;
   let sidebar:PdfSidebar|undefined;
+  let contextMenu:PdfMenuSession|undefined,contextVersion=0,normalizeUnicode:((text:string)=>string)|undefined;
   let loaded=false,labels:string[]|null=null,pendingSubpath=options.subpath??'',highlight:PdfLocation|undefined,searchTimer:ReturnType<typeof setTimeout>|undefined;
   let cancelReady!:()=>void;const cancelled=new Promise<void>(resolve=>{cancelReady=resolve;});
   const abort=new AbortController(),handlers:[string,(event:EventData)=>void][]=[];
@@ -195,6 +200,63 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
     const start=selectionPoint(mapping,range.startContainer,range.startOffset),end=selectionPoint(mapping,range.endContainer,range.endOffset);
     return start&&end?`#page=${page}&selection=${start[0]},${start[1]},${end[0]},${end[1]}`:null;
   }
+  const clipboard=options.writeClipboard??(win.navigator.clipboard?.writeText?((text:string)=>win.navigator.clipboard.writeText(text)):undefined);
+  const basename=(path.split('/').at(-1)??path).replace(/\.pdf$/i,'');
+  const contextError=(cause:unknown)=>{if(!closed)try{options.onError?.(cause instanceof Error?cause:new Error(String(cause)));}catch{/* A host diagnostic must not create an unhandled menu rejection. */}};
+  const context=(event:MouseEvent)=>{
+    if(closed||!loaded||!viewer||!pdf||options.mobile||event.defaultPrevented)return;
+    const target=event.target instanceof win.Element?event.target:null;
+    if(!target||target.closest('input,textarea,select,[contenteditable="true"]'))return;
+    const thumbnail=target.closest<HTMLElement>('.zorid-pdf-thumbnail[data-page]');
+    const pageElement=target.closest<HTMLElement>('.page[data-page-number]');
+    if((!thumbnail||!sidebar?.element.contains(thumbnail))&&(!pageElement||!pages.contains(pageElement)))return;
+    const number=Number(thumbnail?.dataset.page??pageElement?.dataset.pageNumber);
+    if(!Number.isSafeInteger(number)||number<1||number>pdf.numPages)return;
+    // Claim the event synchronously, before annotation reads or native popup waits.
+    // Canvas must not open its card menu while this viewer is preparing its own.
+    event.preventDefault();event.stopPropagation();
+    contextMenu?.dispose();contextMenu=undefined;const version=++contextVersion,document=pdf,active=viewer;
+    const selection=doc.getSelection(),rangeCount=selection?.rangeCount??0;
+    const anchor=selection?.anchorNode,anchorOffset=selection?.anchorOffset,focus=selection?.focusNode,focusOffset=selection?.focusOffset;
+    const selectedText=selection?.toString()??'';
+    const pointParents=[anchor?.parentNode,focus?.parentNode],pointTexts=[anchor?.textContent,focus?.textContent];
+    const validSelection=()=>{
+      const current=doc.getSelection();
+      return (current?.rangeCount??0)===rangeCount&&current?.anchorNode===anchor&&current?.anchorOffset===anchorOffset&&current?.focusNode===focus&&current?.focusOffset===focusOffset&&current?.toString()===selectedText&&
+        (!anchor||(anchor.isConnected&&anchor.parentNode===pointParents[0]&&anchor.textContent===pointTexts[0]))&&(!focus||(focus.isConnected&&focus.parentNode===pointParents[1]&&focus.textContent===pointTexts[1]));
+    };
+    const current=()=>!closed&&loaded&&contextVersion===version&&pdf===document&&viewer===active&&root.isConnected;
+    const markdown=options.generateMarkdownLink?({subpath,alias}:{subpath:string;alias:string})=>options.generateMarkdownLink!(subpath,alias):undefined;
+    const show=async(session:PdfMenuSession)=>{
+      if(!current()){session.dispose();return;}contextMenu=session;
+      try{if(session.items.length)await session.run(await showContextMenu(event,session.items,{document:doc}));}
+      finally{session.dispose();if(contextMenu===session)contextMenu=undefined;}
+    };
+    if(thumbnail){
+      void show(createPdfThumbnailMenu({page:number,basename},{writeClipboard:clipboard,generateMarkdownLink:markdown,isCurrent:()=>current()&&!!sidebar?.element.contains(thumbnail)&&Number(thumbnail.dataset.page)===number})).catch(error=>{if(current())contextError(error);});return;
+    }
+    const page=active.getPageView(number-1);if(!page||page.div!==pageElement)return;const publicPage=page.pdfPage;
+    const ownsSelection=!!anchor&&!!focus&&pages.contains(anchor)&&pages.contains(focus);
+    const selectionPath=ownsSelection?getSelectionSubpath():null,location=selectionPath?parsePdfSubpath(selectionPath):undefined;
+    const annotationElement=target.closest<HTMLElement>('[data-annotation-id]');
+    const annotationId=annotationElement&&page.div.contains(annotationElement)?annotationElement.dataset.annotationId:undefined;
+    const live=()=>current()&&active.getPageView(number-1)===page&&page.pdfPage===publicPage&&Number(page.div.dataset.pageNumber)===number&&pages.contains(page.div)&&validSelection()&&(!annotationElement||(page.div.contains(annotationElement)&&annotationElement.dataset.annotationId===annotationId));
+    void (async()=>{
+      let annotation:{id:string;subtype:string;text?:string|null}|undefined;
+      if(annotationId&&page.pdfPage){
+        try{
+          const annotations=await page.pdfPage.getAnnotations({intent:'display'});if(!live())return;
+          const data=annotations.find(value=>value.id===annotationId);
+          if(data&&data.subtype!=='Widget')annotation={id:data.id,subtype:data.subtype,text:await annotationText(page,data,live)};
+        }catch(error){if(!live())return;contextError(error);}
+      }
+      if(!live())return;
+      await show(createPdfPageMenu({desktop:true,page:number,basename,selectionText:ownsSelection?selectedText:'',selection:location?.page===number?location.selection:null,annotation},{
+        writeClipboard:clipboard,generateMarkdownLink:markdown,normalizeUnicode,isCurrent:live,
+      }));
+    })().catch(error=>{if(live())contextError(error);});
+  };
+  root.addEventListener('contextmenu',context);
   let controlHeld=false,wheelTicks=0,suppressWheelUntil=0;
   const wheel=(event:WheelEvent)=>{
     if(!event.ctrlKey&&!event.metaKey){suppressWheelUntil=Date.now()+1000;return;}
@@ -220,7 +282,7 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   const resized=()=>{updateFindHeight();if(!closed&&viewer&&loaded){if(['page-width','page-height'].includes(viewer.currentScaleValue))viewer.currentScaleValue=viewer.currentScaleValue;viewer.update();updateHeight();}};
   const resize=typeof win.ResizeObserver==='function'?new win.ResizeObserver(resized):undefined;resize?.observe(stage);
   function destroy():void{
-    if(closed)return;closed=true;sidebar?.destroy();if(sidebarMenu){sidebarMenu.dispose();sidebarMenu=undefined;void dismissContextMenu(doc);}if(menuSession){menuSession.dispose();menuSession=undefined;void dismissContextMenu(doc);}cancelReady();clearTimeout(searchTimer);clearHighlight();abort.abort();resize?.disconnect();for(const [name,handler]of handlers)bus?.off(name,handler);
+    if(closed)return;closed=true;contextVersion++;root.removeEventListener('contextmenu',context);if(contextMenu){contextMenu.dispose();contextMenu=undefined;void dismissContextMenu(doc);}sidebar?.destroy();if(sidebarMenu){sidebarMenu.dispose();sidebarMenu=undefined;void dismissContextMenu(doc);}if(menuSession){menuSession.dispose();menuSession=undefined;void dismissContextMenu(doc);}cancelReady();clearTimeout(searchTimer);clearHighlight();abort.abort();resize?.disconnect();for(const [name,handler]of handlers)bus?.off(name,handler);
     root.removeEventListener('keydown',key);root.removeEventListener('keyup',keyup);scroller.removeEventListener('wheel',wheel);passwordCallback=undefined;root.remove();void release();
   }
   let releasing:Promise<void>|undefined;
@@ -241,6 +303,7 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
       // File-origin Electron blob URLs cannot reliably be fetched by PDF.js. Pass
       // owned bytes directly; the lease returns a fresh transferable buffer.
       const data=new Uint8Array(await acquired.arrayBuffer());if(closed)return;
+      normalizeUnicode=engine.core.normalizeUnicode;
       bus=new engine.viewer.EventBus();links=new engine.viewer.PDFLinkService({eventBus:bus,externalLinkTarget:2,externalLinkRel:'noopener noreferrer'});
       const findController=new engine.viewer.PDFFindController({eventBus:bus,linkService:links});
       viewer=new engine.viewer.PDFViewer({container:scroller,viewer:pages,eventBus:bus,linkService:links,findController,textLayerMode:1,annotationMode:2,annotationEditorMode:-1,removePageBorders:!!options.embed||!!options.mobile,enableScripting:false,maxCanvasPixels:options.mobile?5242880:16777216,abortSignal:abort.signal,imageResourcesPath:new URL('web/images/',assetBase).href});
@@ -263,6 +326,58 @@ export function createPdfView(parent:HTMLElement,path:string,resources:Pick<Atta
   return {ready,destroy,goToPage,setScale,showSearch,applySubpath,getSelectionSubpath,rotate(degrees){if(!closed&&loaded&&viewer&&Number.isFinite(degrees)&&degrees%90===0){viewer.pagesRotation=((viewer.pagesRotation+degrees)%360+360)%360;sidebar?.setRotation(viewer.pagesRotation);updateHeight();}}};
 }
 let nextViewId=0;
+/** Quote only glyphs whose rendered DOM centers fall inside the PDF annotation.
+ * Public PDF.js geometry supplies the inverse viewport transform, including
+ * rotation. Canvas transforms are accounted for by the rendered canvas bounds.
+ * Missing layout or unusually large selections retain the real annotation link
+ * without inventing quote text from comments or approximate character widths. */
+async function annotationText(page:PageView,annotation:PdfAnnotation,current:()=>boolean):Promise<string|null>{
+  const quads=annotation.quadPoints,viewport=page.viewport,mapping=page.textLayer?.highlighter?.textDivs;
+  const canvas=page.div.querySelector<HTMLElement>('.canvasWrapper');
+  if(!quads?.length||quads.length%8||quads.length>8192||!mapping||!viewport?.convertToPdfPoint||!viewport.width||!canvas)return null;
+  if(!(viewport.width>0&&viewport.height>0&&Number.isFinite(viewport.width)&&Number.isFinite(viewport.height)))return null;
+  const bounds=canvas.getBoundingClientRect();if(!(bounds.width>0&&bounds.height>0)||[bounds.left,bounds.top,bounds.width,bounds.height].some(value=>!Number.isFinite(value)))return null;
+  const textSnapshot=mapping.map(node=>({node,text:node.textContent,parent:node.parentNode}));
+  const characterCount=textSnapshot.reduce((total,item)=>total+(item.text?.length??0),0);
+  if(characterCount>20000||characterCount*quads.length/8>1000000)return null;
+  const geometryCurrent=()=>{const rect=canvas.getBoundingClientRect();return current()&&page.viewport===viewport&&page.textLayer?.highlighter?.textDivs===mapping&&rect.left===bounds.left&&rect.top===bounds.top&&rect.width===bounds.width&&rect.height===bounds.height;};
+  const polygons:number[][][]=[];
+  for(let offset=0;offset<quads.length;offset+=8){
+    const points=Array.from({length:8},(_,index)=>quads[offset+index]);if(points.some(value=>!Number.isFinite(value)))return null;
+    // PDF.js exposes top-left, top-right, bottom-left, bottom-right. Traverse
+    // the perimeter rather than using its bounding box (slanted text matters).
+    polygons.push([points.slice(0,2),points.slice(2,4),points.slice(6,8),points.slice(4,6)]);
+  }
+  const contains=(polygon:number[][],x:number,y:number)=>{
+    if(!Number.isFinite(x)||!Number.isFinite(y))return false;
+    let positive=false,negative=false,area=0;
+    for(let index=0;index<4;index++){
+      const a=polygon[index],b=polygon[(index+1)%4],cross=(b[0]-a[0])*(y-a[1])-(b[1]-a[1])*(x-a[0]);
+      positive ||= cross>1e-7;negative ||= cross< -1e-7;area+=a[0]*b[1]-b[0]*a[1];
+    }
+    return Math.abs(area)>1e-7&&!(positive&&negative);
+  };
+  const pieces=polygons.map(()=>''),doc=page.div.ownerDocument,range=doc.createRange();
+  if(typeof range.getClientRects!=='function')return null;
+  let processed=0;
+  for(const item of mapping){
+    if(!page.div.contains(item))return null;
+    const walker=doc.createTreeWalker(item,4),nodes:Node[]=[];
+    if(item.nodeType===3)nodes.push(item);else for(let node=walker.nextNode();node;node=walker.nextNode())nodes.push(node);
+    for(const node of nodes){let offset=0;const text=node.textContent??'';
+      for(const glyph of text){
+        if(++processed%256===0){await new Promise<void>(resolve=>setTimeout(resolve,0));if(!geometryCurrent()||!page.div.contains(node)||node.textContent!==text)return null;}
+        range.setStart(node,offset);offset+=glyph.length;range.setEnd(node,offset);
+        const points=Array.from(range.getClientRects()).filter(rect=>rect.width&&rect.height).map(rect=>viewport.convertToPdfPoint!((rect.left+rect.width/2-bounds.left)*viewport.width!/bounds.width,(rect.top+rect.height/2-bounds.top)*viewport.height/bounds.height));
+        for(let index=0;index<polygons.length;index++){
+          if(points.some(([x,y])=>contains(polygons[index],x,y)))pieces[index]+=glyph;
+        }
+      }
+    }
+  }
+  const unchanged=mapping.length===textSnapshot.length&&textSnapshot.every((item,index)=>mapping[index]===item.node&&page.div.contains(item.node)&&item.node.parentNode===item.parent&&item.node.textContent===item.text);
+  return geometryCurrent()&&unchanged?pieces.map(value=>value.trim()).filter(Boolean).join(' ')||null:null;
+}
 function textPoint(root:Node|undefined,offset:number):{node:Node;offset:number}|null{
   if(!root||offset<0||!Number.isSafeInteger(offset))return null;
   const walker=root.ownerDocument!.createTreeWalker(root,4);let remaining=offset;

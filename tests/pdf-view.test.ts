@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { createPdfView, parsePdfSubpath } from '../src/ui/pdf-view.ts';
 import type { PdfEngine, PdfViewOptions } from '../src/ui/pdf-view.ts';
+import type { ContextMenuRequest } from '../src/platform/context-menu.ts';
 
 function dom(t:TestContext){const env=new JSDOM('<!doctype html><html><head></head><body><main></main></body></html>',{url:'https://zorid.test/dist/index.html'});t.after(()=>env.window.close());return {env,root:env.window.document.querySelector('main')!};}
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:Error)=>void;const promise=new Promise<T>((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};}
@@ -30,6 +31,119 @@ function fixture(t:TestContext,options:PdfViewOptions={}){
   return {env,root,view,events,hashes,disposed,opens,loading,task,resolve,get bus(){return bus;},get viewer(){return viewer;},get acquired(){return acquired;}};
 }
 async function ticks(){for(let i=0;i<6;i++)await Promise.resolve();}
+function selectPdfText(f:ReturnType<typeof fixture>,start=6,end=9,page=0){
+  const node=f.viewer.pages.get(page)!.textLayer.highlighter.textDivs[0].firstChild!,range=f.env.window.document.createRange();range.setStart(node,start);range.setEnd(node,end);const selection=f.env.window.getSelection()!;selection.removeAllRanges();selection.addRange(range);return selection;
+}
+function pdfContext(f:ReturnType<typeof fixture>,target:Element){const event=new f.env.window.MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:333,clientY:212});target.dispatchEvent(event);return event;}
+
+test('PDF page menu claims embedded event synchronously and copies a real same-page selection link',async t=>{
+  const copied:string[]=[],requests:ContextMenuRequest[]=[],formats:unknown[]=[];
+  const f=fixture(t,{embed:true,writeClipboard:text=>{copied.push(text);},generateMarkdownLink:(subpath,alias)=>{formats.push([subpath,alias]);return `[[Folder/Example.pdf${subpath}|${alias}]]`;}});f.resolve();await f.view.ready;
+  const selection=selectPdfText(f);let outer=0;f.root.addEventListener('contextmenu',()=>outer++);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return 'pdf-copy-quote';}}});
+  const event=pdfContext(f,f.viewer.pages.get(0)!.div);assert.equal(event.defaultPrevented,true);assert.equal(outer,0);await ticks();
+  assert.equal(requests[0].x,333);assert.equal(requests[0].y,212);
+  assert.deepEqual(requests[0].items.map(item=>'label' in item?item.label:null),['Copy','Copy as quote','Copy link to selection']);
+  assert.deepEqual(formats,[['#page=1&selection=0,6,0,9','Example, page 1']]);
+  assert.deepEqual(copied,['> PDF\n\n[[Folder/Example.pdf#page=1&selection=0,6,0,9|Example, page 1]]']);assert.equal(selection.toString(),'PDF');
+});
+
+test('PDF menu without host link formatter keeps functional Copy but does not guess links',async t=>{
+  const copied:string[]=[],requests:ContextMenuRequest[]=[];const f=fixture(t,{writeClipboard:text=>{copied.push(text);}});f.resolve();await f.view.ready;selectPdfText(f);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return 'pdf-copy';}}});
+  pdfContext(f,f.viewer.pages.get(0)!.div);await ticks();assert.deepEqual(requests[0].items,[{id:'pdf-copy',label:'Copy',enabled:true}]);assert.deepEqual(copied,['PDF']);
+});
+
+test('PDF link commands reject cross-page selections and selections outside the viewer',async t=>{
+  const requests:ContextMenuRequest[]=[];const f=fixture(t,{writeClipboard:()=>{},generateMarkdownLink:()=>assert.fail('invalid same-page link')});f.resolve();await f.view.ready;
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return null;}}});
+  const selection=selectPdfText(f),range=selection.getRangeAt(0);range.setEnd(f.viewer.pages.get(1)!.textLayer.highlighter.textDivs[0].firstChild!,3);selection.removeAllRanges();selection.addRange(range);
+  pdfContext(f,f.viewer.pages.get(0)!.div);await ticks();assert.deepEqual(requests[0].items.map(item=>'id'in item?item.id:null),['pdf-copy']);
+  const outside=f.env.window.document.createElement('p');outside.textContent='outside';f.env.window.document.body.append(outside);range.selectNodeContents(outside);selection.removeAllRanges();selection.addRange(range);
+  pdfContext(f,f.viewer.pages.get(0)!.div);await ticks();assert.equal(requests.length,1);
+});
+
+test('changed selection or destroyed viewer cannot execute late native menu commands',async t=>{
+  for(const close of [false,true]){
+    const copied:string[]=[],pending=deferred<string|null>();let dismissed=0;
+    const f=fixture(t,{writeClipboard:text=>{copied.push(text);}});f.resolve();await f.view.ready;selectPdfText(f);
+    Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:()=>pending.promise,dismissContextMenu:async()=>{dismissed++;}}});
+    pdfContext(f,f.viewer.pages.get(0)!.div);await ticks();
+    if(close)f.view.destroy();else selectPdfText(f,0,5);
+    pending.resolve('pdf-copy');await ticks();assert.deepEqual(copied,[]);assert.equal(dismissed,close?1:0);
+  }
+});
+
+test('desktop page menus leave mobile, PDF form fields and non-page background to their owners',async t=>{
+  for(const mobile of [false,true]){
+    const f=fixture(t,{mobile,writeClipboard:()=>{}});f.resolve();await f.view.ready;selectPdfText(f);
+    const input=f.env.window.document.createElement('input');f.viewer.pages.get(0)!.div.append(input);
+    assert.equal(pdfContext(f,input).defaultPrevented,false);
+    assert.equal(pdfContext(f,f.root.querySelector('.zorid-pdf-scroll')!).defaultPrevented,false);
+    if(mobile)assert.equal(pdfContext(f,f.viewer.pages.get(0)!.div).defaultPrevented,false);
+  }
+});
+
+test('annotation menu resolves official page data and encodes link id without inventing quote text',async t=>{
+  const copied:string[]=[],requests:ContextMenuRequest[]=[],data=deferred<{id:string;subtype:string}[]>();
+  const f=fixture(t,{writeClipboard:text=>{copied.push(text);},generateMarkdownLink:(subpath,alias)=>`${subpath}|${alias}`});f.resolve();await f.view.ready;
+  const page=f.viewer.pages.get(1)!;Object.assign(page,{pdfPage:{getAnnotations:()=>data.promise}});
+  const annotation=f.env.window.document.createElement('section');annotation.dataset.annotationId='a b&c';page.div.append(annotation);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return 'pdf-copy-annotation-link';}}});
+  assert.equal(pdfContext(f,annotation).defaultPrevented,true);assert.equal(requests.length,0);data.resolve([{id:'a b&c',subtype:'Highlight'}]);await ticks();
+  assert.deepEqual(requests[0].items.map(item=>'label'in item?item.label:null),['Copy link to annotation']);assert.deepEqual(copied,['#page=2&annotation=a%20b%26c|Example, page 2']);
+});
+
+test('late annotation metadata cannot open a menu after disposal or a newer context event',async t=>{
+  for(const close of [true,false]){
+    const requests:ContextMenuRequest[]=[],data=deferred<{id:string;subtype:string}[]>();const f=fixture(t,{writeClipboard:()=>{},generateMarkdownLink:subpath=>subpath});f.resolve();await f.view.ready;
+    const page=f.viewer.pages.get(0)!;Object.assign(page,{pdfPage:{getAnnotations:()=>data.promise}});
+    const annotation=f.env.window.document.createElement('section');annotation.dataset.annotationId='old';page.div.append(annotation);
+    Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return null;}}});pdfContext(f,annotation);
+    if(close)f.view.destroy();else pdfContext(f,page.div);
+    data.resolve([{id:'old',subtype:'Highlight'}]);await ticks();assert.deepEqual(requests,[]);
+  }
+});
+
+test('thumbnail menu uses actual thumbnail page and host link formatter',async t=>{
+  const copied:string[]=[],requests:ContextMenuRequest[]=[];const f=fixture(t,{writeClipboard:text=>{copied.push(text);},generateMarkdownLink:(subpath,alias)=>`${subpath}|${alias}`});f.resolve();await f.view.ready;
+  f.root.querySelector<HTMLButtonElement>('[aria-label="Toggle sidebar"]')!.click();
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return 'pdf-copy-page-link';}}});
+  const thumbnail=f.root.querySelector('.zorid-pdf-thumbnail[data-page="2"]')!;assert.ok(thumbnail);pdfContext(f,thumbnail);await ticks();
+  assert.deepEqual(requests[0].items,[{id:'pdf-copy-page-link',label:'Copy link to page 2'}]);assert.deepEqual(copied,['#page=2|Example, page 2']);
+});
+
+test('annotation quote uses DOM glyph geometry with scaled and rotated PDF coordinates',async t=>{
+  const copied:string[]=[],requests:ContextMenuRequest[]=[];const f=fixture(t,{writeClipboard:text=>{copied.push(text);},generateMarkdownLink:subpath=>subpath});f.resolve();await f.view.ready;
+  const page=f.viewer.pages.get(0)!,canvas=f.env.window.document.createElement('div');canvas.className='canvasWrapper';page.div.append(canvas);
+  canvas.getBoundingClientRect=()=>({left:100,top:50,width:400,height:300}) as DOMRect;
+  Object.assign(page,{viewport:{width:200,height:150,convertToPdfPoint:(x:number,y:number)=>[y,200-x]},pdfPage:{getAnnotations:async()=>[{id:'mark',subtype:'Highlight',quadPoints:[0,199,10,199,0,195,10,195]}]}});
+  // Each glyph has a real-sized DOM rectangle; rotation maps glyph centers back
+  // into PDF units. The highlight covers offsets 1..4: "ello".
+  Object.defineProperty(f.env.window.Range.prototype,'getClientRects',{configurable:true,value:function(this:Range){return [{left:100+this.startOffset*2,top:50,width:2,height:20}];}});
+  const annotation=f.env.window.document.createElement('section');annotation.dataset.annotationId='mark';page.div.append(annotation);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return 'pdf-copy-annotation';}}});
+  pdfContext(f,annotation);await ticks();assert.deepEqual(requests[0].items.map(item=>'label'in item?item.label:null),['Copy annotation','Copy link to annotation']);assert.deepEqual(copied,['> ello\n\n#page=1&annotation=mark']);
+});
+
+test('non-finite annotation geometry cannot fabricate quote text',async t=>{
+  const requests:ContextMenuRequest[]=[];const f=fixture(t,{writeClipboard:()=>{},generateMarkdownLink:subpath=>subpath});f.resolve();await f.view.ready;
+  const page=f.viewer.pages.get(0)!,canvas=f.env.window.document.createElement('div');canvas.className='canvasWrapper';page.div.append(canvas);
+  canvas.getBoundingClientRect=()=>({left:0,top:0,width:100,height:100}) as DOMRect;
+  Object.assign(page,{viewport:{width:100,height:100,convertToPdfPoint:()=>[NaN,NaN]},pdfPage:{getAnnotations:async()=>[{id:'mark',subtype:'Highlight',quadPoints:[0,10,10,10,0,0,10,0]}]}});
+  Object.defineProperty(f.env.window.Range.prototype,'getClientRects',{configurable:true,value:()=>[{left:1,top:1,width:2,height:2}]});
+  const annotation=f.env.window.document.createElement('section');annotation.dataset.annotationId='mark';page.div.append(annotation);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return null;}}});
+  pdfContext(f,annotation);await ticks();assert.deepEqual(requests[0].items.map(item=>'label'in item?item.label:null),['Copy link to annotation']);
+});
+
+test('annotation metadata errors report once while preserving a valid selection menu',async t=>{
+  const requests:ContextMenuRequest[]=[],errors:Error[]=[];const f=fixture(t,{writeClipboard:()=>{},onError:error=>{errors.push(error);}});f.resolve();await f.view.ready;selectPdfText(f);
+  const page=f.viewer.pages.get(0)!;Object.assign(page,{pdfPage:{getAnnotations:async()=>{throw new Error('Metadata unavailable');}}});
+  const annotation=f.env.window.document.createElement('section');annotation.dataset.annotationId='broken';page.div.append(annotation);
+  Object.defineProperty(f.env.window,'zorid',{value:{showContextMenu:async(request:ContextMenuRequest)=>{requests.push(request);return null;}}});
+  pdfContext(f,annotation);await ticks();assert.deepEqual(errors.map(error=>error.message),['Metadata unavailable']);assert.deepEqual(requests[0].items.map(item=>'label'in item?item.label:null),['Copy']);
+});
 
 test('PDF subpath uses PDF destination coordinates and item/offset selection tuples',()=>{
   assert.deepEqual(parsePdfSubpath('#chapter-one'),{destination:'chapter-one'});
