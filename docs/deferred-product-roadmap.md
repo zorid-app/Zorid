@@ -69,6 +69,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Broken live fixture evidence is now secured in
+  `/private/tmp/zorid-wal-split-74662.{lsof,stat}.txt` and physical-note snapshot
+  `/private/tmp/zorid-wal-split-physical-snapshot`. Normal Cmd-Q closed launch37850
+  exit0; database recovery is not claimed. Lock fix source independently approved;
+  data_readiness granted minimal sqlite_lock_tests gate before other native runs.
+- User confirms creation works but rename fails. Actual `native_namespace_pending`
+  matches incomplete adapter connection; desktop_integration full-file command
+  slice owns fix and subsequent rebuilt UI proof.
 
 First-milestone acceptance snapshot (2026-10-17; not a completion claim):
 
