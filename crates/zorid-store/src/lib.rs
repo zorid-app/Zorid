@@ -3,8 +3,12 @@
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
+mod directory;
 mod projection;
+mod scan;
+pub use directory::{DirectoryAttempt, DirectoryBaseline, DirectoryPhase};
 pub use projection::{ExternalObservation, ProjectionAttempt, ProjectionBaseline, ProjectionPhase};
+pub use scan::{DirectoryCoverage, ScanObservation, ScanObservationKind, ScanRun};
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::Path, time::Duration};
 use zorid_core::{
@@ -12,7 +16,7 @@ use zorid_core::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const APPLICATION_ID: i64 = 0x5a4f5244; // ZORD
 const SCHEMA: &[(&str, &str)] = &[
     ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB)"),
@@ -25,7 +29,7 @@ const SCHEMA: &[(&str, &str)] = &[
 fn check_schema(connection: &Connection) -> Result<i64> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
-    if !matches!(version, 0 | 1 | SCHEMA_VERSION) {
+    if !matches!(version, 0 | 1 | 2 | SCHEMA_VERSION) {
         return Err(StoreError::UnsupportedSchema(version));
     }
     if version == 0 {
@@ -56,6 +60,8 @@ fn check_schema(connection: &Connection) -> Result<i64> {
             } else {
                 &[]
             })
+            .chain(if version >= 3 { directory::SCHEMA } else { &[] })
+            .chain(if version >= 3 { scan::SCHEMA } else { &[] })
             .map(|(name, _)| *name)
             .collect();
         if names.len() != expected_names.len()
@@ -71,11 +77,16 @@ fn check_schema(connection: &Connection) -> Result<i64> {
                 .join(" ")
                 .to_ascii_lowercase()
         };
-        for (name, expected) in SCHEMA.iter().chain(if version >= 2 {
-            projection::SCHEMA
-        } else {
-            &[]
-        }) {
+        for (name, expected) in SCHEMA
+            .iter()
+            .chain(if version >= 2 {
+                projection::SCHEMA
+            } else {
+                &[]
+            })
+            .chain(if version >= 3 { directory::SCHEMA } else { &[] })
+            .chain(if version >= 3 { scan::SCHEMA } else { &[] })
+        {
             let actual = connection
                 .query_row("SELECT sql FROM sqlite_master WHERE name=?1", [name], |r| {
                     r.get::<_, String>(0)
@@ -233,6 +244,11 @@ impl Store {
         }
         if version < 2 {
             for (_, sql) in projection::SCHEMA {
+                tx.execute_batch(sql)?;
+            }
+        }
+        if version < 3 {
+            for (_, sql) in directory::SCHEMA.iter().chain(scan::SCHEMA) {
                 tx.execute_batch(sql)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
