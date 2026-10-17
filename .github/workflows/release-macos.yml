@@ -75,7 +75,7 @@ jobs:
       - name: Test and build
         run: |
           node --test --test-concurrency=2 tests/*.test.*
-          pnpm run build
+          pnpm run build:desktop
       - name: Build matching native Rust desktop host
         env:
           RUST_TARGET: ${{ matrix.rust-target }}

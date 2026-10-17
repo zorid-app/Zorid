@@ -30,7 +30,7 @@ test('release installs the architecture-specific runtime before build and signin
   const steps = workflow.jobs.build.steps;
   const dependencies = steps.findIndex(step => step.run === 'pnpm install --frozen-lockfile');
   const runtime = steps.findIndex(step => step.run === 'pnpm run desktop:install "--${RELEASE_ARCH}"');
-  const build = steps.findIndex(step => step.run?.includes('pnpm run build'));
+  const build = steps.findIndex(step => step.run?.split('\n').includes('pnpm run build:desktop'));
   const credentials = steps.findIndex(step => step.run?.includes('macos-release.mjs prepare'));
   assert.ok(dependencies >= 0 && dependencies < runtime && runtime < build && build < credentials);
   assert.equal(steps[runtime].env, undefined);
