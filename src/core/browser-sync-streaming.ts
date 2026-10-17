@@ -368,7 +368,12 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost):BrowserStrea
           const forcedChange=forced?.find(change=>change.after.id===id);
           const entry:EntryState=forcedChange?copy(forcedChange.after):{id,path:outcome.path,kind:outcome.kind,deleted:false,revision};
           if(entry.deleted||entry.path!==outcome.path||entry.kind!==outcome.kind)throw failure('sync_projection_conflict');
-          if(previous?.entry?.revision!==entry.revision)revisions.add(entry.revision);
+          // Text may become visible after its namespace dependencies arrive.
+          // Its unchanged durable witness is already fenced; publication is not
+          // a new allocation. Fresh Text/forced revisions are still reserved by
+          // finish() and rebind allocations above.
+          const retainedText=content?.kind==='text'?s.texts.get(textKey(content.metadata.witness.identity)):undefined;
+          if(previous?.entry?.revision!==entry.revision&&retainedText?.version!==entry.revision)revisions.add(entry.revision);
           const presentation:BrowserVaultPresentation=previous?.fingerprint===fingerprint&&previous.presentation?copy(previous.presentation):{
             id,ctime_ms:previous?.presentation?.ctime_ms??timestamp,mtime_ms:timestamp,size_bytes:bytesLength};
           rows.push({id,status:'normal',fingerprint,entry,presentation,content,reason:outcome});

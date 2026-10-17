@@ -192,6 +192,11 @@ function harness(){
     openSyncUpdate(raw:string,bytes:Uint8Array){const context=JSON.parse(raw),e=wires.get(wireKey(bytes));assert.ok(e,'opaque authentication rejected wire');assert.equal(context.update_id,e.metadata.key.update_id);
       return {free(){},metadataJson(){return JSON.stringify(e.metadata);},exactWire(){return bytes.slice();},matchesPayload(payload:Uint8Array){return Buffer.from(payload).equals(Buffer.from(e.payload));},exactPlaintext(){return e.payload.slice();},authenticatedDescriptorJson(){return JSON.stringify({record:e.record,activity:e.activity,summary_digest:summary});},
         prepareMetadataFile(base:any,next:string,prior:Uint8Array){return prior.length?candidate(base,base.version,[],{wire:bytes},receiveRows,[],false):candidate(base,next,[e],{wire:bytes},receiveRows);},
+        prepareMetadataText(base:any,raw:string,prior:Uint8Array){
+          const input=JSON.parse(raw);
+          return prior.length?candidate(base,base.version,[],{wire:bytes},receiveRows,[],false):
+            candidate(base,input.next_namespace_version,[],{wire:bytes,next_text:{...input.state,version:input.request.next_version}},receiveRows,[e]);
+        },
       };
     },
   };
@@ -233,6 +238,7 @@ function harness(){
     retire(){lease=false;},rejectProof(){rejectProof=true;},setSealHook(fn:()=>void){sealHook=fn;},
     requestVerification(ids:string[]){verifyRequests=ids.map((id,sequence)=>({scope,update_id:id,expected:updates.get(id).record,manifest_index:0,sequence}));},
     publishReceivedFolder(){receiveRows=[{identity:{entry_id:'remote-folder'},outcome:{status:'normal',path:'remote',kind:'folder',content:null}}];},
+    publishReceivedText(text:any){receiveRows=[{identity:{entry_id:text.identity.entry_id},outcome:{status:'normal',path:'remote.md',kind:'file',content:{kind:'text',content:{byte_length:'4',witness:{kind:'text',identity:text.identity,revision:text.version}}}}}];},
   };
 }
 async function enrolled(){const h=harness();await h.engine.api.enroll({...scope,key_epoch:1});return h;}
@@ -285,6 +291,45 @@ test('received exact plaintext overlay verifies outside writer and commits sourc
   assert.deepEqual(h.f.row('sync_cursors',['realm','vault']).value,delivery.next);
   assert.equal(h.f.row('control','test-publication').value.entries[0].id,'remote-folder');
   assert.equal(h.f.records.get('sync_authored')!.size,0,'receive never authors echo');
+});
+test('Text received before namespace publishes its already fenced witness when dependencies arrive',async()=>{
+  const h=await receiving();
+  const binding={entry_id:'remote-note',text_bootstrap_id:'remote-bootstrap',namespace:{bootstrap_id:'remote-create',parents:['remote-create']}};
+  const textUpdate=emission('remote-text',new Uint8Array([4,5,6]),binding),textWire=h.wire(textUpdate);
+  // Opaque Rust classifications remain empty until the namespace dependency
+  // arrives. This fixture verifies the host's revision fencing, not CRDT rules.
+  await h.engine.api.receive('remote-text',textWire,h.key,delivery);
+  const text=clone([...h.f.records.get('sync_text')!.values()][0].state);
+  assert.ok(h.f.row('sync_revisions',text.version));
+  assert.deepEqual(h.f.row('control','test-publication').value.entries,[]);
+  const fences=h.f.records.get('sync_revisions')!.size;
+  h.publishReceivedText(text);
+  const create=emission('remote-create'),createWire=h.wire(create,new Uint8Array([84,85,86]));
+  await h.engine.api.receive('remote-create',createWire,h.key);
+  assert.equal(h.f.row('control','test-publication').value.entries[0].revision,text.version);
+  assert.deepEqual([...h.f.records.get('sync_text')!.values()][0].state,text);
+  assert.equal(h.f.records.get('sync_revisions')!.size,fences+1,'only the new graph revision is allocated');
+  const replay=await h.engine.api.receive('remote-create',createWire,h.key);
+  assert.equal(replay.duplicate,true);
+  const textReplay=await h.engine.api.receive('remote-text',textWire,h.key);
+  assert.equal(textReplay.duplicate,true);
+  assert.equal(h.f.records.get('sync_revisions')!.size,fences+1,'exact replay reserves no revisions');
+  await h.engine.api.receive('unrelated-chunk',h.wire(emission('unrelated-chunk'),new Uint8Array([87,88,89])),h.key);
+  assert.equal(h.f.records.get('sync_revisions')!.size,fences+2,'unchanged Text witnesses reserve no new revision');
+  await h.engine.validate();
+});
+test('new graph and forced Text or ancestor revisions still reject retained revision collisions',async()=>{
+  const text=await enrolled();await text.commit(await local(text));
+  await assert.rejects(text.commit(await local(text)),{code:'sync_revision_collision'});
+  assert.equal(text.f.row('control','test-publication').value.sequence,'1');
+  assert.equal(text.f.records.get('sync_authored')!.size,2);
+  for(const revision of ['binary-graph','binary-revision']){
+    const h=await binaryStage();h.f.seed('sync_revisions',revision,{revision});
+    await assert.rejects(h.commit(await h.engine.prepareBinary(h.input)),{code:'sync_revision_collision'});
+    assert.equal(h.f.row('sync_source_headers',keyOfId('binary-final')),undefined);
+    assert.equal(h.f.records.get('sync_graph_records')!.size,0);
+    assert.equal(h.f.row('control','test-publication').value.sequence,'1');
+  }
 });
 test('failed proof and final transaction abort retain cursor publication and source absence',async()=>{
   for(const failure of ['proof','commit']){
