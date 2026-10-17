@@ -69,6 +69,23 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+
+First-milestone acceptance snapshot (2026-10-17; not a completion claim):
+
+| Requirement | Current evidence / next necessary step |
+| --- | --- |
+| Portable Rust + independent web/Electron/CLI | Built WASM/native and actual three-client transfer; desktop remains explicit opt-in. Main integration recorded below |
+| Text, binary and folders | Actual nested browser create/reopen to CLI; binary digest preserved. Desktop remaining folder/binary/move/delete consumer is in isolated implementation |
+| Offline convergence | Independent unsynced browser edits converged; actual disconnected/rejoin scenario still required |
+| Desktop/CLI simultaneous safety | Blocked by observed split-WAL defect; metadata-only native identity fix and fresh cross-process check required |
+| Browser-tab safety | Earlier spike and store-connection checks exist; current complete worker/tab lifecycle still needs bounded integrated proof |
+| Durable-save crash/restart | Normal desktop restart preserves saved note; actual dirty-draft/unknown-commit process interruption remains unverified |
+| Move/delete/external edits | Fresh native receive physically retires deleted paths. Mixed obligations/publication handoff/existing external imports are reviewed follow-ups awaiting storage fix and combined runtime gate |
+| E2EE/account/vault isolation | Actual encrypted interop and server permission checks pass; current full client isolation and protocol fixtures remain queued |
+| Protocol compatibility | Existing current-v2 CLI fixture integrated; execution pending |
+| Basic encrypted backup/restore | Clean independent CLI text + multi-chunk binary restore/restart passed; account/permission/credential and pinned WAL snapshot tests passed |
+| Integration/resource discipline | Main owns reviewed confirmed batches; builds serialized. No real vault migration or deployment; active broken fixture retained for diagnosis |
+
 - Priority storage blocker: browser_sync_plan observed live host74662 holding
   WAL inode342471712/SHM342471713 while pathname WAL/SHM are342480671/342480672.
   Host writes and later CLI/Python reads therefore see split SQLite state.
