@@ -10,6 +10,17 @@ items. Store design owner is `/root/package_sol`; portable owner is
 `/Users/ctk/orca/workspaces/Zorid/shared-binary-streaming`, base `890a9d4`.
 Root remains the sole main integrator. Native build slots remain root-owned.
 
+Latest integration update (2026-10-17): main2a78b40 contains the additive metadata
+candidate, verified reference classifier and binary event mapper. Exact portable
+source matches frozena661bf7; single-job lib gate50222 passed97/97, including six
+mapper fixtures. Mainacda3ed contains metadata-only core content planning, source
+e7827b0; gate33112 passed6new+12planning+5materialization checks. Private verification
+proofs are rebuilt after reload; durable source commitments are not serialized
+verification capabilities. Store stage/descriptor foundation passed29lib+3family
+checks in isolation and is now composed in aggregateb86149e. Store schema10 is
+not main; activation schema11 and client/native streaming remain pending. Current
+main runtime still uses bounded whole-file paths and the existing v2 wire codec.
+
 The first deliverable is bounded-memory binary create/read/update/import and
 E2EE sync of files above 16 MiB. Keep the current authenticated 128 KiB chunk
 wire and an explicit **64 MiB per-file format limit** for this increment. This

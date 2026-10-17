@@ -116,6 +116,29 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Main2a78b40 also contains the reviewed additive metadata candidate/classifier/
+  binary event mapper (portable sourcec319e8d+67493c4+a661bf7, gate50222:97/97)
+  and core metadata-only Create/Write helperacda3ed (sourcee7827b0, gate33112:
+  6 new+12 planning+5 materialization checks). Source trees exactly match tested
+  candidates; no client streaming activation follows from these additions.
+  Current verified native CLI/host/renderer copied to main ignored artifacts;
+  target/debug/zorid-build-provenance.json records sourcef4e6ec2 and exact hashes.
+  Main pinnedpnpm12 frozen install9473 and Nodeprotobuf4/4 pass; earlier42000
+  install failed only sandboxDNS. Store schema10 foundation is composed in
+  isolated aggregateb86149e, not main; schema11 Store/native streaming activation
+  remains in progress with exact shared types and fresh-only development format.
+- gRPC proof compiled16543exit0 and passed actualChrome and nativeHTTP2 clients
+  against the same Rust endpoint.131072-byte upload/download hash exact; limit,
+  hash/id mismatch, uncertain response+exact retry and cancellation-after-accept
+  checked. Source/evidence83d47e6+69c9fa2+3f2a89d remain isolatedprototype only.
+  This closes browser compatibility gate, supporting accepted remoteRPC direction.
+  Nativebindings/IPC/CLI calls remain local. Next proposal reuses existing relay
+  SQLite/auth/receipt/cursor logic with explicit protobuftransport version; no
+  production transport switched. OwnChrome tab and servers closed.
+  General metadata planner5ce07e5 and native bounded primitive67c8bed are reviewed
+  source-frozen awaiting serialized checks. Protobuf owner currently provisions
+  official matching Rust/WASM toolchain in writabletmp because user rustup
+  directories are root-owned; no chmod/sudo or existing-toolchain change.
 - Main77bb43f integrates the reviewed resumable native scan batch after actual
   independent CLI and rebuilt Electron proof. Fresh CLI init/enroll needed no
   desktop/server;270dirs completed over22 independent32entry scans with one
