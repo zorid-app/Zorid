@@ -27,8 +27,8 @@ fn parse_document_json(input: &str) -> Result<String, String> {
             maximum_bytes: MAX_DOCUMENT_REQUEST_JSON_BYTES,
         }));
     }
-    // Deserialize directly into the strong shared IDs and Unicode strings. An
-    // intermediate serde_json::Value would discard recursive map source order.
+    // Deserialize directly into strong shared IDs and Unicode strings, without
+    // accepting a weaker identity DTO or coercing the source through JS values.
     let request: MetadataRequest = serde_json::from_str(input)
         .map_err(|_| error_json(&DocumentBindingError::InvalidRequest))?;
     let result = parse_markdown(&request).map_err(|error| error_json(&error))?;
