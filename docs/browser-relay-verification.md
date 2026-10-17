@@ -40,6 +40,17 @@ flow, account-B browser isolation, integrated CLI/Electron and backup/restore.
 This is runtime/core proof, not the main editor's storage integration or production
 security acceptance.
 
+Follow-up: standalone CLI candidate `e6b1a67` received the binary to disk with
+the same 4,106-byte digest. It authored `cli-note.md`, then a fresh browser received
+and read `Written by independent CLI\n` (27 bytes), SHA256
+`d40ed38f916ee736e57b95716826a37d31060e113ee3b9e95e8bf3832b869d5f`.
+CLI physical move/delete remains incomplete, despite logical convergence.
+
+Nested-folder failure: Folder creation succeeds, child creation returns
+storage_corrupt. First source fix `1cefd8d`, rebuilt as candidate `da2d162`, still
+fails in fresh DB `e74ba4ea-df0d-431b-9cf2-fc2d193489f8`. Do not count folder
+support as verified. Diagnostic work is ongoing; failed commits may be durable.
+
 Continuation state: relay session60287 and static server session52832 remain live
 for the next smoke steps. Fixture credentials are outside served content at
 `/private/tmp/zorid-browser-sync-20261017-0026`. Do not print credential contents.

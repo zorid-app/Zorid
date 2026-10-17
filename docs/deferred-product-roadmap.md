@@ -68,6 +68,24 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17 00:24 local
 
+- User explicitly approved remaining namespace physical-binding patch; owner
+  committed `f7f81ce` in `core-family-namespace` and continues received/local
+  Move/Delete attachment + recovery. No authorization blockers remain for those
+  two previously blocked source patches. No real-vault migration authorized.
+- Combined native CLI candidate `e6b1a67` built successfully (root73685).
+  Actual standalone CLI init/enroll/receive matched browser binary SHA256 and
+  created/uploaded `cli-note.md`; fresh browser received exact 27-byte CLI text.
+  Native received namespace still incomplete: logical deleted note absent from
+  list but `note.md` remains physically, pending_projection3. Owner has reproducer
+  `/private/tmp/zorid-cli-family-20261017-0910`; do not claim synced=true.
+- Normal desktop candidate `2ac9d13` passed tsc46590 and webpack15318; matching
+  Rust desktop host build/runtime still pending. `core_cli` assembles host into
+  native candidate. Editor Canvas pass released native slot via msg52236cefade5.
+- Actual browser nested child creation found storage_corrupt. Initial reviewed
+  fix `1cefd8d` (candidate da2d162) rebuilt but STILL fails in fresh DB; not
+  integrated main. `mobile_readiness` owns diagnostic/fixture bounded build slot;
+  root browser interactions only. Preserve failing fixtures, no automatic repair.
+
 - Native schema8 owned commits `dc9e1ba` + `a9e821c` passed combined store family
   integration 3/3 in worker session98471. `core_cli` assembles latest-main native
   + standalone CLI + shared runner candidate in `core-native-cli-combined`;
