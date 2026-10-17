@@ -899,6 +899,18 @@ impl EmbeddedHost {
         {
             return Err(error("import_invalid_source", job.uncertain));
         }
+        if !job.terminal() && job.state == "hashing" {
+            if let Some(file) = &job.source {
+                if file
+                    .metadata()
+                    .map_err(|_| error("import_invalid_source", job.uncertain))?
+                    .len()
+                    != selection.length()?
+                {
+                    return Err(error("import_source_changed", job.uncertain));
+                }
+            }
+        }
         let answer = job.progress();
         self.leases.staged_import = Some(job);
         Ok(answer)
