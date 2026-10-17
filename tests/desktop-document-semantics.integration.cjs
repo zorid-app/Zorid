@@ -56,6 +56,18 @@ test('actual desktop semantic transport retains one snapshot through independent
   const pinId='1',opened=await call('open',{pinId});
   assert.deepEqual(opened.snapshot,snapshot);
   assert.deepEqual(await call('open',{pinId}),opened,'exact open retry must retain its original generation');
+  // Independent view lifetimes: keep four pins without implicitly closing or
+  // substituting the older view, and respect the shared Store's global quota.
+  for(const pinId of ['2','3','4'])assert.deepEqual((await call('open',{pinId})).snapshot,snapshot);
+  await assert.rejects(call('open',{pinId:'5'}),{code:'pin_capacity'});
+  await assert.rejects(other('open',{pinId:'1'}),{code:'generation_limit'});
+  assert.deepEqual(await call('open',{pinId}),opened,'a live ID retries even below the monotonic floor');
+  await call('close',{pinId:'2'});await call('close',{pinId:'2'});
+  await assert.rejects(call('open',{pinId:'2'}),{code:'snapshot_expired'});
+  assert.deepEqual((await call('metadata',{pinId:'3',id:'source'})).snapshot,snapshot,'closing another view cannot evict this pin');
+  await call('open',{pinId:'5'}); // Failed quota attempts did not consume its sequence.
+  for(const pinId of ['3','4','5'])await call('close',{pinId});
+
   const metadata=await call('metadata',{pinId,id:'source'});
   assert.deepEqual(metadata.snapshot,snapshot);
   assert.equal(metadata.value.metadata.sourceLength.bytes,Buffer.byteLength(original));
@@ -99,11 +111,11 @@ test('actual desktop semantic transport retains one snapshot through independent
   await assert.rejects(call('open',{pinId}),{code:'snapshot_expired'});
   // More than the former64-open cap: long sessions retain progress with a
   // constant-size monotonic replay floor and no leaked native pin quota.
-  for(let sequence=2n;sequence<=70n;sequence++){
+  for(let sequence=6n;sequence<=75n;sequence++){
     const pinId=String(sequence);await call('open',{pinId});await call('close',{pinId});
   }
   await assert.rejects(call('open',{pinId:'2'}),{code:'snapshot_expired'});
-  await call('open',{pinId:'71'});
+  await call('open',{pinId:'76'});
   await first.release(()=>{});
   await assert.rejects(call('status'),{code:'client_not_admitted'});
   const reacquired=await admit('10000000-0000-4000-8000-000000000001');

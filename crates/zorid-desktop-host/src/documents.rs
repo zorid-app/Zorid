@@ -12,7 +12,9 @@ use zorid_native::{
 
 pub(crate) const MAX_REQUEST_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_PINS_PER_CLIENT: usize = 1;
+// Independent search/backlink/Base views may retain separate lifetimes; the
+// native Store also enforces its global four-pin ceiling across all clients.
+const MAX_PINS_PER_CLIENT: usize = 4;
 const MAX_CURSORS_PER_PIN: usize = 8;
 
 #[derive(Deserialize, Serialize)]
