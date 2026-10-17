@@ -4,11 +4,16 @@ use super::*;
 use std::collections::BTreeSet;
 use zorid_core::{EntryChange, OperationId};
 
+#[path = "family_namespace.rs"]
+mod family;
+
 pub(super) const SCHEMA: &[(&str, &str)] = &[
     ("namespace_attempts", "CREATE TABLE namespace_attempts (job_id TEXT PRIMARY KEY NOT NULL REFERENCES projection_jobs(job_id), completed INTEGER NOT NULL CHECK(completed IN (0,1)), work TEXT NOT NULL CHECK(work IN ('move','delete')), member_count INTEGER NOT NULL CHECK(member_count > 0), evidence_bytes INTEGER NOT NULL CHECK(evidence_bytes >= 0), record TEXT NOT NULL)"),
     ("namespace_members", "CREATE TABLE namespace_members (job_id TEXT NOT NULL REFERENCES namespace_attempts(job_id), member_index INTEGER NOT NULL CHECK(member_index >= 0), entry_id TEXT NOT NULL REFERENCES entries(id), source_identity TEXT NOT NULL, target_path TEXT NOT NULL, entry_kind TEXT NOT NULL CHECK(entry_kind IN ('file','folder')), evidence_bytes INTEGER NOT NULL CHECK(evidence_bytes >= 0), change TEXT NOT NULL, evidence TEXT NOT NULL, PRIMARY KEY(job_id,member_index), UNIQUE(job_id,entry_id))"),
     ("namespace_member_targets", "CREATE INDEX namespace_member_targets ON namespace_members(job_id,target_path,entry_kind)"),
     ("namespace_member_progress", "CREATE TABLE namespace_member_progress (job_id TEXT NOT NULL, member_index INTEGER NOT NULL, directory_stage_identity TEXT, captured INTEGER NOT NULL CHECK(captured IN (0,1)), published INTEGER NOT NULL CHECK(published IN (0,1)), finished INTEGER NOT NULL CHECK(finished IN (0,1)), PRIMARY KEY(job_id,member_index), FOREIGN KEY(job_id,member_index) REFERENCES namespace_members(job_id,member_index))"),
+    family::SCHEMA[0],
+    family::SCHEMA[1],
 ];
 pub const MAX_NAMESPACE_MEMBERS: usize = 10_000;
 pub const MAX_NAMESPACE_EVIDENCE_BYTES: usize = 64 * 1024 * 1024;
@@ -587,6 +592,27 @@ fn check_baselines(tx: &Connection, e: &NamespaceEvidence) -> Result<()> {
     Ok(())
 }
 impl Store {
+    /// Recheck semantic targets before filesystem replay. A hidden Recovery row
+    /// is never interchangeable with a semantic tombstone.
+    pub fn namespace_validate_target(&self, job_id: &OperationId) -> Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        let a = get(&tx, job_id)?;
+        if !a.completed && !family::check_finish(&tx, &a)? {
+            for member in &a.members {
+                let (current, _) = entry(&tx, &member.change.after.id)?;
+                let target = &member.change.after;
+                if current.path != target.path
+                    || current.kind != target.kind
+                    || current.deleted != target.deleted
+                    || (!target.deleted && !is_visible(&tx, &target.id)?)
+                {
+                    return Err(invalid("namespace desired target changed"));
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
     /// Read one exact attempt, validating its whole immutable membership set.
     pub fn namespace_attempt(&self, job_id: &OperationId) -> Result<NamespaceAttempt> {
         let tx = self.connection.unchecked_transaction()?;
@@ -840,8 +866,12 @@ impl Store {
         if a.members.iter().any(|m| !m.finished) {
             return Err(invalid("namespace members unfinished"));
         }
+        let family = family::check_finish(&tx, &a)?;
         for m in &a.members {
             check_baselines(&tx, &m.evidence)?;
+            if family {
+                continue;
+            }
             let (current, _) = entry(&tx, &m.change.after.id)?;
             let after = &m.change.after;
             if current.path != after.path
@@ -931,6 +961,7 @@ impl Store {
                 )?;
             }
         }
+        family::finish_covered(&tx, &a)?;
         projection_jobs::finish(&tx, &a.job)?;
         a.completed = true;
         tx.execute(

@@ -90,15 +90,12 @@ impl NativeVault {
         self.paths.verify()?;
         let commit = self.store.family_apply(request, mode)?;
         self.point("family_committed");
-        let projection = if matches!(
-            request.mutation,
-            Mutation::Move { .. } | Mutation::Delete { .. }
-        ) {
-            ProjectionStatus::Pending(
-                "family namespace publication requires physical provenance attachment".into(),
-            )
-        } else {
-            self.family_project_status(request.mutation.id())
+        let projection = match self.recover_locked() {
+            Ok(report) if report.blocked.is_empty() => {
+                self.family_project_status(request.mutation.id())
+            }
+            Ok(report) => ProjectionStatus::Pending(report.blocked[0].1.clone()),
+            Err(error) => ProjectionStatus::Pending(error.to_string()),
         };
         Ok(ApplyOutcome { commit, projection })
     }
@@ -113,7 +110,13 @@ impl NativeVault {
         self.paths.verify()?;
         let commit = self.store.family_receive(opened, delivery)?;
         self.point("family_received_committed");
-        let mut projection = ProjectionStatus::Projected;
+        // Receipts stay durable even if attachment or filesystem recovery fails.
+        // Duplicate delivery must also retry retained physical responsibility.
+        let mut projection = match self.recover_locked() {
+            Ok(report) if report.blocked.is_empty() => ProjectionStatus::Projected,
+            Ok(report) => ProjectionStatus::Pending(report.blocked[0].1.clone()),
+            Err(error) => ProjectionStatus::Pending(error.to_string()),
+        };
         for id in &commit.changed_entry_ids {
             let status = self.family_project_status(id);
             if matches!(status, ProjectionStatus::Pending(_)) {
@@ -143,9 +146,6 @@ impl NativeVault {
                 .store
                 .family_materialization(id)?
                 .ok_or(Error::Busy("family publication witness missing"))?;
-            let FamilyPublication::Normal { path, .. } = materialization.publication else {
-                return Err(Error::Busy("family entry is hidden, pending, or deleted"));
-            };
             for job in self.store.pending_namespace_jobs()? {
                 if job.affected.iter().any(|change| {
                     change.after.id == *id
@@ -159,6 +159,21 @@ impl NativeVault {
                     ));
                 }
             }
+            let path = match materialization.publication {
+                FamilyPublication::Normal { path, .. } => path,
+                FamilyPublication::Tombstone => {
+                    if self.store.physical_binding(id)?.is_some()
+                        || self.store.projection_baseline(id)?.is_some()
+                        || self.store.directory_baseline(id)?.is_some()
+                    {
+                        return Err(Error::Busy(
+                            "family deletion retains active physical ownership",
+                        ));
+                    }
+                    return Ok(());
+                }
+                _ => return Err(Error::Busy("family entry awaits dependencies or recovery")),
+            };
             self.namespace_clear(&path)?;
             // Requires the schema8 store publication-history hook: completion
             // records the exact revision/frontier/content witness actually

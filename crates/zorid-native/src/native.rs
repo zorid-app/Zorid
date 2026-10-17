@@ -14,6 +14,11 @@ mod checkpoints;
 mod directory;
 #[path = "family.rs"]
 mod family;
+#[path = "family_namespace.rs"]
+mod family_namespace;
+#[cfg(test)]
+#[path = "family_namespace_tests.rs"]
+mod family_namespace_tests;
 #[path = "host_intents.rs"]
 mod host_intents;
 #[path = "namespace.rs"]
@@ -318,13 +323,17 @@ impl NativeVault {
             .into_iter()
             .filter(|s| s.kind == EntryKind::Folder)
         {
-            if self.store.directory_baseline(&state.id)?.is_some()
-                || report.blocked.iter().any(|(p, _)| *p == state.path)
+            if report.blocked.iter().any(|(p, _)| *p == state.path)
                 || report.projected.contains(&state.id)
             {
                 continue;
             }
-            if self.store.pending_directory_create(&state.id)? {
+            // A moved folder's proven physical branch can have a different
+            // optimistic revision. Recheck its inode and explicitly advance only
+            // an identical family publication witness through project_directory.
+            if self.store.directory_baseline(&state.id)?.is_some()
+                || self.store.pending_directory_create(&state.id)?
+            {
                 match self.project_directory(&state.id) {
                     Ok(()) => report.projected.push(state.id),
                     Err(e) => report.blocked.push((state.path, e.to_string())),

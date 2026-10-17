@@ -460,6 +460,7 @@ impl NativeVault {
             return Ok(());
         }
         self.paths.verify()?;
+        self.store.namespace_validate_target(&a.job.job_id)?;
         // Never publish an earlier move into a path now owned by a later logical
         // operation. Retained objects and both jobs remain available for recovery.
         for m in &a.members {
@@ -569,11 +570,15 @@ impl NativeVault {
         Ok(())
     }
     pub(super) fn recover_namespaces(&mut self, report: &mut ReconcileReport) -> Result<()> {
+        self.attach_family_namespaces(report)?;
+        let covered = self.store.family_namespace_covered_jobs()?;
         // Listing and status never load retained byte evidence. A pending job is
         // loaded once; completed deletion audit loads one member at a time.
         let attempts = self.store.namespace_attempt_metadata(true)?;
         for job in self.store.pending_namespace_jobs()? {
-            if !attempts.iter().any(|a| a.job.job_id == job.job_id) {
+            if !attempts.iter().any(|a| a.job.job_id == job.job_id)
+                && !covered.contains(&job.job_id)
+            {
                 report.blocked.push((
                     job.target.path,
                     "legacy namespace job has no physical provenance; source left untouched".into(),
@@ -585,7 +590,9 @@ impl NativeVault {
                 let target = a.job.target.clone();
                 let attempt = self.store.namespace_attempt(&a.job.job_id)?;
                 match self.resume_namespace(attempt) {
-                    Ok(()) => report.projected.push(target.id),
+                    // A physical Move can preserve old content; the ordinary
+                    // file pass must still publish the current desired bytes.
+                    Ok(()) => {}
                     Err(error) => report.blocked.push((target.path, error.to_string())),
                 }
             } else {
