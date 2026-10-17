@@ -408,7 +408,7 @@ impl State {
     pub fn view(&self) -> Result<VaultView> {
         self.view_and_ancestry().map(|(view, _)| view)
     }
-    fn view_and_ancestry(&self) -> Result<(VaultView, super::GraphAncestry)> {
+    pub(super) fn view_and_ancestry(&self) -> Result<(VaultView, super::GraphAncestry)> {
         if self.records.len() + self.activities.len() > super::MAX_RECORDS {
             return Err(Error::TooLarge);
         }
