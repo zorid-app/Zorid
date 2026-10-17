@@ -9,6 +9,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::{
     fs,
+    io::Read,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -87,17 +88,48 @@ fn cli(vault: &Path, args: &[&str]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let out = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take(32 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        bytes
+    });
+    let err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        bytes
+    });
     let deadline = Instant::now() + Duration::from_secs(25);
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            return child.wait_with_output().unwrap();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = out.join();
+            let _ = err.join();
             panic!("fixture CLI deadline exceeded");
         }
         std::thread::sleep(Duration::from_millis(10));
+    };
+    let stdout = out.join().unwrap();
+    let stderr = err.join().unwrap();
+    assert!(
+        stdout.len() <= 32 * 1024 * 1024 && stderr.len() <= 1024 * 1024,
+        "fixture output exceeded bounds"
+    );
+    Output {
+        status,
+        stdout,
+        stderr,
     }
 }
 fn success(output: Output) -> Value {
@@ -114,19 +146,22 @@ fn sync(vault: &Path, credentials: &Path, command: &[&str]) -> Output {
     args.extend(command);
     cli(vault, &args)
 }
-fn create(vault: &Path, input: &Path) {
+fn create(vault: &Path, _input: &Path) {
     fs::create_dir(vault).unwrap();
     success(cli(vault, &["init"]));
-    fs::write(input, []).unwrap();
+}
+fn create_text(vault: &Path, input: &Path, id: &str, path: &str, bytes: &[u8]) {
+    fs::write(input, bytes).unwrap();
     success(cli(
         vault,
         &[
             "create",
-            "note.md",
+            path,
             "--id",
-            "note",
+            id,
             "--operation-id",
-            "create",
+            &format!("create-{id}"),
+            "--text",
             "--input",
             input.to_str().unwrap(),
         ],
@@ -139,19 +174,7 @@ fn revision(vault: &Path) -> String {
         .into()
 }
 fn bind(vault: &Path, credentials: &Path) {
-    success(sync(
-        vault,
-        credentials,
-        &[
-            "fixture-bind-empty",
-            "--id",
-            "note",
-            "--bootstrap-id",
-            "shared-bootstrap",
-            "--expected-revision",
-            &revision(vault),
-        ],
-    ));
+    success(sync(vault, credentials, &["fixture-enroll"]));
 }
 fn write(vault: &Path, input: &Path, operation: &str, content: &str) {
     fs::write(input, content).unwrap();
@@ -235,6 +258,7 @@ impl Fixture {
         create(&b, &input);
         bind(&a, &ca);
         bind(&b, &cb);
+        create_text(&a, &input, "note", "note.md", b"");
         Self {
             _temp: temp,
             server,
@@ -270,14 +294,15 @@ fn independent_cli_processes_converge_offline_edits_without_receive_echo() {
     let mut f = Fixture::new(false);
     write(&f.a, &f.input, "seed", "\u{feff}seed\r\n");
     let pushed = success(sync(&f.a, &f.ca, &["once"]));
-    assert_eq!(pushed["server_accepted"], 1);
+    let initial_count = pushed["server_accepted"].as_u64().unwrap() as usize;
+    assert!(initial_count >= 2);
     assert_eq!(pushed["synced"], false);
     let received = success(sync(&f.b, &f.cb, &["once"]));
     assert_eq!(received["server_accepted"], 0);
-    assert_eq!(received["locally_received"], 1);
-    assert_eq!(received["pending_text_sample"], 0);
+    assert_eq!(received["locally_received"], initial_count);
+    assert_eq!(received["pending_envelope_sample"], 0);
     assert_eq!(read(&f.a), read(&f.b));
-    assert_eq!(f.wires().len(), 1);
+    assert_eq!(f.wires().len(), initial_count);
     // Both independent invocations mutate while neither invokes any transport.
     write(&f.a, &f.input, "offline-a", "\u{feff}seed A\r\n");
     write(&f.b, &f.input, "offline-b", "\u{feff}seed B\r\n");
@@ -288,9 +313,9 @@ fn independent_cli_processes_converge_offline_edits_without_receive_echo() {
     assert_eq!(a.as_bytes(), read(&f.b));
     assert!(a.contains('A') && a.contains('B'));
     assert_eq!(caught_up["server_accepted"], 0);
-    assert_eq!(caught_up["pending_text_sample"], 0);
+    assert_eq!(caught_up["pending_envelope_sample"], 0);
     let wires = f.wires();
-    assert_eq!(wires.len(), 3);
+    assert_eq!(wires.len(), initial_count + 2);
     for wire in wires {
         assert!(!wire.windows(4).any(|w| w == b"seed"));
     }
@@ -307,14 +332,15 @@ fn lost_remote_ack_retries_persisted_ciphertext_after_cli_restart() {
     let first = f.wires();
     assert_eq!(first.len(), 1);
     let pending = success(sync(&f.a, &f.ca, &["status"]));
-    assert_eq!(pending["pending_text_sample"], 1);
-    assert_eq!(pending["pending_text"][0]["sealed"], true);
+    let pending_count = pending["pending_envelope_sample"].as_u64().unwrap();
+    assert!(pending_count >= 2);
+    assert_eq!(pending["pending_envelopes"][0]["sealed"], true);
     let retried = success(sync(&f.a, &f.ca, &["once"]));
-    assert_eq!(retried["server_accepted"], 1);
-    assert_eq!(retried["pending_text_sample"], 0);
+    assert_eq!(retried["server_accepted"], pending_count);
+    assert_eq!(retried["pending_envelope_sample"], 0);
     assert_eq!(
-        f.wires(),
-        first,
+        &f.wires()[..1],
+        first.as_slice(),
         "retry retained identical ciphertext and immutable log position"
     );
     success(sync(&f.b, &f.cb, &["once"]));
@@ -351,14 +377,14 @@ fn revoked_device_and_wrong_epoch_do_not_advance_receive_cursor() {
         .unwrap();
     assert!(!sync(&f.b, &f.cb, &["once"]).status.success());
     let status = success(sync(&f.b, &f.cb, &["status"]));
-    assert_eq!(status["receive_cursor"]["after"], "0");
-    assert_eq!(read(&f.b), b"");
+    assert_eq!(status["family"]["cursor"]["after"], "0");
+    assert!(!cli(&f.b, &["read", "--id", "note"]).status.success());
     let mut value: Value = serde_json::from_slice(&fs::read(&f.cb).unwrap()).unwrap();
     value["server_epoch"] = json!("wrong-epoch");
     fs::write(&f.cb, serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(!sync(&f.b, &f.cb, &["once"]).status.success());
     assert_eq!(
-        success(sync(&f.b, &f.cb, &["status"]))["receive_cursor"]["after"],
+        success(sync(&f.b, &f.cb, &["status"]))["family"]["cursor"]["after"],
         "0"
     );
 }
@@ -388,108 +414,257 @@ fn unauthenticated_ciphertext_never_advances_cursor_or_creates_echo() {
         .unwrap();
     assert!(!sync(&f.b, &f.cb, &["once"]).status.success());
     let state = success(sync(&f.b, &f.cb, &["status"]));
-    assert_eq!(state["receive_cursor"]["after"], "0");
-    assert_eq!(state["pending_text_sample"], 0);
-    assert_eq!(read(&f.b), b"");
+    assert_eq!(state["family"]["cursor"]["after"], "0");
+    assert_eq!(state["pending_envelope_sample"], 0);
+    assert!(!cli(&f.b, &["read", "--id", "note"]).status.success());
 }
 
 #[test]
-fn unknown_authenticated_entry_stops_at_that_item_and_resumes_after_explicit_binding() {
+fn namespace_create_receives_new_text_without_manual_local_binding() {
     let mut f = Fixture::new(false);
-    write(&f.a, &f.input, "seed", "known note");
+    create_text(&f.a, &f.input, "extra", "extra.md", b"unique remote text");
     success(sync(&f.a, &f.ca, &["once"]));
-    fs::write(&f.input, []).unwrap();
+    let count = f.wires().len();
+    let received = success(sync(&f.b, &f.cb, &["once"]));
+    assert_eq!(received["server_accepted"], 0);
+    assert_eq!(received["pending_envelope_sample"], 0);
+    assert_eq!(received["family"]["pending_dependencies"], "0");
+    let read = cli(&f.b, &["read", "--id", "extra", "--raw"]);
+    assert!(read.status.success());
+    assert_eq!(read.stdout, b"unique remote text");
+    success(sync(&f.b, &f.cb, &["once"]));
+    assert_eq!(f.wires().len(), count);
+}
+
+#[test]
+fn binary_larger_than_one_envelope_moves_and_deletes_with_exact_bytes() {
+    let mut f = Fixture::new(false);
+    let bytes: Vec<u8> = (0..(2 * 1024 * 1024 + 17))
+        .map(|i| (i % 256) as u8)
+        .collect();
+    fs::write(&f.input, &bytes).unwrap();
     success(cli(
         &f.a,
         &[
             "create",
-            "extra.md",
+            "unknown.xyz",
             "--id",
-            "extra",
+            "binary",
             "--operation-id",
-            "create-extra",
+            "create-binary",
+            "--binary",
             "--input",
             f.input.to_str().unwrap(),
         ],
     ));
-    let extra_revision = success(cli(&f.a, &["read", "--id", "extra"]))["entry"]["revision"]
-        .as_str()
+    success(sync(&f.a, &f.ca, &["once"]));
+    success(sync(&f.b, &f.cb, &["once", "--max-pages", "40"]));
+    let read = cli(&f.b, &["read", "--id", "binary", "--raw"]);
+    assert!(read.status.success());
+    assert_eq!(read.stdout, bytes);
+    let old = success(cli(&f.a, &["read", "--id", "binary"]));
+    let revision = old["entry"]["revision"].as_str().unwrap();
+    success(cli(
+        &f.a,
+        &[
+            "move",
+            "moved.xyz",
+            "--id",
+            "binary",
+            "--expected-revision",
+            revision,
+            "--operation-id",
+            "move-binary",
+        ],
+    ));
+    success(sync(&f.a, &f.ca, &["once"]));
+    success(sync(&f.b, &f.cb, &["once", "--max-pages", "40"]));
+    assert_eq!(fs::read(f.b.join("moved.xyz")).unwrap(), bytes);
+    assert!(!f.b.join("unknown.xyz").exists());
+    let moved = success(cli(&f.a, &["read", "--id", "binary"]));
+    let revision = moved["entry"]["revision"].as_str().unwrap();
+    success(cli(
+        &f.a,
+        &[
+            "delete",
+            "--id",
+            "binary",
+            "--expected-revision",
+            revision,
+            "--operation-id",
+            "delete-binary",
+        ],
+    ));
+    success(sync(&f.a, &f.ca, &["once"]));
+    success(sync(&f.b, &f.cb, &["once", "--max-pages", "40"]));
+    assert!(!f.b.join("moved.xyz").exists());
+    let listed = success(cli(&f.b, &["list"]));
+    assert!(!listed["entries"]
+        .as_array()
         .unwrap()
-        .to_owned();
-    success(sync(
+        .iter()
+        .any(|e| e["id"] == "binary"));
+    assert_eq!(
+        success(sync(&f.b, &f.cb, &["status"]))["pending_envelope_sample"],
+        0
+    );
+}
+
+#[test]
+fn enrollment_is_explicit_and_mode_is_part_of_exact_operation_retry() {
+    let f = Fixture::new(false);
+    success(sync(&f.a, &f.ca, &["fixture-enroll"])); // exact idempotent binding
+    fs::write(&f.input, b"same bytes").unwrap();
+    let args = [
+        "create",
+        "mode.dat",
+        "--id",
+        "mode",
+        "--operation-id",
+        "mode-create",
+        "--input",
+        f.input.to_str().unwrap(),
+    ];
+    assert!(!cli(&f.a, &args).status.success());
+    let mut binary = args.to_vec();
+    binary.push("--binary");
+    success(cli(&f.a, &binary));
+    success(cli(&f.a, &binary));
+    let mut text = args.to_vec();
+    text.push("--text");
+    assert!(!cli(&f.a, &text).status.success());
+    assert!(!cli(
+        &f.a,
+        &[
+            "create",
+            "both",
+            "--id",
+            "both",
+            "--operation-id",
+            "both",
+            "--input",
+            f.input.to_str().unwrap(),
+            "--text",
+            "--binary"
+        ]
+    )
+    .status
+    .success());
+    assert!(!sync(
         &f.a,
         &f.ca,
         &[
             "fixture-bind-empty",
             "--id",
-            "extra",
+            "note",
             "--bootstrap-id",
-            "extra-bootstrap",
+            "old",
             "--expected-revision",
-            &extra_revision,
-        ],
-    ));
-    fs::write(&f.input, "unknown document").unwrap();
-    success(cli(
-        &f.a,
-        &[
-            "write",
-            "--id",
-            "extra",
-            "--operation-id",
-            "write-extra",
-            "--expected-revision",
-            &extra_revision,
-            "--input",
-            f.input.to_str().unwrap(),
-        ],
-    ));
-    success(sync(&f.a, &f.ca, &["once"]));
-    assert_eq!(f.wires().len(), 2);
-    let failed = sync(&f.b, &f.cb, &["once"]);
-    assert!(!failed.status.success());
-    let failure: Value = serde_json::from_slice(&failed.stderr).unwrap();
-    assert_eq!(failure["error"]["code"], "sync_unbound_entry");
-    assert_eq!(read(&f.b), b"known note");
-    let status = success(sync(&f.b, &f.cb, &["status"]));
-    assert_eq!(status["receive_cursor"]["after"], "1");
-    assert_eq!(status["pending_text_sample"], 0);
-    fs::write(&f.input, []).unwrap();
-    success(cli(
-        &f.b,
-        &[
-            "create",
-            "extra.md",
-            "--id",
-            "extra",
-            "--operation-id",
-            "create-extra",
-            "--input",
-            f.input.to_str().unwrap(),
-        ],
-    ));
-    let local_revision = success(cli(&f.b, &["read", "--id", "extra"]))["entry"]["revision"]
-        .as_str()
+            "old"
+        ]
+    )
+    .status
+    .success());
+}
+
+#[test]
+fn incomplete_binary_dependencies_are_durable_without_partial_publication_or_echo() {
+    use zorid_core::{EntryId, EntryKind};
+    use zorid_file_sync::v2::{Body, ContentSeed, Effect, EntryEvent, Payload};
+    use zorid_file_sync::{
+        ChunkPage, ChunkRef, EntryIdentity, Family, Location, Manifest, Scope, Sha256Digest,
+    };
+    use zorid_sync_protocol::{Header, UpdateId};
+    let mut f = Fixture::new(false);
+    let id = |s: &str| UpdateId::new(s).unwrap();
+    let bytes = vec![0, 255, 1, 254];
+    let page = ChunkPage {
+        chunks: vec![ChunkRef {
+            id: id("remote-chunk"),
+            bytes: bytes.len() as u32,
+            digest: Sha256Digest::of(&bytes),
+        }],
+    };
+    let manifest = Manifest {
+        bytes: bytes.len() as u64,
+        digest: Sha256Digest::of(&bytes),
+        pages: vec![page.reference(id("remote-page")).unwrap()],
+    };
+    let create = Body::Events {
+        events: vec![EntryEvent {
+            id: id("remote-create"),
+            identity: EntryIdentity {
+                entry_id: EntryId::new("remote").unwrap(),
+                bootstrap_id: id("remote-create"),
+            },
+            parents: vec![],
+            effect: Effect::Create {
+                entry_kind: EntryKind::File,
+                location: Location {
+                    parent: None,
+                    name: "remote.dat".into(),
+                },
+                content: Some(ContentSeed::Binary { manifest }),
+            },
+        }],
+    };
+    let publish = |f: &mut Fixture, name: &str, body: Body| {
+        let update = id(name);
+        let realm = RealmId::new("realm").unwrap();
+        let vault = VaultId::new("vault").unwrap();
+        let payload = Payload {
+            family: Family::Files,
+            format_version: 2,
+            scope: Scope {
+                realm_id: realm.clone(),
+                vault_id: vault.clone(),
+            },
+            id: update.clone(),
+            body,
+        };
+        let header = Header::new(
+            realm,
+            vault.clone(),
+            update.clone(),
+            DeviceId::new("fixture-sender").unwrap(),
+            1,
+        )
+        .unwrap();
+        let wire = zorid_crypto::seal(
+            &header,
+            &payload.encode().unwrap(),
+            &zorid_crypto::VaultKey::from_bytes([7; 32]),
+            &mut zorid_crypto::SystemEntropy,
+        )
         .unwrap()
-        .to_owned();
-    success(sync(
-        &f.b,
-        &f.cb,
-        &[
-            "fixture-bind-empty",
-            "--id",
-            "extra",
-            "--bootstrap-id",
-            "extra-bootstrap",
-            "--expected-revision",
-            &local_revision,
-        ],
-    ));
-    let resumed = success(sync(&f.b, &f.cb, &["once"]));
-    assert_eq!(resumed["server_accepted"], 0);
-    assert_eq!(resumed["receive_cursor"]["after"], "2");
-    let extra = cli(&f.b, &["read", "--id", "extra", "--raw"]);
-    assert!(extra.status.success());
-    assert_eq!(extra.stdout, b"unknown document");
-    assert_eq!(f.wires().len(), 2);
+        .encode();
+        f.admin.append(&f.token, &vault, &update, &wire).unwrap();
+    };
+    publish(&mut f, "remote-create", create);
+    let pending = success(sync(&f.b, &f.cb, &["once"]));
+    assert_eq!(pending["family"]["cursor"]["after"], "1");
+    assert_ne!(pending["family"]["pending_dependencies"], "0");
+    assert!(!f.b.join("remote.dat").exists());
+    assert_eq!(pending["pending_envelope_sample"], 0);
+    // A separate CLI process resumes the already durable dependency obligation.
+    publish(&mut f, "remote-page", Body::Page { page });
+    let still_pending = success(sync(&f.b, &f.cb, &["once"]));
+    assert_eq!(still_pending["family"]["cursor"]["after"], "2");
+    assert!(!f.b.join("remote.dat").exists());
+    publish(
+        &mut f,
+        "remote-chunk",
+        Body::Chunk {
+            bytes: bytes.clone(),
+        },
+    );
+    let complete = success(sync(&f.b, &f.cb, &["once"]));
+    assert_eq!(complete["family"]["cursor"]["after"], "3");
+    assert_eq!(complete["family"]["pending_dependencies"], "0");
+    assert_eq!(complete["server_accepted"], 0);
+    let read = cli(&f.b, &["read", "--id", "remote", "--raw"]);
+    assert!(read.status.success());
+    assert_eq!(read.stdout, bytes);
+    assert_eq!(fs::read(f.b.join("remote.dat")).unwrap(), bytes);
+    assert_eq!(f.wires().len(), 3);
 }

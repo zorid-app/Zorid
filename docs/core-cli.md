@@ -6,11 +6,10 @@ vault's SQLite authority and uses the native adapter's cross-process filesystem
 coordination. This initial slice supports macOS and Linux; other platforms return
 `unsupported_platform` until their native adapter exists.
 
-This is not the completed full-vault CLI milestone. Move/delete, search,
-automatic watcher integration, full-vault E2EE sync and real Electron
-concurrency verification remain required. An explicitly selected fixture text-sync
-surface now sends encrypted native-authored updates to a local relay; its source
-and fixture presence do not establish runtime acceptance.
+This is not the completed full-vault CLI milestone. Search, continuous watching,
+large-file streaming and production enrollment remain required. Current-v2 family
+sync source uses the native core's shared ledger and causal text/file state; its
+source and fixture presence do not establish runtime acceptance.
 
 ## Commands
 
@@ -26,6 +25,8 @@ zorid --vault /path/to/existing-vault create note.md --id note1 --operation-id c
 zorid --vault /path/to/existing-vault read --id note1
 zorid --vault /path/to/existing-vault read --id note1 --raw
 zorid --vault /path/to/existing-vault write --id note1 --expected-revision REVISION --operation-id write1 --input -
+zorid --vault /path/to/existing-vault move moved.md --id note1 --expected-revision REVISION --operation-id move1
+zorid --vault /path/to/existing-vault delete --id note1 --expected-revision REVISION --operation-id delete1
 zorid --vault /path/to/existing-vault reconcile nested/file.bin note.md
 zorid --vault /path/to/existing-vault rescan
 zorid --vault /path/to/existing-vault rescan --max-entries 500 --max-total-bytes 16777216 --max-depth 32 --max-duration-ms 2000
@@ -137,16 +138,13 @@ Source presence alone does not establish these checks passed. The coordinator's
 execution ledger records actual runs. These tests do not establish Electron
 integration, server sync, Windows support or the completed CLI milestone.
 
-## Explicit fixture text sync
+## Current-v2 fixture family sync
 
-This source slice uses the standalone process's embedded NativeVault, including
-its persisted text CRDT, authored queue, seal-once encrypted wire and atomic
-received-update/cursor transaction. It never requires desktop IPC, sends local
-MutationRequests as sync payloads, or treats the local command outbox as the
-network queue. Current native limits apply: managed UTF-8 text is at most 256 KiB,
-with an 8,192-character whole-text diff work bound. Binary files, namespace
-operations, creation/discovery over sync, continuous watching, production
-onboarding and service deployment remain unsupported by these commands.
+This source uses the standalone process's embedded NativeVault for current text-v2
+and file-v2, one authored envelope queue, persisted seal-once ciphertext, and atomic
+received-envelope/domain-state/cursor transactions. No desktop IPC, alternate CLI
+backend or local MutationRequest wire format is involved. Text mode still has its
+256 KiB managed-text and 8,192-character replacement-diff bounds.
 
 Each invocation takes `sync --credentials /absolute/path/to/fixture.json` followed
 by one of the commands below. Provision the file through the synthetic relay
@@ -166,60 +164,81 @@ epoch are independently pinned in the file. An epoch change fails explicitly;
 this CLI does not reset a receive cursor or rotate keys automatically.
 
 ```sh
-zorid --vault /tmp/fixture-a sync --credentials /tmp/fixture-credentials.json fixture-bind-empty --id note1 --bootstrap-id shared-bootstrap --expected-revision REVISION
-zorid --vault /tmp/fixture-a sync --credentials /tmp/fixture-credentials.json fixture-adopt --id note1 --bootstrap-id shared-bootstrap --expected-revision REVISION --operation-id adopt1 --input /tmp/exact-existing-text.md
+zorid --vault /tmp/fixture-a sync --credentials /tmp/fixture-credentials.json fixture-enroll
+zorid --vault /tmp/fixture-a create note.md --id note1 --operation-id create1 --text --input /tmp/note.md
+zorid --vault /tmp/fixture-a create asset.xyz --id asset1 --operation-id create2 --binary --input /tmp/asset.xyz
 zorid --vault /tmp/fixture-a sync --credentials /tmp/fixture-credentials.json status
 zorid --vault /tmp/fixture-a sync --credentials /tmp/fixture-credentials.json once --max-push 64 --max-pages 4
 ```
 
-`fixture-bind-empty` binds an existing empty file using explicit entry and bootstrap
-identities; replicas must agree on those identities, even if their local revisions
-are different. `fixture-adopt` authors the initial content once from exact committed
-bytes with a caller-stable operation ID and revision precondition. It is an
-alternative to binding that same nonempty replica, not a command to independently
-seed every replica. Both commands work offline. After binding/adoption, ordinary
-revision-checked CLI writes and native external reconciliation use the shared text
-mutation pipeline. Other replicas initially bind an empty file to the agreed
-identity and receive the authored seed. Matching paths or matching content never
-infer document identity. Unknown incoming entry/bootstrap identities stop receive;
-they do not cause implicit file creation or a skipped cursor position.
+Enrollment requires a fresh empty initialized vault. Enrolling the identical scope
+again is idempotent. Each receiving client enrolls its own fresh empty vault; it
+does not independently create matching files or infer shared identity from paths.
+Current authenticated namespace Create records supply identity/content binding.
+Old `fixture-bind-empty` and `fixture-adopt` explicitly reject as obsolete; there
+is no development-fixture migration or invented v1 namespace frontier.
 
-`once` first pushes up to `max-push` pending native-authored updates, then pulls at
-most `max-pages` pages of at most 64 entries each. Zero disables the corresponding
-phase. Pull uses one fixed server high-water boundary for that invocation. The
-transport caps each response before JSON/base64 decoding, validates contiguous
-sequences, snapshot bounds, epoch and protocol extensions, and authenticates all
-bounded page envelopes before committing any of that page. Upload ACKs validate
-the exact update/vault/epoch and do not advance receive cursors.
+In enrolled vaults, file creation requires exactly one of `--text` or `--binary`.
+This is immutable content ownership, not a filename or UTF-8 heuristic. The mode
+is part of operation idempotency: retrying an operation with another mode rejects.
+Writes, moves and logical deletes use the persisted binding and the caller's
+revision precondition. `--recursive` authorizes only the core-observed subtree;
+it never purges storage or expands remote deletion to unknown files. Offline
+commands persist their family envelopes atomically with their local mutation.
 
-A lost upload ACK retains the previously sealed wire. Run the same sync command
-again: the next process sends the exact persisted ciphertext with the same update
-ID. A failed receive never authorizes a cursor advance. A successfully committed
-receive may have pending filesystem publication; its persisted cursor is still
-valid, and `recover` retries publication. Native cursor/state CAS rejects concurrent
-stale workers. Partial progress before a later error remains durable; another
-invocation continues from persisted state without new local operations or echoing
-received updates into the authored queue.
+`once` pushes at most `max-push` native-authored envelopes and pulls at most
+`max-pages` bounded pages against a fixed relay high-water mark. Zero disables a
+phase. The existing bounded HTTP transport validates realm, epoch, contiguous
+sequence, response sizes and ACK identity before recording remote acceptance.
+The CLI authenticates a bounded page before sending each capability to the native
+family dispatcher. It does not parse CRDT updates or assemble chunk manifests.
 
-Success reports `server_accepted`, `locally_received`,
-`receive_projection_pending`, and `pull_snapshot_complete` separately. `synced`
-remains false and `all_file_sync_supported` remains false: completing a text pull
-snapshot does not complete full-vault sync. `local_command_outbox_unclassified`
-reports the older local command queue, which is not acknowledged by this text
-transport and can include already transported text commands. It must not be used
-as a count of missing server text updates. `pending_text_sample` is bounded at
-1,000 entries; inspect `pending_text_sample_complete` rather than assuming a full
-count. `status` is offline and never seals/uploads data. `sync_available: false`
-on ordinary status refers to full-vault sync; `fixture_text_sync_available: true`
-identifies this limited surface.
+The native transaction may durably receive an envelope whose Create, frontier,
+page or chunk is unavailable. That committed receipt and its dependency obligation
+may advance the shared cursor, without publishing an empty or partial file. Later
+dependency delivery resolves it. Failed transactions do not advance the cursor.
+Exact duplicate delivery is quiet, and received data never becomes authored echo.
+Lost upload ACKs retry the persisted winning ciphertext with the same UpdateId.
 
-Focused source fixtures in `tests/sync.rs` use a real loopback relay and repeated
-independent CLI executable processes. They cover offline concurrent edits,
-received-no-echo, lost remote ACK after real server commit, exact ciphertext retry,
-BOM/line-ending preservation, revoked credentials, wrong epoch, invalid encryption
-and protected credential inputs. Transport unit fixtures reject malformed page
-chains and excessive response bodies. Runtime results belong in the coordinator's
-execution ledger; no production or complete full-vault-sync claim follows from
-these fixtures. The conventional blocking HTTP client uses the
-[reqwest 0.13.5 client controls](https://docs.rs/reqwest/0.13.5/reqwest/blocking/struct.ClientBuilder.html)
-and [bounded Read response interface](https://docs.rs/reqwest/0.13.5/reqwest/blocking/struct.Response.html).
+Output separates `server_accepted`, `locally_received`, `locally_applied_updates`,
+`duplicate_receipts`, `dependency_pending_receipts`, `receive_projection_pending`
+and `pull_snapshot_complete`. Metadata under `family` reports the shared cursor,
+pending counts and current limits/graph usage. Counts declared as strings by the
+native API stay decimal strings. Pending envelope samples are capped at 1,000;
+inspect `pending_envelope_sample_complete`. `synced` stays false because a bounded
+sweep is not a global synchronization barrier. Physical publication may remain
+pending after durable receive; `recover` handles supported projection work.
+
+### File-size and memory boundaries
+
+The interim CLI/native fixture whole-file limit is 16 MiB. Input uses cap-plus-one
+reads and rejects oversize before a mutation. Arbitrary binary bytes and unknown
+extensions are supported within that limit. This is a temporary client bound,
+not an architectural requirement or a claim that larger-file work is finished.
+
+The protocol plaintext limit is 1 MiB **per envelope**, not per file. Native
+chunking uses at most 128 KiB raw chunks, manifest pages and a final content event;
+the CLI uploads one sealed envelope at a time. The portable manifest permits up
+to 64 MiB, but that does not mean the current client can materialize 64 MiB.
+Current chunk JSON numeric arrays can expand fourfold, and aggregate encoded graph
+history is capped at 128 MiB and 4,096 records. Even two worst-case 16 MiB versions
+approach that graph limit. Native transactions must reject exhausted bounds
+without partial receipts; status exposes current usage. No truncation is allowed.
+
+File imports, projection and graph rebuilds still use bounded whole buffers.
+Transporting chunks does not make those operations streaming. Supporting larger
+files requires core-owned incremental staging/hash validation, normalized chunk
+storage and bounded graph/materialization work; CLI must consume that native
+streaming interface rather than invent another storage path. Keep this work
+required before claiming unrestricted full-vault support.
+
+Source fixtures use actual standalone CLI processes and a real loopback relay.
+They cover offline text convergence, exact lost-ACK retry, protected credentials,
+revocation/epoch/authentication rejection, remotely created text, binary content
+larger than one envelope followed by move/delete, immutable create modes, and
+pending manifest/page/chunk restart resolution without partial publication or
+echo. Process stdout/stderr are drained concurrently with bounds and a watchdog.
+These current-v2 additions are source-only until the coordinator records an actual
+schema8 integrated test pass. They do not establish browser/Electron convergence
+or production enrollment. The HTTP client remains
+[reqwest 0.13.5](https://docs.rs/reqwest/0.13.5/reqwest/blocking/struct.ClientBuilder.html).

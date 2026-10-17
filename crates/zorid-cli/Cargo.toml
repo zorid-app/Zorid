@@ -17,6 +17,7 @@ zorid-store = { path = "../zorid-store" }
 clap = { version = "4.6", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 base64 = "0.22"
+zorid-file-sync = { path = "../zorid-file-sync" }
 zorid-client-sync = { path = "../zorid-client-sync" }
 zorid-sync-protocol = { path = "../zorid-sync-protocol" }
 zorid-crypto = { path = "../zorid-crypto" }

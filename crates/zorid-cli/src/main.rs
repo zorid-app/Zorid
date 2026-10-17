@@ -14,7 +14,7 @@ const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
 #[command(
     name = "zorid",
     version,
-    about = "Standalone Zorid vault access and explicit fixture text sync"
+    about = "Standalone Zorid vault access and explicit encrypted fixture sync"
 )]
 struct Args {
     /// Existing vault directory. Only init may initialize its private storage.
@@ -51,6 +51,12 @@ enum Command {
         /// Read bytes from FILE, or '-' for stdin. No text conversion.
         #[arg(long, value_name = "FILE")]
         input: PathBuf,
+        /// Explicit immutable text mode for a fresh enrolled family vault.
+        #[arg(long, conflicts_with = "binary")]
+        text: bool,
+        /// Explicit immutable binary mode for a fresh enrolled family vault.
+        #[arg(long, conflicts_with = "text")]
+        binary: bool,
     },
     /// Create one folder without replacing an existing path; parents must exist.
     Mkdir {
@@ -92,13 +98,31 @@ enum Command {
     },
     /// Resume pending filesystem publications without scanning the whole vault.
     Recover,
-    /// Not implemented in this slice.
-    Move,
-    /// Not implemented in this slice.
-    Delete,
+    /// Move an entry and its observed subtree without overwriting other entries.
+    Move {
+        path: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        expected_revision: String,
+        #[arg(long)]
+        operation_id: String,
+    },
+    /// Retain a logical tombstone and recoverable bytes; never purge files.
+    Delete {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        expected_revision: String,
+        #[arg(long)]
+        operation_id: String,
+        /// Delete exactly the core-observed subtree; required for nonempty folders.
+        #[arg(long)]
+        recursive: bool,
+    },
     /// Not implemented in this slice.
     Search,
-    /// Explicit loopback fixture text sync; full-vault/binary sync is not implemented.
+    /// Explicit current-v2 loopback fixture sync; file limits remain bounded.
     Sync {
         /// Owner-only credential JSON outside the vault; never pass secrets as flags.
         #[arg(long, value_name = "FILE")]
@@ -279,6 +303,15 @@ impl From<zorid_native::Error> for Failure {
                 };
                 Self::new(code, "Sync validation failed; preserve the existing state and exact pending work", exit)
             },
+            Store(zorid_store::StoreError::FileSync(error)) => {
+                use zorid_file_sync::Error::*;
+                let (code,exit)=match error {
+                    TooLarge=>("sync_limit",2),UnsupportedFormat=>("sync_unsupported_format",5),
+                    IdentityMismatch|DuplicateMismatch=>("sync_identity_mismatch",3),VersionConflict=>("sync_conflict",3),
+                    AuthenticationFailed=>("sync_authentication_failed",1),_ =>("sync_validation_failed",1),
+                };
+                Self::new(code,"Family sync validation failed; preserve existing state and exact pending work",exit)
+            },
             Store(zorid_store::StoreError::Protocol(error)) => protocol_failure(error),
             Store(zorid_store::StoreError::Crypto(zorid_crypto::CryptoError::Protocol(error))) => protocol_failure(error),
             Store(zorid_store::StoreError::Crypto(_)) => Self::new("sync_crypto_failed", "Encryption or authentication failed; pending work is retained", 1),
@@ -324,10 +357,7 @@ fn run(args: Args) -> Result<Output> {
     };
     use zorid_native::NativeVault;
 
-    if matches!(
-        args.command,
-        Command::Move | Command::Delete | Command::Search
-    ) {
+    if matches!(args.command, Command::Search) {
         return Err(Failure::new(
             "unsupported",
             "This command is not implemented in the initial CLI slice",
@@ -368,6 +398,7 @@ fn run(args: Args) -> Result<Output> {
             id,
             operation_id,
             input,
+            ..
         } => Some(MutationRequest {
             operation_id: OperationId::new(operation_id.clone())?,
             mutation: Mutation::Create {
@@ -403,6 +434,37 @@ fn run(args: Args) -> Result<Output> {
                 content: None,
             },
         }),
+        Command::Move {
+            path,
+            id,
+            expected_revision,
+            operation_id,
+        } => Some(MutationRequest {
+            operation_id: OperationId::new(operation_id.clone())?,
+            mutation: Mutation::Move {
+                id: EntryId::new(id.clone())?,
+                expected: Revision::new(expected_revision.clone())?,
+                path: VaultPath::new(path.clone())?,
+            },
+        }),
+        Command::Delete {
+            id,
+            expected_revision,
+            operation_id,
+            recursive,
+        } => Some(MutationRequest {
+            operation_id: OperationId::new(operation_id.clone())?,
+            mutation: Mutation::Delete {
+                id: EntryId::new(id.clone())?,
+                expected: Revision::new(expected_revision.clone())?,
+                recursive: *recursive,
+            },
+        }),
+        _ => None,
+    };
+    let create_mode = match &args.command {
+        Command::Create { text: true, .. } => Some(zorid_native::FamilyCreateMode::Text),
+        Command::Create { binary: true, .. } => Some(zorid_native::FamilyCreateMode::Binary),
         _ => None,
     };
     // The metadata preflight above provides a useful missing-vault error only.
@@ -418,12 +480,12 @@ fn run(args: Args) -> Result<Output> {
             command,
         } => sync::run(&mut vault, &args.vault, &credentials, command)?,
         Command::Init => {
-            json!({"initialized":true,"imported_existing_files":false,"max_file_bytes":MAX_FILE_BYTES,"sync_available":false,"fixture_text_sync_available":true})
+            json!({"initialized":true,"imported_existing_files":false,"max_file_bytes":MAX_FILE_BYTES,"sync_available":false,"fixture_family_sync_available":true})
         }
         Command::Status => {
             let status = vault.status()?;
             // Keep status limited to operational counts, without recovery bodies.
-            json!({"pending_outbox":status.pending_outbox,"pending_projection":status.pending_projection,"projection_attempts":status.attempts.len(),"external_observations":status.observations.len(),"max_file_bytes":MAX_FILE_BYTES,"sync_available":false,"fixture_text_sync_available":true})
+            json!({"pending_outbox":status.pending_outbox,"pending_projection":status.pending_projection,"projection_attempts":status.attempts.len(),"external_observations":status.observations.len(),"max_file_bytes":MAX_FILE_BYTES,"sync_available":false,"fixture_family_sync_available":true})
         }
         Command::List => json!({"entries":vault.list()?}),
         Command::Read { id, raw } => {
@@ -438,8 +500,17 @@ fn run(args: Args) -> Result<Output> {
             }
             json!({"entry":entry.state,"encoding":"base64","bytes":STANDARD.encode(bytes)})
         }
-        Command::Create { .. } | Command::Write { .. } | Command::Mkdir { .. } => {
-            let outcome = vault.apply(request.as_ref().expect("mutation request prepared"))?;
+        Command::Create { .. }
+        | Command::Write { .. }
+        | Command::Mkdir { .. }
+        | Command::Move { .. }
+        | Command::Delete { .. } => {
+            let request = request.as_ref().expect("mutation request prepared");
+            let outcome = if create_mode.is_some() {
+                vault.family_apply(request, create_mode)?
+            } else {
+                vault.apply(request)?
+            };
             json!({"durable_local_commit":true,"synced":false,"commit":outcome.commit,"projection":projection_json(outcome.projection)})
         }
         Command::Reconcile { paths } => {
@@ -474,7 +545,7 @@ fn run(args: Args) -> Result<Output> {
             let issues: Vec<_> = report.issues.into_iter().map(|issue| json!({"path":issue.path,"code":"scan_issue","message":"This path could not be fully reconciled; data is preserved"})).collect();
             json!({"complete":report.run.complete,"run":{"scan_id":report.run.scan_id,"max_entries":report.run.max_entries,"finished":report.run.finished,"complete":report.run.complete,"observed":report.run.observed,"imported":report.run.imported,"issue":report.run.issue.map(|_| "scan_incomplete")},"issues":issues,"missing":report.missing,"missing_are_deletions":false,"limits":limits,"synced":false})
         }
-        Command::Move | Command::Delete | Command::Search => unreachable!(),
+        Command::Search => unreachable!(),
     };
     Ok(Output::Json(value))
 }
