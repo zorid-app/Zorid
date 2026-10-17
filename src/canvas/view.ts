@@ -6,6 +6,8 @@ import { icon } from '../ui/dom.ts';
 import { renderMarkdown } from '../ui/markdown.ts';
 import type { EmbedRequest } from '../ui/markdown.ts';
 import { destroyMarkdown } from '../ui/markdown-lifecycle.ts';
+import { canvasTaskSource, createCanvasMarkdownCard } from './markdown-card.ts';
+import type { CanvasMarkdownCard, CanvasMarkdownSession } from './markdown-card.ts';
 
 export interface CanvasViewOptions {
   document: CanvasDocument;
@@ -16,6 +18,8 @@ export interface CanvasViewOptions {
   openMarkdownLink?(target: string, kind: 'wiki' | 'markdown'): void | Promise<void>;
   /** Each returned owner is destroyed once when its card refreshes or closes. */
   renderMarkdownEmbed?(request: EmbedRequest, nodeId: string): { element: HTMLElement; destroy(): void };
+  /** Shared NoteBuffer lease for an existing Markdown file, never Canvas JSON. */
+  openMarkdownFile?(path: string): Promise<CanvasMarkdownSession>;
   openFileInNewTab?(path: string): void | Promise<void>;
   copyText?(text: string): void | Promise<void>;
   onError?(error: unknown): void;
@@ -78,6 +82,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   const undoStack: string[] = [], redoStack: string[] = [], selectedNodes = new Set<string>(), selectedEdges = new Set<string>();
   const nodeEls = new Map<string, HTMLElement>(), edgeEls = new Map<string, { group: SVGGElement; path: SVGPathElement; hit: SVGPathElement; label: HTMLDivElement; arrows: SVGGElement[] }>();
   const markdownOwners = new Set<() => void>();
+  const fileCards = new Map<string, { file: string; subpath: string; card: CanvasMarkdownCard }>();
   let drag: { id: number; mode: 'move' | 'pan' | 'select'; startX: number; startY: number; x: number; y: number; dx: number; dy: number; positions: Map<string, { x: number; y: number }>; prior: Set<string> } | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let editorOriginal = '';
@@ -173,9 +178,38 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   function paintSelection(): void {
     for (const [id, item] of nodeEls) { item.classList.toggle('is-selected', selectedNodes.has(id)); item.setAttribute('aria-selected', String(selectedNodes.has(id))); }
     for (const [id, item] of edgeEls) item.group.classList.toggle('is-selected', selectedEdges.has(id));
+    for (const [id, entry] of fileCards) if (!selectedNodes.has(id)) void entry.card.deactivate().catch(report);
+  }
+  function markdownFile(node: CanvasNode): boolean { return node.type === 'file' && /\.md$/i.test(String(node.file)) && !!options.openMarkdownFile; }
+  function assertCanReplaceCards(next: CanvasDocument): void {
+    const projected = projectCanvas(next);
+    for (const [id, entry] of fileCards) {
+      const node = projected.nodes.get(id)?.data;
+      if ((!node || !markdownFile(node) || node.file !== entry.file || String(node.subpath ?? '') !== entry.subpath) && entry.card.hasPendingChanges()) {
+        throw new Error('The note card has unsaved changes. Save it before removing or replacing the card.');
+      }
+    }
+  }
+  function fileCard(node: CanvasNode): CanvasMarkdownCard {
+    const file = String(node.file), subpath = String(node.subpath ?? '');
+    const previous = fileCards.get(node.id);
+    if (previous?.file === file && previous.subpath === subpath) return previous.card;
+    previous?.card.destroy();
+    const entry = { file, subpath, card: undefined as unknown as CanvasMarkdownCard };
+    entry.card = createCanvasMarkdownCard(dom, {
+      load: () => options.openMarkdownFile!(file), subpath,
+      isCurrent: () => !closed && fileCards.get(node.id) === entry,
+      onError: report,
+      onEditingChange(editing) {
+        if (closed || fileCards.get(node.id) !== entry) return;
+        menuVersion++; nodeEls.get(node.id)?.classList.toggle('is-editing', editing);
+        if (editing) { selectedNodes.clear(); selectedEdges.clear(); selectedNodes.add(node.id); paintSelection(); }
+      },
+    });
+    fileCards.set(node.id, entry); return entry.card;
   }
   function ownsInput(target: Element): boolean {
-    return !!target.closest('button,input,textarea,select,a,video,audio') || hasEditableOwner(target);
+    return !!target.closest('button,input,textarea,select,a,video,audio,.zorid-canvas-note-editor') || hasEditableOwner(target);
   }
   function hasEditableOwner(target: Element): boolean {
     // Resolve inherited editable state, including plaintext-only and explicit
@@ -220,7 +254,14 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       if (anchor && options.openLink) { event.preventDefault(); event.stopPropagation(); invoke(() => options.openLink!(anchor.href)); }
     }, true);
     try {
-      renderMarkdown(content, String(node.text ?? ''), open, undefined, {
+      renderMarkdown(content, String(node.text ?? ''), open, (line, checked) => {
+        if (!current()) return;
+        const text = canvasTaskSource(String(node.text ?? ''), line, checked);
+        commit(draft => {
+          const index = recordIndex(draft.nodes, original);
+          draft.setRoot('nodes', draft.nodes.map((raw, i) => i === index ? { ...raw, text } : raw));
+        });
+      }, {
         properties: false,
         embed: options.renderMarkdownEmbed ? request => {
           const embed = options.renderMarkdownEmbed!(request, node.id); embeds.push(embed); return embed.element;
@@ -233,6 +274,10 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   function render(): void {
     menuVersion++;
     finishEditing?.(false); clearMarkdown(); projection = projectCanvas(document); renderedSource = document.toString();
+    for (const [id, entry] of fileCards) {
+      const node = projection.nodes.get(id)?.data;
+      if (!node || !markdownFile(node) || node.file !== entry.file || String(node.subpath ?? '') !== entry.subpath) { entry.card.destroy(); fileCards.delete(id); }
+    }
     for (const item of nodeEls.values()) item.remove(); for (const item of edgeEls.values()) { item.group.remove(); item.label.remove(); } nodeEls.clear(); edgeEls.clear();
     for (const id of selectedNodes) if (!projection.nodes.has(id)) selectedNodes.delete(id);
     for (const id of selectedEdges) if (!projection.edges.has(id)) selectedEdges.delete(id);
@@ -247,7 +292,14 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         label.style.setProperty('--zc-label-foreground', groupForeground(node.color));
         item.append(label); item.setAttribute('aria-label', `Group: ${label.textContent}`);
       }
-      else {
+      else if (markdownFile(node)) {
+        const card = fileCard(node); content.append(card.element); item.append(card.toolbar); item.classList.toggle('is-editing', card.isEditing());
+        item.setAttribute('aria-label', `Note: ${String(node.file)}`);
+        const label = dom.createElement('div'); label.className = 'zorid-canvas-node-label';
+        label.textContent = String(node.file).split('/').at(-1)!.replace(/\.md$/i, '') + (node.subpath ? ` › ${String(node.subpath).replace(/^#/, '')}` : '');
+        label.ondblclick = event => { event.preventDefault(); event.stopPropagation(); invoke(options.openFile ? () => options.openFile!(String(node.file), typeof node.subpath === 'string' ? node.subpath : undefined) : undefined); };
+        item.append(label);
+      } else {
         const open = dom.createElement('button'); open.type = 'button'; open.className = 'zorid-canvas-open';
         open.textContent = String(node.type === 'file' ? node.file ?? '' : node.url ?? ''); open.title = open.textContent;
         open.onclick = () => node.type === 'file' ? invoke(options.openFile ? () => options.openFile!(String(node.file), typeof node.subpath === 'string' ? node.subpath : undefined) : undefined) : invoke(options.openLink ? () => options.openLink!(String(node.url)) : undefined);
@@ -257,7 +309,11 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         item.append(label);
       }
       frame.append(content); item.append(frame); world.append(item); nodeEls.set(id, item); drawNode(id);
-      item.ondblclick = event => { if (!event.defaultPrevented && node.type === 'text' && nodeEls.get(id) === item && !ownsInput(event.target as Element)) { event.preventDefault(); startEditing(id); } };
+      item.ondblclick = event => {
+        if (event.defaultPrevented || nodeEls.get(id) !== item || ownsInput(event.target as Element)) return;
+        if (markdownFile(node)) { event.preventDefault(); selectedNodes.clear(); selectedEdges.clear(); selectedNodes.add(id); paintSelection(); invoke(() => fileCards.get(id)!.card.activate({ x: event.clientX, y: event.clientY })); }
+        else if (node.type === 'text') { event.preventDefault(); startEditing(id); }
+      };
     }
     for (const [id, edge] of projection.edges) {
       const group = dom.createElementNS(svgNS, 'g'), path = dom.createElementNS(svgNS, 'path'), hit = dom.createElementNS(svgNS, 'path'), label = dom.createElement('div'), arrows: SVGGElement[] = [];
@@ -292,6 +348,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
     if (!closed) {
       finishEditing?.(true);
       if (editorFailure) throw editorFailure;
+      for (const entry of fileCards.values()) await entry.card.flush();
       // Retry only a failure already known on entry, not a first failure that
       // occurs while this flush waits. Concurrent flushes share that retry.
       if (failedSave && completedSaveVersion === saveVersion) publish();
@@ -303,16 +360,18 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   function commit(operation: (draft: CanvasDocument) => void): void {
     if (closed) return;
     const before = document.toString();
-    try { document.transaction(operation); } catch (error) { report(error); return; }
+    try { document.transaction(draft => { operation(draft); assertCanReplaceCards(draft); }); } catch (error) { report(error); return; }
     if (before === document.toString()) return;
     undoStack.push(before); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; render(); publish();
   }
   function undo(): void {
     if (closed || editor || drag || !undoStack.length) return;
+    try { assertCanReplaceCards(CanvasDocument.parse(undoStack.at(-1)!)); } catch (error) { report(error); return; }
     redoStack.push(document.toString()); document.replaceSource(undoStack.pop()!); render(); publish();
   }
   function redo(): void {
     if (closed || editor || drag || !redoStack.length) return;
+    try { assertCanReplaceCards(CanvasDocument.parse(redoStack.at(-1)!)); } catch (error) { report(error); return; }
     undoStack.push(document.toString()); document.replaceSource(redoStack.pop()!); render(); publish();
   }
   function openValueEditor(host: HTMLElement, label: string, value: string, change: (draft: CanvasDocument, value: string) => void, cleanup?: () => void, afterSave?: () => void): void {
@@ -421,7 +480,9 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   viewport.addEventListener('pointerdown', pointerDown); viewport.addEventListener('pointermove', pointerMove);
   viewport.addEventListener('pointerup', event => finishDrag(event)); viewport.addEventListener('pointercancel', event => finishDrag(event, true)); viewport.addEventListener('lostpointercapture', event => finishDrag(event, true));
   viewport.addEventListener('wheel', event => {
-    if (closed || editor || drag || event.defaultPrevented || ownsInput(event.target as Element)) return; event.preventDefault();
+    if (closed || editor || drag || event.defaultPrevented || ownsInput(event.target as Element)) return;
+    if ((event.target as Element).closest('.zorid-canvas-markdown-card') && !event.ctrlKey && !event.metaKey && !space) return;
+    event.preventDefault();
     const factor = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 800 : 1;
     if (event.ctrlKey || event.metaKey || space) { const rect = viewport.getBoundingClientRect(); zoom(scale * Math.pow(2, -event.deltaY * factor / 300), event.clientX - rect.left, event.clientY - rect.top); }
     else { tx -= (event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX) * factor * 0.93; if (!event.shiftKey || event.deltaX) ty -= event.deltaY * factor * 0.93; transform(); }
@@ -519,6 +580,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
         if (node.type === 'file' && /\.md$/i.test(String(node.file)) && options.openFileInNewTab) {
           separator(); add('open-new-tab', 'Open in new tab', () => options.openFileInNewTab!(String(node.file)));
         }
+        if (markdownFile(node) && fileCards.get(nodeId)?.card.isEditable()) add('edit-note', 'Edit', () => fileCards.get(nodeId)!.card.activate());
         separator(); add('remove', 'Remove', removeSelection);
       } else if (edge && edgeId) {
         add('edit-label', 'Edit label', () => {
@@ -558,7 +620,7 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
   render();
   return {
     element, get document() { return document; }, undo, redo, flush,
-    hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave,
+    hasPendingChanges: () => !!editor && editor.value !== editorOriginal || saveVersion > completedSaveVersion || !!failedSave || [...fileCards.values()].some(entry => entry.card.hasPendingChanges()),
     setDocument(next) {
       // File watchers also report our own completed writes. Replacing identical
       // source would discard undo/redo, active drafts and rich renderer owners.
@@ -568,8 +630,9 @@ export function createCanvasView(parent: HTMLElement, options: CanvasViewOptions
       // the rendered projection already represents this source.
       const source = next.toString();
       if (source === renderedSource && source === document.toString()) return;
+      assertCanReplaceCards(next);
       finishEditing?.(false); clearDrag(); document = next; undoStack.length = redoStack.length = 0; selectedNodes.clear(); selectedEdges.clear(); render();
     },
-    destroy() { if (closed) return; closed = true; finishEditing?.(false); clearDrag(); clearMarkdown(); win.removeEventListener('blur', windowBlur); element.remove(); },
+    destroy() { if (closed) return; closed = true; finishEditing?.(false); clearDrag(); clearMarkdown(); for (const entry of fileCards.values()) entry.card.destroy(); fileCards.clear(); win.removeEventListener('blur', windowBlur); element.remove(); },
   };
 }
