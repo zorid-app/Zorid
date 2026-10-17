@@ -1478,6 +1478,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyvec"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
 name = "tokio"
 version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1688,6 +1694,15 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "universal-hash"
@@ -1961,6 +1976,7 @@ dependencies = [
  "zorid-client-sync",
  "zorid-core",
  "zorid-crypto",
+ "zorid-document",
  "zorid-file-sync",
  "zorid-native",
  "zorid-native-sync",
@@ -2053,6 +2069,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zorid-index"
+version = "0.1.0"
+dependencies = [
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha2",
+ "unicode-normalization",
+ "zorid-core",
+ "zorid-document",
+]
+
+[[package]]
 name = "zorid-native"
 version = "0.1.0"
 dependencies = [
@@ -2113,6 +2142,7 @@ dependencies = [
  "zorid-core",
  "zorid-crypto",
  "zorid-file-sync",
+ "zorid-index",
  "zorid-sync-protocol",
 ]
 
