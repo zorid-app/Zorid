@@ -38,6 +38,24 @@ fn index_error(error: zorid_index::IndexError) -> ExpressionDiagnostic {
     };
     ExpressionDiagnostic::new(code, error.to_string())
 }
+impl From<zorid_index::IndexError> for ExpressionDiagnostic {
+    fn from(error: zorid_index::IndexError) -> Self {
+        index_error(error)
+    }
+}
+fn charge(
+    remaining: &mut usize,
+    cancellation: Option<&crate::OperationCancellation>,
+    work: usize,
+) -> Result<(), ExpressionDiagnostic> {
+    if cancellation.is_some_and(|c| c.stop_reason().is_some()) {
+        return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+    }
+    *remaining = remaining.checked_sub(work).ok_or_else(|| {
+        ExpressionDiagnostic::new("budget", "Generation preparation exceeds query work budget")
+    })?;
+    Ok(())
+}
 impl BaseSnapshot {
     /// Metadata, paths and graph derive solely from this immutable generation.
     /// Facts may add only host file presentation fields with exact witnesses.
@@ -45,11 +63,23 @@ impl BaseSnapshot {
         generation: &Generation,
         facts: &[FilePresentationFacts],
     ) -> Result<Self, ExpressionDiagnostic> {
+        let mut remaining = crate::MAX_QUERY_STEPS;
+        Self::from_generation_checked(generation, facts, &mut |work| {
+            charge(&mut remaining, None, work)
+        })
+    }
+    fn from_generation_checked(
+        generation: &Generation,
+        facts: &[FilePresentationFacts],
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
+    ) -> Result<Self, ExpressionDiagnostic> {
+        check(0)?;
         if facts.len() > crate::MAX_QUERY_SCANNED {
             return Err(ExpressionDiagnostic::new("budget", "Too many file facts"));
         }
         let mut by_id = HashMap::new();
         for fact in facts {
+            check(1)?;
             let record = generation.record(&fact.witness.entry_id).ok_or_else(|| {
                 ExpressionDiagnostic::new("stale-source", "File fact is absent from generation")
             })?;
@@ -69,6 +99,11 @@ impl BaseSnapshot {
             crate::MAX_BASE_REQUEST_BYTES,
         )?;
         for record in generation.records() {
+            check(
+                1 + record
+                    .metadata()
+                    .map_or(0, |m| m.properties.len().saturating_mul(2) + m.tags.len()),
+            )?;
             if records.len() >= crate::MAX_QUERY_SCANNED {
                 return Err(ExpressionDiagnostic::new(
                     "budget",
@@ -144,15 +179,15 @@ impl BaseSnapshot {
             }
             records.push(row);
         }
-        let relationships = ResolutionView::new(generation)
-            .snapshot(
-                MAX_RELATIONSHIP_EDGES,
-                crate::MAX_BASE_REQUEST_BYTES
-                    .saturating_sub(bytes)
-                    .saturating_add(4)
-                    .min(crate::MAX_BASE_REQUEST_BYTES),
-            )
-            .map_err(index_error)?;
+        let relationships = ResolutionView::snapshot_checked(
+            generation,
+            MAX_RELATIONSHIP_EDGES,
+            crate::MAX_BASE_REQUEST_BYTES
+                .saturating_sub(bytes)
+                .saturating_add(4)
+                .min(crate::MAX_BASE_REQUEST_BYTES),
+            check,
+        )?;
         Ok(Self {
             snapshot_id: generation.id().clone(),
             records,
@@ -208,16 +243,21 @@ pub fn query_generation(
             return Err(budget("Generation preparation exceeds query budget"));
         }
     }
-    let snapshot = BaseSnapshot::from_generation(generation, facts)?;
-    if options
-        .evaluation
-        .cancellation
-        .as_ref()
-        .is_some_and(|c| c.stop_reason().is_some())
-    {
-        return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
-    }
-    crate::query_base(program, &snapshot, options)
+    let mut remaining = options.max_steps;
+    let snapshot = BaseSnapshot::from_generation_checked(generation, facts, &mut |work| {
+        charge(
+            &mut remaining,
+            options.evaluation.cancellation.as_ref(),
+            work,
+        )
+    })?;
+    let used = options.max_steps - remaining;
+    let mut invocation = options.clone();
+    invocation.max_steps = remaining;
+    let mut result = crate::query_base(program, &snapshot, &invocation)?;
+    result.steps_used = result.steps_used.saturating_add(used);
+    crate::encoded_size(&result, options.max_output_bytes)?;
+    Ok(result)
 }
 #[derive(Default)]
 struct FileRelations {
@@ -235,10 +275,12 @@ impl<'a> PreparedRelationships<'a> {
     pub(crate) fn new(
         graph: &'a ResolutionSnapshot,
         issues: &[MetadataIssue],
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
     ) -> Result<Self, ExpressionDiagnostic> {
         let mut files: HashMap<EntryId, FileRelations> = HashMap::new();
         let mut incoming = HashSet::new();
         for edge in graph.edges() {
+            check(1)?;
             let target = edge.target().map(|entry| RecordWitness {
                 entry_id: entry.id.clone(),
                 revision: entry.revision.clone(),
@@ -278,7 +320,7 @@ impl<'a> PreparedRelationships<'a> {
         // Edge order is shared namespace path/ID order then parser occurrence.
         Ok(Self {
             graph,
-            resolver: graph.resolver(),
+            resolver: graph.resolver_checked(check)?,
             files,
             unavailable: issues
                 .iter()
@@ -309,6 +351,7 @@ impl<'a> PreparedRelationships<'a> {
         &self,
         file: &BasesFile,
         target: &str,
+        check: &mut impl FnMut(usize) -> Result<(), ExpressionDiagnostic>,
     ) -> Result<bool, ExpressionDiagnostic> {
         if !self.complete() {
             return Err(ExpressionDiagnostic::new(
@@ -324,8 +367,7 @@ impl<'a> PreparedRelationships<'a> {
         }
         let candidates = self
             .resolver
-            .candidates(&source.entry_id, target)
-            .map_err(index_error)?;
+            .candidates_checked(&source.entry_id, target, check)?;
         let selected = candidates.first().map(|entry| &entry.id);
         Ok(selected.is_some_and(|id| {
             file.links

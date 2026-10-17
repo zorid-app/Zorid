@@ -1645,7 +1645,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn file_method(
-        &self,
+        &mut self,
         file: &BasesFile,
         name: &str,
         arguments: &[RuntimeValue],
@@ -1662,10 +1662,26 @@ impl<'a> Evaluator<'a> {
                         "unavailable\0Relationship metadata not supplied".into(),
                     );
                 };
-                match graph.has_link(
-                    file,
-                    &arguments.first().map(plain_string).unwrap_or_default(),
-                ) {
+                let target = arguments.first().map(plain_string).unwrap_or_default();
+                let mut check = |work: usize| {
+                    if self
+                        .context
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(|c| c.stop_reason().is_some())
+                    {
+                        return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+                    }
+                    self.remaining_work =
+                        self.remaining_work.checked_sub(work).ok_or_else(|| {
+                            ExpressionDiagnostic::new(
+                                "budget",
+                                "Relationship resolver exceeds work budget",
+                            )
+                        })?;
+                    Ok(())
+                };
+                match graph.has_link(file, &target, &mut check) {
                     Ok(value) => RuntimeValue::Bool(value),
                     Err(error) => RuntimeValue::Error(format!("{}\0{}", error.code, error.message)),
                 }
@@ -1710,7 +1726,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn link_method(
-        &self,
+        &mut self,
         link: &BasesLink,
         name: &str,
         arguments: &[RuntimeValue],

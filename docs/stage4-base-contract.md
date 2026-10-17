@@ -286,3 +286,12 @@ generation and available property extraction. Access to unavailable properties i
 an `unavailable` error, so a filter cannot silently reinterpret failed extraction
 as an ordinary missing property. Binary exclusions remain distinct from unreadable
 or resource-excluded source.
+
+The cancellation gap above is closed in the current source by the Index-owned
+`ResolutionView::snapshot_checked` and `ResolutionSnapshot::resolver_checked`
+seams. Generation construction, namespace projection, candidate scans and graph
+occurrences charge one shared operation budget and check local Rust cancellation;
+`file.hasLink` uses `candidates_checked` against its expression budget. Factory
+preparation steps are included in the returned query total. These callbacks are
+private Rust operation guards, never serialized capabilities or JavaScript/plugin
+hooks. The canonical compiled/browser proof still belongs to the coordinator.

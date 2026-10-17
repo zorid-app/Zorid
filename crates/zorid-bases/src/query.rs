@@ -364,14 +364,32 @@ pub fn query_base(
     if graph_work > options.max_steps {
         return Err(budget("Relationships exceed query work budget"));
     }
+    let mut graph_preparation = 0usize;
+    let mut check = |work: usize| {
+        if options
+            .evaluation
+            .cancellation
+            .as_ref()
+            .is_some_and(|c| c.stop_reason().is_some())
+        {
+            return Err(ExpressionDiagnostic::new("cancelled", "Query cancelled"));
+        }
+        graph_preparation = graph_preparation.saturating_add(work);
+        if graph_preparation > options.max_steps {
+            return Err(budget("Relationship preparation exceeds query work budget"));
+        }
+        Ok(())
+    };
     let relationships = snapshot
         .relationships
         .as_ref()
-        .map(|graph| crate::graph::PreparedRelationships::new(graph, &snapshot.metadata_issues))
+        .map(|graph| {
+            crate::graph::PreparedRelationships::new(graph, &snapshot.metadata_issues, &mut check)
+        })
         .transpose()?;
     let relationship_available = relationships.as_ref().is_some_and(|graph| graph.complete());
     let mut discovery = 0usize;
-    let mut preparation_work = graph_work;
+    let mut preparation_work = graph_preparation;
     let mut counts = QueryCounts {
         scanned: snapshot.records.len(),
         ..Default::default()
@@ -775,12 +793,6 @@ pub fn query_base(
                 .iter()
                 .any(|i| i.properties_unavailable),
     };
-    if serde_json::to_vec(&result)
-        .map_err(|error| ExpressionDiagnostic::new("output", error.to_string()))?
-        .len()
-        > options.max_output_bytes
-    {
-        return Err(budget("Encoded result exceeds byte budget"));
-    }
+    crate::encoded_size(&result, options.max_output_bytes)?;
     Ok(result)
 }
