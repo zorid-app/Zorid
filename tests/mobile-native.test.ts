@@ -786,3 +786,34 @@ test('successful switch cannot replay pending toolbar enable or accept later act
   f.action({action:'bold'});gate.resolve();await state;await until(()=>f.actionRemovals===1);assert.equal(calls,0);assert.deepEqual(f.editorStates.at(-1),disabledEditor);
   const before=f.editorStates.length;await v.nativeEditor.setState(enabledEditor);assert.equal(f.editorStates.length,before);await v.release!();assert.equal(f.closes,0);
 });
+
+test('negative lifecycle ACK replays latest workspace-restored toolbar state without another edit',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),negativeGate=deferred(),restored=deferred();let pending=false,applied={...disabledEditor},calls=0;
+  f.onEditorState(async state=>{if(pending&&state.focused)throw new Error('native lifecycle still pending');applied={...state};});
+  f.onAck(async input=>{if(!input.ok){await negativeGate.promise;pending=false;}});
+  v.nativeEditor.subscribe(()=>{calls++;});await v.nativeEditor.setState(enabledEditor);const before=f.editorStates.length;
+  const actual={...enabledEditor,canUndo:false};
+  v.mobileLifecycle.subscribe(async()=>{try{throw new Error('workspace flush rejected');}finally{await v.nativeEditor.setState(actual);restored.resolve();}});
+  pending=true;f.emit('switchVault');await restored.promise;await until(()=>f.acks.some(a=>!a.ok));await until(()=>applied.focused===false);
+  assert.equal(f.editorStates.slice(before).some(s=>s.focused),false); // Restoration cannot race the pending native ACK.
+  negativeGate.resolve();await until(()=>applied.focused===true);assert.deepEqual(applied,actual);
+  f.action({action:'bold'});await until(()=>calls===1);await v.release!();
+});
+
+test('negative lifecycle restoration cannot enable toolbar after release starts',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred(),restored=deferred();
+  v.nativeEditor.subscribe(()=>{});await v.nativeEditor.setState(enabledEditor);const before=f.editorStates.length;
+  f.onAck(async input=>{if(!input.ok)await gate.promise;});
+  v.mobileLifecycle.subscribe(async()=>{await v.nativeEditor.setState(enabledEditor);restored.resolve();throw new Error('flush failed');});
+  f.emit('switchVault');await restored.promise;await until(()=>f.acks.some(a=>!a.ok));const release=v.release!();gate.resolve();await release;
+  assert.equal(f.editorStates.slice(before).some(s=>s.focused),false);assert.equal(f.actionRemovals,1);
+});
+
+test('successful background does not replay handler restoration until a fresh foreground state',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),done=deferred();let appActive=true,applied={...disabledEditor};
+  f.onEditorState(async state=>{if(state.focused&&!appActive)throw new Error('native app inactive');applied={...state};});
+  v.nativeEditor.subscribe(()=>{});await v.nativeEditor.setState(enabledEditor);const before=f.editorStates.length;
+  v.mobileLifecycle.subscribe(async(_reason,ack)=>{try{await ack();}finally{await v.nativeEditor.setState(enabledEditor);done.resolve();}});
+  appActive=false;f.emit('background');await done.promise;await until(()=>applied.focused===false);await new Promise<void>(r=>setImmediate(r));
+  assert.equal(f.editorStates.slice(before).some(s=>s.focused),false);appActive=true;await v.nativeEditor.setState(enabledEditor);assert.deepEqual(applied,enabledEditor);await v.release!();
+});

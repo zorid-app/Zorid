@@ -120,7 +120,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     latest: NativeEditorState; accepted: NativeEditorState; version: number;
     flushing?: Promise<void>; callbacks: Set<Promise<void>>;
   };
-  let editorSubscription: EditorSubscription | undefined;
+  let editorSubscription: EditorSubscription | undefined, editorLifecyclePaused = false;
   const editorRetirements = new Set<Promise<void>>();
   function editorQueue<T>(action: () => Promise<T>): Promise<T> {
     const task = editorTail.then(action); editorTail = task.catch(() => {}); return task;
@@ -137,10 +137,11 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
         await sub.ready;
         let sent = -1;
         while (sub.handle && editorAlive(sub) && sent !== sub.version) {
+          if (lifecycleTask || editorLifecyclePaused) { sub.accepted = disabledEditorState; break; }
           sent = sub.version; const state = sub.latest;
           try {
             await bridge.editorState(state);
-            if (editorAlive(sub)) sub.accepted = state;
+            if (editorAlive(sub)) sub.accepted = lifecycleTask || editorLifecyclePaused ? disabledEditorState : state;
           } catch { /* Optional toolbar failure never fails a save or poisons its queue. */ }
         }
       } finally { sub.flushing = undefined; }
@@ -172,6 +173,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
         || ![input.focused,input.editable,input.canUndo,input.canRedo].every(v => typeof v === 'boolean')) throw fail('invalid_editor_state');
       const sub = editorSubscription;
       if (!sub || !editorAlive(sub)) return;
+      if (!lifecycleTask) editorLifecyclePaused = false;
       sub.latest = Object.freeze({ focused: input.focused, editable: input.editable, canUndo: input.canUndo, canRedo: input.canRedo }); sub.version++;
       await publishEditorState(sub);
     },
@@ -206,8 +208,18 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     if (lifecycleTask || lifecycleStopped || closed || closing || releasePromise || !['background','switchVault'].includes(event.reason)) { void rejectLifecycle(event.id); return; }
     lifecycleBusyId = event.id;
     const handler = lifecycleHandler;
-    // Background/switch presentation is disabled without joining the save path.
-    void nativeEditor.setState(disabledEditorState).catch(() => {});
+    // Pause publication without replacing the workspace's latest state. A
+    // handler may await setState while native still requires a negative ACK.
+    editorLifecyclePaused = true;
+    const editor = editorSubscription;
+    if (editor) {
+      editor.accepted = disabledEditorState;
+      void editorQueue(async () => {
+        await editor.ready;
+        if (editor.handle && editorAlive(editor)) { try { await bridge.editorState(disabledEditorState); } catch { /* Best effort. */ } }
+      });
+    }
+    let lifecycleApproved = false;
     const task = Promise.resolve().then(async () => {
       let approved = false, finished = false, ackPromise: Promise<void> | undefined;
       const ack = (): Promise<void> => {
@@ -217,7 +229,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
           // Native owns the deadline and rejects stale_lifecycle without switching.
           await Promise.allSettled([...(editorSubscription?.callbacks ?? [])]);
           await bridge.lifecycleAck({ id: event.id, ok: true });
-          approved = true;
+          approved = true; lifecycleApproved = true;
           if (event.reason === 'switchVault') { stopNativeEditor(); stopPolling(); closed = true; leaseReleased = true; }
         })();
         void ackPromise.catch(() => {}); // An unawaited ACK must not create an unhandled rejection.
@@ -236,7 +248,16 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     });
     lifecycleTask = task;
     void task.finally(() => {
-      if (lifecycleTask === task) { lifecycleTask = undefined; lifecycleBusyId = undefined; }
+      if (lifecycleTask === task) {
+        lifecycleTask = undefined; lifecycleBusyId = undefined;
+        // Replay only after the negative ACK settles. Never await lifecycleTask
+        // inside the presentation queue: the handler may itself await setState.
+        const sub = editorSubscription;
+        if (!lifecycleApproved && sub && editorAlive(sub)) {
+          editorLifecyclePaused = false; sub.version++;
+          void publishEditorState(sub);
+        }
+      }
       if (closed) void stopLifecycle().catch(() => {});
     });
   }
