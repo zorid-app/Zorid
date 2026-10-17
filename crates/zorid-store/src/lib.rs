@@ -4,6 +4,18 @@
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 mod checkpoints;
+mod family_commands;
+mod family_ingress;
+mod family_materialization;
+pub use family_materialization::{FamilyContentWitness, FamilyMaterialization, FamilyPublication};
+mod family_ledger;
+mod family_store;
+mod file_state;
+pub use family_store::{
+    FamilyAuthoredStatus, FamilyCreateMode, FamilyEnvelopeOrigin, FamilyEnvelopeStatus,
+    FamilyLimits, FamilyPayloadKind, FamilyReceiveCommit, FamilyScope, FamilyStatus,
+    FAMILY_MAX_FILE_BYTES,
+};
 mod directory;
 pub use checkpoints::{
     Checkpoint, CheckpointError, CheckpointMetadata, CheckpointPage, CheckpointScope,
@@ -19,8 +31,12 @@ pub use host_intents::{
     HostIntentAcknowledgment, HostIntentPage, HostIntentRef, HostIntentState, HostIntentView,
     HostMutationKind, HostProjectionState, HostRejection, HostRejectionCode,
 };
+mod physical_bindings;
 mod presentation;
 mod projection;
+pub use physical_bindings::{
+    ObservationPhysical, PhysicalBinding, PhysicalIdentity, PublicationKind, PublicationProof,
+};
 mod projection_jobs;
 pub use presentation::{
     ChangeOrigin, ChangePage, EntryPresentation, ListingSnapshot, LocalChange, PresentedEntry,
@@ -40,29 +56,48 @@ use zorid_core::{
     IdempotencyCheck, Mutation, MutationRequest, RecordedOperation, Revision,
 };
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const APPLICATION_ID: i64 = 0x5a4f5244; // ZORD
 const SCHEMA: &[(&str, &str)] = &[
-    ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB)"),
-    ("live_paths", "CREATE UNIQUE INDEX live_paths ON entries(path) WHERE deleted = 0"),
+    ("entries", "CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL, deleted INTEGER NOT NULL CHECK(deleted IN (0,1)), state TEXT NOT NULL, content BLOB, visible INTEGER NOT NULL DEFAULT 1 CHECK(visible IN (0,1)))"),
+    ("live_paths", "CREATE UNIQUE INDEX live_paths ON entries(path) WHERE deleted = 0 AND visible = 1"),
     ("operations", "CREATE TABLE operations (sequence INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL UNIQUE, request TEXT NOT NULL, result TEXT)"),
     ("outbox", "CREATE TABLE outbox (sequence INTEGER PRIMARY KEY REFERENCES operations(sequence))"),
-    ("projection_queue", "CREATE TABLE projection_queue (sequence INTEGER PRIMARY KEY REFERENCES operations(sequence))"),
 ];
 
+fn schema_objects() -> Vec<(&'static str, &'static str)> {
+    SCHEMA
+        .iter()
+        .chain(projection::SCHEMA)
+        .chain(directory::SCHEMA_V6)
+        .chain(scan::SCHEMA)
+        .chain(presentation::SCHEMA)
+        .chain(host_intents::SCHEMA)
+        .chain(projection_jobs::SCHEMA)
+        .chain(namespace::SCHEMA)
+        .chain(text_sync::SCHEMA)
+        .chain(checkpoints::SCHEMA)
+        .chain(physical_bindings::SCHEMA)
+        .chain(family_commands::SCHEMA)
+        .chain(family_ledger::SCHEMA)
+        .chain(file_state::SCHEMA)
+        .chain(family_materialization::SCHEMA)
+        .copied()
+        .collect()
+}
 fn check_schema(connection: &Connection) -> Result<i64> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let application: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
-    if !matches!(version, 0 | 1 | 2 | 3 | 4 | 5 | 6 | SCHEMA_VERSION) {
+    // Unreleased formats: reject before changing WAL or database bytes.
+    if !matches!(version, 0 | SCHEMA_VERSION) {
         return Err(StoreError::UnsupportedSchema(version));
     }
+    let names: Vec<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'")?
+        .query_map([], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
     if version == 0 {
-        let objects: i64 = connection.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'",
-            [],
-            |r| r.get(0),
-        )?;
-        if application != 0 || objects != 0 {
+        if application != 0 || !names.is_empty() {
             return Err(StoreError::Corrupt(
                 "unversioned nonempty or foreign database".into(),
             ));
@@ -71,56 +106,11 @@ fn check_schema(connection: &Connection) -> Result<i64> {
         if application != APPLICATION_ID {
             return Err(StoreError::Corrupt("wrong application ID".into()));
         }
-        // Every supported version has one canonical layout. Extra objects can
-        // shadow a migration or change write behavior, so reject before WAL too.
-        let names: Vec<String> = connection
-            .prepare("SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'")?
-            .query_map([], |r| r.get(0))?
-            .collect::<std::result::Result<_, _>>()?;
-        let expected_names: Vec<&str> = SCHEMA
-            .iter()
-            .filter(|(name, _)| version < 6 || *name != "projection_queue")
-            .chain(if version >= 2 {
-                projection::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 6 {
-                directory::SCHEMA_V6
-            } else if version >= 3 {
-                directory::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 3 { scan::SCHEMA } else { &[] })
-            .chain(if version >= 4 {
-                presentation::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 5 {
-                host_intents::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 6 {
-                projection_jobs::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 7 { namespace::SCHEMA } else { &[] })
-            .chain(if version >= 6 { text_sync::SCHEMA } else { &[] })
-            .chain(if version >= 6 {
-                checkpoints::SCHEMA
-            } else {
-                &[]
-            })
-            .map(|(name, _)| *name)
-            .collect();
-        if names.len() != expected_names.len()
+        let expected = schema_objects();
+        if names.len() != expected.len()
             || names
                 .iter()
-                .any(|name| !expected_names.contains(&name.as_str()))
+                .any(|name| !expected.iter().any(|(expected, _)| *expected == name))
         {
             return Err(StoreError::Corrupt("unexpected schema objects".into()));
         }
@@ -130,56 +120,32 @@ fn check_schema(connection: &Connection) -> Result<i64> {
                 .join(" ")
                 .to_ascii_lowercase()
         };
-        for (name, expected) in SCHEMA
-            .iter()
-            .filter(|(name, _)| version < 6 || *name != "projection_queue")
-            .chain(if version >= 2 {
-                projection::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 6 {
-                directory::SCHEMA_V6
-            } else if version >= 3 {
-                directory::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 3 { scan::SCHEMA } else { &[] })
-            .chain(if version >= 4 {
-                presentation::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 5 {
-                host_intents::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 6 {
-                projection_jobs::SCHEMA
-            } else {
-                &[]
-            })
-            .chain(if version >= 7 { namespace::SCHEMA } else { &[] })
-            .chain(if version >= 6 { text_sync::SCHEMA } else { &[] })
-            .chain(if version >= 6 {
-                checkpoints::SCHEMA
-            } else {
-                &[]
-            })
-        {
-            let actual = connection
-                .query_row("SELECT sql FROM sqlite_master WHERE name=?1", [name], |r| {
-                    r.get::<_, String>(0)
-                })
-                .optional()?;
-            if actual.as_deref().map(normalize).as_deref() != Some(normalize(expected).as_str()) {
+        for (name, sql) in expected {
+            let actual: String = connection.query_row(
+                "SELECT sql FROM sqlite_master WHERE name=?1",
+                [name],
+                |r| r.get(0),
+            )?;
+            if normalize(&actual) != normalize(sql) {
                 return Err(StoreError::Corrupt(format!("invalid schema object {name}")));
             }
         }
     }
     Ok(version)
+}
+pub(super) fn is_visible(tx: &Connection, id: &EntryId) -> Result<bool> {
+    let value: Option<i64> = tx
+        .query_row(
+            "SELECT visible FROM entries WHERE id=?1",
+            [id.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match value {
+        Some(1) => Ok(true),
+        Some(0) | None => Ok(false),
+        _ => Err(StoreError::Corrupt("invalid entry visibility".into())),
+    }
 }
 
 fn decode_state(
@@ -205,7 +171,7 @@ fn decode_state(
 
 fn read_states(connection: &Connection, include_deleted: bool) -> Result<Vec<EntryState>> {
     let mut stmt = connection.prepare(
-        "SELECT id,path,deleted,state,content IS NOT NULL FROM entries WHERE ?1 OR deleted=0 ORDER BY path"
+        "SELECT id,path,deleted,state,content IS NOT NULL FROM entries WHERE visible=1 AND (?1 OR deleted=0) ORDER BY path"
     )?;
     let records = stmt
         .query_map([include_deleted], |r| {
@@ -238,6 +204,7 @@ pub enum StoreError {
     ReloadRequired(ReloadReason),
     Sql(rusqlite::Error),
     Sync(zorid_client_sync::SyncError),
+    FileSync(zorid_file_sync::Error),
     Crypto(zorid_crypto::CryptoError),
     Protocol(zorid_sync_protocol::ProtocolError),
     Json(serde_json::Error),
@@ -252,6 +219,7 @@ impl fmt::Display for StoreError {
                 write!(f, "Coherent snapshot reload required: {reason:?}")
             }
             Self::Sync(e) => write!(f, "Text synchronization error: {e}"),
+            Self::FileSync(e) => write!(f, "File synchronization error: {e}"),
             Self::Crypto(e) => write!(f, "Envelope encryption error: {e}"),
             Self::Protocol(e) => write!(f, "Envelope protocol error: {e}"),
             Self::Sql(e) => write!(f, "Storage error: {e}"),
@@ -283,6 +251,11 @@ impl From<zorid_client_sync::SyncError> for StoreError {
         Self::Sync(e)
     }
 }
+impl From<zorid_file_sync::Error> for StoreError {
+    fn from(e: zorid_file_sync::Error) -> Self {
+        Self::FileSync(e)
+    }
+}
 impl From<zorid_crypto::CryptoError> for StoreError {
     fn from(e: zorid_crypto::CryptoError) -> Self {
         Self::Crypto(e)
@@ -310,6 +283,9 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn is_visible_entry(&self, id: &EntryId) -> Result<bool> {
+        is_visible(&self.connection, id)
+    }
     /// Opens an explicitly selected database; it does not scan or modify vault files.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_mode(path.as_ref(), false, false)
@@ -350,40 +326,27 @@ impl Store {
             return Err(StoreError::Corrupt("vault is not initialized".into()));
         }
         if version == 0 {
-            // A fresh initialization is atomic and serialized across processes.
-            for (_, sql) in SCHEMA {
+            // Current-format empty initialization only, in one transaction.
+            for (_, sql) in SCHEMA
+                .iter()
+                .chain(projection::SCHEMA)
+                .chain(directory::SCHEMA_V6)
+                .chain(scan::SCHEMA)
+                .chain(host_intents::SCHEMA)
+                .chain(projection_jobs::SCHEMA)
+                .chain(namespace::SCHEMA)
+                .chain(physical_bindings::SCHEMA)
+                .chain(family_commands::SCHEMA)
+                .chain(family_ledger::SCHEMA)
+                .chain(file_state::SCHEMA)
+                .chain(family_materialization::SCHEMA)
+            {
                 tx.execute_batch(sql)?;
             }
-            tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-        }
-        if version < 2 {
-            for (_, sql) in projection::SCHEMA {
-                tx.execute_batch(sql)?;
-            }
-        }
-        if version < 3 {
-            for (_, sql) in directory::SCHEMA.iter().chain(scan::SCHEMA) {
-                tx.execute_batch(sql)?;
-            }
-        }
-        if version < 4 {
             presentation::migrate(&tx)?;
-        }
-        if version < 5 {
-            for (_, sql) in host_intents::SCHEMA {
-                tx.execute_batch(sql)?;
-            }
-        }
-        if version < 6 {
-            projection_jobs::migrate(&tx)?;
-            directory::migrate_job_schema(&tx)?;
             text_sync::migrate(&tx)?;
             checkpoints::migrate(&tx)?;
-        }
-        if version < 7 {
-            for (_, sql) in namespace::SCHEMA {
-                tx.execute_batch(sql)?;
-            }
+            tx.pragma_update(None, "application_id", APPLICATION_ID)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -397,7 +360,7 @@ impl Store {
     pub fn read(&self, id: &EntryId) -> Result<Option<StoredEntry>> {
         self.connection
             .query_row(
-                "SELECT path,deleted,state,content FROM entries WHERE id=?1",
+                "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND visible=1",
                 [id.as_str()],
                 |r| {
                     Ok((
@@ -458,6 +421,7 @@ impl Store {
         prepared: Option<text_sync::PreparedText>,
     ) -> Result<CommitResult> {
         request.validate()?;
+        family_store::reject_legacy_mutation(tx)?;
         let prior = tx
             .query_row(
                 "SELECT request,result FROM operations WHERE operation_id=?1",

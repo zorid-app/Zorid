@@ -218,6 +218,34 @@ pub(super) fn enqueue_received(
         None,
     )
 }
+/// Enqueue exact received namespace/content work without a fabricated command
+/// receipt. The physical adapter separately attaches durable source provenance.
+pub(super) fn enqueue_received_work(
+    tx: &Connection,
+    origin: ProjectionOrigin,
+    work: ProjectionWork,
+    target: EntryState,
+    affected: Vec<EntryChange>,
+) -> Result<ProjectionJob> {
+    if !matches!(origin, ProjectionOrigin::ReceivedUpdate { .. }) {
+        return Err(StoreError::Corrupt(
+            "received projection has local origin".into(),
+        ));
+    }
+    insert(
+        tx,
+        ProjectionJob {
+            job_id: OperationId::new(uuid::Uuid::new_v4().to_string())?,
+            ordinal: "0".into(),
+            origin,
+            work,
+            target,
+            affected,
+            completed: false,
+        },
+        None,
+    )
+}
 pub(super) fn finish(tx: &Connection, expected: &ProjectionJob) -> Result<()> {
     let current = get(tx, &expected.job_id)?;
     let mut normalized = current.clone();

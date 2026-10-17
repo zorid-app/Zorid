@@ -13,8 +13,8 @@ use zorid_sync_protocol::{
 pub(super) const SCHEMA:&[(&str,&str)]=&[
     ("revision_fences","CREATE TABLE revision_fences (ordinal INTEGER PRIMARY KEY AUTOINCREMENT, revision TEXT NOT NULL UNIQUE)"),
     ("authority_identity","CREATE TABLE authority_identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), local_store_id TEXT NOT NULL, realm_id TEXT, vault_id TEXT, CHECK((realm_id IS NULL)=(vault_id IS NULL)))"),
-    ("text_bindings","CREATE TABLE text_bindings (entry_id TEXT PRIMARY KEY REFERENCES entries(id), realm_id TEXT NOT NULL, vault_id TEXT NOT NULL, bootstrap_id TEXT NOT NULL, revision TEXT NOT NULL)"),
-    ("text_revisions","CREATE TABLE text_revisions (entry_id TEXT NOT NULL REFERENCES entries(id), revision TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY(entry_id,revision))"),
+    ("text_bindings","CREATE TABLE text_bindings (entry_id TEXT PRIMARY KEY, realm_id TEXT NOT NULL, vault_id TEXT NOT NULL, bootstrap_id TEXT NOT NULL, revision TEXT NOT NULL)"),
+    ("text_revisions","CREATE TABLE text_revisions (entry_id TEXT NOT NULL, revision TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY(entry_id,revision))"),
     ("sync_updates","CREATE TABLE sync_updates (realm_id TEXT NOT NULL, vault_id TEXT NOT NULL, update_id TEXT NOT NULL, entry_id TEXT NOT NULL REFERENCES entries(id), bootstrap_id TEXT NOT NULL, direction TEXT NOT NULL CHECK(direction IN ('authored','received')), wire BLOB NOT NULL, PRIMARY KEY(realm_id,vault_id,update_id))"),
     ("authored_text","CREATE TABLE authored_text (realm_id TEXT NOT NULL, vault_id TEXT NOT NULL, update_id TEXT NOT NULL, entry_id TEXT NOT NULL REFERENCES entries(id), record TEXT NOT NULL, sealed BLOB, accepted INTEGER NOT NULL CHECK(accepted IN (0,1)), PRIMARY KEY(realm_id,vault_id,update_id))"),
     ("receive_cursors","CREATE TABLE receive_cursors (realm_id TEXT NOT NULL, vault_id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY(realm_id,vault_id))"),
@@ -113,6 +113,7 @@ pub(super) fn identity(tx: &Connection) -> Result<AuthorityIdentity> {
     })
 }
 fn bind_scope(tx: &Connection, text: &TextIdentity) -> Result<()> {
+    family_store::reject_legacy_mutation(tx)?;
     let current = identity(tx)?;
     match (&current.realm_id, &current.vault_id) {
         (None, None) => {
@@ -152,7 +153,7 @@ pub(super) fn reserve_revision(tx: &Connection, revision: &Revision) -> Result<(
 fn stored_entry(tx: &Connection, id: &EntryId) -> Result<StoredEntry> {
     let raw = tx
         .query_row(
-            "SELECT path,deleted,state,content FROM entries WHERE id=?1",
+            "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND visible=1",
             [id.as_str()],
             |r| {
                 Ok((
@@ -180,7 +181,11 @@ fn stored_entry(tx: &Connection, id: &EntryId) -> Result<StoredEntry> {
         content: raw.3,
     })
 }
-fn revision(tx: &Connection, id: &EntryId, version: &Revision) -> Result<Option<TextState>> {
+pub(super) fn revision(
+    tx: &Connection,
+    id: &EntryId,
+    version: &Revision,
+) -> Result<Option<TextState>> {
     tx.query_row(
         "SELECT record FROM text_revisions WHERE entry_id=?1 AND revision=?2",
         params![id.as_str(), version.as_str()],
@@ -199,7 +204,9 @@ fn revision(tx: &Connection, id: &EntryId, version: &Revision) -> Result<Option<
     })
     .transpose()
 }
-pub(super) fn current(tx: &Connection, id: &EntryId) -> Result<Option<TextState>> {
+/// The CRDT identity/head is retained independently of visible namespace state.
+/// This is also the loader for authenticated text arriving before its Create.
+pub(super) fn retained(tx: &Connection, id: &EntryId) -> Result<Option<TextState>> {
     let binding = tx
         .query_row(
             "SELECT realm_id,vault_id,bootstrap_id,revision FROM text_bindings WHERE entry_id=?1",
@@ -226,12 +233,9 @@ pub(super) fn current(tx: &Connection, id: &EntryId) -> Result<Option<TextState>
         .map(|(realm, vault, bootstrap, version)| {
             let state = revision(tx, id, &Revision::new(version)?)?
                 .ok_or_else(|| StoreError::Corrupt("managed text revision missing".into()))?;
-            let entry = stored_entry(tx, id)?;
             if state.identity.realm_id.as_str() != realm
                 || state.identity.vault_id.as_str() != vault
                 || state.identity.bootstrap_id.as_str() != bootstrap
-                || state.version != entry.state.revision
-                || Some(state.materialized_utf8()?) != entry.content
             {
                 return Err(StoreError::Corrupt(
                     "managed text and committed entry disagree".into(),
@@ -249,7 +253,22 @@ pub(super) fn current(tx: &Connection, id: &EntryId) -> Result<Option<TextState>
         })
         .transpose()
 }
-fn put_revision(tx: &Connection, state: &TextState) -> Result<()> {
+pub(super) fn current(tx: &Connection, id: &EntryId) -> Result<Option<TextState>> {
+    family_store::reject_legacy_mutation(tx)?;
+    let state = retained(tx, id)?;
+    if let Some(state) = &state {
+        let entry = stored_entry(tx, id)?;
+        if state.version != entry.state.revision
+            || Some(state.materialized_utf8()?) != entry.content
+        {
+            return Err(StoreError::Corrupt(
+                "managed text and committed entry disagree".into(),
+            ));
+        }
+    }
+    Ok(state)
+}
+pub(super) fn put_revision(tx: &Connection, state: &TextState) -> Result<()> {
     if revision(tx, &state.identity.entry_id, &state.version)?.is_some() {
         return Err(zorid_client_sync::SyncError::VersionConflict.into());
     }
@@ -264,7 +283,22 @@ fn put_revision(tx: &Connection, state: &TextState) -> Result<()> {
     )?;
     Ok(())
 }
-fn put_current(tx: &Connection, state: &TextState) -> Result<()> {
+pub(super) fn put_current(tx: &Connection, state: &TextState) -> Result<()> {
+    let prior: Option<(String, String, String)> = tx
+        .query_row(
+            "SELECT realm_id,vault_id,bootstrap_id FROM text_bindings WHERE entry_id=?1",
+            [state.identity.entry_id.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    if let Some((realm, vault, bootstrap)) = prior {
+        if realm != state.identity.realm_id.as_str()
+            || vault != state.identity.vault_id.as_str()
+            || bootstrap != state.identity.bootstrap_id.as_str()
+        {
+            return Err(zorid_client_sync::SyncError::IdentityMismatch.into());
+        }
+    }
     put_revision(tx, state)?;
     let i = &state.identity;
     tx.execute("INSERT INTO text_bindings VALUES(?1,?2,?3,?4,?5) ON CONFLICT(entry_id) DO UPDATE SET revision=excluded.revision",params![i.entry_id.as_str(),i.realm_id.as_str(),i.vault_id.as_str(),i.bootstrap_id.as_str(),state.version.as_str()])?;
@@ -935,6 +969,7 @@ impl Store {
         if projection::baseline(&tx, &physical.state.id)?.as_ref() != Some(physical) {
             return Err(zorid_client_sync::SyncError::InvalidState.into());
         }
+        let physical_proof = physical_bindings::check_observation(&tx, id, &physical.state.id)?;
         let active: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM projection_attempts WHERE entry_id=?1 AND completed=0)",
             [physical.state.id.as_str()],
@@ -991,10 +1026,11 @@ impl Store {
         projection::put_baseline(
             &tx,
             &ProjectionBaseline {
-                state: observed_state,
+                state: observed_state.clone(),
                 content: observation.content.clone(),
             },
         )?;
+        physical_bindings::put_observed_binding(&tx, &observed_state, physical_proof.as_ref())?;
         observation.resolution = Some(id.clone());
         tx.execute(
             "UPDATE external_observations SET record=?1 WHERE observation_id=?2",

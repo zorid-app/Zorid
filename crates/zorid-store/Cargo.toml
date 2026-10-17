@@ -9,6 +9,7 @@ description = "Transactional native persistence for Zorid's shared vault core"
 [dependencies]
 zorid-core = { path = "../zorid-core" }
 zorid-client-sync = { path = "../zorid-client-sync" }
+zorid-file-sync = { path = "../zorid-file-sync" }
 zorid-crypto = { path = "../zorid-crypto" }
 zorid-sync-protocol = { path = "../zorid-sync-protocol" }
 rusqlite = { version = "=0.40.2", features = ["bundled"] }

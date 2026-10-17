@@ -199,6 +199,42 @@ pub(crate) fn record_changes(
     append(tx, origin, false, entries)?;
     Ok(())
 }
+/// A visibility transition cannot be represented as a fake tombstone. Update
+/// presentation metadata and append one explicit full-reload event atomically.
+pub(crate) fn record_family_reload(
+    tx: &Connection,
+    origin: ProjectionOrigin,
+    changes: &[zorid_core::EntryChange],
+    now: u64,
+) -> Result<()> {
+    validate_number(now)?;
+    let now =
+        i64::try_from(now).map_err(|_| StoreError::Corrupt("display clock overflow".into()))?;
+    for change in changes {
+        let size: i64 = tx.query_row(
+            "SELECT coalesce(length(content),0) FROM entries WHERE id=?1",
+            [change.after.id.as_str()],
+            |r| r.get(0),
+        )?;
+        stored_number(size)?;
+        tx.execute("INSERT INTO entry_presentation VALUES(?1,?2,?2,?3) ON CONFLICT(entry_id) DO UPDATE SET mtime_ms=max(entry_presentation.mtime_ms,excluded.mtime_ms),size_bytes=excluded.size_bytes",params![change.after.id.as_str(),now,size])?;
+    }
+    let origin = match origin {
+        ProjectionOrigin::ReceivedUpdate {
+            realm_id,
+            vault_id,
+            update_id,
+        } => ChangeOrigin::ReceivedUpdate {
+            realm_id,
+            vault_id,
+            update_id,
+        },
+        ProjectionOrigin::LocalCommand { operation_id } => {
+            ChangeOrigin::LocalCommand { operation_id }
+        }
+    };
+    append(tx, origin, true, Vec::new())
+}
 fn append(
     tx: &Connection,
     origin: ChangeOrigin,
@@ -243,7 +279,7 @@ impl Store {
         let tx = self.connection.unchecked_transaction()?;
         let raw = tx
             .query_row(
-                "SELECT id,deleted,state,content FROM entries WHERE path=?1 AND deleted=0",
+                "SELECT id,deleted,state,content FROM entries WHERE path=?1 AND deleted=0 AND visible=1",
                 [path.as_str()],
                 |r| {
                     Ok((
@@ -274,7 +310,7 @@ impl Store {
         let tx = self.connection.unchecked_transaction()?;
         let raw = tx
             .query_row(
-                "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND deleted=0",
+                "SELECT path,deleted,state,content FROM entries WHERE id=?1 AND deleted=0 AND visible=1",
                 [id.as_str()],
                 |r| {
                     Ok((
@@ -357,7 +393,8 @@ impl Store {
             )?;
             let change: LocalChange = serde_json::from_str(&json)?;
             if parse_cursor(&change.cursor)? != sequence
-                || change.requires_full_reload != matches!(change.origin, ChangeOrigin::Bootstrap)
+                || (matches!(change.origin, ChangeOrigin::Bootstrap)
+                    && !change.requires_full_reload)
                 || (change.requires_full_reload && !change.entries.is_empty())
                 || (!change.requires_full_reload && change.entries.is_empty())
             {
