@@ -1,8 +1,11 @@
 # Shared binary streaming contract — proposal for review
 
-Status: contract proposal only, 2026-10-17. No portable/runtime implementation or
-streaming validation is claimed. Root review and named API agreement precede
-portable edits. Owner `/root/desktop_default_sol`; branch
+Status: root reviewed sections1–3 on2026-10-17 and authorized the narrow portable
+types/builder/verifier and metadata/chunk-source implementation. No runtime
+streaming validation is claimed. Exact portable/store signatures must be frozen
+jointly before coupled integration; quotas and later Text framing remain review
+items. Store design owner is `/root/package_sol`; portable owner is
+`/root/desktop_default_sol`. Branch
 `tingkai-c/shared-binary-streaming`, Orca worktree
 `/Users/ctk/orca/workspaces/Zorid/shared-binary-streaming`, base `890a9d4`.
 Root remains the sole main integrator. Native build slots remain root-owned.
@@ -35,11 +38,11 @@ whole Vec in smaller IPC messages does not meet this contract.
 | --- | --- | --- |
 | Shared contract and portable binary semantics | `/root/desktop_default_sol`; this document, then agreed `zorid-file-sync/src/{binary_stream.rs,v2.rs,mutation.rs,materialization.rs}` and narrow core content-reference types | Root approves API/data shapes before edits |
 | Native scan/physical publication | `/root/external_reconcile_sol`; native fs, native/family/namespace/publication_handoff/external_scan/host_intents | Shared refs and store API; native scan-progress work remains independently owned |
-| Store persistence/ingress | Root must name one owner; `zorid-store/src/{lib.rs,file_state.rs,family_ledger.rs,family_commands.rs,family_materialization.rs,projection.rs,family_observations.rs,family_external_create.rs,family_external_namespace.rs}` plus a new blob/stage module | Shared metadata state and verification contract; no parallel schema ownership |
+| Store persistence/ingress | `/root/package_sol`; `zorid-store/src/{lib.rs,file_state.rs,family_ledger.rs,family_commands.rs,family_materialization.rs,projection.rs,family_observations.rs,family_external_create.rs,family_external_namespace.rs}` plus a new blob/stage module | Shared metadata state and verification contract; first reconcile the native owner's scan-progress checkpoint/proof helpers; no parallel schema ownership |
 | Standalone CLI | `/root/package_sol`; CLI main and focused process checks | Native streaming interface, not an independent filesystem importer |
 | Browser/WASM | Current browser owner, with exact files assigned by root; wasm sync/family/classification and browser-sync/worker/runtime/adapter | Portable metadata/ref APIs and immutable indexed chunk storage |
 | Desktop consumer | Root must assign exact owner before edits; host main/family, rust service/admission, text-create/checkpoints, preload/bridge/platform mapping and Vault binary wrappers | Same native stage/ref API; renderer ownership explicitly coordinated |
-| Large text | Contract review only in this increment; named owner before implementation | Separate bounded Text batch/snapshot changes, not binary-mode fallback |
+| Large text | Portable owner may delegate the scoped8Kdiff repair in an isolated worktree; larger framing remains proposal only | Keep current256KiB budget and immutable Text identity; no new wire framing or raised Text/snapshot limits without review |
 
 Read-only subworkers `chunk_metadata_contract` and `text_limit_contract` assess
 specific transition invariants; they own no source edits or builds. Both completed

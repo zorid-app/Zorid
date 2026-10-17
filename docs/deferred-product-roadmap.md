@@ -116,6 +116,36 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Maina1eb831 integrates standalone CLI search/watch (cf807b6+ a1eb831),
+  independently reviewed with10 scoped local-process/relay checks. CLI/native/
+  store/lock sources exactly match tested0f03894; copied tested CLI into main
+  target/debug, SHA2565212e542ed7673ccc0ef9fea32ee6f5f77ee85b80173f40fe4ce28e080657abb.
+  Per-binary provenance records the older desktop host separately. Root's main
+  CLI finds exact external custom-text note and runs one quiet complete watch
+  cycle on retained fixture. Search/watch are no longer missing implementation.
+- Combined client aggregate c6c5772 (through browserd1ac52c, desktopdiagbbbb358,
+  UI744083c, workflow305d397 and verifiedCLI) has independent seam approval,
+  TypeScript9653 exit0, desktop production23356 exit0 and3 targeted workspace/
+  platform tests5743 pass. Actual no-opt-in Electron4610 uses aggregate dist and
+  default-discovered host on fresh /private/tmp/zorid-incomplete-ui-us4yx3m4:
+  257dirs show persistent incomplete warning/details with zero imports, rather
+  than an apparently empty ready vault. Removing only agent-created emptydirs
+  lets automatic polling import Visible.md and clear the warning; exact note
+  read through UI. Explicit retry was not proved because polling completed first.
+  Normal app-menu Quit4610 exit0 confirmed; no test app remains.
+- Browser owner reports actual simultaneous-tab saves: winner remains committed,
+  losing exact draft survives reload and recovery-copy creation/reload preserves
+  both versions. Tiny real undo/selection/copy pass; IME not exercised. Folder/
+  trash UI exposed a shared stale-object menu guard after unchanged snapshots;
+  approved scoped fix666ac28 is source-reviewed/tested by worker and awaits
+  owner independent review/rebuild/runtime proof before client batch integration.
+- Shared bounded streaming contract now in shared-binary-streaming-plan.md.
+  Root approves narrow portable sections1–3; desktop_default_sol owns portable
+  implementation and package_sol the store adaptation proposal, coordinated with
+  native progress helper ownership. Scattered whole-file caps remain; no streaming
+  runtime claim. Practical8K Text diff repair stays within current256KiB limits;
+  larger Text framing/limits are still proposals. Native256progress source review
+  remains active; heavy builds coordinate through browser owner then native owner.
 - Main4816771 integrates fatal routing2cceb6e, compound move/delete10479ea and
   test-only corruption oracle4816771. Native/store sources exactly match tested
   aggregate e9bc2be. Native external gate10156 passes51/51; prior21576 was50/51
