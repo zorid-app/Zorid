@@ -1,6 +1,7 @@
 //! Browser bindings to the same Rust contracts and text CRDT used natively.
 //! This crate never saves data. A host adapter must commit state, bytes, outbox
 //! and receipts atomically before reporting a durable save.
+mod bases;
 mod crypto;
 mod document;
 mod rpc;

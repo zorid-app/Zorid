@@ -19,3 +19,5 @@ zeroize = "=1.9.1"
 zorid-client-sync = { path = "../zorid-client-sync" }
 zorid-file-sync = { path = "../zorid-file-sync" }
 zorid-document = { path = "../zorid-document" }
+zorid-bases = { path = "../zorid-bases" }
+zorid-index = { path = "../zorid-index" }

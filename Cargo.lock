@@ -1953,7 +1953,9 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "zorid-core",
  "zorid-document",
+ "zorid-index",
 ]
 
 [[package]]
@@ -2199,11 +2201,13 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "zeroize",
+ "zorid-bases",
  "zorid-client-sync",
  "zorid-core",
  "zorid-crdt",
  "zorid-crypto",
  "zorid-document",
  "zorid-file-sync",
+ "zorid-index",
  "zorid-sync-protocol",
 ]
