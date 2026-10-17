@@ -33,6 +33,7 @@ interface Run {
   readonly generation: number;
   readonly target: DocumentBacklinksTarget | null;
   cancelled: boolean;
+  finished: boolean;
   pin: DocumentPin | null;
   closing: Promise<void> | null;
 }
@@ -87,9 +88,13 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
     if (run.closing) return run.closing;
     const pin = run.pin;
     if (!pin) return Promise.resolve();
-    run.pin = null;
-    run.closing = Promise.resolve().then(() => pin.close());
-    return run.closing;
+    const closing = Promise.resolve().then(() => pin.close()).then(() => {
+      // A rejected close retains ownership so the next refresh/dispose can retry.
+      run.pin = null;
+      if (run.finished) runs.delete(run);
+    }).finally(() => { if (run.closing === closing) run.closing = null; });
+    run.closing = closing;
+    return closing;
   };
   const retire = (run: Run): void => {
     run.cancelled = true;
@@ -144,12 +149,11 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
       if (!live(run)) return;
       if (!run.target) { show(run, 'unavailable', 'Open a saved note to see linked mentions.'); return; }
       if (!service) { show(run, 'unavailable', 'Linked mentions are unavailable for this vault.'); return; }
-      if (rebuild) {
-        show(run, 'indexing', 'Rebuilding the note index…', true);
-        await service.rebuild(); if (!live(run)) return;
-      }
+      // Retry failed retired closes before acquiring another quota-limited pin.
+      await Promise.all([...runs].filter(previous => previous !== run).map(closeOwned));
+      if (!live(run)) return;
       const maintained = await catchUpDocumentIndex(service, {
-        isCurrent: () => live(run), maxPumps: options.maxPumps, maxRestarts: options.maxRestarts,
+        isCurrent: () => live(run), rebuild, maxPumps: options.maxPumps, maxRestarts: options.maxRestarts,
         onProgress(progress) {
           const message = progress.phase === 'rebuild' ? 'Rebuilding the note index…'
             : progress.phase === 'indexing' && progress.prepared !== undefined && progress.total !== undefined
@@ -191,7 +195,8 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
       }
       const observed = await service.status(); if (!live(run)) return;
       if (observed.source.localStoreId !== pin.source.localStoreId) throw new DocumentSemanticsError('document_invalid_response');
-      const lagged = !sameSource(observed.source, pin.source) || !observed.snapshot || !sameSnapshot(observed.snapshot, pin.snapshot);
+      if (observed.rebuildRequired) throw new DocumentSemanticsError('rebuild_required');
+      const lagged = !observed.current || !sameSource(observed.source, pin.source) || !observed.snapshot || !sameSnapshot(observed.snapshot, pin.snapshot);
       if (lagged || !scanComplete || !coverageComplete) {
         const messages: string[] = [];
         if (lagged) messages.push('Recent changes are still being indexed.');
@@ -204,17 +209,22 @@ export function mountDocumentBacklinks(container: HTMLElement, options: Document
     } catch (error) { failed(run, error); }
     finally {
       try { await closeOwned(run); }
-      catch { if (live(run)) { show(run, 'unavailable', 'Linked mentions could not finish refreshing. Refresh to try again.', false, true); action(run, 'Refresh linked mentions'); } }
+      catch {
+        // Disposal may precede a late open. Allow one final transient-close retry
+        // because a disposed view cannot receive a subsequent refresh.
+        if (disposed) { try { await closeOwned(run); } catch { /* Ownership remains until the vault service closes. */ } }
+        else if (live(run)) { show(run, 'unavailable', 'Linked mentions could not finish refreshing. Refresh to try again.', false, true); action(run, 'Refresh linked mentions'); }
+      }
       if (live(run)) element.setAttribute('aria-busy', 'false');
     }
   }
   function start(next: DocumentBacklinksTarget | null, rebuild = false): Promise<void> {
     for (const run of runs) retire(run);
     target = copyTarget(next);
-    const run: Run = { generation: ++generation, target: copyTarget(target), cancelled: false, pin: null, closing: null };
+    const run: Run = { generation: ++generation, target: copyTarget(target), cancelled: false, finished: false, pin: null, closing: null };
     current = run; runs.add(run);
     if (live(run)) { rows.replaceChildren(); show(run, 'indexing', 'Updating linked mentions…', true); }
-    const work = perform(run, rebuild).finally(() => { runs.delete(run); });
+    const work = perform(run, rebuild).finally(() => { run.finished = true; if (!run.pin) runs.delete(run); });
     ready = work; return work;
   }
   ready = start(target);

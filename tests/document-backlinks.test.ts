@@ -148,3 +148,58 @@ test('an explicit cache-corruption rebuild stays visible and precedes a valid em
   finish.resolve(); await ui.view.ready;
   assert.equal(service.rebuilds, 1); assert.equal(ui.view.element.dataset.state, 'empty'); assert.equal(owned.closeCount, 1);
 });
+
+test('a failed pin close retains ownership and retries before the next pin opens', async t => {
+  const owned = makePin(), fresh = makePin(); let attempts = 0, opens = 0;
+  owned.pin.close = async () => { if (++attempts === 1) throw new Error('Transient close failure'); };
+  const service = makeService(async () => {
+    if (++opens === 1) return owned.pin;
+    assert.equal(attempts, 2, 'retired ownership was cleaned before another pin opens');
+    return fresh.pin;
+  });
+  const ui = setup(t, service.service); await ui.view.ready;
+  assert.equal(attempts, 1); assert.equal(ui.view.element.dataset.state, 'unavailable');
+  await ui.view.refresh();
+  assert.equal(attempts, 2); assert.equal(fresh.closeCount, 1); assert.equal(ui.view.element.dataset.state, 'empty');
+});
+
+test('a retired late pin with a transient close failure is retried on disposal', async t => {
+  const opening = deferred<DocumentPin>(), started = deferred<void>();
+  const owned = makePin(); let attempts = 0;
+  const closed = deferred<void>();
+  owned.pin.close = async () => { if (++attempts === 1) throw new Error('Transient close failure'); closed.resolve(); };
+  const service = makeService(async () => { started.resolve(); return opening.promise; });
+  const ui = setup(t, service.service), work = ui.view.ready;
+  await started.promise; ui.view.cancel(); opening.resolve(owned.pin); await work;
+  assert.equal(attempts, 1); ui.view.dispose(); await closed.promise; assert.equal(attempts, 2);
+});
+
+test('equal identities do not mask a noncurrent status or a required rebuild', async t => {
+  for (const rebuildRequired of [false, true]) {
+    let invalidate = true;
+    const owned = makePin(async () => {
+      if (invalidate) service.setStatus({ source, snapshot: snapshot(), coveredSource: source,
+        current: false, rebuildRequired, coverageComplete: true });
+      return page();
+    });
+    const service = makeService(async () => owned.pin), ui = setup(t, service.service); await ui.view.ready;
+    assert.equal(ui.view.element.dataset.state, rebuildRequired ? 'unavailable' : 'lagged');
+    assert.doesNotMatch(ui.container.textContent ?? '', /No backlinks found/);
+    if (rebuildRequired) {
+      invalidate = false;
+      const button = [...ui.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Rebuild index');
+      assert.ok(button); button.click(); await ui.view.ready;
+      assert.equal(service.rebuilds, 1); assert.equal(ui.view.element.dataset.state, 'empty');
+    }
+  }
+});
+
+test('disposal before a late open retries its first transient close failure', async t => {
+  const opening = deferred<DocumentPin>(), started = deferred<void>();
+  const owned = makePin(); let attempts = 0;
+  owned.pin.close = async () => { if (++attempts === 1) throw new Error('Transient close failure'); };
+  const service = makeService(async () => { started.resolve(); return opening.promise; });
+  const ui = setup(t, service.service), work = ui.view.ready;
+  await started.promise; ui.view.dispose(); opening.resolve(owned.pin); await work;
+  assert.equal(attempts, 2); assert.equal(ui.container.children.length, 0);
+});
