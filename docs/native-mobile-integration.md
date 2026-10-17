@@ -606,3 +606,36 @@ superseding prior unavailable/uninstalled observations above. No new Xcode build
 production app mutation, fixture sync, TestFlight or shared-core merged runtime
 claim follows. Actual phone file interaction after installation remains distinct
 from the already observed Simulator open/navigation/save proof.
+
+
+## Latest native page steering — 2026-10-17 22:17 UTC
+
+Direct user correction supersedes the prior separate Recents/Files/Settings tabs:
+combine Recents and Files into one bottom navigation page. A down chevron beside
+the Recents heading opens a native mode menu for Recents or Files. Settings moves
+out of the tab bar to a top-left gear visible only on the home/root page, never
+inside a folder or editor. Owner stated the working interpretation to the user:
+one Notes tab; home means the native vault root page, not a newly implemented
+Home feature. Existing folder/list/history/save/lease behaviors remain required.
+Both modes are available within this one page; old separate inclusion toggles
+and a persisted Settings selection must not produce an empty page.
+
+Existing Swift worker owns NativePages.swift only on a fresh isolated branch from
+f7d78f6d, preserving the document-handshake branch. NativeMobile.swift, FFI and
+shared editor source are frozen for this UI change. Source/syntax/focused checks
+and independent review precede any next Xcode/Simulator/phone6 verification.
+
+Combined source f7d78f6d (before this UI change) passes full TypeScript66766 exit0
+and serial seven-file focused batch10205:240/240 pass, log
+/private/tmp/mobile-combined-source-tests.log. FFI7523450d test85645 passes10/10,
+official locked/offline/j1 exact mobile manifest, target/stage4-verified. Owner
+verified FFI lib/header blob identity after import7d506d98, so no duplicate test
+was launched. Independent source reviews ec40f143eddd (FFI+Swift) and
+fa6a80667c3f (adapter+watch/recovery) report no blockers. These are not build6
+link/runtime proofs; phone retains the actually installed hotfix5/source51d8b84f.
+
+Orca runtime briefly became unavailable; failed latest-UI assignment explicitly
+reported no input sent. Skill-directed orca open restored runtimef7efea81; worker
+terminal371 was re-listed live before retry. Root durable inbox was notified.
+Owner terminal listing changed, while orchestration caller still reports the
+originalbbf identity; do not assume a new listed shell is the active agent.
