@@ -116,6 +116,26 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Mainf5f97b2 now integrates the reviewed/tested desktop default batch; crates,
+  desktop, src, scripts and build configs are source-equivalent to aggregate
+  1a02f01 (zero diff). Copied tested CLI/host and renderer into ignored main
+  target/debug and dist for ordinary desktop startup; provenance JSON retained
+  beside binaries. No repeated main build needed for source-equivalent artifacts.
+  Native host SHA2563bd287c11baf7a7321725e8d06d38296f975cc0e032daa7b4f5b3801be680ee6.
+  Actual test app72273 normal Quit exit0 confirmed; no test app left running.
+- Browser normal default source ff90295 source-approved after release-phase retry
+  and independent legacy export fixes. Heavy browser87504 passed with existing
+  tasklocal Rust overlay/pinned wasm-bindgen (first95472 lacked wasm target and
+  exited2). WASM2378971 bytes digest0d9efb8e2eda8e6cf741fd6f2e62791902c2879bc397cb41f88210218f7277cf;
+  webpack production passed72.236sec, size warnings only. Actual editor CUA proof
+  now owned default_lifecycle_review_sol at freshorigin8791/server65716.
+  Browser source not main yet. Packaging workflowfollowup305d397 must join asset
+  build:desktop script, not standalone. No heavy build live at checkpoint.
+- Native compound external folder move+child deletion and typed fatal error routing
+  remain external_reconcile_sol work. Diagnosticfollowupcaa4e7e+bbbb358 and UI744083c
+  source reviewed; do not activate until native fatal errors propagate (catch-all
+  ScanIssues cannot hide corruption/schema/unsafe-root failures). Large directory
+  rescan progress above256held descriptors remains required followup.
 - Aggregate1a02f01 compiled; native external42/42, portable8/8, oldschema byte-
   preserving rejection1/1, credential-free localhost startup1/1 passed. CLI/host
   built serial gate96668; TypeScript/renderer webpack30017 passed. Actual no-env
@@ -231,8 +251,8 @@ First-milestone acceptance snapshot (2026-10-17; not a completion claim):
 
 | Requirement | Current evidence / next necessary step |
 | --- | --- |
-| Portable Rust + independent web/Electron/CLI | Built WASM/native and actual three-client transfer; desktop remains explicit opt-in. Main integration recorded below |
-| Text, binary and folders | Actual nested browser create/reopen to CLI; binary digest preserved. Desktop remaining folder/binary/move/delete consumer is in isolated implementation |
+| Portable Rust + independent web/Electron/CLI | Desktop Rust default now main, actual no-opt-in startup/recovery passed; normal browser source built and undergoing actual editor verification; standalone CLI independent |
+| Text, binary and folders | Byte-exact binary/nested transfer and desktop normal creation/rename/folder proof; durable file commands integrated. Compound external move+delete remains in progress |
 | Offline convergence | Actual stopped-relay browser/CLI independent edits, browser reload and relay restart converge exact55 bytes; see verification document |
 | Desktop/CLI simultaneous safety | POSIX lock fix integrated; actual CLI wins while desktop draft retained, forced restart and recovery copy preserve both exact versions. Automatic stale-editor merge remains future UX |
 | Browser-tab safety | Earlier spike and store-connection checks exist; current complete worker/tab lifecycle still needs bounded integrated proof |
