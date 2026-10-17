@@ -3,6 +3,7 @@ import SwiftUI
 import WebKit
 import Capacitor
 import Darwin
+import CoreFoundation
 
 // Native owns roots and session lifetime; all storage/sync commands remain in Rust.
 private enum MobileFailure: Error {
@@ -115,13 +116,15 @@ final class NativeMobileSession {
     private var handle: OpaquePointer?
     let vault: LocalVault
     private var reconciliation: [String: Any] // Access only on worker.
+    private let documentSemantics: Bool // Immutable startup capability, never inferred.
     private static let headerLimit = 1_048_576
     private static let bodyLimit = 33_554_432
 
-    private init(vault: LocalVault, handle: OpaquePointer, reconciliation: [String: Any]) {
+    private init(vault: LocalVault, handle: OpaquePointer, reconciliation: [String: Any], documentSemantics: Bool) {
         self.vault = vault
         self.handle = handle
         self.reconciliation = reconciliation
+        self.documentSemantics = documentSemantics
     }
 
     static func open(vault: LocalVault, root: URL, completion: @escaping (Result<NativeMobileSession, Error>) -> Void) {
@@ -135,7 +138,8 @@ final class NativeMobileSession {
                 do {
                     let startup = try consumeReconciliation(zorid_mobile_startup(pointer))
                     // Incomplete startup is usable recovery state, never an empty-ready fallback.
-                    result = .success(NativeMobileSession(vault: vault, handle: pointer, reconciliation: startup.reconciliation))
+                    result = .success(NativeMobileSession(vault: vault, handle: pointer, reconciliation: startup.reconciliation,
+                                                          documentSemantics: try startupDocumentSemantics(startup.wrapper)))
                 } catch {
                     zorid_mobile_close(pointer)
                     result = .failure(MobileFailure.unavailable)
@@ -151,9 +155,11 @@ final class NativeMobileSession {
     // Reads and updates of cached reconciliation share the C-ABI worker queue.
     func context(completion: @escaping ([String: Any]) -> Void) {
         Self.worker.async {
-            let context: [String: Any] = ["name": self.vault.name, "clientId": self.vault.clientId,
+            var context: [String: Any] = ["name": self.vault.name, "clientId": self.vault.clientId,
                                           "reconciliation": self.reconciliation]
-            DispatchQueue.main.async { completion(context) }
+            if self.documentSemantics { context["documentSemantics"] = true }
+            let captured = context
+            DispatchQueue.main.async { completion(captured) }
         }
     }
 
@@ -191,9 +197,21 @@ final class NativeMobileSession {
         return (object, reconciliation)
     }
 
+    private static func startupDocumentSemantics(_ object: [String: Any]) throws -> Bool {
+        guard let value = object["documentSemantics"] else { return false } // Older FFI.
+        // NSNumber bridges JSON 1 as Bool too; only an actual JSON true advertises
+        // this host capability. Explicit false/null/other types fail admission.
+        guard let boolean = value as? NSNumber,
+              CFGetTypeID(boolean) == CFBooleanGetTypeID(), boolean.boolValue else {
+            throw MobileFailure.unavailable
+        }
+        return true
+    }
+
     func request(header: String, body: String, completion: @escaping (Result<(String, String), Error>) -> Void) {
         Self.worker.async {
             let result: Result<(String, String), Error>
+            var dispatched = false
             do {
                 guard let handle = self.handle else { throw MobileFailure.unavailable }
                 // Check encoded lengths before allocating decoded payloads.
@@ -220,6 +238,7 @@ final class NativeMobileSession {
                 }
                 frame.append(json)
                 frame.append(payload)
+                dispatched = true
                 let reply = frame.withUnsafeBytes { bytes in
                     zorid_mobile_request(handle, bytes.bindMemory(to: UInt8.self).baseAddress, frame.count)
                 }
@@ -236,9 +255,15 @@ final class NativeMobileSession {
                 let headerData = Data(bytes: pointer.advanced(by: 8), count: headerCount)
                 try Self.validateHeader(headerData)
                 guard let replyHeader = String(data: headerData, encoding: .utf8) else { throw MobileFailure.invalidFrame }
+                // Body bytes are opaque here, including typed Rust document
+                // JSON. Never parse/re-encode them through NSDictionary.
                 let replyBody = Data(bytes: pointer.advanced(by: 8 + headerCount), count: bodyCount)
                 result = .success((replyHeader, replyBody.base64EncodedString()))
             } catch {
+                // Empty/malformed native replies are terminal for this host
+                // generation. Drop leases before later queued calls can run.
+                // Invalid input rejected before dispatch keeps a healthy host.
+                if dispatched { self.closeOnWorker() }
                 result = .failure(MobileFailure.unavailable)
             }
             DispatchQueue.main.async { completion(result) }
@@ -253,12 +278,17 @@ final class NativeMobileSession {
         return object
     }
 
+    private func closeOnWorker() {
+        dispatchPrecondition(condition: .onQueue(Self.worker))
+        if let handle = handle {
+            self.handle = nil
+            zorid_mobile_close(handle)
+        }
+    }
+
     func close(completion: @escaping () -> Void) {
         Self.worker.async {
-            if let handle = self.handle {
-                zorid_mobile_close(handle)
-                self.handle = nil
-            }
+            self.closeOnWorker()
             DispatchQueue.main.async(execute: completion)
         }
     }
