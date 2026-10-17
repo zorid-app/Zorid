@@ -71,12 +71,18 @@ sequence below; completion of the first goal must not close those requirements.
 - Native schema6 `28cff13` passed108 focused native/store tests after source
   review fixed historical cross-entry revision reuse, sealed epoch mismatch and
   orphan managed-text binding. Isolated core assembles it as5a5cb46 with
-  checkpoints6f0084f and desktopab3a959. Root session99512 tests the combined
-  Rust workspace at0c98f6f; latest source is not on main or combined-pass yet.
-- Editor owns NoteBuffer checkpoint consumer against now-integrated Vault/types.
-  Desktop owner implements fixture exclusive client admission; CLI owner adds
-  actual encrypted text sync transport; namespace owner builds physical explicit
-  member moves/deletes in core-native-namespace with schema7. Shared contracts
+  checkpoints6f0084f and desktopab3a959. Root session99512 exited101 at the
+  desktop test that decoded response frames using the strict request decoder.
+  Reviewed test-only fix9a2a113 preserves production validation; retry pending.
+  Latest source is not on main or combined-pass yet.
+- Editor retains NoteBuffer ownership but reports its broad goal, including
+  durable/Canvas work, paused by the user in that session. Core must not treat
+  the consumer as actively implementing or repeatedly invite paused work. The
+  editor has the current bounded test slot for a separate insertion-command
+  request. Desktop fixture admission continues independently. CLI sync source
+  54929f6 is assembled as660194a; pinned dependencies fetched without changing
+  existing package identities, lock1a918a1. Runtime tests remain pending.
+  Reviewed physical namespace/schema7 sourcea012eaa awaits its focused slot. Shared contracts
   include stable entry-key checkpoints and best-effort typing mirror arbitration.
   User now accepts shared Rust metadata/index/Base semantics as the next milestone;
   preparation can run alongside this gate, implementation follows its acceptance.
