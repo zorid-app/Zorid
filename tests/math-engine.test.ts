@@ -8,16 +8,8 @@ const require = createRequire(import.meta.url);
 test('pinned upstream engine and emitted local assets render TeX, mhchem, extensions and safe output without remote fetches',
   { timeout: 20000 }, async t => {
     for (const name of ['mathjax', '@mathjax/mathjax-tex-font', '@mathjax/mathjax-mhchem-font-extension']) assert.equal(require(`${name}/package.json`).version, '4.1.3');
-    const { MathAssetsPlugin } = require('../scripts/math-assets.cjs');
-    const assets = new Map<string, Buffer>();
-    let collect!: () => Promise<void>;
-    const compilation = { hooks: { processAssets: { tapPromise(_options: unknown, callback: () => Promise<void>) { collect = callback; } } },
-      emitAsset(name: string, source: { source(): Buffer }) { assets.set(name, source.source()); } };
-    new MathAssetsPlugin().apply({ hooks: { thisCompilation: { tap(_name: string, callback: (value: unknown) => void) { callback(compilation); } } },
-      webpack: { Compilation: { PROCESS_ASSETS_STAGE_SUMMARIZE: 1 }, sources: { RawSource: class {
-        value: Buffer; constructor(value: Buffer) { this.value = value; } source() { return this.value; }
-      } } } });
-    await collect();
+    const { createMathAssets } = require('../scripts/math-assets.cjs');
+    const assets = await createMathAssets() as Map<string, Buffer>;
     assert.ok(assets.has('lib/mathjax/tex-chtml-nofont.js'));
     assert.ok(assets.has('lib/mathjax/input/tex/extensions/mhchem.js'));
     assert.ok(assets.has('lib/mathjax/fonts/mathjax-tex-font/chtml.js'));
