@@ -52,8 +52,8 @@ function fixture(){
     finish(){const header=this.header,rows=this.rows;assert.ok(this.ready());return {
       free(){},headerJson:()=>JSON.stringify(header),snapshotJson:()=>JSON.stringify(header.nextIndex),coverageComplete:()=>true,rowJson:(id:string)=>JSON.stringify(rows.get(id)),
       resolveJson:()=>'{"fixture":"opaque-rust-transport"}',backlinksJson:()=>'{"fixture":"opaque-rust-transport"}',
-      openLiteral(){let position=0;const observed:string[]=[];const files=header.entries.filter(e=>e.kind==='file'&&rows.get(e.id)?.digest);return {
-        free(){},nextReadJson:()=>JSON.stringify(files[position]??null),accept(bytes:Uint8Array){assert.deepEqual(sha(bytes),rows.get(files[position]!.id).digest);observed.push(new TextDecoder().decode(bytes));position++;},finishJson:()=>JSON.stringify({fixture:'projection-transport',observed,snapshot:header.nextIndex}),
+      openLiteral(query:string,token:string){if(query==='fixture-page')assert.ok(token===''||token==='1');let position=0;const observed:string[]=[];const files=header.entries.filter(e=>e.kind==='file'&&rows.get(e.id)?.digest);return {
+        free(){},nextReadJson:()=>JSON.stringify(files[position]??null),accept(bytes:Uint8Array){assert.deepEqual(sha(bytes),rows.get(files[position]!.id).digest);observed.push(new TextDecoder().decode(bytes));position++;},finishJson:()=>JSON.stringify({fixture:'projection-transport',observed,snapshot:header.nextIndex,...(query==='fixture-page'?{next:'1'}:{})}),
       };},
     };}
   }
@@ -122,6 +122,23 @@ test('bounded pin limit and cross-client nonce ownership reject fabricated pins'
 test('corrupt catalog rebuild sweeps only exact derived prefixes',async()=>{
   const f=fixture();f.file('a','text');const index=f.open();await f.build(index);f.seed('control','unrelated',{key:'unrelated',value:'preserved'});f.seed('control','document-index:v1/catalog',{key:'document-index:v1/catalog',value:{bad:true}});
   assert.equal((await index.status()).rebuildRequired,true);await index.rebuild();assert.equal(f.records.get('control')!.get('unrelated').value,'preserved');await f.build(index);await index.close();
+});
+
+test('a pump processes at most 32 files and aborted staging preserves the previous head',async()=>{
+  const f=fixture();for(let i=0;i<40;i++)f.file('f'+String(i).padStart(2,'0'),'body');const index=f.open();let stage=await index.begin();stage=await index.pump(stage.stageId);assert.equal(stage.prepared,32);assert.equal(stage.ready,false);stage=await index.pump(stage.stageId);assert.equal(stage.prepared,40);const snapshot=await index.publish(stage.stageId);
+  const next=await index.begin();f.fail();await assert.rejects(index.pump(next.stageId),{code:'storage_failure'});await assert.rejects(index.publish(next.stageId),{code:'index_rebuild_required'});assert.deepEqual((await index.status()).snapshot,snapshot);await index.close();
+});
+test('restart drops only its own stale pins and stages, retaining the published cache',async()=>{
+  const f=fixture();f.file('a','text');const first=f.open();await f.build(first);await first.open();await first.begin();
+  // A real worker lifetime lease prevents both instances being active. Here the
+  // second fixture stands for a fresh worker after abrupt first-worker loss.
+  const second=f.open();const pin=await second.open();assert.deepEqual((await second.search({pinId:pin.pinId,query:'opaque'}) as any).observed,['text']);const stage=await second.begin();assert.ok(stage.stageId);await second.close();
+});
+
+test('continuations are bound to the exact random pin nonce',async()=>{
+  const f=fixture();f.file('a','text');const index=f.open();await f.build(index);const a=await index.open(),b=await index.open();const page=await index.search({pinId:a.pinId,query:'fixture-page'}) as any;
+  assert.equal(page.next,a.pinId+'/1');await index.search({pinId:a.pinId,query:'fixture-page',token:page.next});
+  await assert.rejects(index.search({pinId:b.pinId,query:'fixture-page',token:page.next}),{code:'index_snapshot_expired'});await index.close();
 });
 
 test.after(()=>{(globalThis as any).IDBKeyRange=range;});

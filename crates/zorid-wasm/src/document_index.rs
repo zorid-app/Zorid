@@ -136,7 +136,12 @@ impl WasmDocumentIndexBuilder {
             content_revision: witness.entry().revision.clone(),
             source: source.into(),
         };
-        let markdown = witness.entry().path.as_str().ends_with(".md");
+        let markdown = witness
+            .entry()
+            .path
+            .as_str()
+            .to_ascii_lowercase()
+            .ends_with(".md");
         // Extraction budget checks must run before parsing.
         builder
             .extract_and_add(witness, &request, markdown)
@@ -211,6 +216,49 @@ struct Tokens {
     values: BTreeMap<String, LiteralToken>,
     relationships: BTreeMap<String, RelationshipToken>,
 }
+impl Tokens {
+    fn reserve(&mut self) -> Result<String, JsValue> {
+        // Bound retained continuations, not lifetime page count. Explicitly
+        // expire the oldest opaque token while preserving forward progress.
+        if self.values.len() + self.relationships.len() >= MAX_TOKENS {
+            let oldest = self
+                .values
+                .keys()
+                .chain(self.relationships.keys())
+                .filter_map(|k| k.parse::<u64>().ok())
+                .min()
+                .ok_or_else(|| error("index_invalid_record"))?
+                .to_string();
+            self.values.remove(&oldest);
+            self.relationships.remove(&oldest);
+        }
+        self.counter = self
+            .counter
+            .checked_add(1)
+            .ok_or_else(|| error("index_token_limit"))?;
+        Ok(self.counter.to_string())
+    }
+    fn literal(&mut self, token: LiteralToken) -> Result<String, JsValue> {
+        if let Some((key, _)) = self.values.iter().find(|(_, value)| **value == token) {
+            return Ok(key.clone());
+        }
+        let key = self.reserve()?;
+        self.values.insert(key.clone(), token);
+        Ok(key)
+    }
+    fn relationship(&mut self, token: RelationshipToken) -> Result<String, JsValue> {
+        if let Some((key, _)) = self
+            .relationships
+            .iter()
+            .find(|(_, value)| **value == token)
+        {
+            return Ok(key.clone());
+        }
+        let key = self.reserve()?;
+        self.relationships.insert(key.clone(), token);
+        Ok(key)
+    }
+}
 #[wasm_bindgen]
 pub struct WasmDocumentIndexGeneration {
     header: Header,
@@ -274,13 +322,7 @@ impl WasmDocumentIndexGeneration {
             .query(&id, RelationshipDirection::Incoming, token, limit as usize)
             .map_err(contract)?;
         let next = if let Some(token) = page.next {
-            if tokens.values.len() + tokens.relationships.len() >= MAX_TOKENS {
-                return Err(error("index_token_limit"));
-            }
-            tokens.counter += 1;
-            let key = tokens.counter.to_string();
-            tokens.relationships.insert(key.clone(), token);
-            Some(key)
+            Some(tokens.relationship(token)?)
         } else {
             None
         };
@@ -372,13 +414,7 @@ impl WasmDocumentLiteralPage {
             .map_err(contract)?;
         let next = if let Some(token) = page.next {
             let mut tokens = self.tokens.borrow_mut();
-            if tokens.values.len() + tokens.relationships.len() >= MAX_TOKENS {
-                return Err(error("index_token_limit"));
-            }
-            tokens.counter += 1;
-            let key = tokens.counter.to_string();
-            tokens.values.insert(key.clone(), token);
-            Some(key)
+            Some(tokens.literal(token)?)
         } else {
             None
         };
@@ -388,5 +424,100 @@ impl WasmDocumentLiteralPage {
         )?;
         self.result = Some(result.clone());
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn header() -> String {
+        let versions: serde_json::Value =
+            serde_json::from_str(&document_index_versions_json().unwrap()).unwrap();
+        serde_json::json!({
+            "source":{"localStoreId":"store","watermark":"7"},
+            "entries":[
+                {"id":"a","path":"a.md","kind":"file","revision":"r1","deleted":false},
+                {"id":"b","path":"b.md","kind":"file","revision":"r2","deleted":false}
+            ],
+            "expectedIndex":null,
+            "nextIndex":{"localStoreId":"store","generationEpoch":"epoch","generation":"1","versions":versions}
+        }).to_string()
+    }
+    #[test]
+    fn incremental_transport_extracts_and_restores_same_rust_generation() {
+        let header = header();
+        let mut builder = WasmDocumentIndexBuilder::new(&header).unwrap();
+        builder.begin_pump().unwrap();
+        builder
+            .add_text("a", b"---\ntitle: Original\n---\n# Header\n[[b]]\nneedle\n")
+            .unwrap();
+        let a = builder.row_json("a").unwrap();
+        builder.add_text("b", b"target\n").unwrap();
+        let b = builder.row_json("b").unwrap();
+        let generation = builder.finish().unwrap();
+        let mut restored = WasmDocumentIndexBuilder::new(&header).unwrap();
+        restored.add_persisted("a", &a).unwrap();
+        restored.add_persisted("b", &b).unwrap();
+        let restored = restored.finish().unwrap();
+        assert_eq!(
+            generation.snapshot_json().unwrap(),
+            restored.snapshot_json().unwrap()
+        );
+        assert_eq!(
+            generation.row_json("a").unwrap(),
+            restored.row_json("a").unwrap()
+        );
+        let backlinks: serde_json::Value =
+            serde_json::from_str(&restored.backlinks_json("b", "", 10.0).unwrap()).unwrap();
+        assert_eq!(backlinks["edges"].as_array().unwrap().len(), 1);
+        assert_eq!(backlinks["edges"][0]["source"]["id"], "a");
+        assert_eq!(backlinks["complete"], true);
+    }
+    #[test]
+    fn owned_literal_page_keeps_generation_alive_and_reads_one_projection_at_a_time() {
+        let mut builder = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        builder.add_text("a", b"needle\n").unwrap();
+        builder.add_binary("b").unwrap();
+        let generation = builder.finish().unwrap();
+        let mut page = generation.open_literal("needle", "", 1.0).unwrap();
+        drop(generation); // Arc in the owned portable page retains exact facts.
+        let request: serde_json::Value =
+            serde_json::from_str(&page.next_read_json().unwrap()).unwrap();
+        assert_eq!(request["id"], "a");
+        page.accept(b"needle\n").unwrap();
+        let first = page.finish_json().unwrap();
+        assert_eq!(first, page.finish_json().unwrap());
+        let report: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(report["hits"][0]["entry"]["id"], "a");
+        assert_eq!(report["hits"][0]["line"], 0);
+    }
+    #[test]
+    fn pagination_continues_beyond_retained_token_capacity_and_uppercase_markdown_is_extracted() {
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"][0]["path"] = serde_json::json!("A.MD");
+        let source = format!("# Heading\n{}", "needle\n".repeat(24));
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
+        builder.add_text("a", source.as_bytes()).unwrap();
+        builder.add_binary("b").unwrap();
+        let row: serde_json::Value = serde_json::from_str(&builder.row_json("a").unwrap()).unwrap();
+        assert_eq!(row["metadata"]["headings"][0]["text"], "Heading");
+        let generation = builder.finish().unwrap();
+        let mut token = String::new();
+        let mut hits = 0;
+        loop {
+            let mut page = generation.open_literal("needle", &token, 1.0).unwrap();
+            if page.next_read_json().unwrap() != "null" {
+                page.accept(source.as_bytes()).unwrap();
+            }
+            let report: serde_json::Value =
+                serde_json::from_str(&page.finish_json().unwrap()).unwrap();
+            hits += report["hits"].as_array().unwrap().len();
+            if let Some(next) = report["next"].as_str() {
+                token = next.into();
+            } else {
+                break;
+            }
+        }
+        assert_eq!(hits, 24);
     }
 }
