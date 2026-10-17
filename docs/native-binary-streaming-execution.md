@@ -199,3 +199,13 @@ The Native wrapper is independently source-reviewed, and the existing staged
 fixture now checks its original digest after a newer write. Its Store method and
 `BinaryContentManifest` alias are a required follow-up dependency; no compile or
 runtime claim is made for this seam.
+
+### Host pin recovery seam
+
+Combined source review found that host recovery already calls owner-scoped pin
+listing. Native now exposes `list_binary_reads(client)` under the filesystem lock
+with before/after authority checks and the Store's four-pin, current-local-store,
+exact-client bound. It returns only resume/close locators. The same independently
+reviewed follow-up makes `open_binary_read` run its final authority check after
+every retry/metadata validation error, preserving the original-pin-first flow.
+These changes are source-only; no additional build was started.

@@ -139,74 +139,76 @@ impl NativeVault {
     ) -> Result<BinaryReadSession> {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.paths.verify()?;
-        if let Some(reference) = self
-            .store
-            .list_binary_reads(client)?
-            .into_iter()
-            .find(|reference| reference.read_id() == read_id)
-        {
-            let session = self.store.resume_binary_read(client, reference.pin_id())?;
-            let state = session.state().ok_or_else(|| {
-                Error::Contract(zorid_core::ContractError::IdempotencyConflict {
-                    operation_id: read_id.clone(),
-                })
-            })?;
-            if state.id != *id {
-                return Err(zorid_core::ContractError::IdempotencyConflict {
-                    operation_id: read_id.clone(),
+        let outcome = (|| -> Result<BinaryReadSession> {
+            if let Some(reference) = self
+                .store
+                .list_binary_reads(client)?
+                .into_iter()
+                .find(|reference| reference.read_id() == read_id)
+            {
+                let session = self.store.resume_binary_read(client, reference.pin_id())?;
+                let state = session.state().ok_or_else(|| {
+                    Error::Contract(zorid_core::ContractError::IdempotencyConflict {
+                        operation_id: read_id.clone(),
+                    })
+                })?;
+                if state.id != *id {
+                    return Err(zorid_core::ContractError::IdempotencyConflict {
+                        operation_id: read_id.clone(),
+                    }
+                    .into());
                 }
-                .into());
+                if let Some(expected) =
+                    expected_revision.filter(|expected| *expected != &state.revision)
+                {
+                    return Err(zorid_core::ContractError::RevisionConflict {
+                        id: id.clone(),
+                        expected: expected.clone(),
+                        actual: state.revision.clone(),
+                    }
+                    .into());
+                }
+                return Ok(session);
+            }
+            let entry = self
+                .store
+                .read_metadata(id)?
+                .ok_or_else(|| zorid_core::ContractError::EntryNotFound { id: id.clone() })?;
+            if entry.state.deleted {
+                return Err(zorid_core::ContractError::EntryDeleted { id: id.clone() }.into());
+            }
+            if !self.store.is_visible_entry(id)? {
+                return Err(Error::Busy("hidden entry retains its physical publication"));
             }
             if let Some(expected) =
-                expected_revision.filter(|expected| *expected != &state.revision)
+                expected_revision.filter(|expected| *expected != &entry.state.revision)
             {
                 return Err(zorid_core::ContractError::RevisionConflict {
                     id: id.clone(),
                     expected: expected.clone(),
-                    actual: state.revision.clone(),
+                    actual: entry.state.revision.clone(),
                 }
                 .into());
             }
-            self.paths.verify()?;
-            return Ok(session);
-        }
-        let entry = self
-            .store
-            .read_metadata(id)?
-            .ok_or_else(|| zorid_core::ContractError::EntryNotFound { id: id.clone() })?;
-        if entry.state.deleted {
-            return Err(zorid_core::ContractError::EntryDeleted { id: id.clone() }.into());
-        }
-        if !self.store.is_visible_entry(id)? {
-            return Err(Error::Busy("hidden entry retains its physical publication"));
-        }
-        if let Some(expected) =
-            expected_revision.filter(|expected| *expected != &entry.state.revision)
-        {
-            return Err(zorid_core::ContractError::RevisionConflict {
-                id: id.clone(),
-                expected: expected.clone(),
-                actual: entry.state.revision.clone(),
-            }
-            .into());
-        }
-        let source = match &entry.content {
-            Some(ContentMetadata::BinaryRef {
-                reference: BinarySourceRef::Graph(source),
-            }) => source,
-            Some(ContentMetadata::BinaryRef { .. }) => {
-                return Err(zorid_store::StoreError::Corrupt(
-                    "current publication contains an inert capture".into(),
-                )
-                .into())
-            }
-            _ => return Err(Error::Unsupported("entry has no binary stream publication")),
-        };
-        let outcome = self
-            .store
-            .open_binary_read_with_id(client, read_id, &entry.state, source);
+            let source = match &entry.content {
+                Some(ContentMetadata::BinaryRef {
+                    reference: BinarySourceRef::Graph(source),
+                }) => source,
+                Some(ContentMetadata::BinaryRef { .. }) => {
+                    return Err(zorid_store::StoreError::Corrupt(
+                        "current publication contains an inert capture".into(),
+                    )
+                    .into())
+                }
+                _ => return Err(Error::Unsupported("entry has no binary stream publication")),
+            };
+            let outcome =
+                self.store
+                    .open_binary_read_with_id(client, read_id, &entry.state, source);
+            Ok(outcome?)
+        })();
         self.paths.verify()?;
-        Ok(outcome?)
+        outcome
     }
 
     pub fn begin_binary_stage(
@@ -296,6 +298,16 @@ impl NativeVault {
         let _guard = self.paths.lock(self.options.lock_timeout)?;
         self.paths.verify()?;
         let outcome = self.store.open_capture_read(client, source);
+        self.paths.verify()?;
+        Ok(outcome?)
+    }
+
+    /// Bounded owner-scoped locators for explicit resume/close recovery.
+    /// These locators do not construct a verified session or expose other owners.
+    pub fn list_binary_reads(&self, client: &OperationId) -> Result<Vec<BinaryReadRef>> {
+        let _guard = self.paths.lock(self.options.lock_timeout)?;
+        self.paths.verify()?;
+        let outcome = self.store.list_binary_reads(client);
         self.paths.verify()?;
         Ok(outcome?)
     }
