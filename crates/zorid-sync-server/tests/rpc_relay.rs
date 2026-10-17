@@ -477,7 +477,7 @@ async fn binary_web_exact_bytes_cors_and_frame_bounds_precede_decoder() {
                 .header("access-control-request-method", "POST")
                 .header(
                     "access-control-request-headers",
-                    "authorization,content-type,x-grpc-web",
+                    "authorization,content-type,x-grpc-web,grpc-accept-encoding",
                 )
                 .body(Body::empty())
                 .unwrap(),

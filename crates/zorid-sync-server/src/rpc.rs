@@ -209,6 +209,7 @@ fn router_with_state(state: RelayState, origins: &[String]) -> Result<Router> {
             header::HeaderName::from_static("x-grpc-web"),
             header::HeaderName::from_static("x-user-agent"),
             header::HeaderName::from_static("grpc-timeout"),
+            header::HeaderName::from_static("grpc-accept-encoding"),
             header::HeaderName::from_static("connect-protocol-version"),
         ])
         .expose_headers([
