@@ -47,6 +47,15 @@ if [[ "$MODE" == development ]]; then
   [[ "$IOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || fail 'IOS_TEAM_ID must be a ten-character Apple team ID.'
   [[ "$IOS_DEVICE_ID" =~ ^([A-Fa-f0-9]{40}|[A-Fa-f0-9]{8}-[A-Fa-f0-9]{16})$ ]] || fail 'IOS_DEVICE_ID must be one hardware UDID, not a name or list.'
   case "${IOS_ALLOW_PROVISIONING_UPDATES:-0}" in 0|1) ;; *) fail 'IOS_ALLOW_PROVISIONING_UPDATES must be 0 or 1.' ;; esac
+  DEV_SIGNING_STYLE=Automatic
+  if [[ "${IOS_DEV_PROFILE_UUID+x}" == x || "${IOS_DEV_SIGNING_IDENTITY+x}" == x ]]; then
+    : "${IOS_DEV_PROFILE_UUID:?Manual development signing requires IOS_DEV_PROFILE_UUID.}"
+    : "${IOS_DEV_SIGNING_IDENTITY:?Manual development signing requires IOS_DEV_SIGNING_IDENTITY.}"
+    [[ "$IOS_DEV_PROFILE_UUID" =~ ^[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$ ]] || fail 'IOS_DEV_PROFILE_UUID must be a profile UUID.'
+    [[ "$IOS_DEV_SIGNING_IDENTITY" =~ ^[A-Fa-f0-9]{40}$ ]] || fail 'IOS_DEV_SIGNING_IDENTITY must be the exact certificate SHA1 fingerprint.'
+    [[ "${IOS_ALLOW_PROVISIONING_UPDATES:-0}" == 0 ]] || fail 'Manual development signing forbids provisioning updates; unset IOS_ALLOW_PROVISIONING_UPDATES or set 0.'
+    DEV_SIGNING_STYLE=Manual
+  fi
   # Resolve existing ancestors/symlinks before creating any output. Never reuse a stale build.
   IOS_OUTPUT_DIR="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).expanduser().resolve())' "$IOS_OUTPUT_DIR")"
   PHYSICAL_ROOT="$(pwd -P)"
@@ -86,13 +95,18 @@ if [[ "$MODE" == development ]]; then
   # Override both general and SDK-specific paths so no iphoneos Release library is selected.
   XCODE_ARGS+=(
     'PRODUCT_BUNDLE_IDENTIFIER=app.zorid.notes.dev'
-    "DEVELOPMENT_TEAM=$IOS_TEAM_ID" CODE_SIGN_STYLE=Automatic 'CODE_SIGN_IDENTITY=Apple Development'
-    'PROVISIONING_PROFILE_SPECIFIER=' 'PROVISIONING_PROFILE='
+    'ZORID_APP_DISPLAY_NAME=Zorid Dev'
+    "DEVELOPMENT_TEAM=$IOS_TEAM_ID" 'PROVISIONING_PROFILE='
     'LIBRARY_SEARCH_PATHS="$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/debug"'
     'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]="$(PROJECT_DIR)/../../mobile/rust/target/aarch64-apple-ios/debug"'
   )
-  if [[ "${IOS_ALLOW_PROVISIONING_UPDATES:-0}" == 1 ]]; then
-    XCODE_ARGS+=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration)
+  if [[ "$DEV_SIGNING_STYLE" == Manual ]]; then
+    XCODE_ARGS+=(CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=$IOS_DEV_SIGNING_IDENTITY" "PROVISIONING_PROFILE_SPECIFIER=$IOS_DEV_PROFILE_UUID")
+  else
+    XCODE_ARGS+=(CODE_SIGN_STYLE=Automatic 'CODE_SIGN_IDENTITY=Apple Development' 'PROVISIONING_PROFILE_SPECIFIER=')
+    if [[ "${IOS_ALLOW_PROVISIONING_UPDATES:-0}" == 1 ]]; then
+      XCODE_ARGS+=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration)
+    fi
   fi
   xcrun xcodebuild "${XCODE_ARGS[@]}" build
   printf 'Development app (app.zorid.notes.dev): %s\n' "$OUTPUT/DerivedData/Build/Products/Debug-iphoneos/App.app"

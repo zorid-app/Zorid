@@ -133,9 +133,10 @@ only with the usual care for unreleased schemas.
 
 Development bundle ID is fixed to **`app.zorid.notes.dev`**. It has a separate app
 sandbox from production `app.zorid.notes`, protecting production's installed data.
-The current Info.plist has a literal display name, so this source-only script
-keeps **Zorid** as the icon name; two installed icons may have the same name.
-No project/Info.plist edits are required. Capacitor runtime config still comes
+Development passes `ZORID_APP_DISPLAY_NAME=Zorid Dev` as one Xcode argument.
+Owner commit `4c299d86` supplies the Info.plist variable and default **Zorid**;
+integrate it before expecting the **Zorid Dev** icon name. This worker makes no
+project/Info.plist edits. Distribution retains the owner's default name. Capacitor runtime config still comes
 from the checked-in config; the native bundle override and installed app identity
 are `.dev`. Future app groups/keychain groups or other shared-container features
 must be reviewed before assuming this separate ID alone isolates such features.
@@ -162,7 +163,38 @@ export IOS_OUTPUT_DIR="$HOME/Library/Caches/zorid-iphone-dev-1"
 bash mobile/scripts/ios-run.sh build
 ```
 
-By default Xcode uses existing available development signing assets without the
+For the existing owner-verified development profile, prefer manual signing:
+set both `IOS_DEV_PROFILE_UUID` and `IOS_DEV_SIGNING_IDENTITY` to the exact profile
+UUID and certificate SHA1 fingerprint supplied by Apple owner. These are nonsecret
+identifiers, passed as quoted scalar build settings. Setting either variable
+requires both to be nonempty and valid; invalid/incomplete settings fail without
+falling back to automatic signing. Manual signing uses `CODE_SIGN_STYLE=Manual`,
+`PROVISIONING_PROFILE_SPECIFIER=<UUID>` and `CODE_SIGN_IDENTITY=<fingerprint>`.
+It never adds provisioning network flags; `IOS_ALLOW_PROVISIONING_UPDATES=1` is
+rejected in this branch. The matching profile must already be installed and its
+private-key identity available in the local keychain; no distribution wrapper,
+key export/import or provisioning mutation is performed by this script.
+
+Apple owner reports that the private local contract at
+`~/certificates/apple/apps/zorid/development/signing-contract-private.json`
+contains `team_id`, `profile_uuid`, `identity_sha1`, `profile_path`,
+`code_sign_identity`, `device_udid`, `development`, and `bundle_id`. The retained
+`current.mobileprovision` is alongside it. Apple owner verified the existing
+wildcard development profile covers the phone and development bundle, with
+Developer Mode enabled. Populate `IOS_TEAM_ID`, `IOS_DEVICE_ID`,
+`IOS_DEV_PROFILE_UUID` and `IOS_DEV_SIGNING_IDENTITY` from that contract privately;
+do not dump it into logs or source and do not `source`/`eval` JSON. Owner still
+must verify build entitlements fit the profile and actual signing succeeds.
+
+```sh
+# Set these from the Apple owner's private contract; use its identity_sha1, not a label.
+export IOS_DEV_PROFILE_UUID IOS_DEV_SIGNING_IDENTITY
+export IOS_OUTPUT_DIR="$HOME/Library/Caches/zorid-iphone-dev-manual-1"
+IOS_ALLOW_PROVISIONING_UPDATES=0 bash mobile/scripts/ios-run.sh build
+```
+
+With both manual variables unset, Xcode uses automatic development signing and
+existing available signing assets for the explicitly supplied team, without the
 provisioning update/device-registration flags. If those assets are missing, the
 explicit owner-authorized command below permits Xcode automatic signing to create
 or update development signing resources and register the selected phone. Use a
@@ -170,21 +202,24 @@ fresh output path even after a failed build; preserve prior evidence rather than
 removing/reusing an output automatically:
 
 ```sh
+unset IOS_DEV_PROFILE_UUID IOS_DEV_SIGNING_IDENTITY
 export IOS_OUTPUT_DIR="$HOME/Library/Caches/zorid-iphone-dev-2"
 IOS_ALLOW_PROVISIONING_UPDATES=1 bash mobile/scripts/ios-run.sh build
 ```
 
 `IOS_ALLOW_PROVISIONING_UPDATES` accepts only `0` (default) or `1`. Only `1` adds
 both `-allowProvisioningUpdates` and `-allowProvisioningDeviceRegistration` to
-this explicit build. The scripts do not log in or accept agreements, import a
+an explicit automatic-signing build only. Manual signing never uses these flags.
+The scripts do not log in or accept agreements, import a
 private key, use an API key/password argument, or change the project signing
 settings on disk. Xcode uses its signed-in Apple Account/local keychain.
 
 Build sequence is the production `webpack --env target=desktop` bundle plus
 `cap copy ios`, then `cargo build --locked --manifest-path mobile/rust/Cargo.toml
 --target aarch64-apple-ios -j1` **without `--release`**, and Xcode App project/scheme
-Debug/iphoneos, arm64, `-jobs 1`, selected phone destination, automatic signing and
-explicit development team. Both general and `iphoneos` SDK-specific
+Debug/iphoneos, arm64, `-jobs 1`, selected phone destination, manual or automatic
+development signing as selected above, explicit development team and display name
+**Zorid Dev**. Both general and `iphoneos` SDK-specific
 `LIBRARY_SEARCH_PATHS` are overridden to
 `mobile/rust/target/aarch64-apple-ios/debug`; the existing project's iphoneos
 Release path cannot accidentally supply this library. `OTHER_LDFLAGS` stays under
