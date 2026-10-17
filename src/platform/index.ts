@@ -55,7 +55,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
       compareAndWrite:(path,expectedContent,content,expectedIdentity)=>execute({kind:'writeText',path,expectedContent,content,...(expectedIdentity?{expectedEntryId:expectedIdentity.entryId,expectedRevision:expectedIdentity.revision}:{})}),
       createBinary:(path,data)=>execute({kind:'createBinary',path,data}),
       writeBinary:(path,data)=>execute({kind:'writeBinary',path,data}),
-      mkdir:path=>execute({kind:'mkdir',path}),rename:(path,destination)=>execute({kind:'move',path,destination}),
+      mkdir:path=>execute({kind:'mkdir',path}),rename:(path,destination,expectedIdentity)=>execute({kind:'move',path,destination,...(expectedIdentity!==undefined?{expectedEntryId:expectedIdentity.entryId,expectedRevision:expectedIdentity.revision}:{})}),
       trash:path=>execute({kind:'trash',path}),remove:(path,force)=>execute({kind:'delete',path,force}),
     };
     durableWrites = Object.freeze<DurableWrites>({
@@ -92,7 +92,10 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
       ...(bridge.compareAndWrite ? { compareAndWrite: (path: string, expectedContent: string, contents: string) => bridge.compareAndWrite!(info.path, path, expectedContent, contents) } : {}),
       writeBinary: (path, data) => bridge.writeBinary(info.path, path, data),
       mkdir: path => bridge.mkdir(info.path, path),
-      rename: (from, to) => bridge.rename(info.path, from, to),
+      rename: async (from, to, expectedIdentity) => {
+        if(expectedIdentity!==undefined)throw Object.assign(new Error('Witnessed rename requires an admitted durable command context'),{code:'revision_conflict'});
+        await bridge.rename(info.path, from, to);
+      },
       trash: path => bridge.trash(info.path, path),
       ...(bridge.remove ? { remove: (path: string, force: boolean) => bridge.remove!(info.path, path, force) } : {}),
       ...commands,

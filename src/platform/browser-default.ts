@@ -110,7 +110,7 @@ export function defaultBrowserAdapter(runtime:BrowserCoreRuntime,consumer:Browse
     compareAndWrite:(path,expectedContent,content,expectedIdentity)=>execute({kind:'writeText',path,content,expectedContent,...(expectedIdentity?{expectedEntryId:expectedIdentity.entryId,expectedRevision:expectedIdentity.revision}:{})}),
     createBinary:(path,data)=>streams?binary('createBinary',path,data):execute({kind:'createBinary',path,data}),
     writeBinary:(path,data)=>streams?binary('writeBinary',path,data):execute({kind:'writeBinary',path,data}),
-    mkdir:path=>execute({kind:'mkdir',path}),rename:(path,destination)=>execute({kind:'move',path,destination}),
+    mkdir:path=>execute({kind:'mkdir',path}),rename:(path,destination,expectedIdentity)=>execute({kind:'move',path,destination,...(expectedIdentity!==undefined?{expectedEntryId:expectedIdentity.entryId,expectedRevision:expectedIdentity.revision}:{})}),
     trash:path=>execute({kind:'trash',path}),remove:(path,force)=>execute({kind:'delete',path,force}),
   };
 }

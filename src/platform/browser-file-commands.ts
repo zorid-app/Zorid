@@ -27,10 +27,10 @@ export type BrowserFileCommandInput = Base & ({
     data: Uint8Array;
 } & Omit<Expected, 'expectedContent'>) | {
     kind: 'mkdir' | 'trash';
-} | {
+} | ({
     kind: 'move';
     destination: string;
-} | {
+} & Omit<Expected, 'expectedContent'>) | {
     kind: 'delete';
     force: boolean;
 });
@@ -179,6 +179,8 @@ export function createBrowserFileCommands(backend: BrowserFileCommandBackend, as
                 throw failure('revision_conflict');
             return [{ operationId: request.operationId, mutation: { type: 'write', id: current.entry.id, expected: current.entry.revision }, mode: null }];
         }
+        if (request.kind === 'move' && request.expectedEntryId !== undefined && (!current || current.entry.id !== request.expectedEntryId || current.entry.revision !== request.expectedRevision))
+            throw failure('revision_conflict');
         if (!current)
             throw failure('not_found');
         let destination = request.destination;
