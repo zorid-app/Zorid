@@ -1,0 +1,12 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Zorid browser sync smoke</title>
+<style>body{font:16px system-ui;max-width:900px;margin:2rem auto;padding:0 1rem}button,input,textarea{font:inherit;margin:.3rem;padding:.4rem}textarea{display:block;width:95%;height:7rem}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#eee;padding:1rem}label{display:block}</style>
+<h1>Browser sync smoke</h1><p>Disposable fixture only. Uses the actual browser runtime, worker, Rust/WASM and HTTP relay. Credentials stay in memory; import again after reload.</p>
+<p id="identity"></p><a id="peer" target="_blank" rel="noopener">Open independent peer</a>
+<label>Private fixture credential file <input id="credentials" type="file" accept="application/json,.json"></label>
+<button id="configure">Import and connect</button><button id="sync">Sync once</button><button id="list">List files</button><button id="recover">Reconcile settled intents</button><button id="reload">Reload client</button>
+<label>Path <input id="path" value="note.md"></label>
+<label>Text<textarea id="text">Hello from browser</textarea></label>
+<button id="save">Create / save text</button>
+<label>Binary file <input id="binary" type="file"></label><button id="save-binary">Create / save binary at path</button>
+<button id="read">Read path</button><pre id="result" aria-live="polite">Opening worker…</pre>
+</html>
