@@ -21,7 +21,7 @@ function strings(value){return Array.isArray(value)&&value.length<=256&&value.ev
 function captureDocumentRequest(input){
   if(!keys(input,['schemaVersion','command'])||input.schemaVersion!==1||!object(input.command)||typeof input.command.op!=='string')throw fail('invalid_document_request');
   const command=input.command,op=command.op;
-  const fields={status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options']}[op];
+  const fields={status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options']}[op];
   if(!fields||!keys(command,['op',...fields],['op',...fields.filter(key=>!['cursor','viewName','options'].includes(key))]))throw fail('invalid_document_request');
   const captured={op};
   for(const key of fields){
@@ -62,7 +62,7 @@ function decodeDocumentReply(request,marker,bytes){
   if(!keys(reply,['schemaVersion','op','value'])||reply.schemaVersion!==1||reply.op!==op)throw fail('invalid_document_response');
   const value=reply.value;
   let valid=false;
-  if(['initialize','rebuild','close'].includes(op))valid=value===true;
+  if(['initialize','rebuild','close','discard'].includes(op))valid=value===true;
   else if(op==='status')valid=object(value)&&['uninitialized','rebuild_required','building','ready'].includes(value.state)
     &&(value.state!=='ready'||snapshot(value.snapshot)&&decimal(value.coveredWatermark)&&decimal(value.observedSourceHead)&&typeof value.coverageComplete==='boolean');
   else if(['begin','resume'].includes(op))valid=keys(value,['snapshot'])&&snapshot(value.snapshot)&&(op!=='resume'||same(value.snapshot,command.snapshot));

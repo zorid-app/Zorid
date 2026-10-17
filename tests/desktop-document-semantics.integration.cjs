@@ -93,13 +93,18 @@ test('actual desktop semantic transport retains one snapshot through independent
   assert.deepEqual(base.snapshot,snapshot);assert.deepEqual(base.value.result.snapshotId,snapshot);
   assert.deepEqual(base.value.result.rows.map(row=>row.entryId),['source']);
   assert.equal(base.value.result.rows[0].values['config.TITLE'].value,'first');
+  const staleStage=await other('begin');
   await cli(root,['write','--id','source','--expected-revision',oldRevision,'--operation-id','independent-write','--input','-'],'# Changed\nNo old links or literal text.\n');
+  await assert.rejects(other('pump',{snapshot:staleStage.snapshot}),{code:'stale_source'});
+  assert.equal(await other('discard',{snapshot:staleStage.snapshot}),true,'discard bypasses stale source/index publication fences');
+  assert.equal(await other('discard',{snapshot:staleStage.snapshot}),true,'exact discarded-stage retry is idempotent');
   assert.deepEqual(await call('metadata',{pinId,id:'source'}),metadata,'current bodies cannot replace retained metadata');
   const next=await call('search',{pinId,query:'needle',cursor:search.cursor,limit:1});
   assert.equal(next.result.value.hits[0].entry.revision,oldRevision);
   assert.equal(next.result.value.hits[0].line,6);
   const nextSnapshot=await build(other);
   assert.notDeepEqual(nextSnapshot,snapshot);
+  await assert.rejects(other('discard',{snapshot:nextSnapshot}),{code:'stale_index'});
   const newPin='1';await other('open',{pinId:newPin});
   const updated=await other('metadata',{pinId:newPin,id:'source'});
   assert.notEqual(updated.value.entry.revision,oldRevision);

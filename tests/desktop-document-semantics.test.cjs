@@ -22,6 +22,7 @@ test('semantic requests snapshot bounded known fields without accepting native c
     request('base',{pinId:'1',id:'base',options:{currentRecord:{}}}),
     request('base',{pinId:'1',id:'base',options:{searchTerms:['x'.repeat(4097)]}}),
     request('resume',{snapshot:{...snapshot,generation:'01'}}),
+    request('discard',{snapshot:{...snapshot,generation:'01'}}),
     {schemaVersion:2,command:{op:'status'}},
   ])assert.throws(()=>captureDocumentRequest(input),error=>!!error.code);
 });
@@ -38,6 +39,7 @@ test('typed semantic body validates marker, operation, Unicode metadata identity
     [{documents:true,schemaVersion:1,bytes:MAX_DOCUMENT_RESPONSE+1},Buffer.alloc(1)],
     [{documents:true,schemaVersion:1,bytes:1},Buffer.from([255])],
   ])assert.throws(()=>decodeDocumentReply(input,badMarker,badBytes),{code:'invalid_document_response'});
+  assert.equal(decodeDocumentReply(request('discard',{snapshot}),...wire('discard',true)),true);
   const page={snapshot,hits:[],next:null,scanComplete:true,coverageComplete:false,complete:false,sourceBytes:0,documents:0};
   const search=request('search',{pinId:'1',query:'x',cursor:null,limit:1});
   assert.equal(decodeDocumentReply(search,...wire('search',{result:{snapshot,source,coverageComplete:false,value:page},cursor:null})).result.value.complete,false);

@@ -45,6 +45,9 @@ enum DocumentCommand {
     Publish {
         snapshot: IndexSnapshotId,
     },
+    Discard {
+        snapshot: IndexSnapshotId,
+    },
     Open {
         pin_id: OperationId,
     },
@@ -285,6 +288,14 @@ pub(crate) fn execute(
                     "publish",
                     vault.publish_document_index(&stage).map_err(native)?,
                 )
+            }
+            Discard { snapshot } => {
+                // Cleanup must work after stale source/index work. Do not call
+                // resume_document_index, whose publication fences are stricter.
+                vault
+                    .discard_document_index_stage(&snapshot)
+                    .map_err(native)?;
+                answer("discard", true)
             }
             Open { pin_id } => {
                 let sequence = pin_sequence(&pin_id)?;
