@@ -69,6 +69,19 @@ areas rather than claiming that every upstream edge case has been exhausted.
 ### Integration checkpoint — 2026-10-17 09:35 local
 
 Current authoritative update (older bullets below record preceding stages):
+- Crash21481 terminated confirmed ownapp37756+host37814 with SIGKILL; restart3337
+  retained checkpoint exactly and CLI physical bytes SHA256
+  a54edd43b725a162f7e7bcc95d56f36e208a16c982b32348c71c266f13bfd7f7.
+  Actual AX blocks workspace on recovered conflict. browser_sync_plan owns fix:
+  initial render must not flush unseen recovered draft; preserve baseline/CAS and
+  offer note-local recovery, plus user-requested improved workspace error screen.
+  Evidence /private/tmp/zorid-race-after-crash.json. Restart3337 was asked to quit
+  via normal menu but exit not yet confirmed; revalidate before new launch.
+- Default activation source ongoing desktop-rust-default: local-only bootstrap,
+  per-window identities and host discovery;15 bounded checks passed. Registry
+  4a3d6f0+fb25329 independently source-approved,5 checks passed. Lifecycle reviewer
+  found retire/open race; owner must fence per-root closing + identity cache delete.
+  Packaging13 bounded checks passed, source review underway, no full package run.
 - Actual desktop/CLI race now exercised on fresh lockfixed fixture. Observer
   /private/tmp/zorid-desktop-cli-race.py saw desktop checkpoint draft token
   DesktopRaceToken1017 at old revisionf5e0aeec-9d04-47f2-b7eb-4bed68da9e5e;
