@@ -18,6 +18,9 @@ use zorid_store::{
 };
 
 const CLIENT: &str = "zorid_cli_binary";
+// Separate from mutation authority and every desktop/editor owner. The existing
+// canonical-UUID OS lease permits safe cleanup after a previous CLI read died.
+const READ_CLIENT: &str = "903d6a52-2b38-43e3-9ffb-d582bcf6c954";
 fn client() -> Result<OperationId> {
     Ok(OperationId::new(CLIENT)?)
 }
@@ -215,28 +218,76 @@ fn consume_input(
     Ok((length, Sha256Digest(hash.finalize().into())))
 }
 
-/// Preserve the existing raw/base64 JSON schema while writing one verified
-/// range at a time. A failure may leave partial stdout; stderr/exit report it.
+fn admission(error: zorid_native::ClientAdmissionError) -> Failure {
+    match error {
+        zorid_native::ClientAdmissionError::Native(error) => error.into(),
+        zorid_native::ClientAdmissionError::InUse => Failure::new(
+            "client_in_use",
+            "Another CLI binary read owns this vault; retry after it completes",
+            3,
+        ),
+        zorid_native::ClientAdmissionError::InvalidClient => Failure::new(
+            "invalid_identifier",
+            "Binary read owner identity is invalid",
+            2,
+        ),
+    }
+}
+
+/// Preserve raw/base64 JSON while writing one verified range at a time. The
+/// owner lease spans output and cleanup; failed output must be discarded.
 pub fn read(
     vault: &mut NativeVault,
     id: &EntryId,
     raw: bool,
-    read_id: &OperationId,
+    read_id: Option<&OperationId>,
 ) -> Result<bool> {
-    let Some(metadata) = vault.read_metadata(id)? else {
-        return Ok(false);
-    };
-    if !matches!(metadata.content, Some(ContentMetadata::BinaryRef { .. })) {
+    // Unspecified reads may inspect only metadata to preserve the inline path.
+    // Explicit read IDs restore their original pin before inspecting new state.
+    if read_id.is_none()
+        && !matches!(
+            vault.read_metadata(id)?.and_then(|entry| entry.content),
+            Some(ContentMetadata::BinaryRef { .. })
+        )
+    {
         return Ok(false);
     }
-    let session = vault.open_binary_read(&client()?, read_id, id, None)?;
+    let owner = OperationId::new(READ_CLIENT)?;
+    let lease = vault.claim_client(&owner).map_err(admission)?;
+    let pins = vault.list_binary_reads(&owner)?;
+    let prior = pins
+        .iter()
+        .find(|pin| read_id.is_some_and(|id| id == pin.read_id()))
+        .cloned();
+    for pin in &pins {
+        if prior.as_ref() != Some(pin) {
+            vault.close_binary_read(pin)?;
+        }
+    }
+    vault.verify_client_lease(&lease).map_err(admission)?;
+    let session = if let Some(prior) = prior {
+        let session = vault.resume_binary_read(&owner, prior.pin_id())?;
+        if session.state().is_none_or(|state| &state.id != id) {
+            return Err(conflict(prior.read_id()));
+        }
+        session
+    } else {
+        if !matches!(
+            vault.read_metadata(id)?.and_then(|entry| entry.content),
+            Some(ContentMetadata::BinaryRef { .. })
+        ) {
+            return Ok(false);
+        }
+        let generated = OperationId::new(uuid::Uuid::new_v4().to_string())?;
+        vault.open_binary_read(&owner, read_id.unwrap_or(&generated), id, None)?
+    };
     let result = (|| {
         let state = session.state().ok_or_else(|| {
             Failure::new("corrupt_storage", "Binary read has no committed entry", 1)
         })?;
         let mut out = io::BufWriter::new(io::stdout().lock());
         if raw {
-            emit_ranges(vault, &session, &mut out)?;
+            emit_ranges(vault, &session, &lease, &mut out)?;
         } else {
             out.write_all(b"{\"version\":1,\"ok\":true,\"result\":{\"entry\":")
                 .map_err(|_| output_error())?;
@@ -244,25 +295,29 @@ pub fn read(
             out.write_all(b",\"encoding\":\"base64\",\"bytes\":\"")
                 .map_err(|_| output_error())?;
             let mut encoded = EncoderWriter::new(&mut out, &STANDARD);
-            emit_ranges(vault, &session, &mut encoded)?;
+            emit_ranges(vault, &session, &lease, &mut encoded)?;
             encoded.finish().map_err(|_| output_error())?;
             drop(encoded);
             out.write_all(b"\"}}\n").map_err(|_| output_error())?;
         }
-        out.flush().map_err(|_| output_error())
+        out.flush().map_err(|_| output_error())?;
+        vault.verify_client_lease(&lease).map_err(admission)
     })();
-    let close = vault.close_binary_read(session.reference());
+    // Always try closing the pin, including output/range errors. A typed fatal
+    // storage failure during cleanup takes precedence over ordinary output I/O.
+    vault.close_binary_read(session.reference())?;
     result?;
-    close?;
     Ok(true)
 }
 fn emit_ranges(
     vault: &NativeVault,
     session: &zorid_store::BinaryReadSession,
+    lease: &zorid_native::ClientLease,
     out: &mut impl Write,
 ) -> Result<()> {
     let mut offset = 0u64;
     while offset < session.len() {
+        vault.verify_client_lease(lease).map_err(admission)?;
         let chunk = vault.read_binary_range(session, offset, BINARY_READ_MAX_RANGE_BYTES)?;
         let end = offset
             .checked_add(chunk.bytes.len() as u64)
@@ -280,6 +335,7 @@ fn emit_ranges(
             ));
         }
         out.write_all(&chunk.bytes).map_err(|_| output_error())?;
+        vault.verify_client_lease(lease).map_err(admission)?;
         offset = end;
     }
     Ok(())

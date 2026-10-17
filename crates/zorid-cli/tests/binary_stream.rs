@@ -11,7 +11,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use zorid_core::EntryId;
+use zorid_core::{EntryId, OperationId};
 use zorid_file_sync::Scope;
 use zorid_native::NativeVault;
 use zorid_sync_protocol::{RealmId, VaultId};
@@ -19,6 +19,7 @@ use zorid_sync_protocol::{RealmId, VaultId};
 const CHUNK: usize = 128 * 1024;
 const LENGTH: usize = 16 * 1024 * 1024 + 17;
 const MAX_CONTROL: usize = 128 * 1024;
+const READ_CLIENT: &str = "903d6a52-2b38-43e3-9ffb-d582bcf6c954";
 fn pattern(bytes: &mut [u8], offset: usize, seed: usize) {
     for (index, byte) in bytes.iter_mut().enumerate() {
         *byte = ((offset + index + seed) % 251) as u8;
@@ -192,6 +193,19 @@ fn independent_cli_streams_large_binary_stdin_file_read_write_and_exact_retries(
     assert_eq!(created["durable_local_commit"], true);
     assert_eq!(created["projection"]["state"], "projected");
     compare(File::open(root.join("large.bin")).unwrap(), 7);
+    // Simulate an earlier reader dying without Close. No lease remains; the
+    // next independent CLI owner can reap only its dedicated owner's pins.
+    {
+        let mut vault = NativeVault::open_existing(&root).unwrap();
+        vault
+            .open_binary_read(
+                &OperationId::new(READ_CLIENT).unwrap(),
+                &OperationId::new("abandoned-read").unwrap(),
+                &EntryId::new("large-binary").unwrap(),
+                None,
+            )
+            .unwrap();
+    }
     let raw = temp.path().join("read.raw");
     let (status, errors) = invoke(
         &root,
@@ -209,6 +223,21 @@ fn independent_cli_streams_large_binary_stdin_file_read_write_and_exact_retries(
     assert!(status.success(), "{}", String::from_utf8_lossy(&errors));
     assert!(errors.is_empty());
     compare(File::open(&raw).unwrap(), 7);
+    {
+        let mut vault = NativeVault::open_existing(&root).unwrap();
+        let owner = OperationId::new(READ_CLIENT).unwrap();
+        assert!(vault.list_binary_reads(&owner).unwrap().is_empty());
+        // Retain an explicit old view before the next Write. Its caller ID
+        // selects that original pin before newer publication metadata.
+        vault
+            .open_binary_read(
+                &owner,
+                &OperationId::new("original-read").unwrap(),
+                &EntryId::new("large-binary").unwrap(),
+                None,
+            )
+            .unwrap();
+    }
     let input = temp.path().join("replacement.bin");
     generate(File::create(&input).unwrap(), 37).unwrap();
     let write = [
@@ -225,6 +254,22 @@ fn independent_cli_streams_large_binary_stdin_file_read_write_and_exact_retries(
     let written = success(&root, &write, None, &output);
     assert_eq!(written["durable_local_commit"], true);
     compare(File::open(root.join("large.bin")).unwrap(), 37);
+    let (status, errors) = invoke(
+        &root,
+        &[
+            "read",
+            "--id",
+            "large-binary",
+            "--raw",
+            "--read-id",
+            "original-read",
+        ],
+        None,
+        &raw,
+    );
+    assert!(status.success(), "{}", String::from_utf8_lossy(&errors));
+    assert!(errors.is_empty());
+    compare(File::open(&raw).unwrap(), 7);
     assert_eq!(
         success(&root, &write, None, &output)["commit"],
         written["commit"]

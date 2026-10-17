@@ -466,7 +466,7 @@ fn run(args: Args) -> Result<Output> {
     if matches!(
         &args.command,
         Command::Create { binary: true, .. } | Command::Write { .. }
-    ) && vault.family_status()?.scope.is_some()
+    ) && vault.identity()?.vault_id.is_some()
     {
         match &args.command {
             Command::Create {
@@ -596,9 +596,8 @@ fn run(args: Args) -> Result<Output> {
         Command::List => json!({"entries":vault.list()?}),
         Command::Read { id, raw, read_id } => {
             let id = EntryId::new(id)?;
-            let read_id =
-                OperationId::new(read_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()))?;
-            if binary::read(&mut vault, &id, raw, &read_id)? {
+            let read_id = read_id.map(OperationId::new).transpose()?;
+            if binary::read(&mut vault, &id, raw, read_id.as_ref())? {
                 return Ok(Output::Streamed);
             }
             let entry = vault
