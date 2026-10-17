@@ -141,9 +141,11 @@ fn run(endpoint: String, commands: Receiver<Command>, ready: Reply<()>) {
     // Direct literal-loopback HTTP/2 connection. Tonic does not use HTTP proxy
     // environment variables, follow redirects or retry unary requests. No
     // compression features/encodings are enabled on this generated client.
-    let channel = match runtime.block_on(endpoint.connect()) {
-        Ok(channel) => channel,
-        Err(_) => {
+    let channel = match runtime
+        .block_on(async { tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect()).await })
+    {
+        Ok(Ok(channel)) => channel,
+        _ => {
             let _ = ready.send(Err(error("sync_transport")));
             return;
         }
@@ -160,9 +162,9 @@ fn run(endpoint: String, commands: Receiver<Command>, ready: Reply<()>) {
                     .max_encoding_message_size(rpc::MAX_CONTROL_BYTES)
                     .max_decoding_message_size(rpc::MAX_CONTROL_BYTES);
                 let result = runtime.block_on(async {
-                    client
-                        .hello(request)
+                    tokio::time::timeout(REQUEST_TIMEOUT, client.hello(request))
                         .await
+                        .map_err(|_| error("sync_transport"))?
                         .map(|r| r.into_inner())
                         .map_err(status)
                 });
@@ -174,9 +176,9 @@ fn run(endpoint: String, commands: Receiver<Command>, ready: Reply<()>) {
                     .max_encoding_message_size(rpc::MAX_APPEND_MESSAGE)
                     .max_decoding_message_size(rpc::MAX_CONTROL_BYTES);
                 let result = runtime.block_on(async {
-                    client
-                        .append(request)
+                    tokio::time::timeout(REQUEST_TIMEOUT, client.append(request))
                         .await
+                        .map_err(|_| error("sync_transport"))?
                         .map(|r| r.into_inner())
                         .map_err(status)
                 });
@@ -188,9 +190,9 @@ fn run(endpoint: String, commands: Receiver<Command>, ready: Reply<()>) {
                     .max_encoding_message_size(rpc::MAX_CONTROL_BYTES)
                     .max_decoding_message_size(rpc::MAX_PULL_MESSAGE);
                 let result = runtime.block_on(async {
-                    client
-                        .pull(request)
+                    tokio::time::timeout(REQUEST_TIMEOUT, client.pull(request))
                         .await
+                        .map_err(|_| error("sync_transport"))?
                         .map(|r| r.into_inner())
                         .map_err(status)
                 });
