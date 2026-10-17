@@ -116,6 +116,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Native resource update23:48UTC: build8 app/helper cleanup confirmed, phone8 skipped.
+Granted continued exclusive Simulator9→signed phoneDev9 slot to native owner for
+frozen3288c1bb (95df87fa + reviewed minimum-one navigation only). Actual8 Settings,
+Rust search/open/return pass; no-typing caret pixel acceptance remains unverified,
+later capture was contaminated by typing. Menu/import/loading/tabs remain outside9.
+Root import candidate5fc59cae checks wait for explicit slot return; no root heavy
+job or shared dependency-tree mutation while native owner holds the slot.
+
 Latest user design supersedes the initial task contract: ordinary Markdown records
 reference configurable vault type definitions; task behavior is an optional type
 capability mapping status categories/planned day/deadline/recurrence/reminders.
