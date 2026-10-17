@@ -289,6 +289,13 @@ confirmed for Zorid app actions, not shell commands; owner notified.
 
 ### 2026-10-17 — Native follow-up ownership and phone7
 
+Latest navigation correction23:38UTC: navigation bar must always contain at least
+one item. This supersedes the earlier explicit-empty configuration. Native371
+prepares a separate minimal patch: normalize empty/malformed preferences to Notes,
+reject removing or dragging out the final item. Independent review/helper checks
+and actual UI acceptance remain pending. Finish Simulator8 checks but skip phone8;
+request exact reviewed build9 candidate before compiling/installing replacement.
+
 Follow-up23:37UTC: opening a vault or file should navigate immediately to its
 destination and show the loading skeleton there. Returning home currently makes
 all rows briefly look active/opened. Native owner assigned destination loading to
