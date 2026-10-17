@@ -110,6 +110,9 @@ export function createCanvasMarkdownCard(document: Document, options: CanvasMark
     try {
       session.update(value, source);
       source = session.getText(); draftError = undefined; status.textContent = '';
+      // Native input can arrive after focus has already returned to Reading.
+      // Keep its visible controls bound to the newly accepted source snapshot.
+      if (!editing) showPreview();
     } catch (error) { draftError = error; report(error); }
   }
   const ready = Promise.resolve().then(options.load).then(loaded => {
