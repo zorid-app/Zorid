@@ -204,6 +204,10 @@ private final class NativePagesCoordinator {
     private var generation = 0
     private var busy = false
     private var editorActive = false
+    private var visible = false
+    private var refreshRequested = false
+    private var refreshWork: DispatchWorkItem?
+    private var refreshGeneration = 0
     weak var owner: NativePagesController?
 
     init(vault: LocalVault, root: URL, session: NativeMobileSession) {
@@ -212,26 +216,78 @@ private final class NativePagesCoordinator {
         self.session = session
     }
 
+    private var pageActive: Bool {
+        guard visible, !editorActive, UIApplication.shared.applicationState == .active,
+              let owner = owner, owner.navigationController?.topViewController === owner,
+              let scene = owner.viewIfLoaded?.window?.windowScene else { return false }
+        return scene.activationState == .foregroundActive
+    }
+
+    func setVisible(_ visible: Bool) {
+        self.visible = visible
+        if visible { scheduleAutomaticRefresh() } else { cancelQueuedRefresh() }
+    }
+
+    func cancelQueuedRefresh() {
+        refreshGeneration += 1
+        refreshWork?.cancel()
+        refreshWork = nil
+        refreshRequested = false
+    }
+
+    // Lifecycle events are debounced into one pending refresh, never a polling
+    // loop. Continuously visible external writes await a future Rust-backed
+    // change-notification seam; root-only vnode watches miss nested file writes.
+    func scheduleAutomaticRefresh() {
+        guard pageActive else { return }
+        refreshRequested = true
+        guard !busy, refreshWork == nil else { return }
+        let ticket = refreshGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.refreshGeneration == ticket else { return }
+            self.refreshWork = nil
+            guard self.pageActive, !self.busy, self.refreshRequested else { return }
+            self.refreshRequested = false
+            self.load(refresh: true)
+        }
+        refreshWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func drainAutomaticRefresh() {
+        if refreshRequested { scheduleAutomaticRefresh() }
+    }
+
     func load(refresh: Bool = false, completion: @escaping () -> Void = {}) {
-        guard !busy, !editorActive else { completion(); return }
+        guard pageActive, !busy, !editorActive else { completion(); return }
+        let finished: () -> Void = { [weak self] in
+            completion()
+            self?.drainAutomaticRefresh()
+        }
         busy = true
         generation += 1
         let ticket = generation
         owner?.setLoading()
         if let session = session {
-            if refresh { refreshThenRead(session, ticket: ticket, completion: completion) }
-            else { read(session, ticket: ticket, completion: completion) }
+            if refresh { refreshThenRead(session, ticket: ticket, completion: finished) }
+            else { read(session, ticket: ticket, completion: finished) }
             return
         }
         NativeMobileSession.open(vault: vault, root: root) { [weak self] result in
             guard let self = self, self.generation == ticket, !self.editorActive else {
                 if case .success(let session) = result { session.close {} }
-                completion()
+                finished()
                 return
             }
             switch result {
-            case .success(let session): self.session = session; self.read(session, ticket: ticket, completion: completion)
-            case .failure: self.busy = false; self.owner?.showLoadFailure(); completion()
+            case .success(let session):
+                self.session = session
+                if self.pageActive { self.read(session, ticket: ticket, completion: finished) }
+                else { self.busy = false; finished() }
+            case .failure:
+                self.busy = false
+                if self.pageActive { self.owner?.showLoadFailure() }
+                finished()
             }
         }
     }
@@ -240,7 +296,9 @@ private final class NativePagesCoordinator {
         session.refresh { [weak self] result in
             guard let self = self, self.generation == ticket, !self.editorActive else { completion(); return }
             switch result {
-            case .success: self.read(session, ticket: ticket, completion: completion)
+            case .success:
+                guard self.pageActive else { self.busy = false; completion(); return }
+                self.read(session, ticket: ticket, completion: completion)
             case .failure: self.fail(session, ticket: ticket, completion: completion)
             }
         }
@@ -252,7 +310,7 @@ private final class NativePagesCoordinator {
             switch result {
             case .success(let listing):
                 self.busy = false
-                self.owner?.showListing(listing)
+                if self.pageActive { self.owner?.showListing(listing) }
                 completion()
             case .failure: self.fail(session, ticket: ticket, completion: completion)
             }
@@ -261,23 +319,27 @@ private final class NativePagesCoordinator {
 
     private func fail(_ session: NativeMobileSession, ticket: Int, missingSelection: Bool = false, completion: @escaping () -> Void = {}) {
         // A failed/fenced host must not be reused by every retry. Complete close
-        // before making Reload usable so a new host cannot overlap this one.
+        // before allowing retry so a new host cannot overlap this one.
         self.session = nil
         busy = true
         session.close { [weak self] in
             guard let self = self, self.generation == ticket else { completion(); return }
             self.busy = false
-            self.owner?.showLoadFailure(missingSelection: missingSelection)
+            if self.pageActive { self.owner?.showLoadFailure(missingSelection: missingSelection) }
             completion()
+            self.drainAutomaticRefresh()
         }
     }
 
     func reload() async {
+        guard pageActive else { return }
+        if busy { scheduleAutomaticRefresh(); return }
+        cancelQueuedRefresh()
         await withCheckedContinuation { continuation in load(refresh: true) { continuation.resume() } }
     }
 
     func openEditor(entry: NativeFileEntry?, origin: String) {
-        guard !busy, !editorActive, let session = session, owner?.navigationController != nil else { return }
+        guard pageActive, !busy, !editorActive, let session = session, owner?.navigationController != nil else { return }
         generation += 1
         let ticket = generation
         guard let entry = entry else { transfer(session, initialEntry: nil, origin: origin); return }
@@ -289,6 +351,7 @@ private final class NativePagesCoordinator {
             guard let self = self, self.generation == ticket, !self.editorActive else { return }
             switch result {
             case .success(let listing):
+                guard self.pageActive else { self.busy = false; return }
                 guard let current = listing.entries.first(where: { $0.id == entry.id && $0.kind == .file }) else {
                     self.fail(session, ticket: ticket, missingSelection: true)
                     return
@@ -302,6 +365,7 @@ private final class NativePagesCoordinator {
     private func transfer(_ session: NativeMobileSession, initialEntry: NativeFileEntry?, origin: String) {
         guard let navigation = owner?.navigationController else { busy = false; return }
         busy = false
+        cancelQueuedRefresh()
         self.session = nil
         editorActive = true
         let launch = initialEntry.map(NativeEditorLaunch.entry) ?? .newNote
@@ -312,7 +376,8 @@ private final class NativePagesCoordinator {
     }
 
     func chooseVault() {
-        guard !busy, !editorActive else { return }
+        guard pageActive, !busy, !editorActive else { return }
+        cancelQueuedRefresh()
         busy = true
         generation += 1
         let session = self.session
@@ -356,8 +421,8 @@ private final class NativePagesModel: ObservableObject {
         loading = false
         listing = nil
         status = missingSelection
-            ? "The selected note is no longer available. Reload to see the current files."
-            : "Could not load this vault safely. Reload to try again. Your files have not been changed."
+            ? "The selected note is no longer available. Pull down to see the current files."
+            : "Could not load this vault safely. Pull down to retry or reopen the vault. Your files have not been changed."
         render()
         focusedEntryId = nil
         restoringFocus = false
@@ -367,7 +432,7 @@ private final class NativePagesModel: ObservableObject {
     func showListing(_ listing: NativeVaultListing) {
         loading = false
         self.listing = listing
-        status = listing.scanComplete ? "" : "The vault scan is incomplete. Some files may be unavailable. Reload to retry."
+        status = listing.scanComplete ? "" : "The vault scan is incomplete. Some files may be unavailable. Pull down to retry."
         if !folder.isEmpty && !listing.entries.contains(where: { NativeFileEntry.samePath($0.path, folder) && $0.kind == .folder }) { folder = "" }
         render()
         if restoringFocus {
@@ -416,7 +481,7 @@ private final class NativePagesModel: ObservableObject {
         }
         if historyFailed { status = "Recent history could not be read. Your files are available in Files." }
         else if let listing = listing {
-            status = listing.scanComplete ? "" : "The vault scan is incomplete. Some files may be unavailable. Reload to retry."
+            status = listing.scanComplete ? "" : "The vault scan is incomplete. Some files may be unavailable. Pull down to retry."
         }
         canCreateNote = !loading && listing != nil
         if loading { emptyMessage = "" }
@@ -431,6 +496,7 @@ final class NativePagesController: UIViewController {
     private let model: NativePagesModel
     private let coordinator: NativePagesCoordinator
     private var hosting: UIHostingController<NativePagesView>?
+    private var activityObservers: [NSObjectProtocol] = []
 
     init(vault: LocalVault, root: URL, session: NativeMobileSession) {
         model = NativePagesModel(vault: vault)
@@ -467,16 +533,39 @@ final class NativePagesController: UIViewController {
             hosting.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
         hosting.didMove(toParent: self)
+        activityObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.coordinator.scheduleAutomaticRefresh()
+        })
+        activityObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.coordinator.cancelQueuedRefresh()
+        })
+        activityObservers.append(NotificationCenter.default.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let self = self, let scene = notification.object as? UIWindowScene,
+                  scene === self.viewIfLoaded?.window?.windowScene else { return }
+            self.coordinator.scheduleAutomaticRefresh()
+        })
+        activityObservers.append(NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let self = self, let scene = notification.object as? UIWindowScene,
+                  scene === self.viewIfLoaded?.window?.windowScene else { return }
+            self.coordinator.cancelQueuedRefresh()
+        })
     }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(true, animated: false)
         navigationController?.interactivePopGestureRecognizer?.isEnabled = false
-        coordinator.load()
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        coordinator.setVisible(true)
     }
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        coordinator.setVisible(false)
         navigationController?.setNavigationBarHidden(false, animated: false)
+    }
+    deinit {
+        for observer in activityObservers { NotificationCenter.default.removeObserver(observer) }
     }
     fileprivate func setLoading() { model.setLoading() }
     fileprivate func showListing(_ listing: NativeVaultListing) { model.showListing(listing) }
@@ -492,7 +581,6 @@ private struct NativePagesView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.dynamicTypeSize) private var typeSize
     @Namespace private var glassNamespace
     @State private var sheet: PageSheet?
     @State private var sheetOrigin: Focus = .settings
@@ -500,7 +588,7 @@ private struct NativePagesView: View {
     @AccessibilityFocusState private var focus: Focus?
 
     private enum PageSheet: String, Identifiable { case settings, pages; var id: String { rawValue } }
-    private enum Focus: Hashable { case settings, plus, heading, entry(String) }
+    private enum Focus: Hashable { case settings, plus, compose, heading, entry(String) }
     private var motion: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9) }
 
     private var selectedPage: Binding<NativePage> {
@@ -556,7 +644,13 @@ private struct NativePagesView: View {
                     .accessibilityIdentifier("native.pages.status")
                     .padding(.horizontal, 20)
             }
-            pageActions.padding(.horizontal, 16)
+            if model.isInFolder {
+                Button { withAnimation(motion) { model.parentFolder() }; focus = .heading } label: {
+                    Label("Parent folder", systemImage: "chevron.left").frame(minHeight: 44)
+                }
+                .padding(.horizontal, 20)
+                .accessibilityIdentifier("native.files.parent")
+            }
             entryList
         }
     }
@@ -590,31 +684,18 @@ private struct NativePagesView: View {
                 .accessibilityIdentifier("native.pages.add")
                 .disabled(model.loading)
                 .accessibilityFocused($focus, equals: .plus)
+            Button { open(nil) } label: {
+                Image(systemName: "square.and.pencil").padding(12).frame(minWidth: 44, minHeight: 44)
+            }
+                .buttonStyle(.plain)
+                .modifier(PageControlSurface(id: "compose", namespace: glassNamespace))
+                .accessibilityLabel("New note")
+                .accessibilityIdentifier("native.pages.new-note")
+                .disabled(!model.canCreateNote)
+                .accessibilityFocused($focus, equals: .compose)
         }
         .font(.body)
         .foregroundColor(.primary)
-    }
-
-    @ViewBuilder private var pageActions: some View {
-        if typeSize.isAccessibilitySize { VStack(alignment: .leading, spacing: 4) { actionButtons } }
-        else { HStack(spacing: 12) { actionButtons } }
-    }
-    @ViewBuilder private var actionButtons: some View {
-        if model.isInFolder {
-            Button { withAnimation(motion) { model.parentFolder() }; focus = .heading } label: {
-                Label("Parent folder", systemImage: "chevron.left").padding(.horizontal, 4).frame(minHeight: 44)
-            }.accessibilityIdentifier("native.files.parent")
-        }
-        Button { Task { await refresh() } } label: {
-            Label("Reload", systemImage: "arrow.clockwise").padding(.horizontal, 4).frame(minHeight: 44)
-        }
-        .disabled(model.loading)
-        .accessibilityIdentifier("native.pages.refresh")
-        Button { open(nil) } label: {
-            Text("New note").padding(.horizontal, 4).frame(minHeight: 44)
-        }
-        .disabled(!model.canCreateNote)
-        .accessibilityIdentifier("native.pages.new-note")
     }
 
     private var entryList: some View {
