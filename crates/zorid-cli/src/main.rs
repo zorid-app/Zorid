@@ -1,4 +1,6 @@
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod binary;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod search;
 mod sync;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -43,8 +45,11 @@ enum Command {
         /// Emit only file bytes on stdout; errors remain JSON on stderr.
         #[arg(long)]
         raw: bool,
+        /// Stable binary read identity for an explicit retry; normally generated per invocation.
+        #[arg(long)]
+        read_id: Option<String>,
     },
-    /// Create a file without overwriting an existing file (16 MiB maximum).
+    /// Create a file; enrolled --binary streams up to 64 MiB, other input is bounded to 16 MiB.
     Create {
         path: String,
         #[arg(long)]
@@ -332,6 +337,7 @@ impl From<zorid_native::Error> for Failure {
             Busy(_) => Self::new("filesystem_changed", "Filesystem changed during the operation; reconcile before retrying", 3),
             Unsupported(_) => Self::new("unsupported", "Operation is unsupported by this native adapter slice", 5),
             LockTimeout => Self::new("lock_timeout", "Timed out acquiring the vault lock", 3),
+            Store(zorid_store::StoreError::StreamRequired { .. }) => Self::new("stream_required", "Committed content requires a bounded binary stream", 5),
             Store(zorid_store::StoreError::UnsupportedSchema(_)) => Self::new("unsupported_schema", "Database schema is unsupported", 5),
             Store(zorid_store::StoreError::Corrupt(_)) | Store(zorid_store::StoreError::Json(_)) => Self::new("corrupt_storage", "Stored data failed validation", 1),
             Store(zorid_store::StoreError::Sync(error)) => {
@@ -449,7 +455,56 @@ fn run(args: Args) -> Result<Output> {
         return Ok(Output::Streamed);
     }
 
-    // Prepare and bound mutation input before opening the vault or taking locks.
+    // The adapter enforces existing-only under its own lock and SQLite flags.
+    let mut vault = if matches!(args.command, Command::Init) {
+        NativeVault::open(&args.vault)?
+    } else {
+        NativeVault::open_existing(&args.vault)?
+    };
+    // Binary requests select their durable original operation before reading
+    // input. Each append is bounded; no native lock spans a caller's input read.
+    if matches!(
+        &args.command,
+        Command::Create { binary: true, .. } | Command::Write { .. }
+    ) && vault.family_status()?.scope.is_some()
+    {
+        match &args.command {
+            Command::Create {
+                path,
+                id,
+                operation_id,
+                input,
+                binary: true,
+                ..
+            } => {
+                return Ok(Output::Json(binary::create(
+                    &mut vault,
+                    EntryId::new(id.clone())?,
+                    VaultPath::new(path.clone())?,
+                    OperationId::new(operation_id.clone())?,
+                    input,
+                )?));
+            }
+            Command::Write {
+                id,
+                expected_revision,
+                operation_id,
+                input,
+            } => {
+                if let Some(value) = binary::write(
+                    &mut vault,
+                    EntryId::new(id.clone())?,
+                    Revision::new(expected_revision.clone())?,
+                    OperationId::new(operation_id.clone())?,
+                    input,
+                )? {
+                    return Ok(Output::Json(value));
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    // Inline Text and unenrolled legacy bytes retain their existing input cap.
     let request = match &args.command {
         Command::Create {
             path,
@@ -525,30 +580,29 @@ fn run(args: Args) -> Result<Output> {
         Command::Create { binary: true, .. } => Some(zorid_native::FamilyCreateMode::Binary),
         _ => None,
     };
-    // The metadata preflight above provides a useful missing-vault error only.
-    // The adapter enforces existing-only under its own lock and SQLite open flags.
-    let mut vault = if matches!(args.command, Command::Init) {
-        NativeVault::open(&args.vault)?
-    } else {
-        NativeVault::open_existing(&args.vault)?
-    };
     let value = match args.command {
         Command::Sync {
             credentials,
             command,
         } => sync::run(&mut vault, &args.vault, &credentials, command)?,
         Command::Init => {
-            json!({"initialized":true,"imported_existing_files":false,"max_file_bytes":MAX_FILE_BYTES,"sync_available":false,"fixture_family_sync_available":true})
+            json!({"initialized":true,"imported_existing_files":false,"max_file_bytes":MAX_FILE_BYTES,"max_binary_file_bytes":zorid_store::BINARY_STAGE_MAX_FILE_BYTES,"binary_chunk_bytes":zorid_store::BINARY_STAGE_MAX_CHUNK_BYTES,"sync_available":false,"fixture_family_sync_available":true})
         }
         Command::Status => {
             let status = vault.status()?;
             // Keep status limited to operational counts, without recovery bodies.
-            json!({"pending_outbox":status.pending_outbox,"pending_projection":status.pending_projection,"projection_attempts":status.attempts.len(),"external_observations":status.observations.len(),"max_file_bytes":MAX_FILE_BYTES,"sync_available":false,"fixture_family_sync_available":true})
+            json!({"pending_outbox":status.pending_outbox,"pending_projection":status.pending_projection,"projection_attempts":status.attempts.len(),"external_observations":status.observations.len(),"max_file_bytes":MAX_FILE_BYTES,"max_binary_file_bytes":zorid_store::BINARY_STAGE_MAX_FILE_BYTES,"binary_chunk_bytes":zorid_store::BINARY_STAGE_MAX_CHUNK_BYTES,"sync_available":false,"fixture_family_sync_available":true})
         }
         Command::List => json!({"entries":vault.list()?}),
-        Command::Read { id, raw } => {
+        Command::Read { id, raw, read_id } => {
+            let id = EntryId::new(id)?;
+            let read_id =
+                OperationId::new(read_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()))?;
+            if binary::read(&mut vault, &id, raw, &read_id)? {
+                return Ok(Output::Streamed);
+            }
             let entry = vault
-                .read(&EntryId::new(id)?)?
+                .read(&id)?
                 .ok_or_else(|| Failure::new("not_found", "Entry was not found", 4))?;
             let bytes = entry
                 .content
