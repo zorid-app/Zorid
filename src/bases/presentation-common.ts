@@ -271,9 +271,10 @@ export function createBaseVirtualSurface(container: HTMLElement, className: stri
   };
   const editObserver = win?.MutationObserver ? new win.MutationObserver(() => {
     if (destroyed) return;
-    const active = hasBaseDraft(content);
+    let active = hasBaseDraft(content);
     if (!active && refreshQueued) refresh();
     if (destroyed) return;
+    active = hasBaseDraft(content);
     if (active !== reportedEditing) {
       reportedEditing = active;
       try { editLifecycle.onEditStateChange?.(active); } catch (error) { try { onError?.(error); } catch {} }

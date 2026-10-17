@@ -78,6 +78,14 @@ for (const [name, create] of [['Cards', createBaseCardsView], ['List', createBas
     assert.equal(view.hasActiveEdits(), false); assert.equal(input.isConnected, false); assert.equal(host.querySelector<HTMLInputElement>('input')!.checked, true);
     assert.deepEqual(states, [true, false]);
   });
+  test(`${name} edit-state callback never reports idle while remounted custom widget owns a draft`, async t => {
+    const { dom, host } = setup(); t.after(() => dom.window.close()); const states: boolean[] = [];
+    const view = create(host, { result: result(), openFile() {}, onEditStateChange: active => states.push(active),
+      renderProperty(element) { element.dataset.baseEditing = 'draft'; } }); t.after(() => view.destroy());
+    await tick(); view.update(result(2));
+    host.querySelector('[data-property]')!.removeAttribute('data-base-editing'); await tick();
+    assert.equal(view.hasActiveEdits(), true); assert.deepEqual(states, [true]);
+  });
   test(`${name} custom property widgets can mark drafts and release deferred changes`, async t => {
     const { dom, host } = setup(); t.after(() => dom.window.close());
     const view = create(host, { result: result(), openFile() {}, renderProperty(element, context) {
