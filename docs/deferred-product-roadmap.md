@@ -77,6 +77,18 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Mobile steering checkpoint (2026-10-18 02:19 UTC): user phone findings require
+vault-scoped tabs/restore, functional Home create, route gestures, and skeleton-only
+loading without technical text.2f owns isolated NativeDocumentTabs/MetadataStore
+partition + pending-ticket encoding; native owner owns context/coordinator/factory
+and NewNote caller integration. Home routes through the same guarded Pages create
+flow, choosing a vault if absent.371 owns additive TS editor gesture eligibility
+fields after direct API agreement; native owner alone owns Swift consumer/gesture
+hunks. No generic plugin/framework or extra host is implied. Link91cb90dc cleanup
+successor passed independent source review and owner90 focused checks/scoped TS;
+matching WK retest remains required, diagnostics excluded. Actual13 original
+failure and before/after regression evidence remain retained.
+
 Canonical worker checkpoint (2026-10-18 02:18 UTC): mainbf575275..547036a7
 integrates exactly five normal-worker commits through38539b42. Root verified
 source/tests/results trees byte-identical and raw report SHA616b4bd9 matching,

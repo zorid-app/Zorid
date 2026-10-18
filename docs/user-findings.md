@@ -8,6 +8,9 @@ them or interrupting the current work.
 
 | Finding / requested behavior | Current state | Next evidence or work |
 | --- | --- | --- |
+| Tabs belong only to the current vault, restoring separately per vault | Direct phone finding relayed by native owner;2f owns model/metadata partition and pending-ticket encoding in isolation | Native owner owns context/coordinator/factory integration. Use trusted vault identity; retain original pending operation/tab recovery without manufacturing a new slot |
+| Home create button must work | Dev10 button has no creation callback; user reports it nonfunctional | Route via current-vault Pages and the same guarded New Note path, or choose/create vault if absent. Do not build a second create engine or rotate uncertain operation IDs |
+| Loading uses skeletons, without loading words or technical details | Direct user steering relayed from phone session | Native owner owns Pages/Mobile presentation changes; keep actionable human error/retry. Caching/module overlap remains measured followup, with no recovery or authority bypass |
 | Mobile Files header shortcut and history arrow necessity | User questions relayed by native owner; UX decision queued | Avoid redundant shortcut if a clear accessible parent/back alternative exists; retain discoverable accessible history controls while gestures are incomplete |
 | Mobile link taps open the link without moving the caret | User finding relayed by native owner; stage4_contract_review owns source-only pointer/default-selection and mobile bridge audit | Name smallest edit seam after diagnosis; preserve desktop modifiers, IME and real navigation. Verify actual native tap and selection, beyond URL callback tests |
 | Native route edge swipes | Requested via native owner; not implemented. Buttons/history composition precedes gestures | Reuse guarded root traversal after transition verification; no additional host or separate navigation engine |
