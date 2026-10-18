@@ -40,6 +40,11 @@ joins, pin/current-source/collection fencing and membership proof.
 
 ## Verification and limits
 
+Exact source commit `cfcdf84d` independently approved in `msg_f06fb80ba56c`;
+no blocking source finding. Native consumer `msg_222fa3ece202` requested public
+CalendarContext::validate so link-only reads validate context without materializing
+tasks or adding dependencies; this visibility-only successor preserves behavior.
+
 Source formatting and git diff --check pass. Six focused tests cover selection
 beyond 1,000 unrelated tasks, saved named-view selection/limit, explicit cap,
 root/view/group/search/order/this/ignore behavior and selected counts, Toronto

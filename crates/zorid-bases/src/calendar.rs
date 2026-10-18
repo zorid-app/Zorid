@@ -20,7 +20,8 @@ pub struct CalendarContext {
     pub timezone: String,
 }
 impl CalendarContext {
-    fn validate(&self) -> Result<(), ExpressionDiagnostic> {
+    /// Validate host read context without selecting or materializing any tasks.
+    pub fn validate(&self) -> Result<(), ExpressionDiagnostic> {
         self.timezone
             .parse::<chrono_tz::Tz>()
             .map_err(|_| ExpressionDiagnostic::new("timezone", "Expected IANA timezone"))?;
