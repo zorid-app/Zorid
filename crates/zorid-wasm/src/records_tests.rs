@@ -472,3 +472,49 @@ fn local_cache_binding_provenance_requires_exact_complete_history_and_policy() {
     )
     .is_err());
 }
+
+#[test]
+fn structural_stored_readset_preserves_empty_restore_scope_and_integer_sources() {
+    for integer in [i64::MIN, i64::MAX] {
+        let f = fixture(Policy::Synced);
+        let plan = local(&f, integer);
+        let bytes = plan.payload.as_ref().unwrap();
+        let inspected: serde_json::Value =
+            serde_json::from_str(&stored_read_set_inner(bytes).unwrap()).unwrap();
+        assert_eq!(inspected["scope"], serde_json::to_value(&f.scope).unwrap());
+        assert_eq!(inspected["operations"], serde_json::json!(["create"]));
+        let mut noncanonical = bytes.clone();
+        noncanonical.push(b' ');
+        assert!(stored_read_set_inner(&noncanonical).is_err());
+    }
+    let mut f = fixture(Policy::Synced);
+    f.scope.generation = id("restored");
+    f.scope.restores = Some(id("previous"));
+    let registration = registration(f.registration.as_ref().unwrap().as_bytes()).unwrap();
+    let empty = State::new(registration.schema, f.scope.clone()).unwrap();
+    let source = Payload::from_intent(id("empty-source"), &empty.snapshot().unwrap()).unwrap();
+    let inspected: serde_json::Value =
+        serde_json::from_str(&stored_read_set_inner(&source.encode().unwrap()).unwrap()).unwrap();
+    assert_eq!(inspected["scope"], serde_json::to_value(&f.scope).unwrap());
+    assert_eq!(inspected["operations"], serde_json::json!([]));
+}
+
+#[test]
+fn local_result_and_replay_require_the_same_positive_sequence_as_stored_validation() {
+    let mut f = fixture(Policy::Synced);
+    let plan = local(&f, i64::MAX);
+    let revision = plan.output.revision.unwrap();
+    assert!(finalize_local_result_inner("create", &revision, "0").is_err());
+    assert!(finalize_local_result_inner("create", &revision, "01").is_err());
+    assert!(finalize_local_result_inner("create", &revision, "9223372036854775808").is_err());
+    for sequence in ["1", "9223372036854775807"] {
+        let result = finalize_local_result_inner("create", &revision, sequence).unwrap();
+        let local = f.local.as_mut().unwrap();
+        local.prior_request = Some(text(plan.request.clone().unwrap()).unwrap());
+        local.prior_result = Some(text(result).unwrap());
+        assert!(prepare_local_inner(&raw(&f), &command_bytes(i64::MAX)).is_ok());
+    }
+    let zero = encode(&Commit { operation: id("create"), revision: Sha256Digest(revision), sequence: "0".into() }).unwrap();
+    f.local.as_mut().unwrap().prior_result = Some(text(zero).unwrap());
+    assert!(prepare_local_inner(&raw(&f), &command_bytes(i64::MAX)).is_err());
+}

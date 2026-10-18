@@ -371,23 +371,24 @@ pub fn canonical_local_request(
     };
     run().map_err(err)
 }
+fn finalize_local_result_inner(operation: &str, revision: &[u8], sequence: &str) -> Result<Vec<u8>> {
+    let sequence_value = decimal(sequence)?;
+    if sequence_value == 0 || sequence_value > i64::MAX as u64 {
+        return Err("records sequence exhausted".into());
+    }
+    encode(&Commit {
+        operation: core(Id::new(operation))?,
+        revision: Sha256Digest(digest(revision)?),
+        sequence: sequence.into(),
+    })
+}
 #[wasm_bindgen(js_name=finalizeRecordsLocalResult)]
 pub fn finalize_local_result(
     operation: &str,
     revision: &[u8],
     sequence: &str,
 ) -> std::result::Result<Vec<u8>, JsValue> {
-    let run = || -> Result<Vec<u8>> {
-        if decimal(sequence)? > i64::MAX as u64 {
-            return Err("records sequence exhausted".into());
-        }
-        encode(&Commit {
-            operation: core(Id::new(operation))?,
-            revision: Sha256Digest(digest(revision)?),
-            sequence: sequence.into(),
-        })
-    };
-    run().map_err(err)
+    finalize_local_result_inner(operation, revision, sequence).map_err(err)
 }
 #[wasm_bindgen(js_name=recordsRetryEligible)]
 pub fn retry_eligible(raw: &str) -> std::result::Result<bool, JsValue> {
@@ -404,6 +405,15 @@ pub fn local_read_set(scope_json: &str, operation: &str) -> std::result::Result<
         )?)
     };
     run().map_err(err)
+}
+/// Structural stored-source inspection only; this never grants authentication
+/// or creates a receive plan. Only a real opened update can prepare a receive.
+#[wasm_bindgen(js_name=recordsStoredReadSet)]
+pub fn stored_read_set(bytes: &[u8]) -> std::result::Result<String, JsValue> {
+    stored_read_set_inner(bytes).map_err(err)
+}
+fn stored_read_set_inner(bytes: &[u8]) -> Result<String> {
+    read_set(&core(Payload::decode(bytes))?)
 }
 pub(crate) fn read_set(payload: &Payload) -> Result<String> {
     text(encode(
@@ -462,7 +472,8 @@ fn prepare_local_inner(raw: &str, raw_command: &[u8]) -> Result<RecordsPlan> {
             .as_ref()
             .ok_or("records replay result missing")?;
         let parsed: Commit = canonical(result.as_bytes(), 2 * MAX_BYTES)?;
-        if parsed.operation != local.operation || decimal(&parsed.sequence)? > i64::MAX as u64 {
+        let sequence = decimal(&parsed.sequence)?;
+        if parsed.operation != local.operation || sequence == 0 || sequence > i64::MAX as u64 {
             return Err("records replay result mismatch".into());
         }
         plan.output.replay_result = Some(result.clone());
