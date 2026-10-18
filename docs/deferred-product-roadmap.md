@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:35UTC: native owner starts reserved composed Swift frontend typecheck frozen
+c39f525c,12 app sources+actual canonical Rust Cheader, iOS15 arm64Simulator
+SDK26.2/cachedSim9 module cache/products. Exact command/sourcehash artifacts
+/private/tmp/zorid-mobile-composed-typing-c39f525c/{command,sourcehash}.json (owner
+reports adjacent sourcehash JSON; confirm actual filename before consuming).
+No Rust/assets/fullXcode/install; owner solecompiler, handle/result forthcoming.
+Factory excluded this pass; root3acc5818 sourceapproved, exactblob a9a2d9a3.
+Pages ever-configured latch remains required; sourceacceptance/typecheck/runtime
+are separate. Main runtime unchanged since bb155f3a and combined Rust check.
+
 00:34UTC: root approved staged factory narrow correction (no scanComplete gate,
 weak installed-owner toolbar bridge), commit pending. Settings callbackf9c7 and
 UUIDfixcb097 ready; exactf9c7 still lacked ever-root-configured latch, correction
