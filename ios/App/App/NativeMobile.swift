@@ -327,6 +327,10 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     private var currentEditorState = NativeEditorState.inactive
     fileprivate var onEditorState: ((NativeEditorState, Bool) -> Void)?
     fileprivate var onNoteOpened: ((String) -> Void)?
+    fileprivate var onDocumentValidated: ((NativeTabDocument) -> Void)?
+    fileprivate var isCurrentDocumentOwner: (() -> Bool)?
+    fileprivate private(set) var documentValidationNonce = UUID()
+    fileprivate private(set) var documentSnapshotReady = false
     fileprivate var onPresentationSettled: (() -> Bool)?
 
     fileprivate init(session: NativeMobileSession, launch: NativeEditorLaunch) {
@@ -397,6 +401,11 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         publishEditorState()
     }
 
+    fileprivate func invalidateDocumentValidation() {
+        documentValidationNonce = UUID()
+        documentSnapshotReady = false
+    }
+
     fileprivate func requestForegroundEditorState() {
         guard UIApplication.shared.applicationState == .active, !closeAuthorized else { return }
         // Background checkpoints retain the workspace. Cancel only that pending
@@ -422,12 +431,34 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Invalid note identity.", "invalid_request")
             return
         }
-        // Called after real web activation, never just after tapping a native row.
-        session.recordNoteOpened(path: path, entryId: entryId, onValidated: { [weak self] id in self?.onNoteOpened?(id) }) { result in
-            switch result {
-            case .success: call.resolve()
-            case .failure: call.reject("The opened note could not be recorded.", "native_history_failed")
+        DispatchQueue.main.async {
+            // A newer activation supersedes every older native listing callback.
+            let nonce = UUID()
+            self.documentValidationNonce = nonce
+            self.documentSnapshotReady = false
+            let current: () -> Bool = { [weak self] in
+                guard let self = self else { return false }
+                return self.documentValidationNonce == nonce && !self.closeAuthorized
+                    && self.pending == nil && UIApplication.shared.applicationState == .active
+                    && self.isCurrentDocumentOwner?() == true
             }
+            guard current() else {
+                call.reject("This editor is no longer active.", "stale_activation"); return
+            }
+            // The native listing is shared with history validation, never repeated.
+            self.session.recordNoteOpened(path: path, entryId: entryId, isCurrent: current,
+                onValidated: { [weak self] document in
+                    guard let self = self, current() else { return }
+                    self.documentSnapshotReady = true
+                    self.onNoteOpened?(document.stableFileID)
+                    guard current() else { return }
+                    self.onDocumentValidated?(document)
+                }) { result in
+                    switch result {
+                    case .success: call.resolve()
+                    case .failure: call.reject("The opened note could not be recorded.", "native_history_failed")
+                    }
+                }
         }
     }
 
@@ -445,6 +476,10 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         DispatchQueue.main.async {
+            if state != "ready" {
+                self.documentValidationNonce = UUID()
+                self.documentSnapshotReady = false
+            }
             guard UIApplication.shared.applicationState == .active,
                   !self.closeAuthorized, self.pending == nil,
                   self.onPresentationSettled?() == true else {
@@ -516,6 +551,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
 
     fileprivate func requestLifecycle(_ reason: String, completion: @escaping (Bool) -> Void) {
         guard pending == nil, hasListeners("lifecycleRequest") else { completion(false); return }
+        invalidateDocumentValidation()
         let id = UUID().uuidString.lowercased()
         pending = (id, reason, completion)
         let timer = DispatchWorkItem { [weak self] in self?.cancelLifecycle() }
@@ -589,6 +625,12 @@ final class NativeEditorContainer: UIViewController {
     private let originTitle: String
     private let onClosed: () -> Void
     var onNoteOpened: ((String) -> Void)?
+    var onDocumentValidated: ((NativeTabDocument) -> Void)?
+    private var documentSourceOwnerID: UUID?
+    private var documentOwnerIsCurrent: (() -> Bool)?
+    private var closeTicket: UUID?
+    private var closeReceiptEpoch = UUID()
+    private var closed = false
     var onNavigate: ((Int) -> Void)?
     private var canGoBack = false
     private var canGoForward = false
@@ -628,6 +670,14 @@ final class NativeEditorContainer: UIViewController {
         done.accessibilityIdentifier = "native.editor.vaults"
         done.accessibilityLabel = "Return to " + originTitle
         navigationItem.rightBarButtonItem = done
+        editor.vaultPlugin.isCurrentDocumentOwner = { [weak self] in
+            guard let self = self, !self.leaving else { return false }
+            return self.currentDocumentOwner(requiresVisible: true)
+        }
+        editor.vaultPlugin.onDocumentValidated = { [weak self] document in
+            guard let self = self, !self.leaving, self.currentDocumentOwner(requiresVisible: true) else { return }
+            self.onDocumentValidated?(document)
+        }
         editor.vaultPlugin.onNoteOpened = { [weak self] id in
             self?.finishEditorLoading(reason: .noteOpened)
             self?.onNoteOpened?(id)
@@ -680,6 +730,7 @@ final class NativeEditorContainer: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         editor.vaultPlugin.resetEditorState()
+        editor.vaultPlugin.invalidateDocumentValidation()
     }
 
     override func viewDidLayoutSubviews() {
@@ -929,36 +980,125 @@ final class NativeEditorContainer: UIViewController {
 
     @objc private func returnToVaults() { leaveForNativeRoute { _ in } }
 
-    // Both ordinary return and history traversal use the same save/ACK fence.
-    // The coordinator stages a destination; a rejected ACK leaves this host live.
+    // Root supplies a weak closure comparing its current container/session/owner.
+    // This UUID is presentation authority only, never a Rust lease credential.
+    func configureDocumentTabOwner(sourceOwnerID: UUID, isCurrent: @escaping () -> Bool) {
+        guard !leaving, !closed else { return }
+        editor.vaultPlugin.invalidateDocumentValidation()
+        documentSourceOwnerID = sourceOwnerID
+        documentOwnerIsCurrent = isCurrent
+    }
+
+    private func currentDocumentOwner(requiresVisible: Bool) -> Bool {
+        // An overview can cover/remove the source view from its window before
+        // draining begins. Its navigation scene, not source visibility, owns close.
+        let scene = requiresVisible ? viewIfLoaded?.window?.windowScene
+            : navigationController?.viewIfLoaded?.window?.windowScene
+        guard !closed, UIApplication.shared.applicationState == .active,
+              scene?.activationState == .foregroundActive else { return false }
+        if documentSourceOwnerID != nil, documentOwnerIsCurrent?() != true { return false }
+        if requiresVisible {
+            return navigationController?.topViewController === self && presentedViewController == nil
+        }
+        return true
+    }
+
+    func closeForDocumentTabTransition(sourceOwnerID: UUID, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard documentSourceOwnerID == sourceOwnerID, documentOwnerIsCurrent?() == true else {
+            completion(.failure(MobileFailure.unavailable)); return
+        }
+        closeEditor(isCurrent: { [weak self] in
+            guard let self = self, self.documentSourceOwnerID == sourceOwnerID else { return false }
+            return self.currentDocumentOwner(requiresVisible: false)
+        }, completion: completion)
+    }
+
+    // Both routes use the same save/ACK/close fence; only this wrapper navigates.
     func leaveForNativeRoute(completion: @escaping (Bool) -> Void) {
-        guard !leaving else { completion(false); return }
-        leaving = true
-        editor.vaultPlugin.resetEditorState()
-        updateRouteControls()
-        editor.vaultPlugin.requestLifecycle("switchVault") { [weak self] ok in
-            guard let self = self else { return }
-            guard ok else {
-                self.leaving = false
-                self.updateToolbarLayout()
-                self.updateRouteControls()
+        closeEditor(isCurrent: { [weak self] in self?.currentDocumentOwner(requiresVisible: true) == true }) { [weak self] result in
+            guard let self = self else { completion(false); return }
+            switch result {
+            case .success:
+                completion(true)
+                // Completion may synchronously advance navigation itself.
+                if self.navigationController?.topViewController === self {
+                    self.navigationController?.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
+                }
+            case .failure:
                 completion(false)
-                if UIApplication.shared.applicationState == .active {
+                if !self.closed && self.currentDocumentOwner(requiresVisible: true) {
                     self.showMessage("Vault stays open", "The editor has not confirmed that it is safe to leave. Your workspace remains open. Try again after saving is ready.")
                 }
-                return
-            }
-            self.session.close {
-                self.loadingTimeout?.cancel()
-                self.onClosed()
-                completion(true)
-                self.navigationController?.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
             }
         }
     }
 
+    private func closeEditor(isCurrent: @escaping () -> Bool, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !leaving, !closed, isCurrent() else { completion(.failure(MobileFailure.unavailable)); return }
+        let ticket = UUID()
+        let epoch = closeReceiptEpoch
+        closeTicket = ticket; leaving = true
+        editor.vaultPlugin.resetEditorState()
+        updateRouteControls()
+        editor.vaultPlugin.requestLifecycle("switchVault") { [self] ok in
+            guard closeTicket == ticket else { completion(.failure(MobileFailure.unavailable)); return }
+            guard ok else {
+                closeTicket = nil; leaving = false
+                updateToolbarLayout(); updateRouteControls()
+                completion(.failure(MobileFailure.unavailable)); return
+            }
+            // A true ACK has quiesced the web editor. Even if ownership changed,
+            // finish closing this exact session; a stale receipt is never success.
+            let admitted = closeReceiptEpoch == epoch && isCurrent()
+            session.close { [self] in
+                let stillCurrent = admitted && closeTicket == ticket && closeReceiptEpoch == epoch && isCurrent()
+                closeTicket = nil
+                loadingTimeout?.cancel()
+                if !closed { closed = true; onClosed() }
+                completion(stillCurrent ? .success(()) : .failure(MobileFailure.unavailable))
+            }
+        }
+    }
+
+    func captureDocumentTabSnapshot(sourceOwnerID: UUID, maximumPixelDimension: Int,
+                                    completion: @escaping (UIImage?) -> Void) {
+        guard maximumPixelDimension > 0, documentSourceOwnerID == sourceOwnerID,
+              !leaving, currentDocumentOwner(requiresVisible: true),
+              editor.vaultPlugin.documentSnapshotReady, let web = editor.webView else { completion(nil); return }
+        let nonce = editor.vaultPlugin.documentValidationNonce
+        let rect = web.bounds.intersection(web.convert(view.safeAreaLayoutGuide.layoutFrame, from: view))
+        guard !rect.isNull, rect.width.isFinite, rect.height.isFinite, rect.width > 0, rect.height > 0 else { completion(nil); return }
+        let limit = CGFloat(min(1024, maximumPixelDimension))
+        let scale = max(1, view.window?.screen.scale ?? 1)
+        let factor = min(1, limit / max(rect.width * scale, rect.height * scale))
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = rect
+        configuration.snapshotWidth = NSNumber(value: Double(rect.width * factor))
+        configuration.afterScreenUpdates = false
+        var completed = false
+        let finish: (UIImage?) -> Void = { image in
+            guard !completed else { return }; completed = true; completion(image)
+        }
+        // Best effort only: callers must never await this to save or close.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { finish(nil) }
+        web.takeSnapshot(with: configuration) { [weak self, weak web] image, _ in
+            guard !completed, let self = self, let web = web, self.editor.webView === web,
+                  !self.leaving, self.documentSourceOwnerID == sourceOwnerID,
+                  self.currentDocumentOwner(requiresVisible: true),
+                  self.editor.vaultPlugin.documentValidationNonce == nonce,
+                  self.editor.vaultPlugin.documentSnapshotReady,
+                  let image = image, let bitmap = image.cgImage,
+                  bitmap.width > 0, bitmap.height > 0,
+                  bitmap.width <= Int(limit), bitmap.height <= Int(limit),
+                  bitmap.bytesPerRow <= 4_194_304 / max(1, bitmap.height) else { finish(nil); return }
+            finish(image)
+        }
+    }
+
     func enterBackground() {
+        closeReceiptEpoch = UUID()
         guard backgroundTask == .invalid else { return }
+        editor.vaultPlugin.invalidateDocumentValidation()
         editor.vaultPlugin.resetEditorState()
         // Cancel a foreground navigation request; it must never pop on suspension.
         editor.vaultPlugin.cancelLifecycle()
