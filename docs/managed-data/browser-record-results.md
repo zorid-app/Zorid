@@ -37,7 +37,9 @@ See [private seam](browser-private-seam.md) and
 | Actual wasm32 artifact |Exit0 session55965,22.01s, `/private/tmp/zorid-managed-records-wasm-62a40caf.log`, pinned Rust1.95/bindgen0.2.129. |
 | Actual Chrome155 + WASM + IDB |Eight groups pass at ad6481b7, terminal session22166exit0; exact sources/artifacts checked before/after.69 strict completes,8 abort events,7 disposable DB deletions and owned Chrome/server/profile cleanup verified. |
 
-Production browser bundle result is recorded in the final integration checkpoint.
+Production browser bundle: Vite exit0 session62295,1.78s, log
+`/private/tmp/zorid-managed-records-browser-build-ad6481b7.log`. It consumes the
+matching actual WASM artifact. Existing chunk-size/dynamic-import warnings remain.
 No full Rust/Node suite campaign was launched for this feature.
 
 ## Concrete defects caught and corrected
@@ -64,7 +66,7 @@ No full Rust/Node suite campaign was launched for this feature.
 Independent source/test-logic reviews by separate workers approved frozen A e99,
 final A helper62a40, B9dcf correction slices and B9692 context followup. Exact
 hashes and review scope are retained in execution.md and orchestration messages
-msg4f062445cca2, msg8298ff27f982, msge318b4b37562 and msgc644dda618b2.
+`msg_4f062445cca2`, `msg_8298ff27f982`, `msg_e318b4b37562` and `msg_c644dda618b2`.
 Reviewers did not claim runtime execution.
 
 ## Actual browser proof
