@@ -721,8 +721,19 @@ impl StagedImport {
             }
             StagePhase::Sealed => {
                 self.uncertain = true;
-                vault.request_commit_binary_stage(stage).map_err(storage)?;
-                self.state = "commit_requested";
+                // Authorization can persist a definitive rejection and then
+                // return Err. Resolve THIS original stage before interpreting
+                // that error, just as at the later commit boundary. Only the
+                // Store-issued terminal PathConflict permits a keep-both retry.
+                let result = vault.request_commit_binary_stage(stage);
+                let refreshed = self.refresh_binary(vault);
+                if self.terminal() {
+                    refreshed?;
+                } else {
+                    result.map_err(storage)?;
+                    refreshed?;
+                    self.state = "commit_requested";
+                }
             }
             StagePhase::CommitRequested => {
                 self.uncertain = true;
@@ -1199,9 +1210,31 @@ mod tests {
                 Some(CreateMode::Binary),
             )
             .unwrap();
-        let done = finish(&mut host, op);
+        // Drive to sealed, then race at commit AUTHORIZATION, not just final
+        // commit. Store records terminal rejection before returning its error.
+        for _ in 0..10 {
+            if host.staged_import_step(op).unwrap().state == "sealed" {
+                break;
+            }
+        }
+        assert_eq!(host.staged_import_status(op).unwrap().state, "sealed");
+        let done = host.staged_import_step(op).unwrap();
         assert_eq!(done.state, "collision");
         assert!(done.can_retry_collision);
+        assert_eq!(done.commit_state, "rejected");
+        let original_stage = host
+            .leases
+            .staged_import
+            .as_ref()
+            .unwrap()
+            .stage
+            .as_ref()
+            .unwrap();
+        let terminal = host.vault.query_binary_stage(original_stage).unwrap();
+        assert_eq!(terminal.state, StagePhase::Rejected);
+        assert!(matches!(terminal.terminal,
+            Some(BinaryStageTerminal::Rejected(reason))
+                if reason.code == BinaryStageRejectionCode::PathConflict));
         assert_eq!(
             host.staged_import_begin(None, s).unwrap().state,
             "collision"
