@@ -1,5 +1,13 @@
 # Finite same-vault navigation: source results
 
+Historical capability evidence. On 2026-10-18 at04:38 UTC the user superseded
+native-owned document routing with a single retained WebView owning tabs/history
+and logical route commit. The new optional `webRouting:1` capability must not
+advertise `sameVaultNavigation:1` simultaneously. Native ready/presentation ACK
+does not authorize history changes in the successor. See
+[current plan](mobile-live-editor-window-plan.md). The composed native-authoritative
+`ddbc83a7` candidate never reached compilation and is reference only.
+
 2026-10-18 UTC. Owner: mobile-ios-shell, branch
 `tingkai-c/mobile-ios-finite-navigation`, base `f54dde44`.
 Implementation freeze: `4d04d0824251b98a69dac1ccdca30175165ef521`.

@@ -77,6 +77,41 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Latest checkpoint (2026-10-18 04:48 UTC): user mobile architecture supersession
+relayed in `msg_f2da5c302596`, acknowledged by root. ONE retained initialized
+WebView per vault owns logical document tabs, selected document, history, live
+editor window and route commit. Native owns physical vault host/session, outer
+Files/Recents/settings/chrome and gesture input, without a second document cursor.
+New Note and native data actions use the existing web Workspace/Rust adapter and
+same client. See [current source plan](mobile-live-editor-window-plan.md).
+The native-authoritative `ddbc83a7` candidate is superseded/reference only; its
+Simulator20 preflight stopped BEFORE compilation, and its slot was released.
+Do not build it as a prerequisite to the new architecture. Dev19 remains installed
+and open on the phone; no new physical UI or live-swipe result is claimed.
+
+Named parallel source: TS371 `mobile-web-router` at base `a4ee37ea` owns router,
+three-editor window and optional platform/Workspace adapter; native lead owns
+retained host/plugin and gesture presentation; editor owner `mobile-editor-interaction`
+owns interaction fencing with its existing independent reviewer. Editor successor
+`ec8ca471` has69 focused passes but remains unapproved for stale menu-role and
+control-event delivery seams. Root granted narrow owned-menu platform guards,
+not a general menu rewrite. Native Pages external services have an approved
+ownership direction; exact paired service DTOs must agree before shared edits.
+No new Rust/NoteBuffer/storage APIs are authorized by these mobile seams.
+
+Calendar backend foundation is canonical at `a4ee37ea`: Store receipt summary
+`d9c2b801`, saved-Base-before-task projection `5b71573d`, context validation
+`ba6eb9b8`, and corrected bounded test fixture `bf722de1`. Exact reviewed Store
+5/5 and projection17/17 execution evidence is recorded in
+`managed-data/calendar-foundation-integration.md`. Native join/desktop binding and
+rendered composed Calendar remain separate gates. Browser WorkBlocks actual
+`3b555af6` passed CRUD/ref/replay/restart and Rust semantic-abort normalization,
+then failed a cursor-eviction fixture assumption; full browser gate remains open.
+Managed lead owns the single cached native Calendar/desktop-host Rust turn.
+
+The checkpoints below retain historical evidence; the latest supersession above
+controls mobile architecture and sequencing.
+
 Native delivery checkpoint (2026-10-18 04:33 UTC): main `3cfff3f7` integrates
 reviewed nonwarm native/NewNote source and `24c4ec40` approved JS reattestation,
 preserving desktop Tasks. Composed299Node/fullTS0 and exact isolated-tree match.
