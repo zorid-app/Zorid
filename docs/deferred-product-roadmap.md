@@ -77,6 +77,24 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Native follow-up checkpoint (2026-10-18 01:24 UTC): configured history source
+review accepted Mobile4ab5cdec / Coordinator e46b3ec9 / Factory9d41f71c after
+all three transition/background/supersession corrections. No compiled/runtime
+history claim yet. Next compiler slot awaits frozen combined typing/harness
+commands. Native owner assigns d809 isolated mobile-rendered-link-touch from
+main07415616, only live-inline/native-caret-visibility plus minimal editor.ts
+native capability; touch admission must preserve pan/long press, not assume
+mousedown alone covers WebKit touch. Actual WK tap/caret proof remains required.
+For New Note, source audit established a minimal native-owned rejection journal
+protocol; no core cancellation/schema change is needed. bd57 may extend only
+NativeNewNoteRequest: completed parsed invalid_request/false followed by exact
+same-loan not_committed, with serial exclusive dispatch and no outstanding call,
+permits generic rejected retirement. Persist per-CID terminal first, then current
+terminal; all replay paths consult per-CID terminal. Unknown dispatch/status/CAS
+or release retains the gate. Fresh IDs require both terminal writes verified and
+exact loan release/fence ACK. Retain old CID rejection; this is not a universal
+core tombstone. Implementation/review/runtime acceptance remain pending.
+
 Integration checkpoint (2026-10-18 01:24 UTC): managed wire/native Store batch
 is now on main8f0f0c43..f26eb0b5, corresponding exactly to reviewed2276582d.
 Root verified Cargo.lock and both changed crate trees byte-identical to that
