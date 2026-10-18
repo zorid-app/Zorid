@@ -116,6 +116,17 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:42UTC: actual native picker/root/factory File/Home/Showtabs/Settings/Return
+wiring under2f source review; no compiler. Initial Simulator File/Home candidate
+may verify known incomplete flow, phone9 stays until NewNote/history gates covered.
+Minimal history followup ACK:371 owns NEW NativeRouteHistory.swift and scoped
+Pages validated native-page/folder-restore adapters; nativeowner retains coordinator
+integration. Scene-RAM existing100cap/cursor/pending target, stablevault/store/file
+or folder identity, explicitroot nilfolder; no tabmetadata/newframework/persistence.
+Cursor commits only validated target after root-owned close/install, not presentation.
+Concrete APIs proposed first, source review before exposure; heavy jobs serialized.
+NewNote helper assigned bd57, existingRustcreate+journal, no JS creation replay.
+
 00:38UTC: native NewNote proposal source-confirmed existing create_text and
 file_command_status reconstruct identical empty Text FamilyCommand. Narrow NEW
 NativeNewNoteRequest.swift helper scope ACKea787cadb5de; nativeowner assigns one
