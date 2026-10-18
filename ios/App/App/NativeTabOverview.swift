@@ -76,9 +76,28 @@ struct NativeTabOverview: View {
     @ObservedObject var snapshots: NativeTabSnapshotCache
     let onIntent: (NativeDocumentTabs.Intent) -> Void
     let onDone: () -> Void
+    // On failure, caller cancels the model intent AND clears its busy guard
+    // before offering recovery; this view does not cancel save/close work.
+    var isInteractionBlocked: Bool = false
+    var transitionMessage: String? = nil
+    var onRetryTransition: (() -> Void)? = nil
+    var onResumeSource: (() -> Void)? = nil
     @Environment(\.dynamicTypeSize) private var dynamicType
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
+
+    private var actionsBlocked: Bool { isInteractionBlocked || model.pendingIntent != nil }
+    private var statusMessage: String? {
+        if let message = transitionMessage, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return message
+        }
+        return actionsBlocked ? "Finishing the current tab change…" : nil
+    }
+
+    private func request(_ intent: NativeDocumentTabs.Intent) {
+        guard !actionsBlocked else { return }
+        onIntent(intent)
+    }
 
     private var columns: [GridItem] {
         dynamicType.isAccessibilitySize ? [GridItem(.flexible())] :
@@ -100,7 +119,14 @@ struct NativeTabOverview: View {
         .background(Color(uiColor: .secondarySystemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.tabs)
-        .onAppear { snapshots.retainSnapshots(for: model.tabs) }
+        // This guards sheet dismissal only. The hosting UIKit coordinator must
+        // separately guard Back, edge-pop and every programmatic stack exit.
+        .interactiveDismissDisabled(actionsBlocked)
+        .onAppear {
+            snapshots.retainSnapshots(for: model.tabs)
+            announceStatus(statusMessage)
+        }
+        .onChange(of: statusMessage) { message in announceStatus(message) }
         .onChange(of: model.tabs) { tabs in snapshots.retainSnapshots(for: tabs) }
         .accessibilityIdentifier("native.tabs.overview")
     }
@@ -109,7 +135,7 @@ struct NativeTabOverview: View {
         let selected = tab.id == model.selectedTabID
         return VStack(spacing: 10) {
             ZStack(alignment: .topTrailing) {
-                Button { onIntent(.select(tab.id)) } label: {
+                Button { request(.select(tab.id)) } label: {
                     thumbnail(tab)
                         .aspectRatio(0.76, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -121,17 +147,17 @@ struct NativeTabOverview: View {
                         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .disabled(model.pendingIntent != nil)
+                .disabled(actionsBlocked)
                 .accessibilityLabel(Text(tab.displayTitle))
                 .accessibilityHint("Select tab")
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .accessibilityIdentifier("native.tabs.select." + tab.id.uuidString.lowercased())
                 .accessibilityAction(named: Text("Close tab")) {
-                    if model.pendingIntent == nil { onIntent(.close(tab.id)) }
+                    request(.close(tab.id))
                 }
 
                 // Separate sibling button: closing never also selects the card.
-                Button { onIntent(.close(tab.id)) } label: {
+                Button { request(.close(tab.id)) } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 17, weight: .semibold))
                         .frame(width: 44, height: 44)
@@ -140,7 +166,7 @@ struct NativeTabOverview: View {
                 .buttonStyle(.plain)
                 .modifier(TabOverviewControlSurface())
                 .padding(8)
-                .disabled(model.pendingIntent != nil)
+                .disabled(actionsBlocked)
                 .accessibilityLabel(Text("Close \(tab.displayTitle) tab"))
                 .accessibilityIdentifier("native.tabs.close." + tab.id.uuidString.lowercased())
             }
@@ -176,6 +202,37 @@ struct NativeTabOverview: View {
 
     private var footer: some View {
         VStack(spacing: 8) {
+            if let message = statusMessage {
+                Text(message)
+                    .font(.callout)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("native.tabs.transitionStatus")
+            }
+            if let retry = onRetryTransition {
+                Button {
+                    if !actionsBlocked { retry() }
+                } label: {
+                    Text("Retry").padding(.horizontal, 16).frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .modifier(TabOverviewControlSurface())
+                .disabled(actionsBlocked)
+                .accessibilityLabel("Retry tab change")
+                .accessibilityIdentifier("native.tabs.retry")
+            }
+            if let resume = onResumeSource {
+                Button {
+                    if !actionsBlocked { resume() }
+                } label: {
+                    Text("Resume editing").padding(.horizontal, 16).frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .modifier(TabOverviewControlSurface())
+                .disabled(actionsBlocked)
+                .accessibilityLabel("Resume editing")
+                .accessibilityIdentifier("native.tabs.resume")
+            }
             if model.restoreDisposition == .rejected {
                 Text("Saved tabs could not be restored. Your files are unchanged.")
                     .font(.footnote)
@@ -207,6 +264,11 @@ struct NativeTabOverview: View {
         .background(Color(uiColor: .secondarySystemBackground))
     }
 
+    private func announceStatus(_ message: String?) {
+        guard let message = message else { return }
+        UIAccessibility.post(notification: .announcement, argument: message)
+    }
+
     private var count: some View {
         Text(model.tabs.count == 1 ? "1 tab" : "\(model.tabs.count) tabs")
             .font(.headline)
@@ -216,7 +278,7 @@ struct NativeTabOverview: View {
     }
 
     private var newTab: some View {
-        Button { onIntent(.newHome) } label: {
+        Button { if model.canAddTab { request(.newHome) } } label: {
             Image(systemName: "plus")
                 .font(.title2)
                 .frame(width: 52, height: 52)
@@ -224,14 +286,16 @@ struct NativeTabOverview: View {
         }
         .buttonStyle(.plain)
         .modifier(TabOverviewControlSurface())
-        .disabled(!model.canAddTab)
+        .disabled(actionsBlocked || !model.canAddTab)
         .accessibilityLabel("New tab")
         .accessibilityHint(model.tabs.count >= NativeDocumentTabs.maximumTabs ? "Tab limit reached. Close a tab to add another." : "Create an empty Home tab")
         .accessibilityIdentifier("native.tabs.new")
     }
 
     private var done: some View {
-        Button(action: onDone) {
+        Button {
+            if !actionsBlocked { onDone() }
+        } label: {
             Text("Done")
                 .font(.headline)
                 .padding(.horizontal, 16)
@@ -240,7 +304,7 @@ struct NativeTabOverview: View {
         }
         .buttonStyle(.plain)
         .modifier(TabOverviewControlSurface())
-        .disabled(model.pendingIntent != nil)
+        .disabled(actionsBlocked)
         .accessibilityLabel("Done")
         .accessibilityHint("Return to selected tab")
         .accessibilityIdentifier("native.tabs.done")
