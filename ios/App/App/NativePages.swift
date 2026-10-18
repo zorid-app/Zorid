@@ -1260,6 +1260,59 @@ private final class NativePagesCoordinator {
         drainAutomaticRefresh()
     }
 
+    func restoreNativePageRoute(_ route: NativePageRoute, completion: @escaping (Result<NativePageRoute, Error>) -> Void) {
+        guard route.vaultID == vault.id, !busy, !editorActive, !tabOverviewSuspended, !tabSourceClosed,
+              !ownershipBlocked, loanTicket == nil, openingDestination == nil, let session = session else {
+            completion(.failure(NativeRouteHistoryError.unavailable)); return
+        }
+        cancelSearch()
+        cancelQueuedRefresh()
+        editorOpenGeneration += 1
+        let routeTicket = editorOpenGeneration
+        generation += 1
+        let readTicket = generation
+        busy = true
+        owner?.setLoading()
+        updateRouteControls()
+        session.pageListing { [weak self] result in
+            guard let self = self else { completion(.failure(NativeRouteHistoryError.stale)); return }
+            // A newer host/read owns its own cleanup. Never unlock it here.
+            guard self.generation == readTicket, self.session === session else {
+                completion(.failure(NativeRouteHistoryError.stale)); return
+            }
+            guard self.editorOpenGeneration == routeTicket, !self.editorActive,
+                  !self.tabOverviewSuspended, !self.tabSourceClosed else {
+                self.busy = false
+                self.owner?.cancelNativePageRouteLoading()
+                self.updateRouteControls()
+                completion(.failure(NativeRouteHistoryError.stale))
+                self.drainAutomaticRefresh()
+                return
+            }
+            switch result {
+            case .success(let listing):
+                do {
+                    guard listing.localStoreId == route.localStoreID, let owner = self.owner else { throw NativeRouteHistoryError.stale }
+                    let restored = try owner.applyRestoredNativePageRoute(route, listing: listing)
+                    self.historyStoreId = listing.localStoreId
+                    self.busy = false
+                    self.updateRouteControls()
+                    // This is folder-display validation, NOT checkpoint/lease
+                    // readiness. Keep the recovery gate and Review untouched.
+                    completion(.success(restored))
+                } catch {
+                    self.busy = false
+                    self.owner?.cancelNativePageRouteLoading(emitCurrent: false)
+                    self.updateRouteControls()
+                    completion(.failure(error))
+                }
+                self.drainAutomaticRefresh()
+            case .failure(let error):
+                self.fail(session, ticket: readTicket) { completion(.failure(error)) }
+            }
+        }
+    }
+
     func reload() async {
         guard pageActive else { return }
         cancelSearch()
@@ -2114,6 +2167,34 @@ private final class NativePagesModel: ObservableObject {
     var isInFolder: Bool { preferences.selected == .files && !folder.isEmpty }
     var showInitialSkeleton: Bool { loading && listing == nil }
 
+    func nativePageRoute() throws -> NativePageRoute {
+        guard !loading, !documentTabSourceSuspended, let listing = listing else { throw NativeRouteHistoryError.unavailable }
+        let mode: NativePageRoute.Mode = preferences.selected == .recents ? .recents : .files
+        let target = mode == .files ? folderId : nil
+        if let target = target {
+            guard let current = listing.entries.first(where: { $0.id == target && $0.kind == .folder && !$0.deleted }),
+                  NativeFileEntry.isVisiblePath(current.path), NativeFileEntry.samePath(current.path, folder) else {
+                throw NativeRouteHistoryError.unavailable
+            }
+        } else if mode == .files, !folder.isEmpty { throw NativeRouteHistoryError.unavailable }
+        return try NativePageRoute(vaultID: vault.id, localStoreID: listing.localStoreId, mode: mode, folderID: target)
+    }
+
+    func applyRestoredNativePageRoute(_ route: NativePageRoute, listing: NativeVaultListing) throws -> NativePageRoute {
+        guard route.vaultID == vault.id, route.localStoreID == listing.localStoreId,
+              !documentTabSourceSuspended else { throw NativeRouteHistoryError.stale }
+        let target = route.folderID.flatMap { id in listing.entries.first { $0.id == id && $0.kind == .folder && !$0.deleted && NativeFileEntry.isVisiblePath($0.path) } }
+        guard route.folderID == nil || target != nil else { throw NativeRouteHistoryError.unavailable }
+        showListing(listing)
+        applyRoute(page: route.mode == .recents ? .recents : .files, folder: target)
+        return try nativePageRoute()
+    }
+
+    func cancelNativePageRouteLoading() {
+        loading = false
+        render() // Keep the newer selected mode/folder and prior trusted listing.
+    }
+
     // A synchronous presentation witness from the last trusted Rust listing.
     // The activation factory must still resolve this stable identity afresh.
     func documentTabDocument(for entry: NativeFileEntry) throws -> NativeTabDocument {
@@ -2278,6 +2359,15 @@ final class NativePagesController: UIViewController {
     var onOpenDocument: ((NativeFileEntry, Bool) -> Void)? { didSet { updateDocumentTabRouting() } }
     var onCreateNote: (() -> Void)? { didSet { updateDocumentTabRouting() } }
     var onChooseVault: (() -> Void)? { didSet { updateDocumentTabRouting() } }
+    var onNativePageRouteValidated: ((NativePageRoute) -> Void)?
+    func nativePageRoute() throws -> NativePageRoute { try model.nativePageRoute() }
+    func restoreNativePageRoute(_ route: NativePageRoute, completion: @escaping (Result<NativePageRoute, Error>) -> Void) {
+        coordinator.restoreNativePageRoute(route, completion: completion)
+    }
+    private func emitNativePageRouteValidated() {
+        guard let route = try? model.nativePageRoute() else { return }
+        onNativePageRouteValidated?(route)
+    }
     // One-way ownership for this controller's lifetime. Callback teardown must
     // never resurrect a legacy path on a controller that root has admitted.
     private var documentTabRoutingConfigured = false
@@ -2317,7 +2407,10 @@ final class NativePagesController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         model.onSearch = { [weak self] query in self?.coordinator.search(query) }
-        model.onRouteChanged = { [weak self] route in self?.coordinator.recordPageNavigation(route) }
+        model.onRouteChanged = { [weak self] route in
+            self?.coordinator.recordPageNavigation(route)
+            self?.emitNativePageRouteValidated()
+        }
         coordinator.record(model.currentRoute)
         let pages = NativePagesView(model: model, fileAction: { [weak self] action, entry in self?.fileAction(action, entry: entry) }, retryFileAction: { [weak self] in self?.retryFileAction() }, checkOwnership: { [weak self] in self?.coordinator.recheckOwnership() }, navigate: { [weak self] direction in self?.coordinator.traverse(direction) }, open: { [weak self] entry in
             guard let self = self else { return }
@@ -2605,12 +2698,27 @@ final class NativePagesController: UIViewController {
     fileprivate var currentRoute: NativeRoute { model.currentRoute }
     fileprivate var originTitle: String { model.preferences.selected.title }
     fileprivate func supports(_ page: NativePage) -> Bool { model.supports(page) }
-    fileprivate func applyRoute(page: NativePage, folder: NativeFileEntry?) { model.applyRoute(page: page, folder: folder) }
+    fileprivate func applyRoute(page: NativePage, folder: NativeFileEntry?) {
+        model.applyRoute(page: page, folder: folder)
+        emitNativePageRouteValidated()
+    }
     fileprivate func showRouteUnavailable() { model.showRouteUnavailable() }
     fileprivate func resetFolderRoute() { model.applyRoute(page: model.preferences.selected, folder: nil) }
     fileprivate func setRouteAvailability(back: Bool, forward: Bool) { model.setRouteAvailability(back: back, forward: forward) }
     fileprivate func setLoading() { model.setLoading() }
-    fileprivate func showListing(_ listing: NativeVaultListing) { model.showListing(listing) }
+    fileprivate func showListing(_ listing: NativeVaultListing) {
+        model.showListing(listing)
+        emitNativePageRouteValidated()
+    }
+    fileprivate func applyRestoredNativePageRoute(_ route: NativePageRoute, listing: NativeVaultListing) throws -> NativePageRoute {
+        // Root restoration completes through its staged ticket; do not emit a
+        // second ordinary navigation callback that could truncate history.
+        try model.applyRestoredNativePageRoute(route, listing: listing)
+    }
+    fileprivate func cancelNativePageRouteLoading(emitCurrent: Bool = true) {
+        model.cancelNativePageRouteLoading()
+        if emitCurrent { emitNativePageRouteValidated() }
+    }
     fileprivate func showLoadFailure(missingSelection: Bool = false) { model.showLoadFailure(missingSelection: missingSelection) }
 }
 
