@@ -7,15 +7,18 @@ fn id(s: &str) -> EntryId {
     EntryId::new(s).unwrap()
 }
 fn create(v: &mut NativeVault, name: &str, path: &str, content: &str) {
-    v.apply(&MutationRequest {
-        operation_id: OperationId::new(format!("create-{name}")).unwrap(),
-        mutation: Mutation::Create {
-            id: id(name),
-            path: VaultPath::new(path).unwrap(),
-            kind: EntryKind::File,
-            content: Some(content.as_bytes().to_vec()),
+    v.family_apply(
+        &MutationRequest {
+            operation_id: OperationId::new(format!("create-{name}")).unwrap(),
+            mutation: Mutation::Create {
+                id: id(name),
+                path: VaultPath::new(path).unwrap(),
+                kind: EntryKind::File,
+                content: Some(content.as_bytes().to_vec()),
+            },
         },
-    })
+        Some(FamilyCreateMode::Text),
+    )
     .unwrap();
 }
 fn setup() -> (
@@ -26,6 +29,11 @@ fn setup() -> (
 ) {
     let dir = tempfile::tempdir().unwrap();
     let mut v = NativeVault::open(dir.path()).unwrap();
+    v.family_enroll(&FamilyScope {
+        realm_id: zorid_sync_protocol::RealmId::new("realm").unwrap(),
+        vault_id: zorid_sync_protocol::VaultId::new("vault").unwrap(),
+    })
+    .unwrap();
     create(
         &mut v,
         "type-file",
@@ -38,11 +46,6 @@ fn setup() -> (
         "Task.md",
         "---\ntype: type-task\n---\n# A task\n",
     );
-    v.family_enroll(&FamilyScope {
-        realm_id: zorid_sync_protocol::RealmId::new("realm").unwrap(),
-        vault_id: zorid_sync_protocol::VaultId::new("vault").unwrap(),
-    })
-    .unwrap();
     let l = v
         .claim_client(&OperationId::new("10000000-0000-4000-8000-000000000001").unwrap())
         .unwrap();

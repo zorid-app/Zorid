@@ -69,7 +69,9 @@ or Rust test execution**. `rustfmt --edition 2021 --check` on the new source/tes
 files and `git diff --check` pass. These checks establish formatting/parsing only,
 not Rust type correctness or test success.
 
-Nine focused native/real-SQLite tests are authored in `tests/calendar.rs`:
+A source audit corrected fixture enrollment ordering: enroll the empty vault first,
+then create files through explicit `FamilyCreateMode::Text`; no legacy enrollment
+bypass is used. Nine focused native/real-SQLite tests are authored in `tests/calendar.rs`:
 
 1. Authenticated receipt-only waiting and future-schema input, zero accepted SQLite
    records, unknown task membership and unknown window membership at stable fence.
