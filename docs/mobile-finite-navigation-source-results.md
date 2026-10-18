@@ -1,45 +1,72 @@
-# Finite same-vault JS navigation checkpoint
+# Finite same-vault navigation: source results
 
-Owner: mobile-ios-shell / term_c8bf385c-b0d0-4bee-b3cd-cf0bffcdc971.
-Branch: `tingkai-c/mobile-ios-finite-navigation`; base `f54dde44`.
-Frozen implementation: `4d04d0824251b98a69dac1ccdca30175165ef521`.
-Root integration owner: `run_3e72b2c9ab72`; Tasks seam: `run_7a10da5526b5`.
-Native pairing owner: `term_d8fdd76f-8de9-4cfe-b570-604b005df067`.
+2026-10-18 UTC. Owner: mobile-ios-shell, branch
+`tingkai-c/mobile-ios-finite-navigation`, base `f54dde44`.
+Implementation freeze: `4d04d0824251b98a69dac1ccdca30175165ef521`.
+Root/integration: `run_3e72b2c9ab72`; Tasks seam: `run_7a10da5526b5`.
+Paired Swift/plugin/root/factory remains native owner's scope.
 
-The interrupted eight-file diff was inspected and preserved, then completed.
-No main mutation, push, Xcode/Rust builds, emulator operations, or tooling edits.
-Only this worktree's untracked node_modules symlink was repointed to the matching
-read-only managed-calendar-desktop-ui dependency cache. Both package.json and
-pnpm-lock.yaml byte-match that checkout. The previous linked tree lacked Calendar
-packages and failed type-checking; no packages or lockfiles were changed.
+The interrupted eight-file diff was preserved and completed. The optional
+sameVaultNavigation version 1 channel stages stable-ID Markdown admission and
+source flush before native ready. Navigation uses its own transaction queue,
+retains the actual source view until acceptance, and keeps the same Vault/client
+binding. Positive native ready resolution is irrevocable. Lifecycle drains failed
+navigation rollback before capturing inert state. Spontaneous links supersede
+command intents and publish their own identity even from a provisional target tab.
+The source tab is retired after acceptance or newer navigation takeover.
 
-Implementation retains one Workspace/Vault/client lease and independently queues
-navigation transactions. Source flush and stable-ID target admission precede
-staging; checkpoint/pending recovery cannot precede expected-ID admission.
-Native positive ready resolution commits irrevocably. Failed target rendering or
-native ACK restores the retained source. Lifecycle drains rollback before capturing
-inert state. A spontaneous link has its own intent and native notification even
-when reusing a provisional target tab; source retirement removes the obsolete tab.
-The first seven openNote parameters are unchanged; expectedEntryId is eighth.
+`openNote` retains its original seven arguments and adds optional eighth
+`expectedEntryId`. By-ID admission precedes checkpoint adoption/pending recovery.
+Rejected admission does not pin a loaded/fresh buffer to the rejected ID; queued
+admissions validate the successful immutable identity. Path reuse cannot retarget
+an existing loaded buffer or create another writer for that admitted entry.
 
-Validation: 293/293 focused tests pass, single test concurrency, covering
-mobile-native, workspace-mobile-navigation, workspace-mobile-lifecycle, note-buffer,
-note-buffer-durable-recovery, note-buffer-witness and note-buffer-write-guard.
-`tsc --noEmit` passes against the matching cache. `git diff --check` passes.
-Logs: `finite-js-focused.log`, `finite-js-typecheck.log` under
-`/Users/ctk/orca/artifacts/zorid-native-20261018`.
+## Verification
 
-Root's independent reviewer found admission pin poisoning in the interrupted
-NoteBuffer change. The frozen successor pins only after successful admission and
-revalidates queued admissions. Added regressions cover failed loaded/fresh admission
-and queued mismatching IDs. Root has the frozen successor for final delta review.
-Initial review established no other concrete defect in its assigned source scope.
+Passed, exit 0, Node v26.10.0:
 
-The exact DTO is unchanged: sameVaultNavigation?:1, five-field documentOpenRequest,
-ready with path/entryId/revision/recovery, failed/stale with id/status. Native owner
-confirmed positive ready resolves only after fresh correlated validation/root bind.
-No remaining contract question identified. Swift pairing, native runtime verification,
-and main integration are separate and are not established by these source checks.
+```sh
+node --test --test-concurrency=1 tests/mobile-native.test.ts tests/note-buffer-durable-recovery.test.ts tests/workspace-mobile-navigation.test.ts tests/workspace-mobile-lifecycle.test.ts tests/note-buffer.test.ts tests/note-buffer-witness.test.ts tests/note-buffer-write-guard.test.ts
+./node_modules/.bin/tsc --noEmit
+git diff --check
+```
+
+293 tests passed, zero failures/skips/cancellations. No broader suite or native
+build/pass was run. Matching read-only dependencies:
+`/Users/ctk/orca/workspaces/Zorid/managed-calendar-desktop-ui/node_modules`.
+Both package.json and pnpm-lock.yaml byte-match the owner checkout. Only the
+untracked symlink in this worktree changed; the cache and lockfiles were untouched.
+
+Artifacts: `/Users/ctk/orca/artifacts/zorid-native-20261018`.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| finite-js-focused.log | `2d224375a6fe4ad8fe758ce3426e7a7b9d5a7e2bf36d20a43d8a6c69bf8fa28a` |
+| finite-js-typecheck.log (empty successful output) | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+
+## Frozen Git blobs
+
+| Path | Blob |
+| --- | --- |
+| src/platform/index.ts | `12f0b59f889bf269f3e8e6bd606f99d810c567f9` |
+| src/platform/mobile-native.ts | `e01cded493c8d14af3fec8db007ec7942a508e97` |
+| src/ui/note-buffer.ts | `1d24867397e764c069f900fabf4de021b49065a8` |
+| src/ui/note-durable-state.ts | `9b2511aa0672ca363719bf71169a8fcf71375d7d` |
+| src/ui/workspace.ts | `f885d7b989352931d8aa0964db8414cfdc0d1d86` |
+| tests/mobile-native.test.ts | `42d88953ecd330f9b41ffb1fe66394424fbc2d03` |
+| tests/note-buffer-durable-recovery.test.ts | `bffba30ab5464cf5271b411d222c5e80155dc5d6` |
+| tests/workspace-mobile-navigation.test.ts | `8a5c1dc848f67504d2bbdcadb406cfe236c30514` |
+
+Root assigned an independent source reviewer. Its initial concrete P2 finding
+(failed admission pin poisoning) is corrected in this freeze, with regressions.
+Root independently verified the correction; the final same-freeze reviewer
+subsequently approved this optional source slice. No unresolved DTO question is identified.
+Native owner confirms positive ready resolves only after fresh correlated
+validation and root binding. That confirmation and these focused tests establish
+source behavior only: paired Swift delivery, native/mobile verification, undo
+continuity require separate native evidence. Canonical integration is recorded below.
+This owner performed no main mutation, push, Xcode/Rust build, simulator pass, or
+build-tooling edit.
 
 ## Canonical integration and independent verdict
 
