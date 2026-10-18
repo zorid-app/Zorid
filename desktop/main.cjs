@@ -35,6 +35,41 @@ function registerIPC() {
   handle('newWindow', async record => {
     return { id: (await createWindow({ source: record })).id };
   });
+  handle('reopenCalendarRecovery', async (record, event, request) => {
+    if (!request || typeof request.originalWindowId !== 'string' || request.originalWindowId === 'primary' || request.originalWindowId.length > 64 || typeof request.expectedVaultId !== 'string'
+      || !request.expectedVaultId.length || request.expectedVaultId.length > 128) throw new Error('Invalid recovery request');
+    const originalWindowId = request.originalWindowId, expectedVaultId = request.expectedVaultId;
+    const entry = record.vault, generation = record.generation, root = entry?.service.root;
+    const check = (opened) => {
+      if (broker.authenticate(event) !== record || !entry || record.vault !== entry || record.generation !== generation
+        || record.vaultSelectionPending || closeStates.get(record)?.pending || entry.service.closed
+        || record.persistedVaultRoot !== root) throw new Error('Recovery caller changed');
+      if (opened) {
+        broker.assertLive(opened);
+        if (opened.vault?.service.root !== root || opened.vaultSelectionPending) throw new Error('Recovery target vault changed');
+      }
+      if ([...broker.windows.values()].some(owner => owner.id === originalWindowId && owner !== opened)) throw new Error('Recovery window is still in use');
+    };
+    check();
+    if (!editorCore || !clientSlots) throw new Error('Recovery is unavailable');
+    const admitted = await editorCore.context(broker, record, root);
+    check();
+    if (!admitted || admitted.scope.vaultId !== expectedVaultId) throw new Error('Recovery vault does not match');
+    const checkAdmission = async opened => {
+      check(opened);
+      const current = await editorCore.context(broker, record, root);
+      check(opened);
+      if (current?.admissionId !== admitted.admissionId || current.scope.vaultId !== expectedVaultId
+        || current.scope.clientId !== admitted.scope.clientId) throw new Error('Recovery admission changed');
+    };
+    const id = originalWindowId === 'main' ? 'primary' : originalWindowId;
+    const slot = (await clientSlots.listExisting()).find(row => row.slotId === id);
+    await checkAdmission();
+    if (!slot?.vaultPath || await fs.realpath(slot.vaultPath) !== root) throw new Error('Original recovery slot is unavailable for this vault');
+    await checkAdmission();
+    const opened = await createWindow({ primary: id === 'primary', restoreSlot: slot, initialState: 'restore', recoveryCheck: checkAdmission, recoveryAssert: check });
+    return { id: opened.id };
+  });
   handle('getVault', record => broker.describe(record));
   handle('closeHandlerReady', (record, _event, ready) => {
     const state = closeStates.get(record);
@@ -97,13 +132,21 @@ function registerIPC() {
     handle(method, (record, event, expectedRoot, ...args) => broker.dispatch(record, expectedRoot, method, args, () => broker.authenticate(event)));
   }
 }
-async function createWindow({ source, primary = false, initialState = 'empty', restoreSlot } = {}) {
+async function createWindow({ source, primary = false, initialState = 'empty', restoreSlot, recoveryCheck, recoveryAssert } = {}) {
   if (source) {
     broker.assertLive(source);
   }
-  const clientSlot=clientSlots?await clientSlots.claim(restoreSlot?{slotId:restoreSlot.slotId}:primary?{primary:true}:{}):null;
-  const window = new BrowserWindow({ width: 1280, height: 860, minWidth: 640, minHeight: 480, title: 'Zorid', backgroundColor: '#1e1e1e', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 15 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-  const record = broker.register(window, { primary, initialState, persistentId:clientSlot?.slotId });
+  const clientSlot=clientSlots?await clientSlots.claim(restoreSlot?{slotId:restoreSlot.slotId,...(recoveryCheck?{existingOnly:true,expectedClientId:restoreSlot.clientId,expectedVaultPath:restoreSlot.vaultPath}:{})}:primary?{primary:true}:{}):null;
+  let window, record;
+  try {
+    if (recoveryCheck) { await recoveryCheck(); recoveryAssert(); }
+    window = new BrowserWindow({ width: 1280, height: 860, minWidth: 640, minHeight: 480, title: 'Zorid', backgroundColor: '#1e1e1e', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 15 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    record = broker.register(window, { primary, initialState, persistentId:clientSlot?.slotId });
+  } catch (error) {
+    if (window && !window.isDestroyed()) window.destroy();
+    if (clientSlot) await clientSlots.release(clientSlot.slotId, {restore:true});
+    throw error;
+  }
   record.clientSlot=clientSlot;
   const closeState = {ready: false, pending: null, allowed: false};
   closeStates.set(record, closeState);
@@ -138,12 +181,14 @@ async function createWindow({ source, primary = false, initialState = 'empty', r
     else {
       const selected=restoreSlot?.vaultPath||(primary?clientSlot?.vaultPath||lastVaultPath:null);
       if(selected){
-        try {await broker.select(record,selected);}
-        catch(error){dialog.showErrorBox('Could not open Rust vault',`${error.code||'vault_open_failed'}: ${error.message}`);}
+        try {await broker.select(record,selected);if(recoveryCheck){await recoveryCheck(record);recoveryAssert(record);}}
+        catch(error){if(recoveryCheck)throw error;dialog.showErrorBox('Could not open Rust vault',`${error.code||'vault_open_failed'}: ${error.message}`);}
       }
     }
     if(record.vault&&clientSlot){await clientSlots.setVault(clientSlot.slotId,record.vault.service.root);record.persistedVaultRoot=record.vault.service.root;}
+    if (recoveryCheck) { await recoveryCheck(record); recoveryAssert(record); }
     if (devUrl) await window.loadURL(devUrl); else await window.loadFile(path.join(__dirname, '../dist/index.html'));
+    if (recoveryCheck) { await recoveryCheck(record); recoveryAssert(record); }
     return record;
   } catch (error) { if (!window.isDestroyed()) window.destroy(); throw error; }
 }

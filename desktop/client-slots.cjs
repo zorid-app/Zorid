@@ -68,14 +68,17 @@ async function openClientSlots(file) {
     }
   }
   return Object.freeze({
+    listExisting() { return serial(async () => state.slots.map(copy)); },
     listRestorable() { return serial(async () => state.slots.filter(row => row.slotId !== 'primary' && row.restore).sort((a,b) => a.slotId.localeCompare(b.slotId)).map(copy)); },
     claim(options = {}) { return serial(async () => {
-      if (options.primary !== undefined && typeof options.primary !== 'boolean' || options.slotId !== undefined && !slotId(options.slotId)
+      if (options.existingOnly !== undefined && typeof options.existingOnly !== 'boolean' || options.primary !== undefined && typeof options.primary !== 'boolean' || options.slotId !== undefined && !slotId(options.slotId)
         || options.primary && options.slotId && options.slotId !== 'primary') throw failure('invalid_client_slot');
       const wanted = options.primary ? 'primary' : options.slotId;
       let row = wanted ? state.slots.find(row => row.slotId === wanted) : state.slots.find(row => row.slotId !== 'primary' && !row.restore && !claimed.has(row.slotId));
+      if (options.existingOnly && (!wanted || !row || row.clientId !== options.expectedClientId || row.vaultPath !== options.expectedVaultPath)) throw failure('client_slot_not_found');
       if (wanted && claimed.has(wanted)) throw failure('client_slot_in_use');
       if (!row) {
+        if (options.existingOnly) throw failure('client_slot_not_found');
         if (wanted && wanted !== 'primary') throw failure('client_slot_not_found');
         row = {slotId: wanted || `window-${randomUUID()}`, clientId: randomUUID(), vaultPath: null, restore: true};
       }
