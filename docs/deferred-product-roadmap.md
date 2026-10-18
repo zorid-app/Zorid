@@ -77,6 +77,14 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Mobile bridge checkpoint (2026-10-18 05:26 UTC): root composition `7f97d7f1`
+exactly matches approved finalf42b5dcb across five source/test files. The retained
+9/9 focused log and root combined fullTS exit0 are recorded in
+mobile-web-routing-bridge-integration.md. Bounded command admission and original-
+only receipt semantics are accepted. Workspace activation and paired actual
+native behavior remain open; no new iOS build or physical result is claimed.
+
+
 Recovery helper checkpoint (2026-10-18 05:23 UTC): root composition `9acab0ad`
 exactly matches independently approved6c80a893+bcc02aa0. Retained9/9 focused
 checks cover completed inventory owner/client/vault retirement with no extra
@@ -105,8 +113,8 @@ review; native Calendar query foundation at `aab1d5c8` retains explicitly split
 native/stdio results; passive actual CodeMirror host at `2120024d` passes7 component
 cases. These are source/component foundations, not activated retained WebKit
 navigation. TS371 owns optional bridge/recovery/Workspace composition; bridge
-changed-payload reuse needs its final correction; the recovery helper scope fix
-is accepted separately above.
+changed-payload reuse and recovery helper scope fixes are accepted separately
+above; consuming Workspace integration remains open.
 Managed lead owns the next reviewed Electron Calendar retry, root starts no heavy
 job concurrently. The original UI attempts failed driver selectors; no full
 Calendar GUI case is accepted from those attempts. Dev19 remains the phone build.
