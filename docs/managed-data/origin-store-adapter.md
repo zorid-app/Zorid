@@ -239,3 +239,53 @@ no fake engine, source copy, production arbitrary catalog, Cargo feature or
 new dependency is permitted. Compiler remains owned by root; source-only review
 and bounded formatting only until root releases load. Reviewer ctx_4ef93249788f
 was sent exact inventory and this reply; shared source has not been edited.
+
+## Fixed v2 fixture feature amendment — source review gate
+
+Coordinator msg_0fb16764c640 conveys root msg94ba7da4d049 assigning this SAME owner
+three additional exact feature hunks, subject to reviewer ctx_4ef93249788f approval
+of this amendment BEFORE edits:
+
+- `crates/zorid-records/Cargo.toml`: add nondefault empty `intent-test-fixtures`
+  feature; no default change, dependency or lock change.
+- `crates/zorid-records/src/local_intent.rs`: feature-gated fixed synthetic catalog
+  helper `intent_test_registration(realm: Id, vault: Id, version: u32) ->
+  IntentResult<ValidatedRegistration>`. Accept versions 1/2 only and fixed owner
+  `origin-store-fixture`, collection `origin-store-fixture-records`: v1 empty
+  fields, v2 adds one optional String with fixed default `new-default`. Build the
+  exact prefix declaration internally and validate against exactly that compiled
+  two-schema catalog. No caller schema/vector/lineage/catalog input or generic
+  trusted constructor. Existing production validate_registration unchanged.
+  Add feature-gated compile_error when debug_assertions is false: release builds
+  cannot include fixture trust. Dependency cfg(test) is false for Store unit-test
+  builds, so this helper is feature-gated in records, not cfg(test).
+- `crates/zorid-store/Cargo.toml`: nondefault `intent-test-fixtures` forwards only
+  `zorid-records/intent-test-fixtures`; no default feature change.
+- Already owned `managed_records.rs`: private registration helper may invoke this
+  fixed fixture catalog ONLY under `cfg(all(test, feature="intent-test-fixtures"))`
+  and exact fixture owner/collection; compare complete current schema bytes.
+  Ordinary compiledWorkBlocks-v1 validation stays production default.
+  Inline unit tests under same cfg exercise actual Store SQLite empty Create v1
+  capture/precommit-nojournal/upgrade-v2/origin rejection and a separate postcommit
+  replay upgrade; settlement32/recovery and no new authored migration operations.
+
+Feature-unification review must inspect workspace/native/WASM/default graphs for
+any default or ordinary dependency requesting this feature; none is authorized.
+Even when records' additive feature is unified by an explicit fixture test build,
+Store's fixture-trust branch is absent outside its own unit-test cfg. Release
+compile_error excludes fixture-enabled shipping artifacts. Default Store remains
+first-party WorkBlocks only, and default native/WASM artifacts never enable this
+feature. Before actual execution, coordinator separately approves bounded default
+v1 checks and explicit `-p zorid-store --features intent-test-fixtures --lib` filter;
+no full suite or speculative release compilation is requested. Source-only checks
+verify exact feature forwarding, no default request, unchanged production validator
+and cfg gates. Real SQLite v2 acceptance remains OPEN until actual tests pass.
+
+Independent early review corrections: generic Store checkpoint IDs remain any
+existing valid OperationId, denying ONLY the reserved UUID; committed replay
+never invokes State::prepare, historical or fresh; reserved load verifies exactly
+one capture or capture->retirement two-row history on every path, including
+unjournaled settlement retry. Receipt is byte-canonical with exact original op,
+positive canonical sequence, immutable source and accepted-change association.
+The metadata16MiB cap is dominated by4096 retained keys at this charge/key bound;
+no artificial impossible metadata-cap fixture will be claimed.
