@@ -1185,3 +1185,38 @@ Native successor checkpoint — 2026-10-18 00:20 UTC:
   source assertions only; requires root atomic folder/status Rust wire actual
   validation. New tab Pages adapters remain separate followup. Root integrated
   import library main d1ceed0a (host10/10, ABI5/5); no Swift import UI proof.
+
+
+Tab wiring checkpoint — 2026-10-18 00:28 UTC (SOURCE ONLY):
+- Owner read mandatory retirement correction a02b7397 and composed WITH5742
+  as150ad6dd+99be269a. Exact container/session/owner terminal receipt is minted
+  after true lifecycle ACK + actual workerclose, before callbacks; same-scene
+  covered-editor background delivery is internal, no Scene edits. No compiler
+  or actual native-background proof. Typed witness depends on371 next patch.
+- Fresh catalog resolve(vaultID) committed87e73a4a, independent2f SOURCE approved
+  e4b8. bd57 explicitly confirmed no catalog/picker ownership14162ada42f8; owner
+  retains catalog/picker/coordinator hunks. No picker retention hooks edited yet.
+- Coordinator remains UNTRACKED/unregistered, awaiting exact final review.
+  Review corrections include prepared-destination validation before/after UIKit
+  transition, strict host-free Home, exact editor role/tab/vault/store/stableID,
+  separate foreground admission epoch, terminal retirement query, recoverable
+  quarantine, independent persistence error/retry state and post-cleanup intent.
+  Prepared controllers never navigate themselves. Required didInstall handshake
+  follows root Source registration+controller installation, allowing buffered
+  validated identity to bind without restarting editor. Installed quarantine
+  cleanup uses Source save/quiesce; unlaunched cleanup uses factory reservation.
+- Explicit worker starts (mail alone does not wake idle turns):37189889d43
+  implements owned Pages ShowTabs/header,60pt NewNote FAB, OpenInNewTab, typed
+  validated witness and read/search/lease drain+retirement query. bd57266e5bb7
+  owns ONLY NEW NativeTabDestinationFactory.swift, root ACKd32/e3e210; resolver
+  injection, one exact reservation, fresh Rust listing/store/stableID, prepared
+  File/Home without view load/navigation; didInstall buffers early validation.
+  Newnote remains separate PROPOSAL pending coordinator durability/retry review,
+  never a generic Home host. No duplicate creation replay on restart authorized.
+- d80926becc7f explicit followup narrow rootACK88c920: native header callbacks
+  onShowDocumentTabs/onReturnToNativePages installed afterviewload; configured
+  routes root-owned; UNCONFIGURED alreadyclosed explicit foreground/topself
+  legacy return may pop without repeat save/close. Source review stillpending.
+- Final2f coordinator re-review ecd52284 started; latest didInstall handshake
+  delta89ff sent. No native compiler after granted57718 returned; root Rust
+  menu corrections own slot. No new phone/simulator build or runtime claim.
