@@ -74,8 +74,10 @@ choice at the desktop gate rather than silently expanding the prerequisite.
 **Current:** native Store/SQLite authority, physical projection journals and local
 checkpoints exist. Browser uses IndexedDB. The first reviewed S0 batch adds shared
 SQLite connection policy, separate app-local recovery snapshots, automatic opening
-recovery and settled backup retirement. Native document caches still share the
-authority database; extraction is the next S0 slice. Complete S0 is not accepted.
+recovery and settled backup retirement. The reviewed second batch separates native disposable document caches into app-local
+`cache.sqlite` and adds entry-scoped version preview/restoration. Clipboard-image
+transfer collision repair and actual dirty-close/quit/history checks are in
+verification. Complete S0 is not accepted.
 
 Scope:
 

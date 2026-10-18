@@ -573,3 +573,51 @@ test('recovery-copy failures show an actionable message without native details',
   assert.doesNotMatch(document.body.innerHTML,/IPC|operation-uuid|checkpoint_cas|schema_version/);
   buffer.saveRecoveryCopy=save;await save();await f.workspace.flush();
 });
+
+
+const historyVersion={snapshotId:'42',entryId:'id_A_md',path:'A.md',capturedAtMs:1_700_000_000_000,byteLength:12};
+const noteHistory={list:async()=>({versions:[historyVersion]}),read:async()=>({version:historyVersion,content:'Older note α'})};
+test('version history restores through the ordinary shared note save and refreshes the editor',async t=>{
+  const f=await setup(t,{initialPath:'A.md',initialEntryId:'id_A_md',recoveryHistory:noteHistory});
+  let writes=0;const write=f.adapter.write.bind(f.adapter);f.adapter.write=async(path,content)=>{writes++;await write(path,content);};
+  await(f.workspace as any).showVersionHistory('A.md');await new Promise<void>(resolve=>setImmediate(resolve));
+  document.querySelector<HTMLButtonElement>('.version-history-version')!.click();await new Promise<void>(resolve=>setImmediate(resolve));
+  const restore=[...document.querySelectorAll<HTMLButtonElement>('.version-history button')].find(button=>button.textContent==='Restore version')!;
+  restore.click();await new Promise<void>(resolve=>setImmediate(resolve));await f.workspace.flush();
+  assert.equal(await f.adapter.read('A.md'),'Older note α');assert.equal(writes,1);assert.equal(f.workspace.activePane.editor?.getValue(),'Older note α');assert.equal(document.querySelector('.version-history'),null);
+});
+test('version history preserves edits made while browsing and refuses a changed saved revision',async t=>{
+  const f=await setup(t,{initialPath:'A.md',initialEntryId:'id_A_md',recoveryHistory:noteHistory});
+  const stat=f.adapter.stat.bind(f.adapter);f.adapter.stat=async path=>{const value=await stat(path);return value?{...value,entryId:'id_'+path.replaceAll('.','_')}:null;};
+  await(f.workspace as any).showVersionHistory('A.md');await new Promise<void>(resolve=>setImmediate(resolve));
+  document.querySelector<HTMLButtonElement>('.version-history-version')!.click();await new Promise<void>(resolve=>setImmediate(resolve));
+  const input=document.querySelector<HTMLTextAreaElement>('.editor-host textarea')!;input.value='Current unsaved draft';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+  const restore=[...document.querySelectorAll<HTMLButtonElement>('.version-history button')].find(button=>button.textContent==='Restore version')!;
+  restore.click();await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.match(document.querySelector('.version-history-message')!.textContent!,/Save your changes before restoring/);
+  assert.equal(f.workspace.buffers.get('A.md')!.text,'Current unsaved draft');assert.equal(await f.adapter.read('A.md'),'Alpha');
+  await f.workspace.flush();restore.click();await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.match(document.querySelector('.version-history-message')!.textContent!,/This note changed/);
+  assert.equal(await f.adapter.read('A.md'),'Current unsaved draft');
+  [...document.querySelectorAll<HTMLButtonElement>('.version-history button')].find(button=>button.textContent==='Close')!.click();
+});
+
+
+test('command palette exposes Version history only for an available identified Markdown note',async t=>{
+  const f=await setup(t,{initialPath:'A.md',initialEntryId:'id_A_md'});
+  assert.equal((f.workspace as any).commands().some((command:{id:string})=>command.id==='version-history'),false);
+  (f.platform as any).recoveryHistory=noteHistory;
+  f.workspace.commandPalette();
+  const input=document.querySelector<HTMLInputElement>('.command-input')!;input.value='Version history';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+  const rows=document.querySelectorAll<HTMLElement>('.suggestion');assert.equal(rows.length,1);assert.equal(rows[0].textContent,'Version history');rows[0].click();
+  await new Promise<void>(resolve=>setImmediate(resolve));assert.ok(document.querySelector('.version-history'));
+  [...document.querySelectorAll<HTMLButtonElement>('.version-history button')].find(button=>button.textContent==='Close')!.click();
+  await f.workspace.openNote('Bad.canvas');assert.equal((f.workspace as any).commands().some((command:{id:string})=>command.id==='version-history'),false);
+});
+test('captured Version history command cannot target a replacement entry',async t=>{
+  let reads=0;
+  const f=await setup(t,{initialPath:'A.md',initialEntryId:'id_A_md',recoveryHistory:{...noteHistory,list:async()=>{reads++;return{versions:[]};}}});
+  const command=(f.workspace as any).commands().find((command:{id:string})=>command.id==='version-history');assert.ok(command);
+  const entry=f.workspace.vault.entries.get('A.md')!;f.workspace.vault.entries.set('A.md',{...entry,entryId:'replacement'});
+  await command.action();assert.equal(reads,0);assert.equal(document.querySelector('.version-history'),null);
+});

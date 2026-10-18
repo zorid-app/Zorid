@@ -16,6 +16,118 @@ serialized. Implementation commits and integrated verification will be recorded
 here; module-level tests alone do not establish desktop runtime acceptance.
 
 
+### S0 continuation ownership
+
+First batch integrated as main `b9f29cc93f12233608036632266661fd0b51c5e2`;
+main tree was checked identical to reviewed integration `af7ce394`. No push.
+Root reuses `storage-foundation` on `tingkai-c/storage-cache-integration` from main.
+`storage_sqlite_impl` owns `storage-cache` independent cache connection + Store/
+native cache facade + host/CLI enable seam. Root owns snapshot maintenance batching
+(`local_recovery.rs`, native queue field, host snapshot helper), Cargo.lock and
+serialized checks/integration. `architecture_platform_audit` owns only the actual
+Electron dirty-close/normal-quit harness successor. These continuations are not yet
+accepted by the first batch's runtime evidence. Existing worker review/correctness
+requirements and sole main ownership remain in force.
+
+Additional continuation owners: `storage_recovery_impl` reuses `storage-recovery`
+on `tingkai-c/storage-recovery-history` for entry-scoped native history reads and
+host frames (`8ac6235b`). `storage_recovery_ui_impl` reuses `storage-recovery-ui`
+on `tingkai-c/storage-history-ui` for optional desktop history preview and ordinary
+NoteBuffer restoration. Root integrates both only after focused checks and review;
+they do not add arbitrary SQL/path access or a separate force-write path. Browser/
+mobile hide the optional desktop action. UI must reject dirty/conflicted/stale
+restoration and keep technical diagnostics out of presentation.
+
+### S0 second batch — source reviewed, runtime gates pending
+
+Root integration `storage-foundation` / `tingkai-c/storage-cache-integration`
+continues from main `b9f29cc9`. Independent disposable document cache extraction
+(`a5ccf3fd`) keeps source authority in `.zorid/vault.sqlite`; desktop/CLI explicitly
+opt into app-local `cache.sqlite`, while bare Store remains memory backed. Optional
+cache startup failure keeps an in-memory fallback. Cache lock ordering is
+cache→authority and cache read snapshots are pinned before authority snapshots;
+publication still validates source witnesses. Unknown schemas/scopes are rejected
+before WAL. Native history reads (`6e4cda2b`) are entry scoped; desktop history
+(`b071f25a`, palette `7195a8ff`) restores through ordinary NoteBuffer saves with
+stale/dirty/conflict guards. Snapshot maintenance is bounded to sixteen notes per
+interactive batch (`5841afc2`); the metadata inventory remains once per cycle and
+this is not a measured latency bound.
+
+Scoped checks passed: Store library 97 (+1 ignored), document-index integration22,
+native document index7, CLI commands13 + documents3, host document consumer1,
+local recovery/cache-boundary7, host history2, history UI/IPC145, and TypeScript /
+desktop frontend build. These are focused suites, not the complete Rust suite.
+Independent core source review approved cache lock/snapshot ordering and history
+service boundaries; platform review approved history transport/restoration.
+
+New user clipboard report is a blocking S0 save/attachment finding. Actual hidden
+Electron reproduction at `c47d9717` caught `binary_busy` in
+AttachmentResources→Vault.readBinary→desktop openRead. Both PNG payloads and note
+embeds committed; image reads collided. Red evidence:
+`/private/tmp/zorid-clipboard-diagnostic-attempt3/evidence.json`.
+`storage_sqlite_impl` implemented complete-transfer scheduling in isolated
+`storage-cache` / `tingkai-c/binary-transfer-scheduling` (`fd87d9f0`, root cherry-pick
+`36d0a0a9`); core independent review approved exact source. Two real desktop
+consumer tests failed before the fix; worker TypeScript +100 focused checks and
+root28 integration checks passed afterward. Original identity/revision selection,
+caller-input capture, cancellation, cleanup and text responsiveness are preserved.
+Actual clipboard runtime passed on composed source `bbf121ea`:
+`/private/tmp/zorid-clipboard-final-verified/evidence.json`; both exact pasted PNG
+files/embeds, unchanged seed bytes and all four decoded target pixel hashes matched
+with no transfer errors. Hidden eager/decode fixture intervention does not establish
+OS clipboard/foreground lazy-loading parity. Final source-reviewed harness commits
+`a34fecfa`/`a0f77881` use CSP-safe pixel hashes and record transient missing-file
+observations without relaxing final exact-file checks. Clipboard fix was integrated
+independently into main `a98cb04f` with 28 focused tests and desktop build passing on
+that base; no push. Main findings record `81c2d47b` preserves delivery status.
+
+The broader S0 pass stopped at dirty renderer `window.close()`: dirty witness and
+unchanged disk, close27ms later, window/host still alive15s later, exact edits then
+autosaved. Evidence `/private/tmp/zorid-s0-final-bbf121ea-evidence/evidence.json`.
+This is not an OS-close/app-quit or data-loss finding. Diagnose whether Chromium
+beforeunload vetoes this test action before the native close handshake; verify the
+native close path and normal AppKit quit before accepting those gates. Version
+history runtime was not reached. Prior clipboard polling also observed temporary
+source-path ENOENT during saving, then exact final content; continuous filesystem
+visibility remains unverified. S0 is not accepted.
+
+`architecture_platform_audit` owns hidden clipboard and save/dirty-close/quit/
+history runtime harnesses; `storage_recovery_ui_impl` independently reviews the
+clipboard assertions/owned cleanup. User-owned visible Playground PID66932 is
+excluded from all automation, artifact replacement and cleanup. Root retains sole
+main integration; no push is authorized. S0 remains implementing until runtime
+and remaining exit scenarios are recorded. S0A/S1/features/iOS stay deferred.
+
+### S0 runtime continuation — 2026-10-18
+
+At frozen source `3eabc392`, native API window close flushed dirty bytes after a
+47ms pre-debounce request, produced guarded→allowed→closed events and drained its
+host. The separate live-window normal AppKit quit/history run passed 22 checks:
+`/private/tmp/zorid-s0-live-appkit-evidence/evidence.json`. Exact dirty bytes reopened,
+all apps exited normally without signals, real command-palette history preview
+left source unchanged, explicit Restore saved exact historical bytes and survived
+quit/restart. Hidden CDP + native API close does not establish OS traffic-light
+input; actual live-window AppKit quit is separately observed. All owned automation
+processes are closed. User confirms their manual Playground is now closed too.
+
+No-window AppKit quit remains a separate open gap; the Mac shell stayed running
+15s after its window/host had closed. Renderer JS `window.close()` dirty veto is
+not a failure of the subsequently proven native close handshake. Runtime harness
+source `63cff35c`/`98bcc6e8` independently reviewed and integrated into this branch.
+
+Read-only recent-vault candidate found a captured namespace move superseded by a
+later logical move. Original vault untouched; metadata evidence remains in
+`/private/tmp/zorid-warning-candidate-mp5yzuln/metadata-summary.json`; not confirmed
+as the original screenshot cause. `storage_recovery_impl` owns native synthetic
+repro `dacca86b` and native OS proof; `storage_sqlite_impl` owns a newly assigned
+Store transactional responsibility-handoff contract/schema/API; core reviewer
+requires immutable predecessor evidence, explicit delegation, exact causal/claim/
+baseline CAS and restart-safe retained/destination proof. Native-only retarget is
+rejected. No implementation before concrete contract review; no Rust check runs
+until root grants the serialized slot. Separate concurrency/interruption harness
+`e1f65a35` awaits independent review and coordinated runtime. S0 stays implementing;
+S0A/S1/features/mobile do not advance. Root retains sole main integration; no push.
+
 ### S0 first verified batch
 
 Frozen source `736eddcd1a59f4c7a79402d0aee6c66e3787bf2a`: checked native SQLite,
@@ -47,7 +159,7 @@ is claimed. No real vault artifacts were swept.
 
 Next S0 slice: `storage_sqlite_impl` owns isolated `storage-cache` extraction of
 rebuildable document caches, preserving source fences with independent SQLite
-connections and authority→cache lock ordering. Root retains sole main integration
+connections. The subsequent source review corrected the lock order to cache→authority: never hold an authority reservation while waiting for a disposable cache lock. Root retains sole main integration
 and Cargo.lock/build coordination. Cache extraction/history interfaces and broader
 S0 exit checks remain open; S0A/S1/features/iOS do not advance from this batch.
 

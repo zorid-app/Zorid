@@ -9,6 +9,12 @@ export interface DesktopReconciliation {
   issues: readonly {path: string | null; code: 'scan_limit' | 'recovery_retained' | 'changed_during_scan' | 'reconciliation_blocked'}[];
   failure?: 'scan_failed';
 }
+export interface RecoveryCursor {captured_at_ms:number;snapshot_id:string}
+export interface RecoveryVersion {snapshotId:string;entryId:string;path:string;capturedAtMs:number;byteLength:number}
+export interface RecoveryHistory {
+  list(entryId:string,options:{limit:number;before?:RecoveryCursor}):Promise<{versions:RecoveryVersion[];nextCursor?:RecoveryCursor}>;
+  read(entryId:string,snapshotId:string):Promise<{version:RecoveryVersion;content:string}>;
+}
 export interface DesktopVault { path: string; name: string; reconciliation?: DesktopReconciliation }
 export interface DesktopWindowInfo { id: string; initialState: 'restore' | 'empty' }
 export interface VaultChange { vault?: string; type: string; path?: string; message?: string; reconciliation?: DesktopReconciliation }
@@ -22,6 +28,8 @@ export interface DesktopBridge {
   dismissContextMenu?(): Promise<void>;
   getPathForFile?(file: File): string;
   getVault(): Promise<DesktopVault | null>;
+  recoveryList?(vault:string,entryId:string,options:{limit:number;before?:RecoveryCursor}):ReturnType<RecoveryHistory['list']>;
+  recoveryRead?(vault:string,entryId:string,snapshotId:string):ReturnType<RecoveryHistory['read']>;
   retryReconciliation?(vault: string): Promise<DesktopReconciliation>;
   /** Native close is held until this asynchronous save/release callback succeeds. */
   onBeforeClose?(handler: () => Promise<void>): () => void;

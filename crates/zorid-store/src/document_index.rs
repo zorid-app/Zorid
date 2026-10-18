@@ -1,6 +1,7 @@
 //! Disposable native document cache. Source commits never consult these tables.
 //! Parsing and generation preparation run outside SQLite write transactions.
 use super::*;
+use crate::document_cache::{DocumentCache, DocumentTransaction};
 use zorid_core::OperationId;
 use zorid_index::{
     document_extraction_version, EntryWitness, Exclusion, Generation, GenerationBuilder,
@@ -304,9 +305,13 @@ impl Record {
             .map_err(|_| DocumentIndexError::RebuildRequired)
     }
 }
-fn cache_tables(tx: &Connection) -> IndexResult<usize> {
+fn cache_tables(tx: &DocumentTransaction<'_>) -> IndexResult<usize> {
     // Also revalidate live SQL; explicit rebuild never drops malformed/unknown SQL.
-    check_schema(tx)?;
+    check_schema(&tx.authority)?;
+    let local = text_sync::identity(&tx.authority)?.local_store_id;
+    if !crate::document_cache::validate(tx, &local)? {
+        return Ok(0);
+    }
     Ok(SCHEMA
         .iter()
         .map(|(name, _)| {
@@ -321,7 +326,7 @@ fn cache_tables(tx: &Connection) -> IndexResult<usize> {
         .filter(|v| *v)
         .count())
 }
-fn generation_bounds(tx: &Connection, transient_insert: bool) -> IndexResult<()> {
+fn generation_bounds(tx: &DocumentTransaction<'_>, transient_insert: bool) -> IndexResult<()> {
     let (count,key_min,key_max,record_min,record_max):(i64,i64,i64,i64,i64)=tx.query_row("SELECT count(*),coalesce(min(length(CAST(snapshot_key AS BLOB))),0),coalesce(max(length(CAST(snapshot_key AS BLOB))),0),coalesce(min(length(CAST(record AS BLOB))),0),coalesce(max(length(CAST(record AS BLOB))),0) FROM document_index_generations",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
     let limit = DOCUMENT_INDEX_RETAINED_GENERATIONS
         + DOCUMENT_INDEX_RETAINED_STAGES
@@ -338,7 +343,7 @@ fn generation_bounds(tx: &Connection, transient_insert: bool) -> IndexResult<()>
     }
     Ok(())
 }
-fn header_bytes(tx: &Connection, key: &str) -> IndexResult<usize> {
+fn header_bytes(tx: &DocumentTransaction<'_>, key: &str) -> IndexResult<usize> {
     let bytes:Option<i64>=tx.query_row("SELECT length(CAST(record AS BLOB)) FROM document_index_generations WHERE snapshot_key=?1",[key],|r|r.get(0)).optional()?;
     let bytes = bytes.ok_or(DocumentIndexError::RebuildRequired)?;
     if !(1..=MAX_GENERATION_METADATA_BYTES as i64).contains(&bytes) {
@@ -347,7 +352,7 @@ fn header_bytes(tx: &Connection, key: &str) -> IndexResult<usize> {
     Ok(bytes as usize)
 }
 
-fn control(tx: &Connection) -> IndexResult<Control> {
+fn control(tx: &DocumentTransaction<'_>) -> IndexResult<Control> {
     if cache_tables(tx)? != SCHEMA.len() {
         return Err(DocumentIndexError::RebuildRequired);
     }
@@ -368,13 +373,13 @@ fn control(tx: &Connection) -> IndexResult<Control> {
         return Err(DocumentIndexError::RebuildRequired);
     }
     // Do not mask authority identity read errors as cache diagnostics.
-    let actual = text_sync::identity(tx)?.local_store_id;
+    let actual = text_sync::identity(&tx.authority)?.local_store_id;
     if c.head.as_ref().is_some_and(|h| h.local != actual) {
         return Err(DocumentIndexError::RebuildRequired);
     }
     Ok(c)
 }
-fn source(tx: &Connection) -> IndexResult<SourceSnapshotId> {
+fn source_authority(tx: &Connection) -> IndexResult<SourceSnapshotId> {
     let (head, allocated): (i64,i64) = tx.query_row("SELECT (SELECT coalesce(max(cursor),0) FROM local_changes),(SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='local_changes'),0))", [], |r|Ok((r.get(0)?,r.get(1)?)))?;
     // Source11 initialization always appends Bootstrap at cursor1, including
     // empty vaults. Zero therefore means missing authority history, not a
@@ -387,8 +392,8 @@ fn source(tx: &Connection) -> IndexResult<SourceSnapshotId> {
         SourceWatermark::new(head.to_string())?,
     ))
 }
-fn capture(tx: &Connection) -> IndexResult<DocumentManifest> {
-    let source = source(tx)?;
+fn capture_authority(tx: &Connection) -> IndexResult<DocumentManifest> {
+    let source = source_authority(tx)?;
     let minimum:i64=tx.query_row("SELECT coalesce(sum(length(CAST(state AS BLOB))+coalesce(length(CAST(content_ref AS BLOB)),0)+coalesce(length(CAST(content_digest AS BLOB)),0)+256),0) FROM entries WHERE visible=1 AND deleted=0",[],|r|r.get(0))?;
     if minimum < 0 || minimum as u64 > MAX_GENERATION_METADATA_BYTES as u64 {
         return Err(IndexError::GenerationLimit.into());
@@ -413,7 +418,13 @@ fn capture(tx: &Connection) -> IndexResult<DocumentManifest> {
     result.manifest()?;
     Ok(result)
 }
-fn header(tx: &Connection, snapshot: &IndexSnapshotId) -> IndexResult<Header> {
+fn source(tx: &DocumentTransaction<'_>) -> IndexResult<SourceSnapshotId> {
+    source_authority(&tx.authority)
+}
+fn capture(tx: &DocumentTransaction<'_>) -> IndexResult<DocumentManifest> {
+    capture_authority(&tx.authority)
+}
+fn header(tx: &DocumentTransaction<'_>, snapshot: &IndexSnapshotId) -> IndexResult<Header> {
     let c = control(tx)?;
     if c.epoch != *snapshot.generation_epoch() {
         return Err(IndexError::SnapshotExpired.into());
@@ -428,7 +439,7 @@ fn header(tx: &Connection, snapshot: &IndexSnapshotId) -> IndexResult<Header> {
     let h: Header = decode(&raw.ok_or(DocumentIndexError::RebuildRequired)?)?;
     if h.snapshot.id()? != *snapshot
         || h.manifest.local_store_id != *snapshot.local_store_id()
-        || h.manifest.local_store_id != text_sync::identity(tx)?.local_store_id
+        || h.manifest.local_store_id != text_sync::identity(&tx.authority)?.local_store_id
         || snapshot.generation() > c.allocated
     {
         return Err(DocumentIndexError::RebuildRequired);
@@ -436,7 +447,7 @@ fn header(tx: &Connection, snapshot: &IndexSnapshotId) -> IndexResult<Header> {
     h.fence()?;
     Ok(h)
 }
-fn builder(tx: &Connection, h: &Header) -> IndexResult<GenerationBuilder> {
+fn builder(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<GenerationBuilder> {
     let manifest = h.manifest.manifest()?;
     let mut b = GenerationBuilder::new(manifest.clone(), h.fence()?)
         .map_err(|_| DocumentIndexError::RebuildRequired)?;
@@ -479,7 +490,7 @@ fn builder(tx: &Connection, h: &Header) -> IndexResult<GenerationBuilder> {
     Ok(b)
 }
 fn reusable_record(
-    tx: &Connection,
+    tx: &DocumentTransaction<'_>,
     previous: Option<&(Header, Manifest)>,
     current: &Manifest,
     original: &StoredEntryMetadata,
@@ -502,7 +513,7 @@ fn reusable_record(
     Ok(Some(record.rebind_unchanged(current)?))
 }
 
-fn check_stage(tx: &Connection, h: &Header) -> IndexResult<()> {
+fn check_stage(tx: &DocumentTransaction<'_>, h: &Header) -> IndexResult<()> {
     let c = control(tx)?;
     let raw: Option<String> = tx
         .query_row(
@@ -529,7 +540,7 @@ fn check_stage(tx: &Connection, h: &Header) -> IndexResult<()> {
 }
 
 fn index_status(
-    tx: &Connection,
+    tx: &DocumentTransaction<'_>,
     observed_source: &SourceSnapshotId,
 ) -> IndexResult<DocumentIndexStatus> {
     let count = cache_tables(tx)?;
@@ -564,7 +575,7 @@ fn index_status(
 }
 
 fn pinned_header(
-    tx: &Connection,
+    tx: &DocumentTransaction<'_>,
     pin: &DocumentQueryPin,
     owner: &OperationId,
 ) -> IndexResult<Header> {
@@ -593,7 +604,7 @@ fn pinned_header(
     Ok(h)
 }
 fn retained_projection(
-    tx: &Connection,
+    tx: &DocumentTransaction<'_>,
     h: &Header,
     generation: &Generation,
     id: &EntryId,
@@ -619,7 +630,7 @@ fn retained_projection(
     })
 }
 
-fn prune(tx: &Connection, published: bool, retain: usize) -> IndexResult<()> {
+fn prune(tx: &DocumentTransaction<'_>, published: bool, retain: usize) -> IndexResult<()> {
     generation_bounds(tx, true)?;
     let mut expired = Vec::new();
     {
@@ -658,9 +669,25 @@ fn prune(tx: &Connection, published: bool, retain: usize) -> IndexResult<()> {
 }
 
 impl Store {
+    /// Select a host-owned app-local cache. Failure keeps the current cache and
+    /// cannot change authoritative state. Existing pins expire after a swap.
+    pub fn enable_document_cache(&mut self, path: impl AsRef<Path>) -> IndexResult<()> {
+        let local = self.identity()?.local_store_id;
+        let cache = DocumentCache::open(path.as_ref(), &local)?;
+        self.document_cache = cache;
+        self.document_query_owner = fresh();
+        self.document_query_pins = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        Ok(())
+    }
+    fn document_transaction(
+        &self,
+        behavior: TransactionBehavior,
+    ) -> IndexResult<DocumentTransaction<'_>> {
+        DocumentTransaction::new(&self.connection, &self.document_cache, behavior)
+    }
     pub fn capture_document_manifest(&self) -> IndexResult<DocumentManifest> {
         let tx = self.connection.unchecked_transaction()?;
-        let manifest = capture(&tx)?;
+        let manifest = capture_authority(&tx)?;
         tx.commit()?;
         Ok(manifest)
     }
@@ -677,7 +704,7 @@ impl Store {
             .find(|e| &e.state.id == id)
             .ok_or(IndexError::MissingSource)?;
         let tx = self.connection.unchecked_transaction()?;
-        if source(&tx)? != *portable.source() {
+        if source_authority(&tx)? != *portable.source() {
             return Err(IndexError::StaleSource.into());
         }
         if entry_content::read_metadata_row(&tx, id)?.as_ref() != Some(original)
@@ -711,9 +738,7 @@ impl Store {
     }
     /// Create a missing cache explicitly; partial cache objects require rebuild.
     pub fn initialize_document_index(&mut self) -> IndexResult<()> {
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.document_transaction(TransactionBehavior::Immediate)?;
         let count = cache_tables(&tx)?;
         if count == SCHEMA.len() {
             control(&tx)?;
@@ -722,6 +747,10 @@ impl Store {
         }
         if count != 0 {
             return Err(DocumentIndexError::RebuildRequired);
+        }
+        let local = text_sync::identity(&tx.authority)?.local_store_id;
+        if !crate::document_cache::validate(&tx, &local)? {
+            crate::document_cache::initialize_scope(&tx, &local)?;
         }
         for (_, sql) in SCHEMA {
             tx.execute_batch(sql)?;
@@ -741,10 +770,12 @@ impl Store {
     /// Only owned cache data is cleared. Registered SQL must still validate.
     /// Fresh epoch invalidates in-flight work and all previous query pins.
     pub fn rebuild_document_index(&mut self) -> IndexResult<()> {
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.document_transaction(TransactionBehavior::Immediate)?;
         cache_tables(&tx)?;
+        let local = text_sync::identity(&tx.authority)?.local_store_id;
+        if !crate::document_cache::validate(&tx, &local)? {
+            crate::document_cache::initialize_scope(&tx, &local)?;
+        }
         for (name, sql) in SCHEMA {
             let exists: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name=?1)",
@@ -771,9 +802,7 @@ impl Store {
         Ok(())
     }
     pub fn begin_document_index(&mut self) -> IndexResult<DocumentIndexStage> {
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.document_transaction(TransactionBehavior::Immediate)?;
         let mut c = control(&tx)?;
         let manifest = capture(&tx)?;
         c.allocated = c
@@ -814,10 +843,8 @@ impl Store {
     /// and expired epochs in a healthy same-store cache are no-ops. Published
     /// rows, heads and query pins are never removed by cleanup.
     pub fn discard_document_index_stage(&mut self, snapshot: &IndexSnapshotId) -> IndexResult<()> {
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if text_sync::identity(&tx)?.local_store_id != *snapshot.local_store_id() {
+        let tx = self.document_transaction(TransactionBehavior::Immediate)?;
+        if text_sync::identity(&tx.authority)?.local_store_id != *snapshot.local_store_id() {
             return Err(IndexError::StaleIndex.into());
         }
         let c = control(&tx)?;
@@ -879,7 +906,7 @@ impl Store {
     /// Discover the most recent durable staging attempts after restart. Source
     /// changes can make an attempt stale; resume checks its publication fences.
     pub fn document_index_stages(&self) -> IndexResult<Vec<DocumentIndexStage>> {
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
         let c = control(&tx)?;
         let mut out = Vec::new();
         {
@@ -906,7 +933,7 @@ impl Store {
         &self,
         snapshot: &IndexSnapshotId,
     ) -> IndexResult<DocumentIndexStage> {
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
         let h = header(&tx, snapshot)?;
         if h.published {
             return Err(IndexError::StaleIndex.into());
@@ -923,7 +950,7 @@ impl Store {
         stage: &DocumentIndexStage,
     ) -> IndexResult<DocumentIndexProgress> {
         let (h, mut b, previous) = {
-            let tx = self.connection.unchecked_transaction()?;
+            let tx = self.document_transaction(TransactionBehavior::Deferred)?;
             let h = header(&tx, &stage.snapshot)?;
             if h.published {
                 return Err(IndexError::StaleIndex.into());
@@ -967,12 +994,14 @@ impl Store {
             let mut reused_this_record = false;
             let (record, text) = {
                 // Exact committed authority read; the filesystem is never consulted.
-                let tx = self.connection.unchecked_transaction()?;
+                let tx = self.document_transaction(TransactionBehavior::Deferred)?;
                 if source(&tx)? != *witness.source() {
                     return Err(IndexError::StaleSource.into());
                 }
-                let actual = entry_content::read_metadata_row(&tx, &witness.entry().id)?;
-                if actual.as_ref() != Some(original) || !is_visible(&tx, &witness.entry().id)? {
+                let actual = entry_content::read_metadata_row(&tx.authority, &witness.entry().id)?;
+                if actual.as_ref() != Some(original)
+                    || !is_visible(&tx.authority, &witness.entry().id)?
+                {
                     return Err(IndexError::StaleSource.into());
                 }
                 let reused = reusable_record(&tx, previous.as_ref(), b.manifest(), original)?;
@@ -981,7 +1010,7 @@ impl Store {
                     Some(ContentMetadata::InlineBytes { bytes, .. })
                         if *bytes <= FAMILY_MAX_INLINE_BYTES =>
                     {
-                        entry_content::read_content_entry(&tx, &witness.entry().id)?
+                        entry_content::read_content_entry(&tx.authority, &witness.entry().id)?
                             .and_then(|(_, c)| c)
                             .and_then(|c| match c {
                                 StoredContent::InlineBytes(b) => Some(b),
@@ -1073,9 +1102,7 @@ impl Store {
                 .count(),
             ready: b.ready(),
         };
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.document_transaction(TransactionBehavior::Immediate)?;
         // The source and derived-head fences are rechecked in this same write Tx.
         check_stage(&tx, &h)?;
         let existing:i64=tx.query_row("SELECT coalesce(sum(length(CAST(record AS BLOB))+length(CAST(entry_id AS BLOB))),0) FROM document_index_rows WHERE snapshot_key=?1",[h.snapshot.key()],|r|r.get(0))?;
@@ -1106,7 +1133,7 @@ impl Store {
         stage: &DocumentIndexStage,
     ) -> IndexResult<IndexSnapshotId> {
         let mut h = {
-            let tx = self.connection.unchecked_transaction()?;
+            let tx = self.document_transaction(TransactionBehavior::Deferred)?;
             let h = header(&tx, &stage.snapshot)?;
             if h.published {
                 return Err(IndexError::StaleIndex.into());
@@ -1115,9 +1142,7 @@ impl Store {
             tx.commit()?;
             h
         };
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.document_transaction(TransactionBehavior::Immediate)?;
         check_stage(&tx, &h)?;
         let mut c = control(&tx)?;
         h.published = true;
@@ -1139,7 +1164,7 @@ impl Store {
     pub fn document_index_status_with_source(
         &self,
     ) -> IndexResult<(SourceSnapshotId, DocumentIndexStatus)> {
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
         let source = source(&tx)?;
         let status = index_status(&tx, &source)?;
         tx.commit()?;
@@ -1157,7 +1182,7 @@ impl Store {
         {
             return Err(IndexError::GenerationLimit.into());
         }
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
         let c = control(&tx)?;
         let id = c.head.ok_or(DocumentIndexError::NotReady)?.id()?;
         let h = header(&tx, &id)?;
@@ -1183,7 +1208,7 @@ impl Store {
         &self,
         pin: &DocumentQueryPin,
     ) -> IndexResult<DocumentManifest> {
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
         let h = pinned_header(&tx, pin, &self.document_query_owner)?;
         tx.commit()?;
         Ok(h.manifest)
@@ -1195,7 +1220,7 @@ impl Store {
         pin: &DocumentQueryPin,
         id: &EntryId,
     ) -> IndexResult<DocumentSourceRead> {
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
         let h = pinned_header(&tx, pin, &self.document_query_owner)?;
         let read = retained_projection(&tx, &h, &pin.generation, id)?;
         tx.commit()?;
@@ -1209,7 +1234,7 @@ impl Store {
         token: Option<&LiteralToken>,
         limit: usize,
     ) -> IndexResult<LiteralPage> {
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.document_transaction(TransactionBehavior::Deferred)?;
         let h = pinned_header(&tx, pin, &self.document_query_owner)?;
         let mut page = LiteralPageBuilder::new(&pin.generation, query, token, limit)?;
         while let Some(read) = page.next_read() {
@@ -1226,5 +1251,62 @@ impl Store {
         let result = page.finish()?;
         tx.commit()?;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod cache_snapshot_tests {
+    use super::*;
+    fn create(name: &str) -> MutationRequest {
+        MutationRequest {
+            operation_id: OperationId::new(name).unwrap(),
+            mutation: Mutation::Create {
+                id: EntryId::new(name).unwrap(),
+                path: zorid_core::VaultPath::new(format!("{name}.md")).unwrap(),
+                kind: EntryKind::File,
+                content: Some(b"needle".to_vec()),
+            },
+        }
+    }
+    fn build(store: &mut Store) {
+        let stage = store.begin_document_index().unwrap();
+        while !store.pump_document_index(&stage).unwrap().ready {}
+        store.publish_document_index(&stage).unwrap();
+    }
+
+    #[test]
+    fn compound_status_never_reports_cache_newer_than_its_observed_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let path = root.join("vault.sqlite");
+        let cache = root.join("cache.sqlite");
+        let mut reader = Store::open(&path).unwrap();
+        reader.enable_document_cache(&cache).unwrap();
+        reader.initialize_document_index().unwrap();
+        build(&mut reader);
+        let mut writer = Store::open(&path).unwrap();
+        writer.enable_document_cache(&cache).unwrap();
+        let tx = reader
+            .document_transaction(TransactionBehavior::Deferred)
+            .unwrap();
+        let observed = source(&tx).unwrap();
+        writer.apply(&create("concurrent-note")).unwrap();
+        build(&mut writer);
+        let status = index_status(&tx, &observed).unwrap();
+        tx.commit().unwrap();
+        let DocumentIndexStatus::Ready {
+            covered_watermark,
+            observed_source_head,
+            ..
+        } = status
+        else {
+            panic!("expected retained ready generation");
+        };
+        assert_eq!(covered_watermark, observed.watermark().as_str());
+        assert_eq!(observed_source_head, observed.watermark().as_str());
+        assert_ne!(
+            writer.document_index_status_with_source().unwrap().0,
+            observed
+        );
     }
 }

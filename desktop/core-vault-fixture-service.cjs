@@ -188,6 +188,8 @@ class CoreVaultFixtureService {
       throw reason;
     }
   }
+  recoveryList(entryId,options) {this.live();return this.host.recoveryList(entryId,options);}
+  recoveryRead(entryId,snapshotId) {this.live();return this.host.recoveryRead(entryId,snapshotId);}
   async retryReconciliation() {
     this.live();
     await this.scanNow();

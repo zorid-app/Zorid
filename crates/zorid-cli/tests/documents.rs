@@ -8,9 +8,9 @@ use std::{
 };
 
 fn invoke(root: &Path, args: &[&str]) -> Output {
-    let local_data = tempfile::tempdir().unwrap();
+    let local_data = root.parent().unwrap().join("app-data");
     Command::new(env!("CARGO_BIN_EXE_zorid"))
-        .env("ZORID_LOCAL_DATA_DIR", local_data.path())
+        .env("ZORID_LOCAL_DATA_DIR", local_data)
         .arg("--vault")
         .arg(root)
         .args(args)
@@ -84,8 +84,23 @@ fn write(root: &Path, id: &str, operation: &str, source: &[u8]) {
         ],
     ));
 }
-fn setup() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
+struct Fixture {
+    _directory: tempfile::TempDir,
+    root: std::path::PathBuf,
+}
+impl Fixture {
+    fn path(&self) -> &Path {
+        &self.root
+    }
+}
+fn setup() -> Fixture {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vault");
+    fs::create_dir(&root).unwrap();
+    let dir = Fixture {
+        _directory: directory,
+        root,
+    };
     success(invoke(dir.path(), &["init"]));
     dir
 }

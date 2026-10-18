@@ -2,6 +2,7 @@
 //! to NativeVault. No listener, daemon, filesystem writes or alternate store here.
 mod binary;
 mod documents;
+mod recovery;
 mod workblocks;
 mod embedded_fixture_sync;
 mod staged_import;
@@ -42,6 +43,15 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    RecoveryList {
+        entry_id: EntryId,
+        limit: usize,
+        before: Option<recovery::Cursor>,
+    },
+    RecoveryRead {
+        entry_id: EntryId,
+        snapshot_id: String,
+    },
     Workblocks { client_id: OperationId, request: workblocks::Request },
     Documents {
         client_id: OperationId,
@@ -508,6 +518,14 @@ fn execute(
     body: Vec<u8>,
 ) -> Result<(Value, Vec<u8>), Value> {
     let result = match command {
+        Command::RecoveryList { entry_id, limit, before } => {
+            empty(&body)?;
+            return recovery::list(vault, &entry_id, limit, before);
+        }
+        Command::RecoveryRead { entry_id, snapshot_id } => {
+            empty(&body)?;
+            return recovery::read(vault, &entry_id, &snapshot_id);
+        }
         Command::Workblocks { client_id, request } => {
             empty(&body)?;
             let lease = leases.active.values().find(|lease| lease.reference().client_id == client_id)
@@ -918,6 +936,20 @@ fn app_local_data_root() -> io::Result<PathBuf> {
     zorid_native::LocalStoragePaths::app_data_root()
 }
 
+fn enable_local_document_cache(vault: &mut NativeVault, root: &Path, data_root: &Path) {
+    let enabled = (|| -> Result<(), String> {
+        let identity = vault.identity().map_err(|error| error.to_string())?;
+        let paths = zorid_native::LocalStoragePaths::resolve(root, &identity.local_store_id, data_root)
+            .map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(paths.cache.parent().expect("cache bucket has a parent"))
+            .map_err(|error| error.to_string())?;
+        vault.enable_local_document_cache(paths.cache).map_err(|error| error.to_string())
+    })();
+    if let Err(error) = enabled {
+        eprintln!("Local document cache unavailable; using temporary cache: {error}");
+    }
+}
+
 fn enable_local_recovery(vault: &mut NativeVault, root: &Path, data_root: &Path) -> Result<(), Value> {
     let identity = vault.identity().map_err(native_fault)?;
     let path = local_recovery_path(root, data_root, &identity.local_store_id)
@@ -931,11 +963,15 @@ fn snapshot_local_recovery_if_due(vault: &mut NativeVault, leases: &mut ClientLe
     if leases.next_recovery_snapshot_ms.is_some_and(|next| now < next) {
         return;
     }
-    // Secondary storage must never change an authoritative save's result.
-    // Throttle whole-vault maintenance; native saves capture touched notes.
+    // Bound secondary body reads at interactive command boundaries. Touched-note
+    // save snapshots remain immediate; the inventory is captured once per cycle.
     leases.next_recovery_snapshot_ms = Some(now.saturating_add(RECOVERY_SNAPSHOT_INTERVAL_MS));
-    if let Err(error) = vault.snapshot_local_recovery(now) {
-        eprintln!("Local recovery maintenance failed: {error}");
+    match vault.maintain_local_recovery(now, 16) {
+        Ok(progress) => {
+            if progress.pending { leases.next_recovery_snapshot_ms = Some(now.saturating_add(1_000)); }
+            if progress.failed_notes > 0 { eprintln!("Local recovery skipped unavailable note snapshots"); }
+        }
+        Err(error) => eprintln!("Local recovery maintenance failed: {error}"),
     }
 }
 
@@ -957,6 +993,7 @@ impl EmbeddedHost {
     /// path-neutral for fixtures and shells that have not configured recovery.
     pub fn open_local_with_data_root(root: &Path, data_root: &Path) -> Result<Self, Value> {
         let mut vault = NativeVault::open(root).map_err(native_fault)?;
+        enable_local_document_cache(&mut vault, root, data_root);
         enable_local_recovery(&mut vault, root, data_root)?;
         let reconciliation = initialize_desktop_vault(&mut vault)?;
         let mut leases = ClientLeases::default();
@@ -1014,11 +1051,15 @@ pub fn run_stdio() -> io::Result<()> {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "usage"));
     }
     let mut initialize_local = false;
+    let mut local_cache = false;
     let mut config = None;
     let mut index = 2;
     while index < args.len() {
         if args[index] == "--initialize-local" && !initialize_local {
             initialize_local = true;
+            index += 1;
+        } else if args[index] == "--local-cache" && !local_cache {
+            local_cache = true;
             index += 1;
         } else if args[index] == "--fixture-sync-config"
             && config.is_none()
@@ -1057,6 +1098,12 @@ pub fn run_stdio() -> io::Result<()> {
             .and_then(|data_root| enable_local_recovery(&mut vault, Path::new(&args[1]), &data_root));
         if let Err(error) = enabled {
             eprintln!("Local recovery initialization failed: {error}");
+        }
+    }
+    if initialize_local || local_cache {
+        match app_local_data_root() {
+            Ok(data_root) => enable_local_document_cache(&mut vault, Path::new(&args[1]), &data_root),
+            Err(error) => eprintln!("Local document cache unavailable; using temporary cache: {error}"),
         }
     }
     // The trusted main process selects a protected config path once. No framed

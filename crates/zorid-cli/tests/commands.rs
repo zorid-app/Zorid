@@ -538,6 +538,7 @@ fn cli_uses_shared_native_app_local_recovery_location() {
     let paths = zorid_native::LocalStoragePaths::resolve(vault_root.path(), &identity.local_store_id, local_data.path()).unwrap();
     assert!(paths.recovery.is_file());
     assert!(!paths.recovery.starts_with(std::fs::canonicalize(vault_root.path()).unwrap()));
-    assert!(!paths.cache.exists(), "path planning does not create a cache database");
+    assert!(paths.cache.is_file());
+    assert!(!paths.cache.starts_with(std::fs::canonicalize(vault_root.path()).unwrap()));
     assert_eq!(&std::fs::read(paths.recovery).unwrap()[..16], b"SQLite format 3\0");
 }

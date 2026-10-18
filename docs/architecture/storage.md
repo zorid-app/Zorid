@@ -22,13 +22,15 @@ committed current state, identity/revisions, content, operation receipts and
 causal sync state. Ordinary files are its user-accessible projection, while
 external file edits are reconciled into the core. Filesystem projection can be
 pending after a successful database commit; neither side can be discarded casually.
-Current optional index/cache tables share this same SQLite connection/database.
+Derived document caches use a separate connection: desktop and CLI opt into
+app-local `cache.sqlite`; bare Store/native embedders use an in-memory cache.
+Legacy optional cache tables in the authority DB remain recognized but inert.
 
 Browser storage uses TypeScript IndexedDB transactions around portable Rust/WASM
 plans. Its derived index keys also currently share the existing authority DB.
 Current checkpoint/host-intent rows are not periodic File Recovery snapshots.
 
-## Accepted native placement direction — not yet implemented
+## Native placement
 
 ```text
 Vault/
@@ -36,20 +38,24 @@ Vault/
   .zorid/vault.sqlite           authoritative native state and sync bookkeeping
 
 Platform app-local storage/
-  vaults/<local-vault-id>/
+  vaults/<local-scope-key>/
     cache.sqlite               rebuildable metadata/indexes
     recovery.sqlite            retained local snapshots
 ```
 
-Desktop uses its app-data directory; native mobile uses private app storage.
+Desktop/CLI use the shared app-data resolver. The local scope key hashes authority
+identity plus canonical vault location, so aliases reuse one bucket and copies at
+different locations stay separate. Moving a vault currently creates a new bucket;
+old retained history is not deleted or silently reassociated. Native mobile can
+supply private app storage through the shared API; its rollout remains paused.
 This native layout is not a browser requirement. The browser joins an existing
 sync group and retains local working data/derived indexes for low-latency access
 and incremental catch-up. Browser storage is not a native vault directory; its
 engine and exact offline/reload guarantees remain to be designed. Protect pending
 edits/receipts separately from refetchable synchronized content.
 Recovery and cache do not travel with a copied vault and are excluded from sync.
-Define stable local vault identity, copied/moved-vault handling, retirement and CLI
-path discovery before cutting over; a display name is not a storage identity.
+A display name is not a storage identity. Retiring old buckets or reassociating
+retained history after a move remains an explicit future operation.
 
 Temporary atomic-replacement files must be on a suitable filesystem near their
 destination. They are neither history nor caches and require explicit settlement

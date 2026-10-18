@@ -128,8 +128,8 @@ function registerIPC() {
     if (!editorCore) throw new Error('No Rust editor context');
     return editorCore.release(broker, record, event, expectedRoot, admissionId);
   }));
-  for (const method of ['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash', 'remove', 'retryReconciliation']) {
-    handle(method, (record, event, expectedRoot, ...args) => broker.dispatch(record, expectedRoot, method, args, () => broker.authenticate(event)));
+  for (const method of ['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'compareAndWrite', 'mkdir', 'rename', 'trash', 'remove', 'retryReconciliation', 'recoveryList', 'recoveryRead']) {
+    handle(method, (record, event, expectedRoot, ...args) => broker.dispatch(record, expectedRoot, method, method==='recoveryList'||method==='recoveryRead'?structuredClone(args):args, () => broker.authenticate(event)));
   }
 }
 async function createWindow({ source, primary = false, initialState = 'empty', restoreSlot, recoveryCheck, recoveryAssert } = {}) {

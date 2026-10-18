@@ -10,6 +10,46 @@ pub(super) fn now_ms() -> i64 {
 }
 
 impl NativeVault {
+    /// Bounded device-local history metadata, independent of current liveness or
+    /// path so renames and deleted notes keep their historical entry identity.
+    pub fn list_local_recovery(
+        &self,
+        entry: &EntryId,
+        before: Option<LocalRecoveryCursor>,
+        limit: usize,
+    ) -> Result<Vec<LocalRecoveryVersion>> {
+        self.paths.verify()?;
+        let recovery = self
+            .recovery
+            .as_ref()
+            .ok_or(Error::Unsupported("local recovery is unavailable"))?;
+        let versions = recovery.list(entry.as_str(), before, limit)?;
+        if versions
+            .iter()
+            .any(|version| version.entry_id != entry.as_str())
+        {
+            return Err(zorid_recovery::RecoveryError::CorruptRecord.into());
+        }
+        Ok(versions)
+    }
+
+    /// A snapshot number is not entry authority. A caller must provide its
+    /// captured entry identity, and a foreign snapshot never returns its body.
+    pub fn read_local_recovery(
+        &self,
+        entry: &EntryId,
+        snapshot_id: i64,
+    ) -> Result<Option<LocalRecoverySnapshot>> {
+        self.paths.verify()?;
+        let recovery = self
+            .recovery
+            .as_ref()
+            .ok_or(Error::Unsupported("local recovery is unavailable"))?;
+        Ok(recovery
+            .read(snapshot_id)?
+            .filter(|snapshot| snapshot.info.entry_id == entry.as_str()))
+    }
+
     /// The host supplies an app-owned path outside the vault. Tests and native
     /// shells can inject their private data directory without global environment.
     pub fn enable_local_recovery(&mut self, path: impl AsRef<Path>, now_ms: i64) -> Result<()> {
@@ -33,6 +73,7 @@ impl NativeVault {
             .file_name()
             .ok_or_else(|| Error::UnsafePath("recovery filename missing".into()))?;
         self.recovery = Some(RecoveryStore::open(parent.join(name), &scope, now_ms)?);
+        self.recovery_queue = None;
         Ok(())
     }
 
@@ -61,6 +102,66 @@ impl NativeVault {
             recovery.prune(now_ms)?;
         }
         Ok(())
+    }
+
+    /// Incremental secondary maintenance for interactive hosts. Take a metadata
+    /// inventory once per cycle, then bound body reads to at most 64 notes per
+    /// call. Renames/deletions are revalidated against source before each capture.
+    pub fn maintain_local_recovery(
+        &mut self,
+        now_ms: i64,
+        limit: u16,
+    ) -> Result<RecoveryMaintenance> {
+        if limit == 0 || limit > 64 {
+            return Err(Error::Unsupported("recovery maintenance batch limit"));
+        }
+        if self.recovery.is_none() {
+            return Ok(RecoveryMaintenance::default());
+        }
+        self.paths.verify()?;
+        if self.recovery_queue.is_none() {
+            self.recovery_queue = Some(
+                self.store
+                    .list()?
+                    .into_iter()
+                    .filter(|entry| {
+                        entry.kind == EntryKind::File
+                            && entry.path.as_str().to_ascii_lowercase().ends_with(".md")
+                    })
+                    .map(|entry| entry.id)
+                    .collect(),
+            );
+        }
+        let mut failed_notes = 0;
+        for _ in 0..limit {
+            let Some(id) = self
+                .recovery_queue
+                .as_mut()
+                .and_then(|queue| queue.pop_front())
+            else {
+                break;
+            };
+            if self
+                .capture_local_recovery(&id, now_ms, SnapshotProvenance::Periodic)
+                .is_err()
+            {
+                failed_notes += 1;
+            }
+        }
+        let pending = self
+            .recovery_queue
+            .as_ref()
+            .is_some_and(|queue| !queue.is_empty());
+        if !pending {
+            self.recovery_queue = None;
+            if let Some(recovery) = &mut self.recovery {
+                recovery.prune(now_ms)?;
+            }
+        }
+        Ok(RecoveryMaintenance {
+            pending,
+            failed_notes,
+        })
     }
 
     /// A rejected/uncertain save must preserve the attempted text as secondary
@@ -168,6 +269,80 @@ mod tests {
                 },
             })
             .unwrap()
+    }
+    #[test]
+    fn entry_scoped_history_reads_exact_bytes_and_rejects_foreign_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        let note = EntryId::new("note").unwrap();
+        let other = EntryId::new("other").unwrap();
+        create(
+            &mut vault,
+            note.as_str(),
+            "old.md",
+            b"\xef\xbb\xbfexact\r\n",
+        );
+        create(&mut vault, other.as_str(), "other.md", b"other secret");
+        assert!(vault.list_local_recovery(&note, None, 10).is_err());
+        vault
+            .enable_local_recovery(data.path().join("recovery.sqlite"), now_ms())
+            .unwrap();
+        vault.snapshot_local_recovery(now_ms()).unwrap();
+        let note_versions = vault.list_local_recovery(&note, None, 10).unwrap();
+        let other_versions = vault.list_local_recovery(&other, None, 10).unwrap();
+        assert_eq!(note_versions.len(), 1);
+        assert_eq!(note_versions[0].historical_path, "old.md");
+        assert_eq!(
+            vault
+                .read_local_recovery(&note, note_versions[0].id)
+                .unwrap()
+                .unwrap()
+                .content,
+            b"\xef\xbb\xbfexact\r\n"
+        );
+        assert!(vault
+            .read_local_recovery(&note, other_versions[0].id)
+            .unwrap()
+            .is_none());
+        assert!(vault
+            .read_local_recovery(&note, i64::MAX)
+            .unwrap()
+            .is_none());
+        assert!(vault.read_local_recovery(&note, 0).is_err());
+        assert!(vault.list_local_recovery(&note, None, 101).is_err());
+        let cursor = LocalRecoveryCursor {
+            captured_at_ms: note_versions[0].captured_at_ms,
+            id: note_versions[0].id,
+        };
+        assert!(vault
+            .list_local_recovery(&note, Some(cursor), 10)
+            .unwrap()
+            .is_empty());
+        let revision = vault.read(&note).unwrap().unwrap().state.revision;
+        vault
+            .apply(&MutationRequest {
+                operation_id: OperationId::new("rename").unwrap(),
+                mutation: Mutation::Move {
+                    id: note.clone(),
+                    expected: revision,
+                    path: VaultPath::new("new.md").unwrap(),
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            vault.list_local_recovery(&note, None, 10).unwrap(),
+            note_versions
+        );
+        assert_eq!(
+            vault
+                .read_local_recovery(&note, note_versions[0].id)
+                .unwrap()
+                .unwrap()
+                .info
+                .historical_path,
+            "old.md"
+        );
     }
     #[test]
     fn local_snapshots_live_outside_vault_and_keep_exact_note_bytes() {
@@ -403,5 +578,108 @@ mod tests {
             b"valuable attempted draft"
         );
         assert_eq!(versions[0].provenance, SnapshotProvenance::SaveFailure);
+    }
+    #[test]
+    fn maintenance_pages_note_bodies_without_restarting_the_inventory() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("recovery.sqlite");
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        for (id, name) in [("one", "one.md"), ("two", "two.md"), ("three", "three.md")] {
+            create(&mut vault, id, name, name.as_bytes());
+        }
+        vault.enable_local_recovery(&path, now_ms()).unwrap();
+        assert!(vault.maintain_local_recovery(now_ms(), 0).is_err());
+        let first = vault.maintain_local_recovery(now_ms(), 1).unwrap();
+        assert!(first.pending);
+        assert_eq!(first.failed_notes, 0);
+        assert_eq!(
+            vault
+                .recovery
+                .as_ref()
+                .unwrap()
+                .list("one", None, 10)
+                .unwrap()
+                .len()
+                + vault
+                    .recovery
+                    .as_ref()
+                    .unwrap()
+                    .list("two", None, 10)
+                    .unwrap()
+                    .len()
+                + vault
+                    .recovery
+                    .as_ref()
+                    .unwrap()
+                    .list("three", None, 10)
+                    .unwrap()
+                    .len(),
+            1
+        );
+        let second = vault.maintain_local_recovery(now_ms(), 1).unwrap();
+        assert!(second.pending);
+        let third = vault.maintain_local_recovery(now_ms(), 1).unwrap();
+        assert!(!third.pending);
+        assert_eq!(third.failed_notes, 0);
+        for id in ["one", "two", "three"] {
+            assert_eq!(
+                vault
+                    .recovery
+                    .as_ref()
+                    .unwrap()
+                    .list(id, None, 10)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+    }
+    #[test]
+    fn discarding_and_rebuilding_cache_preserves_source_and_retained_history() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let recovery_path = data.path().join("recovery.sqlite");
+        let cache_path = data.path().join("cache.sqlite");
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        vault
+            .enable_local_recovery(&recovery_path, now_ms())
+            .unwrap();
+        vault.enable_local_document_cache(&cache_path).unwrap();
+        create(&mut vault, "note", "note.md", b"# Current note\n#retained");
+        let id = EntryId::new("note").unwrap();
+        let source = vault.read(&id).unwrap().unwrap();
+        let history = vault.list_local_recovery(&id, None, 10).unwrap();
+        assert_eq!(history.len(), 1);
+        fn build(vault: &mut NativeVault) -> zorid_index::IndexSnapshotId {
+            vault.initialize_document_index().unwrap();
+            let stage = vault.begin_document_index().unwrap();
+            assert!(vault.pump_document_index(&stage).unwrap().ready);
+            vault.publish_document_index(&stage).unwrap()
+        }
+        let first = build(&mut vault);
+        drop(vault);
+        std::fs::remove_file(&cache_path).unwrap();
+        let mut vault = NativeVault::open_existing(root.path()).unwrap();
+        vault
+            .enable_local_recovery(&recovery_path, now_ms())
+            .unwrap();
+        vault.enable_local_document_cache(&cache_path).unwrap();
+        let rebuilt = build(&mut vault);
+        assert_ne!(first, rebuilt);
+        assert_eq!(vault.read(&id).unwrap().unwrap(), source);
+        assert_eq!(vault.list_local_recovery(&id, None, 10).unwrap(), history);
+        assert_eq!(
+            vault
+                .read_local_recovery(&id, history[0].id)
+                .unwrap()
+                .unwrap()
+                .content,
+            source.content.unwrap()
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("note.md")).unwrap(),
+            b"# Current note\n#retained"
+        );
     }
 }

@@ -7,6 +7,7 @@ mod binary_commit;
 mod blob_read;
 mod capture_authorization;
 pub mod document_index;
+mod document_cache;
 mod entry_content;
 mod family_metadata_transactions;
 mod immutable_payloads;
@@ -391,6 +392,7 @@ pub struct StoredEntry {
 /// separately; SQLite transactions do not make filesystem writes atomic.
 pub struct Store {
     connection: Connection,
+    document_cache: document_cache::DocumentCache,
     // Process-local handles deliberately expire on reopen; persisted generations do not.
     document_query_owner: zorid_core::OperationId,
     document_query_pins: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -463,8 +465,10 @@ impl Store {
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
+        let document_cache = document_cache::DocumentCache::memory()?;
         Ok(Self {
             connection,
+            document_cache,
             document_query_owner: zorid_core::OperationId::new(uuid::Uuid::new_v4().to_string())?,
             document_query_pins: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })

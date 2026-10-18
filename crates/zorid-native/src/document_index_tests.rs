@@ -58,7 +58,10 @@ fn expect_code<T>(result: NativeDocumentResult<T>, code: &str) {
 #[test]
 fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
     let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let cache_path = cache.path().canonicalize().unwrap().join("cache.sqlite");
     let mut vault = NativeVault::open(dir.path()).unwrap();
+    vault.enable_local_document_cache(&cache_path).unwrap();
     create(&mut vault, "target", "Target.md", "# Old\n#before\n");
     create(
         &mut vault,
@@ -94,6 +97,7 @@ fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
     // A second authority handle changes source, namespace, deletion and Base
     // bytes while the first handle retains the old coherent query generation.
     let mut writer = NativeVault::open_existing(dir.path()).unwrap();
+    writer.enable_local_document_cache(&cache_path).unwrap();
     write(
         &mut writer,
         "write-target",
@@ -215,7 +219,10 @@ fn retained_generation_binds_metadata_search_backlinks_base_source_and_facts() {
 #[test]
 fn staged_work_fences_concurrent_source_changes_and_can_resume_after_restart() {
     let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let cache_path = cache.path().canonicalize().unwrap().join("cache.sqlite");
     let mut vault = NativeVault::open(dir.path()).unwrap();
+    vault.enable_local_document_cache(&cache_path).unwrap();
     create(&mut vault, "note", "Note.md", "first\n");
     vault.initialize_document_index().unwrap();
     let stage = vault.begin_document_index().unwrap();
@@ -223,9 +230,11 @@ fn staged_work_fences_concurrent_source_changes_and_can_resume_after_restart() {
     assert!(vault.pump_document_index(&stage).unwrap().ready);
     drop(vault);
     let mut vault = NativeVault::open_existing(dir.path()).unwrap();
+    vault.enable_local_document_cache(&cache_path).unwrap();
     assert_eq!(vault.document_index_stages().unwrap().len(), 1);
     let resumed = vault.resume_document_index(&snapshot).unwrap();
     let mut writer = NativeVault::open_existing(dir.path()).unwrap();
+    writer.enable_local_document_cache(&cache_path).unwrap();
     write(&mut writer, "concurrent-write", "note", "second\n");
     expect_code(vault.publish_document_index(&resumed), "stale_source");
     let winner = build(&mut vault);

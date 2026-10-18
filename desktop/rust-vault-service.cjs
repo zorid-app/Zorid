@@ -2,6 +2,7 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { captureRecoveryList, captureRecoveryRead, validRecoveryReply } = require('./recovery-history.cjs');
 const { checkpointBytes } = require('./durable-checkpoints.cjs');
 const { captureDocumentRequest, decodeDocumentReply, validDocumentReply } = require('./document-semantics.cjs');
 const { captureWorkBlockRequest, decodeWorkBlockReply, validWorkBlockReply, MAX_WORKBLOCK_RESPONSE } = require('./workblocks.cjs');
@@ -130,8 +131,9 @@ function checkpointResult({ result, bytes }) {
 function successful(command, result, bytes, expectedBytes) {
   if (!object(result)) return false;
   if (!command) return bytes.length === 0; // Full startup validation follows.
-  if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas', 'binary', 'documents', 'workblocks'].includes(command.method) && bytes.length) return false;
+  if (!['read', 'read_path', 'read_presented', 'checkpoint_load', 'checkpoint_cas', 'binary', 'documents', 'workblocks', 'recovery_read'].includes(command.method) && bytes.length) return false;
   switch (command.method) {
+    case 'recovery_list': case 'recovery_read': return validRecoveryReply(command,result,bytes);
     case 'documents': return validDocumentReply(command, result, bytes);
     case 'workblocks': return validWorkBlockReply(command, result, bytes);
     case 'binary': return result.binary === true && bytes.length > 0 && bytes.length <= MAX_BINARY_FRAME;
@@ -386,6 +388,8 @@ class RustVaultService {
     return this.request({method:'file_command',client_id:clientId,family},bytes).then(reply=>reply.result);
   }
   createText(clientId, request, bytes) { return this.request({method:'create_text',client_id:clientId,operation_id:request.operationId,id:request.entryId,path:request.path}, bytes).then(reply=>reply.result); }
+  recoveryList(entryId,options) { const command=captureRecoveryList(entryId,options);return this.request(command).then(reply=>reply.result); }
+  recoveryRead(entryId,snapshotId) { const command=captureRecoveryRead(entryId,snapshotId);return this.request(command).then(({result,bytes})=>({version:result.version,content:new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes)})); }
   localFamilyStatus() { return this.request({method:'local_family_status'}).then(reply=>reply.result.family); }
   claimClient(clientId) { return this.request({ method: 'claim_client', client_id: clientId }).then(reply => Object.freeze({ ...reply.result.lease })); }
   releaseClient(reference) { return this.request({ method: 'release_client', reference }).then(reply => reply.result); }

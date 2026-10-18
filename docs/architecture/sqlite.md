@@ -10,8 +10,9 @@ busy timeout, WAL, FULL synchronization and foreign keys. Each domain still owns
 its schema and revalidates under IMMEDIATE transaction before initialization.
 No-follow paths reject symlinks throughout the filename, so trusted hosts resolve
 canonical parent directories first. Store preserves authoritative joint commits.
-Optional document cache tables still live on the Store connection; cache extraction
-is pending. Browser still uses IndexedDB.
+Document caches use an independent connection and scoped app-local database,
+with an in-memory fallback. Legacy authority cache tables are inert. Browser
+still uses IndexedDB.
 
 ## Accepted direction
 
@@ -35,6 +36,13 @@ versions, transactions, busy/locking behavior, resource limits and error mapping
 Each service owns its tables and domain operations. UI calls service operations;
 it does not issue arbitrary SQL. Shared infrastructure does not mean one global
 connection or one database file for every role/vault.
+
+Cache operations reserve/pin cache before authority, so waiting on a cache lock
+does not reserve source storage. They recheck source/publication fences under the
+authority reservation and commit only cache before releasing authority. Reads
+pin cache before observing source; cache may lag the observed source but cannot
+come from its future. This is not a transaction spanning both databases. Parsing
+stays outside write transactions.
 
 Keep authoritative, recovery and cache lifecycle separate. Source commits must
 not depend on a healthy cache. Recovery retention must not use a generic cache

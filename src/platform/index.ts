@@ -8,6 +8,7 @@ import type { VaultAdapter } from '../core/types';
 import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridge';
 
 export interface PlatformVault {
+  readonly recoveryHistory?:import('./bridge').RecoveryHistory;
   readonly workBlocks?:import('../core/workblocks.ts').WorkBlockService;
   readonly documentSemantics?:DocumentService;
   nativeDocumentNavigation?:import('./mobile-native.ts').NativeDocumentNavigation;
@@ -99,6 +100,7 @@ async function desktopVault(bridge: DesktopBridge, info: DesktopVault): Promise<
   }
   return {
     ...(release ? {release} : {}),
+    ...(bridge.recoveryList&&bridge.recoveryRead?{recoveryHistory:{list:(entryId,options)=>bridge.recoveryList!(info.path,entryId,options),read:(entryId,snapshotId)=>bridge.recoveryRead!(info.path,entryId,snapshotId)}}:{}),
     ...(workBlocks?{workBlocks:workBlocks.service}:{}),
     ...(documents?{documentSemantics:documents.service}:{}),
     ...(reconciliation?{reconciliation}:{}),

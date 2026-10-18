@@ -16,7 +16,9 @@ and atomically publish matching rows and generation metadata.
 Native `Store::pump_document_index` performs bounded work, reuses compatible
 records from a prior generation before parsing, and keeps parsing outside storage
 write transactions. It already persists derived metadata; caching is not being
-introduced from nothing. Cache tables currently share `vault.sqlite`.
+introduced from nothing. Native cache tables now live on an independent app-local `cache.sqlite`
+connection (or an in-memory fallback for bare embedders). Source remains in
+`vault.sqlite`; old optional authority cache tables are recognized but inert.
 
 The browser host stores local-only persisted generation data in IndexedDB and
 uses the same Rust semantics through WASM. Neither cache is sync authority.
@@ -32,8 +34,8 @@ Reuse content-derived parse results using content hashes plus parser/schema and
 relevant semantic options. Reattach path/entry/revision context correctly; cached
 metadata from another identity is not an authority witness. A future cache key
 must account for all inputs that affect extraction, not only file modification time.
-Separate app-local `cache.sqlite` is accepted native placement direction, not
-current code. Browser retains joined-group working data and persisted derived
+Native app-local cache separation is implemented independently of the upcoming
+parallel parsing/search work. Browser retains joined-group working data and persisted derived
 indexes between visits, with incremental catch-up; its storage engine need not
 mirror native databases.
 

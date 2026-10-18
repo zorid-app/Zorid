@@ -33,7 +33,7 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   let slotNumber=0;
   const retirements=[];
   const openService=async root=>{
-    if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {}, remove: async (target, force) => { removals.push([root, target, force]); } });
+    if (!services.has(root)) services.set(root, { root, watchers: 0, stops: 0, subscribe() { this.watchers++; return () => { this.watchers--; this.stops++; }; }, read: async () => 'base', write: async () => {}, recoveryList:async(entryId,options)=>({entryId,options}),recoveryRead:async(entryId,snapshotId)=>({entryId,snapshotId,content:'old'}), remove: async (target, force) => { removals.push([root, target, force]); } });
     return services.get(root);
   };
   const nativeRequire = name => {
@@ -47,7 +47,7 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
     if (name === './vault-service.cjs') return {VaultService:{open:openService}};
     return require(name);
   };
-  vm.runInNewContext(fs.readFileSync(mainPath, 'utf8'), { require: nativeRequire, __dirname: path.dirname(mainPath), process: { platform: 'darwin', env: {} }, URL });
+  vm.runInNewContext(fs.readFileSync(mainPath, 'utf8'), { require: nativeRequire, __dirname: path.dirname(mainPath), process: { platform: 'darwin', env: {} }, URL, structuredClone });
   await new Promise(resolve => setImmediate(resolve));
   const invoke = (window, name, ...args) => handlers.get(`zorid:${name}`)({ sender: window.webContents, senderFrame: window.webContents.mainFrame }, ...args);
   assert.equal(windows.length, 1);
@@ -67,6 +67,10 @@ test('main wiring creates empty authenticated windows and scopes vault picking t
   assert.deepEqual(retirements,['/first'],'switch retires its old admission without detaching the surviving window');
   // Exercise actual main registration, broker grants, and service forwarding.
   assert.ok(handlers.has('zorid:remove'));
+  const historyOptions={limit:20};const historyRequest=invoke(windows[0],'recoveryList','/first','note',historyOptions);historyOptions.limit=99;
+  assert.equal((await historyRequest).options.limit,20);
+  assert.equal((await invoke(windows[0],'recoveryRead','/first','note','2')).content,'old');
+  assert.throws(()=>invoke(windows[0],'recoveryRead','/second','note','2'),/vault|grant|authorized/i);
   await invoke(windows[0], 'remove', '/first', 'Owned.md', false);
   await invoke(windows[1], 'remove', '/second', 'Folder', true);
   assert.throws(() => invoke(windows[0], 'remove', '/second', 'Foreign.md', true), /vault|grant|authorized/i);

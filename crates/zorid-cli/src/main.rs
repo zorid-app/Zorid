@@ -286,6 +286,22 @@ fn enable_local_recovery(vault: &mut zorid_native::NativeVault, root: &std::path
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn enable_local_document_cache(vault: &mut zorid_native::NativeVault, root: &std::path::Path) {
+    let enabled = (|| -> std::result::Result<(), String> {
+        let identity = vault.identity().map_err(|error| error.to_string())?;
+        let data = zorid_native::LocalStoragePaths::app_data_root().map_err(|error| error.to_string())?;
+        let paths = zorid_native::LocalStoragePaths::resolve(root, &identity.local_store_id, &data)
+            .map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(paths.cache.parent().expect("cache bucket has a parent"))
+            .map_err(|error| error.to_string())?;
+        vault.enable_local_document_cache(paths.cache).map_err(|error| error.to_string())
+    })();
+    if let Err(error) = enabled {
+        eprintln!("Local document cache unavailable; using temporary cache: {error}");
+    }
+}
+
 fn main() -> ExitCode {
     let args = match Args::try_parse() {
         Ok(args) => args,
@@ -521,6 +537,7 @@ fn run(args: Args) -> Result<Output> {
     } else {
         NativeVault::open_existing(&args.vault)?
     };
+    enable_local_document_cache(&mut vault, &args.vault);
     enable_local_recovery(&mut vault, &args.vault, true);
     // Binary requests select their durable original operation before reading
     // input. Each append is bounded; no native lock spans a caller's input read.

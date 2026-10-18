@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('zorid', Object.freeze({
   },
   compareAndWrite: (vault, path, expectedContent, contents) => invoke('compareAndWrite', vault, path, expectedContent, contents),
   getVault: () => invoke('getVault'),
+  recoveryList: (vault,entryId,options) => invoke('recoveryList',vault,entryId,options),
+  recoveryRead: (vault,entryId,snapshotId) => invoke('recoveryRead',vault,entryId,snapshotId),
   retryReconciliation: vault => invoke('retryReconciliation',vault),
   onBeforeClose: handler => {
     if (typeof handler !== 'function') throw new TypeError('Close handler required');

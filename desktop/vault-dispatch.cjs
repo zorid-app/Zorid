@@ -1,5 +1,5 @@
 'use strict';
-const methods = new Set(['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'mkdir', 'rename', 'trash', 'remove', 'retryReconciliation']);
+const methods = new Set(['list', 'stat', 'read', 'readBinary', 'write', 'writeBinary', 'mkdir', 'rename', 'trash', 'remove', 'retryReconciliation', 'recoveryList', 'recoveryRead']);
 
 function dispatchVaultOperation(vault, expectedRoot, method, args) {
   if (!vault) throw new Error('Open a vault first');

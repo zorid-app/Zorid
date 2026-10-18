@@ -5,6 +5,7 @@ import { renderStartupError } from './ui/startup-error.ts';
 import { legacyBrowserExport } from './platform/browser-legacy-export.ts';
 import './ui/recovery.css';
 import './ui/import-status.css';
+import './ui/version-history.css';
 import './ui/styles.css';
 import './ui/hotkey-settings.css';
 import './ui/reference-defaults.css';

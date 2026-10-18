@@ -7,6 +7,7 @@ import type {CalendarView, CalendarViewState} from '../calendar/view.ts';
 import { mountDocumentBacklinks } from './document-backlinks.ts';
 import { catchUpDocumentIndex, documentErrorCode, DocumentSemanticsError } from '../core/document-semantics.ts';
 import type { DocumentCursor, DocumentPin, DocumentService, DocumentSnapshotId, DocumentSourceId, DocumentTaskWitness } from '../core/document-semantics.ts';
+import { openVersionHistory } from './version-history.ts';
 import { mountImportStatus } from './import-status.ts';
 import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS, EDITOR_HOTKEY_COMMANDS } from './hotkeys.ts';
 import { mountHotkeySettings } from './hotkey-settings.ts';
@@ -2005,9 +2006,17 @@ export class Workspace {
   }
 
   private commands():Command[]{
-    return WORKSPACE_HOTKEY_COMMANDS.filter(command=>command.id!=='new-window'||workspaceWindowBridge(window.zorid)).map(command=>({
+    const pane=this.activePane,tab=pane&&this.current(pane),path=tab?.path,vault=this.vault,generation=this.vaultGeneration;
+    const entryId=path?vault.entries.get(path)?.entryId:undefined;
+    const history:Command[]=tab?.kind==='note'&&path&&isMarkdown(path)&&entryId&&this.platform.recoveryHistory?[{
+      id:'version-history',name:'Version history',action:async()=>{
+        if(this.vault!==vault||generation!==this.vaultGeneration||this.activePane!==pane||this.current(pane)!==tab||tab.path!==path||vault.entries.get(path)?.entryId!==entryId||this.platformReleased)return;
+        await this.showVersionHistory(path);
+      },
+    }]:[];
+    return [...WORKSPACE_HOTKEY_COMMANDS.filter(command=>command.id!=='new-window'||workspaceWindowBridge(window.zorid)).map(command=>({
       id:command.id,name:command.name,shortcut:this.hotkeys.label(command.id),action:()=>this.executeHotkey(command.id),
-    }));
+    })),...history];
   }
   private syncNativeHotkeys():void{
     void window.zorid?.setMenuHotkeys?.(['new-window','close-tab'].map(id=>({id:id as 'new-window'|'close-tab',shortcut:this.hotkeys.label(id)}))).catch(error=>notice(error instanceof Error?error.message:String(error)));
@@ -2094,6 +2103,26 @@ export class Workspace {
       const match=/^action-(\d+)$/.exec(id);if(match)await items[Number(match[1])]?.action();
     });
   }
+  private async showVersionHistory(path:string):Promise<void>{
+    const vault=this.vault,generation=this.vaultGeneration,history=this.platform.recoveryHistory,entry=vault.entries.get(path);
+    if(!history||!entry?.entryId||!isMarkdown(path))return;
+    const entryId=entry.entryId,revision=entry.revision;
+    const current=()=>this.vault===vault&&generation===this.vaultGeneration&&!this.platformReleased&&vault.entries.get(path)?.entryId===entryId;
+    let buffer:NoteBuffer;
+    try{buffer=await this.bufferFor(path,vault.adapter.durableWrites?entryId:undefined,()=>{if(!current())throw new Error('Note changed');});}
+    catch(error){this.noteStorageFailure(error,'Version history couldn’t be opened. Please try again.');return;}
+    if(!current())return;
+    const original=buffer.text;
+    openVersionHistory({history,entryId,isCurrent:current,restore:async text=>{
+      if(buffer.dirty||buffer.error||buffer.hasRecoveryConflict)return'save_changes';
+      if(!current()||this.buffers.get(path)!==buffer||vault.entries.get(path)?.revision!==revision||buffer.text!==original)return'changed';
+      const validate=()=>{if(!current()||vault.entries.get(path)?.revision!==revision)throw new Error('The note changed before restoration');};
+      this.updateMarkdownBuffer(buffer,text,validate);
+      for(const view of this.loadedViews())if(view.viewPath===path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
+      await buffer.flush();this.renderStatus();return'restored';
+    }});
+  }
+
   private fileMenu(entry:VaultEntry,x:number,y:number,inlineRename=false):void{
     // Explorer rows survive harmless snapshot refreshes. Capture the current
     // observation and stable path token rather than the row's old entry object.
@@ -2102,6 +2131,7 @@ export class Workspace {
     const token=this.treeEntryToken(path),type=current.type,revision=current.revision,folder=type==='folder';
     this.menu([
       ...(folder?[{name:'New note',action:()=>this.newNote(path)},{name:'New folder',action:()=>this.newFolder(path)}]:[{name:'Open in new tab',action:()=>this.openNote(path,true)},{name:this.bookmarks.has(path)?'Remove bookmark':'Bookmark',action:()=>{if(this.bookmarks.has(path))this.bookmarks.delete(path);else this.bookmarks.add(path);this.saveSession();this.renderSidebar();}}]),
+      ...(!folder&&isMarkdown(path)&&current.entryId&&this.platform.recoveryHistory?[{name:'Version history',action:()=>this.showVersionHistory(path)}]:[]),
       {name:'Rename…',action:()=>inlineRename?this.beginTreeRename(path):this.renameDialog(path)}, {name:'Move to trash',action:()=>this.deletePath(path)},
     ],x,y,()=>{
       const latest=vault.entries.get(path);
@@ -2117,7 +2147,7 @@ export class Workspace {
       action:async()=>{tab.mode=mode;pane.active=tab.id;await this.renderPane(pane);this.saveSession();},
     })):[];
     const path=tab.path;
-    this.menu([{name:'Split right',action:()=>this.split('right',pane,tab)},{name:'Split down',action:()=>this.split('bottom',pane,tab)},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
+    this.menu([...(path&&isMarkdown(path)&&this.platform.recoveryHistory?[{name:'Version history',action:()=>this.showVersionHistory(path)}]:[]),{name:'Split right',action:()=>this.split('right',pane,tab)},{name:'Split down',action:()=>this.split('bottom',pane,tab)},...modes,...(path?[{name:'Rename…',action:()=>this.renameDialog(path)}]:[]),{name:'Close tab',action:()=>this.closeTab(pane,tab)}],x,y,()=>this.panes.includes(pane)&&pane.tabs.includes(tab)&&tab.path===path);
   }
   private menuPoint(event:MouseEvent):{x:number;y:number}{
     if(event.type!=='contextmenu'&&event.currentTarget instanceof HTMLElement){const bounds=event.currentTarget.getBoundingClientRect();return{x:bounds.left,y:bounds.bottom};}

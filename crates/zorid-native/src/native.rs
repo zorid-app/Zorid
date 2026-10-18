@@ -79,6 +79,7 @@ pub struct NativeVault {
     store: Store,
     options: Options,
     recovery: Option<zorid_recovery::RecoveryStore>,
+    recovery_queue: Option<std::collections::VecDeque<EntryId>>,
     #[cfg(test)]
     pub(crate) fault: Option<fn(&str)>,
 }
@@ -118,6 +119,7 @@ impl NativeVault {
             store,
             options,
             recovery: None,
+            recovery_queue: None,
             #[cfg(test)]
             fault: None,
         })

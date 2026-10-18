@@ -1,6 +1,10 @@
 //! Native filesystem adapter. SQLite is authority; a commit receipt is NOT a
 //! filesystem acknowledgement. See README for crash and security boundaries.
 use serde::{Deserialize, Serialize};
+pub use zorid_recovery::{
+    Snapshot as LocalRecoverySnapshot, SnapshotCursor as LocalRecoveryCursor,
+    SnapshotInfo as LocalRecoveryVersion,
+};
 use std::{fmt, time::Duration};
 use zorid_core::{
     CommitResult, EntryId, EntryState, MutationRequest, OperationId, Revision, VaultPath,
@@ -95,6 +99,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct ReceiveOutcome {
     pub commit: TextReceiveOutcome,
     pub projection: ProjectionStatus,
+}
+/// Device-local secondary history maintenance; never a save acknowledgement.
+#[derive(Debug, Default)]
+pub struct RecoveryMaintenance {
+    pub pending: bool,
+    pub failed_notes: u16,
 }
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -247,8 +257,11 @@ pub enum ExternalFileMode {
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 impl NativeVault {
+    pub fn list_local_recovery(&self, _: &EntryId, _: Option<LocalRecoveryCursor>, _: usize) -> Result<Vec<LocalRecoveryVersion>> { unsupported() }
+    pub fn read_local_recovery(&self, _: &EntryId, _: i64) -> Result<Option<LocalRecoverySnapshot>> { unsupported() }
     pub fn enable_local_recovery(&mut self, _: impl AsRef<std::path::Path>, _: i64) -> Result<()> { unsupported() }
     pub fn snapshot_local_recovery(&mut self, _: i64) -> Result<()> { unsupported() }
+    pub fn maintain_local_recovery(&mut self, _: i64, _: u16) -> Result<RecoveryMaintenance> { unsupported() }
     pub fn open(_: impl AsRef<std::path::Path>) -> Result<Self> {
         unsupported()
     }

@@ -54,7 +54,13 @@ committed save receipt. Whole-vault maintenance is throttled at host boundaries.
 Normal durable note saves also retain attempted text after a rejected/uncertain
 core save, without applying it over current source. Errors before that handoff
 (prepare/checkpoint/transport/editor failures) still rely on existing draft journals.
-History preview/restore UI remains pending. A save-strategy change must reconcile current database/file
+Desktop Version history lists local versions and previews exact UTF-8 text.
+Explicit restoration requires a clean, unchanged note and uses the ordinary
+NoteBuffer/durable-save path. It never substitutes a force-write endpoint or
+automatically restores arbitrary historical versions. Browser/mobile hosts hide
+this optional action until they provide the capability. Interactive snapshot
+maintenance reads at most 16 note bodies per request boundary, keeping only a
+metadata inventory between batches; this is a work bound, not a latency promise. A save-strategy change must reconcile current database/file
 projection and external-writer guarantees before cutover; replacing projection
 with direct writes is not a safe isolated filename change.
 

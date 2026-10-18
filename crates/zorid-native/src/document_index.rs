@@ -7,12 +7,35 @@ use zorid_index::{IndexError, IndexSnapshotId, ResolutionView, MAX_GENERATION_ME
 use zorid_store::DocumentManifest;
 
 impl NativeVault {
+    /// Persist derived data in a host-owned app-local database. Ordinary vault
+    /// opens remain usable with a temporary cache if this optional setup fails.
+    pub fn enable_local_document_cache(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> NativeDocumentResult<()> {
+        self.paths.verify()?;
+        let path = path.as_ref();
+        let parent = path
+            .parent()
+            .ok_or_else(|| crate::Error::UnsafePath("cache parent missing".into()))?
+            .canonicalize()
+            .map_err(crate::Error::from)?;
+        if parent.starts_with(&self.paths.absolute) {
+            return Err(
+                crate::Error::UnsafePath("local cache must be outside the vault".into()).into(),
+            );
+        }
+        let name = path
+            .file_name()
+            .ok_or_else(|| crate::Error::UnsafePath("cache filename missing".into()))?;
+        Ok(self.store.enable_document_cache(parent.join(name))?)
+    }
     pub fn document_index_status(&self) -> NativeDocumentResult<DocumentIndexStatus> {
         self.paths.verify()?;
         Ok(self.store.document_index_status()?)
     }
-    /// Observe authority identity and cache status in the same Store read
-    /// transaction, including uninitialized/building/rebuild-required states.
+    /// Pin cache before observing authority, including uninitialized/building/
+    /// rebuild-required states. Cache may lag source; this is not cross-DB atomicity.
     pub fn document_index_status_with_source(
         &self,
     ) -> NativeDocumentResult<(SourceSnapshotId, DocumentIndexStatus)> {
@@ -85,7 +108,10 @@ impl NativeVault {
         // Dropping a pin is always safe, including after the root becomes unsafe.
         self.store.close_document_snapshot(pin)
     }
-    pub(crate) fn document_manifest(&self, pin: &DocumentQueryPin) -> NativeDocumentResult<DocumentManifest> {
+    pub(crate) fn document_manifest(
+        &self,
+        pin: &DocumentQueryPin,
+    ) -> NativeDocumentResult<DocumentManifest> {
         self.paths.verify()?;
         Ok(self.store.document_snapshot_manifest(pin)?)
     }

@@ -12,9 +12,11 @@ struct Host {
     watch: Option<std::thread::JoinHandle<()>>,
 }
 impl Host {
-    fn start(root: &std::path::Path) -> Self {
+    fn start(root: &std::path::Path, data: &std::path::Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_zorid-desktop-host"))
             .args([std::ffi::OsStr::new("--vault"), root.as_os_str()])
+            .arg("--local-cache")
+            .env("ZORID_LOCAL_DATA_DIR", data)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -40,7 +42,8 @@ impl Host {
             stop: Some(stop),
             watch: Some(watch),
         };
-        assert_eq!(host.recv().0["ok"], true);
+        let (startup, _) = host.recv();
+        assert_eq!(startup["ok"], true, "{startup}");
         host
     }
     fn recv(&mut self) -> (Value, Vec<u8>) {
@@ -124,7 +127,17 @@ fn build(v: &mut NativeVault) {
 #[test]
 fn real_stdio_tasks_use_retained_sources_and_reject_forged_ast_and_foreign_or_expired_pins() {
     let root = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
     let mut vault = NativeVault::open(root.path()).unwrap();
+    let cache_path = zorid_native::LocalStoragePaths::resolve(
+        root.path(),
+        &vault.identity().unwrap().local_store_id,
+        data.path(),
+    )
+    .unwrap()
+    .cache;
+    std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+    vault.enable_local_document_cache(&cache_path).unwrap();
     let config = include_str!("../../../tests/fixtures/tasks/task-type.json");
     create(&mut vault, "type-file", "Task.yaml", config);
     create(
@@ -136,7 +149,7 @@ fn real_stdio_tasks_use_retained_sources_and_reject_forged_ast_and_foreign_or_ex
     vault.initialize_document_index().unwrap();
     build(&mut vault);
     drop(vault);
-    let mut host = Host::start(root.path());
+    let mut host = Host::start(root.path(), data.path());
     let client = "10000000-0000-4000-8000-000000000001";
     let other = "10000000-0000-4000-8000-000000000002";
     let lease = host
@@ -161,6 +174,7 @@ fn real_stdio_tasks_use_retained_sources_and_reject_forged_ast_and_foreign_or_ex
         "snapshot_expired"
     );
     let mut writer = NativeVault::open(root.path()).unwrap();
+    writer.enable_local_document_cache(&cache_path).unwrap();
     let expected = writer
         .read(&id("type-file"))
         .unwrap()

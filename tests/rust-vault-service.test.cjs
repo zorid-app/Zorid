@@ -39,6 +39,12 @@ process.stdin.on('data', chunk => {buffer=Buffer.concat([buffer,chunk]); while(b
   if(mode==='family_journal_bad_entries')result.changes[0].requires_full_reload=false;
   if(mode==='family_journal_bad_origin')result.changes[0].origin={kind:'received_update'};
  }
+ if(mode.startsWith('history_') && req.command.method==='recovery_list')result={versions:[{snapshotId:'2',entryId:req.command.entry_id,path:'Note.md',capturedAtMs:100,byteLength:3}]};
+ if(mode.startsWith('history_') && req.command.method==='recovery_read') {
+  responseBody=mode==='history_utf8'?Buffer.from([255]):Buffer.from('old');
+  result={version:{snapshotId:req.command.snapshot_id,entryId:mode==='history_wrong_entry'?'other':req.command.entry_id,path:'Note.md',capturedAtMs:100,byteLength:responseBody.length}};
+  if(mode==='history_wrong_length')result.version.byteLength++;
+ }
  if(req.command.method==='checkpoint_cas') {
   responseBody=body;
   result={checkpoint:{version:1,...req.command.scope,key:req.command.key,revision:req.command.next_revision,sequence:'1',deleted:!req.command.has_state,byteLength:body.length}};
@@ -304,4 +310,17 @@ test('document query rejection preserves strict frames and does not poison the n
 test('hyphenated document frame errors still fail strict transport validation',async t=>{
   const host=await fixture(t,'document_bad_rejection');
   await assert.rejects(host.documentCommand('client',{schemaVersion:1,command:{op:'base',pinId:'1',id:'base',options:{currentEntryId:'missing-current',clockMs:0}}}),{code:'invalid_response',commitUncertain:true});
+});
+
+
+test('history subprocess frames preserve selected versions and exact UTF-8 content',async t=>{
+  const host=await fixture(t,'history_valid');
+  const page=await host.recoveryList('note',{limit:20});assert.equal(page.versions[0].snapshotId,'2');
+  assert.equal((await host.recoveryRead('note','2')).content,'old');
+});
+for(const mode of ['history_wrong_entry','history_wrong_length'])test('history malformed successful response '+mode+' cannot reach the preview',async t=>{
+  const host=await fixture(t,mode);await assert.rejects(host.recoveryRead('note','2'),{code:'invalid_response'});
+});
+test('malformed UTF-8 history cannot be decoded or offered for restoration',async t=>{
+  const host=await fixture(t,'history_utf8');await assert.rejects(host.recoveryRead('note','2'),/encoded data/i);assert.equal(host.fatal,null);
 });

@@ -17,33 +17,53 @@ recovery plan in isolation; `architecture_core_audit` reviews causal/identity pr
 and preservation before any implementation. No cleanup or migration in the real
 vault is authorized by this diagnosis. Root coordinates serialized validation.
 
-Native window-close verification independently passed on source `3eabc392`: the
-pending edit was flushed, guarded then allowed close completed, and the host
-drained. Normal macOS app quit remains unverified: a no-window shell did not exit
-after an AppKit request. That is separate from the earlier dirty JavaScript-close
-veto, and did not lose the saved edit. Live-window quit/history checks continue.
+Native window close and live-window AppKit quit passed on source `3eabc392`: exact
+pending bytes were flushed and reopened, with normal no-signal exit and host drain.
+Version history preview, explicit restore and restart persistence passed (22 runtime
+checks): `/private/tmp/zorid-s0-live-appkit-evidence/evidence.json`. A separate
+no-window shell did not exit after an AppKit request; that case remains open.
 
 ## Clipboard image transfer — fixed 2026-10-18
 
-Integrated `a98cb04f` on main. Concurrent attachment reads and paste uploads could
-collide with desktop single-command admission (`binary_busy`) after files already
-committed. Complete-transfer scheduling now preserves identity, cancellation and
-cleanup without blocking ordinary text saves. Independent source review passed;
-28 focused tests and desktop TypeScript/build passed on main.
+Integrated independently as main `a98cb04f`; main findings commit `81c2d47b`.
+Concurrent attachment reads/paste upload collided with desktop command admission
+(`binary_busy`) after files had committed. Complete-transfer FIFO preserves original
+identity, caller inputs, cancellation and cleanup, while text writes stay responsive.
+Independent core source review approved `fd87d9f0`; root 28 focused tests and desktop
+TypeScript/build passed on main. No push performed.
 
-Actual Electron regression passed on composed integration source `bbf121ea`:
-`/private/tmp/zorid-clipboard-final-verified/evidence.json`. Two exact PNG files,
-saved embeds and four target-specific 128×64 decoded pixel hashes matched with no
-transfer errors. Hidden ClipboardEvent/File pipeline used explicit eager decoding;
-this does not establish OS clipboard or foreground lazy-loading parity. User-owned
-visible Playground was left on its existing copied build.
+Actual hidden Electron pass on composed source `bbf121ea`:
+`/private/tmp/zorid-clipboard-final-verified/evidence.json`. Two exact PNG files and
+saved embeds, unchanged seeds, four exact target acquisitions and 128×64 decoded
+RGBA hashes passed in 4.544 seconds, without transfer errors. Test drives the actual
+File/DataTransfer/ClipboardEvent path; it does not mutate the OS clipboard. Hidden
+fixture eager/decode actions are explicit; no foreground lazy-loading parity claim.
+CSP is unchanged. User reports the visible Playground has now been closed; it
+was never targeted by automation. Its copied artifacts remain the older build.
 
-The larger cache/history batch remains isolated in `storage-foundation` /
-`tingkai-c/storage-cache-integration` (latest `5b8c83d9`); S0 is not accepted.
-Dirty JS `window.close()` did not finish in 15 seconds, although exact edits
-subsequently autosaved. Native OS close, normal quit and history runtime checks
-remain open; evidence `/private/tmp/zorid-runtime-handoff.json`. Original import
-warning and large-stream limitations remain open. No push performed.
+Broader S0 hidden pass: `/private/tmp/zorid-s0-final-bbf121ea-evidence/evidence.json`.
+Dirty renderer `window.close()` did not finish within fifteen seconds, while exact
+edits subsequently autosaved. This does not establish OS-window-close/app-quit
+failure. Subsequent native close, live-window normal quit and history checks passed as
+recorded above; only no-window quit remains open. Root retains sole integration.
+A prior clipboard poll observed temporary source-path absence during saving; it
+later reappeared with exact bytes. Preserve this publication visibility limitation.
+
+## Manual playground versus automated checks — 2026-10-18
+
+User wants to keep playing with visible test apps. Automation uses its own hidden
+app/profile/vault and exact-owned-PID cleanup. User-owned visible playground
+PID66932 and isolated root `/private/tmp/zorid-manual-playground-dlko_ol6` are
+excluded from automation cleanup. Pointer: `/private/tmp/zorid-current-manual-playground.json`.
+The playground uses copied artifacts so ongoing builds do not replace its files.
+
+
+## Dirty-close verification — 2026-10-18
+
+The first dirty-close runtime pass contained fixture edits outside the harness,
+so its timeout is inconclusive. It establishes neither a product defect nor a
+passing dirty-close/normal-quit scenario. Retry with the exact-owned test app hidden
+before editing, keeping pending-edit and precise close/quit witnesses.
 
 ## Large-file validation performance — 2026-10-18
 
