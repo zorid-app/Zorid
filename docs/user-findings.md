@@ -401,3 +401,8 @@ root via msg5e815eb955cf; no native compiler/helper/server remains active.
   Root owns manifests. No implementation or runtime acceptance claimed yet.
   Share extension/AppGroup/project/signing/CI changes require a subsequent scoped
   coordination decision; the existing wildcard profile does not prove readiness.
+
+2026-10-18 native header finding: user requests removing the vault-name subtitle
+above the Recents/Files heading (reference screenshot AhGuxX). Owner removed only
+that decorative row in NativePages; vault identity remains in selection/settings.
+Source review and current phone build verification pending; not yet deployed.

@@ -1357,3 +1357,43 @@ and NativeMobile SHA256130cb790e63f676e9e4aba08526b765105f1ca9f38db04533fb83d371
 Owner verified matching bytes before commit. Acceptance covers initial connected
 File/Home wiring only; all compilation/runtime and feature limitations above
 remain distinct. Project plist validation and git diff check passed.
+
+
+Simulator10 integrated evidence — 2026-10-18 01:06 UTC:
+Home Show tabs source d7e77c3c composed fb1c04d7 after first full script16736
+TERMINAL1 at package-manager verification (no compiler). Shell pnpm9 parsed
+pnpm12 multi-document manager lock incorrectly; canonical lock is valid. Owner
+removed only its node_modules symlink, preserving shared worker dependencies.
+Existing /Users/ctk/.local/share/pnpm/pnpm12.14 frozen offline ignore-scripts
+install36802 TERMINAL0; no manifests/locks/toolchain download. Full retry39003
+TERMINAL0, BUILD SUCCEEDED: Vite native renderer, cap copy ios only, Rust1.95
+locked-j1 staticlib, Xcode App Debug arm64 Simulator jobs1. Exact command/provenance
+/private/tmp/zorid-ios-v10b-sim-command.json; build log/exit file adjacent. Artifact
+/private/tmp/zorid-ios-v10b-sim-20261018/DerivedData/Build/Products/Debug-iphonesimulator/App.app.
+
+Actual install/launch/Orca attach67686 TERMINAL0 on existing1274 simulator.
+Disposable Orca Mobile Test native vault and Pages open PASS87003; configured
+file destination shows existing saved Markdown body PASS84378. Actual editor
+close to overview, +Home, native Home Show tabs, two-card overview PASS51920.
+Original note reactivation retains original saved body and Return to Files
+reaches usable native list PASS99193. No new text typed in this pass; no new
+edit/keyboard/background/failed-save/cursor pixel claims. Screenshot actual
+framebuffer /private/tmp/zorid-mobile-v10-tabs.png inspected: two thumbnails,
+selected purple outline, labels and footer. Footer button identifiers inherited
+parent overview ID; automation used observed labels. One AX transport failure
+and transient empty AX tree retried without restarting app; not an app crash.
+Overview screenshot also shows a system Back affordance despite requested
+hidesBackButton; behavior/polish remains to inspect. Test app/helper cleanup77553
+TERMINAL0, simulator kept booted.
+
+Direct user now requests phone installation and removing vault subtitle above
+Recents/Files. Only six-line decorative NativePages header removal, independently
+source approved533a8a056bfb at SHA256a41bac4800e95a4d779ba83618919026f0a5ccf89606ffa095788c0d5ceb175e;
+full phone compilation and visual proof still pending. Existing private manual
+contract bundle is old app.zorid.notes; wrapper assertion stopped BEFORE build.
+Dev9 evidence uses automatic existing wildcard development profile, so use same
+automatic Dev signing with team/device contract fields, no provisioning updates,
+not that old bundle-specific manual profile. Device wired/paired/tunnel connected
+and Developer Mode enabled per devicectl01:06. Coordinator0c249 extends exclusive
+slot for signed development build/install/launch after simulator check; no new
+account/production capability changes. Phone remains Dev9 until actual receipt.

@@ -2668,12 +2668,6 @@ private struct NativePagesView: View {
 
     private var pageContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(model.vault.name)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 20)
-                .accessibilityIdentifier("native.pages.vault-name")
             Menu {
                 Picker("Notes view", selection: selectedMode) {
                     ForEach(NativePage.allCases, id: \.self) { page in
