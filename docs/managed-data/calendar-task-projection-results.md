@@ -52,8 +52,31 @@ clock/IANA parity with Tasks Today, completed picker versus membership, missing/
 renamed/path-reused links, invalid/missing/stale Types, malformed metadata and
 missing/ambiguous views/query budgets.
 
-Cargo/build/tests have **not run**: coordinator explicitly holds these while the
-native iOS19 heavy turn is active. Source/API is ready for independent review;
-compiled verification awaits a bounded load checkpoint. This does not establish
-native join, binding, browser, rendered UI, mobile or integrated-main completion.
-No manifests, dependencies, managed record schema or other owners' files changed.
+Coordinator granted focused Rust checkpoint `msg_d4e80f69fd71` after native
+Dev19 heavy terminal ended. Exact production source is reviewed `9cdd273e`
+(`msg_fb193ee0aa03` extends exact `cfcdf84d` source approval). Command:
+
+```sh
+PATH=/Users/ctk/Projects/Zorid/tmp/shared-rust-toolchain/toolchains/stable-aarch64-apple-darwin/bin:$PATH \
+CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 \
+CARGO_TARGET_DIR=/Users/ctk/Projects/Zorid/target/stage4-verified \
+cargo test --offline --locked -p zorid-bases --test calendar --test tasks -- --test-threads=1
+```
+
+First process exited 101: five Calendar cases passed; the large fixture hit
+Generation::from_sources' documented 32-entry convenience-import limit before
+Calendar evaluation. Replaced only this test helper with ordinary incremental
+GenerationBuilder pumps and removed its unused import; no production/API change.
+Focused rerun exited **0**, **6/6 Calendar + 11/11 Tasks passed**. Existing 29
+expression/files warnings remain outside this scope; no new test warnings.
+Persistent logs:
+
+- `/Users/ctk/.local/state/zorid-calendar-task-projection-validation.log` (initial fixture failure)
+- `/Users/ctk/.local/state/zorid-calendar-task-projection-validation-rerun.log` (17/17 pass)
+
+Root received terminal slot release immediately in `msg_6704bd5d71d1`; no builds
+remain running. No full suite/install/new target was used. Source/API and compiled
+focused verification are ready for root integration and native composition.
+This does not establish native join, binding, browser, rendered UI, mobile or
+integrated-main completion. No manifests, dependencies, managed record schema or
+other owners' files changed.

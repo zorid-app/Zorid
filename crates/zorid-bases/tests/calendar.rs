@@ -1,12 +1,12 @@
 use serde_json::{json, Value};
 use zorid_bases::calendar::*;
 use zorid_bases::types::{compile_types, TypeSource};
-use zorid_bases::{compile_base, PropertyValue, QueryOptions, RecordWitness};
+use zorid_bases::{compile_base, QueryOptions, RecordWitness};
 use zorid_core::{EntryId, EntryKind, EntryState, OperationId, Revision, VaultPath};
 use zorid_document::MetadataRequest;
 use zorid_index::{
-    Generation, GenerationSource, IndexSnapshotId, SemanticVersions, SourceSnapshotId,
-    SourceWatermark,
+    Generation, GenerationBuilder, IndexError, IndexSnapshotId, Manifest, PublicationFence,
+    SemanticVersions, SourceSnapshotId, SourceWatermark,
 };
 fn id(s: &str) -> EntryId {
     EntryId::new(s).unwrap()
@@ -53,18 +53,28 @@ fn generation(notes: &[(&str, &str, &str)]) -> Generation {
             deleted: false,
         })
         .collect();
-    let sources = all
-        .iter()
-        .map(|(name, path, text)| GenerationSource::Text {
-            request: MetadataRequest {
-                entry_id: id(name),
-                content_revision: Revision::new("r1").unwrap(),
-                source: (*text).into(),
-            },
-            markdown: path.ends_with(".md"),
-        })
-        .collect();
-    Generation::from_sources(source, snapshot, entries, sources).unwrap()
+    let manifest = Manifest::new(source.clone(), entries).unwrap();
+    let fence = PublicationFence::new(source, None, snapshot).unwrap();
+    let mut builder = GenerationBuilder::new(manifest.clone(), fence).unwrap();
+    for (name, path, text) in all {
+        let request = MetadataRequest {
+            entry_id: id(name),
+            content_revision: Revision::new("r1").unwrap(),
+            source: text.into(),
+        };
+        let witness = manifest.witness(&request.entry_id).unwrap();
+        match builder.extract_and_add(witness.clone(), &request, path.ends_with(".md")) {
+            Ok(()) => {}
+            Err(IndexError::PumpLimit) => {
+                builder.begin_pump();
+                builder
+                    .extract_and_add(witness, &request, path.ends_with(".md"))
+                    .unwrap();
+            }
+            Err(error) => panic!("fixture generation: {error:?}"),
+        }
+    }
+    builder.finish().unwrap().into_parts().1
 }
 
 fn context() -> CalendarContext {
