@@ -1,7 +1,12 @@
+import type {TasksView} from '../tasks/view.ts';
+import type {TasksHost, TaskCaptureRequest} from '../tasks/controller.ts';
+import type {TaskPreset} from '../tasks/presets.ts';
+import {planTaskPreset} from '../tasks/presets.ts';
+import {readProperties, setProperty, removeProperty} from '../core/properties.ts';
 import type {CalendarView, CalendarViewState} from '../calendar/view.ts';
 import { mountDocumentBacklinks } from './document-backlinks.ts';
 import { catchUpDocumentIndex, documentErrorCode, DocumentSemanticsError } from '../core/document-semantics.ts';
-import type { DocumentCursor, DocumentPin, DocumentService, DocumentSnapshotId, DocumentSourceId } from '../core/document-semantics.ts';
+import type { DocumentCursor, DocumentPin, DocumentService, DocumentSnapshotId, DocumentSourceId, DocumentTaskWitness } from '../core/document-semantics.ts';
 import { mountImportStatus } from './import-status.ts';
 import { HotkeyPreferences, HOTKEY_STORAGE_KEY, WORKSPACE_HOTKEY_COMMANDS, EDITOR_HOTKEY_COMMANDS } from './hotkeys.ts';
 import { mountHotkeySettings } from './hotkey-settings.ts';
@@ -64,7 +69,7 @@ interface DocumentSearchOwner {
 }
 type Mode = 'live' | 'reading';
 interface Tab {
-  id:string; path:string|null; expectedEntryId?:string; mode:Mode; kind:'note'|'graph'|'calendar'; subpath?:string; calendarState?:CalendarViewState;
+  id:string; path:string|null; expectedEntryId?:string; mode:Mode; kind:'note'|'graph'|'calendar'|'tasks'; subpath?:string; calendarState?:CalendarViewState;
   history?:string[]; historyIndex?:number;
   viewState?:{editor?:EditorViewState;scrollTop:number;scrollLeft:number};
 }
@@ -76,7 +81,7 @@ interface Pane {
   viewReady?:boolean; viewMode?:Mode; viewKind?:Tab['kind']; viewSettings?:string;
   viewTabId?:string; viewPath?:string|null; renderVersion:number;
   editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; mediaView?:MediaView; canvasView?:CanvasView; baseView?:BaseSession;
-  calendarView?:CalendarView;
+  calendarView?:CalendarView; tasksView?:TasksView;
   canvasSource?:string; baseEmbeds?:BaseEmbedSessions; embeds?:MarkdownEmbeds; properties?:PropertiesView;
   propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void;
   history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
@@ -138,7 +143,7 @@ export class Workspace {
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
     try{this.saveSession();}catch{/* Storage failure must not bypass the dirty-document unload guard. */}
-    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.calendarView?.hasPendingChanges() || pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges() || pane.baseEmbeds?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
+    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.tasksView?.hasPendingChanges() || pane.calendarView?.hasPendingChanges() || pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges() || pane.baseEmbeds?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
   };
   private menuSerial = 0;
   private inputContextListener=(event:MouseEvent)=>{
@@ -170,6 +175,7 @@ export class Workspace {
   private renderRequests = new WeakMap<Pane,number>();
   private cachedViews = new Map<Tab, Pane>();
   private tabDocking?: ReturnType<typeof createTabDocking>;
+  private tasksRetiring=false;
   private sidebarControls?: ReturnType<typeof createSidebarControls>;
   private disposeFileListMenu?: () => void;
   private importStatusCleanup?:()=>void;
@@ -385,12 +391,13 @@ export class Workspace {
     if(this.platformReleased||!this.platform?.release)return;
     const searchWasSuspended=this.documentSearchSuspended;
     this.documentSearchSuspended=true;this.clearDocumentSearch();
+    let cancelTasksClose:(recover?:boolean)=>void=()=>{};
     try{
-    if(!this.platformDrained){await this.flush();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
+    if(!this.platformDrained){await this.flush();cancelTasksClose=await this.prepareTasksViewsClose();await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();this.platformDrained=true;}
     this.clearDocumentBacklinks();
     await this.closeDocumentSearchPins().catch(()=>{});
-    await this.platform.release();this.releaseDocumentSearchOwner(this.vault);this.platformReleased=true;
-    }catch(error){this.documentSearchSuspended=searchWasSuspended;throw error;}
+    await this.platform.release();this.releaseDocumentSearchOwner(this.vault);this.platformReleased=true;cancelTasksClose(false);
+    }catch(error){cancelTasksClose();this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
   async chooseVault(): Promise<void> {
     if(this.closing)throw new Error('Window close is pending');
@@ -594,9 +601,11 @@ export class Workspace {
     this.storageScope.migrateLegacy(localStorage, platform.id);
     const searchVault=this.vault,searchWasSuspended=this.documentSearchSuspended;
     this.documentSearchSuspended=true;this.clearDocumentSearch();
+    let cancelTasksClose:(recover?:boolean)=>void=()=>{};
     try{
     this.menuSerial++; await dismissContextMenu(this.root.ownerDocument);
     if(!this.platformReleased)await this.flush();
+    cancelTasksClose=await this.prepareTasksViewsClose();
     this.saveSession();
     for (const dispose of this.disposers) dispose(); this.disposers = [];
     clearTimeout(this.reloadTimer);
@@ -609,6 +618,7 @@ export class Workspace {
     this.treeRows=[]; this.treeSelection.clear(); this.treeSelectionAnchor=undefined; this.entryTokens.clear();
     this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
     this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
+    cancelTasksClose(false);cancelTasksClose=()=>{};
     this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;
     this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.buffers=recovered; this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
@@ -626,7 +636,7 @@ export class Workspace {
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
         for (const item of (Array.isArray(saved.panes) ? saved.panes : []).slice(0, 100)) {
-          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || tab.kind === 'calendar' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => {const history=Array.isArray(tab.history)?tab.history.filter(path=>typeof path==='string'):[];return{...tab,history,historyIndex:Number.isInteger(tab.historyIndex)?Math.max(-1,Math.min(tab.historyIndex!,history.length-1)):history.length-1,mode:tab.mode==='reading'?'reading' as const:'live' as const,id:makeId()};});
+          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || tab.kind === 'calendar' || tab.kind === 'tasks' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => {const history=Array.isArray(tab.history)?tab.history.filter(path=>typeof path==='string'):[];return{...tab,history,historyIndex:Number.isInteger(tab.historyIndex)?Math.max(-1,Math.min(tab.historyIndex!,history.length-1)):history.length-1,mode:tab.mode==='reading'?'reading' as const:'live' as const,id:makeId()};});
           const pane = this.addPane(tabs.length ? tabs : undefined, typeof item.id === 'string' && item.id && !this.panes.some(p=>p.id===item.id) ? item.id : undefined); pane.active = pane.tabs[Math.max(0,Math.min(Number.isInteger(item.active) ? item.active : 0, pane.tabs.length - 1))].id; pane.persisted = item;
         }
         restored = this.panes.length > 0;
@@ -733,7 +743,7 @@ export class Workspace {
     if (unsubscribe) this.disposers.push(unsubscribe);
     this.renderSidebar(); this.renderRight(); this.saveSession();
     this.bindMobileLifecycle();this.bindNativeEditor();this.bindNativeDocumentNavigation();
-    }catch(error){if(this.vault===searchVault)this.documentSearchSuspended=searchWasSuspended;throw error;}
+    }catch(error){cancelTasksClose();if(this.vault===searchVault)this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
 
   private disposeShell(): void {
@@ -753,7 +763,7 @@ export class Workspace {
     this.root.classList.toggle('is-macos-desktop',!!window.zorid&&/Mac/i.test(window.navigator.platform));
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
     const top = el('div', 'ribbon-top');
-    top.append(this.hotkeyButton('search','quick-switcher', 'Open quick switcher', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.run(() => this.openGraph())), button('calendar', 'Open Calendar', () => this.run(() => this.openCalendar())), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), this.hotkeyButton('terminal','command-palette', 'Open command palette', () => this.commandPalette()));
+    top.append(this.hotkeyButton('search','quick-switcher', 'Open quick switcher', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.run(() => this.openGraph())), button('list', 'Open Tasks', () => this.run(() => this.openTasks())), button('calendar', 'Open Calendar', () => this.run(() => this.openCalendar())), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), this.hotkeyButton('terminal','command-palette', 'Open command palette', () => this.commandPalette()));
     const bottom = el('div', 'ribbon-bottom'); bottom.append(button('folder', 'Open another vault', () => this.run(() => this.chooseVault())), button('help', 'Help', () => this.help()), this.hotkeyButton('settings','settings', 'Settings', () => this.showSettings())); ribbon.append(top, bottom);
     this.sidebar = el('aside', 'sidebar'); this.sidebar.setAttribute('aria-label', 'Left sidebar');
     const title = el('div', 'titlebar'); title.append(button('sidebar', 'Toggle left sidebar', () => this.toggleLeft()));
@@ -900,7 +910,7 @@ export class Workspace {
     const strip=el('div','tab-strip');bar.append(strip);
     for(const item of pane.tabs){
       const node=el('div',`tab${item.id===tab.id?' is-active':''}`);node.role='tab';node.tabIndex=item.id===tab.id?0:-1;node.setAttribute('aria-selected',String(item.id===tab.id));node.draggable=true;node.dataset.tabId=item.id;
-      node.append(icon(item.kind==='calendar'?'calendar':item.kind==='graph'?'graph':'file',15),el('span','tab-title',item.kind==='calendar'?'Calendar':item.kind==='graph'?'Graph view':item.path?nameOf(item.path):'New tab'));
+      node.append(icon(item.kind==='tasks'?'list':item.kind==='calendar'?'calendar':item.kind==='graph'?'graph':'file',15),el('span','tab-title',item.kind==='tasks'?'Tasks':item.kind==='calendar'?'Calendar':item.kind==='graph'?'Graph view':item.path?nameOf(item.path):'New tab'));
       const close=button('close','Close tab',event=>{event.stopPropagation();this.run(()=>this.closeTab(pane,item));},'tab-close');node.append(close);
       const select=()=>this.run(()=>this.selectTab(pane,item));node.onclick=select;
       node.oncontextmenu=event=>{event.preventDefault();event.stopPropagation();this.tabMenu(pane,item,event.clientX,event.clientY);};
@@ -912,10 +922,11 @@ export class Workspace {
   }
 
   private async selectTab(pane:Pane,tab:Tab):Promise<void>{
+    if(this.tasksRetiring)return;
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration;this.navigationIntent.set(pane,intent);
     if(pane.active===tab.id){this.activate(pane);this.observeNativeNoteView(pane);this.flushNativePresentation(pane);this.focusPane(pane);return;}
     await this.flushPane(pane);
-    if(intent!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab))return;
+    if(this.tasksRetiring||intent!==this.navigationIntent.get(pane)||generation!==this.vaultGeneration||!this.panes.includes(pane)||!pane.tabs.includes(tab))return;
     pane.active=tab.id;this.activate(pane);await this.renderPane(pane);this.saveSession();
   }
 
@@ -948,8 +959,8 @@ export class Workspace {
     const content=el('div','tab-view-content');Object.assign(content.style,{display:'flex',flexDirection:'column',flex:'1',minHeight:'0',minWidth:'0',overflow:'hidden'});pane.element.append(content);pane.content=content;
     let recoveryCleanup:(()=>void)|undefined;
     const runtime=createTabViewRuntime({id:tab.id,element:content,owner:this.viewOwner(pane),
-      flush:async()=>{await pane.calendarView?.flush();await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flushForNavigation();await pane.baseView?.close();await pane.baseEmbeds?.flush();},
-      dispose:async()=>{await pane.baseEmbeds?.close();recoveryCleanup?.();this.releasePaneView(pane,content);},focus:()=>this.focusPane(pane)});pane.runtime=runtime;
+      flush:async()=>{await pane.calendarView?.flush();await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flushForNavigation();await pane.baseView?.close();await pane.baseEmbeds?.flush();await pane.tasksView?.prepareClose();},
+      dispose:async()=>{await pane.baseEmbeds?.close();pane.tasksView?.destroy();recoveryCleanup?.();this.releasePaneView(pane,content);},focus:()=>this.focusPane(pane)});pane.runtime=runtime;
     const nativePresentation=this.nativePresentationCallback(pane);
     let ownerChanged=()=>{};pane.rebindView=owner=>{pane=owner;ownerChanged();};
     const toolbar=el('div','pane-toolbar');
@@ -959,6 +970,19 @@ export class Workspace {
     const actions=el('div','view-actions');
     if(tab.kind==='note'&&(!tab.path||isMarkdown(tab.path)))actions.append(this.hotkeyButton(tab.mode==='reading'?'edit':'book','toggle-reading',tab.mode==='reading'?'Switch to Live Edit':'Switch to reading view',()=>this.run(()=>this.toggleReading(pane))));
     actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);if(!this.platform.editorOnly)content.append(toolbar);
+    if(tab.kind==='tasks'){
+      if(this.tasksRetiring)return;
+      const documents=this.platform.documentSemantics;
+      if(!documents||!this.vault.adapter.durableWrites){content.append(el('p','muted','Tasks is not available for this vault on this platform.'));pane.viewReady=true;return;}
+      const {createTasksView}=await import('../tasks/view.ts');
+      await import('../tasks/styles.ts');
+      if(this.tasksRetiring)return;
+      if(!current()||version!==pane.renderVersion)return;
+      const validate=()=>{if(generation!==this.vaultGeneration||this.platformReleased||pane.runtime!==runtime||runtime.phase==='disposed')throw new Error('The Tasks vault is no longer available.');};
+      pane.tasksView=createTasksView(content,this.createTasksHost(documents,()=>pane,validate));
+      await pane.tasksView.ready;if(!current()||version!==pane.renderVersion)return;
+      pane.viewReady=true;this.renderStatus();return;
+    }
     if(tab.kind==='calendar'){
       const {createCalendarView}=await import('../calendar/view.ts');
       await import('../calendar/styles.ts');
@@ -1251,6 +1275,7 @@ export class Workspace {
   /** Model/topology and live ownership commit synchronously, before loading the
    * source's next tab. Moving content never requires writing a dirty buffer. */
   private async dockTab(intent:DockIntent):Promise<void>{
+    if(this.tasksRetiring)return;
     const source=this.panes.find(pane=>pane.id===intent.sourcePaneId),target=this.panes.find(pane=>pane.id===intent.targetPaneId);
     const tab=source?.tabs.find(tab=>tab.id===intent.tabId),layout=this.splitLayout;
     if(!source||!target||!tab||!layout||!['center','left','right','top','bottom'].includes(intent.edge))return;
@@ -1259,6 +1284,7 @@ export class Workspace {
       await this.disposePaneViews(cached);if(this.cachedViews.get(tab)===cached)this.cachedViews.delete(tab);
       if(!this.panes.includes(source)||!this.panes.includes(target)||!source.tabs.includes(tab))return;
     }
+    if(this.tasksRetiring)return;
     if(source.runtime&&(!source.viewReady||source.runtime.phase!=='active')||target.runtime&&(!target.viewReady||target.runtime.phase!=='active'))return;
     const generation=this.vaultGeneration;
     this.navigationIntent.set(source,(this.navigationIntent.get(source)??0)+1);this.navigationIntent.set(target,(this.navigationIntent.get(target)??0)+1);
@@ -1329,7 +1355,7 @@ export class Workspace {
   private viewSettings():string{return JSON.stringify([this.settings.readableWidth,this.settings.showInlineTitle,this.settings.useTab,this.settings.tabSize,this.settings.smartIndentList]);}
   private clearPaneViewFields(pane:Pane):void{
     pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
-    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.calendarView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
+    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.calendarView=undefined;pane.tasksView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
     pane.renderVersion=++this.viewSequence;
   }
   private parkPaneView(pane:Pane,keepConnected=false):void{
@@ -1347,7 +1373,7 @@ export class Workspace {
     const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
     const connected=cached.content.isConnected;
     cached.runtime.attach(pane.element,this.viewOwner(pane));
-    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
+    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','tasksView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
     for(const key of fields)(pane as unknown as Record<string,unknown>)[key]=cached[key];
     pane.history=tab.history??cached.history;pane.historyIndex=tab.historyIndex??cached.historyIndex;
     pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);
@@ -1362,6 +1388,18 @@ export class Workspace {
     }
     return this.restoreCachedViewNow(pane,tab);
   }
+  private async prepareTasksViewsClose():Promise<(recover?:boolean)=>void>{
+    if(this.tasksRetiring)throw new Error('Tasks retirement is already in progress.');
+    const wasInert=this.root.inert;this.tasksRetiring=true;this.root.inert=true;
+    const views=[...new Set(this.loadedViews().flatMap(pane=>pane.tasksView?[pane.tasksView]:[]))];let finished=false;
+    const cancel=(recover=true)=>{
+      if(finished)return;finished=true;
+      for(const view of views)if(this.loadedViews().some(pane=>pane.tasksView===view))view.cancelClose();
+      this.tasksRetiring=false;this.root.inert=wasInert;
+      if(recover&&this.initialized&&!this.platformReleased)for(const pane of this.panes)if(this.current(pane)?.kind==='tasks'&&!pane.tasksView)this.run(()=>this.renderPane(pane,{flush:false,refresh:true}));
+    };
+    try{for(const view of views)await view.prepareClose();return cancel;}catch(error){cancel();throw error;}
+  }
   private async clearCachedViews():Promise<void>{for(const [tab,pane] of this.cachedViews){await this.disposePaneViews(pane);this.cachedViews.delete(tab);}}
   private releasePaneView(pane:Pane,content:HTMLElement):void{
     if(pane.runtime){this.nativePresentations.get(pane.runtime)?.dispose();this.nativePresentations.delete(pane.runtime);}
@@ -1369,7 +1407,7 @@ export class Workspace {
     clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.calendarView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
   }
   private async disposePaneViews(pane:Pane):Promise<void>{
-    if(pane.runtime){await pane.canvasView?.flush();await pane.runtime.destroy();}
+    if(pane.runtime){await pane.canvasView?.flush();try{await pane.runtime.destroy();}catch(error){pane.tasksView?.cancelClose();throw error;}}
   }
 
   private async importAttachment(file:TransferFile,ownerPath:string,generation:number):Promise<string>{
@@ -1775,6 +1813,7 @@ export class Workspace {
     this.renderNativeDocumentStatus();
     if(!this.activePane)return;const tab=this.current();const buffer=tab?.path?this.buffers.get(tab.path):undefined;const text=buffer?.text||'';
     this.status.replaceChildren();
+    if(tab?.kind!=='note')return;
     if(tab?.path&&!isMarkdown(tab.path)){this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
     this.status.append(el('span','save-state',buffer?.error?'Save failed — draft retained':buffer?.dirty?'Saving…':''));
     const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(mode),'status-mode');
@@ -1891,6 +1930,7 @@ export class Workspace {
   private async deletePath(path:string):Promise<void>{await this.flush();await this.vault.trash(path);this.buffers.delete(path);notice('Moved to vault trash.');}
   private async newTab(pane=this.activePane):Promise<void>{await this.flushPane(pane);const tab:Tab={id:makeId(),path:null,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;this.renderRight();this.run(()=>this.renderPane(pane));this.saveSession();}
   private async closeTab(pane:Pane,tab:Tab):Promise<void>{
+    if(this.tasksRetiring)return;
     if(!pane.tabs.includes(tab))return;
     const owner=pane.viewTabId===tab.id?pane:this.cachedViews.get(tab);
     if(owner)await this.disposePaneViews(owner);else if(tab.path)await this.buffers.get(tab.path)?.flush();
@@ -1909,13 +1949,14 @@ export class Workspace {
   private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane,true,target.includes('#')?target.slice(target.indexOf('#')):'');return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
   private async dailyNote():Promise<void>{const now=new Date();const name=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.md`;if(!this.vault.entries.has(name))await this.vault.create(name,'');await this.openNote(name);}
   private async split(edge:'right'|'bottom'='right',source=this.activePane,tab=this.current(source)):Promise<void>{
+    if(this.tasksRetiring)return;
     const generation=this.vaultGeneration;
     await this.flushPane(source);
-    if(generation!==this.vaultGeneration||!this.panes.includes(source)||!source.tabs.includes(tab))return;
+    if(this.tasksRetiring||generation!==this.vaultGeneration||!this.panes.includes(source)||!source.tabs.includes(tab))return;
     this.capturePaneState(source);
     const pane=this.addPane([{...tab,id:makeId(),viewState:tab.viewState?structuredClone(tab.viewState):undefined}]);
     if(!this.splitLayout?.split(source.id,pane.id,pane.element,edge)){this.panes=this.panes.filter(item=>item!==pane);pane.element.remove();return;}
-    this.activate(pane);await this.renderPane(pane);if(generation!==this.vaultGeneration||!this.panes.includes(pane))return;this.focusPane(pane);this.saveSession();
+    this.activate(pane);await this.renderPane(pane);if(this.tasksRetiring||generation!==this.vaultGeneration||!this.panes.includes(pane))return;this.focusPane(pane);this.saveSession();
   }
   private toggleLeft():void{this.root.classList.toggle('left-hidden');this.saveSession();}
   private toggleRight():void{this.root.classList.toggle('right-hidden');this.renderRight();this.saveSession();}
@@ -1950,8 +1991,8 @@ export class Workspace {
     for(const root of roots)for(const node of root.querySelectorAll<HTMLElement>('[data-hotkey-command]'))this.updateHotkeyLabel(node);
   }
   private executeHotkey(id:string):void{
-    if(this.closing)return;
-    if(this.platform?.editorOnly&&(id.startsWith('tab-')||['new-window','new-tab','close-tab','split-right','split-down','toggle-left','toggle-right','search-all','graph','calendar','open-vault'].includes(id)))return;
+    if(this.closing||this.tasksRetiring)return;
+    if(this.platform?.editorOnly&&(id.startsWith('tab-')||['new-window','new-tab','close-tab','split-right','split-down','toggle-left','toggle-right','search-all','graph','calendar','tasks','open-vault'].includes(id)))return;
     if(id==='new-window'){if(workspaceWindowBridge(window.zorid))this.run(()=>this.newWindow());return;}
     if(!this.vault)return;
     if(id.startsWith('tab-')){
@@ -1972,7 +2013,7 @@ export class Workspace {
       'quick-switcher':()=>this.quickSwitcher(),'command-palette':()=>this.commandPalette(),settings:()=>this.showSettings(),'toggle-reading':()=>this.toggleReading(),
       'split-right':()=>this.split(),'split-down':()=>this.split('bottom'),'toggle-left':()=>this.toggleLeft(),'toggle-right':()=>this.toggleRight(),
       'search-all':()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector<HTMLInputElement>('input')?.focus();},
-      'daily-note':()=>this.dailyNote(),graph:()=>this.openGraph(),calendar:()=>this.openCalendar(),'new-folder':()=>this.newFolder(),'open-vault':()=>this.chooseVault(),
+      'daily-note':()=>this.dailyNote(),graph:()=>this.openGraph(),calendar:()=>this.openCalendar(),tasks:()=>this.openTasks(),'new-folder':()=>this.newFolder(),'open-vault':()=>this.chooseVault(),
     };
     if(actions[id])this.run(actions[id]);
   }
@@ -2050,6 +2091,121 @@ export class Workspace {
   }
   private modeMenu(anchor:HTMLElement):void{this.tabMenuAt(this.activePane,anchor);}
 
+  /** Ordinary note mutations only: the Rust query supplies saved witnesses and
+   * mappings; Tasks never maintains a second task store or rewrites checkboxes. */
+  private createTasksHost(documents:DocumentService,getPane:()=>Pane,validateOwner:()=>void):TasksHost{
+    const vault=this.vault;
+    const definite=(message:string)=>Object.assign(new Error(message),{commitUncertain:false});
+    const admit=()=>{validateOwner();if(getPane().runtime?.phase!=='active')throw definite('The Tasks view is closing.');};
+    const checkClean=(path:string)=>{const buffer=this.buffers.get(path);if(buffer?.dirty||buffer?.error)throw definite('This note has unsaved or failed changes. Save or resolve its draft before editing it from Tasks.');};
+    const checkWitnessClean=(witness:DocumentTaskWitness)=>{const entry=[...vault.entries.values()].find(entry=>entry.entryId===witness.entryId);if(entry)checkClean(entry.path);};
+    const canonical=(value:string,allowEmpty=false)=>{
+      if(allowEmpty&&value==='')return value;
+      if(!value||value!==value.trim()||value.startsWith('/')||value.includes('\\')||/[\u0000-\u001f\u007f-\u009f]/.test(value)||/^[A-Za-z]:/.test(value)||value.split('/').some(part=>!part||part==='.'||part==='..')||value.split('/')[0].toLowerCase()==='.zorid')throw definite('Choose a valid relative folder or file path inside this vault.');
+      return value;
+    };
+    const readWitness=async(witness:DocumentTaskWitness)=>{
+      validateOwner();checkWitnessClean(witness);
+      const read=await vault.readDurableTextById(witness.entryId);validateOwner();
+      if(!read||read.entryId!==witness.entryId||read.revision!==witness.revision||vault.entries.get(read.path)?.entryId!==witness.entryId)throw definite('The saved note or Type definition changed. Refresh Tasks before applying this draft.');
+      checkClean(read.path);return read;
+    };
+    const folders=async(folder:string)=>{
+      canonical(folder,true);let current='';
+      for(const part of folder?folder.split('/'):[]){
+        validateOwner();current=current?current+'/'+part:part;
+        const entry=vault.entries.get(current);if(entry){if(entry.type!=='folder')throw definite('A file occupies the requested task folder.');continue;}
+        this.requireAvailableTreePath(vault,current);await vault.createFolder(current,validateOwner);validateOwner();
+      }
+    };
+    const captures=new Map<string,{encoded:string;path:string;attempted:boolean;committed:boolean}>();
+    return{
+      documents,
+      typeDefinitionIds:()=>{
+        validateOwner();const entries=[...vault.entries.values()].filter(entry=>entry.type==='file'&&/^Types\/.+\.ya?ml$/i.test(entry.path)).sort((a,b)=>a.path.localeCompare(b.path));
+        if(entries.length>128)throw definite('Tasks supports up to 128 Type definition files in Types/. Remove unused definitions or choose a smaller inventory.');
+        if(entries.some(entry=>!entry.entryId))throw definite('Some Type definitions are still loading. Refresh Tasks to retry.');
+        return entries.map(entry=>entry.entryId!);
+      },
+      createTask:async(request:TaskCaptureRequest)=>{
+        const input=structuredClone(request),encoded=JSON.stringify(input);
+        let capture=captures.get(input.captureId);
+        if(capture){if(capture.encoded!==encoded)throw definite('This capture identity belongs to different task content.');if(capture.committed)return;if(capture.attempted)throw Object.assign(new Error('The earlier task create is unconfirmed. Inspect the vault before resolving it; a new create has not been sent.'),{commitUncertain:true});}
+        try{
+          admit();canonical(input.destination,true);
+          const title=input.title.trim();
+          if(!title||title!==input.title||/[\\/\u0000-\u001f\u007f-\u009f]/.test(title)||title==='.'||title==='..'||new TextEncoder().encode(title).length>200)throw definite('Use a task title of at most 200 bytes without slashes or control characters.');
+          checkWitnessClean(input.typeWitness);await readWitness(input.typeWitness);
+          await folders(input.destination);const type=await readWitness(input.typeWitness);validateOwner();
+          let source='# '+title+'\n';for(const[key,value]of Object.entries(input.properties))source=setProperty(source,key,value);
+          if(typeof input.properties.type!=='string'||!input.properties.type)throw definite('The task Type has no saved capture defaults. Refresh Tasks.');
+          if(!capture){let index=0,path='';do{path=(input.destination?input.destination+'/':'')+title+(index?' '+index:'')+'.md';index++;}while(vault.entries.has(path));this.requireAvailableTreePath(vault,path);capture={encoded,path,attempted:false,committed:false};captures.set(input.captureId,capture);}
+          validateOwner();capture.attempted=true;
+          const validateCreate=()=>{
+            try{validateOwner();checkClean(type.path);const entry=vault.entries.get(type.path);if(entry?.entryId!==input.typeWitness.entryId||entry.revision!==input.typeWitness.revision)throw definite('The Type definition changed before task creation. Refresh Tasks.');}
+            catch(error){throw Object.assign(error instanceof Error?error:new Error('Task creation is no longer admitted.'),{commitUncertain:false});}
+          };
+          await vault.create(capture.path,source,validateCreate);capture.committed=true;
+        }catch(error){
+          if(!capture?.attempted)throw Object.assign(error instanceof Error?error:new Error('Task could not be created.'),{commitUncertain:false});
+          // Once ordinary create was invoked, unknown results stay unconfirmed.
+          // Never allocate another filename or operation as an automatic retry.
+          if((error as {commitUncertain?:unknown})?.commitUncertain===false)captures.delete(input.captureId);
+          throw error;
+        }
+      },
+      editTask:async(request)=>{
+        const input=structuredClone(request);admit();checkWitnessClean(input.witness);checkWitnessClean(input.typeWitness);
+        await readWitness(input.typeWitness);const note=await readWitness(input.witness);
+        const buffer=await this.bufferFor(note.path);validateOwner();checkClean(note.path);
+        const witness=buffer.savedDurableWitness;
+        if(!witness||witness.entryId!==input.witness.entryId||witness.revision!==input.witness.revision||buffer.text!==note.content)throw definite('The note buffer has a different saved revision. Open the note and resolve its draft before editing it from Tasks.');
+        if(readProperties(buffer.text).find(property=>property.key==='type')?.value!==input.expectedTypeId)throw definite('This note uses a different Type. Refresh Tasks before editing its properties.');
+        let source=buffer.text;for(const[key,value]of Object.entries(input.properties))source=value===null?removeProperty(source,key):setProperty(source,key,value,'text');
+        // Recheck the Type immediately before synchronous draft admission.
+        // The ordinary durable NoteBuffer owns the note's expected-revision CAS.
+        // Do not retain a Type-file lifetime validator on the note: a later Type
+        // edit must not permanently poison unrelated future note saves/recovery.
+        await readWitness(input.typeWitness);validateOwner();checkClean(note.path);
+        const saved=buffer.savedDurableWitness;
+        if(this.buffers.get(note.path)!==buffer||buffer.path!==note.path||saved?.entryId!==input.witness.entryId||saved.revision!==input.witness.revision||buffer.text!==note.content)throw definite('The task changed before saving. Refresh Tasks before applying this draft.');
+        this.updateMarkdownBuffer(buffer,source);
+        for(const pane of this.loadedViews())if(pane.viewPath===note.path){pane.editor?.setValue(source);pane.refreshPreview?.();pane.properties?.refresh();if(pane.runtime?.phase==='active')pane.runtime.touch();}
+        await buffer.flush();
+      },
+      openTask:async(witness)=>{
+        admit();const pane=getPane(),activation=this.paneActivationRevision,tab=this.current(pane);
+        const read=await vault.readDurableTextById(witness.entryId);validateOwner();
+        if(!read||read.revision!==witness.revision||this.activePane!==pane||this.current(pane)!==tab||vault.entries.get(read.path)?.entryId!==witness.entryId)throw definite('This saved task changed or moved. Refresh Tasks before opening it.');
+        // The controller owns this callback's running promise. Dispatch after
+        // returning so openNote's normal pane flush cannot await itself.
+        this.run(async()=>{validateOwner();if(this.tasksRetiring||this.activePane!==pane||this.current(pane)!==tab)throw definite('The Tasks selection changed before opening.');await this.openNote(read.path,true,pane,true,'',activation,()=>!this.tasksRetiring&&this.vault===vault&&this.activePane===pane&&this.current(pane)===tab&&vault.entries.get(read.path)?.entryId===witness.entryId&&vault.entries.get(read.path)?.revision===witness.revision,witness.entryId);});
+      },
+      installPreset:async(request:TaskPreset)=>{
+        const preset=structuredClone(request);admit();canonical(preset.type.path);canonical(preset.base.path);canonical(preset.destination);
+        if(!/^Types\/.+\.ya?ml$/i.test(preset.type.path))throw definite('Place the Type definition inside Types/ so Tasks can discover it.');
+        await vault.reload();validateOwner();
+        const plan=planTaskPreset(preset,[...vault.entries.values()].map(entry=>({path:entry.path,kind:entry.type})));
+        if(!plan.ready)throw definite('Preset destinations already exist. Choose unused Type and Base file paths.');
+        let created=0,typeEntry:VaultEntry|undefined;
+        const validateCreate=()=>{validateOwner();if(typeEntry){checkClean(typeEntry.path);const current=vault.entries.get(typeEntry.path);if(current?.entryId!==typeEntry.entryId||current?.revision!==typeEntry.revision)throw definite('The newly created Type changed before its Base could be created.');}};
+        try{for(const file of plan.files){await folders(parentOf(file.path));validateCreate();this.requireAvailableTreePath(vault,file.path);const entry=await vault.create(file.path,file.source,validateCreate);if(file.path===preset.type.path)typeEntry=entry;created++;}await folders(preset.destination);}
+        catch(error){throw new Error(created?'The preset was only partly created. Existing files were preserved; inspect the vault and choose unused paths before retrying.':error instanceof Error?error.message:'The preset could not be created.');}
+      },
+      subscribe:listener=>{const stops=[vault.on('create',listener),vault.on('modify',listener),vault.on('delete',listener),vault.on('rename',listener)];return()=>stops.forEach(stop=>stop());},
+    };
+  }
+
+  private async openTasks():Promise<void>{
+    if(this.platform.editorOnly||this.tasksRetiring)return;
+    const pane=this.activePane,generation=this.vaultGeneration,version=pane.renderVersion;
+    const intent=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,intent);
+    await this.flushPane(pane);if(this.tasksRetiring||generation!==this.vaultGeneration||intent!==this.navigationIntent.get(pane)||version!==pane.renderVersion||!this.panes.includes(pane))return;
+    const existing=pane.tabs.find(tab=>tab.kind==='tasks');
+    if(existing)pane.active=existing.id;
+    else{const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'tasks'};pane.tabs.push(tab);pane.active=tab.id;}
+    this.activate(pane);await this.renderPane(pane);this.saveSession();
+  }
   private async openCalendar():Promise<void>{
     if(this.platform.editorOnly)return;
     const pane=this.activePane,generation=this.vaultGeneration,version=pane.renderVersion;
@@ -2117,7 +2273,7 @@ export class Workspace {
   private help():void{const{content}=modal('Help');content.append(el('h2','','Get started'),el('p','',`Link to another note with [[note name]]. Customize workspace shortcuts in Settings → Hotkeys. Create note: ${this.hotkeys.label('new-note')||'not assigned'}. Find file: ${this.hotkeys.label('quick-switcher')||'not assigned'}. Command palette: ${this.hotkeys.label('command-palette')||'not assigned'}.`));
   }
   private hotkeySurfaceBlocked(): boolean {
-    return this.startupFailed||this.closing||!!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
+    return this.startupFailed||this.closing||this.tasksRetiring||!!document.querySelector('.modal-overlay,[aria-modal="true"],[role="menu"]');
   }
   private onKey(event:KeyboardEvent):void{
     if(event.defaultPrevented||event.isComposing||event.getModifierState('AltGraph')||this.hotkeySurfaceBlocked())return;
@@ -2139,7 +2295,7 @@ export class Workspace {
     const primary=this.hotkeys.platform==='mac'?event.metaKey&&!event.ctrlKey:event.ctrlKey&&!event.metaKey;
     if(primary&&!event.shiftKey&&!event.altKey&&!event.repeat&&event.key.toLowerCase()==='f'&&this.activePane?.pdfView){event.preventDefault();this.activePane.pdfView.showSearch();}
   }
-  private async flushPane(pane:Pane):Promise<void>{await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
-  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}catch(error){if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
+  private async flushPane(pane:Pane):Promise<void>{await pane.tasksView?.flush();await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
+  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.tasksView?.flush();if(pane.tasksView?.hasPendingChanges())throw new Error('Tasks has unsaved or unconfirmed changes. Save, discard, or resolve them before closing.');await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
+  async destroy():Promise<void>{let cancelTasksClose:(recover?:boolean)=>void=()=>{};const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();cancelTasksClose=await this.prepareTasksViewsClose();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();cancelTasksClose(false);}catch(error){cancelTasksClose();if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
 }

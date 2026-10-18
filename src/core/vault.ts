@@ -486,13 +486,18 @@ export class Vault {
     return this.contents.get(path) ?? this.adapter.read(path);
   }
 
-  create(rawPath: string, text = ''): Promise<VaultEntry> {
+  create(rawPath: string, text = '', validate?: () => void): Promise<VaultEntry> {
+    const adapter=this.adapter;
     return this.enqueue(async () => {
       const path = normalizePath(rawPath);
       await this.refresh();
       this.requireDestination(path);
-      if (this.adapter.createText) await this.adapter.createText(path, text);
-      else await this.adapter.write(path, text);
+      // Callers may admit a saved identity/owner only after the queued refresh.
+      // Keep the final synchronous check adjacent to the durable dispatch.
+      validate?.();
+      if(this.adapter!==adapter)throw new Error('The vault adapter changed before file creation.');
+      if (adapter.createText) await adapter.createText(path, text);
+      else await adapter.write(path, text);
       await this.refresh();
       const entry = this.entries.get(path)!;
       this.emit('create', { path, entry });
