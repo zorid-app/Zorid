@@ -4,12 +4,14 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
+const {createRequire}=require('node:module');
 const {WindowBroker}=require('../desktop/window-broker.cjs');
 const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};};
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(){
   const opened=[],closed=deferred();
   const filename=path.resolve(__dirname,'../desktop/editor-core.cjs');
+  const sourceRequire=createRequire(filename);
   const module={exports:{}};
   vm.runInNewContext(fs.readFileSync(filename,'utf8'),{module,exports:module.exports,process,structuredClone,require(name){
     if(name==='node:fs/promises')return {realpath:async value=>value};
@@ -19,7 +21,8 @@ function fixture(){
     }}};
     if(name==='./host-location.cjs')return {resolveDesktopHost:async()=>'/trusted/host'};
     if(name==='./client-admission.cjs')return {admitDesktopFixtureClient:assert.fail};
-    return require(name);
+    // Unmocked dependencies resolve beside the evaluated production module.
+    return sourceRequire(name);
   }});
   const manager=module.exports.createEditorCoreManager({});
   const broker=new WindowBroker({openVault:directory=>manager.open(directory),allowedURL:()=>true});
