@@ -618,6 +618,14 @@ private final class NativeEditorBridge: CAPBridgeViewController {
 }
 
 final class NativeEditorContainer: UIViewController {
+    // A terminal fact about this exact source, never permission to navigate.
+    struct DocumentTabRetirementReceipt {
+        let sourceOwnerID: UUID
+        fileprivate let containerID: ObjectIdentifier
+        fileprivate let sessionID: ObjectIdentifier
+        fileprivate let closeTicket: UUID
+    }
+
     private let session: NativeMobileSession
     private let editor: NativeEditorBridge
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -630,7 +638,11 @@ final class NativeEditorContainer: UIViewController {
     private var documentOwnerIsCurrent: (() -> Bool)?
     private var closeTicket: UUID?
     private var closeReceiptEpoch = UUID()
+    private var retirementReceipt: DocumentTabRetirementReceipt?
+    private var closeAcknowledged = false
     private var closed = false
+    private var backgroundHandled = false
+    private var backgroundObservers: [NSObjectProtocol] = []
     var onNavigate: ((Int) -> Void)?
     private var canGoBack = false
     private var canGoForward = false
@@ -717,6 +729,7 @@ final class NativeEditorContainer: UIViewController {
         editor.didMove(toParent: self)
         installEditorLoading()
         installKeyboardToolbar()
+        installBackgroundObservers()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -854,6 +867,7 @@ final class NativeEditorContainer: UIViewController {
     deinit {
         loadingTimeout?.cancel()
         for observer in keyboardObservers { NotificationCenter.default.removeObserver(observer) }
+        for observer in backgroundObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     private var historyControls: NativeHistoryControls {
@@ -980,11 +994,14 @@ final class NativeEditorContainer: UIViewController {
 
     @objc private func returnToVaults() { leaveForNativeRoute { _ in } }
 
-    // Root supplies a weak closure comparing its current container/session/owner.
+    // Root supplies a weak identity/lifetime-only container/session/owner check.
+    // It must remain true while covered, transitioning or backgrounded; this
+    // container applies foreground/visibility requirements per operation.
     // This UUID is presentation authority only, never a Rust lease credential.
     func configureDocumentTabOwner(sourceOwnerID: UUID, isCurrent: @escaping () -> Bool) {
         guard !leaving, !closed else { return }
         editor.vaultPlugin.invalidateDocumentValidation()
+        retirementReceipt = nil
         documentSourceOwnerID = sourceOwnerID
         documentOwnerIsCurrent = isCurrent
     }
@@ -1013,6 +1030,17 @@ final class NativeEditorContainer: UIViewController {
         }, completion: completion)
     }
 
+    // Query the retained source even after background/stale navigation failure.
+    // Root must match its source container + owner, retire it, then await an
+    // explicit foreground intent. A nil receipt does not establish retirement.
+    func documentTabRetirementReceipt(sourceOwnerID: UUID) -> DocumentTabRetirementReceipt? {
+        guard closed, documentSourceOwnerID == sourceOwnerID,
+              let receipt = retirementReceipt, receipt.sourceOwnerID == sourceOwnerID,
+              receipt.containerID == ObjectIdentifier(self),
+              receipt.sessionID == ObjectIdentifier(session) else { return nil }
+        return receipt
+    }
+
     // Both routes use the same save/ACK/close fence; only this wrapper navigates.
     func leaveForNativeRoute(completion: @escaping (Bool) -> Void) {
         closeEditor(isCurrent: { [weak self] in self?.currentDocumentOwner(requiresVisible: true) == true }) { [weak self] result in
@@ -1037,6 +1065,7 @@ final class NativeEditorContainer: UIViewController {
         guard !leaving, !closed, isCurrent() else { completion(.failure(MobileFailure.unavailable)); return }
         let ticket = UUID()
         let epoch = closeReceiptEpoch
+        let sourceOwnerID = documentSourceOwnerID
         closeTicket = ticket; leaving = true
         editor.vaultPlugin.resetEditorState()
         updateRouteControls()
@@ -1050,10 +1079,15 @@ final class NativeEditorContainer: UIViewController {
             // A true ACK has quiesced the web editor. Even if ownership changed,
             // finish closing this exact session; a stale receipt is never success.
             let admitted = closeReceiptEpoch == epoch && isCurrent()
+            closeAcknowledged = true
             session.close { [self] in
                 let stillCurrent = admitted && closeTicket == ticket && closeReceiptEpoch == epoch && isCurrent()
                 closeTicket = nil
                 loadingTimeout?.cancel()
+                if let sourceOwnerID = sourceOwnerID {
+                    retirementReceipt = DocumentTabRetirementReceipt(sourceOwnerID: sourceOwnerID,
+                        containerID: ObjectIdentifier(self), sessionID: ObjectIdentifier(session), closeTicket: ticket)
+                }
                 if !closed { closed = true; onClosed() }
                 completion(stillCurrent ? .success(()) : .failure(MobileFailure.unavailable))
             }
@@ -1095,11 +1129,49 @@ final class NativeEditorContainer: UIViewController {
         }
     }
 
+    private var owningScene: UIWindowScene? {
+        navigationController?.viewIfLoaded?.window?.windowScene ?? viewIfLoaded?.window?.windowScene
+    }
+
+    private func installBackgroundObservers() {
+        for name in [UIScene.didEnterBackgroundNotification, UIApplication.didEnterBackgroundNotification] {
+            backgroundObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                guard let self = self else { return }
+                if notification.name == UIScene.didEnterBackgroundNotification {
+                    guard let scene = notification.object as? UIWindowScene, self.owningScene === scene else { return }
+                } else {
+                    guard self.owningScene?.activationState == .background else { return }
+                }
+                self.enterBackground()
+            })
+        }
+        for name in [UIScene.didActivateNotification, UIApplication.didBecomeActiveNotification] {
+            backgroundObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                guard let self = self else { return }
+                if notification.name == UIScene.didActivateNotification {
+                    guard let scene = notification.object as? UIWindowScene, self.owningScene === scene else { return }
+                }
+                guard self.owningScene?.activationState == .foregroundActive else { return }
+                self.backgroundHandled = false
+            })
+        }
+    }
+
     func enterBackground() {
         closeReceiptEpoch = UUID()
-        guard backgroundTask == .invalid else { return }
         editor.vaultPlugin.invalidateDocumentValidation()
         editor.vaultPlugin.resetEditorState()
+        // SceneDelegate and app/scene notifications may all reach this source.
+        // Every delivery invalidates receipts, but only one starts a checkpoint.
+        guard !closed, !closeAcknowledged else { return }
+        if documentSourceOwnerID != nil {
+            guard documentOwnerIsCurrent?() == true else { return }
+        } else {
+            guard navigationController?.topViewController === self else { return }
+        }
+        guard !backgroundHandled else { return }
+        backgroundHandled = true
+        guard backgroundTask == .invalid else { return }
         // Cancel a foreground navigation request; it must never pop on suspension.
         editor.vaultPlugin.cancelLifecycle()
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Vault draft checkpoint") { [weak self] in
