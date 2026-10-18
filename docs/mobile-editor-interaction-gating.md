@@ -74,3 +74,25 @@ No build, full suite, full TypeScript check, Rust compilation, Xcode, simulator,
 phone, visual, performance or integrated router verification was run. Geometry
 shims and synthetic DOM events establish source behavior only. Native/runtime
 acceptance and main integration belong to their named owners.
+
+### Independent review follow-up
+
+Reviewer `msg_8781e93f844d` withheld approval of `71c362b0`: denied transfer
+handling also suppressed control defaults, child read-only could remain stale
+across an equal-facet refresh, and a queued table selection callback could focus
+an editor after a rapid inactive/active cycle. Source successor
+`ec8ca47125a8f6f0a19370b36ccd34efc93dddcd` adds an explicit table interaction
+refresh effect on every setter and target-specific transfer handling. Reviewer
+`msg_e1b3835ff494` accepted both table fixes; it identified target event-handler
+suppression and a separate surviving menu role lifetime gap. Source successor
+`12a8fa7267b488ba8dab3a809793f793b6109a82` delivers non-editor transfer events to
+their original controls before stopping CodeMirror's bubble fallback. Regression
+assertions cover both target listener delivery and browser default preservation.
+
+Current bounded command above: **69 passed, 0 failed**, exit 0. No heavy check
+was run. Approval remains withheld pending the owned menu role lifetime seam and
+exact follow-up review. Root grants `msg_d288112ac51d` and `msg_5d2ffaae736f`
+add narrow editor/platform context-menu lifetime ownership; bridge/native edits
+remain separately owned. Proposed guarded-browser fallback and per-editor
+abort/epoch guard were sent for root agreement in `msg_9d2cb2fa3a1b`; no
+unapproved platform/menu implementation is present at this checkpoint.
