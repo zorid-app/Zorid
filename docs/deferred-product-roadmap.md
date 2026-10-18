@@ -77,6 +77,33 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Canonical delivery checkpoint (2026-10-18 03:13 UTC): Task query binding and
+retained Type sources are integrated at f62fa48a/9ed74f18. Desktop Calendar is
+integrated as seven scoped commits 43093c57..3e4c3ae9; all22 changed source,
+test, dependency and report files exactly match reviewed assembly4c5b7478.
+Independent24 focused cases and actual3-process Electron proof cover creation,
+title/atomic-range edits, pointer move/resize cancellation, four views, split,
+reopen and durable deletion; final light/dark/narrow screenshots accepted.
+See managed-data/calendar-desktop-results.md and calendar-desktop-review.md.
+No repeated build was needed for identical source. Calendar currently presents
+standalone WorkBlocks; Tasks joins, Google, browser and mobile are not claimed.
+Managed owner continues Tasks UI close/uncertainty fixes and actual proof, plus
+read-only browser WorkBlock seam mapping before any activation approval.
+
+Native owner retains native-vault-context composition: combined16 compiled but
+fresh A/B vault runtime checks remain underway. Reviewed picker navigation-bar
+fix93205742 and editor header removal92ce0376 are not in that running artifact.
+Per-tab history registry55ec6eb6 has52 actual-source host assertions and scoped
+independent source approval; root caller composition/runtime remains native-owned.
+Latest user clarification: new tabs open the current vault's native landing
+page, never a vault picker. Independent Rust/native/TS audit recommends one
+persistent current-vault host and warm WK/Workspace/client lease: existing
+openNote/followLink avoid per-navigation Vault.initialize. Owners must reconcile
+a narrow ticketed stable-ID navigation/ACK contract before implementation;
+bounded actual adjacent editor state is still required, previews alone do not
+establish warm readiness. No broad multi-realm protocol or new Rust authority
+API is approved by this checkpoint.
+
 Canonical service checkpoint (2026-10-18 03:06 UTC): main4f768f9f..f2988dee
 integrates exactly17 N+B native WorkBlock/desktop binding/proof commits, excluding
 the feature merge and separate Task query/Calendar slices. Root compared26 changed
