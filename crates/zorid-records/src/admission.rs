@@ -212,6 +212,7 @@ pub fn registration_change(old: &Registration, next: &Registration) -> Result<bo
     // Decoded IDs and declarations are untrusted, including on an exact repeat.
     for registration in [old, next] {
         registration.schema.validate()?;
+        first_party::validate_schema(&registration.owner, &registration.schema)?;
         for id in [&registration.realm, &registration.vault, &registration.owner] {
             id.validate()?;
         }

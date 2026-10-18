@@ -95,14 +95,14 @@ impl Payload {
             collection: self.scope().collection.clone(), version: 1,
             policy: Policy::Local, fields: BTreeMap::new(),
         };
-        let structural = State::new(schema, self.scope().clone())?;
+        let structural = State::new_structural(schema, self.scope().clone())?;
         let mut ids = BTreeSet::new();
         for operation in self.operations() {
             if operation.scope != *self.scope() { return Err(Error::Scope); }
             // A wire batch has one immutable row per ID; never silently coalesce
             // duplicate operations when recovering its exact local intent.
             if !ids.insert(&operation.id) { return Err(Error::InvalidOperation); }
-            structural.validate_operation(operation)?;
+            structural.validate_operation_structure(operation)?;
         }
         Ok(())
     }

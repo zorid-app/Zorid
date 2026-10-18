@@ -1,6 +1,7 @@
 //! Internal, in-memory managed-record authority. No durable receipt or authorization.
 pub mod wire;
 pub mod admission;
+pub mod first_party;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -237,6 +238,11 @@ impl Ancestry {
 
 impl State {
     pub fn new(schema: Schema, scope: Scope) -> Result<Self> {
+        first_party::validate_schema(&scope.owner, &schema)?;
+        Self::new_structural(schema, scope)
+    }
+    // Wire-only scratch constructor. Never exposes a semantic admission bypass.
+    fn new_structural(schema: Schema, scope: Scope) -> Result<Self> {
         schema.validate()?; scope.validate()?;
         if schema.collection != scope.collection { return Err(Error::Scope); }
         Ok(Self { schema, scope, operations: BTreeMap::new() })
@@ -245,6 +251,7 @@ impl State {
     pub fn scope(&self) -> &Scope { &self.scope }
     pub fn history(&self) -> &BTreeMap<Id, Operation> { &self.operations }
     pub fn snapshot(&self) -> Result<Vec<u8>> {
+        first_party::validate_export(self)?;
         encode(&Envelope { format: 1, scope: self.scope.clone(),
             operations: self.operations.values().cloned().collect() })
     }
@@ -325,6 +332,11 @@ impl State {
         Ok(())
     }
     fn validate_operation(&self, op: &Operation) -> Result<()> {
+        first_party::validate_operation(op)?;
+        self.validate_operation_structure(op)
+    }
+    // Wire must retain semantically malformed payloads for durable admission receipts.
+    fn validate_operation_structure(&self, op: &Operation) -> Result<()> {
         op.id.validate()?; op.scope.validate()?;
         if op.scope != self.scope { return Err(Error::Scope); }
         if op.schema_version == 0 { return Err(Error::InvalidSchema); }

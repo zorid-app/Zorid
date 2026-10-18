@@ -8,3 +8,7 @@ description = "Internal portable immutable managed-record operations"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+
+zorid-core = { path = "../zorid-core" }
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+chrono-tz = { version = "=0.10.4", default-features = false, features = ["std"] }
