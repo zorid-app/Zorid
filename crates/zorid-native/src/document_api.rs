@@ -5,6 +5,8 @@ use std::fmt;
 use zorid_core::{EntryId, EntryState};
 use zorid_index::{Exclusion, MetadataProjection};
 
+pub use zorid_bases::tasks::{TaskFilter, TaskQueryOptions, TaskQueryResult};
+pub use zorid_bases::types::TaskTypeSummary;
 pub use zorid_bases::{BaseQueryResult, EvaluationOptions, OperationCancellation, QueryOptions};
 pub use zorid_index::{
     IndexSnapshotId, LiteralPage, LiteralQuery, LiteralToken, RelationshipDirection,
@@ -89,6 +91,15 @@ pub struct DocumentBaseResult {
     /// Exact Base identity/revision/path whose retained bytes were compiled.
     pub definition: EntryState,
     pub result: BaseQueryResult,
+}
+
+/// Definitions and task capabilities compiled from actual retained YAML bytes.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentTasksResult {
+    pub definitions: Vec<EntryState>,
+    pub types: Vec<TaskTypeSummary>,
+    pub result: TaskQueryResult,
 }
 
 impl NativeDocumentError {

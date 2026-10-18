@@ -86,6 +86,8 @@ impl NoteType {
 pub struct TypeDiagnostic {
     pub witness: RecordWitness,
     pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yaml: Option<zorid_document::YamlDiagnostic>,
 }
 /// Invalid/unknown source data remains available; only valid, unique definitions
 /// enter the capability registry. No label, path or special name grants taskhood.
@@ -308,6 +310,7 @@ pub fn compile_types(sources: Vec<TypeSource>) -> Result<TypeRegistry, Expressio
             Err(code) => registry.diagnostics.push(TypeDiagnostic {
                 witness: source.witness.clone(),
                 code: code.into(),
+                yaml: None,
             }),
         }
     }
@@ -331,4 +334,120 @@ pub fn task_capture_defaults(
             .filter_map(|p| p.default.clone().map(|v| (p.key.clone(), v))),
     );
     Ok(values)
+}
+
+/// Exact retained Type YAML supplied by a trusted source reader, never a
+/// renderer-provided saved AST. Admission/provenance remain the reader's duty.
+#[derive(Clone, Debug)]
+pub struct TypeYamlSource {
+    pub witness: RecordWitness,
+    pub path: String,
+    pub source: String,
+}
+pub const MAX_TYPE_SOURCE_BYTES: usize = 256 * 1024;
+/// Use the existing shared document YAML decoder. Invalid YAML keeps its source
+/// witness in the registry as unavailable configuration, and never creates a
+/// typed definition. No files are changed or parser semantics reimplemented.
+pub fn compile_type_yaml(
+    sources: Vec<TypeYamlSource>,
+) -> Result<TypeRegistry, ExpressionDiagnostic> {
+    if sources.len() > MAX_TYPE_SOURCES {
+        return Err(ExpressionDiagnostic::new("budget", "Too many type files"));
+    }
+    let mut bytes = 0usize;
+    let mut failures = BTreeMap::new();
+    let mut parsed = Vec::with_capacity(sources.len());
+    for source in sources {
+        bytes = bytes.checked_add(source.source.len()).ok_or_else(|| {
+            ExpressionDiagnostic::new("budget", "Type sources exceed byte budget")
+        })?;
+        if source.source.len() > MAX_TYPE_SOURCE_BYTES || bytes > MAX_TYPE_BYTES {
+            return Err(ExpressionDiagnostic::new(
+                "budget",
+                "Type sources exceed byte budget",
+            ));
+        }
+        let configuration = match zorid_document::parse_yaml_mapping(&source.source) {
+            Ok(value) => value,
+            Err(error) => {
+                failures.insert(source.witness.entry_id.clone(), error);
+                PropertyValue::Null
+            }
+        };
+        parsed.push(TypeSource {
+            witness: source.witness,
+            path: source.path,
+            configuration,
+        });
+    }
+    let mut registry = compile_types(parsed)?;
+    for diagnostic in &mut registry.diagnostics {
+        if let Some(error) = failures.remove(&diagnostic.witness.entry_id) {
+            diagnostic.code = "invalid_type_yaml".into();
+            diagnostic.yaml = Some(error);
+        }
+    }
+    Ok(registry)
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskTypeSummary {
+    pub witness: RecordWitness,
+    pub type_id: String,
+    pub label: String,
+    pub status: TypeProperty,
+    pub planned_day: Option<TypeProperty>,
+    pub deadline: Option<TypeProperty>,
+    /// Explicit exact-key defaults (including present null), for a later
+    /// admitted capture command to validate again; this is not write authority.
+    pub capture_defaults: Vec<(String, PropertyValue)>,
+}
+pub fn task_type_summaries(
+    registry: &TypeRegistry,
+) -> Result<Vec<TaskTypeSummary>, ExpressionDiagnostic> {
+    registry
+        .iter()
+        .filter_map(|definition| {
+            definition
+                .capabilities
+                .task
+                .as_ref()
+                .map(|mapping| (definition, mapping))
+        })
+        .map(|(definition, mapping)| {
+            let source = registry
+                .sources
+                .iter()
+                .find(|source| {
+                    source
+                        .configuration
+                        .get("id")
+                        .and_then(PropertyValue::as_str)
+                        == Some(definition.id.as_str())
+                })
+                .ok_or_else(|| {
+                    ExpressionDiagnostic::new("type-source", "Type source is unavailable")
+                })?;
+            Ok(TaskTypeSummary {
+                witness: source.witness.clone(),
+                type_id: definition.id.clone(),
+                label: definition.label.clone(),
+                status: definition
+                    .property(&mapping.status)
+                    .expect("compiled mapping")
+                    .clone(),
+                planned_day: mapping
+                    .planned_day
+                    .as_ref()
+                    .and_then(|id| definition.property(id))
+                    .cloned(),
+                deadline: mapping
+                    .deadline
+                    .as_ref()
+                    .and_then(|id| definition.property(id))
+                    .cloned(),
+                capture_defaults: task_capture_defaults(registry, &definition.id)?,
+            })
+        })
+        .collect()
 }

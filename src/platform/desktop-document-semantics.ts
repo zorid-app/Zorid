@@ -52,6 +52,7 @@ export function createDesktopDocumentService(invoke:(request:DesktopDocumentRequ
     metadata:input=>command('metadata',input),
     search:input=>command('search',{...input,limit:input.limit??100}),
     backlinks:({targetId,...input})=>command('backlinks',{...input,id:targetId,limit:input.limit??100}),
+    tasks:input=>command('tasks',input),
     base:input=>command('base',input),
   };
   return {service:createDocumentService(transport),release(){

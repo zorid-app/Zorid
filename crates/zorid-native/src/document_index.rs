@@ -183,6 +183,71 @@ impl NativeVault {
     ) -> NativeDocumentResult<DocumentQueryResult<DocumentBaseResult>> {
         self.query_base_document_inner(pin, definition, Some(view_name), options)
     }
+    /// Selectors locate actual source bytes in this pin; no caller AST is trusted.
+    /// Invalid YAML is diagnostic data, while missing/non-text sources fail closed.
+    pub fn query_task_documents(
+        &self,
+        pin: &DocumentQueryPin,
+        type_ids: &[EntryId],
+        options: &TaskQueryOptions,
+    ) -> NativeDocumentResult<DocumentQueryResult<DocumentTasksResult>> {
+        use zorid_bases::types::{
+            compile_type_yaml, task_type_summaries, TypeYamlSource, MAX_TYPE_BYTES,
+            MAX_TYPE_SOURCES, MAX_TYPE_SOURCE_BYTES,
+        };
+        use zorid_bases::{ExpressionDiagnostic, RecordWitness};
+        self.document_manifest(pin)?;
+        if type_ids.len() > MAX_TYPE_SOURCES {
+            return Err(ExpressionDiagnostic::new("budget", "Too many type selectors").into());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut sources = Vec::with_capacity(type_ids.len());
+        let mut definitions = Vec::with_capacity(type_ids.len());
+        let mut total = 0usize;
+        for id in type_ids {
+            if !seen.insert(id) {
+                return Err(
+                    ExpressionDiagnostic::new("type-source", "Duplicate type selector").into(),
+                );
+            }
+            let projected = self.store.read_document_projection(pin, id)?;
+            let entry = projected.witness.entry().clone();
+            let bytes = projected
+                .content
+                .ok_or_else(|| NativeDocumentError::SourceUnavailable(id.clone()))?;
+            total = total
+                .checked_add(bytes.len())
+                .ok_or_else(|| ExpressionDiagnostic::new("budget", "Type byte budget exceeded"))?;
+            if bytes.len() > MAX_TYPE_SOURCE_BYTES || total > MAX_TYPE_BYTES {
+                return Err(
+                    ExpressionDiagnostic::new("budget", "Type byte budget exceeded").into(),
+                );
+            }
+            let source = String::from_utf8(bytes)
+                .map_err(|_| NativeDocumentError::SourceUnavailable(id.clone()))?;
+            sources.push(TypeYamlSource {
+                witness: RecordWitness {
+                    entry_id: entry.id.clone(),
+                    revision: entry.revision.clone(),
+                },
+                path: entry.path.to_string(),
+                source,
+            });
+            definitions.push(entry);
+        }
+        let registry = compile_type_yaml(sources)?;
+        let result = zorid_bases::tasks::query_tasks(pin.generation(), &registry, options)?;
+        let types = task_type_summaries(&registry)?;
+        // Recheck path safety and exact pin retention after all reads/evaluation.
+        self.document_result(
+            pin,
+            DocumentTasksResult {
+                definitions,
+                types,
+                result,
+            },
+        )
+    }
     fn query_base_document_inner(
         &self,
         pin: &DocumentQueryPin,

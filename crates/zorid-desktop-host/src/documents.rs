@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use zorid_core::{EntryId, OperationId};
 use zorid_native::{
     DocumentQueryPin, IndexSnapshotId, LiteralQuery, LiteralToken, NativeDocumentError,
-    NativeVault, QueryOptions, RelationshipToken,
+    NativeVault, QueryOptions, RelationshipToken, TaskFilter, TaskQueryOptions,
 };
 
 pub(crate) const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -70,6 +70,12 @@ enum DocumentCommand {
         id: EntryId,
         cursor: Option<OperationId>,
         limit: usize,
+    },
+    Tasks {
+        pin_id: OperationId,
+        type_ids: Vec<EntryId>,
+        #[serde(default)]
+        options: TaskOptions,
     },
     Base {
         pin_id: OperationId,
@@ -142,6 +148,55 @@ impl BaseOptions {
         options.max_steps = self.max_steps;
         options.current_entry_id = self.current_entry_id;
         Ok(options)
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct TaskOptions {
+    filter: TaskFilter,
+    #[serde(
+        default,
+        deserialize_with = "clock_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    clock_ms: Option<i64>,
+    timezone: String,
+    show_done: bool,
+    max_rows: usize,
+}
+impl Default for TaskOptions {
+    fn default() -> Self {
+        Self {
+            filter: TaskFilter::All,
+            clock_ms: None,
+            timezone: "UTC".into(),
+            show_done: false,
+            max_rows: 1000,
+        }
+    }
+}
+impl TaskOptions {
+    fn into_options(self) -> Result<TaskQueryOptions, Value> {
+        self.into_options_with_clock(capture_clock_ms)
+    }
+    fn into_options_with_clock(
+        self,
+        capture: impl FnOnce() -> Result<i64, Value>,
+    ) -> Result<TaskQueryOptions, Value> {
+        if self.max_rows == 0 || self.max_rows > 10000 || self.timezone.len() > 128 {
+            return Err(failure("invalid_budget"));
+        }
+        let clock_ms = match self.clock_ms {
+            Some(clock) => safe_clock_ms(clock)?,
+            None => safe_clock_ms(capture()?)?,
+        };
+        Ok(TaskQueryOptions {
+            filter: self.filter,
+            clock_ms,
+            timezone: self.timezone,
+            show_done: self.show_done,
+            max_rows: self.max_rows,
+        })
     }
 }
 // An optional selector may be omitted, but present null must not erase it.
@@ -328,7 +383,8 @@ pub(crate) fn execute(
         | Metadata { pin_id, .. }
         | Search { pin_id, .. }
         | Backlinks { pin_id, .. }
-        | Base { pin_id, .. } => Some(pin_id.clone()),
+        | Base { pin_id, .. }
+        | Tasks { pin_id, .. } => Some(pin_id.clone()),
         _ => None,
     };
     let result = (|| {
@@ -483,6 +539,20 @@ pub(crate) fn execute(
                     .transpose()?;
                 answer("backlinks", Paged { result, cursor })
             }
+            Tasks {
+                pin_id,
+                type_ids,
+                options,
+            } => {
+                let pin = pin(sessions, client, &pin_id)?;
+                let options = options.into_options()?;
+                answer(
+                    "tasks",
+                    vault
+                        .query_task_documents(&pin.value, &type_ids, &options)
+                        .map_err(native)?,
+                )
+            }
             Base {
                 pin_id,
                 id,
@@ -540,6 +610,31 @@ mod clock_tests {
     use super::*;
     use std::cell::Cell;
 
+    #[test]
+    fn tasks_clock_is_captured_once_and_explicit_zero_never_reads_it() {
+        let calls = Cell::new(0);
+        let options: TaskOptions = serde_json::from_str("{}").unwrap();
+        let result = options
+            .into_options_with_clock(|| {
+                calls.set(calls.get() + 1);
+                Ok(42)
+            })
+            .unwrap();
+        assert_eq!(result.clock_ms, 42);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(result.timezone, "UTC");
+        assert_eq!(result.max_rows, 1000);
+        let options: TaskOptions = serde_json::from_str(r#"{"clockMs":0}"#).unwrap();
+        assert_eq!(
+            options
+                .into_options_with_clock(|| panic!("clock must not run"))
+                .unwrap()
+                .clock_ms,
+            0
+        );
+        assert!(serde_json::from_str::<TaskOptions>(r#"{"clockMs":null}"#).is_err());
+        assert!(serde_json::from_str::<TaskOptions>(r#"{"owner":"forged"}"#).is_err());
+    }
     #[test]
     fn omitted_base_clock_is_captured_once_with_utc_and_row_defaults() {
         let calls = Cell::new(0);

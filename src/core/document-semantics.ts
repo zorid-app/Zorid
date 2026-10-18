@@ -58,6 +58,17 @@ export interface DocumentBaseResult {
 /** Shared normal-vault calls capture clockMs once per invocation and default maxRows to 1000. */
 export interface DocumentBaseOptions {readonly viewIndex?:number;readonly searchTerms?:readonly string[];readonly ignorePaths?:readonly string[];readonly clockMs?:number;readonly timezone?:string;readonly maxRows?:number;readonly currentEntryId?:string;readonly maxSteps?:number}
 export interface DocumentBaseRead {readonly definition:DocumentEntry;readonly result:DocumentBaseResult}
+export type DocumentTaskFilter='all'|'today'|'unscheduled';
+export type DocumentStatusCategory='not_started'|'working'|'done';
+export interface DocumentTaskOptions {readonly filter?:DocumentTaskFilter;readonly clockMs?:number;readonly timezone?:string;readonly showDone?:boolean;readonly maxRows?:number}
+export interface DocumentTaskWitness {readonly entryId:string;readonly revision:string}
+export interface DocumentTypeProperty {readonly id:string;readonly key:string;readonly label:string;readonly datatype:string;readonly options:readonly{readonly id:string;readonly label:string;readonly category:DocumentStatusCategory|null}[];readonly default:DocumentValue}
+export interface DocumentTaskType {readonly witness:DocumentTaskWitness;readonly typeId:string;readonly label:string;readonly status:DocumentTypeProperty;readonly plannedDay:DocumentTypeProperty|null;readonly deadline:DocumentTypeProperty|null;readonly captureDefaults:readonly(readonly[string,DocumentValue])[]}
+export interface DocumentTaskRow {readonly witness:DocumentTaskWitness;readonly path:string;readonly title:string;readonly typeId:string;readonly statusId:string|null;readonly statusLabel:string|null;readonly category:DocumentStatusCategory|null;readonly statusDefaulted:boolean;readonly plannedDay:string|null;readonly deadline:string|null}
+export interface DocumentTasksRead {
+  readonly definitions:readonly DocumentEntry[];readonly types:readonly DocumentTaskType[];
+  readonly result:{readonly snapshotId:DocumentSnapshotId;readonly typeWitnesses:readonly DocumentTaskWitness[];readonly coverageComplete:boolean;readonly rows:readonly DocumentTaskRow[];readonly groups:readonly{readonly typeId:string;readonly category:DocumentStatusCategory|null;readonly statusId:string|null;readonly entryIds:readonly string[]}[];readonly matched:number;readonly truncated:boolean;readonly diagnostics:readonly{readonly witness:DocumentTaskWitness;readonly property:string;readonly code:string}[];readonly typeDiagnostics:readonly{readonly witness:DocumentTaskWitness;readonly code:string;readonly yaml?:{readonly code:string;readonly range:DocumentRange}}[];readonly metadataIssues:DocumentBaseResult['metadataIssues']};
+}
 export interface DocumentStatus {
   readonly source:DocumentSourceId;readonly snapshot:DocumentSnapshotId|null;readonly coveredSource:DocumentSourceId|null;
   /** Exact host capture comparison, not sequence equality alone. */
@@ -70,6 +81,7 @@ export interface DocumentPin {
   metadata(id:string):Promise<DocumentQueryResult<DocumentMetadataRow>>;
   search(input:{readonly query:string;readonly cursor?:DocumentCursor|null;readonly limit?:number}):Promise<DocumentPage<DocumentLiteralPage>>;
   backlinks(input:{readonly targetId:string;readonly cursor?:DocumentCursor|null;readonly limit?:number}):Promise<DocumentPage<DocumentRelationshipPage>>;
+  tasks?(input:{readonly typeIds:readonly string[];readonly options?:DocumentTaskOptions}):Promise<DocumentQueryResult<DocumentTasksRead>>;
   base(input:{readonly id:string;readonly viewName?:string|null;readonly options?:DocumentBaseOptions}):Promise<DocumentQueryResult<DocumentBaseRead>>;
 }
 /** Optional normal-vault capability. Closing a pin never releases its vault.
@@ -96,6 +108,7 @@ export interface DocumentTransport {
   metadata(input:{pinId:string;id:string}):Promise<unknown>;
   search(input:{pinId:string;query:string;cursor?:string;limit?:number}):Promise<unknown>;
   backlinks(input:{pinId:string;targetId:string;cursor?:string;limit?:number}):Promise<unknown>;
+  tasks?(input:{pinId:string;typeIds:string[];options?:DocumentTaskOptions}):Promise<unknown>;
   base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number;currentEntryId?:string;maxSteps?:number}}):Promise<unknown>;
 }
 const invalid=():never=>{throw new DocumentSemanticsError('invalid_document_response');};
@@ -138,6 +151,19 @@ export function createDocumentService(transport:DocumentTransport):DocumentServi
         async metadata(id:string){live();return report<DocumentMetadataRow>(await call({pinId,id},()=>transport.metadata({pinId,id})));},
         async search(input:{query:string;cursor?:DocumentCursor|null;limit?:number}){live();limit(input.limit);const request={pinId,query:input.query,...(input.cursor==null?{}:{cursor:input.cursor}),limit:input.limit};return page<DocumentLiteralPage>(await call(request,()=>transport.search(request)));},
         async backlinks(input:{targetId:string;cursor?:DocumentCursor|null;limit?:number}){live();limit(input.limit);const request={pinId,targetId:input.targetId,...(input.cursor==null?{}:{cursor:input.cursor}),limit:input.limit};return page<DocumentRelationshipPage>(await call(request,()=>transport.backlinks(request)));},
+        ...(transport.tasks?{async tasks(input:{typeIds:readonly string[];options?:DocumentTaskOptions}){
+          live();
+          if(!Array.isArray(input.typeIds)||input.typeIds.length>128||input.typeIds.some(id=>typeof id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(id))||new Set(input.typeIds).size!==input.typeIds.length)throw new DocumentSemanticsError('invalid_request');
+          if(input.options===null)throw new DocumentSemanticsError('invalid_request');
+          const supplied=input.options??{};
+          if(typeof supplied!=='object'||Array.isArray(supplied)||Object.keys(supplied).some(key=>!['filter','clockMs','timezone','showDone','maxRows'].includes(key)))throw new DocumentSemanticsError('invalid_request');
+          const options=Object.fromEntries(Object.entries(supplied).filter(([,value])=>value!==undefined)) as DocumentTaskOptions;
+          if(options.clockMs!==undefined&&!Number.isSafeInteger(options.clockMs)||options.maxRows!==undefined&&(!Number.isInteger(options.maxRows)||options.maxRows<1||options.maxRows>10000)||options.filter!==undefined&&!['all','today','unscheduled'].includes(options.filter)||options.timezone!==undefined&&(typeof options.timezone!=='string'||new TextEncoder().encode(options.timezone).length>128)||options.showDone!==undefined&&typeof options.showDone!=='boolean')throw new DocumentSemanticsError('invalid_request');
+          const request={pinId,typeIds:[...input.typeIds],options};
+          const value=report<DocumentTasksRead>(await call(request,()=>transport.tasks!(request)));live();
+          if(!sameSnapshot(documentSnapshot(value.value.result.snapshotId),snapshot)||value.value.definitions.length!==request.typeIds.length||value.value.definitions.some((entry,index)=>entry.id!==request.typeIds[index])||typeof value.value.result.coverageComplete!=='boolean'||value.value.result.coverageComplete&&!coverageComplete)return invalid();
+          return value;
+        }}:{}),
         async base(input:{id:string;viewName?:string|null;options?:DocumentBaseOptions}){live();if(input.options?.currentEntryId!==undefined&&(typeof input.options.currentEntryId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(input.options.currentEntryId)))throw new DocumentSemanticsError('invalid_request');if(input.options?.maxSteps!==undefined&&(!Number.isInteger(input.options.maxSteps)||input.options.maxSteps<1||input.options.maxSteps>2000000))throw new DocumentSemanticsError('invalid_request');const {searchTerms,ignorePaths,...scalars}=input.options??{};const definedScalars=Object.fromEntries(Object.entries(scalars).filter(([,value])=>value!==undefined));const options:NonNullable<Parameters<DocumentTransport['base']>[0]['options']>={...definedScalars,clockMs:scalars.clockMs===undefined?Date.now():scalars.clockMs,maxRows:scalars.maxRows===undefined?1000:scalars.maxRows};if(searchTerms)options.searchTerms=[...searchTerms];if(ignorePaths)options.ignorePaths=[...ignorePaths];const request={pinId,id:input.id,viewName:input.viewName,options};return report<DocumentBaseRead>(await call(request,()=>transport.base(request)));},
       });
     },

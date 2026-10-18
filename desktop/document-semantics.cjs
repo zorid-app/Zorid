@@ -22,25 +22,27 @@ function strings(value){return Array.isArray(value)&&value.length<=256&&value.ev
 function captureDocumentRequest(input){
   if(!keys(input,['schemaVersion','command'])||input.schemaVersion!==1||!object(input.command)||typeof input.command.op!=='string')throw fail('invalid_document_request');
   const command=input.command,op=command.op;
-  const fields={status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options']}[op];
+  const fields={status:[],initialize:[],rebuild:[],begin:[],stages:[],resume:['snapshot'],pump:['snapshot'],publish:['snapshot'],discard:['snapshot'],open:['pinId'],close:['pinId'],metadata:['pinId','id'],search:['pinId','query','cursor','limit'],backlinks:['pinId','id','cursor','limit'],base:['pinId','id','viewName','options'],tasks:['pinId','typeIds','options']}[op];
   if(!fields||!keys(command,['op',...fields],['op',...fields.filter(key=>!['cursor','viewName','options'].includes(key))]))throw fail('invalid_document_request');
   const captured={op};
   for(const key of fields){
     const value=command[key];
     if(key==='snapshot'){if(!snapshot(value))throw fail('invalid_document_request');captured[key]=structuredClone(value);}
     else if(key==='pinId'){if(!decimal(value)||value==='0')throw fail('invalid_pin_id');captured[key]=value;}
+    else if(key==='typeIds'){if(!Array.isArray(value)||value.length>128||value.some(item=>!id(item))||new Set(value).size!==value.length)throw fail('invalid_document_request');captured[key]=[...value];}
     else if(key==='id'){if(!id(value))throw fail('invalid_document_request');captured[key]=value;}
     else if(key==='cursor'){if(value!==undefined&&value!==null&&!id(value))throw fail('invalid_document_request');captured[key]=value??null;}
     else if(key==='query'){if(typeof value!=='string'||!value||byteLength(value)>4096||/[\r\n]/.test(value))throw fail('invalid_query');captured[key]=value;}
     else if(key==='limit'){if(!integer(value,1000)||value===0)throw fail('invalid_budget');captured[key]=value;}
     else if(key==='viewName'){if(value!==undefined&&value!==null&&(typeof value!=='string'||byteLength(value)>1024))throw fail('invalid_document_request');captured[key]=value??null;}
     else if(key==='options'){
-      const options=value??{},allowed=['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps'];
+      if(op==='tasks'&&value===null)throw fail('invalid_document_request');
+      const options=value??{},allowed=op==='tasks'?['filter','clockMs','timezone','showDone','maxRows']:['viewIndex','searchTerms','ignorePaths','clockMs','timezone','maxRows','currentEntryId','maxSteps'];
       if(!keys(options,allowed,[]))throw fail('invalid_document_request');
       captured.options={};
       for(const key of Object.keys(options)){
         const value=options[key];
-        if(key==='currentEntryId'&&!id(value)||key==='maxSteps'&&(!integer(value,2000000)||value===0)||key==='viewIndex'&&!integer(value,1000)||key==='maxRows'&&(!integer(value,10000)||value===0)||key==='clockMs'&&!Number.isSafeInteger(value)||['searchTerms','ignorePaths'].includes(key)&&!strings(value)||key==='timezone'&&(typeof value!=='string'||byteLength(value)>128))throw fail('invalid_document_request');
+        if(key==='filter'&&!['all','today','unscheduled'].includes(value)||key==='showDone'&&typeof value!=='boolean'||key==='currentEntryId'&&!id(value)||key==='maxSteps'&&(!integer(value,2000000)||value===0)||key==='viewIndex'&&!integer(value,1000)||key==='maxRows'&&(!integer(value,10000)||value===0)||key==='clockMs'&&!Number.isSafeInteger(value)||['searchTerms','ignorePaths'].includes(key)&&!strings(value)||key==='timezone'&&(typeof value!=='string'||byteLength(value)>128))throw fail('invalid_document_request');
         captured.options[key]=Array.isArray(value)?[...value]:value;
       }
     }
@@ -55,6 +57,43 @@ function page(value,op,limit){
   const fields=['snapshot',collection,'next','scanComplete','coverageComplete','complete',...(op==='search'?['sourceBytes','documents']:[])];
   return keys(value,fields)&&(op!=='search'||integer(value.sourceBytes,16*1024*1024)&&integer(value.documents,32))&&snapshot(value.snapshot)&&Array.isArray(value[collection])&&value[collection].length<=limit&&value.next===null
     &&['scanComplete','coverageComplete','complete'].every(key=>typeof value[key]==='boolean')&&value.complete===(value.scanComplete&&value.coverageComplete);
+}
+const witness=value=>keys(value,['entryId','revision'])&&id(value.entryId)&&id(value.revision);
+const category=value=>value===null||['not_started','working','done'].includes(value);
+const nullableString=value=>value===null||typeof value==='string';
+function taskProperty(value,datatype){
+  return keys(value,['id','key','label','datatype','options','default'])&&id(value.id)&&typeof value.key==='string'&&typeof value.label==='string'&&value.datatype===datatype
+    &&Array.isArray(value.options)&&value.options.length<=128&&value.options.every(option=>keys(option,['id','label','category'])&&id(option.id)&&typeof option.label==='string'&&category(option.category));
+}
+function taskRead(value,command){
+  if(!envelope(value)||!keys(value.value,['definitions','types','result']))return false;
+  const {definitions,types,result}=value.value;
+  if(!Array.isArray(definitions)||definitions.length!==command.typeIds.length||!definitions.every((item,index)=>entry(item)&&item.kind==='file'&&item.id===command.typeIds[index])
+    ||!Array.isArray(types)||types.length>definitions.length||!keys(result,['snapshotId','typeWitnesses','coverageComplete','rows','groups','matched','truncated','diagnostics','typeDiagnostics','metadataIssues'])||!same(result.snapshotId,value.snapshot))return false;
+  const defined=new Map(definitions.map(item=>[item.id,item]));
+  const knownWitness=item=>witness(item)&&defined.get(item.entryId)?.revision===item.revision;
+  if(!Array.isArray(result.typeWitnesses)||result.typeWitnesses.length!==definitions.length||!result.typeWitnesses.every((item,index)=>knownWitness(item)&&item.entryId===definitions[index].id)
+    ||typeof result.coverageComplete!=='boolean'||result.coverageComplete&&!value.coverageComplete)return false;
+  const typeIds=new Set();
+  for(const item of types){
+    if(!keys(item,['witness','typeId','label','status','plannedDay','deadline','captureDefaults'])||!knownWitness(item.witness)||!id(item.typeId)||typeIds.has(item.typeId)||typeof item.label!=='string'||!taskProperty(item.status,'status')
+      ||item.plannedDay!==null&&!taskProperty(item.plannedDay,'date')||item.deadline!==null&&!taskProperty(item.deadline,'date')||!Array.isArray(item.captureDefaults)||item.captureDefaults.length>65||!item.captureDefaults.every(pair=>Array.isArray(pair)&&pair.length===2&&typeof pair[0]==='string'))return false;
+    typeIds.add(item.typeId);
+  }
+  if(!Array.isArray(result.rows)||result.rows.length>(command.options?.maxRows??1000)||!integer(result.matched,50000)||result.matched<result.rows.length||typeof result.truncated!=='boolean'||result.truncated!==(result.matched>result.rows.length)||!Array.isArray(result.groups)||result.groups.length>result.rows.length)return false;
+  const rows=new Map();
+  for(const row of result.rows){
+    if(!keys(row,['witness','path','title','typeId','statusId','statusLabel','category','statusDefaulted','plannedDay','deadline'])||!witness(row.witness)||rows.has(row.witness.entryId)||typeof row.path!=='string'||typeof row.title!=='string'||!typeIds.has(row.typeId)||!nullableString(row.statusId)||!nullableString(row.statusLabel)||!category(row.category)||typeof row.statusDefaulted!=='boolean'||!nullableString(row.plannedDay)||!nullableString(row.deadline))return false;
+    rows.set(row.witness.entryId,row);
+  }
+  const grouped=new Set();
+  for(const group of result.groups){
+    if(!keys(group,['typeId','category','statusId','entryIds'])||!typeIds.has(group.typeId)||!category(group.category)||!nullableString(group.statusId)||!Array.isArray(group.entryIds)||!group.entryIds.length)return false;
+    for(const entryId of group.entryIds){const row=rows.get(entryId);if(!row||grouped.has(entryId)||row.typeId!==group.typeId||row.category!==group.category||row.statusId!==group.statusId)return false;grouped.add(entryId);}
+  }
+  return grouped.size===rows.size&&Array.isArray(result.diagnostics)&&result.diagnostics.every(item=>keys(item,['witness','property','code'])&&witness(item.witness)&&typeof item.property==='string'&&typeof item.code==='string')
+    &&Array.isArray(result.typeDiagnostics)&&result.typeDiagnostics.every(item=>keys(item,['witness','code','yaml'],['witness','code'])&&knownWitness(item.witness)&&typeof item.code==='string'&&(!Object.hasOwn(item,'yaml')||object(item.yaml)&&typeof item.yaml.code==='string'&&object(item.yaml.range)))
+    &&Array.isArray(result.metadataIssues)&&result.metadataIssues.every(item=>object(item)&&witness(item.witness)&&typeof item.propertiesUnavailable==='boolean'&&Array.isArray(item.diagnostics));
 }
 function decodeDocumentReply(request,marker,bytes){
   if(!keys(marker,['documents','schemaVersion','bytes'])||marker.documents!==true||marker.schemaVersion!==1||!integer(marker.bytes,MAX_DOCUMENT_RESPONSE)||!(bytes instanceof Uint8Array)||marker.bytes!==bytes.length||!bytes.length)throw fail('invalid_document_response');
@@ -79,7 +118,8 @@ function decodeDocumentReply(request,marker,bytes){
     valid=keys(value,['result','cursor'])&&(value.cursor===null||id(value.cursor))&&envelope(report)&&page(inner,op,command.limit)&&same(inner.snapshot,report.snapshot)&&inner.coverageComplete===report.coverageComplete&&inner.scanComplete===(value.cursor===null);
     if(valid)valid=op==='search'?inner.hits.every(hit=>entry(hit.entry)&&integer(hit.line)&&object(hit.range)&&typeof hit.snippet==='string'&&typeof hit.snippetTruncated==='boolean'):
       inner.edges.every(edge=>entry(edge.source)&&entry(edge.target)&&edge.target.id===command.id&&integer(edge.linkIndex)&&object(edge.link));
-  }else if(op==='base')valid=envelope(value)&&keys(value.value,['definition','result'])&&entry(value.value.definition)&&value.value.definition.id===command.id&&object(value.value.result)&&same(value.value.result.snapshotId,value.snapshot)&&Array.isArray(value.value.result.rows);
+  }else if(op==='tasks')valid=taskRead(value,command);
+  else if(op==='base')valid=envelope(value)&&keys(value.value,['definition','result'])&&entry(value.value.definition)&&value.value.definition.id===command.id&&object(value.value.result)&&same(value.value.result.snapshotId,value.snapshot)&&Array.isArray(value.value.result.rows);
   if(!valid)throw fail('invalid_document_response');
   return value;
 }
@@ -101,7 +141,7 @@ function createDesktopDocumentSemantics(host,clientId,localStoreId){
         pins.set(command.pinId,structuredClone({snapshot:value.snapshot,source:value.source,coverageComplete:value.coverageComplete}));
       }else if(op==='close')pins.delete(command.pinId);
       else if(op==='rebuild')pins.clear();
-      else if(['metadata','base','search','backlinks'].includes(op)){
+      else if(['metadata','base','tasks','search','backlinks'].includes(op)){
         const envelope=['search','backlinks'].includes(op)?value.result:value;
         const selected=pins.get(command.pinId);
         if(!selected||!same(envelope.snapshot,selected.snapshot)||!sameSource(envelope.source,selected.source)||envelope.coverageComplete!==selected.coverageComplete)throw fail('invalid_document_response');
