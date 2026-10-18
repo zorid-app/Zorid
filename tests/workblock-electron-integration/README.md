@@ -7,7 +7,10 @@ and disposable vault, the real renderer preload `getDurableContext` /
 `durableInvoke('workblockCommand')`, existing window/client/vault admission,
 real native stdio and SQLite. The raw preload probe bypasses the renderer
 `createDesktopWorkBlocks` factory; its runtime proof remains a separate gate. It does not mock a service/store or claim Calendar
-UI acceptance. No product source instrumentation is required.
+UI acceptance. No product source instrumentation is required. The probe asserts the plain
+versioned WorkBlock success/failure envelope surviving `contextBridge`, then
+uses the tested assembly's production `decodeWorkBlockEnvelope` to reconstruct
+typed errors locally; it does not parse thrown error messages.
 
 ```sh
 node /absolute/binding/tests/workblock-electron-integration/run.mjs \

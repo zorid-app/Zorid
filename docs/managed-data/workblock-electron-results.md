@@ -1,13 +1,14 @@
 # Actual Electron WorkBlock bridge/storage verification
 
 Owner: worker `term_dcd608f8-cbcf-41d1-930b-c098d80659ac`, task
-`task_0439dfd1fbe6`, dispatch `ctx_689388f73d04`. Scope is only new
+`task_0439dfd1fbe6`, dispatch `ctx_689388f73d04`. Initial scope was only new
 `tests/workblock-electron-integration/**` and this report on isolated binding
 branch `tingkai-c/managed-workblock-desktop-binding`.
 
 The preceding accepted desktop binding source remains frozen at `313e9964`
-with report through `65a2dfdb`. This followup changes no product source,
-Workspace, bridge, native code, root manifest or dependency lockfile. Root alone
+with report through `65a2dfdb`. The initial harness preparation changed no product source. The actual failure
+below then triggered an explicitly granted narrow WorkBlock envelope correction.
+Workspace, native code, root manifest and dependency lockfiles remain untouched. Root alone
 integrates main and the coordinator assembles/builds the native+desktop batch.
 
 ## Preparation checkpoint
@@ -98,6 +99,36 @@ Harness followup `99795c82` (new test files only) now retains rejected error
 messages/own property names before assertions and records after-provenance even
 on a failing pass; syntax check passed. A product error-envelope correction and
 new exact frozen artifact readiness are required before repeating runtime.
+
+## Narrow real-bridge correction
+
+Coordinator `msg_763b4800edb0` expanded this dispatch to exact WorkBlock hunks in
+preload, admitted renderer invocation, bridge declaration and shared codec,
+plus focused regressions. R agreed the exact design in `msg_47fecbd53fb0` and
+`msg_4a4f1f9754df` before edits. Source commit
+`43cb6fa511011767872b170c9f40b2fba8223eaa` implements:
+
+- WorkBlock-only preload always resolves cloneable plain data:
+  `{workblocks:true,schemaVersion:1,ok:true,value}` or
+  `{workblocks:true,schemaVersion:1,ok:false,error:{code,source:"host",commitUncertain}}`.
+  No custom Error crosses this bridge. Other durable APIs are unchanged.
+- Shared strict `decodeWorkBlockEnvelope` validates exact tags/version/fields,
+  error code bounds, boolean certainty and existing semantic value/size limits.
+  The admitted renderer closure calls it after the bridge and reconstructs its
+  own sanitized typed Error. Valid explicit rejection certainty is preserved;
+  missing/malformed/lost data never becomes a definite mutation rejection.
+- Actual harness asserts the raw preload envelope and normalizes using the same
+  production decoder loaded from the tested assembly. It continues to bypass
+  the renderer factory and makes no factory/Calendar UI runtime claim.
+
+Bounded seven-file Node/TS regression command now passes **45/45**, including
+**19 WorkBlock cases**. Full configured frontend `tsc --noEmit`, harness syntax
+and diff checks pass. New tests cover cloning, explicit false/true error metadata,
+lost IPC, malformed tags/version/error codes/uncertainty, renderer-side decoding,
+unknown outcome input retention and unchanged other durable error behavior.
+R found no concrete blocker in the source draft (`msg_53a44764997b`); exact
+committed review and fresh coordinator artifact freeze are pending before retry.
+These mocked bridge checks do not supersede the actual failed proof above.
 
 ## Remaining gates
 
