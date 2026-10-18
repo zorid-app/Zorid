@@ -2263,10 +2263,13 @@ final class NativePagesController: UIViewController {
     var onOpenDocument: ((NativeFileEntry, Bool) -> Void)? { didSet { updateDocumentTabRouting() } }
     var onCreateNote: (() -> Void)? { didSet { updateDocumentTabRouting() } }
     var onChooseVault: (() -> Void)? { didSet { updateDocumentTabRouting() } }
-    private var documentTabRoutingConfigured: Bool {
-        onShowDocumentTabs != nil || onOpenDocument != nil || onCreateNote != nil || onChooseVault != nil
-    }
+    // One-way ownership for this controller's lifetime. Callback teardown must
+    // never resurrect a legacy path on a controller that root has admitted.
+    private var documentTabRoutingConfigured = false
     private func updateDocumentTabRouting() {
+        if onShowDocumentTabs != nil || onOpenDocument != nil || onCreateNote != nil || onChooseVault != nil {
+            documentTabRoutingConfigured = true
+        }
         coordinator.invalidateDocumentTabRetirement() // A new root configuration cannot inherit an old close fact.
         model.canShowDocumentTabs = onShowDocumentTabs != nil
         model.canOpenInNewTab = onOpenDocument != nil
