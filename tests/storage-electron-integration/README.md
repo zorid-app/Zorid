@@ -119,3 +119,55 @@ it equals or descends from source, harness or the recorded manual playground roo
 before creating output. The optional manual pointer is enforced when present;
 malformed pointers fail closed. Clean mode issues no Debugger commands, including
 cleanup. Diagnostic capture errors fail the diagnostic result.
+
+
+# Desktop/CLI concurrency and retained-draft interruption
+
+`concurrency.mjs` runs an ordinary hidden editor and an independently launched CLI
+against one fresh disposable vault with a shared `ZORID_LOCAL_DATA_DIR`. Supply the
+CLI executable named `zorid`, built from the same frozen application source as the
+native host. No build is performed by the harness.
+
+```sh
+node tests/storage-electron-integration/concurrency.mjs \
+  --root /absolute/frozen/integration \
+  --expected-head FULL_40_CHARACTER_COMMIT \
+  --native /absolute/matched/zorid-desktop-host \
+  --cli /absolute/matched/zorid \
+  --electron /absolute/Electron.app/Contents/MacOS/Electron \
+  --out /private/tmp/zorid-concurrency-evidence \
+  --ready storage-concurrency-artifacts-frozen
+```
+
+The required gates are:
+
+- An ordinary keyboard save is read back exactly by the independent CLI. A CLI
+  document-index build reaches ready state, its local authority matches the
+  editor's durable scope, an app-local cache file exists outside the vault, and
+  ordinary desktop search returns the expected note and snippet. This does not
+  measure cache-hit rates or establish performance targets.
+- A CLI compare-and-swap write commits while real repeated keyboard input keeps
+  the editor debounce pending. The peer's exact bytes remain committed; an
+  identical operation replay returns the original receipt and a new stale write
+  is rejected. The editor shows its exact retained draft and recovery actions.
+- The existing read-only durable bridge confirms the original baseline, latest
+  draft and conflict flag are checkpointed. The harness then sends one SIGKILL
+  to the exact owned native host, revalidating its PID, parent and command first.
+- Reopening the same profile retains the exact draft/conflict while the peer's
+  committed content remains unchanged. Clicking the ordinary Save recovery copy
+  action creates one separate exact draft file, then shows the peer version;
+  the original entry's revision stays unchanged.
+
+All source mutations use keyboard input, the independent CLI or the explicit
+recovery-copy action. There are no direct database writes, clock mocks or injected
+save services. The harness records source/artifact/helper hashes, CLI receipts,
+checkpoint observations, screenshots and process outcomes, then cleans only its
+owned app/host/CLI processes. Manual playground paths/PIDs and their aliases are
+excluded. Cleanup signals cannot establish graceful quit; use `run.mjs` for that
+separate lifecycle proof.
+
+This verifies one conflict and one interruption after an observed durable draft.
+It does not establish arbitrary-instruction crash recovery, power-loss durability,
+external-handle behavior, stress throughput, seamless conflict merging, sync or
+browser/mobile parity. Together with the lifecycle harness it covers bounded
+desktop save/recovery gates; it does not by itself certify the entire S0 milestone.
