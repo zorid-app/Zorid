@@ -116,6 +116,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:02UTC actual Simulator10 build39003 terminal0 BUILD SUCCEEDED, frozenfb1c04d7.
+Ruststaticlib+fullXcodecompile/link passed; artifact
+/private/tmp/zorid-ios-v10b-sim-20261018/DerivedData/Build/Products/Debug-iphonesimulator/App.app.
+Command/log /private/tmp/zorid-ios-v10b-sim-{command.json,build.log}. Nativeowner
+retains exclusive slot through1274 install/launch/focusedFile/HomeUI+cleanup;
+results pending, no rootheavyprocess/phone9replacement. NewNote/history/import
+remain explicitgaps; buildsuccess isn't nativeinteraction/wholeUX acceptance.
+
 01:02UTC: history helper mayretain one boundedscene-level evicted-prefix pageorigin
 to preserve folderReturn beyond100entries, samevault/store/reset, no pertabstack.
 Native NewNote UIhandoff gap: UserDefaults.set isn't throwing durability barrier.
