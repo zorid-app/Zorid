@@ -164,7 +164,20 @@ fn receipt(v: &mut NativeVault, incompatible: bool) {
             domain::add_task(&id("task"))
         },
     };
-    let intent = json!({"format":1,"scope":scope,"operations":[op]});
+    #[derive(serde::Serialize)]
+    struct Intent<'a> {
+        format: u32,
+        scope: &'a Scope,
+        operations: &'a [Operation],
+    }
+    // The records intent decoder checks canonical typed field order. A JSON
+    // Value sorts object keys and is deliberately not a canonical intent.
+    let operations = [op];
+    let intent = Intent {
+        format: 1,
+        scope: &scope,
+        operations: &operations,
+    };
     let update = if incompatible {
         "future-receipt"
     } else {
@@ -270,9 +283,12 @@ fn exact_saved_base_selection_precedes_native_task_cap() {
     drop(s);
     drop(l);
     drop(v);
-    let mut store =
-        zorid_store::Store::open_existing_no_follow(dir.path().join(".zorid/vault.sqlite"))
-            .unwrap();
+    let mut store = zorid_store::Store::open_existing_no_follow(
+        std::fs::canonicalize(dir.path())
+            .unwrap()
+            .join(".zorid/vault.sqlite"),
+    )
+    .unwrap();
     let body = "---\ntype: type-task\n---\n";
     for n in 0..1001 {
         store
