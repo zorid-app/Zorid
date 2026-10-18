@@ -1,6 +1,12 @@
 # Normal browser WorkBlock proof harness
 
-**SOURCE ONLY: gate2/3 have not run or passed.** V source successor task
+The12 selected groups have passed on actual Chrome/IndexedDB/WASM, including the
+current-main composition46e7360e. See
+[composed evidence](../../docs/managed-data/browser-workblocks-main-integration.md)
+for exact source/artifact hashes, terminal/cleanup receipts and remaining gates.
+This is bounded browser evidence, not complete product/mobile parity.
+
+Historical source assignment: V source successor task
 `task_83ee5512f2f3`, dispatch `ctx_507e6047b69b`, isolated `managed-browser-wb-proof`.
 Contract SHA256 `adc287835bc5e05e649122c3375bc34f54e1f713b440d620421dc390a05bb082`.
 
@@ -21,7 +27,7 @@ unenrolled open has no service; successful configuration must refresh the normal
 replicas retain different actual DB authorities/client leases and one logical
 realm/vault. Sync configuration/keys are fixture credentials, not enrollment UX.
 
-## Bounded source campaign (12 groups; all browser assertions unexecuted)
+## Bounded campaign (12 exercised groups)
 
 - Actual CRUD/ref/delete/read, remove/readd exact retry, newer-state/reopen
   original receipts, stale/target collision/range rejection with exact relevant

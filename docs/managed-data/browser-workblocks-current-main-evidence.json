@@ -1,0 +1,121 @@
+{
+  "testedHead": "46e7360e693b688ff666feed46a6f01ffc45b79c",
+  "provenance": {
+    "head": "46e7360e693b688ff666feed46a6f01ffc45b79c",
+    "fingerprint": "5e71fab4e2036bdf2fc52788d0fc67cf17b935dc8c2058d846da4c7113f5e99e",
+    "files": {
+      "zorid_wasm.js": "ab5af194bf78cad8a5dd5da6396d7671bef07172e24463eb0c82ad2b1221986f",
+      "zorid_wasm_bg.wasm": "0b4b9b78e563ec45e599e4fa64c0224a167c7c7974f2f1b9a560c267d0e41884"
+    },
+    "sourceDigest": "f7eecf95927600bcc4af72534a7c63b0b942be75229ebde7b46aa29905d0742d",
+    "observation": {
+      "channel": "zorid-workblocks-proof:98b27c48-4019-472a-93dd-d7f652f4cf70",
+      "path": "src/platform/browser-core-worker.ts",
+      "mode": "test-only prepend; original product body unchanged",
+      "originalSha256": "a1277a3d40b1744b0ee5b63a097b0d20bd2d8fbfa2858a267e71d4caa8d1b385",
+      "prependSha256": "b1d3398d0ab56d499cd3177bcd1f6aa0b1dfed0667c570e5c609ba73c6ccca30",
+      "transformedSha256": "81798fcbb06801a9f61dfc8408e0e7a7915db1be31de1227e1d6a30d07afe780"
+    }
+  },
+  "runtime": {
+    "status": "passed-subset",
+    "groups": [
+      {
+        "name": "normal admitted CRUD/ref lifecycle, immutable receipts, rejections and restart",
+        "status": "passed"
+      },
+      {
+        "name": "bounded window scanning, byte nonconsumption, cursor/query/watermark fences",
+        "status": "passed"
+      },
+      {
+        "name": "journal replay precedes deliberately corrupt current state and source/quota reads",
+        "status": "passed"
+      },
+      {
+        "name": "admitted release drains held strict writes before cleanup and exact client reacquires",
+        "status": "passed"
+      },
+      {
+        "name": "deliberate worker release during real before-prepare hold preserves exact outcome",
+        "status": "passed"
+      },
+      {
+        "name": "deliberate worker release during real common-authored hold preserves exact outcome",
+        "status": "passed"
+      },
+      {
+        "name": "deliberate worker release during real after-final-write hold preserves exact outcome",
+        "status": "passed"
+      },
+      {
+        "name": "sync revocation during held local authoring preserves credential-independent durable save",
+        "status": "passed"
+      },
+      {
+        "name": "deliberate exact reply loss after commit remains uncertain and replays original receipt",
+        "status": "passed"
+      },
+      {
+        "name": "two normal same-authority clients catch a deliberately lost hint on foreground refresh",
+        "status": "passed"
+      },
+      {
+        "name": "two normal Workers: encrypted offline field/ref/delete races, restart receipts and no echo",
+        "status": "passed"
+      },
+      {
+        "name": "normal encrypted receive rejects wrong key/scope and aborts a session-revoked held transaction",
+        "status": "passed"
+      }
+    ],
+    "strict": {
+      "count": 443,
+      "complete": 436,
+      "abort": 7
+    },
+    "atomicitySnapshots": 43,
+    "causalOrderingPairs": 10,
+    "databaseCleanupCount": 12,
+    "remainingGates": [
+      "Unrelated fence proof uses a normal file-family mutation, not a second managed collection; 1MiB budget is requested, not saturated",
+      "No gRPC/protobuf, rendered UI, native/mobile or full browser matrix proof"
+    ],
+    "runnerError": null,
+    "artifactFailures": []
+  },
+  "runnerTerminal": {
+    "sessionId": 72675,
+    "exitCode": 0,
+    "observedAt": "2026-10-18T05:19 UTC",
+    "naturalExit": true,
+    "note": "Node remained idle after persisted PASS/child cleanup, then exited naturally; no restart or signal."
+  },
+  "artifacts": {
+    "report.json": {
+      "path": "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-main-runtime-46e7360e/report.json",
+      "bytes": 42811936,
+      "sha256": "b1494d243ba9eead77288b1b867b8b72f45ea223c2d3d134aaaa2612e16e44c4"
+    },
+    "cleanup.json": {
+      "path": "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-main-runtime-46e7360e/cleanup.json",
+      "bytes": 1441,
+      "sha256": "f20e17307a302255308502ddcb810dd602978c9f27040b8e55a74570cd72adde"
+    },
+    "browser-main-runtime-46e7360e.log": {
+      "path": "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-main-runtime-46e7360e.log",
+      "bytes": 131,
+      "sha256": "80185c16ef9fee69a6e59f0f57901232bd232f8c3fdd087790c5b87088ccaf9b"
+    },
+    "browser-main-wasm-build.log": {
+      "path": "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-main-wasm-build.log",
+      "bytes": 11645,
+      "sha256": "f71617e1815077f0fa45faf1522c0e31bf87f3b492f9b9ac0217ce58fbef4402"
+    },
+    "browser-main-typecheck.log": {
+      "path": "/Users/ctk/orca/artifacts/zorid-native-20261018/browser-main-typecheck.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

@@ -17,12 +17,29 @@ recomputed raw SHA34031e83c8c02d963c9ddcbb496f0cf753e13c4285e78b437b47fef5e22d30
 and confirmed12pass,443strict/436complete/7abort/43snapshots/no runner error and
 owned cleanup. Raw evidence remains outside Git at the manifest's exact paths.
 
-This composition is not yet activated on main. Generated WASM must be regenerated
-from the resulting current Rust inputs under the shared serialized compile turn,
-then its artifact/source identity and affected composition checked. Existing3f
-assets prove3f, not a differently fingerprinted current-main build. No raw copied
-failed reports or wholelib replacement is included. Canonical S/localintent modules
-must never be overwritten by the older branch's records lib.
+Current-main composition `46e7360e693b688ff666feed46a6f01ffc45b79c`
+was then built from its actual Rust inputs: WASM build exit0, combined full
+TypeScript exit0, and a fresh normal browser run passed the same12 selected groups.
+Root read the current report:443 strict transactions (436 complete/7 abort),
+43 full atomicity snapshots,10 causal ordering pairs and12 database cleanups.
+The current generated WASM differs from the original3f artifact; its own hashes,
+source digest and fingerprint are retained in
+[browser-workblocks-current-main-evidence.json](browser-workblocks-current-main-evidence.json).
+Chrome80437 exit0, owned Vite58132 closed, temporary profile absence ENOENT,
+no cleanup/artifact errors. Runner session72675 naturally exited0 at05:19 UTC;
+its idle delay after PASS was not treated as terminal completion.
+
+Only documentation changes follow the tested46 source freeze. Canonical
+S/local-intent modules are preserved, and no wholelib replacement was performed.
+Independent reviewer stage5_history_inventory APPROVES the current46 evidence:
+recomputed fingerprint/source digest/generated hashes and actual443 strict
+starts/terminals,10 case-local ordering pairs,43 complete31-store snapshots and
+12 database deletions. Two observer-transformed loads preserve the exact normal
+Worker body. Reviewer accepted root-observed natural parent exit0; no tests,
+builds or edits were repeated. The31-store abort diff permits only the exact
+empty document-index catalog entry from a separate completed control transaction,
+not a blanket metadata exception. Source and runtime are accepted for canonical
+integration with the bounded limitations below.
 
 Remaining bounded proof limitations stay explicit: HTTP1 JSON relay, no second
 managed collection fence case, requested but unsaturated1MiB, no incoming foreign-
