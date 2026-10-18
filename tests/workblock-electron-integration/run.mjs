@@ -91,7 +91,7 @@ async function command(op,input){
 function readShape(value,target){assert.equal(value.record,target.record);assert.equal(value.generation,target.generation);assert.equal(value.revision.length,32);assert.ok(value.revision.every(byte=>Number.isInteger(byte)&&byte>=0&&byte<256));assert.equal(value.created,true);assert.equal(value.deleted,false);assert.ok(value.block);}
 async function releaseAndReject(record,target){
   assert.equal(cdp.events.filter(event=>event.method==='Runtime.exceptionThrown').length,0,'Unexpected renderer exception before release');
-  const value=await cdp.evaluate(`(async()=>{const {vault,context}=window.__workblockProof;await window.zorid.releaseDurableContext(vault.path,context.admissionId);try{await window.zorid.durableInvoke(vault.path,context.admissionId,'workblockCommand',[${JSON.stringify({schemaVersion:1,command:{op:'read',...target}})}]);return {accepted:true};}catch(error){return {accepted:false,code:error.code,commitUncertain:error.commitUncertain};}})()`);
+  const value=await cdp.evaluate(`(async()=>{const {vault,context}=window.__workblockProof;await window.zorid.releaseDurableContext(vault.path,context.admissionId);try{await window.zorid.durableInvoke(vault.path,context.admissionId,'workblockCommand',[${JSON.stringify({schemaVersion:1,command:{op:'read',...target}})}]);return {accepted:true};}catch(error){return {accepted:false,code:error.code,commitUncertain:error.commitUncertain,message:error.message,ownKeys:Object.getOwnPropertyNames(error)};}})()`);
   assert.equal(value.accepted,false);assert.equal(value.code,'durable_scope_changed');record.released=value;
   record.events=cdp.events;
 }
@@ -104,8 +104,9 @@ try{
   const target={record:'electron-block-'+randomUUID(),generation:'generation-'+randomUUID()};
   const original={...target,operation:target.generation,range:{start_ms:'253402300800000',end_ms:'253402300801000',timezone:'America/Toronto'},title:'Electron 😀 original'};
   evidence.target=target;const first=await launch('create-edit-release');
-  const negatives=await cdp.evaluate(`(async()=>{const {vault,context}=window.__workblockProof;const result=[];for(const [root,admission,request] of [[vault.path+'-stale',context.admissionId,{schemaVersion:1,command:{op:'read',...${JSON.stringify(target)}}}],[vault.path,'revoked-admission',{schemaVersion:1,command:{op:'read',...${JSON.stringify(target)}}}],[vault.path,context.admissionId,{schemaVersion:1,command:{op:'read',...${JSON.stringify(target)},owner:'forbidden'}}]]){try{await window.zorid.durableInvoke(root,admission,'workblockCommand',[request]);result.push({accepted:true});}catch(error){result.push({accepted:false,code:error.code,commitUncertain:error.commitUncertain});}}return result;})()`);
-  assert.deepEqual(negatives.map(value=>value.code),['durable_scope_changed','durable_scope_changed','invalid_workblock_request']);assert.ok(negatives.every(value=>value.accepted===false));evidence.admissionNegatives=negatives;
+  const negatives=await cdp.evaluate(`(async()=>{const {vault,context}=window.__workblockProof;const result=[];for(const [root,admission,request] of [[vault.path+'-stale',context.admissionId,{schemaVersion:1,command:{op:'read',...${JSON.stringify(target)}}}],[vault.path,'revoked-admission',{schemaVersion:1,command:{op:'read',...${JSON.stringify(target)}}}],[vault.path,context.admissionId,{schemaVersion:1,command:{op:'read',...${JSON.stringify(target)},owner:'forbidden'}}]]){try{await window.zorid.durableInvoke(root,admission,'workblockCommand',[request]);result.push({accepted:true});}catch(error){result.push({accepted:false,code:error.code,commitUncertain:error.commitUncertain,message:error.message,ownKeys:Object.getOwnPropertyNames(error)});}}return result;})()`);
+  evidence.admissionNegatives=negatives;
+  assert.deepEqual(negatives.map(value=>value.code),['durable_scope_changed','durable_scope_changed','invalid_workblock_request']);assert.ok(negatives.every(value=>value.accepted===false));
   const created=await command('create',original);assert.equal(created.operation,original.operation);assert.match(created.sequence,/^[1-9][0-9]*$/);
   let read=await command('read',target);readShape(read,target);assert.deepEqual(read.revision,created.revision);assert.deepEqual(read.block.ranges[0].range,original.range);
   const move={...target,operation:'move-'+randomUUID(),expectedRevision:read.revision,range:{start_ms:'253402300802000',end_ms:'253402300803000',timezone:'America/Toronto'}};
@@ -145,11 +146,12 @@ try{
   evidence.groups.push('actual-observer-interruption-identical-request-replay-one-durable-write');
   await releaseAndReject(third,target);await stop();
   const after=await provenance();assert.deepEqual(after,before,'Source/artifacts changed during pass; evidence invalid');await fs.writeFile(path.join(out,'provenance-after.json'),JSON.stringify(after,null,2));
-  evidence.status='passed-subset';
+  evidence.provenanceVerified=true;evidence.status='passed-subset';
 }catch(error){failure=error;evidence.status='failed';evidence.error={message:error.message,stack:error.stack};}
 finally{
   await stop().catch(error=>{evidence.cleanupError=error.message;failure??=error;});
   if(sandbox)await fs.rm(sandbox,{recursive:true,force:true}).catch(error=>{evidence.cleanupError=error.message;failure??=error;});
+  if(before&&!evidence.provenanceVerified)try{const after=await provenance();await fs.writeFile(path.join(out,'provenance-after.json'),JSON.stringify(after,null,2));evidence.provenanceVerified=JSON.stringify(after)===JSON.stringify(before);}catch(error){evidence.provenanceError=error.message;}
   evidence.finished=new Date().toISOString();evidence.runtime=runtime;
   await fs.writeFile(path.join(out,'result.json'),JSON.stringify(evidence,null,2));
 }
