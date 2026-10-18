@@ -4,7 +4,10 @@
 a public API freeze.** Owner: `term_06f49726-24ba-4006-b062-c3c7f30af67f`, task
 `task_f9ad0b71e1f3`, dispatch `ctx_b7c2998a892e`; isolated branch
 `tingkai-c/managed-tasks-desktop-ui`. This dispatch owns only this new document.
-Frozen Tasks source `cbe9dff6` and report `214a7079` remain untouched. Canonical main
+Initial contract commit: `28a174cc`. This bounded correction is owned by task
+`task_cf86fede4d8b`, dispatch `ctx_83be0250abee`, following independent U
+(`ctx_a2107585af7e`) no-journal-row replay finding. Frozen Tasks close source
+`b8b9a5ab` and report `3613f215` remain untouched. Canonical main
 integration belongs solely to `term_2fbd0185-6f86-4649-824c-92faf46852f7`.
 
 Source inspected in canonical `/Users/ctk/Projects/Zorid` at `f2988dee` and
@@ -59,7 +62,7 @@ revalidating all that history and may make an otherwise additive upgrade fail.
 | Same file: received_gate | **Exact schema_version equality today.** Replace only with explicit validated-lineage membership after conflict/missing-registration/policy gates; never `version <= active`. |
 | Same file: restore_accepted/admit_received | Shared restoration, union, pending, projection and quota decisions. Route history/origin validation here so adapters cannot widen versions independently. |
 | `crates/zorid-store/src/managed_records.rs`: ManagedRegistration, portable, managed_register, load, snapshot, check_restore, activate, managed_export | Registration is persisted in managed_collections.registration; IMMEDIATE registration transaction restores accepted states before replacing revision. All accepted-state restore paths need lineage-aware validation, not only receive gate. |
-| Same file: managed_apply, managed_local_operations | Exact authorized request replay is checked before new revision/default preparation. Preserve this ordering after upgrades; stale handle still fails, reacquire then replay original request. |
+| Same file: managed_apply, managed_local_operations | Exact authorized request replay precedes new revision/default preparation, but local_request currently fingerprints only scope, expected state digest and raw command, not origin schema/registration. Add a trusted original-intent fence to canonical request identity and reject no-row origin mismatch after reacquisition; held-plan fencing alone is insufficient. |
 | Same file: receive_in_transaction, retry_in_transaction, transition | Retains authenticated exact payload/source/status; receive shares ledger/cursor transaction; bounded retry uses persisted fair continuation. Reuse unchanged durability boundaries. |
 | `crates/zorid-wasm/src/records.rs`: registration, validate_registration, validate_accepted, recordsSnapshot, prepare_local_inner, prepare_received, prior_restore, validate_stored_binding | Rust owns canonical bytes, schemas and facts/plans. Replace every raw accepted State::restore bypass with lineage-aware restore; preserve structural-only stored-source validation for unresolved future payloads. |
 | `src/core/browser-managed-records.ts`: register, apply, receive/retryPage, validate | Registration validation and every accepted-state check happen inside IDB readwrite transaction; same bytes preserve revision, changed bytes rotate it. Keep registration revision in final plan/CAS read set. JS must not interpret lineage compatibility. |
@@ -205,11 +208,89 @@ boundary; quota failure before durable retention cannot acknowledge/advance sync
 Unknown wire family/action/value/format remains decoder failure/no progress under
 current dispatcher, not a promised managed incompatible receipt.
 
-Exact already-committed local retries, after reacquiring a current handle, return
-managed_local_operations' original result before fresh digest/default preparation.
-Never call State::prepare under v2 to replace an original uncertain v1 intent; its
-version check can collide. Uncommitted stale plans fail and require explicit
-caller reconciliation, not reuse with silently changed expected revision.
+### Original local intent must survive reacquisition, including no journal row
+
+Current `admission::local_request` identifies scope + expected state digest + raw
+command, without origin registration/schema. Therefore journal-first ordering is
+necessary but **not sufficient**: an uncertain v1 `Create([])` may never have
+committed. After v2 registration adds an optional default and the caller reacquires
+authority, the empty-state digest can be unchanged; a fresh apply with that same
+operation ID, digest and command finds no journal row and calls `State::prepare`
+under v2, silently adding v2 defaults. The old operation is not in State history,
+so State::prepare's existing retry collision cannot protect it. A held-plan CAS
+protects an already prepared plan, not this fresh call after reacquisition.
+
+Require a **trusted original registration/schema intent fence**, captured when
+the caller creates its local intent, before the first uncertain attempt. Retain it
+with the original operation ID, target/scope (including generation/restores),
+expected digest and raw command through failures, host-session/handle reacquisition
+and any supported retry/restart. Bind this origin evidence into the Rust canonical
+request identity stored in `managed_local_operations` and its browser equivalent.
+Reacquiring a current handle must never replace that evidence with the current
+schema or current defaults. An old handle/registration revision is not itself new
+authority, and an arbitrary caller-supplied numeric schema version is not trusted
+origin evidence. Semantic origin identity and current authorization are separate.
+
+Required local apply order in both native and WASM/browser paths:
+
+1. Require current authorized handle/session, enrolled scope and target ownership.
+   Validate the retained origin evidence and its binding to the original intent;
+   it cannot be used as authority for another vault, collection, operation or
+   changed command. The exact opaque-token/evidence transport is a root decision
+   below, not a public API selected by this document.
+2. Build canonical original request identity using the **retained** origin fence,
+   scope, expected digest and raw command; do not recompute semantic origin from
+   the newly acquired registration. Look up the durable journal by original ID.
+3. If a committed row exists, compare the complete original request, including
+   its origin fence. A mismatch is an identity collision. An exact authorized
+   replay returns the originally stored result bytes and original operation/
+   payload binding before fresh state digest checks, default expansion or
+   preparation. It does not issue another operation, receipt, sequence or outbox
+   item, even if active registration has since upgraded.
+4. If no row exists, require the retained origin declaration/intent fence to match
+   the current authorized semantic registration under the reviewed origin-format
+   rule. An origin mismatch, missing original evidence or unverifiable evidence
+   rejects for explicit caller reconciliation; do **not** call State::prepare,
+   materialize new defaults or silently rebind the same ID. Certified compatible
+   lineage does not authorize reinterpreting an uncertain local intent.
+5. Only a matching new original intent may proceed to existing expected-state,
+   restore, preparation, source and quota checks, and the final registration
+   revision/CAS fence in the commit transaction. Held plans still require that
+   fence. A caller choosing a genuinely new v2 intent does so explicitly after
+   reconciliation with a new retained identity, never as an invisible retry.
+
+Proposed affected boundaries (source assignments still required):
+
+- `crates/zorid-records/src/admission.rs::local_request`: extend private canonical
+  identity to include verified original-intent evidence. Origin validation belongs
+  to shared Rust compatibility/admission, not JS default inference.
+- `crates/zorid-store/src/managed_records.rs`: the local intent/managed_apply input
+  boundary captures or admits the trusted origin fence; journal comparison uses
+  it before preparation, with no-row mismatch rejection in the same transaction.
+  Current authorization remains mandatory even for an exact committed replay.
+- `crates/zorid-native/src/workblocks.rs`: first-party command intent capture and
+  retained pending request must carry the original fence through session/handle
+  reacquisition. Session registration alone must not mint a fresh origin for an
+  existing uncertain operation. This is a generic records requirement as well;
+  WorkBlock Create still independently requires its valid range.
+- `crates/zorid-wasm/src/records.rs::{canonical_local_request,prepare_local_inner}`:
+  canonical request generation and local facts/plans must admit the original
+  fence, do exact replay first and reject no-row mismatch before State::prepare.
+  Stored local-replay validation must check the same request representation.
+- `src/core/browser-managed-records.ts::{ManagedLocalInput,apply}`: capture/retain
+  the original opaque intent evidence before the first call, clone it with the
+  existing stable request, and pass it through reacquisition into Rust unchanged.
+  Newly read CollectionRow.registration is current authorization/commit evidence,
+  not a substitute origin. Normal Worker/consumer pending-intent capture across
+  message/session boundaries needs explicit ownership if those seams must change.
+
+No final token shape, signing scheme, new token ledger or public plugin API is
+frozen here. Root must choose how a first-party host issues/revalidates canonical
+origin evidence, binds it to intent and retains it for any promised restart retry.
+If no trusted origin can be recovered, reject/reconcile rather than guessing.
+This is required semantic retry safety in the new private format, not a legacy
+compatibility layer. Update fixtures and explicitly reject missing-fence input;
+no dev-only dual request decoder or current-registration fallback is authorized.
 
 Local SQLite DDL/IDB version/index upgrades are separate physical-format mechanisms.
 They may rebuild projections from retained authority but never relabel operation
@@ -231,8 +312,8 @@ UI changes are needed by this document.
 | --- | --- |
 | Portable compatibility owner | NEW compatibility.rs and tests/schema_compatibility.rs under crates/zorid-records; lib.rs module/helper and admission.rs shared gates. Depends on canonical optional-only guard. Preserve existing tests/schema_registration.rs and tests/admission.rs expectations, update only explicit new-format fixtures. |
 | Compiled WorkBlock domain owner | crates/zorid-records/src/first_party.rs plus existing crates/zorid-records/tests/workblocks.rs; immutable schema_v1/catalog and origin validators. No production v2 feature invented: prove optional v2 in an internal fixture or approve one concrete metadata field first. |
-| Native persistence owner | crates/zorid-store/src/managed_records.rs and tests/managed_records.rs; registration bytes, restore coverage and replay/rollback. Coordinate crates/zorid-native/src/workblocks.rs registration/restore with its sole active owner; no native/mobile UI redesign. |
-| WASM/browser owner | crates/zorid-wasm/src/records.rs, src/core/browser-managed-records.ts, tests/browser-managed-records.test.ts; existing browser proof fixture for real generated WASM/strict IDB. Any browser host/registry change requires named separate ownership. |
+| Native persistence owner | crates/zorid-store/src/managed_records.rs and tests/managed_records.rs; registration bytes, original local-intent fence/journal identity, restore coverage and replay/rollback. Coordinate crates/zorid-native/src/workblocks.rs registration/restore with its sole active owner; no native/mobile UI redesign. |
+| WASM/browser owner | crates/zorid-wasm/src/records.rs, src/core/browser-managed-records.ts, tests/browser-managed-records.test.ts; local intent capture/request/facts and stored replay validation; existing browser proof fixture for real generated WASM/strict IDB. Any browser host/registry change requires named separate ownership. |
 | Independent reviewer/integrator | Review origin gate and every accepted restore/export path, canonical fixture bytes, failure atomicity and operation conservation before sole-main integration. Actual normal Worker and native client proofs remain separate delivery evidence. |
 
 Meaningful required tests (future work; none executed by this document task):
@@ -252,6 +333,19 @@ Meaningful required tests (future work; none executed by this document task):
 - Two native Store instances and two IDB transactions race identical and divergent
   extensions; stale prepared local commit fails, exact committed v1 replay under
   reacquired v2 handle returns original durable result; changed ID intent collides.
+- **Before commit / no journal row:** capture trusted v1 intent for generic
+  Create([]), lose/abort the first attempt before durable commit, upgrade to v2
+  with a new optional default, and reacquire a current handle. Prove empty-state
+  digest is unchanged, then freshly call apply with original ID/digest/command/
+  origin (not an old held plan). It must reject before preparation with zero
+  state/history/default/outbox/journal writes; missing/unverifiable/replaced
+  origin also rejects. Run in real native SQLite and generated WASM/strict IDB.
+- **After commit / acknowledgement lost:** commit a v1 Create([]), retain exact
+  request+origin, upgrade/reacquire and repeat. Return byte-identical original
+  result and payload/operation identity without v2 defaults or new sequence/
+  receipt/outbox entries; changing only origin, scope, digest or command under
+  that ID collides. Separately exercise held-plan registration CAS failure so
+  these tests cannot pass by testing only the older plan path.
 - Crash/abort before registration commit, after commit before retry, and between
   retry pages; retained future payload activates once after certified registration,
   fair continuation advances past blocked prefix, no extra cursor/ciphertext/echo.
@@ -276,7 +370,13 @@ Meaningful required tests (future work; none executed by this document task):
 3. Select a real compatible WorkBlock v2 field if desired, or keep v2 as a test-only
    fixture until a product field is approved. Do not weaken current exact compiled
    WorkBlock gates globally just to make generic tests pass.
-4. Assign shared records, native Store/domain, WASM/browser and independent review
+4. Resolve trusted original-intent issuance/authorization and canonical origin
+   representation/transport across native, WASM, browser and retained consumer
+   requests before local retry changes. Require intent binding and restart/reacquire
+   semantics; neither a process handle nor an untrusted version field suffices.
+   Preserve journal-first original replay and no-row origin mismatch rejection
+   regardless of the representation selected; do not freeze a public plugin API.
+5. Assign shared records, native Store/domain, WASM/browser and independent review
    owners, resolving active UI/native/host ownership before edits. No destructive
    transform/type conversion is included without a new recoverable semantic plan.
 
