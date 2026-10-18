@@ -116,6 +116,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:10UTC: rootfocusedread corrected durable-adapter-contract SHA2567c638a6c01bc565d5042a94c7e81ac1bd5c454b277e0dff52ed97f7a76b2e0fb
+APPROVED for isolatednativeimplementation. All explicitgenerationtarget/unique
+key+priorcommittedtombstone/replay-beforefreshrevision/exactschema/faircontinuation
+corrections included. NamedStore6307/ctx856 existingfilegrantff87 reaffirmed,
+wirecf5NEWmodule/testsscope unchanged. No furtherapprovalloop forunchangedsource
+scope; actualdurableimplementation/review/tests beforemain/Phase1acceptance.
+Nativephonebuild owns heavyresources, no new compiler granted.
+
 01:09UTC: uservaultsubtitle6line removal independently source-approved, final
 NativePages SHAa41bac48..., committedphonecandidate2add282b (otherSimfb1csource
 unchanged). SignedDev10 buildstartingunderextendedgrant, pinnedpnpm/Rust/jobs1,
