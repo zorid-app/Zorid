@@ -77,6 +77,18 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Intent/migration assignment (2026-10-18 04:03 UTC): recovered reviewed docs
+903ecfe7/86bd56f9 are canonical; origin-intent-decision.md selects reserved
+host checkpoint namespace, explicit tagged settlement and32live/16MiB plus
+4096 historical-key bounds. Managed coordinator names isolated portable/native/
+WASM/browser/admission/transport owners after corresponding current-v1 freezes;
+no overlapping source or permissive generic-apply bypass. V2 stays test-only,
+no DB/index/wire/dependency change. Actual SQLite/generatedWASM/strictIDB gates
+remain required. Finite replay/retirement retention is recorded as future work,
+not unlimited product history. Tasks actual split failure includes product
+identity error, not just driver readiness; source owner diagnoses projection/ID
+admission before another acceptance claim.
+
 Mobile priority (2026-10-18 04:00 UTC): direct user finding relayed by native
 owner confirms Dev17 New File FAB inert. Dedicated native-new-note-ui owns only
 NewNote-specific root/startup/Pages borrow/recovery/factory inspection/PBX hunks,

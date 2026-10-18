@@ -27,6 +27,16 @@ Shared Markdown extraction, indexes and Base semantics are implemented and
 accepted in the [semantics plan](shared-document-semantics-plan.md). Parallel
 execution remains future work; live editor parsing stays separately owned.
 
+## Managed-record replay and retired-intent retention
+
+The current bounded internal implementation has4096 replay records/16MiB and
+the approved private intent design retains up to4096 retired keys. This is a
+finite operation-history ceiling, not an unlimited lifetime storage promise.
+Design safe compaction/archival and recovery-aware retention before removing
+those bounds: retain exact uncertain/committed replay, prevent retired identity
+reuse and preserve offline dependency/history semantics. Never free capacity by
+silently deleting unresolved requests, retirement evidence or user content.
+
 ## P2P live sync
 
 Explicitly deferred from the current implementation pass by the user. Retained
