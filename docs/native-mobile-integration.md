@@ -1220,3 +1220,24 @@ Tab wiring checkpoint — 2026-10-18 00:28 UTC (SOURCE ONLY):
 - Final2f coordinator re-review ecd52284 started; latest didInstall handshake
   delta89ff sent. No native compiler after granted57718 returned; root Rust
   menu corrections own slot. No new phone/simulator build or runtime claim.
+
+
+Coordinator source acceptance — 2026-10-18 00:30 UTC:
+Independent2f final acceptance2ddc5763f101 inspected exact SHA256
+a83c45cb8fda3db5c56c0d471e6ef782381a1558fad7cc20b018a7c28d910d05, including
+persistence retry ordering, quarantined ShowTabs preservation, required
+didInstall acknowledgement and installed-source save/quiesce cleanup. Owner
+verified bytes, committed875fc451 plus minimal project membership. plutil and
+diffcheck pass. This is SOURCE acceptance only: no compiler/project/link/native
+UI proof. No source-byte changes after freeze. Factory Source/Prepared signatures
+explicitly frozen72e15ce25739; no draft-hash substitution for API agreement.
+
+Root canonical Rust native/menu bb155f3a now integrated17/17 focused tests,
+combinedmain host cargo check11217 terminal0; no native build grant. Pages09a4
+source ready; headerhook683f source ready; factory File/Home source review ready
+pending coherent commit. None composed/runtimeaccepted by this ledger. Settings
+Choosevault fourth rootcallback298c proposed/workerfollowup explicitlystarted;
+configured editor <> history must use root route intent, not legacy Boolean
+return. That routehistory integration remains mandatory. Newnote separate
+once-only/durability contract still pending root review, no genericHomehost.
+Phone9 unchanged, simulator retained booted without test app/helper.
