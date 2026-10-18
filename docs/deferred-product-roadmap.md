@@ -116,6 +116,14 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:16UTC: d809 froze NativeMobile-only tab seams5742f382; root independent
+source review assigned against reachable Git objects. Requires371's exact
+recordNoteOpened(path:entryId:isCurrent:onValidated:completion:) fresh-listing
+witness, guards before/after callback and the frozen NativeTabDocument fields.
+Dependency relayed via msg_7704fa11daad. No standalone Swift compile/runtime
+claim; Python assertions are source/model evidence only. Existing native owner
+frozen527 frontend slot unchanged; no additional compiler grant.
+
 00:15UTC: main d1ceed0a integrates the reviewed native staged-import library/ABI
 from d9836528. All six integrated source files compare exactly with the tested
 candidate. Corrected host module50497 exit0,10/10; ABI63416 exit0,5/5; logs
