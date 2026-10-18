@@ -81,3 +81,23 @@ Canonical pnpm12.14 frozen offline install restored seven cached packages,
 including FullCalendar7.1.3 and temporal-polyfill1.0.6, without lock/source change.
 This is source integration, not paired Swift/iOS interaction acceptance or
 adjacent-page/undo retention. Dev17 currently being built predates this channel.
+
+## Paired native review checkpoint — 2026-10-18 04:13 UTC
+
+Independent source review of the moving `native-warm-editor` snapshot found a
+source-readiness gap. Observed base `95eeb2d1`, NativeMobile blob
+`962901d7cb4485e95eaa5a755c5ffe7ad99ae9bd`: beginning navigation clears
+`documentSnapshotReady`, while failed/stale completion does not revalidate it.
+Canonical JS rollback restores the cached source without another `noteOpened`.
+The source therefore cannot begin another retained navigation after this path.
+Terminal failed/stale proves rollback settled, not that source rendering succeeded;
+the native owner must safely reattest the restored source or keep a recoverable
+fence. Root relayed this finding in Orca `msg_52e319b47a14`.
+
+DTO validation, fresh by-ID ready checks and the rejected-ready rollback barrier
+were consistent in that snapshot. Root wiring was still incomplete: the retained
+navigation method had no caller. This is a moving-source review finding, not
+approval of the paired implementation or a native runtime result. The separate
+NewNote18 candidate `9cf7fe9f` excludes this unfinished warm source; root confirmed
+its native app/project bytes match reviewed `4e390d70` and current main
+`c233362a` is an ancestor before the assigned iOS verification slot.
