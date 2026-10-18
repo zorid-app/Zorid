@@ -3,8 +3,9 @@
 Zorid is a Markdown workspace with three presentation targets and a shared Rust
 data core. TypeScript renders the editor and document views; platform shells
 provide windows, native navigation and operating-system integration. Rust owns
-portable data semantics and native storage operations. Browser persistence is
-currently provided by TypeScript around the same Rust/WASM semantics.
+portable data semantics and native storage operations. The browser is intended
+to join existing sync groups rather than own a durable local vault. Its current implementation still persists data in IndexedDB around
+the same Rust/WASM semantics; that standalone behavior is not the product target.
 
 This manual describes canonical source at `824ddd2c` plus the explicitly marked
 architecture decisions accepted on 2026-10-18. Isolated feature work and historical
@@ -15,7 +16,7 @@ runtime results do not establish current feature completion.
 | Platform | What presents the application | How it reaches the core |
 | --- | --- | --- |
 | [Desktop](platforms/desktop.md) | Electron window hosting the TypeScript workspace and CodeMirror editor | Preload/IPC → Rust host process → native core |
-| [Browser](platforms/browser.md) | Browser renders the same TypeScript workspace/editor | Dedicated Worker → Rust/WASM + TypeScript IndexedDB transactions |
+| [Browser](platforms/browser.md) | Shared TypeScript workspace/editor; joins existing sync groups | Rust/WASM client; current Worker/IndexedDB path differs from target |
 | [iOS](platforms/ios.md) | Native UIKit/SwiftUI shell embeds the shared editor in Capacitor/WKWebView | Capacitor plugin → Swift session queue → Rust C ABI/embedded host |
 
 Android currently retains the older Capacitor Filesystem adapter. It is not yet

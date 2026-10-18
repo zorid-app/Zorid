@@ -6,7 +6,7 @@ This page is a command guide, not a runtime acceptance report.
 | Target | Presentation | Core |
 | --- | --- | --- |
 | Desktop | Electron + shared TypeScript/CodeMirror | Native Rust host process |
-| Browser | Shared TypeScript/CodeMirror | Rust/WASM Worker with current IndexedDB persistence |
+| Browser | Shared TypeScript/CodeMirror; intended to join existing sync groups | Rust/WASM; current Worker/IndexedDB standalone startup differs from target |
 | iOS | Native shell + Capacitor/WKWebView shared editor | Embedded native Rust via C ABI |
 | Android | Existing Capacitor project/shared renderer | Older Filesystem adapter; native Rust path pending |
 

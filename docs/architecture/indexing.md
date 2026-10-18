@@ -32,7 +32,9 @@ Reuse content-derived parse results using content hashes plus parser/schema and
 relevant semantic options. Reattach path/entry/revision context correctly; cached
 metadata from another identity is not an authority witness. A future cache key
 must account for all inputs that affect extraction, not only file modification time.
-Separate app-local `cache.sqlite` is accepted placement direction, not current code.
+Separate app-local `cache.sqlite` is accepted native placement direction, not
+current code. Browser indexes operate on the joined group working state; persistent
+cache storage is optional and need not mirror native databases.
 
 ## Source map
 

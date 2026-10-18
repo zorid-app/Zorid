@@ -11,12 +11,18 @@ SQLite infrastructure layer yet, and the browser still uses IndexedDB.
 
 ## Accepted direction
 
-Provide shared Rust database infrastructure with platform-specific access:
+Provide shared Rust SQLite infrastructure for durable desktop/mobile storage.
+Browser clients share domain/service contracts but join existing sync groups; they
+are not required to use a persistent local SQLite database. The earlier mandatory
+browser SQLite/OPFS proposal is superseded. Browser SQLite/WASM remains an optional
+implementation choice if it helps reuse queries or manage working state.
+
+The native storage path is:
 
 ```text
 Vault / managed-data / recovery / index services
   → shared connection, transaction, schema and diagnostics infrastructure
-  → native SQLite (desktop/mobile) or SQLite/WASM + OPFS (browser)
+  → native SQLite (desktop/mobile)
 ```
 
 The layer should own connection configuration, database roles/paths, schema
@@ -35,9 +41,11 @@ infrastructure with managed records.
 1. Inventory current transactions and preserve their atomic boundaries while
    wrapping existing native Store access. Do not split tables whose joint commit
    is a correctness requirement.
-2. Prove Rust/WASM integration, supported browser VFS/worker ownership, persistence,
-   locking, quota errors and restart behavior. Native rusqlite bindings do not
-   automatically become a browser implementation.
+2. Specify browser join/bootstrap and pending-edit behavior independently of
+   native SQLite rollout. If SQLite/WASM is selected for browser working state,
+   prove its integration and required lifecycle/concurrency behavior. Persistent
+   OPFS is not a platform-parity gate; native rusqlite does not automatically
+   become a browser implementation.
 3. Define the app-local vault-ID/path resolver used by desktop, mobile and CLI.
 4. Move derived caches and add recovery storage independently. Cross-database
    operations require explicit ordering/retry; do not assume a global transaction.

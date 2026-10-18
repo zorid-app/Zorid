@@ -31,8 +31,11 @@ The user wants this subsystem to match the inspected Obsidian autosave/File Reco
 - Best-effort immediate capture of intended text after a catchable save failure.
 - Version selection/preview and explicit restoration through the ordinary save path.
 
-Snapshots belong in per-vault app-local `recovery.sqlite`, not the vault authority
-DB and not synced history. A committed snapshot survives restart; this does not
+On desktop/mobile, snapshots belong in per-vault app-local `recovery.sqlite`, not
+the vault authority DB and not synced history. This does not require a matching
+persistent browser recovery database: browser joins existing sync groups. Its
+pending-edit, reload and retention behavior remains a separate design task.
+A committed snapshot survives restart; this does not
 make every keystroke durable or promise that an abrupt pre-autosave crash loses
 nothing. Native suspension and browser lifecycle limits need explicit behavior.
 

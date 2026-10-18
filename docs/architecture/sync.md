@@ -25,6 +25,15 @@ in its own server database. The relay does not need vault plaintext keys. Fixtur
 operator provisioning and tested transports do not establish finished enrollment,
 Google integration or production account administration UI.
 
+## Browser membership
+
+The intended browser client joins an existing sync group instead of owning a
+standalone durable local vault. It still needs scoped authorization, key access,
+initial state acquisition, convergence and reconnect behavior. Local working
+state/cache persistence is optional. Current IndexedDB receipts alone are not a
+remote acknowledgment, and deleting unconfirmed edits is not an allowed shortcut.
+Offline/reload retention and group-join UX remain design work.
+
 ## What participates in sync
 
 Sync logical vault changes and admitted managed-record operations, not live SQLite

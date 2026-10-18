@@ -2,6 +2,14 @@
 
 ## Latest sequencing and architecture correction — 2026-10-18
 
+**Browser role correction:** browser joins existing sync groups; it is not expected
+to own a persistent local vault like desktop/mobile. This supersedes the mandatory
+browser SQLite/OPFS direction. Local working state/cache is allowed; persistence,
+offline/reload and pending-edit policy remain to be designed. Current standalone
+IndexedDB code is unchanged by this documentation correction. Native SQLite and
+app-local per-vault cache/recovery placement remain accepted.
+
+
 User now prioritizes saving/recovery correctness and Rust indexing/search/cache
 performance, then complete desktop Bases, Tasks, Calendar and Google integration,
 then iOS implementation. Preserve existing native work; older parallel mobile

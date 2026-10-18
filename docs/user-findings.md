@@ -2,6 +2,13 @@
 
 ## Current user steering — 2026-10-18
 
+**Browser role correction:** browser joins existing sync groups; it is not expected
+to own a persistent local vault like desktop/mobile. This supersedes the mandatory
+browser SQLite/OPFS direction. Local working state/cache is allowed; persistence,
+offline/reload and pending-edit policy remain to be designed. Current standalone
+IndexedDB code is unchanged by this documentation correction. Native SQLite and
+app-local per-vault cache/recovery placement remain accepted.
+
 - **Sequence:** saving/recovery bug fixes and Rust indexing/search/cache performance
   first; then fully usable desktop Bases, Tasks, Calendar and Google integration;
   resume iOS implementation afterward. Preserve paused work. This supersedes older
@@ -9,11 +16,12 @@
 - **Open saving findings:** persistent import/reconciliation attention banner and
   accumulating `.previous` artifacts. Source mechanism inspected; actual vault cause,
   safe cleanup and changed save strategy remain unimplemented/unverified.
-- **Accepted architecture:** SQLite infrastructure shared across platforms; native
-  authority stays in the vault; per-vault cache/recovery SQLite goes in app-local
-  storage. Browser SQLite/OPFS remains a feasibility gate; existing browser backend
-  is IndexedDB. Snapshots follow the inspected Obsidian local retention behavior; they are
-  not rebuildable caches and not synced history.
+- **Accepted architecture:** shared native SQLite infrastructure; native authority
+  stays in the vault and per-vault cache/recovery SQLite goes in app-local storage.
+  Browser joins existing sync groups; SQLite/OPFS is optional, not a persistence
+  gate. Current browser backend remains IndexedDB. Native snapshots follow the
+  inspected Obsidian local retention behavior; they are not rebuildable caches
+  and not synced history.
 - **Documentation:** maintain platform-first [architecture modules](architecture/README.md)
   with current/target distinctions. This documentation task does not implement the
   storage migration, performance work or Google integration.

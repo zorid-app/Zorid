@@ -28,7 +28,7 @@ Browser storage uses TypeScript IndexedDB transactions around portable Rust/WASM
 plans. Its derived index keys also currently share the existing authority DB.
 Current checkpoint/host-intent rows are not periodic File Recovery snapshots.
 
-## Accepted placement direction — not yet implemented
+## Accepted native placement direction — not yet implemented
 
 ```text
 Vault/
@@ -42,7 +42,9 @@ Platform app-local storage/
 ```
 
 Desktop uses its app-data directory; native mobile uses private app storage.
-Browser equivalent databases would use OPFS after SQLite/WASM feasibility passes.
+This native layout is not a browser requirement. The browser joins an existing
+sync group; local working state/caches do not constitute an independent durable
+vault. Optional persistence and offline/reload behavior remain to be designed.
 Recovery and cache do not travel with a copied vault and are excluded from sync.
 Define stable local vault identity, copied/moved-vault handling, retirement and CLI
 path discovery before cutting over; a display name is not a storage identity.
