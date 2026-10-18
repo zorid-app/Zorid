@@ -643,6 +643,11 @@ final class NativeEditorContainer: UIViewController {
     private let onClosed: () -> Void
     var onNoteOpened: ((String) -> Void)?
     var onDocumentValidated: ((NativeTabDocument) -> Void)?
+    // Factories must weakly capture root/container and recheck their exact owner.
+    var onShowDocumentTabs: (() -> Void)? { didSet { installNativeNavigationControls() } }
+    var onReturnToNativePages: (() -> Void)? { didSet { installNativeNavigationControls() } }
+    private var returnToPagesItem: UIBarButtonItem?
+    private var showDocumentTabsItem: UIBarButtonItem?
     private var documentSourceOwnerID: UUID?
     private var documentOwnerIsCurrent: (() -> Bool)?
     private var closeTicket: UUID?
@@ -687,10 +692,7 @@ final class NativeEditorContainer: UIViewController {
         view.accessibilityIdentifier = "native.editor.container"
         navigationItem.hidesBackButton = true
         installRouteControls()
-        let done = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
-        done.accessibilityIdentifier = "native.editor.vaults"
-        done.accessibilityLabel = "Return to " + originTitle
-        navigationItem.rightBarButtonItem = done
+        installNativeNavigationControls()
         editor.vaultPlugin.isCurrentDocumentOwner = { [weak self] in
             guard let self = self, !self.leaving else { return false }
             return self.currentDocumentOwner(requiresVisible: true)
@@ -746,6 +748,7 @@ final class NativeEditorContainer: UIViewController {
         navigationController?.interactivePopGestureRecognizer?.isEnabled = false
         view.setNeedsLayout()
         updateToolbarLayout()
+        updateRouteControls()
         if !leaving { editor.vaultPlugin.requestForegroundEditorState() }
     }
 
@@ -815,6 +818,7 @@ final class NativeEditorContainer: UIViewController {
             self.view.setNeedsLayout()
             self.view.layoutIfNeeded()
             self.updateToolbarLayout()
+            self.updateRouteControls()
             if !self.leaving, self.view.window != nil,
                self.navigationController?.topViewController === self {
                 self.editor.vaultPlugin.requestForegroundEditorState()
@@ -998,10 +1002,62 @@ final class NativeEditorContainer: UIViewController {
         }
         legacyHistoryBack?.isEnabled = canGoBack && !leaving
         legacyHistoryForward?.isEnabled = canGoForward && !leaving
-        navigationItem.rightBarButtonItem?.isEnabled = !leaving
+        showDocumentTabsItem?.isEnabled = rootNavigationIsCurrent && onShowDocumentTabs != nil
+        returnToPagesItem?.isEnabled = documentTabsConfigured
+            ? rootNavigationIsCurrent && onReturnToNativePages != nil
+            : (!leaving && currentDocumentOwner(requiresVisible: true)) || legacyClosedReturnIsCurrent
     }
 
-    @objc private func returnToVaults() { leaveForNativeRoute { _ in } }
+    private var documentTabsConfigured: Bool {
+        documentSourceOwnerID != nil || onShowDocumentTabs != nil || onReturnToNativePages != nil
+    }
+
+    private var rootNavigationIsCurrent: Bool {
+        !leaving && documentSourceOwnerID != nil && documentOwnerIsCurrent?() == true
+            && currentDocumentOwner(requiresVisible: true)
+    }
+
+    private var legacyClosedReturnIsCurrent: Bool {
+        !documentTabsConfigured && closed && closeAcknowledged
+            && UIApplication.shared.applicationState == .active
+            && owningScene?.activationState == .foregroundActive
+            && viewIfLoaded?.window != nil && navigationController?.topViewController === self
+            && presentedViewController == nil
+    }
+
+    private func installNativeNavigationControls() {
+        guard isViewLoaded else { return }
+        let done = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
+        done.accessibilityIdentifier = "native.editor.vaults"
+        done.accessibilityLabel = "Return to " + originTitle
+        returnToPagesItem = done
+        if onShowDocumentTabs != nil {
+            let tabs = UIBarButtonItem(image: UIImage(systemName: "square.on.square"), style: .plain,
+                                       target: self, action: #selector(showDocumentTabs))
+            tabs.accessibilityIdentifier = "native.editor.showTabs"
+            tabs.accessibilityLabel = "Show tabs"
+            showDocumentTabsItem = tabs
+            navigationItem.rightBarButtonItems = [tabs, done]
+        } else {
+            showDocumentTabsItem = nil
+            navigationItem.rightBarButtonItems = [done]
+        }
+        updateRouteControls()
+    }
+
+    @objc private func showDocumentTabs() {
+        guard rootNavigationIsCurrent, navigationController?.transitionCoordinator == nil else { return }
+        onShowDocumentTabs?()
+    }
+
+    @objc private func returnToVaults() {
+        if documentTabsConfigured {
+            guard rootNavigationIsCurrent, navigationController?.transitionCoordinator == nil else { return }
+            onReturnToNativePages?()
+            return
+        }
+        leaveForNativeRoute { _ in }
+    }
 
     // Root supplies a weak identity/lifetime-only container/session/owner check.
     // It must remain true while covered, transitioning or backgrounded; this
@@ -1013,6 +1069,7 @@ final class NativeEditorContainer: UIViewController {
         retirementReceipt = nil
         documentSourceOwnerID = sourceOwnerID
         documentOwnerIsCurrent = isCurrent
+        if isViewLoaded { updateRouteControls() }
     }
 
     private func currentDocumentOwner(requiresVisible: Bool) -> Bool {
@@ -1052,6 +1109,19 @@ final class NativeEditorContainer: UIViewController {
 
     // Both routes use the same save/ACK/close fence; only this wrapper navigates.
     func leaveForNativeRoute(completion: @escaping (Bool) -> Void) {
+        // Configured routing belongs to root, including history. A partial hook
+        // installation must never silently fall back to closing/popping locally.
+        guard !documentTabsConfigured else { completion(false); return }
+        if closed {
+            guard legacyClosedReturnIsCurrent, navigationController?.transitionCoordinator == nil else { completion(false); return }
+            completion(true)
+            // An explicit foreground return may retire an already-closed legacy
+            // route. Do not save/close again or notify onClosed a second time.
+            if legacyClosedReturnIsCurrent, navigationController?.transitionCoordinator == nil {
+                navigationController?.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
+            }
+            return
+        }
         closeEditor(isCurrent: { [weak self] in self?.currentDocumentOwner(requiresVisible: true) == true }) { [weak self] result in
             guard let self = self else { completion(false); return }
             switch result {
@@ -1098,6 +1168,7 @@ final class NativeEditorContainer: UIViewController {
                         containerID: ObjectIdentifier(self), sessionID: ObjectIdentifier(session), closeTicket: ticket)
                 }
                 if !closed { closed = true; onClosed() }
+                updateRouteControls()
                 completion(stillCurrent ? .success(()) : .failure(MobileFailure.unavailable))
             }
         }
@@ -1162,6 +1233,7 @@ final class NativeEditorContainer: UIViewController {
                 }
                 guard self.owningScene?.activationState == .foregroundActive else { return }
                 self.backgroundHandled = false
+                self.updateRouteControls()
             })
         }
     }
