@@ -9,6 +9,7 @@ import type { DesktopBridge, DesktopVault, DesktopReconciliation } from './bridg
 export interface PlatformVault {
   readonly workBlocks?:import('../core/workblocks.ts').WorkBlockService;
   readonly documentSemantics?:DocumentService;
+  nativeDocumentNavigation?:import('./mobile-native.ts').NativeDocumentNavigation;
   /** Presentation bridge only; native controls execute shared editor commands. */
   nativeEditor?: {
     setState(state:import('../ui/editor.ts').NativeEditorState):Promise<void>;

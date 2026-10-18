@@ -10,6 +10,8 @@ const encoder = new TextEncoder(), decoder = new TextDecoder();
 const body = (text: string) => btoa(String.fromCharCode(...encoder.encode(text)));
 function scanStatus(overrides:Record<string,unknown>={}) { return {scanId:'scan_fixture',complete:true,scanComplete:true,finished:true,observed:1,imported:1,namespaceApplied:0,issueCount:0,issuesTruncated:false,issues:[],...overrides}; }
 function fixture() {
+  const navigationCallbacks=new Set<(event:any)=>void>(), navigationResults:any[]=[];
+  let navigationCapability:any=undefined,navigationHook:((result:any)=>Promise<void>)|undefined;
   const requests: any[] = [], heads = new Map<string, any>(), intents = new Map<string, any>(), receipts = new Map<string, any>();
   let content = 'before', revision = 'rev1', path = 'Note.md', exists = true, closes = 0, sequence = 0, active = 0, maxActive = 0;
   let failCommand = false, failCheckpoint = false, failCommit = false, wrongId = false, failReleaseAck = false, failReleaseDispatch = false;
@@ -34,10 +36,11 @@ function fixture() {
 
   let initialPath: any = undefined, initialEntryId: any = undefined, createNoteOnOpen: any = undefined, openedHook: ((path:string)=>Promise<void>) | undefined; const opened: string[] = [],openedRefs:{path:string;entryId:string}[]=[];
   const plugin: NativeVaultPlugin & {close():Promise<void>} = {
-    async addListener(event:'lifecycleRequest'|'editorAction'|'editorStateRequest',handler:(event:any)=>void) { if(event==='editorStateRequest'){requestInstalls++;if(requestInstallHook)await requestInstallHook();stateRequestCallbacks.add(handler);return{remove:async()=>{requestRemovals++;stateRequestCallbacks.delete(handler);}};} if(event==='editorAction'){actionInstalls++;if(actionInstallHook)await actionInstallHook();actionCallbacks.add(handler);return{remove:async()=>{actionRemovals++;actionCallbacks.delete(handler);}};} assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
+    async addListener(event:'lifecycleRequest'|'editorAction'|'editorStateRequest'|'documentOpenRequest',handler:(event:any)=>void) { if(event==='documentOpenRequest'){navigationCallbacks.add(handler);return{remove:async()=>{navigationCallbacks.delete(handler);}};} if(event==='editorStateRequest'){requestInstalls++;if(requestInstallHook)await requestInstallHook();stateRequestCallbacks.add(handler);return{remove:async()=>{requestRemovals++;stateRequestCallbacks.delete(handler);}};} if(event==='editorAction'){actionInstalls++;if(actionInstallHook)await actionInstallHook();actionCallbacks.add(handler);return{remove:async()=>{actionRemovals++;actionCallbacks.delete(handler);}};} assert.equal(event,'lifecycleRequest'); lifecycleOrder.push('listen'); lifecycleCallbacks.add(handler); return {remove:async()=>{removals++; lifecycleOrder.push('remove'); lifecycleCallbacks.delete(handler);}}; },
+    async documentOpenResult(result){navigationResults.push(structuredClone(result));if(navigationHook)await navigationHook(result);},
     async editorState(state) {editorStates.push({...state});if(editorStateHook)await editorStateHook(state);},
     async lifecycleAck(input) { acks.push(input); lifecycleOrder.push(input.ok?'ack:true':'ack:false'); if(ackHook)await ackHook(input); if(expired.has(input.id))throw Object.assign(new Error('deadline expired'),{code:'stale_lifecycle'}); },
-    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(initialPath===undefined?{}:{initialPath}),...(initialEntryId===undefined?{}:{initialEntryId}),...(createNoteOnOpen===undefined?{}:{createNoteOnOpen}),...(documentCapability===undefined?{}:{documentSemantics:documentCapability}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
+    context: async () => { lifecycleOrder.push('context'); if(contextEvent)for(const callback of lifecycleCallbacks)callback({id:crypto.randomUUID(),reason:contextEvent}); return {name:'Native fixture',clientId,...(navigationCapability===undefined?{}:{sameVaultNavigation:navigationCapability}),...(initialPath===undefined?{}:{initialPath}),...(initialEntryId===undefined?{}:{initialEntryId}),...(createNoteOnOpen===undefined?{}:{createNoteOnOpen}),...(documentCapability===undefined?{}:{documentSemantics:documentCapability}),...(initialReconciliation===undefined?{}:{reconciliation:initialReconciliation})}; }, close: async () => { closes++; },
     async noteOpened({path,entryId}) { openedRefs.push({path,entryId}); active++;maxActive=Math.max(maxActive,active);opened.push(path);try{if(openedHook)await openedHook(path);await new Promise<void>(r=>setImmediate(r));}finally{active--;} },
     async refresh() { active++;maxActive=Math.max(maxActive,active);refreshCalls++;try {if(refreshHook)await refreshHook();await new Promise<void>(r=>setImmediate(r));return refreshValue;}finally{active--;} },
     async request(input) {
@@ -135,7 +138,7 @@ function fixture() {
       } finally { active--; }
     },
   };
-  return { plugin, requests, heads, receipts, docRequests,docPins,docStages, documents(value:any=true){documentCapability=value;},onDocument(hook:(request:any)=>Promise<void>){docHook=hook;},documentTransform(transform:(op:string,value:any)=>any){docTransform=transform;}, editorStates, get requestInstalls(){return requestInstalls;},get requestRemovals(){return requestRemovals;}, onRequestInstall(hook:()=>Promise<void>){requestInstallHook=hook;}, stateRequest(event:any={reason:'foreground'}){for(const callback of stateRequestCallbacks)callback(event);}, get actionInstalls(){return actionInstalls;},get actionRemovals(){return actionRemovals;}, onActionInstall(hook:()=>Promise<void>){actionInstallHook=hook;}, onEditorState(hook:(state:NativeEditorState)=>Promise<void>){editorStateHook=hook;}, action(event:any){for(const callback of actionCallbacks)callback(event);}, opened, openedRefs, newNote(value:any){createNoteOnOpen=value;}, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
+  return { plugin, navigationResults, navigation(value:any=1){navigationCapability=value;}, navigate(input:any){for(const callback of navigationCallbacks)callback(input);}, onNavigationResult(hook:(result:any)=>Promise<void>){navigationHook=hook;}, requests, heads, receipts, docRequests,docPins,docStages, documents(value:any=true){documentCapability=value;},onDocument(hook:(request:any)=>Promise<void>){docHook=hook;},documentTransform(transform:(op:string,value:any)=>any){docTransform=transform;}, editorStates, get requestInstalls(){return requestInstalls;},get requestRemovals(){return requestRemovals;}, onRequestInstall(hook:()=>Promise<void>){requestInstallHook=hook;}, stateRequest(event:any={reason:'foreground'}){for(const callback of stateRequestCallbacks)callback(event);}, get actionInstalls(){return actionInstalls;},get actionRemovals(){return actionRemovals;}, onActionInstall(hook:()=>Promise<void>){actionInstallHook=hook;}, onEditorState(hook:(state:NativeEditorState)=>Promise<void>){editorStateHook=hook;}, action(event:any){for(const callback of actionCallbacks)callback(event);}, opened, openedRefs, newNote(value:any){createNoteOnOpen=value;}, selectPath(value:any){initialPath=value;initialEntryId=entryUuid;}, selection(path:any,entryId:any){initialPath=path;initialEntryId=entryId;}, replaceIdentity(id:string,text='replacement'){entryIdentity=id;content=text;revision='replacement-rev';}, present(value=true){exists=value;}, onOpened(hook:(path:string)=>Promise<void>){openedHook=hook;}, acks, lifecycleOrder, initialStatus(value:any){initialReconciliation=value;}, refreshed(value:any){refreshValue=value;}, onRefresh(hook:()=>Promise<void>){refreshHook=hook;}, get refreshCalls(){return refreshCalls;}, loseReleaseAck(){failReleaseAck=true;}, loseReleaseDispatch(){failReleaseDispatch=true;}, get admitted(){return !!activeLease;}, hostError(method:string,error:any,after=false){injectedError={method,error,after};}, get removals(){return removals;}, emit(reason:MobileLifecycleReason,id:string=crypto.randomUUID()){for(const callback of lifecycleCallbacks)callback({id,reason});return id;}, expire(id:string){expired.add(id);}, onAck(hook:(input:{id:string;ok:boolean})=>Promise<void>){ackHook=hook;}, duringContext(reason:MobileLifecycleReason){contextEvent=reason;}, badAuthority(value=true){wrongAuthority=value;}, get content(){return content;}, get closes(){return closes;}, get maxActive(){return maxActive;}, loseFileAck(){failCommand=true;}, loseCheckpointAck(){failCheckpoint=true;}, wrongId(value=true){wrongId=value;}, loseCommitAck(){failCommit=true;}, absent(){exists=false;} };
 }
 
 test('durable text planning validates expected identity/content and prepare remains inert',async()=>{
@@ -1130,4 +1133,63 @@ for(const witness of [null,{}, {entryId:'entry'}, {revision:'rev1'}, {entryId:''
 test('legacy rename without witness still follows current source metadata',async()=>{
   const f=fixture(),v=await openNativeMobileVault(f.plugin),resume=await pauseNamespaceQueue(f,v);const move=v.adapter.rename('Note.md','Moved.md');f.replaceIdentity('replacement','legacy replacement');await resume();await move;
   const command=f.requests.find(r=>r.command.method==='file_command').command.family.request.mutation;assert.equal(command.id,'replacement');assert.equal(command.expected,'replacement-rev');await v.release!();
+});
+
+
+const navigationRequest=()=>({id:crypto.randomUUID(),sourceOwnerId:crypto.randomUUID(),nativeTabId:crypto.randomUUID(),localStoreId:'store',entryId:'entry'});
+test('same-vault capability is exact, optional, and never probes old native',async()=>{
+  const old=fixture(),v=await openNativeMobileVault(old.plugin);assert.equal(v.nativeDocumentNavigation,undefined);await v.release!();
+  for(const value of [true,0,2,'1',null]){
+    const f=fixture();f.navigation(value);await assert.rejects(openNativeMobileVault(f.plugin),{code:'invalid_native_context'});
+    assert.equal(f.requests.some(r=>r.command.method==='claim_client'),false);
+  }
+});
+test('finite navigation can read storage then await native ACK without queue deadlock or duplicate ready',async()=>{
+  const f=fixture();f.navigation();const v=await openNativeMobileVault(f.plugin),gate=deferred(),request=navigationRequest();let returned=false,calls=0;
+  f.onNavigationResult(async result=>{if(result.status==='ready')await gate.promise;});
+  v.nativeDocumentNavigation!.subscribe(async(input,control)=>{calls++;assert.ok(Object.isFrozen(input));await v.adapter.read('Note.md');await control.ready({path:'Note.md',entryId:input.entryId,revision:'rev1',recovery:'none'});returned=true;});
+  f.navigate(request);await until(()=>f.navigationResults.length===1);assert.equal(returned,false);assert.equal(f.navigationResults[0].status,'ready');
+  f.navigate(request);gate.resolve();await until(()=>returned);assert.equal(calls,1);await v.release!();assert.equal(f.navigationResults.length,1);
+});
+test('malformed/foreign navigation is rejected before handler and body metadata is strictly validated',async()=>{
+  const f=fixture();f.navigation();const v=await openNativeMobileVault(f.plugin);let calls=0;
+  v.nativeDocumentNavigation!.subscribe(async(req,control)=>{calls++;await control.ready({path:'.trash/note.md',entryId:req.entryId,revision:'rev1',recovery:'none'});});
+  f.navigate({...navigationRequest(),localStoreId:'foreign'});await until(()=>f.navigationResults.length===1);assert.equal(calls,0);
+  f.navigate({...navigationRequest(),extra:'path'});await until(()=>f.navigationResults.length===2);assert.equal(calls,0);
+  f.navigate(navigationRequest());await until(()=>f.navigationResults.length===3);assert.equal(calls,1);assert.equal(f.navigationResults[2].status,'failed');
+  await v.release!();
+});
+test('spontaneous note activation supersedes a command, without sending ready after the newer link',async()=>{
+  const f=fixture();f.navigation();const v=await openNativeMobileVault(f.plugin),gate=deferred();let current=true;
+  v.nativeDocumentNavigation!.subscribe(async(req,control)=>{await gate.promise;current=control.isCurrent();await control.ready({path:'Note.md',entryId:req.entryId,revision:'rev1',recovery:'none'});});
+  f.navigate(navigationRequest());await new Promise<void>(r=>setImmediate(r));await v.noteOpened('Note.md','entry');gate.resolve();
+  await until(()=>f.navigationResults.length===1);assert.equal(current,false);assert.equal(f.navigationResults[0].status,'stale');await v.release!();
+});
+test('positive native ACK remains committed when background invalidates during promise delivery',async()=>{
+  const f=fixture();f.navigation();const v=await openNativeMobileVault(f.plugin),gate=deferred();let committed=false;
+  f.onNavigationResult(async result=>{if(result.status==='ready')await gate.promise;});
+  v.nativeDocumentNavigation!.subscribe(async(req,control)=>{await control.ready({path:'Note.md',entryId:req.entryId,revision:'rev1',recovery:'none'});committed=true;});
+  f.navigate(navigationRequest());await until(()=>f.navigationResults.length===1);f.emit('background');gate.resolve();await until(()=>committed);
+  assert.deepEqual(f.navigationResults.map(r=>r.status),['ready']);await v.release!();
+});
+test('newer request waits for rollback while invalidating the older independent navigation transaction',async()=>{
+  const f=fixture();f.navigation();const v=await openNativeMobileVault(f.plugin),pending=deferred(),entered=deferred();
+  const first=navigationRequest(),second=navigationRequest(),calls:string[]=[];
+  v.nativeDocumentNavigation!.subscribe(async(req,control)=>{
+    calls.push(req.id);if(req.id===first.id){entered.resolve();await pending.promise;assert.equal(control.isCurrent(),false);}
+    await control.ready({path:'Note.md',entryId:req.entryId,revision:'rev1',recovery:'none'});
+  });
+  f.navigate(first);await entered.promise;f.navigate(second);await v.adapter.read('Note.md');assert.deepEqual(calls,[first.id]);
+  pending.resolve();await until(()=>f.navigationResults.length===2);
+  assert.deepEqual(f.navigationResults.map(result=>[result.id,result.status]),[[first.id,'stale'],[second.id,'ready']]);await v.release!();
+});
+test('navigation routing UUIDs require lowercase canonical spelling and entry tokens preserve case',async()=>{
+  const f=fixture();f.navigation();const v=await openNativeMobileVault(f.plugin);let calls=0;
+  v.nativeDocumentNavigation!.subscribe(async(req,control)=>{calls++;assert.equal(req.entryId,'Entry_Mixed-Case');await control.ready({path:'Note.md',entryId:req.entryId,revision:'Revision_Mixed-Case',recovery:'retainedDraft'});});
+  const upper='ABCDEF01-abcd-4abc-8abc-abcdef012345';
+  for(const field of ['sourceOwnerId','nativeTabId'])f.navigate({...navigationRequest(),[field]:upper});
+  await until(()=>f.navigationResults.length===2);assert.equal(calls,0);assert.ok(f.navigationResults.every(result=>result.status==='failed'));
+  f.navigate({...navigationRequest(),id:upper});await new Promise<void>(done=>setImmediate(done));assert.equal(f.navigationResults.length,2);
+  f.navigate({...navigationRequest(),entryId:'Entry_Mixed-Case'});await until(()=>f.navigationResults.length===3);
+  assert.equal(f.navigationResults[2].entryId,'Entry_Mixed-Case');assert.equal(f.navigationResults[2].revision,'Revision_Mixed-Case');await v.release!();
 });

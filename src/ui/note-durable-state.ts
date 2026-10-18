@@ -30,16 +30,22 @@ export class DurableNoteState {
     this.uncertain={key:this.key,expectedRevision:this.revision,nextRevision:crypto.randomUUID(),encodedState};
     const result=await this.writes.checkpoints.compareAndSwap(this.uncertain);this.revision=result.revision;this.uncertain=undefined;
   }
-  load(path:string):Promise<void>{return this.queue(async()=>{
-    const observed=await this.vault.readDurableText(path);this.key=`note/v1/${observed.entryId}`;
-    const head=await this.writes.checkpoints.load(this.key);this.revision=head?.revision??null;
+  load(path:string,expectedEntryId?:string,validate:()=>void=()=>{}):Promise<void>{return this.queue(async()=>{
+    validate();
+    const observed=expectedEntryId===undefined?await this.vault.readDurableText(path):await this.vault.readDurableTextById(expectedEntryId);
+    validate();
+    // Check immutable identity BEFORE checkpoint adoption or resuming an intent.
+    // A rename is retried by its caller, never admitted under an old path key.
+    if(!observed||observed.path!==path||expectedEntryId!==undefined&&observed.entryId!==expectedEntryId)throw failure('selected note changed before admission');
+    this.key=`note/v1/${observed.entryId}`;
+    const head=await this.writes.checkpoints.load(this.key);validate();this.revision=head?.revision??null;
     this.state={version:1,writer:crypto.randomUUID(),generation:0,base:observed,draft:observed.content,conflict:false};
     if(head?.encodedState!==null&&head?.encodedState!==undefined){
       const raw=JSON.parse(head.encodedState) as State;
       if(raw.version!==1||typeof raw.writer!=='string'||!Number.isSafeInteger(raw.generation)||raw.generation<0||typeof raw.draft!=='string'||typeof raw.conflict!=='boolean'||!raw.base||raw.base.entryId!==observed.entryId||typeof raw.base.content!=='string'||typeof raw.base.revision!=='string'||typeof raw.base.path!=='string')throw failure('malformed or unsupported checkpoint; retained');
       this.state=raw;
       if(raw.operation){const op=raw.operation;if(!op.plan||op.plan.version!==1||typeof op.plan.encodedPlan!=='string'||typeof op.content!=='string')throw failure('invalid saved operation');this.checkIdentity(op.plan);boundedUtf8(op.plan.encodedPlan,8*1024*1024,'plan_too_large');if(op.ref){this.checkIdentity(op.ref);if(op.ref.operationId!==op.plan.operationId)throw failure('plan/ref mismatch');}}
-      if(raw.operation?.ref)await this.resume(()=>{});
+      if(raw.operation?.ref)await this.resume(validate);
       else if(observed.revision!==raw.base.revision){if(raw.draft===raw.base.content){raw.base=observed;raw.draft=observed.content;}else raw.conflict=true;}
     }
     if(this.state.conflict)this.error=failure('file changed elsewhere; your draft is retained');

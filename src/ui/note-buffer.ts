@@ -159,11 +159,20 @@ export class NoteBuffer {
     this.error = null;
   }
 
-  load(): Promise<void> {
+  private expectedEntryId?:string;
+  load(expectedEntryId?:string,validate:()=>void=()=>{}): Promise<void> {
     return this.enqueue(async () => {
-      if (this.loaded) return;
+      validate();
+      if(expectedEntryId!==undefined&&this.expectedEntryId!==undefined&&this.expectedEntryId!==expectedEntryId)throw new Error('This note buffer belongs to another entry');
+      const admittedEntryId=expectedEntryId??this.expectedEntryId;
+      if (this.loaded) {
+        if(admittedEntryId!==undefined&&this.savedDurableWitness?.entryId!==admittedEntryId)throw new Error('The selected note identity changed; previous draft retained');
+        this.expectedEntryId=admittedEntryId;
+        return;
+      }
       if (this.disposed) throw new Error('This note buffer is disposed');
-      if(this.durable){await this.durable.load(this.path);this.loaded=true;this.syncDurable();return;}
+      if(this.durable){await this.durable.load(this.path,admittedEntryId,validate);this.expectedEntryId=admittedEntryId;this.loaded=true;this.syncDurable();return;}
+      if(admittedEntryId!==undefined)throw new Error('Stable note admission requires durable identity');
       const disk = await this.vault.read(this.path);
       this.text = this.savedText = disk;
       this.error = null;

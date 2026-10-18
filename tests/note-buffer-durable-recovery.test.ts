@@ -48,3 +48,42 @@ test('typing while the recovery checkpoint is in flight cannot adopt or silently
   const state=JSON.parse(f.checkpoint.encodedState!);assert.equal(state.base.revision,'old-revision');assert.equal(state.draft,buffer.text);
   await assert.rejects(buffer.flush(),/draft preserved/);assert.equal(await f.adapter.read('One.md'),externalText);
 });
+
+
+test('expected stable ID is checked by ID before any checkpoint adoption, including rename drift',async()=>{
+  for(const renamed of [false,true]){
+    const f=await durableRecoveryFixture(),vault=new Vault(f.adapter);await vault.initialize();let checkpoints=0;
+    const load=f.adapter.durableWrites.checkpoints.load;
+    f.adapter.durableWrites.checkpoints.load=async key=>{checkpoints++;return load(key);};
+    if(renamed){const read=f.adapter.durableWrites.readTextById;f.adapter.durableWrites.readTextById=async id=>{const v=await read(id);return v?{...v,path:'Moved.md'}:v;};}
+    const note=new NoteBuffer(vault,'One.md');
+    await assert.rejects(note.load(renamed?'retained-note':'replacement'));
+    assert.equal(checkpoints,0);assert.equal(note.savedDurableWitness,undefined);assert.equal(f.plans,0);
+  }
+});
+test('expected ID remains immutable across retries and loaded-buffer reuse',async()=>{
+  const f=await durableRecoveryFixture(),vault=new Vault(f.adapter);await vault.initialize();const note=new NoteBuffer(vault,'One.md');
+  await note.load('retained-note');assert.equal(note.text,recoveredDraft);
+  await assert.rejects(note.load('replacement'),/another entry/);
+  await note.load();assert.equal(note.savedDurableWitness?.entryId,'retained-note');assert.equal(note.text,recoveredDraft);
+});
+test('rejected replacement admission cannot pin an already loaded buffer to the wrong entry',async()=>{
+  const f=await durableRecoveryFixture(),vault=new Vault(f.adapter);await vault.initialize();const note=new NoteBuffer(vault,'One.md');
+  await note.load();await assert.rejects(note.load('replacement'),/identity changed/);
+  await note.load('retained-note');await note.load();
+  assert.equal(note.savedDurableWitness?.entryId,'retained-note');assert.equal(note.text,recoveredDraft);
+});
+test('failed fresh identity admission does not pin the buffer, and queued loads validate the admitted identity',async()=>{
+  const f=await durableRecoveryFixture(),vault=new Vault(f.adapter);await vault.initialize();const note=new NoteBuffer(vault,'One.md');
+  await assert.rejects(note.load('replacement'));
+  const admitted=note.load('retained-note'),rejected=note.load('replacement');
+  await admitted;await assert.rejects(rejected,/another entry/);await note.load();
+  assert.equal(note.savedDurableWitness?.entryId,'retained-note');assert.equal(f.plans,0);
+});
+test('superseded ID observation cannot load a checkpoint or resume recovery',async()=>{
+  const f=await durableRecoveryFixture(),vault=new Vault(f.adapter);await vault.initialize();let current=true,loads=0;
+  const read=f.adapter.durableWrites.readTextById;f.adapter.durableWrites.readTextById=async id=>{const result=await read(id);current=false;return result;};
+  const load=f.adapter.durableWrites.checkpoints.load;f.adapter.durableWrites.checkpoints.load=async key=>{loads++;return load(key);};
+  const note=new NoteBuffer(vault,'One.md');await assert.rejects(note.load('retained-note',()=>{if(!current)throw new Error('superseded');}),/superseded/);
+  assert.equal(loads,0);assert.equal(f.plans,0);
+});

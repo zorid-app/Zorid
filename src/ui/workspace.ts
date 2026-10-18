@@ -18,6 +18,7 @@ import { Vault, parseMetadata } from '../core/index.ts';
 import type { VaultEntry } from '../core/index.ts';
 import { pickDesktopVault, createPlatformAdapter } from '../platform/index.ts';
 import type { PlatformVault } from '../platform/index.ts';
+import type {NativeDocumentOpenRequest,NativeDocumentNavigation} from '../platform/mobile-native.ts';
 import { el, icon, button, textButton, modal, notice, promptName } from './dom.ts';
 import { renderMarkdown } from './markdown.ts';
 import { destroyMarkdown } from './markdown-lifecycle.ts';
@@ -63,7 +64,7 @@ interface DocumentSearchOwner {
 }
 type Mode = 'live' | 'reading';
 interface Tab {
-  id:string; path:string|null; mode:Mode; kind:'note'|'graph'|'calendar'; subpath?:string; calendarState?:CalendarViewState;
+  id:string; path:string|null; expectedEntryId?:string; mode:Mode; kind:'note'|'graph'|'calendar'; subpath?:string; calendarState?:CalendarViewState;
   history?:string[]; historyIndex?:number;
   viewState?:{editor?:EditorViewState;scrollTop:number;scrollLeft:number};
 }
@@ -253,6 +254,94 @@ export class Workspace {
     this.nativeEditorCleanup=()=>{unsubscribe();document.removeEventListener('visibilitychange',resume);window.removeEventListener('focus',resume);appearance.removeEventListener('change',updateAppearance);};
   }
 
+  private nativeDocumentCleanup?:()=>void;
+  private nativeDocumentTask?:Promise<void>;
+  private nativeCommandView?:{pane:Pane;tabId:string;intent:number};
+  private bindNativeDocumentNavigation():void{
+    this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;
+    const platform=this.platform,generation=this.vaultGeneration;
+    if(!platform.editorOnly||!platform.nativeDocumentNavigation)return;
+    this.nativeDocumentCleanup=platform.nativeDocumentNavigation.subscribe((request,control)=>{
+      const task=this.openNativeDocument(request,control,platform,generation);this.nativeDocumentTask=task;
+      void task.finally(()=>{if(this.nativeDocumentTask===task)this.nativeDocumentTask=undefined;}).catch(()=>{});
+      return task;
+    });
+  }
+
+  /** One source + one provisional target, not a retained multi-view window.
+   * The source runtime stays intact until target admission and native ACK. */
+  private async openNativeDocument(request:Readonly<NativeDocumentOpenRequest>,control:Parameters<Parameters<NativeDocumentNavigation['subscribe']>[0]>[1],platform:PlatformVault,generation:number):Promise<void>{
+    const pane=this.activePane,vault=this.vault,source=this.current(pane);
+    if(!control.isCurrent()||this.platform!==platform||generation!==this.vaultGeneration||this.closing||this.root.inert||this.startupFailed||this.platformReleased||this.platformDrained||document.visibilityState==='hidden'||!pane?.viewReady||!source||!this.panes.includes(pane))throw new Error('Native document navigation is unavailable');
+    if(this.cachedViews.size)throw new Error('A previous document view still needs cleanup; return to Notes and retry');
+    const tabs=[...pane.tabs],history=[...pane.history],historyIndex=pane.historyIndex;
+    const intent=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,intent);
+    const owns=()=>this.platform===platform&&this.vault===vault&&generation===this.vaultGeneration&&!this.platformReleased&&!this.platformDrained&&!this.closing&&this.activePane===pane&&this.panes.includes(pane)&&this.navigationIntent.get(pane)===intent;
+    const check=()=>{if(!control.isCurrent()||!owns()||document.visibilityState==='hidden')throw new Error('Native document navigation was superseded');};
+    const inert=this.root.inert;this.root.inert=true;this.hideNativeEditorToolbar();
+    let target:Tab|undefined,acknowledged=false;
+    try{
+      await this.flushPane(pane);check();
+      let observed=await vault.readDurableTextById(request.entryId);check();
+      if(!observed||!isMarkdown(observed.path))throw new Error('The selected Markdown note is unavailable');
+      // Refresh this projection only; never initialize/rebuild the vault here.
+      await vault.reload([observed.path]);check();
+      if(vault.entries.get(observed.path)?.entryId!==request.entryId)throw new Error('The selected note moved; retry navigation');
+      const buffer=await this.bufferFor(observed.path,request.entryId,check);check();
+      if(buffer.savedDurableWitness?.revision!==observed.revision){
+        try{await buffer.reload();}catch(error){if(!buffer.hasRecoveryConflict)throw error;}
+        check();await buffer.flushForNavigation();check();
+      }
+      observed=await vault.readDurableTextById(request.entryId);check();
+      if(!observed||buffer.path!==observed.path||vault.entries.get(observed.path)?.entryId!==request.entryId||buffer.savedDurableWitness?.entryId!==request.entryId
+        ||buffer.savedDurableWitness.revision!==observed.revision&&!buffer.hasRecoveryConflict)throw new Error('The selected note changed during admission');
+      this.capturePaneState(pane);
+      target={id:makeId(),path:observed.path,expectedEntryId:request.entryId,kind:'note',mode:this.settings.defaultMode};
+      this.nativeCommandView={pane,tabId:target.id,intent};
+      pane.tabs=[...tabs,target];pane.active=target.id;pane.history=[];pane.historyIndex=-1;
+      this.noteNavigation.set(pane,(this.noteNavigation.get(pane)??0)+1);
+      await this.renderPane(pane,{flush:false});check();
+      if(this.current(pane)!==target||!pane.viewReady||!pane.runtime||pane.runtime.phase!=='active'||!this.nativeReadyViews.has(pane.runtime)
+        ||pane.content?.querySelector('.error-message'))throw new Error('The selected note could not be displayed');
+      const final=await vault.readDurableTextById(request.entryId);check();
+      if(!final||final.path!==observed.path||final.revision!==observed.revision)throw new Error('The selected note changed before acknowledgement');
+      await control.ready({path:final.path,entryId:request.entryId,revision:final.revision,recovery:buffer.dirty||buffer.hasRecoveryConflict?'retainedDraft':'none'});
+      acknowledged=true; // Positive native ACK commits even if a later intent arrived.
+      if(owns()&&this.current(pane)===target){
+        this.nativeOpened={platform,entryId:request.entryId,tabId:target.id};
+        pane.tabs=[target];this.renderRight();this.saveSession();
+      }
+    }catch(error){
+      // Native rejection never becomes local success. Roll back only this exact
+      // render; a newer link/request/lifecycle owns its own visible route.
+      if(!acknowledged&&target&&owns()&&this.current(pane)===target){
+        // Detach/rebind synchronously before any asynchronous destruction. A
+        // newer route may run during teardown, but cannot be overwritten later.
+        this.parkPaneView(pane);
+        const failed=this.cachedViews.get(target);
+        pane.tabs=tabs;pane.active=source.id;pane.history=history;pane.historyIndex=historyIndex;
+        if(!this.restoreCachedViewNow(pane,source))throw new Error('The source view could not be restored; return to Notes');
+        if(failed){await this.disposePaneViews(failed);this.cachedViews.delete(target);}
+      }
+      throw error;
+    }finally{
+      if(this.nativeCommandView?.tabId===target?.id)this.nativeCommandView=undefined;
+      // Retire the exact provisional source only after ACK, or after a newer
+      // navigation took over. Failed target admission leaves the source live.
+      const cached=this.cachedViews.get(source);
+      if(cached&&(acknowledged||this.current(pane)!==source)){
+        try{
+          await this.disposePaneViews(cached);this.cachedViews.delete(source);
+          if(this.platform===platform&&generation===this.vaultGeneration&&this.current(pane)!==source)pane.tabs=pane.tabs.filter(tab=>tab!==source);
+        }catch{notice('The previous view is retained for recovery. Return to Notes before opening another note.');}
+      }
+      if(owns()){
+        this.root.inert=inert;
+        const state=pane.editor?.nativeState?.();if(state)this.sendNativeEditorState(state,platform);
+      }else if(this.platform===platform&&generation===this.vaultGeneration&&!this.closing&&!this.platformReleased&&this.root.inert)this.root.inert=inert;
+    }
+  }
+
   private mobileLifecycleCleanup?:()=>void;
   private bindMobileLifecycle():void {
     this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
@@ -262,6 +351,11 @@ export class Workspace {
     this.mobileLifecycleCleanup=platform.mobileLifecycle.subscribe(async(reason,ack)=>{
       if(pending||this.closing||this.startupFailed||this.platform!==platform||this.vaultGeneration!==generation||this.platformReleased)throw new Error('Mobile lifecycle is not ready');
       pending=true;
+      // Adapter invalidates the command before invoking lifecycle. Drain its
+      // rollback before capturing inert state; never retain transient inert=true
+      // as the background/rejected-switch restoration state.
+      if(this.nativeDocumentTask)await this.nativeDocumentTask.catch(()=>{});
+      if(this.platform!==platform||this.vaultGeneration!==generation||this.platformReleased){pending=false;throw new Error('Mobile vault changed during navigation');}
       this.nativePresentationEpoch++;
       const wasClosing=this.closing,wasInert=this.root.inert;
       this.closing=true;this.root.inert=true;
@@ -325,7 +419,7 @@ export class Workspace {
       if(!current){if(raw.operation||raw.draft!==raw.base.content)throw new Error('Recovered note entry is missing; draft retained');continue;}
       let buffer:NoteBuffer;
       buffer=new NoteBuffer(vault,current.path,{onState:()=>{if(this.vault===vault){this.bufferSubscriptions.publish(buffer);this.renderStatus();}}});
-      await buffer.load();result.set(current.path,buffer);
+      await buffer.load(entryId);result.set(current.path,buffer);
     }
     return result;
   }
@@ -448,7 +542,8 @@ export class Workspace {
     if(!pane.viewReady||pane.viewTabId!==tab.id||pane.viewPath!==tab.path||pane.runtime?.phase!=='active')return;
     if(!this.nativeReadyViews.has(pane.runtime))return;
     const entry=this.vault.entries.get(tab.path);
-    if(entry?.type!=='file'||!entry.entryId)return;
+    if(entry?.type!=='file'||!entry.entryId||tab.expectedEntryId!==undefined&&entry.entryId!==tab.expectedEntryId)return;
+    if(this.nativeCommandView?.pane===pane&&this.nativeCommandView.tabId===tab.id&&this.navigationIntent.get(pane)===this.nativeCommandView.intent)return;
     const previous=this.nativeOpened;
     if(previous?.platform===platform&&previous.entryId===entry.entryId&&previous.tabId===tab.id)return;
     this.nativeOpened={platform,entryId:entry.entryId,tabId:tab.id};
@@ -470,7 +565,7 @@ export class Workspace {
       }
       return;
     }
-    await this.openNote(platform.initialPath);
+    await this.openNote(platform.initialPath,false,this.activePane,true,'',undefined,undefined,platform.adapter.durableWrites?platform.initialEntryId:undefined);
   }
 
   async openVault(platform: PlatformVault): Promise<void> {
@@ -514,6 +609,7 @@ export class Workspace {
     this.treeRows=[]; this.treeSelection.clear(); this.treeSelectionAnchor=undefined; this.entryTokens.clear();
     this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;
     this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;
+    this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;
     this.platform = platform; this.vault = next; this.platformReleased=false;this.platformDrained=false;this.buffers=recovered; this.vaultGeneration++;
     this.attachments=new AttachmentResources(this.vault);
     this.attachmentImporter=new AttachmentImporter(this.vault);
@@ -636,7 +732,7 @@ export class Workspace {
     });
     if (unsubscribe) this.disposers.push(unsubscribe);
     this.renderSidebar(); this.renderRight(); this.saveSession();
-    this.bindMobileLifecycle();this.bindNativeEditor();
+    this.bindMobileLifecycle();this.bindNativeEditor();this.bindNativeDocumentNavigation();
     }catch(error){if(this.vault===searchVault)this.documentSearchSuspended=searchWasSuspended;throw error;}
   }
 
@@ -735,12 +831,16 @@ export class Workspace {
   }
   private focusPane(pane:Pane):void{if(pane.editor)pane.editor.focus();else pane.element.focus({preventScroll:true});}
   private activate(pane: Pane): void { const changed=this.activePane!==pane;if(changed)this.paneActivationRevision++;this.activePane=pane; this.panes.forEach(p=>p.element.classList.toggle('is-active',p===pane));if(changed&&this.sidebar.isConnected)this.renderSidebar(); this.renderRight(); this.renderStatus(); if(changed)this.notifyNativeNoteOpened(pane); }
-  async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath='',expectedActivation?:number,commitGuard?:()=>boolean): Promise<void> {
+  async openNote(path:string,newTab=false,pane=this.activePane,recordHistory=true,subpath='',expectedActivation?:number,commitGuard?:()=>boolean,expectedEntryId?:string): Promise<void> {
     if(this.platform.editorOnly)newTab=false;
     if(this.vault.entries.get(path)?.type!=='file') throw new Error(`File not found: ${path}`);
     const intent=(this.navigationIntent.get(pane)??0)+1,generation=this.vaultGeneration,version=pane.renderVersion;this.navigationIntent.set(pane,intent);
     await this.flushPane(pane);
     if(/\.base$/i.test(path))await this.prepareBase(path,generation);
+    if(expectedEntryId!==undefined){
+      const validate=()=>{if(generation!==this.vaultGeneration||this.navigationIntent.get(pane)!==intent||!this.panes.includes(pane)||this.vault.entries.get(path)?.entryId!==expectedEntryId||(commitGuard&&!commitGuard()))throw new Error('The selected note changed before admission');};
+      if(isMarkdown(path))await this.bufferFor(path,expectedEntryId,validate);validate();
+    }
     if(this.navigationIntent.get(pane)!==intent||generation!==this.vaultGeneration||pane.renderVersion!==version||!this.panes.includes(pane)||(expectedActivation!==undefined&&expectedActivation!==this.paneActivationRevision)||(commitGuard&&!commitGuard()))return;
     this.noteNavigation.set(pane,(this.noteNavigation.get(pane)??0)+1);
     this.capturePaneState(pane);const current=this.current(pane);
@@ -748,6 +848,7 @@ export class Workspace {
     if(existing&&!newTab) pane.active=existing.id;
     else if(!newTab&&current){if(current.path!==path)current.viewState=undefined;if(current.kind!=='note')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
     else {const tab:Tab={id:makeId(),path,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;}
+    this.current(pane).expectedEntryId=expectedEntryId;
     this.current(pane).subpath=subpath;
     pane.history=this.current(pane).history??[];pane.historyIndex=this.current(pane).historyIndex??-1;
     if(recordHistory&&pane.history[pane.historyIndex]!==path){pane.history=pane.history.slice(0,pane.historyIndex+1);pane.history.push(path);pane.historyIndex=pane.history.length-1;}
@@ -776,11 +877,19 @@ export class Workspace {
     return buffer;
   }
 
-  private async bufferFor(path:string):Promise<NoteBuffer>{
-    let buffer=this.buffers.get(path); if(buffer){await buffer.load();return buffer;}
+  private async bufferFor(path:string,expectedEntryId?:string,validate:()=>void=()=>{}):Promise<NoteBuffer>{
+    validate();
+    if(expectedEntryId!==undefined){
+      if(this.vault.entries.get(path)?.entryId!==expectedEntryId)throw new Error('The selected note identity changed');
+      for(const [key,other] of this.buffers)if(key!==path&&other.savedDurableWitness?.entryId===expectedEntryId)throw new Error('The selected note moved; its existing draft is retained');
+    }
+    let buffer=this.buffers.get(path); if(buffer){
+      if(expectedEntryId!==undefined&&!buffer.savedDurableWitness)throw new Error('The selected note is still loading; retry navigation');
+      await buffer.load(expectedEntryId,validate);validate();return buffer;
+    }
     buffer=new NoteBuffer(this.vault,path,{storage:localStorage,storageKey:this.storageScope.draftPrefix(this.platform.id),onState:()=>{if(buffer)this.bufferSubscriptions.publish(buffer);this.renderStatus();}});
     this.buffers.set(path,buffer);const token=this.treeEntryToken(path);if(token)this.bufferEntries.set(buffer,token);
-    try{await buffer.load();return buffer;}catch(error){this.buffers.delete(path);throw error;}
+    try{await buffer.load(expectedEntryId,validate);validate();return buffer;}catch(error){if(this.buffers.get(path)===buffer&&!buffer.savedDurableWitness)this.buffers.delete(path);throw error;}
   }
 
   private renderTabBar(pane:Pane):void{
@@ -936,7 +1045,7 @@ export class Workspace {
     });
     scroll.append(title);content.append(scroll);
     try{
-      const buffer=await this.bufferFor(path);if(version!==pane.renderVersion)return;
+      const buffer=await this.bufferFor(path,tab.expectedEntryId,()=>{if(!current()||version!==pane.renderVersion||this.current(pane)!==tab)throw new Error('The note render was superseded');});if(version!==pane.renderVersion)return;
       recoveryCleanup=this.mountNoteRecovery(content,buffer);
       {
         const host=el('div','properties-host');scroll.append(host);
@@ -2032,5 +2141,5 @@ export class Workspace {
   }
   private async flushPane(pane:Pane):Promise<void>{await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
   async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
-  async destroy():Promise<void>{const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}catch(error){if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
+  async destroy():Promise<void>{const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.nativeDocumentCleanup?.();this.nativeDocumentCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}catch(error){if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
 }

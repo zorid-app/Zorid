@@ -11,7 +11,9 @@ import type { Checkpoint, CheckpointMetadata, CheckpointPage, DurableCheckpoints
 
 /** Native chooses/opens the vault before loading the editor. No vault root crosses this API. */
 export interface NativeVaultPlugin {
-  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string; createNoteOnOpen?: boolean; documentSemantics?: true }>;
+  context(): Promise<{ name: string; clientId: string; reconciliation?: DesktopReconciliation; initialPath?: string; initialEntryId?: string; createNoteOnOpen?: boolean; documentSemantics?: true; sameVaultNavigation?: 1 }>;
+  documentOpenResult?(input: NativeDocumentOpenResult): Promise<void>;
+  addListener(event: 'documentOpenRequest', handler: (event: NativeDocumentOpenRequest) => void): Promise<{ remove(): Promise<void> }>;
   presentationSettled?(input: NativePresentationSettled): Promise<void>;
   noteOpened(input: { path: string; entryId: string }): Promise<void>;
   refresh(): Promise<{ reconciliation: DesktopReconciliation }>;
@@ -21,6 +23,20 @@ export interface NativeVaultPlugin {
   addListener(event: 'editorAction', handler: (event: { action: NativeEditorAction }) => void): Promise<{ remove(): Promise<void> }>;
   addListener(event: 'lifecycleRequest', handler: (event: { id: string; reason: MobileLifecycleReason }) => void): Promise<{ remove(): Promise<void> }>;
   lifecycleAck(input: { id: string; ok: boolean }): Promise<void>;
+}
+/** Finite same-vault Markdown navigation; native retains route/cursor authority. */
+export interface NativeDocumentOpenRequest {
+  id: string; sourceOwnerId: string; nativeTabId: string; localStoreId: string; entryId: string;
+}
+export interface NativeDocumentReady {
+  path: string; entryId: string; revision: string; recovery: 'none' | 'retainedDraft';
+}
+export type NativeDocumentOpenResult = ({ id: string; status: 'ready' } & NativeDocumentReady)
+  | { id: string; status: 'failed' | 'stale' };
+export interface NativeDocumentNavigation {
+  subscribe(handler: (request: Readonly<NativeDocumentOpenRequest>, control: {
+    isCurrent(): boolean; ready(result: NativeDocumentReady): Promise<void>;
+  }) => Promise<void>): () => void;
 }
 export interface NativePresentationSettled { path: string; entryId: string; state: 'ready' | 'password' | 'error' }
 export type MobileLifecycleReason = 'background' | 'switchVault';
@@ -111,6 +127,68 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   }
   const bridge = plugin;
   let clientId = '';
+  let navigationGeneration = 0, navigationHandler: Parameters<NativeDocumentNavigation['subscribe']>[0] | undefined;
+  let navigationTail: Promise<void> = Promise.resolve();
+  let navigationListener: { remove(): Promise<void> } | undefined;
+  const seenNavigationIds = new Set<string>();
+  const invalidateNavigation = () => { navigationGeneration++; };
+  const nativeDocumentNavigation: NativeDocumentNavigation = {
+    subscribe(handler) {
+      active();
+      if (navigationHandler || releasePromise) throw fail('navigation_unavailable');
+      navigationHandler = handler;
+      return () => { if (navigationHandler === handler) { navigationHandler = undefined; invalidateNavigation(); } };
+    },
+  };
+  function onDocumentOpen(input: NativeDocumentOpenRequest): void {
+    // Capture before any asynchronous work; never route roots or path fallbacks.
+    const request = input && typeof input === 'object' && !Array.isArray(input) ? { ...input } : undefined;
+    if (!request || !uuid(request.id)) return;
+    if (seenNavigationIds.has(request.id)) return;
+    seenNavigationIds.add(request.id);
+    // A bounded replay fence; native also owns request idempotence.
+    if (seenNavigationIds.size > 128) seenNavigationIds.delete(seenNavigationIds.values().next().value!);
+    const valid = sameKeys(request,['id','sourceOwnerId','nativeTabId','localStoreId','entryId'])
+      && uuid(request.sourceOwnerId) && uuid(request.nativeTabId) && id(request.localStoreId) && id(request.entryId);
+    if (!valid || request.localStoreId !== lease?.local_store_id) {
+      void bridge.documentOpenResult!({id:request.id,status:'failed'}).catch(() => {}); return;
+    }
+    const generation = ++navigationGeneration, epoch = lifecycleEpoch, handler = navigationHandler;
+    const current = () => generation === navigationGeneration && epoch === lifecycleEpoch && !closed && !closing
+      && !releasePromise && !lifecycleBusyId && !!handler && navigationHandler === handler;
+    const send = (result: NativeDocumentOpenResult) => bridge.documentOpenResult!(result);
+    // Independent of tail/serialTail: handler flush/read and native validation
+    // both need those storage queues. Serialize only navigation transactions.
+    const task = navigationTail.then(async () => {
+      if (!valid || request.localStoreId !== lease?.local_store_id || !current()) {
+        await send({id: request.id,status: valid ? 'stale' : 'failed'}); return;
+      }
+      let acknowledged = false;
+      try {
+        await handler!(Object.freeze(request), {
+          isCurrent: current,
+          async ready(result) {
+            if (!current()) throw fail('stale_navigation');
+            if (!sameKeys(result,['path','entryId','revision','recovery']) || result.entryId !== request.entryId
+              || !id(result.entryId) || !id(result.revision) || !['none','retainedDraft'].includes(result.recovery)) throw fail('invalid_navigation_result');
+            const path = nativeNotePath(result.path);
+            if (!visible(path)) throw fail('invalid_path');
+            await send({id:request.id,status:'ready',path,entryId:result.entryId,revision:result.revision,recovery:result.recovery});
+            // A positive native promise is the irrevocable commit point.
+            // Later lifecycle/selection changes cannot turn it into a failure.
+            acknowledged = true;
+          },
+        });
+        if (!acknowledged) throw fail('navigation_not_ready');
+      } catch {
+        // A rejected ready ACK is never local success. Native fences this ID;
+        // it cannot retire a newer pending request or healthy retained host.
+        if (!acknowledged) await send({id:request.id,status:current() ? 'failed' : 'stale'}).catch(() => {});
+      }
+    });
+    navigationTail = task.catch(() => {});
+  }
+
   let releasePromise: Promise<void> | undefined, leaseReleased = false;
   let documents: ReturnType<typeof createDesktopDocumentService> | undefined;
   let documentOwner: ReturnType<typeof createDesktopDocumentSemantics> | undefined;
@@ -247,6 +325,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     if (typeof event?.id !== 'string' || !uuid(event.id)) return;
     if (lifecycleBusyId === event.id) return; // Duplicate delivery shares the original outcome.
     if (lifecycleTask || lifecycleStopped || closed || closing || releasePromise || !['background','switchVault'].includes(event.reason)) { void rejectLifecycle(event.id); return; }
+    invalidateNavigation();
     lifecycleBusyId = event.id; lifecycleEpoch++; documentQuiescing = true;
     const handler = lifecycleHandler;
     // Pause publication without replacing the workspace's latest state. A
@@ -309,7 +388,8 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   const lifecycleListener = await bridge.addListener('lifecycleRequest',onLifecycle);
   let removePromise: Promise<void> | undefined;
   function stopLifecycle(): Promise<void> {
-    lifecycleStopped = true; lifecycleHandler = undefined;
+    lifecycleStopped = true; lifecycleHandler = undefined; invalidateNavigation();
+    if (navigationListener) { const listener = navigationListener; navigationListener = undefined; void listener.remove().catch(() => {}); }
     if (!removePromise) removePromise = lifecycleListener.remove().catch(error => { removePromise = undefined; throw error; });
     return removePromise;
   }
@@ -365,6 +445,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   try {
     context = await bridge.context();
     if (typeof context.clientId !== 'string' || !uuid(context.clientId) || typeof context.name !== 'string' || !context.name) throw fail('invalid_native_context');
+    if (context.sameVaultNavigation !== undefined && (context.sameVaultNavigation !== 1 || typeof bridge.documentOpenResult !== 'function')) throw fail('invalid_native_context');
     if (context.documentSemantics !== undefined && context.documentSemantics !== true) throw fail('invalid_native_context');
     if (context.createNoteOnOpen !== undefined && typeof context.createNoteOnOpen !== 'boolean') throw fail('invalid_native_context');
     if (context.createNoteOnOpen === true && (context.initialPath !== undefined || context.initialEntryId !== undefined)) throw fail('invalid_native_context');
@@ -383,6 +464,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     lease = Object.freeze({ local_store_id: claimed.local_store_id, client_id: clientId, token: claimed.token });
     const authority = (await call('identity')).identity;
     if (authority?.local_store_id !== lease.local_store_id) throw fail('invalid_authority');
+    if (context.sameVaultNavigation === 1) navigationListener = await bridge.addListener('documentOpenRequest',onDocumentOpen);
   } catch (error) {
     closing = true;
     if (lease) await request({ method: 'release_client', reference: lease },undefined,true).catch(() => {});
@@ -751,7 +833,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       return () => { listeners.delete(listener); if (!listeners.size && timer) { watchGeneration++; clearInterval(timer); timer = undefined; } };
     },
   };
-  return { adapter, ...(documents ? { documentSemantics: documents.service } : {}), mobileLifecycle, nativeEditor, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
+  return { adapter, ...(context.sameVaultNavigation === 1 ? {nativeDocumentNavigation} : {}), ...(documents ? { documentSemantics: documents.service } : {}), mobileLifecycle, nativeEditor, reconciliation, editorOnly: true, ...(createNoteOnOpen === undefined ? {} : { createNoteOnOpen }), ...(initialPath === undefined ? {} : { initialPath, initialEntryId }),
     async presentationSettled(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input) || !sameKeys(input,['path','entryId','state'])) throw fail('invalid_presentation_settled');
       let captured: NativePresentationSettled;
@@ -771,6 +853,7 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       presentationTail = task.catch(() => {}); await task;
     },
     async noteOpened(path,entryId) {
+      invalidateNavigation();
       active(); if (releasePromise) throw fail('storage_closed');
       const captured = nativeNotePath(path);
       if (!id(entryId)) throw fail('invalid_entry_id');
@@ -801,11 +884,14 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
     }),
     release() {
       if (releasePromise) return releasePromise;
+      invalidateNavigation();
       lifecycleEpoch++; presentationGeneration++; documentQuiescing = true;
       stopNativeEditor(); stopPolling();
       releasePromise = (async () => {
         // Flush admitted consumers before retiring the native client lease.
         await lifecycleTask;
+        await navigationTail;
+        await navigationListener?.remove(); navigationListener = undefined; navigationHandler = undefined;
         await editorTail; await Promise.allSettled([...editorRetirements]);
         await serialTail; await tail;
         if (documents && !documentsDrained && !leaseReleased) {

@@ -286,7 +286,7 @@ test('retained PDF callbacks rearm only on explicit current activation',async t=
 
 test('unsupported selected attachment reveals its existing unavailable message without history',async t=>{
   const adapter=new IdentityAdapter({'Unknown.zip':'bytes'});
-  const f=await setup(t,{initialPath:'Unknown.zip',initialEntryId:'id_Unknown_zip'},false,{},undefined,adapter);
+  const f=await setup(t,{initialPath:'Unknown.zip',initialEntryId:'id_Unknown_zip'},false,{pdf:((host:HTMLElement)=>{host.textContent='PDF';return{ready:Promise.resolve(),destroy(){}};}) as any},undefined,adapter);
   assert.match(f.workspace.activePane.content!.textContent??'',/No viewer is available/);
   assert.deepEqual(f.presentations,[{path:'Unknown.zip',entryId:'id_Unknown_zip',state:'error'}]);assert.deepEqual(f.opened,[]);
 });
@@ -362,4 +362,110 @@ test('missing native selection error delivery rejection does not fail vault admi
   await new Promise<void>(resolve=>setImmediate(resolve));
   assert.match(document.body.textContent??'',/selected note changed/);assert.deepEqual(f.opened,[]);
   await f.workspace.openNote('A.md');assert.equal(f.workspace.activePane.editor?.getValue(),'Alpha');
+});
+
+// Finite command fixture uses one real Workspace/Vault, with authoritative IDs
+// supplied by a small durable provider rather than a second host/bootstrap.
+async function finiteNavigationFixture(t:TestContext,initialPath='A.md'){
+  const adapter=new IdentityAdapter({'A.md':'Alpha','B.md':'Beta','C.md':'Gamma','Document.pdf':'%PDF-bytes'});
+  const stat=adapter.stat.bind(adapter);adapter.stat=async path=>{const row=await stat(path);return row?{...row,entryId:'id_'+path.replaceAll('.','_'),revision:'rev1'}:row;};
+  const heads=new Map<string,any>(),scope={vaultId:'store',clientId:'client'};
+  const textReads:string[]=[];
+  const read=async(path:string)=>{textReads.push(path);return({entryId:'id_'+path.replaceAll('.','_'),path,revision:'rev1',content:await adapter.read(path),stat:{ctime:1,mtime:1,size:(await adapter.read(path)).length}});};
+  const unused=async():Promise<never>=>{throw new Error('Unexpected durable write');};
+  (adapter as any).durableWrites={checkpoints:{scope,load:async(key:string)=>heads.get(key)??null,list:async()=>({items:[],cursor:null,highWater:'0'}),changes:async()=>({items:[],cursor:null,highWater:'0'}),compareAndSwap:async(change:any)=>{const head={...scope,version:1,key:change.key,revision:change.nextRevision,encodedState:change.encodedState,sequence:'1',deleted:false,byteLength:0};heads.set(change.key,head);return head;}},
+    readText:read,readTextById:async(id:string)=>{const row=(await adapter.list()).find(row=>row.entryId===id);return row?read(row.path):null;},planWrite:unused,prepare:unused,commit:unused,query:unused,listUnacknowledged:async()=>[],acknowledge:unused};
+  let handler:any,lifecycle:any;
+  const f=await setup(t,{editorOnly:true,initialPath,initialEntryId:'id_'+initialPath.replaceAll('.','_'),
+    nativeDocumentNavigation:{subscribe(callback){handler=callback;return()=>{};}},
+    mobileLifecycle:{subscribe(callback){lifecycle=callback;return()=>{};}}},false,{},undefined,adapter);
+  f.workspace.root.inert=false; // JSDOM does not implement HTMLElement.inert's browser default.
+  let current=true;
+  const request={id:crypto.randomUUID(),sourceOwnerId:crypto.randomUUID(),nativeTabId:crypto.randomUUID(),localStoreId:'store',entryId:'id_B_md'};
+  return{...f,heads,textReads,request,setCurrent(value:boolean){current=value;},navigate:(ready:(result:any)=>Promise<void>=async()=>{})=>handler(request,{isCurrent:()=>current,ready}),lifecycle:(reason:string,ack:()=>Promise<void>)=>lifecycle(reason,ack)};
+}
+function gate(){let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done;});return{resolve,promise};}
+async function waitFor(check:()=>boolean){for(let n=0;n<300;n++){if(check())return;await new Promise(done=>setTimeout(done,2));}assert.fail('finite navigation timed out');}
+
+test('finite same-vault command retains source through ACK and never bootstraps a new Vault',async t=>{
+  const f=await finiteNavigationFixture(t),vault=f.workspace.vault,source=f.workspace.activePane.editor!,ack=gate();let ready:any;
+  vault.initialize=async()=>{assert.fail('same-vault navigation must not initialize');};
+  const task=f.navigate(async result=>{ready=result;await ack.promise;});await waitFor(()=>!!ready);
+  assert.equal(source.getValue(),'Alpha');assert.equal(f.workspace.vault,vault);assert.equal(f.workspace.root.inert,true);
+  assert.deepEqual(f.opened,[['A.md','id_A_md']],'command must not publish fire-and-forget noteOpened');
+  ack.resolve();await task;
+  assert.equal(f.workspace.activePane.editor?.getValue(),'Beta');assert.equal(f.workspace.activePane.tabs.length,1);
+  assert.equal((f.workspace as any).cachedViews.size,0);assert.equal(f.workspace.root.inert,false);
+  assert.deepEqual(ready,{path:'B.md',entryId:'id_B_md',revision:'rev1',recovery:'none'});
+});
+test('finite source checkpoint failure leaves exact source runtime and never admits target',async t=>{
+  const f=await finiteNavigationFixture(t),source=f.workspace.activePane.editor!;
+  f.workspace.buffers.get('A.md')!.flushForNavigation=async()=>{throw new Error('checkpoint unavailable');};
+  await assert.rejects(f.navigate(async()=>assert.fail('must not ACK')),/checkpoint unavailable/);
+  assert.equal(f.workspace.activePane.editor,source);assert.equal(f.workspace.activePane.viewPath,'A.md');assert.equal(f.workspace.root.inert,false);assert.equal(f.workspace.buffers.has('B.md'),false);
+  f.workspace.buffers.get('A.md')!.flushForNavigation=async()=>{};
+});
+for(const failure of ['renderer','native ACK'])test(`finite ${failure} failure restores the retained source without recording target`,async t=>{
+  const f=await finiteNavigationFixture(t),source=f.workspace.activePane.editor!;
+  if(failure==='renderer')(f.workspace as any).editorFactory=(parent:HTMLElement,options:EditorOptions)=>{if(options.value==='Beta')throw new Error('target renderer failed');return editor(parent,options);};
+  await assert.rejects(f.navigate(async()=>{throw new Error('native validation rejected');}));
+  assert.equal(f.workspace.activePane.editor,source);assert.equal(f.workspace.activePane.viewPath,'A.md');assert.equal(f.workspace.root.inert,false);
+  assert.deepEqual(f.opened,[['A.md','id_A_md']]);assert.equal((f.workspace as any).cachedViews.size,0);
+});
+test('finite positive native ACK cannot be rolled back by subsequent cancellation',async t=>{
+  const f=await finiteNavigationFixture(t);await f.navigate(async()=>{f.setCurrent(false);});
+  assert.equal(f.workspace.activePane.viewPath,'B.md');assert.equal(f.workspace.root.inert,false);
+});
+test('spontaneous link from a provisional target publishes its own identity and retires the source tab',async t=>{
+  const f=await finiteNavigationFixture(t),pending=gate();let ready=false;
+  const command=f.navigate(async()=>{ready=true;await pending.promise;throw new Error('superseded native request');});
+  await waitFor(()=>ready);await f.workspace.openNote('C.md');f.setCurrent(false);
+  assert.deepEqual(f.opened,[['A.md','id_A_md'],['C.md','id_C_md']],'a reused provisional tab must not suppress the newer link');
+  pending.resolve();await assert.rejects(command,/superseded native request/);
+  assert.equal(f.workspace.activePane.viewPath,'C.md');assert.equal(f.workspace.activePane.tabs.length,1);
+  assert.equal((f.workspace as any).cachedViews.size,0);assert.equal(f.workspace.root.inert,false);
+});
+test('positive native ACK followed immediately by background retains the accepted target',async t=>{
+  const f=await finiteNavigationFixture(t),pending=gate();let ready=false;
+  const command=f.navigate(async()=>{ready=true;await pending.promise;});await waitFor(()=>ready);
+  f.setCurrent(false);const transition=f.lifecycle('background',async()=>{});pending.resolve();
+  await command;await transition;
+  assert.equal(f.workspace.activePane.viewPath,'B.md');assert.equal(f.workspace.activePane.tabs.length,1);
+  assert.equal(f.workspace.root.inert,false);assert.equal((f.workspace as any).cachedViews.size,0);
+});
+test('path reuse cannot adopt or recover the previous loaded buffer for another entry',async t=>{
+  const f=await finiteNavigationFixture(t);await f.workspace.openNote('B.md');await f.workspace.openNote('A.md');
+  const old=f.workspace.buffers.get('B.md')!,source=f.workspace.activePane.editor!,writes=(f.adapter as any).durableWrites;
+  let loads=0;const load=writes.checkpoints.load;writes.checkpoints.load=async(key:string)=>{loads++;return load(key);};
+  f.workspace.vault.reload=async()=>{const row=f.workspace.vault.entries.get('B.md')!;f.workspace.vault.entries.set('B.md',{...row,entryId:'replacement'});};
+  const read=writes.readTextById;writes.readTextById=async(id:string)=>id==='replacement'?{...(await read('id_A_md')),entryId:'replacement',path:'B.md',content:'Replacement'}:read(id);
+  f.request.entryId='replacement';
+  await assert.rejects(f.navigate(),/another entry|identity changed/);
+  assert.equal(f.workspace.activePane.editor,source);assert.equal(f.workspace.activePane.viewPath,'A.md');
+  assert.equal(f.workspace.buffers.get('B.md'),old);assert.equal(old.savedDurableWitness?.entryId,'id_B_md');assert.equal(loads,0);
+});
+for(const reason of ['background','switchVault'])test(`finite cancellation drains before ${reason} captures inert restoration state`,async t=>{
+  const f=await finiteNavigationFixture(t),pending=gate(),source=f.workspace.activePane.editor!;
+  const writes=(f.adapter as any).durableWrites,read=writes.readTextById;let entered=false;
+  writes.readTextById=async(id:string)=>{if(id==='id_B_md'){entered=true;await pending.promise;}return read(id);};
+  const navigation=f.navigate();await waitFor(()=>entered);f.setCurrent(false);
+  const transition=f.lifecycle(reason,async()=>{if(reason==='switchVault')throw new Error('stale lifecycle');});
+  pending.resolve();await assert.rejects(navigation,/superseded/);
+  if(reason==='switchVault')await assert.rejects(transition,/stale lifecycle/);else await transition;
+  assert.equal(f.workspace.activePane.editor,source);assert.equal(f.workspace.root.inert,false);assert.equal((f.workspace as any).closing,false);
+});
+test('finite rejection detaches target before async teardown, so newer navigation is not overwritten',async t=>{
+  const f=await finiteNavigationFixture(t),blocked=gate();let teardown=false;
+  const dispose=(f.workspace as any).disposePaneViews.bind(f.workspace);
+  (f.workspace as any).disposePaneViews=async(pane:any)=>{if(pane.viewPath==='B.md'){teardown=true;await blocked.promise;}return dispose(pane);};
+  const command=f.navigate(async()=>{throw new Error('reject');});await waitFor(()=>teardown);
+  assert.equal(f.workspace.activePane.viewPath,'A.md');await f.workspace.openNote('C.md');blocked.resolve();await assert.rejects(command);
+  assert.equal(f.workspace.activePane.viewPath,'C.md');assert.equal(f.workspace.root.inert,false);
+});
+
+
+test('durable native PDF launch retains binary viewer path without text checkpoint admission',async t=>{
+  const f=await finiteNavigationFixture(t,'Document.pdf');
+  assert.ok(f.workspace.activePane.pdfView);assert.equal(f.workspace.activePane.viewPath,'Document.pdf');
+  assert.deepEqual(f.textReads,[]);assert.equal(f.workspace.buffers.size,0);assert.equal(f.heads.size,0);
 });
