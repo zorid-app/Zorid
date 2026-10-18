@@ -47,7 +47,7 @@ const json=JSON.stringify;
 export class BrowserSyncWorker {
   private session?:{ storage:BrowserSync; transport:BrowserSyncTransport; key:BrowserSyncKey;
     free():void; assert():void; scope:{realm_id:string;vault_id:string;key_epoch:number}; epoch:string;
-    ready:Promise<void>; rpc:boolean; active?:Promise<BrowserSyncSweep> };
+    ready:Promise<void>; admitted:boolean; rpc:boolean; active?:Promise<BrowserSyncSweep> };
   private generation=0;
   private host:Host;
   private transportFactory:typeof createBrowserSyncTransport;
@@ -59,7 +59,7 @@ export class BrowserSyncWorker {
    * key survive retries; revocation fences the captured provider immediately. */
   recordsSession():{key:BrowserSyncKey;sessionToken:object;assertActive():void}|undefined {
     const session=this.session;
-    if(!session)return;
+    if(!session?.admitted)return;
     session.assert();
     return {key:session.key,sessionToken:session,assertActive:session.assert};
   }
@@ -99,7 +99,7 @@ export class BrowserSyncWorker {
     };
     let storage:BrowserSync;
     try{storage=this.host.storage.bindSession(assert);}catch(error){transport.close();free();return Promise.reject(this.sanitize(error));}
-    const session={storage,transport,key,free,assert,scope,epoch,rpc,ready:Promise.resolve()};
+    const session={storage,transport,key,free,assert,scope,epoch,rpc,admitted:false,ready:Promise.resolve()};
     this.session=session;
     const enroll=input.enrollEmpty===true;
     session.ready=this.host.local(async()=>{
@@ -111,6 +111,7 @@ export class BrowserSyncWorker {
       if(inspected.cursor && inspected.cursor.server_epoch!==epoch)throw failure('sync_epoch_mismatch');
       if(!inspected.cursor)await storage.setCursor({realm_id:scope.realm_id,vault_id:scope.vault_id,server_epoch:epoch,after:'0'},null);
       assert();
+      session.admitted=true;
     }).catch(error=>{if(this.session===session)this.revoke();throw this.sanitize(error);});
     return session.ready;
   }

@@ -55,7 +55,8 @@ test('sync provider retains stable key/token and captured guard fails after revo
   const wasm:any={WasmVaultKey:class{free(){freed++;}seal(){}openSyncUpdate(){}},encodeSyncCursor(){},decodeSyncHello(){},decodeSyncAccepted(){},decodeSyncPage(){},syncEnvelopeUpdateId(){}};
   const transport:any={close(){}};
   const worker=new BrowserSyncWorker({storage,wasm,assertOwner(){},fatal(){},async local(op){return op();},async changed(){}},()=>transport);
-  await worker.configure({endpoint:'https://fixture.invalid',realmId:'realm',vaultId:'vault',serverEpoch:'epoch',keyEpoch:1,bearerToken:'fixture',keyBytes:new Uint8Array(32)});
+  const configuring=worker.configure({endpoint:'https://fixture.invalid',realmId:'realm',vaultId:'vault',serverEpoch:'epoch',keyEpoch:1,bearerToken:'fixture',keyBytes:new Uint8Array(32)});
+  assert.equal(worker.recordsSession(),undefined);await configuring;
   const first=worker.recordsSession()!,second=worker.recordsSession()!;assert.equal(first.key,second.key);assert.equal(first.sessionToken,second.sessionToken);first.assertActive();
   worker.revoke();assert.equal(worker.recordsSession(),undefined);assert.throws(first.assertActive,{code:'sync_session_revoked'});assert.throws(guard,{code:'sync_session_revoked'});assert.equal(freed,1);
 });

@@ -81,6 +81,22 @@ async function main(){
     const errors=report.events.filter(e=>['storage-error','managed-records-error'].includes(e.event));assert(errors.length===0,'Worker maintenance errors: '+JSON.stringify(errors));
     await h.release();return {changes:after,reacquiredClient:previous.clientId,errors};
   });
+  await group('release drains a held real strict transaction and suppresses stale durable notification',async()=>{
+    const name='zorid-core-vault:host-drain-'+crypto.randomUUID();await seed(name,[['drain-create',wire('drain-create','drain',[])]]);
+    const h=start(name);await h.open();
+    let releasing,completedBeforeAck=false;
+    h.worker.addEventListener('message',({data})=>{
+      if(data.event==='fixture-held-write')releasing=h.call('release-client').then(()=>{completedBeforeAck=h.events.some(e=>e.event==='fixture-held-finished');});
+    });
+    await h.configure();await until(async()=>!!releasing,Boolean,'No in-flight strict transaction');await releasing;
+    assert(completedBeforeAck,'Release acknowledged before held transaction completed/aborted');
+    assert(!h.events.some(e=>e.event==='fixture-durable-changes'&&e.changes.some(row=>row.status==='accepted')),'Closed host emitted stale accepted notification');
+    const outcome=h.events.find(e=>e.event==='fixture-held-finished').outcome;
+    h.worker.terminate();workers.delete(h.worker);
+    const afterRelease=await status(name,'drain-create'),reopened=start(name,h.clientId);await reopened.open();await reopened.configure();
+    await until(()=>status(name,'drain-create'),value=>value==='accepted','Reacquisition did not prove durable outcome');await reopened.release();
+    return {outcome,afterRelease,afterReopen:await status(name,'drain-create'),completedBeforeAck};
+  });
 }
 try{await main();report.status='passed-subset';}catch(error){report.status='failed';report.error={code:error.code,details:error.details,message:error.message,stack:error.stack};}
 finally{
