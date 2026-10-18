@@ -77,6 +77,15 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Portable router checkpoint (2026-10-18 04:57 UTC): TS371 freeze af3b6538 has
+16 component checks/fullTS0 but independent review WITHHOLDS source approval:
+async resume outside the route queue can overwrite a newer selected document and
+restore the wrong writer. Owner has the held-resume-A/open-B counterexample and
+must serialize/fence that lifecycle path. Earlier strict literal decoding and
+retryable cleanup findings are fixed. Exact blobs, log hash and consuming state-
+before-result publication obligation are in mobile-web-router-source-review.md.
+This component is not on main and does not establish actual live editor rendering.
+
 Retained editor checkpoint (2026-10-18 04:55 UTC): canonical `e4d6b297`
 integrates independently approved interaction source047d5687. Root isolated
 composition exactly matches the entire approved src/tests tree;91 focused cases
