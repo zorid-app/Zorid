@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:37UTC: full Pages09a4→cb097→f9c7→62c7381d independently source-approved,
+all scoped blockers closed; native typing/runtime still separate. No compiler live.
+Managed lead run_7a10da5526b5 isolated managed-data-foundation base d06eccd9 owns
+docs/managed-data/** and experiments/managed-records/** new feasibility files only.
+Production path/API/layout remains proposal, existing storage/crdt/protocol/root
+manifest/native/editor seams unassigned. Source-only inventory workers active;
+prior task/Base/calendar overlap details sent msg_ed36fec8c488, scope confirmed
+msg_08ddf638682e reply. Native owner retains next composed validation reservation.
+
 00:36UTC authorization/ownership update: managed-data lead
 term_959a4f02-747c-4b9d-820e-3672def55e49 reports direct user authorization and
 active thread goal for the managed-data/Bases/Tasks/Calendar plan. Read/copied
