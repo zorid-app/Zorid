@@ -217,3 +217,25 @@ compiler, Rust tests, apps, native/WASM/IDB/UI or source activation run. Later
 checks require coordinator load release and explicitly targeted SQLite test
 commands with one build/test thread; no full suite is planned. Independent review
 and actual validation remain separate from implementation and integration.
+
+## Coordinator reply and canonical composition checkpoint
+
+Coordinator answered the inventory ask: exact source scope above is granted
+**subject to independent inventory review before shared hunks**. Exact canonical
+`2120024d22e9b673858e05cb2f2fc8f6ffd166d2` was merged into this isolated branch,
+retaining inventory commit `7d60b1e3`; no main checkout was changed. Current
+portable/native foundation and their validation reports were read after merge.
+
+The raw+semantic seam is confirmed sufficient for this Store foundation. No
+convenience service API is authorized. A later semantic caller must recover
+original evidence before command_for_new/tag reads: retry original raw input
+through capture if retained, or enumerate bounded pending request bytes to recover
+that raw input; committed operation lookup/service integration remains a later
+named seam. No semantic product retry/cutover claim is made in this slice.
+
+Real SQLite v1 transaction/settlement/denial cases are the initial implementation
+scope. V2 trust access remains OPEN for separately reviewed portable ownership;
+no fake engine, source copy, production arbitrary catalog, Cargo feature or
+new dependency is permitted. Compiler remains owned by root; source-only review
+and bounded formatting only until root releases load. Reviewer ctx_4ef93249788f
+was sent exact inventory and this reply; shared source has not been edited.
