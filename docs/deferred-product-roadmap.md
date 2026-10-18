@@ -77,6 +77,21 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Latest resource steering (2026-10-18 01:31 UTC): direct user clarification relayed
+by managed-data lead says build-slot permission applies ONLY to iOS. Rust/browser
+workers run bounded focused checks independently; do not gate them on iOS slot
+return or repeated coordinator ACKs. Preserve actual resource awareness on this
+8GB machine and existing live processes, main integration and shared-file owners.
+First browser A/B source wave in df764648 is independently approved: A owns
+portable admission/native behavior-preserving delegation and private WASM;
+B initially owns new adapter/tests, existing dispatcher/host comes later. A/B
+agree minimal raw-byte DTO directly and record it, without another grant loop.
+Native15 typecheck passed on588bc; actual Foundation history193 passed after
+explicit macOS SDK/target command correction (initial harness compile failure
+retained). Native owner now has Simulator11 build+focused history/metadata UI
+slot, including disposable metadata-only failure/retry checks. No app UI proof
+yet; NewNote/link/swipes remain separate source work.
+
 Native follow-up checkpoint (2026-10-18 01:24 UTC): configured history source
 review accepted Mobile4ab5cdec / Coordinator e46b3ec9 / Factory9d41f71c after
 all three transition/background/supersession corrections. No compiled/runtime
