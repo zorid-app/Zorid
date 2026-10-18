@@ -127,6 +127,10 @@ and browser milestones; S1 does not silently choose a production VFS.
 
 ## Measurement and implementation gates
 
+See the concrete [baseline specification](../plans/indexing-search-baseline.md)
+and proposed [core runtime interface](document-runtime-interface.md). Both are
+preparatory design records, not implementation or performance acceptance.
+
 Use a 10,000-note representative workload and 100,000-note stress case plus large
 individual notes. Measure cold/warm startup, incremental indexing, search/Base
 latency, memory and foreground responsiveness before selecting numerical budgets.

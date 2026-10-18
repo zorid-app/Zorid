@@ -18,6 +18,9 @@ subtasks/review where the contracts permit them.
 | S1.5 Freshness and first-build behavior | Previous coherent results while updating; clearly incomplete first-build results/counts; time-dependent refresh in selected timezone | Changed results refresh without mixed generations; first-build absence/aggregates aren't presented as complete; midnight/timezone/now dependencies invalidate relevant visible views |
 | S1.6 Integrated performance gate | Same frozen implementation across required desktop/native and actual browser bindings, with retained before/after scenarios | 10,000-note baseline and 100,000-note stress case plus large notes; cold/warm/index/query/memory results; semantic regressions resolved and agreed measured budgets met |
 
+The reviewed [S1.0 baseline specification](indexing-search-baseline.md) defines
+workloads, semantic oracles, measurement phases and current platform limits.
+
 ## Core lifecycle and platform execution requirement
 
 S0A defines the shared core lifecycle/caching interfaces before S1 replaces live
