@@ -228,8 +228,8 @@ async function main() {
   await group('post-AEAD enrolled epoch rotation rejects fresh duplicate and retained commits without progress',async()=>{
     const evidence=[];
     for(const path of ['fresh','duplicate','retained']){
-      const h=await fresh('config-'+path),token=await register(h),s=recordScope('Synced','config-'+path,'config-root');
-      const id='config-'+path,parents=path==='retained'?['missing-parent']:[];
+      const h=await fresh('config-'+path),token=await register(h),id='config-'+path;
+      const s=recordScope('Synced',id,path==='retained'?'missing-parent':id),parents=path==='retained'?['missing-parent']:[];
       const bytes=recordPayload(id,s,[operation(id,s,parents,command(path==='retained'?'Patch':'Create',path))]);
       const wire=seal(id,bytes),cursor={...scope,server_epoch:'config-race-epoch',after:'0'};
       if(path!=='fresh')await h.vault.sync.receive(id,wire,key);
@@ -258,7 +258,7 @@ async function main() {
       }});
       try{
         const error=await reject(()=>path==='retained'?h.records.retryPage(token):h.vault.sync.receive(id,wire,key,{expected:cursor,next:{...cursor,after:'1'}}));
-        assert(injected&&baselinePromise,'Actual AEAD open did not reach injection');
+        assert(injected&&baselinePromise,'Actual AEAD open did not reach injection: '+JSON.stringify({path,error}));
         const baseline=await baselinePromise;
         assert(error.code==='sync_snapshot_conflict','Wrong epoch rotation rejection: '+JSON.stringify(error));
         const expected=structuredClone(before),row=expected.sync_state.find(row=>row.key==='config');
