@@ -116,6 +116,13 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+Canonical update00:03UTC: main60ffc972 integrates source-identical3288 native9
+Settings/search/minimum-one and caret batch. Independent review, fulltsc99639exit0,
+focused66/66 tests55162 pass. Actual Simulator8/9 evidence and phoneDev9 repeated
+install/launch65171both0 recorded docs/native-mobile-integration.md. Caret pixel/
+dragUI gaps remain; no menus/import/loader/tabs included. Root checks terminal,
+no compiler live; tab harness requires ready-source exactpath/fresh slot ACK.
+
 Import verification00:00UTC: root5fc59cae compiled officialRust1.95 locked/offline.
 Host49920 terminal101,9/10 pass: known-name binary collision test returned
 import_storage/commit_uncertain at staged_import_step;861 investigating source.

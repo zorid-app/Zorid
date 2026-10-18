@@ -1,5 +1,27 @@
 # Native mobile integration
 
+## Canonical native9 integration — 2026-10-18 00:03 UTC
+
+Main60ffc972 integrates only reviewed native9 Settings/search/navigation and caret
+source: b947801b first-parent delta→3f940fc2,0beb0268→2e0d1b0b,
+e0070be2→e2d8d2fc. All four final source files compare byte-identical with frozen
+3288c1bb. Independent composed review approved; full TypeScript99639 exit0 and
+focused native-caret/empty-focus55162 exit0,66/66 pass. Logs:
+tmp/native9-composed-typecheck.log, tmp/native9-composed-focus-tests.log.
+Vite/dependency/package/notices and other platform/workspace seams unchanged.
+
+Actual owner evidence: Simulator8 Settings/config/back and Rust two-hit search
+open/save/return pass; Simulator9 build89358/install/launch pass, final-item Remove
+disabled80842, extracted actual Foundation minimum-one/drop34/34. Signed Dev9
+build63961/signature/version and install75081 pass. Initial launch was Locked;
+repeat install/launch65171 both exit0, user phone left running. This supersedes
+the lock-only status. Caret tap-only pixel visibility and physical drag-out UI
+remain unverified. No general mobile/reference parity claim.
+
+Menus, import, destination loader, native tabs and Share candidates remain
+isolated and absent from this integration. Task/Bases/calendar implementation
+remains held for the user-requested typed-record design discussion.
+
 Owner: terminal `term_bbf1787b-d2e5-402a-b366-24d40a2385c3`, original base
 main `f69dc90`. Current isolated branch `tingkai-c/native-mobile-recovery`, Orca
 worktree `/Users/ctk/orca/workspaces/Zorid/native-mobile-recovery`. Published canonical main through `d94c3ae3` is included in this isolated branch
