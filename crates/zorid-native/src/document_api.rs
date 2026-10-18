@@ -26,10 +26,12 @@ pub enum NativeDocumentError {
     BaseCompile(zorid_bases::BaseCompileError),
     BaseEvaluation(zorid_bases::ExpressionDiagnostic),
     SourceUnavailable(EntryId),
+    Calendar(crate::WorkBlockError),
 }
 impl fmt::Display for NativeDocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Calendar(error) => write!(f, "Calendar: {}", error.code()),
             Self::Native(error) => error.fmt(f),
             Self::Index(error) => error.fmt(f),
             Self::BaseCompile(error) => write!(f, "Invalid Base definition: {error:?}"),
@@ -108,6 +110,7 @@ impl NativeDocumentError {
         use zorid_index::IndexError as I;
         use zorid_store::DocumentIndexError as D;
         match self {
+            Self::Calendar(error) => error.code(),
             Self::Native(crate::Error::UnsafePath(_)) => "unsafe_path",
             Self::Native(_) => "native_error",
             Self::Index(D::RebuildRequired) => "rebuild_required",
@@ -131,4 +134,8 @@ impl NativeDocumentError {
             Self::SourceUnavailable(_) => "source_unavailable",
         }
     }
+}
+
+impl From<crate::WorkBlockError> for NativeDocumentError {
+    fn from(error: crate::WorkBlockError) -> Self { Self::Calendar(error) }
 }

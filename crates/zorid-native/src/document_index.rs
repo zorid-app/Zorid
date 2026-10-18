@@ -85,11 +85,11 @@ impl NativeVault {
         // Dropping a pin is always safe, including after the root becomes unsafe.
         self.store.close_document_snapshot(pin)
     }
-    fn document_manifest(&self, pin: &DocumentQueryPin) -> NativeDocumentResult<DocumentManifest> {
+    pub(crate) fn document_manifest(&self, pin: &DocumentQueryPin) -> NativeDocumentResult<DocumentManifest> {
         self.paths.verify()?;
         Ok(self.store.document_snapshot_manifest(pin)?)
     }
-    fn document_result<T>(
+    pub(crate) fn document_result<T>(
         &self,
         pin: &DocumentQueryPin,
         value: T,

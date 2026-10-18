@@ -1,5 +1,8 @@
 //! Fixed first-party service. Capabilities and continuations remain process objects.
 use super::*;
+#[path = "calendar.rs"]
+pub mod calendar;
+pub use calendar::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 use zorid_records::{first_party as domain, Command as RecordCommand, Id, State};
