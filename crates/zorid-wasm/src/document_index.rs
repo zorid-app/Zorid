@@ -967,7 +967,7 @@ mod tests {
         assert!(report.result.rows.is_empty());
         assert!(!report.result.coverage_complete);
         assert_eq!(report.result.type_diagnostics[0].code, "invalid_type_yaml");
-        assert_eq!(report.result.type_diagnostics[0].witness.revision, "r1");
+        assert_eq!(report.result.type_diagnostics[0].witness.revision.as_str(), "r1");
         for raw in [
             r#"{"filter":null}"#,
             r#"{"clockMs":null}"#,
