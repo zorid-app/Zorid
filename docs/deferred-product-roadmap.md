@@ -77,6 +77,21 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Resource/lifecycle checkpoint (2026-10-18 02:56 UTC): ENOSPC at184MiB left the
+desktop host truncated despite Cargo success; it was never launched. Managed
+owner removed only old generated feature caches (~1.8GiB); root removed9 obsolete
+stage4 test executables (285MiB logical), preserving current libraries/host/cache.
+Headroom ~2GiB; rebuilt host44MiB arm64 Mach-O verified, frozen Electron proof may
+proceed. Native owner inventories only owned obsolete iOS copies, preserving16,
+phone15 and proof/toolchain. Combined16 build passed current Rust/Swift; no A/B
+runtime proof yet. User now explicitly requests selected-tab back/current/forward
+warm pages and separate per-tab history. Native owner owns lifecycle/routing,
+371 shared TS suspend/rebind after strict8 freeze; agree minimal contract/prototype
+with one active writer, bounded pool, durable quiesce/fresh reactivation and stale
+callback fencing before changes. This supersedes discussion-only intent, not the
+existing save/recovery guarantees. User Files header removal source is separately
+reviewed with accessible fallback; no warm lifecycle code exists yet.
+
 Phone/combined-build checkpoint (2026-10-18 02:49 UTC): Dev15 signed build20613,
 install/launch23417 all passed on the physical test phone; it remains open for
 the user. Exact recovery3d80209a/runtime11c91da1 source, no diagnostics or unreviewed
