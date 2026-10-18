@@ -1739,3 +1739,10 @@ This proves compile/sign/install/launch only, not phone gesture/keyboard/
 loading acceptance. Dev17 includes scoped tab histories/new Home/header/picker/
 strict8 gesture source; it does NOT include optional one-WK channel now in main.
 Simulator post-restart scene-startup issue remains inconclusive, sample retained.
+
+
+### NewNote18 actual Simulator checkpoint — 2026-10-18 04:24 UTC
+
+Owner native mobile, worktree `native-new-note-candidate`, branch same, product source `9cf7fe9f` (canonical c233362a plus reviewed NewNote4e390d70). Acknowledged slot76c4f1ebca9d. Build18 exited0; actual install and launch succeeded on owned Simulator1274C6C8. Orca automation tapped enabled New Note FAB in fresh disposable Orca NewNote18 vault, typed `NewNote18 saved proof`, and confirmed exact projected vault file bytes. Background/foreground retained text. Termination/relaunch followed by actual same vault/file opening restored exact text; native Back then returned Files with unchanged stable entry ID.
+
+Direct NewNote activation leaves the native navigation bar hidden. Normal file reopening restores Back/Forward/Show tabs. The NewNote owner is fixing the narrow editor appearance hunk; this candidate is not yet approved for phone delivery. In-flight create interruption/recovery, interactive two-live-editor swipe and warm channel runtime remain unproved. Phone remains delivered Dev17. Evidence `/Users/ctk/orca/artifacts/zorid-native-20261018/sim18-runtime-report.md`, `sim18-artifact.json`, AX snapshots and screenshots. Product source freeze unchanged by this documentation.
