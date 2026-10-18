@@ -2,6 +2,7 @@
 pub mod wire;
 pub mod admission;
 pub mod first_party;
+pub mod workblock_service;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
