@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:19UTC: core authority focused checks11/11 passed (parent2, Store authority7,
+compact summary2), logs /private/tmp/native-menu-wire-{parent,authority,summary}.log.
+Compile fixfcdb2a78 reexports types through existing Store dependency, no manifest
+change; host retry remains with exclusive Rust worker. d809 terminal retirement
+receipt proposal ACKed msg_f2cac98dc7cf: exact container/owner/session close fact
+distinct from navigation permission; failure without proof retains reservation.
+Scene observer correction and coordinator consumption require source review.
+Share fixtures57d98193 preserved unregistered/unrun; no extra test-target work.
+
 00:18UTC followup: NativePages-only correction batch4a1e1381+6b67a887+09734eb4
 atop5adb source-ready; independent117 review requested msg_a839409c4848. Requires
 atomic core/wire, no legacy unguarded Move fallback; not compiled/native verified.
