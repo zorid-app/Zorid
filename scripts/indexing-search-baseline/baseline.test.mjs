@@ -4,7 +4,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {generate,noteSource,noteSize,notePath,noteId,queries,literalOracle,expectedCount,sha256,json} from './workload.mjs';
-import {validateSearch,invoke} from './cli.mjs';
+import {validateSearch,invoke,buildSource,validateWarmStatus,decodeReadyFrame} from './cli.mjs';
 
 test('v1 exact template, UTF8 byte budgets and fixed source digest remain reproducible',()=>{
   const expected='---\nproject: project-0\nstatus: todo\nrank: 0\n---\n# Note 000000\n\ncommon-marker café 😀\nunique-000000\nrare-marker\nprefixSUBSTRsuffix\n[[/Notes/G000/Note-000001]]\n- [ ] Task\n';
@@ -35,16 +35,25 @@ function sampleReply(){const query=queries[1],expected=literalOracle(query,100).
   const reply={snapshot,source:{localStoreId:'local',watermark:'1'},coverageComplete:true,scanComplete:true,complete:true,truncated:false,value:{hasNext:false,hits:[{entry,line:expected.line,range:expected.range}],pages:4,documents:100,sourceBytes:305152}};
   return {query,entry,snapshot,reply,byPath:new Map([[entry.path,entry]])};}
 test('CLI oracle verifies physical revision and generation, rejecting forged ranges or omissions',()=>{
-  const f=sampleReply();assert.equal(validateSearch(f.reply,f.query,100,f.byPath,f.snapshot).correctness,'complete-oracle');
-  for(const mutate of [r=>r.value.hits[0].entry.revision='wrong',r=>r.value.hits[0].range.utf16[0]++,r=>r.value.hits=[],r=>r.snapshot.generation='2']){
-    const reply=structuredClone(f.reply);mutate(reply);assert.throws(()=>validateSearch(reply,f.query,100,f.byPath,f.snapshot));}
+  const f=sampleReply();assert.equal(validateSearch(f.reply,f.query,100,f.byPath,f.snapshot,{localStoreId:'local',watermark:'1'}).correctness,'complete-oracle');
+  for(const mutate of [r=>r.value.hits[0].entry.revision='wrong',r=>r.value.hits[0].range.utf16[0]++,r=>r.value.hits=[],r=>r.snapshot.generation='2',r=>r.source.watermark='2']){
+    const reply=structuredClone(f.reply);mutate(reply);assert.throws(()=>validateSearch(reply,f.query,100,f.byPath,f.snapshot,{localStoreId:'local',watermark:'1'}));}
 });
 test('CLI oracle labels bounded prefix honestly and rejects false completeness',()=>{
   const f=sampleReply();f.reply.value.hits=[];f.reply.scanComplete=false;f.reply.complete=false;f.reply.truncated=true;f.reply.value.hasNext=true;
-  assert.equal(validateSearch(f.reply,f.query,100,f.byPath,f.snapshot).correctness,'ordered-prefix-only');
-  f.reply.complete=true;assert.throws(()=>validateSearch(f.reply,f.query,100,f.byPath,f.snapshot));
+  assert.equal(validateSearch(f.reply,f.query,100,f.byPath,f.snapshot,{localStoreId:'local',watermark:'1'}).correctness,'ordered-prefix-only');
+  f.reply.complete=true;assert.throws(()=>validateSearch(f.reply,f.query,100,f.byPath,f.snapshot,{localStoreId:'local',watermark:'1'}));
 });
 test('subprocess wrapper records output and bounds only its exact owned child',async()=>{
   const good=await invoke(process.execPath,['-e','process.stdout.write(JSON.stringify({ok:true}))'],{environment:process.env,timeoutMs:1000});assert.equal(good.exitCode,0);assert.equal(good.stdout,'{"ok":true}');
   const slow=await invoke(process.execPath,['-e','setInterval(()=>{},1000)'],{environment:process.env,timeoutMs:100});assert.equal(slow.timedOut,true);assert.notEqual(slow.signal,null);
+});
+
+test('cold/warm source fence and native ready framing reject mismatched witnesses',()=>{
+ const snapshot={localStoreId:'local',generation:'1'},status={state:'ready',snapshot,coveredWatermark:'4',observedSourceHead:'4',coverageComplete:true},cold={snapshot,observedIndex:status};
+ assert.deepEqual(buildSource(cold),{localStoreId:'local',watermark:'4'});validateWarmStatus({localStoreId:'local',status},cold);
+ assert.throws(()=>buildSource({...cold,observedIndex:{...status,observedSourceHead:'5'}}));
+ assert.throws(()=>validateWarmStatus({localStoreId:'local',status:{...status,coveredWatermark:'5'}},cold));
+ const payload=Buffer.from(JSON.stringify({version:1,request_id:'0',ok:true,result:{transport:'zorid-native-stdio',capabilities:['documents','rescan','local_family_status'],reconciliation:{complete:false}}})),prefix=Buffer.alloc(8);prefix.writeUInt32BE(payload.length,0);const frame=Buffer.concat([prefix,payload]);
+ assert.equal(decodeReadyFrame(frame).reconciliation.complete,false);assert.throws(()=>decodeReadyFrame(frame.subarray(1)));assert.throws(()=>decodeReadyFrame(Buffer.concat([frame,frame])));
 });

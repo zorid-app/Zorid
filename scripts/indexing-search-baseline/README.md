@@ -49,29 +49,43 @@ node scripts/indexing-search-baseline/cli.mjs \
   --out /private/tmp/zorid-s1-cli-UNIQUE \
   --cli /absolute/path/to/already-built/zorid \
   --notes 100 --timeout-ms 30000 --samples 1 \
-  --build-sha SOURCE_SHA --build-mode debug
+  --build-sha SOURCE_SHA --build-mode debug \
+  --native-host /absolute/path/to/matching/zorid-desktop-host
 ```
 
-The runner creates a fresh fixture and app-local data directory, initializes and
-imports source through the public legacy non-enrolled native authority path,
-records its exact logical/physical identity mapping, checks native
+The runner creates a fresh fixture and app-local data directory. With explicit
+`--native-host`, it initializes local-family authority through the same native
+`--initialize-local` entry point used by desktop, validates the single bounded
+ready frame and observes normal host exit after stdin EOF. CLI `rescan` then
+continues durable family inventory in bounded passes (5-second soft work budget,
+32 passes by default, `--max-import-passes` 1..1000). Each CLI process still has
+the explicit process timeout. Raw scan progress is retained; three passes without
+proven same-inventory observed/imported/finished progress stop as incomplete.
+Setup/import timing remains separate from indexing. The tool records its exact
+logical/physical identity mapping and checks native
 committed bytes for the first/last note and all three extras, builds a cold derived
 index, opens a fresh CLI status process and executes all eight literals. Repeated
 samples restart the CLI; they do not measure an in-process retained-pin cache.
 `--samples` is bounded to 1..20. Process wall times include startup/transport/JSON.
-The supplied build SHA/mode are labeled caller provenance; the binary's exact
-SHA-256 is measured independently. The tool does not infer correspondence between
+The supplied build SHA/mode are labeled caller provenance; the CLI and optional
+native-host exact SHA-256 values are measured before/after the run and a changed
+executable fails the report. These are boundary checks, not continuous executable
+identity monitoring. The tool does not infer correspondence between
 binary bytes and a source checkout.
 
 `report.json` retains every command's wall time, exit/timeout/signal, output sizes,
-query snapshot/source identity, analytic match count, verified hit count and
+query snapshot/full source watermark identity, warm-restart source equality, analytic match count, verified hit count and
 coverage. Per-command stdout/stderr files retain full bounded outputs. Physical
 source bytes for every generated file are checked again outside timed work;
 `filesystemSourcePreserved` refers specifically to that check. `authoritySamples`
 identifies the subset separately read and hashed through the actual CLI.
 
-This setup does not measure the enrolled-family or normal Electron admission
-path. In the first real smoke, legacy inline PNG import was classified
+Omitting `--native-host` retains a separately labeled legacy profile using
+public CLI `init` and a single `rescan`. Legacy rescan starts a new inventory;
+this tool does not claim it has a durable continuation. An incomplete legacy
+scan remains incomplete rather than repeatedly restarting its inventory. Neither
+profile measures an Electron renderer. In the first legacy smoke, inline PNG
+import was classified
 `unreadable` by the existing index, so generation coverage was incomplete while
 all 100 Markdown notes matched the complete literal oracle. Keep that observed
 coverage gap; do not relabel it as successful binary text extraction.
