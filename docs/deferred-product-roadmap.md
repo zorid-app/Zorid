@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:17UTC: actual frozen527 two-file iOS frontend57718 terminal0, empty diagnostics;
+Swift5 arm64 iOS15 Simulator target, SDK26.2 and cached Sim9 modulecache. No
+project/build/runtime proof; successor883d and coordinator excluded. Native owner
+explicitly returned slot; stage4_native_consumer now owns exclusive bounded Rust
+core/menu-wire focused checks in native-menu-wire, no overlapping native compiler.
+Independent root review confirms5742 background-after-actual-close returns a
+generic failure indistinguishable from retryable live source. Composition held
+until exact-owner terminal retirement and foreground navigation are distinct.
+
 00:16UTC: d809 froze NativeMobile-only tab seams5742f382; root independent
 source review assigned against reachable Git objects. Requires371's exact
 recordNoteOpened(path:entryId:isCurrent:onValidated:completion:) fresh-listing
