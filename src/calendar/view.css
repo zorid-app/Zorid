@@ -1,0 +1,45 @@
+@import 'fullcalendar/skeleton.css';
+@import 'fullcalendar/themes/monarch/theme.css';
+
+.calendar-view {
+  display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:auto;
+  padding:12px;gap:8px;font-family:var(--font-interface);color:var(--text-normal);
+  container-type:inline-size;
+  --fc-monarch-primary:var(--interactive-accent);--fc-monarch-primary-foreground:var(--text-on-accent);
+  --fc-monarch-primary-over:var(--interactive-accent-hover);--fc-monarch-primary-down:var(--interactive-accent);
+  --fc-monarch-secondary:var(--background-secondary);--fc-monarch-secondary-foreground:var(--text-normal);
+  --fc-monarch-secondary-over:var(--background-modifier-hover);--fc-monarch-secondary-down:var(--background-modifier-active);
+  --fc-monarch-selected:var(--interactive-accent);--fc-monarch-selected-foreground:var(--text-on-accent);
+  --fc-monarch-selected-over:var(--interactive-accent-hover);--fc-monarch-selected-down:var(--interactive-accent);
+  --fc-monarch-tertiary-over:var(--interactive-accent-hover);--fc-monarch-tertiary-down:var(--interactive-accent);
+  --fc-monarch-tertiary:var(--interactive-accent);--fc-monarch-tertiary-foreground:var(--text-on-accent);
+  --fc-monarch-event:var(--interactive-accent);--fc-monarch-event-contrast:var(--text-on-accent);
+  --fc-monarch-highlight:color-mix(in srgb,var(--interactive-accent) 16%,transparent);
+  --fc-monarch-now:var(--text-accent);--fc-monarch-outline:var(--interactive-accent);
+  --fc-monarch-background:var(--background-primary);--fc-monarch-popover:var(--background-secondary);
+  --fc-monarch-faint:var(--background-modifier-hover);--fc-monarch-muted:var(--background-modifier-active);
+  --fc-monarch-strong:var(--background-modifier-border);--fc-monarch-stronger:var(--background-modifier-border);
+  --fc-monarch-strongest:var(--text-muted);--fc-monarch-foreground:var(--text-normal);
+  --fc-monarch-muted-foreground:var(--text-muted);--fc-monarch-faint-foreground:var(--text-faint);
+  --fc-monarch-border:var(--background-modifier-border);--fc-monarch-strong-border:var(--text-muted);
+  --fc-monarch-popover-foreground:var(--text-normal);--fc-monarch-strong-foreground:var(--text-normal);
+}
+.calendar-controls{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.calendar-heading{font-size:16px;font-weight:600;flex:1 1 140px;margin:0;text-align:center;}
+.calendar-grid{flex:1 0 420px;min-width:0;min-height:420px;}
+.calendar-status{font-size:13px;color:var(--text-muted);white-space:normal;}
+.calendar-status:empty,.calendar-form-error:empty{display:none;}
+.calendar-editor{border:1px solid var(--background-modifier-border);border-radius:8px;padding:12px;background:var(--background-secondary);}
+.calendar-editor[hidden],.calendar-view [hidden]{display:none!important;}
+.calendar-editor form{display:flex;flex-wrap:wrap;gap:10px;}
+.calendar-editor h3{width:100%;margin:0;font-size:15px;}
+.calendar-field{display:flex;flex-direction:column;gap:4px;flex:1 1 180px;min-width:0;font-size:13px;}
+.calendar-field input{width:100%;min-width:0;box-sizing:border-box;}
+.calendar-field:first-of-type{flex-basis:100%;}
+.calendar-form-buttons{display:flex;flex-wrap:wrap;gap:6px;width:100%;}
+.calendar-form-error,.calendar-candidates,.calendar-delete-confirm{width:100%;font-size:13px;overflow-wrap:anywhere;}
+.calendar-candidates:empty{display:none;}.calendar-candidates p{margin:4px 0;}
+.calendar-candidates button{display:block;margin:4px 0;text-align:left;white-space:normal;}
+.calendar-delete-confirm{padding:8px;border:1px solid var(--background-modifier-border);border-radius:5px;}
+.calendar-grid button,.calendar-grid a{font-family:inherit;}
+@container (max-width:450px){.calendar-heading{order:-1;flex-basis:100%;text-align:left;}.calendar-controls button{padding:5px 8px;}.calendar-field{flex-basis:100%;}.calendar-grid{font-size:12px;}}

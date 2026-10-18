@@ -1,3 +1,4 @@
+import type {CalendarView, CalendarViewState} from '../calendar/view.ts';
 import { mountDocumentBacklinks } from './document-backlinks.ts';
 import { catchUpDocumentIndex, documentErrorCode, DocumentSemanticsError } from '../core/document-semantics.ts';
 import type { DocumentCursor, DocumentPin, DocumentService, DocumentSnapshotId, DocumentSourceId } from '../core/document-semantics.ts';
@@ -62,7 +63,7 @@ interface DocumentSearchOwner {
 }
 type Mode = 'live' | 'reading';
 interface Tab {
-  id:string; path:string|null; mode:Mode; kind:'note'|'graph'; subpath?:string;
+  id:string; path:string|null; mode:Mode; kind:'note'|'graph'|'calendar'; subpath?:string; calendarState?:CalendarViewState;
   history?:string[]; historyIndex?:number;
   viewState?:{editor?:EditorViewState;scrollTop:number;scrollLeft:number};
 }
@@ -74,6 +75,7 @@ interface Pane {
   viewReady?:boolean; viewMode?:Mode; viewKind?:Tab['kind']; viewSettings?:string;
   viewTabId?:string; viewPath?:string|null; renderVersion:number;
   editor?:EditorHandle; imageView?:ImageView; pdfView?:PdfView; mediaView?:MediaView; canvasView?:CanvasView; baseView?:BaseSession;
+  calendarView?:CalendarView;
   canvasSource?:string; baseEmbeds?:BaseEmbedSessions; embeds?:MarkdownEmbeds; properties?:PropertiesView;
   propertyTimer?:ReturnType<typeof setTimeout>; refreshPreview?:()=>void;
   history:string[]; historyIndex:number; persisted?:Record<string,unknown>;
@@ -135,7 +137,7 @@ export class Workspace {
   private keyListener = (event: KeyboardEvent) => this.onKey(event);
   private unloadListener = (event: BeforeUnloadEvent) => {
     try{this.saveSession();}catch{/* Storage failure must not bypass the dirty-document unload guard. */}
-    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges() || pane.baseEmbeds?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
+    if ([...this.buffers.values()].some(buffer => buffer.dirty) || [...this.panes,...this.cachedViews.values()].some(pane => pane.calendarView?.hasPendingChanges() || pane.canvasView?.hasPendingChanges() || pane.baseView?.hasPendingChanges() || pane.baseEmbeds?.hasPendingChanges())) { event.preventDefault(); event.returnValue = ''; }
   };
   private menuSerial = 0;
   private inputContextListener=(event:MouseEvent)=>{
@@ -528,7 +530,7 @@ export class Workspace {
         this.root.classList.toggle('left-hidden', saved.leftHidden === true);
         this.collapsed = new Set(saved.collapsed || []); this.bookmarks = new Set(saved.bookmarks || []);
         for (const item of (Array.isArray(saved.panes) ? saved.panes : []).slice(0, 100)) {
-          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => {const history=Array.isArray(tab.history)?tab.history.filter(path=>typeof path==='string'):[];return{...tab,history,historyIndex:Number.isInteger(tab.historyIndex)?Math.max(-1,Math.min(tab.historyIndex!,history.length-1)):history.length-1,mode:tab.mode==='reading'?'reading' as const:'live' as const,id:makeId()};});
+          const tabs: Tab[] = (item.tabs || []).filter((tab: Tab) => tab.kind === 'graph' || tab.kind === 'calendar' || !tab.path || this.vault.entries.has(tab.path)).map((tab: Tab) => {const history=Array.isArray(tab.history)?tab.history.filter(path=>typeof path==='string'):[];return{...tab,history,historyIndex:Number.isInteger(tab.historyIndex)?Math.max(-1,Math.min(tab.historyIndex!,history.length-1)):history.length-1,mode:tab.mode==='reading'?'reading' as const:'live' as const,id:makeId()};});
           const pane = this.addPane(tabs.length ? tabs : undefined, typeof item.id === 'string' && item.id && !this.panes.some(p=>p.id===item.id) ? item.id : undefined); pane.active = pane.tabs[Math.max(0,Math.min(Number.isInteger(item.active) ? item.active : 0, pane.tabs.length - 1))].id; pane.persisted = item;
         }
         restored = this.panes.length > 0;
@@ -655,7 +657,7 @@ export class Workspace {
     this.root.classList.toggle('is-macos-desktop',!!window.zorid&&/Mac/i.test(window.navigator.platform));
     const ribbon = el('nav', 'ribbon'); ribbon.setAttribute('aria-label', 'Ribbon');
     const top = el('div', 'ribbon-top');
-    top.append(this.hotkeyButton('search','quick-switcher', 'Open quick switcher', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.run(() => this.openGraph())), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), this.hotkeyButton('terminal','command-palette', 'Open command palette', () => this.commandPalette()));
+    top.append(this.hotkeyButton('search','quick-switcher', 'Open quick switcher', () => this.quickSwitcher()), button('graph', 'Open graph view', () => this.run(() => this.openGraph())), button('calendar', 'Open Calendar', () => this.run(() => this.openCalendar())), button('calendar', "Open today's daily note", () => this.run(() => this.dailyNote())), this.hotkeyButton('terminal','command-palette', 'Open command palette', () => this.commandPalette()));
     const bottom = el('div', 'ribbon-bottom'); bottom.append(button('folder', 'Open another vault', () => this.run(() => this.chooseVault())), button('help', 'Help', () => this.help()), this.hotkeyButton('settings','settings', 'Settings', () => this.showSettings())); ribbon.append(top, bottom);
     this.sidebar = el('aside', 'sidebar'); this.sidebar.setAttribute('aria-label', 'Left sidebar');
     const title = el('div', 'titlebar'); title.append(button('sidebar', 'Toggle left sidebar', () => this.toggleLeft()));
@@ -744,7 +746,7 @@ export class Workspace {
     this.capturePaneState(pane);const current=this.current(pane);
     const existing=pane.tabs.find(tab=>tab.path===path&&tab.kind==='note');
     if(existing&&!newTab) pane.active=existing.id;
-    else if(!newTab&&current){if(current.path!==path)current.viewState=undefined;if(current.kind==='graph')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
+    else if(!newTab&&current){if(current.path!==path)current.viewState=undefined;if(current.kind!=='note')current.mode=this.settings.defaultMode;current.path=path;current.kind='note';}
     else {const tab:Tab={id:makeId(),path,mode:this.settings.defaultMode,kind:'note'};pane.tabs.push(tab);pane.active=tab.id;}
     this.current(pane).subpath=subpath;
     pane.history=this.current(pane).history??[];pane.historyIndex=this.current(pane).historyIndex??-1;
@@ -789,7 +791,7 @@ export class Workspace {
     const strip=el('div','tab-strip');bar.append(strip);
     for(const item of pane.tabs){
       const node=el('div',`tab${item.id===tab.id?' is-active':''}`);node.role='tab';node.tabIndex=item.id===tab.id?0:-1;node.setAttribute('aria-selected',String(item.id===tab.id));node.draggable=true;node.dataset.tabId=item.id;
-      node.append(icon(item.kind==='graph'?'graph':'file',15),el('span','tab-title',item.kind==='graph'?'Graph view':item.path?nameOf(item.path):'New tab'));
+      node.append(icon(item.kind==='calendar'?'calendar':item.kind==='graph'?'graph':'file',15),el('span','tab-title',item.kind==='calendar'?'Calendar':item.kind==='graph'?'Graph view':item.path?nameOf(item.path):'New tab'));
       const close=button('close','Close tab',event=>{event.stopPropagation();this.run(()=>this.closeTab(pane,item));},'tab-close');node.append(close);
       const select=()=>this.run(()=>this.selectTab(pane,item));node.onclick=select;
       node.oncontextmenu=event=>{event.preventDefault();event.stopPropagation();this.tabMenu(pane,item,event.clientX,event.clientY);};
@@ -837,7 +839,7 @@ export class Workspace {
     const content=el('div','tab-view-content');Object.assign(content.style,{display:'flex',flexDirection:'column',flex:'1',minHeight:'0',minWidth:'0',overflow:'hidden'});pane.element.append(content);pane.content=content;
     let recoveryCleanup:(()=>void)|undefined;
     const runtime=createTabViewRuntime({id:tab.id,element:content,owner:this.viewOwner(pane),
-      flush:async()=>{await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flushForNavigation();await pane.baseView?.close();await pane.baseEmbeds?.flush();},
+      flush:async()=>{await pane.calendarView?.flush();await pane.canvasView?.flush();if(pane.viewPath)await this.buffers.get(pane.viewPath)?.flushForNavigation();await pane.baseView?.close();await pane.baseEmbeds?.flush();},
       dispose:async()=>{await pane.baseEmbeds?.close();recoveryCleanup?.();this.releasePaneView(pane,content);},focus:()=>this.focusPane(pane)});pane.runtime=runtime;
     const nativePresentation=this.nativePresentationCallback(pane);
     let ownerChanged=()=>{};pane.rebindView=owner=>{pane=owner;ownerChanged();};
@@ -846,8 +848,15 @@ export class Workspace {
     const forward=button('right','Navigate forward',()=>this.run(()=>this.navigate(1,pane)));forward.disabled=pane.historyIndex>=pane.history.length-1;
     toolbar.append(back,forward,el('div','breadcrumbs',tab.path?tab.path.replace(/\.md$/,'').replaceAll('/',' / '):''));
     const actions=el('div','view-actions');
-    if(!tab.path||isMarkdown(tab.path))actions.append(this.hotkeyButton(tab.mode==='reading'?'edit':'book','toggle-reading',tab.mode==='reading'?'Switch to Live Edit':'Switch to reading view',()=>this.run(()=>this.toggleReading(pane))));
+    if(tab.kind==='note'&&(!tab.path||isMarkdown(tab.path)))actions.append(this.hotkeyButton(tab.mode==='reading'?'edit':'book','toggle-reading',tab.mode==='reading'?'Switch to Live Edit':'Switch to reading view',()=>this.run(()=>this.toggleReading(pane))));
     actions.append(button('more','More options',event=>this.tabMenuAt(pane,event.currentTarget as HTMLElement)),button('rightbar','Toggle right sidebar',()=>this.toggleRight(),'pane-sidebar-toggle'));toolbar.append(actions);if(!this.platform.editorOnly)content.append(toolbar);
+    if(tab.kind==='calendar'){
+      const {createCalendarView}=await import('../calendar/view.ts');
+      await import('../calendar/styles.ts');
+      if(!current()||version!==pane.renderVersion)return;
+      pane.calendarView=createCalendarView(content,this.platform.workBlocks,tab.calendarState,state=>{tab.calendarState=state;if(current())this.saveSession();});
+      pane.viewReady=true;return;
+    }
     if(tab.kind==='graph'){this.renderGraph(content);pane.viewReady=true;return;}
     if(!tab.path){this.renderEmpty(pane,content);pane.viewReady=true;return;}
     const path=tab.path;
@@ -1211,7 +1220,7 @@ export class Workspace {
   private viewSettings():string{return JSON.stringify([this.settings.readableWidth,this.settings.showInlineTitle,this.settings.useTab,this.settings.tabSize,this.settings.smartIndentList]);}
   private clearPaneViewFields(pane:Pane):void{
     pane.viewTabId=undefined;pane.viewPath=undefined;pane.viewMode=undefined;pane.viewKind=undefined;pane.viewReady=false;pane.rebindView=undefined;pane.content=undefined;pane.runtime=undefined;
-    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
+    pane.editor=undefined;pane.imageView=undefined;pane.pdfView=undefined;pane.mediaView=undefined;pane.canvasView=undefined;pane.baseView=undefined;pane.calendarView=undefined;pane.canvasSource=undefined;pane.baseEmbeds=undefined;pane.embeds=undefined;pane.properties=undefined;pane.refreshPreview=undefined;pane.propertyTimer=undefined;
     pane.renderVersion=++this.viewSequence;
   }
   private parkPaneView(pane:Pane,keepConnected=false):void{
@@ -1229,7 +1238,7 @@ export class Workspace {
     const cached=this.cachedViews.get(tab);if(!cached?.runtime||!cached.content)return false;
     const connected=cached.content.isConnected;
     cached.runtime.attach(pane.element,this.viewOwner(pane));
-    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
+    const fields=['viewTabId','viewPath','viewMode','viewKind','viewReady','viewSettings','rebindView','editor','imageView','pdfView','mediaView','canvasView','baseView','calendarView','canvasSource','baseEmbeds','embeds','properties','refreshPreview','propertyTimer','renderVersion','runtime','content'] as const;
     for(const key of fields)(pane as unknown as Record<string,unknown>)[key]=cached[key];
     pane.history=tab.history??cached.history;pane.historyIndex=tab.historyIndex??cached.historyIndex;
     pane.rebindView?.(pane);this.cachedViews.delete(tab);this.applyViewSettings(pane);
@@ -1248,7 +1257,7 @@ export class Workspace {
   private releasePaneView(pane:Pane,content:HTMLElement):void{
     if(pane.runtime){this.nativePresentations.get(pane.runtime)?.dispose();this.nativePresentations.delete(pane.runtime);}
     this.capturePaneState(pane);destroyMarkdown(content);
-    clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
+    clearTimeout(pane.propertyTimer);pane.editor?.destroy();pane.imageView?.destroy();pane.pdfView?.destroy();pane.mediaView?.destroy();pane.canvasView?.destroy();pane.calendarView?.destroy();pane.embeds?.destroy();pane.properties?.destroy();this.clearPaneViewFields(pane);
   }
   private async disposePaneViews(pane:Pane):Promise<void>{
     if(pane.runtime){await pane.canvasView?.flush();await pane.runtime.destroy();}
@@ -1787,7 +1796,7 @@ export class Workspace {
     await this.renderPane(pane);this.saveSession();this.renderRight();
   }
   private async navigate(delta:number,pane:Pane):Promise<void>{const index=pane.historyIndex+delta;if(index<0||index>=pane.history.length)return;pane.historyIndex=index;this.current(pane).historyIndex=index;await this.openNote(pane.history[index],false,pane,false);}
-  private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.path&&!isMarkdown(tab.path))return;await this.flushPane(pane);tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
+  private async toggleReading(pane=this.activePane):Promise<void>{const tab=this.current(pane);if(tab.kind!=='note')return;if(tab.path&&!isMarkdown(tab.path))return;await this.flushPane(pane);tab.mode=tab.mode==='reading'?this.settings.defaultMode:'reading';await this.renderPane(pane);this.saveSession();}
   private async followLink(source:string,target:string,pane:Pane,kind:'wiki'|'markdown'='wiki'):Promise<void>{if(/^[a-z][\w+.-]*:/i.test(target)||target.startsWith('//')){if(/^(?:https?:\/\/|mailto:)/i.test(target))window.open(target,'_blank','noopener,noreferrer');return;}const resolved=this.vault.metadata.resolveLink(source,target,kind);if(resolved){await this.openNote(resolved,false,pane,true,target.includes('#')?target.slice(target.indexOf('#')):'');return;}const path=target.split('#')[0].replace(/\.md$/,'')+'.md';if(!path||path==='.md')return;const parent=parentOf(path);if(parent&&!this.vault.entries.has(parent))throw new Error(`Folder does not exist: ${parent}`);await this.vault.create(path,'');await this.openNote(path,false,pane);}
   private async dailyNote():Promise<void>{const now=new Date();const name=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}.md`;if(!this.vault.entries.has(name))await this.vault.create(name,'');await this.openNote(name);}
   private async split(edge:'right'|'bottom'='right',source=this.activePane,tab=this.current(source)):Promise<void>{
@@ -1833,7 +1842,7 @@ export class Workspace {
   }
   private executeHotkey(id:string):void{
     if(this.closing)return;
-    if(this.platform?.editorOnly&&(id.startsWith('tab-')||['new-window','new-tab','close-tab','split-right','split-down','toggle-left','toggle-right','search-all','graph','open-vault'].includes(id)))return;
+    if(this.platform?.editorOnly&&(id.startsWith('tab-')||['new-window','new-tab','close-tab','split-right','split-down','toggle-left','toggle-right','search-all','graph','calendar','open-vault'].includes(id)))return;
     if(id==='new-window'){if(workspaceWindowBridge(window.zorid))this.run(()=>this.newWindow());return;}
     if(!this.vault)return;
     if(id.startsWith('tab-')){
@@ -1854,7 +1863,7 @@ export class Workspace {
       'quick-switcher':()=>this.quickSwitcher(),'command-palette':()=>this.commandPalette(),settings:()=>this.showSettings(),'toggle-reading':()=>this.toggleReading(),
       'split-right':()=>this.split(),'split-down':()=>this.split('bottom'),'toggle-left':()=>this.toggleLeft(),'toggle-right':()=>this.toggleRight(),
       'search-all':()=>{this.treeTab='search';this.root.classList.remove('left-hidden');this.renderSidebar();this.sidebarContent.querySelector<HTMLInputElement>('input')?.focus();},
-      'daily-note':()=>this.dailyNote(),graph:()=>this.openGraph(),'new-folder':()=>this.newFolder(),'open-vault':()=>this.chooseVault(),
+      'daily-note':()=>this.dailyNote(),graph:()=>this.openGraph(),calendar:()=>this.openCalendar(),'new-folder':()=>this.newFolder(),'open-vault':()=>this.chooseVault(),
     };
     if(actions[id])this.run(actions[id]);
   }
@@ -1932,6 +1941,16 @@ export class Workspace {
   }
   private modeMenu(anchor:HTMLElement):void{this.tabMenuAt(this.activePane,anchor);}
 
+  private async openCalendar():Promise<void>{
+    if(this.platform.editorOnly)return;
+    const pane=this.activePane,generation=this.vaultGeneration,version=pane.renderVersion;
+    const intent=(this.navigationIntent.get(pane)??0)+1;this.navigationIntent.set(pane,intent);
+    await this.flushPane(pane);if(generation!==this.vaultGeneration||intent!==this.navigationIntent.get(pane)||version!==pane.renderVersion||!this.panes.includes(pane))return;
+    const existing=pane.tabs.find(tab=>tab.kind==='calendar');
+    if(existing)pane.active=existing.id;
+    else{const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'calendar'};pane.tabs.push(tab);pane.active=tab.id;}
+    this.activate(pane);await this.renderPane(pane);this.saveSession();
+  }
   private async openGraph():Promise<void>{await this.flushPane(this.activePane);const tab:Tab={id:makeId(),path:null,mode:'reading',kind:'graph'};this.activePane.tabs.push(tab);this.activePane.active=tab.id;this.run(()=>this.renderPane(this.activePane));this.saveSession();}
   private renderGraph(parent:HTMLElement):void{
     const container=el('div','graph-view');const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 800 600');svg.setAttribute('aria-label','Graph of linked notes');
@@ -2011,7 +2030,7 @@ export class Workspace {
     const primary=this.hotkeys.platform==='mac'?event.metaKey&&!event.ctrlKey:event.ctrlKey&&!event.metaKey;
     if(primary&&!event.shiftKey&&!event.altKey&&!event.repeat&&event.key.toLowerCase()==='f'&&this.activePane?.pdfView){event.preventDefault();this.activePane.pdfView.showSearch();}
   }
-  private async flushPane(pane:Pane):Promise<void>{await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
-  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
+  private async flushPane(pane:Pane):Promise<void>{await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();const path=this.current(pane)?.path;if(path)await this.buffers.get(path)?.flushForNavigation();}
+  async flush():Promise<void>{if(this.platformReleased||this.platformDrained)return;for(const pane of [...this.panes,...this.cachedViews.values()]){await pane.calendarView?.flush();await pane.baseEmbeds?.flush();await pane.baseView?.flush();await pane.canvasView?.flush();}for(const buffer of this.buffers.values())await buffer.flush();}
   async destroy():Promise<void>{const searchWasSuspended=this.documentSearchSuspended;this.documentSearchSuspended=true;this.clearDocumentSearch();try{this.hideNativeEditorToolbar();this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;this.mobileLifecycleCleanup?.();this.mobileLifecycleCleanup=undefined;this.vaultRequest++;await this.vaultTransition;this.menuSerial++;await dismissContextMenu(this.root.ownerDocument);await this.flush();this.saveSession();this.disposers.forEach(dispose=>dispose());clearTimeout(this.reloadTimer);this.tabDocking?.destroy();this.tabDocking=undefined;await this.clearCachedViews();for(const pane of this.panes)await this.disposePaneViews(pane);for(const buffer of this.buffers.values())await buffer.dispose();if(!this.platformReleased&&this.platform?.release){await this.platform.release();this.releaseDocumentSearchOwner(this.vault);}this.platformReleased=true;this.vaultGeneration++;this.splitLayout?.destroy();this.splitLayout=undefined;this.attachments?.destroy();this.canvasDocumentInput?.destroy();this.canvasDocumentInput=undefined;this.treeDrag?.destroy();this.treeDrag=undefined;this.treeRename?.session.dispose();this.treeRename=undefined;this.hotkeyCleanup?.();this.hotkeyCleanup=undefined;document.removeEventListener('keydown',this.keyListener);document.removeEventListener('contextmenu',this.inputContextListener);window.removeEventListener('beforeunload',this.unloadListener);this.initialized=false;this.closeCleanup?.();this.closeCleanup=undefined;this.disposeShell();this.root.replaceChildren();}catch(error){if(!this.platformReleased)this.documentSearchSuspended=searchWasSuspended;throw error;}}
 }

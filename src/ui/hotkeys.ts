@@ -27,6 +27,7 @@ const workspaceCommands: readonly Omit<HotkeyCommand,'scope'>[] = [
   { id:'search-all',name:'Search in all files',defaults:[chord('f','Mod','Shift')] },
   { id:'split-right',name:'Split right',defaults:[] }, { id:'split-down',name:'Split down',defaults:[] },
   { id:'toggle-left',name:'Toggle left sidebar',defaults:[] }, { id:'toggle-right',name:'Toggle right sidebar',defaults:[] },
+  { id:'calendar',name:'Calendar: Open Calendar',defaults:[] },
   { id:'daily-note',name:"Daily notes: Open today's daily note",defaults:[] }, { id:'graph',name:'Graph view: Open graph view',defaults:[] },
   { id:'new-folder',name:'Create new folder',defaults:[] }, { id:'open-vault',name:'Open another vault',defaults:[] },
   ...Array.from({length:9},(_,index)=>({id:`tab-${index+1}`,name:index===8?'Go to last tab':`Go to tab ${index+1}`,defaults:[chord(String(index+1),'Mod')]})),

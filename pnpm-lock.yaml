@@ -211,6 +211,12 @@ importers:
       '@mathjax/mathjax-tex-font':
         specifier: 4.1.3
         version: 4.1.3
+      fullcalendar:
+        specifier: 7.1.3
+        version: 7.1.3(temporal-polyfill@1.0.6)
+      temporal-polyfill:
+        specifier: 1.0.6
+        version: 1.0.6
       lucide:
         specifier: 1.57.0
         version: 1.57.0
@@ -286,6 +292,40 @@ importers:
         version: 5.2.6(webpack-cli@6.0.1)(webpack@5.111.1)
 
 packages:
+
+  "@full-ui/headless-calendar@7.1.3":
+    resolution:
+      integrity: sha512-CFomIp87osqY65Hlu2c0e2ZnofBe9tKOO8IoPzIfSPVDK/+aGz4Itj6mLu4xPjIvzRDQiopcVzYlip6u1bvYxw==
+    peerDependencies:
+      temporal-polyfill: ^1.0.1
+  "@fullcalendar/core@7.1.3":
+    resolution:
+      integrity: sha512-DLGXqX7CnuUQHH679FgE6+jc927wa708ydIcnfVx372IOK/OiDZjqc+IBwuKnu2EyqleCooDoAnUAcvXBhHosA==
+    peerDependencies:
+      "@full-ui/headless-calendar": 7.1.3
+      temporal-polyfill: ^1.0.1
+  fullcalendar@7.1.3:
+    resolution:
+      integrity: sha512-Mn8VNqLX80C93UFh0s9aKqhHUSh0BwK8pczyQ+nNDKutJeM0/SVLkJoizTfX9sdmwGiS6+hkAHAg9YC10Us0gg==
+    peerDependencies:
+      temporal-polyfill: ^1.0.1
+  preact@10.29.8:
+    resolution:
+      integrity: sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q==
+    peerDependencies:
+      preact-render-to-string: ">=5"
+    peerDependenciesMeta:
+      preact-render-to-string:
+        optional: true
+  temporal-polyfill@1.0.6:
+    resolution:
+      integrity: sha512-tYyEry1HLGUDbm2356W3iYD0OZdo7rlP7h98Zr/EnjqLZQwTAfcBDUvJnJbfA15v/vQad57hJZScG5O0W2oKEA==
+  temporal-spec@1.0.1:
+    resolution:
+      integrity: sha512-wxVoanmDeavXie1vu2JaQ3WIc3JZnWAOYFBsJyATaVsXsycKYUflGsyBmrRSnoCpZJpwPyr38VpgSUlQ8CbFxg==
+  temporal-utils@1.0.3:
+    resolution:
+      integrity: sha512-9jbTSX3HvkOWvDpNpFzwX/d1mkCrgQgwLmVTOEiuocZGKHsrQJtttGZFmybJ2zYP5zCSZuU5ZyeS8+eOEPABiQ==
 
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
@@ -3441,6 +3481,29 @@ packages:
     engines: {node: '>=10'}
 
 snapshots:
+
+  "@full-ui/headless-calendar@7.1.3(temporal-polyfill@1.0.6)":
+    dependencies:
+      temporal-polyfill: 1.0.6
+  "@fullcalendar/core@7.1.3(@full-ui/headless-calendar@7.1.3(temporal-polyfill@1.0.6))(temporal-polyfill@1.0.6)":
+    dependencies:
+      "@full-ui/headless-calendar": 7.1.3(temporal-polyfill@1.0.6)
+      temporal-polyfill: 1.0.6
+  fullcalendar@7.1.3(temporal-polyfill@1.0.6):
+    dependencies:
+      "@full-ui/headless-calendar": 7.1.3(temporal-polyfill@1.0.6)
+      "@fullcalendar/core": 7.1.3(@full-ui/headless-calendar@7.1.3(temporal-polyfill@1.0.6))(temporal-polyfill@1.0.6)
+      preact: 10.29.8
+      temporal-polyfill: 1.0.6
+    transitivePeerDependencies:
+      - preact-render-to-string
+  preact@10.29.8: {}
+  temporal-polyfill@1.0.6:
+    dependencies:
+      temporal-spec: 1.0.1
+      temporal-utils: 1.0.3
+  temporal-spec@1.0.1: {}
+  temporal-utils@1.0.3: {}
 
   '@asamuzakjp/css-color@3.2.0':
     dependencies:
