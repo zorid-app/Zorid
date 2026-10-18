@@ -993,3 +993,407 @@ Exclusive native slot returned23:17:21 after phone7 and bounded Foundation
 harness; no compiler/test app/helper/server remains. Future iOS8/verification
 requires a newly acknowledged slot. Apple API last22:22 still403 and support
 case103000040642 remains; no repeated API loop or TestFlight readiness claim.
+
+
+### Native UI continuation — 2026-10-17 23:30 UTC
+
+Owner isolated native-mobile-recovery/tingkai-c/native-mobile-recovery merged
+reviewed ceef6006 as b947801b. The resolved NativePages.swift is byte-identical
+to ceef6006; syntax parse/diff checks passed. Search/actions and full Settings/
+nav configuration have not yet passed an Xcode build or actual UIKit acceptance.
+Reviewed native caret fix11b448f3 imported as0beb0268: exact three-file grant,
+85/85 focused real-CodeMirror tests with controlled geometry and scoped strict
+TypeScript check passed in worker against owner Vite dependencies. Owner source
+inspection confirms native capability opt-in, no focus/selection/content/inset
+writes, measured guarded scroll effects and manual-scroll/composition/current-
+owner fences. Actual touch/keyboard visibility remains unverified.
+
+Requested next acknowledged exclusive iOS build8 slot in msg58d501548dca; no
+heavy process started while awaiting coordinator. Phone still runs signed Dev7.
+
+Latest user context-menu reference inspected in Downloads: horizontal Duplicate/
+Move/Share with icons above names, divider, Rename/Delete red. Native371 assigned
+NativePages UI and workflow; d809 independent read-only existing Rust mutation/
+export protocol assessment. Apple UIMenu.preferredElementSize.medium provides
+three icon-and-label elements; native interaction must own lift/dismiss/haptics.
+No fake enabled actions, direct Swift vault writes, or speculative shared Rust
+changes. Functional source/review/build/runtime verification all still pending.
+
+Import first-slice source now explicitly granted by root:861 host staged_import
+helper/minimal lib seam and native C ABI/header; bd57 new staging/coordinator
+Swift files/minimal session/Scene/Info seams, plus focused test source approved.
+117 independently reviews protocol. Initial text|binary ABI proposal objected:
+Rust canonical Auto classification and exact existing live admission token must
+be agreed before Swift wrappers freeze. No Share extension/AppGroup/project/CI/
+signing changes in this source slice, no 64MiB limit raise, no build claimed.
+
+
+### Build8 actual evidence and next minimum-one candidate
+
+Frozen95df87fa Simulator8 build exec30987 terminal0 BUILD SUCCEEDED. Vite972ms,
+cached Rust0.49s, fresh output/private/tmp/zorid-ios-v8-sim-20261017; log
+/private/tmp/mobile-v8-simulator-build.log. Bundle/version assertions, install
+and launch0 (PID5143), Orca helper5261. Actual full native Settings/config/back
+works; Notes removal->Available Add->re-add works under OLD empty-valid rule,
+which user then superseded. Restored Notes before cleanup. Actual native Rust
+content search returned two NativeSearchNeedle hits at displayed lines7/9;
+selected hit opens matching shared editor body, normal save/return and clear
+work. Long-note literal search found line85, opened same stable ID. One AX
+transport error recovered by observation; this was not an app crash.
+
+Caret pixel acceptance remains UNVERIFIED: lower-paragraph tap showed software
+keyboard/native toolbar, initial framebuffer left lower caret offscreen. Later
+framebuffer showed paragraph4/caret above toolbar but also unintended "hh"
+input; no known test typing command was issued in that note. This contaminated
+the no-typing criterion, so do not claim tap-only reveal from that capture.
+Desktop Simulator captures/scroll automation also returned incomplete white
+window images while simctl framebuffer remained valid. Native Undo, keyboard
+dismiss and save/return succeeded; disposable fixture only. No broad caret feel
+or momentum/native-phone claim. Close test app/helper; leave Simulator booted.
+
+User minimum-one navigation rule supersedes empty-valid source. Worker reviewed
+c1faeda136012b76e5b36d3c6aaa017932afc1ef imported ase0070be2 after8build
+completed (existing8artifact unchanged). Owner regenerated actual-source minimum
+Foundation harness and Swift exec47159 terminal0:34/34PASS, injected disposable
+UserDefaults domain cleaned. Full UIKit remove/drag-out proof pending9. Root
+msg2d36653c37bf directs skip phone8, prepare tiny patch, request exact new frozen
+head before Simulator/phone9 compile. Phone remains signed Dev7.
+
+New isolated native tab worker started with source-only named grant35680aa23345:
+/Users/ctk/orca/workspaces/Zorid/mobile-document-tabs, branch
+tingkai-c/mobile-document-tabs, terminal2f48a270-8a1f-4f4c-9fe4-1b9f1be5b8d0.
+Only NEW NativeDocumentTabs.swift/NativeTabOverview.swift; existing NativePages
+371/wiring scope retained. Startup defaultorigin base7467c22a stale; instructed
+to fast-forward isolated branch to current LOCALcanonicalmain ea1e209d before
+edits (exactbase correction receipt pending), never mutate main. Tabs outside9.
+
+Import stack8c94529d+708012df+c62bc79b+cc3e7721 independently SOURCE accepted
+117 after fixing terminal text-collision resurrection and missing recursive test
+field. Host10/ABI4 test bodies UNRUN. FFI exact-error envelope followup3e9b6574
+adds source case, review pending. Root isolated b21d18d9 composes productionsha2
+and mobilelock edge, not compiled. Native staging/admission source2ab4e411 and
+subsequent typed wrapper work unregistered/unbuilt; no completed import claim.
+
+
+### Signed Dev9 install checkpoint — 2026-10-17 23:55 UTC
+
+Frozen3288c1bb Simulator9 build89358 terminal0 BUILD SUCCEEDED. Fresh output
+/private/tmp/zorid-ios-v9-sim-20261017; actual Notes final Remove disabled PASS
+80842 after explicitly opening disposable vault. Drop-last rule has actual
+Foundation helper proof34/34; physical drag-out UI not separately demonstrated.
+AppPID48653 terminated0 and Orcahelper48803 killed0, Simulator retained booted.
+
+Signed device build63961 terminal0 BUILD SUCCEEDED using generic iOS destination
+while phone temporarily unavailable: exact existing development script flags,
+App-Dev/Debug-Dev, version9, official cached device Rust --locked -j1 (0.40s),
+existing Apple Development identity/profile, no provisioning/account/source/tool
+changes. Private log/private/tmp/mobile-v9-phone-build.log0600; fresh output
+/private/tmp/zorid-ios-v9-phone-20261017. Bundle app.zorid.notes.dev/version9/
+ZoridAppEnvironment development and strict/deep codesign verification PASS.
+Initial assertion mistakenly used nonexistent ZoridEnvironment key; corrected
+to actual script/project key before installing, no source defect/change.
+
+Device reconnected after user confirmation: tunnel connected/DDI true. Install
+75081 EXIT0: Dev9 IS INSTALLED on physical iPhone. Launch EXIT1: CoreDevice10002/
+FBSOpenApplicationErrorDomain7 explicitly Locked (device relocked). No launch/
+phone editing/keyboard/tab runtime proof yet. Requested unlock again; retry is
+authorized without rebuild. Private install/launch logs0600 in/private/tmp.
+Phone8 skipped; Dev9 replaces Dev7 installation. Heavy compiler slot can return
+now while waiting for unlocked launch; no simulator test app/helper remains.
+
+
+### Source queue after phone9 delivery — 2026-10-18 00:00 UTC
+
+Exclusive heavy slot returned msg6f4746c927eb; root acknowledged02a5f76d3f71 and
+claimed frozen import5fc59cae host10/ABI5 checks. No owner compiler/Simulator job
+may start until new acknowledgement. Install-free phone launch retry70606 still
+EXIT1 Locked; lockState passcodeRequired=false does not prove launch-unlocked.
+Stop retries until explicit unlock/new evidence. Phone9 installation remains
+confirmed, phone UX not verified.
+
+Reviewed source queue, NOT composed into phone9:
+- Menu5adb0e4a only Move/Rename/Delete; independent117 c88b03d9d6b6 withheld
+ acceptance for atomic selected destination-folder witness race, native pending
+ journal ownership across startup/editor/history/newnote/import handoff, and
+ known no-authority lender completion. Large folder receipts >1MiB can remain
+ uncertain forever; never infer original receipt from current listing. Root
+ assigned native-consumer read-only minimal Rust parent/status proposal.371
+ owns native recovery/lender corrections and row flash; not complete UX.
+- Loading7128f1d8 source parsed/reviewed initially. Owner full review requested
+ d809 followup: picker viewDidAppear resets opening while popped loader open
+ remains pending, permitting a new open before old returned host close ACK.
+ Keep picker reservation until successful transfer or canceled open/close drain.
+ File loader already owns explicit busy/close gate. No loading source composed.
+- Native import source979327ce atop2ab4e411 typed/staging/helper source ready;
+ noauthority lender dependency, project registrations/router integration and real
+ native pipeline evidence still pending. Root composes Rust source/dependencies.
+- Tabs source5824bbfe +2d5e934e on canonical-baseea1e209d reviewed by root/owner
+ without concrete source blocker, TWO NEW files only. Opaque store identity
+ String, ticket+source-owner nonce, one committed file/Home per tab, mixed scopes,
+ explicit bounded restore disposition; memory-only bounded native snapshots.
+ Temporary actual-source model harness requested, not executed during root slot.
+ Existing header/FAB/overview/editor/snapshot/lifecycle wiring requires exact
+ proposal and named scope before edits; tabs are not available in9.
+- Bounded Share source helper newly assigned bd57: ONLY NEW NativeFileExport.swift
+ in separate branch from preserved979; native read_presented exact revision/raw
+ bytes <=16MiB file-only -> own private export -> system activity sheet. No Swift
+ vault IO or Rust/NativePages/NativeMobile/project changes granted; frozen API to
+371 before wiring. Source/review/runtime all pending.
+
+Confirmed native9 batch sent sole main integrator msgd455052bc708: first-parent
+b947801b merge delta,0beb0268,e0070be2 plus delivery ledgers. No main mutation or
+push here. Integration hashes/semantic reconciliation remain coordinator-owned.
+
+
+Physical phone9 follow-up — 2026-10-18 00:02 UTC: user explicitly asked to build
+to phone again. Reused exact verified frozen3288 signed Dev9 artifact, no new
+compiler/source/provisioning change. Repeat install AND launch exec65171 both
+EXIT0. Dev9 is now installed and successfully launched on the physical iPhone;
+left running for the user to try. This supersedes prior Locked-only launch
+status, not the remaining phone editing/keyboard/tab/runtime gaps. Private repeat
+logs/private/tmp/mobile-phone9-repeat-{install,launch}.log0600.
+
+Root offered bounded tab harness slot, but terminal revalidation found the worker
+idle and harness not yet prepared: mailbox-only request had not started a turn.
+Explicit followup cce6ebe0 started; preparation source-only. Offered slot returned
+msg62a9ddf75ecd until exact harness ready, no owner compiler run. Root targeted
+Rust checks may proceed. Bounded Share API accepted and focused new test SOURCE
+NativeFileExportTests.swift approved, no registration or execution granted.
+
+
+Physical phone redeployment — 2026-10-18 00:10 UTC: user again requested phone
+build. Connected/available device confirmed through devicectl JSON. Reused exact
+frozen3288 signed Dev9 artifact; actual exec99761 strict/deep signature0, install0,
+launch0. Left app running for user. Private logs mobile-phone9-again-{signature,
+install,launch}.log and devicectl JSON under/private/tmp. No compilation or new
+source included; document tabs/import/menu/loading successors remain outside9.
+Offered two-file typecheck slot returned unconsumed msg3f74b5f9974e; fresh ACK
+required before compiler use. Main untouched.
+
+
+Successor composition — 2026-10-18 00:14 UTC (NOT Dev9): owner reviewed
+actual c5357 reservation diff and composed loading7128+c5357 as c9b2ad14 and
+6871a511. Picker reservation now survives Back until late open and returned host
+close completion, or releases on Pages transfer. Source review/model checks do
+not prove actual UIKit scheduling; new build/runtime matrix remains required.
+
+Tabs source5824+2d5 composed a011dc4a+527fe77e; root ran actual-source model
+harness207 PASS (exec42964), not repeated here. Scoped project grant6fe356
+permits minimal source registration: NativeDocumentTabs.swift and
+NativeTabOverview.swift each occur exactly once in App Sources; plutil parses
+project and diff check passes. No linker/typecheck/build claim. Fresh bounded
+two-file typecheck slot requested c3406b1241a2; no fresh ACK yet, no compiler.
+
+Explicit existing-worker followups now started:2f model active binding/Home and
+overview busy props; d809 editor close without pop/snapshot/current-document
+validation. Reviewed actual model/view followup diff source-only, no blocker;
+UIKit pop guard and recovery cancel-pending remain caller integration gates.
+371 retains NativePages pending-journal/no-authority recovery then header/FAB
+and tabs source adapters; root atomic folder witness/status wire stays separate.
+Native owner retains scoped root catalog/coordinator/picker integration after
+bd57 ownership reconciliation. No file-wide takeover or main mutation.
+
+Apple bounded diagnostics exec37303 at00:05UTC still returns403
+REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED for apps/bundleIds/users/invitations.
+Existing support case103000040642 remains; no duplicate case or repeated API
+loop. TestFlight/internal tester acceptance remains blocked by account access.
+
+
+Native successor checkpoint — 2026-10-18 00:20 UTC:
+- Actual exclusive-slot frontend exec57718 terminal0, EMPTY diagnostics for
+  EXACT original527fe77e NativeDocumentTabs.swift + NativeTabOverview.swift,
+  extracted by git show into/private/tmp/zorid-tabs-frozen527-typecheck. Swift5
+  arm64-apple-ios15.0-simulator, SDK26.2, cached Simulator9 modulecache. No project
+  build/link/runtime or newer-source proof. Slot returned ee0c71d827be, root
+  ACK3ecb15; root Rust menu worker now owns compiler slot.
+- Reviewed new model9ecedf6f + overview873b4989 composed as1d903448+883d2c7e.
+  Their actual-source binding harness is PREPARED only, not run. Original207
+  proof and original two-file frontend do not cover these successors.
+- Root grantc25665 assigns owner NEW NativeDocumentTabCoordinator.swift and
+  minimal catalog/picker retention hooks; source draft currently UNTRACKED,
+  unregistered and NOT composition accepted. No catalog/picker hook edited yet.
+  Independent2f audit0e5 identified quarantine/identity/persistence/lifecycle/
+  UIKit transition issues; owner correcting explicit source role+assignedtab,
+  exact target witness, metadata-dirty admission gate/retry, foreground epoch,
+  reservation cleanup callback and deferred stack mutations. Final review and
+  actual wiring remain required; do not call this a working tab UI.
+- Lifecycle5742 source held after concrete owner/root review: true saveACK +
+  actual hostclose followed by background epoch failure must expose exact-owner
+  terminal retirement separately from navigation eligibility. Covered editor
+  also misses SceneDelegate top-only background delivery. d809 explicit followup
+  c504bc0a now source correction in progress; opaque retirement query + same-scene
+  background/latch proposal owner/root ACK. No composition/runtime acceptance.
+-371 menu correction batch4a1e1381+6b67a887+09734eb4 source ready, independent
+  source assertions only; requires root atomic folder/status Rust wire actual
+  validation. New tab Pages adapters remain separate followup. Root integrated
+  import library main d1ceed0a (host10/10, ABI5/5); no Swift import UI proof.
+
+
+Tab wiring checkpoint — 2026-10-18 00:28 UTC (SOURCE ONLY):
+- Owner read mandatory retirement correction a02b7397 and composed WITH5742
+  as150ad6dd+99be269a. Exact container/session/owner terminal receipt is minted
+  after true lifecycle ACK + actual workerclose, before callbacks; same-scene
+  covered-editor background delivery is internal, no Scene edits. No compiler
+  or actual native-background proof. Typed witness depends on371 next patch.
+- Fresh catalog resolve(vaultID) committed87e73a4a, independent2f SOURCE approved
+  e4b8. bd57 explicitly confirmed no catalog/picker ownership14162ada42f8; owner
+  retains catalog/picker/coordinator hunks. No picker retention hooks edited yet.
+- Coordinator remains UNTRACKED/unregistered, awaiting exact final review.
+  Review corrections include prepared-destination validation before/after UIKit
+  transition, strict host-free Home, exact editor role/tab/vault/store/stableID,
+  separate foreground admission epoch, terminal retirement query, recoverable
+  quarantine, independent persistence error/retry state and post-cleanup intent.
+  Prepared controllers never navigate themselves. Required didInstall handshake
+  follows root Source registration+controller installation, allowing buffered
+  validated identity to bind without restarting editor. Installed quarantine
+  cleanup uses Source save/quiesce; unlaunched cleanup uses factory reservation.
+- Explicit worker starts (mail alone does not wake idle turns):37189889d43
+  implements owned Pages ShowTabs/header,60pt NewNote FAB, OpenInNewTab, typed
+  validated witness and read/search/lease drain+retirement query. bd57266e5bb7
+  owns ONLY NEW NativeTabDestinationFactory.swift, root ACKd32/e3e210; resolver
+  injection, one exact reservation, fresh Rust listing/store/stableID, prepared
+  File/Home without view load/navigation; didInstall buffers early validation.
+  Newnote remains separate PROPOSAL pending coordinator durability/retry review,
+  never a generic Home host. No duplicate creation replay on restart authorized.
+- d80926becc7f explicit followup narrow rootACK88c920: native header callbacks
+  onShowDocumentTabs/onReturnToNativePages installed afterviewload; configured
+  routes root-owned; UNCONFIGURED alreadyclosed explicit foreground/topself
+  legacy return may pop without repeat save/close. Source review stillpending.
+- Final2f coordinator re-review ecd52284 started; latest didInstall handshake
+  delta89ff sent. No native compiler after granted57718 returned; root Rust
+  menu corrections own slot. No new phone/simulator build or runtime claim.
+
+
+Coordinator source acceptance — 2026-10-18 00:30 UTC:
+Independent2f final acceptance2ddc5763f101 inspected exact SHA256
+a83c45cb8fda3db5c56c0d471e6ef782381a1558fad7cc20b018a7c28d910d05, including
+persistence retry ordering, quarantined ShowTabs preservation, required
+didInstall acknowledgement and installed-source save/quiesce cleanup. Owner
+verified bytes, committed875fc451 plus minimal project membership. plutil and
+diffcheck pass. This is SOURCE acceptance only: no compiler/project/link/native
+UI proof. No source-byte changes after freeze. Factory Source/Prepared signatures
+explicitly frozen72e15ce25739; no draft-hash substitution for API agreement.
+
+Root canonical Rust native/menu bb155f3a now integrated17/17 focused tests,
+combinedmain host cargo check11217 terminal0; no native build grant. Pages09a4
+source ready; headerhook683f source ready; factory File/Home source review ready
+pending coherent commit. None composed/runtimeaccepted by this ledger. Settings
+Choosevault fourth rootcallback298c proposed/workerfollowup explicitlystarted;
+configured editor <> history must use root route intent, not legacy Boolean
+return. That routehistory integration remains mandatory. Newnote separate
+once-only/durability contract still pending root review, no genericHomehost.
+Phone9 unchanged, simulator retained booted without test app/helper.
+
+
+Composed API typing evidence — 2026-10-18 00:35 UTC:
+Canonical main consumed ONLY in isolated ownerbranch merge37da1be0; two additive
+ledger conflicts preserve both sessions' records. Approved import admission
+source2ab4+979 composed80887ea6+12b58a05; frozen NativePages f9c7cc27 composed
+as c39f525c (explicit provenance; owner already had7128 loader). Header hooks
+683f composed3e002a1d. No main mutation/push.
+
+Coordinator-granted bounded Swift frontend exec54060 TERMINAL0 for EXACT frozen
+c39f525ca6eaa586ee59cdb41d9ce40896086db6 TWELVE app Swift sources, actual
+integrated C bridgingheader, arm64 iOS15 Simulator target/SDK26.2/Swift5, cached
+Simulator9 dependencies. Command+source hashes+result.log in
+/private/tmp/zorid-mobile-composed-typing-c39f525c. Zero errors, concurrency/
+Sendable warnings remain in import closures and Pages main-queue observers.
+Not a warning-free/Swift6/link/project-membership/runtime pass. Factory excluded.
+Slot explicitly returned44cbd86376d2; new grant required before morecompilers.
+
+Factory sourcea83f+3acc composed2bf146e6+47f64497 AFTER compiler terminal; root
+approved3acc source8450. Fixed nonexistent listing.scanComplete and removed
+global reconciliation-complete admission gate: known freshly listed exactstore/
+stableID livefile remains openable, unknown/missingtarget still rejected.
+Reconciliation warning remains distinct; no empty/complete assertion. Actual
+File/Home factory integration and project source membership stillpending; no
+newcompile/runtime proof from54060. Configuredhistory/Settings/latch/rootpicker
+wiring and separate Newnote remain acceptance gates. Phone9 unchanged.
+
+
+Connected File/Home root wiring checkpoint — 2026-10-18 00:55 UTC:
+Owner remains native-mobile-recovery / tingkai-c/native-mobile-recovery, committed
+HEAD ae81678d. Current uncommitted owned changes are NativeMobile picker/loader,
+NativeDocumentTabCoordinator and minimal project membership for import/factory
+files. Root now injects a single coordinator/factory, binds Pages callbacks,
+shows editor destination loading before asynchronous host drain, reserves vault
+opening/native routing through exact receipt consumption, and retains validated
+document identity when tab metadata binding fails. Native page changes require
+actual close receipts; no second editor/host is opened while admission is held.
+
+Independent review b8a0/f560 found missing recovery after successful close plus
+a late foreground-invalidated UIKit receipt. Corrected source retains matching
+owner/original route identities until foreground recovery presentation; it does
+not automatically reopen a destination. Final review explicitly started via
+Orca request 9d5f48d7; SOURCE acceptance remains pending.
+
+Immutable 13-file first typecheck30104 TERMINAL1 caught one fileprivate
+showMessage access. Fixed with a private coordinator alert, without widening
+shared visibility. Original failed snapshot remains unchanged in
+/private/tmp/zorid-connected-tabs-source-snapshot. Corrected immutable snapshot
+/private/tmp/zorid-connected-tabs-retry-20261018 includes command.json,
+source-hashes.json, provenance.txt, result.log and exit-code.txt. Hash manifest
+SHA256 d1aff3f450949e636871b5a23215fc5537366251aa6bd420e643c4f3347d90ec.
+Granted retry25349 TERMINAL0, SDK26.2 / Swift5 / arm64 iOS15 Simulator / all13 app
+Swift sources including factory / actual integrated C header / cached Sim9
+dependencies. Zero errors; existing concurrency and Sendable warnings remain.
+Not a full project, link, simulator UI, Swift6 or phone validation. Slot explicitly
+returned 5dfe2132d4ba; coordinator acknowledged6340 and assigned another owner.
+
+Phone remains successfully installed/launched Dev9 (3288c1bb); no newer phone
+app is implied by source checks. NewNote FAB stays disabled: helper f00ebadc
+is library-only source ready, root conditional review requires honoring original
+creation/tab identity and recoverable occupied-name handling before UI exposure.
+Configured editor history and stable folder-origin restoration remain required;
+371 worker explicitly resumed request db178915 to propose minimal scene-RAM
+history and scoped Pages stable-route restoration. External import router and
+Share/Duplicate UI wiring remain incomplete. Full Simulator build follows
+reviewed source freeze and a fresh acknowledged slot, independently of those
+remaining feature gates. Apple agreement API403/support case unchanged.
+
+Final independent source acceptance 6dd0cb36048c received00:55:22UTC for exact
+Coordinator SHA256 d6b0a0a992db6eb5cd10b50334752f9ba1eb736cb2b6a2f71a6c070e8812e8c2
+and NativeMobile SHA256130cb790e63f676e9e4aba08526b765105f1ca9f38db04533fb83d371a1473bd.
+Owner verified matching bytes before commit. Acceptance covers initial connected
+File/Home wiring only; all compilation/runtime and feature limitations above
+remain distinct. Project plist validation and git diff check passed.
+
+
+Simulator10 integrated evidence — 2026-10-18 01:06 UTC:
+Home Show tabs source d7e77c3c composed fb1c04d7 after first full script16736
+TERMINAL1 at package-manager verification (no compiler). Shell pnpm9 parsed
+pnpm12 multi-document manager lock incorrectly; canonical lock is valid. Owner
+removed only its node_modules symlink, preserving shared worker dependencies.
+Existing /Users/ctk/.local/share/pnpm/pnpm12.14 frozen offline ignore-scripts
+install36802 TERMINAL0; no manifests/locks/toolchain download. Full retry39003
+TERMINAL0, BUILD SUCCEEDED: Vite native renderer, cap copy ios only, Rust1.95
+locked-j1 staticlib, Xcode App Debug arm64 Simulator jobs1. Exact command/provenance
+/private/tmp/zorid-ios-v10b-sim-command.json; build log/exit file adjacent. Artifact
+/private/tmp/zorid-ios-v10b-sim-20261018/DerivedData/Build/Products/Debug-iphonesimulator/App.app.
+
+Actual install/launch/Orca attach67686 TERMINAL0 on existing1274 simulator.
+Disposable Orca Mobile Test native vault and Pages open PASS87003; configured
+file destination shows existing saved Markdown body PASS84378. Actual editor
+close to overview, +Home, native Home Show tabs, two-card overview PASS51920.
+Original note reactivation retains original saved body and Return to Files
+reaches usable native list PASS99193. No new text typed in this pass; no new
+edit/keyboard/background/failed-save/cursor pixel claims. Screenshot actual
+framebuffer /private/tmp/zorid-mobile-v10-tabs.png inspected: two thumbnails,
+selected purple outline, labels and footer. Footer button identifiers inherited
+parent overview ID; automation used observed labels. One AX transport failure
+and transient empty AX tree retried without restarting app; not an app crash.
+Overview screenshot also shows a system Back affordance despite requested
+hidesBackButton; behavior/polish remains to inspect. Test app/helper cleanup77553
+TERMINAL0, simulator kept booted.
+
+Direct user now requests phone installation and removing vault subtitle above
+Recents/Files. Only six-line decorative NativePages header removal, independently
+source approved533a8a056bfb at SHA256a41bac4800e95a4d779ba83618919026f0a5ccf89606ffa095788c0d5ceb175e;
+full phone compilation and visual proof still pending. Existing private manual
+contract bundle is old app.zorid.notes; wrapper assertion stopped BEFORE build.
+Dev9 evidence uses automatic existing wildcard development profile, so use same
+automatic Dev signing with team/device contract fields, no provisioning updates,
+not that old bundle-specific manual profile. Device wired/paired/tunnel connected
+and Developer Mode enabled per devicectl01:06. Coordinator0c249 extends exclusive
+slot for signed development build/install/launch after simulator check; no new
+account/production capability changes. Phone remains Dev9 until actual receipt.

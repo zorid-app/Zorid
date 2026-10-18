@@ -63,6 +63,15 @@ private final class LocalVaultCatalog {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    // Document tabs retain only local catalog identity. Resolve the current root
+    // on every activation; the opened Rust session separately validates its store
+    // identity and the stable file ID before a launch path can be used.
+    func resolve(vaultID: UUID) throws -> (LocalVault, URL) {
+        try reload()
+        guard let vault = vaults.first(where: { $0.id == vaultID }) else { throw MobileFailure.metadata }
+        return (vault, try root(for: vault))
+    }
+
     func create(name: String) throws -> LocalVault {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty, cleaned.count <= 80,
@@ -115,6 +124,8 @@ final class NativeMobileSession {
     private static let worker = DispatchQueue(label: "app.zorid.mobile.core", qos: .userInitiated)
     private var handle: OpaquePointer?
     let vault: LocalVault
+    private var nativeAdmission: NativeSessionAdmission? // Static worker only, never web context.
+    private var nativeRequestId: UInt64 = 0
     private var reconciliation: [String: Any] // Access only on worker.
     private let documentSemantics: Bool // Immutable startup capability, never inferred.
     private static let headerLimit = 1_048_576
@@ -278,10 +289,201 @@ final class NativeMobileSession {
         return object
     }
 
+    // NativePages lends this same host exclusively. No new host or renderer
+    // authority is created; row actions and imports share these fixed wrappers.
+    func acquireNativeAdmission(expectedStoreId: String, completion: @escaping (Result<NativeSessionAdmission, Error>) -> Void) {
+        Self.worker.async {
+            let result: Result<NativeSessionAdmission, Error>
+            if self.nativeAdmission != nil {
+                result = .failure(NativeSessionOperationFailure(code: "native_busy", commitUncertain: false, sessionFenced: false))
+            } else {
+                do {
+                    guard UUID(uuidString: expectedStoreId)?.uuidString.lowercased() == expectedStoreId else { throw MobileFailure.invalidFrame }
+                    let object = try self.nativeCommandOnWorker(["method": "claim_client", "client_id": self.vault.clientId])
+                    guard let lease = object["lease"] as? [String: String],
+                          Set(lease.keys) == Set(["local_store_id", "client_id", "token"]),
+                          lease["local_store_id"] == expectedStoreId, lease["client_id"] == self.vault.clientId,
+                          let token = lease["token"], UUID(uuidString: token)?.uuidString.lowercased() == token else { throw MobileFailure.invalidFrame }
+                    let admission = NativeSessionAdmission(localStoreId: expectedStoreId, clientId: self.vault.clientId, token: token)
+                    self.nativeAdmission = admission; result = .success(admission)
+                } catch {
+                    // A claim reply can be lost after admission. Fence even a
+                    // rejected claim here so no invisible lease survives return.
+                    self.closeOnWorker()
+                    result = .failure(NativeSessionOperationFailure(code: "native_admission_failed", commitUncertain: true, sessionFenced: true))
+                }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    func releaseNativeAdmission(_ admission: NativeSessionAdmission, completion: @escaping (Result<Void, Error>) -> Void) {
+        Self.worker.async {
+            let result: Result<Void, Error>
+            if self.nativeAdmission != admission {
+                // A late duplicate release owns no authority over a newer loan.
+                result = .failure(NativeSessionOperationFailure(code: "native_admission_stale", commitUncertain: false, sessionFenced: self.handle == nil))
+            } else { do {
+                let object = try self.nativeCommandOnWorker(["method": "release_client", "reference": admission.wireReference])
+                guard Self.nativeTrue(object["released"]), let reference = object["reference"] as? [String: String],
+                      reference == admission.wireReference else { throw MobileFailure.invalidFrame }
+                self.nativeAdmission = nil; result = .success(())
+            } catch {
+                // Unknown release must never re-enable an editor on this host.
+                self.closeOnWorker()
+                result = .failure(NativeSessionOperationFailure(code: "native_release_failed", commitUncertain: true, sessionFenced: true))
+            } }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    func fenceNativeAdmission(_ admission: NativeSessionAdmission, completion: @escaping (Result<Void, Error>) -> Void) {
+        Self.worker.async {
+            let result: Result<Void, Error>
+            if self.nativeAdmission == admission {
+                self.closeOnWorker(); result = .success(())
+            } else {
+                // Never close a new/foreign loan using an old captured tuple.
+                result = .failure(NativeSessionOperationFailure(code: "native_admission_stale", commitUncertain: false, sessionFenced: self.handle == nil))
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    private static func nativeTrue(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID() && number.boolValue
+    }
+    private func nativeCommandOnWorker(_ command: [String: Any]) throws -> [String: Any] {
+        dispatchPrecondition(condition: .onQueue(Self.worker))
+        guard let handle = handle else { throw MobileFailure.unavailable }
+        guard nativeRequestId < UInt64.max else { throw MobileFailure.unavailable }
+        nativeRequestId += 1
+        let id = String(nativeRequestId)
+        let header = try JSONSerialization.data(withJSONObject: ["version": 1, "request_id": id, "command": command])
+        guard header.count <= 8192 else { throw MobileFailure.invalidFrame }
+        var frame = Data(), length = UInt32(header.count).bigEndian, zero: UInt32 = 0
+        withUnsafeBytes(of: &length) { frame.append(contentsOf: $0) }
+        withUnsafeBytes(of: &zero) { frame.append(contentsOf: $0) }; frame.append(header)
+        let reply = frame.withUnsafeBytes { bytes in
+            zorid_mobile_request(handle, bytes.bindMemory(to: UInt8.self).baseAddress, frame.count)
+        }
+        defer { zorid_mobile_buffer_free(reply) }
+        guard reply.len >= 8, reply.len <= Self.headerLimit + 8, let pointer = reply.data else { throw MobileFailure.invalidFrame }
+        let bytes = UnsafeBufferPointer(start: pointer, count: reply.len)
+        let headerCount = (0..<4).reduce(0) { ($0 << 8) | Int(bytes[$1]) }
+        guard (4..<8).allSatisfy({ bytes[$0] == 0 }), headerCount == reply.len - 8 else { throw MobileFailure.invalidFrame }
+        let object = try Self.validateHeader(Data(bytes: pointer.advanced(by: 8), count: headerCount))
+        guard let version = object["version"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(), version == 1,
+              object["request_id"] as? String == id, Self.nativeTrue(object["ok"]),
+              let result = object["result"] as? [String: Any] else { throw MobileFailure.invalidFrame }
+        return result
+    }
+
+    // Owns the native source FD until begin returns on this queue; Rust duplicates
+    // it synchronously. Neither the descriptor nor token is exposed to Capacitor.
+    func beginNativeImport(owningSourceFD: Int32, selection: NativeImportSelection, admission: NativeSessionAdmission,
+                           completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        Self.worker.async {
+            defer { if owningSourceFD >= 0 { Darwin.close(owningSourceFD) } }
+            let result: Result<NativeImportProgress, Error>
+            do {
+                let data = try JSONEncoder().encode(selection)
+                guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      selection.clientId == admission.clientId, selection.localStoreId == admission.localStoreId else { throw NativeImportFailure.invalidJournal }
+                object["leaseToken"] = admission.token // Ephemeral, never written back to the journal.
+                let wire = try JSONSerialization.data(withJSONObject: object)
+                guard wire.count <= 8192 else { throw NativeImportFailure.invalidJournal }
+                result = .success(try self.importOnWorker(admission, operationId: selection.operationId) { handle in
+                    wire.withUnsafeBytes { bytes in
+                        zorid_mobile_import_begin(handle, owningSourceFD, bytes.bindMemory(to: UInt8.self).baseAddress, wire.count)
+                    }
+                })
+            } catch { result = .failure(error) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    func stepNativeImport(_ operationId: String, admission: NativeSessionAdmission, completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        nativeImportAction(operationId, admission: admission, action: zorid_mobile_import_step, completion: completion)
+    }
+    func statusNativeImport(_ operationId: String, admission: NativeSessionAdmission, completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        nativeImportAction(operationId, admission: admission, action: zorid_mobile_import_status, completion: completion)
+    }
+    func cancelNativeImport(_ operationId: String, admission: NativeSessionAdmission, completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        nativeImportAction(operationId, admission: admission, action: zorid_mobile_import_cancel, completion: completion)
+    }
+    private func nativeImportAction(_ operationId: String, admission: NativeSessionAdmission,
+        action: @escaping (OpaquePointer?, UnsafePointer<UInt8>?, Int) -> ZoridBuffer,
+        completion: @escaping (Result<NativeImportProgress, Error>) -> Void) {
+        Self.worker.async {
+            let result = Result {
+                guard UUID(uuidString: operationId)?.uuidString.lowercased() == operationId else { throw NativeImportFailure.invalidJournal }
+                let data = Data(operationId.utf8)
+                return try self.importOnWorker(admission, operationId: operationId) { handle in
+                    data.withUnsafeBytes { bytes in action(handle, bytes.bindMemory(to: UInt8.self).baseAddress, data.count) }
+                }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    private func importOnWorker(_ admission: NativeSessionAdmission, operationId: String,
+                                action: (OpaquePointer) -> ZoridBuffer) throws -> NativeImportProgress {
+        dispatchPrecondition(condition: .onQueue(Self.worker))
+        guard nativeAdmission == admission, let handle = handle else {
+            throw NativeSessionOperationFailure(code: "native_admission_stale", commitUncertain: false, sessionFenced: self.handle == nil)
+        }
+        do { return try Self.consumeImportReply(action(handle), operationId: operationId) }
+        catch let error as NativeSessionOperationFailure { throw error } // Valid bounded business error.
+        catch {
+            // consumeImportReply has already freed the exact returned slice.
+            closeOnWorker()
+            throw NativeSessionOperationFailure(code: "native_import_transport", commitUncertain: true, sessionFenced: true)
+        }
+    }
+    private static func consumeImportReply(_ buffer: ZoridBuffer, operationId: String) throws -> NativeImportProgress {
+        defer { zorid_mobile_buffer_free(buffer) }
+        guard buffer.len > 0, buffer.len <= 65536, let pointer = buffer.data else { throw NativeImportFailure.invalidReply }
+        return try decodeNativeImportReply(Data(bytes: pointer, count: buffer.len), operationId: operationId)
+    }
+    // Pure DTO boundary for focused source tests; no session/lease/FD authority.
+    static func decodeNativeImportReply(_ data: Data, operationId: String) throws -> NativeImportProgress {
+        guard !data.isEmpty, data.count <= 65536, String(data: data, encoding: .utf8) != nil,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = object["version"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(), version == 1,
+              let ok = nativeBoolean(object["ok"]) else { throw NativeImportFailure.invalidReply }
+        if !ok {
+            guard Set(object.keys) == Set(["version", "ok", "error"]), let error = object["error"] as? [String: Any],
+                  Set(error.keys) == Set(["code", "commit_uncertain"]), let code = error["code"] as? String,
+                  code.range(of: "^[a-z_]{1,64}$", options: .regularExpression) != nil,
+                  let uncertain = nativeBoolean(error["commit_uncertain"]) else { throw NativeImportFailure.invalidReply }
+            throw NativeSessionOperationFailure(code: code, commitUncertain: uncertain, sessionFenced: false)
+        }
+        guard Set(object.keys) == Set(["version", "ok", "result"]), let result = object["result"] as? [String: Any],
+              Set(result.keys) == Set(["operationId", "state", "processedBytes", "totalBytes", "selectedPath", "commitState", "projectionState", "canRetryCollision"]),
+              nativeBoolean(result["canRetryCollision"]) != nil else { throw NativeImportFailure.invalidReply }
+        let progress = try JSONDecoder().decode(NativeImportProgress.self, from: JSONSerialization.data(withJSONObject: result))
+        guard progress.operationId == operationId,
+              let processed = UInt64(progress.processedBytes), String(processed) == progress.processedBytes,
+              let total = UInt64(progress.totalBytes), String(total) == progress.totalBytes,
+              processed <= total, total <= NativeImportStaging.fileLimit,
+              progress.canRetryCollision == (progress.state == .collision),
+              progress.state != .collision || progress.commitState == .rejected,
+              progress.state != .committed || (progress.commitState == .committed && progress.projectionState != .not_started),
+              progress.state != .aborted || progress.commitState == .aborted else { throw NativeImportFailure.invalidReply }
+        if let path = progress.selectedPath {
+            guard !path.isEmpty, path.utf8.count <= 4096, !path.hasPrefix("/"), !path.contains("\\"),
+                  !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+                  !path.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { throw NativeImportFailure.invalidReply }
+        }
+        return progress
+    }
+    private static func nativeBoolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
     private func closeOnWorker() {
         dispatchPrecondition(condition: .onQueue(Self.worker))
         if let handle = handle {
             self.handle = nil
+            self.nativeAdmission = nil
             zorid_mobile_close(handle)
         }
     }
@@ -327,6 +529,10 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     private var currentEditorState = NativeEditorState.inactive
     fileprivate var onEditorState: ((NativeEditorState, Bool) -> Void)?
     fileprivate var onNoteOpened: ((String) -> Void)?
+    fileprivate var onDocumentValidated: ((NativeTabDocument) -> Void)?
+    fileprivate var isCurrentDocumentOwner: (() -> Bool)?
+    fileprivate private(set) var documentValidationNonce = UUID()
+    fileprivate private(set) var documentSnapshotReady = false
     fileprivate var onPresentationSettled: (() -> Bool)?
 
     fileprivate init(session: NativeMobileSession, launch: NativeEditorLaunch) {
@@ -397,6 +603,11 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         publishEditorState()
     }
 
+    fileprivate func invalidateDocumentValidation() {
+        documentValidationNonce = UUID()
+        documentSnapshotReady = false
+    }
+
     fileprivate func requestForegroundEditorState() {
         guard UIApplication.shared.applicationState == .active, !closeAuthorized else { return }
         // Background checkpoints retain the workspace. Cancel only that pending
@@ -422,12 +633,34 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Invalid note identity.", "invalid_request")
             return
         }
-        // Called after real web activation, never just after tapping a native row.
-        session.recordNoteOpened(path: path, entryId: entryId, onValidated: { [weak self] id in self?.onNoteOpened?(id) }) { result in
-            switch result {
-            case .success: call.resolve()
-            case .failure: call.reject("The opened note could not be recorded.", "native_history_failed")
+        DispatchQueue.main.async {
+            // A newer activation supersedes every older native listing callback.
+            let nonce = UUID()
+            self.documentValidationNonce = nonce
+            self.documentSnapshotReady = false
+            let current: () -> Bool = { [weak self] in
+                guard let self = self else { return false }
+                return self.documentValidationNonce == nonce && !self.closeAuthorized
+                    && self.pending == nil && UIApplication.shared.applicationState == .active
+                    && self.isCurrentDocumentOwner?() == true
             }
+            guard current() else {
+                call.reject("This editor is no longer active.", "stale_activation"); return
+            }
+            // The native listing is shared with history validation, never repeated.
+            self.session.recordNoteOpened(path: path, entryId: entryId, isCurrent: current,
+                onValidated: { [weak self] document in
+                    guard let self = self, current() else { return }
+                    self.documentSnapshotReady = true
+                    self.onNoteOpened?(document.stableFileID)
+                    guard current() else { return }
+                    self.onDocumentValidated?(document)
+                }) { result in
+                    switch result {
+                    case .success: call.resolve()
+                    case .failure: call.reject("The opened note could not be recorded.", "native_history_failed")
+                    }
+                }
         }
     }
 
@@ -445,6 +678,10 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         DispatchQueue.main.async {
+            if state != "ready" {
+                self.documentValidationNonce = UUID()
+                self.documentSnapshotReady = false
+            }
             guard UIApplication.shared.applicationState == .active,
                   !self.closeAuthorized, self.pending == nil,
                   self.onPresentationSettled?() == true else {
@@ -516,6 +753,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
 
     fileprivate func requestLifecycle(_ reason: String, completion: @escaping (Bool) -> Void) {
         guard pending == nil, hasListeners("lifecycleRequest") else { completion(false); return }
+        invalidateDocumentValidation()
         let id = UUID().uuidString.lowercased()
         pending = (id, reason, completion)
         let timer = DispatchWorkItem { [weak self] in self?.cancelLifecycle() }
@@ -582,6 +820,14 @@ private final class NativeEditorBridge: CAPBridgeViewController {
 }
 
 final class NativeEditorContainer: UIViewController {
+    // A terminal fact about this exact source, never permission to navigate.
+    struct DocumentTabRetirementReceipt {
+        let sourceOwnerID: UUID
+        fileprivate let containerID: ObjectIdentifier
+        fileprivate let sessionID: ObjectIdentifier
+        fileprivate let closeTicket: UUID
+    }
+
     private let session: NativeMobileSession
     private let editor: NativeEditorBridge
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -589,6 +835,21 @@ final class NativeEditorContainer: UIViewController {
     private let originTitle: String
     private let onClosed: () -> Void
     var onNoteOpened: ((String) -> Void)?
+    var onDocumentValidated: ((NativeTabDocument) -> Void)?
+    // Factories must weakly capture root/container and recheck their exact owner.
+    var onShowDocumentTabs: (() -> Void)? { didSet { installNativeNavigationControls() } }
+    var onReturnToNativePages: (() -> Void)? { didSet { installNativeNavigationControls() } }
+    private var returnToPagesItem: UIBarButtonItem?
+    private var showDocumentTabsItem: UIBarButtonItem?
+    private var documentSourceOwnerID: UUID?
+    private var documentOwnerIsCurrent: (() -> Bool)?
+    private var closeTicket: UUID?
+    private var closeReceiptEpoch = UUID()
+    private var retirementReceipt: DocumentTabRetirementReceipt?
+    private var closeAcknowledged = false
+    private var closed = false
+    private var backgroundHandled = false
+    private var backgroundObservers: [NSObjectProtocol] = []
     var onNavigate: ((Int) -> Void)?
     private var canGoBack = false
     private var canGoForward = false
@@ -624,10 +885,15 @@ final class NativeEditorContainer: UIViewController {
         view.accessibilityIdentifier = "native.editor.container"
         navigationItem.hidesBackButton = true
         installRouteControls()
-        let done = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
-        done.accessibilityIdentifier = "native.editor.vaults"
-        done.accessibilityLabel = "Return to " + originTitle
-        navigationItem.rightBarButtonItem = done
+        installNativeNavigationControls()
+        editor.vaultPlugin.isCurrentDocumentOwner = { [weak self] in
+            guard let self = self, !self.leaving else { return false }
+            return self.currentDocumentOwner(requiresVisible: true)
+        }
+        editor.vaultPlugin.onDocumentValidated = { [weak self] document in
+            guard let self = self, !self.leaving, self.currentDocumentOwner(requiresVisible: true) else { return }
+            self.onDocumentValidated?(document)
+        }
         editor.vaultPlugin.onNoteOpened = { [weak self] id in
             self?.finishEditorLoading(reason: .noteOpened)
             self?.onNoteOpened?(id)
@@ -667,6 +933,7 @@ final class NativeEditorContainer: UIViewController {
         editor.didMove(toParent: self)
         installEditorLoading()
         installKeyboardToolbar()
+        installBackgroundObservers()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -674,12 +941,14 @@ final class NativeEditorContainer: UIViewController {
         navigationController?.interactivePopGestureRecognizer?.isEnabled = false
         view.setNeedsLayout()
         updateToolbarLayout()
+        updateRouteControls()
         if !leaving { editor.vaultPlugin.requestForegroundEditorState() }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         editor.vaultPlugin.resetEditorState()
+        editor.vaultPlugin.invalidateDocumentValidation()
     }
 
     override func viewDidLayoutSubviews() {
@@ -742,6 +1011,7 @@ final class NativeEditorContainer: UIViewController {
             self.view.setNeedsLayout()
             self.view.layoutIfNeeded()
             self.updateToolbarLayout()
+            self.updateRouteControls()
             if !self.leaving, self.view.window != nil,
                self.navigationController?.topViewController === self {
                 self.editor.vaultPlugin.requestForegroundEditorState()
@@ -803,6 +1073,7 @@ final class NativeEditorContainer: UIViewController {
     deinit {
         loadingTimeout?.cancel()
         for observer in keyboardObservers { NotificationCenter.default.removeObserver(observer) }
+        for observer in backgroundObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     private var historyControls: NativeHistoryControls {
@@ -924,42 +1195,257 @@ final class NativeEditorContainer: UIViewController {
         }
         legacyHistoryBack?.isEnabled = canGoBack && !leaving
         legacyHistoryForward?.isEnabled = canGoForward && !leaving
-        navigationItem.rightBarButtonItem?.isEnabled = !leaving
+        showDocumentTabsItem?.isEnabled = rootNavigationIsCurrent && onShowDocumentTabs != nil
+        returnToPagesItem?.isEnabled = documentTabsConfigured
+            ? rootNavigationIsCurrent && onReturnToNativePages != nil
+            : (!leaving && currentDocumentOwner(requiresVisible: true)) || legacyClosedReturnIsCurrent
     }
 
-    @objc private func returnToVaults() { leaveForNativeRoute { _ in } }
+    private var documentTabsConfigured: Bool {
+        documentSourceOwnerID != nil || onShowDocumentTabs != nil || onReturnToNativePages != nil
+    }
 
-    // Both ordinary return and history traversal use the same save/ACK fence.
-    // The coordinator stages a destination; a rejected ACK leaves this host live.
-    func leaveForNativeRoute(completion: @escaping (Bool) -> Void) {
-        guard !leaving else { completion(false); return }
-        leaving = true
-        editor.vaultPlugin.resetEditorState()
+    private var rootNavigationIsCurrent: Bool {
+        !leaving && documentSourceOwnerID != nil && documentOwnerIsCurrent?() == true
+            && currentDocumentOwner(requiresVisible: true)
+    }
+
+    private var legacyClosedReturnIsCurrent: Bool {
+        !documentTabsConfigured && closed && closeAcknowledged
+            && UIApplication.shared.applicationState == .active
+            && owningScene?.activationState == .foregroundActive
+            && viewIfLoaded?.window != nil && navigationController?.topViewController === self
+            && presentedViewController == nil
+    }
+
+    private func installNativeNavigationControls() {
+        guard isViewLoaded else { return }
+        let done = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
+        done.accessibilityIdentifier = "native.editor.vaults"
+        done.accessibilityLabel = "Return to " + originTitle
+        returnToPagesItem = done
+        if onShowDocumentTabs != nil {
+            let tabs = UIBarButtonItem(image: UIImage(systemName: "square.on.square"), style: .plain,
+                                       target: self, action: #selector(showDocumentTabs))
+            tabs.accessibilityIdentifier = "native.editor.showTabs"
+            tabs.accessibilityLabel = "Show tabs"
+            showDocumentTabsItem = tabs
+            navigationItem.rightBarButtonItems = [tabs, done]
+        } else {
+            showDocumentTabsItem = nil
+            navigationItem.rightBarButtonItems = [done]
+        }
         updateRouteControls()
-        editor.vaultPlugin.requestLifecycle("switchVault") { [weak self] ok in
-            guard let self = self else { return }
-            guard ok else {
-                self.leaving = false
-                self.updateToolbarLayout()
-                self.updateRouteControls()
+    }
+
+    @objc private func showDocumentTabs() {
+        guard rootNavigationIsCurrent, navigationController?.transitionCoordinator == nil else { return }
+        onShowDocumentTabs?()
+    }
+
+    @objc private func returnToVaults() {
+        if documentTabsConfigured {
+            guard rootNavigationIsCurrent, navigationController?.transitionCoordinator == nil else { return }
+            onReturnToNativePages?()
+            return
+        }
+        leaveForNativeRoute { _ in }
+    }
+
+    // Root supplies a weak identity/lifetime-only container/session/owner check.
+    // It must remain true while covered, transitioning or backgrounded; this
+    // container applies foreground/visibility requirements per operation.
+    // This UUID is presentation authority only, never a Rust lease credential.
+    func configureDocumentTabOwner(sourceOwnerID: UUID, isCurrent: @escaping () -> Bool) {
+        guard !leaving, !closed else { return }
+        editor.vaultPlugin.invalidateDocumentValidation()
+        retirementReceipt = nil
+        documentSourceOwnerID = sourceOwnerID
+        documentOwnerIsCurrent = isCurrent
+        if isViewLoaded { updateRouteControls() }
+    }
+
+    private func currentDocumentOwner(requiresVisible: Bool) -> Bool {
+        // An overview can cover/remove the source view from its window before
+        // draining begins. Its navigation scene, not source visibility, owns close.
+        let scene = requiresVisible ? viewIfLoaded?.window?.windowScene
+            : navigationController?.viewIfLoaded?.window?.windowScene
+        guard !closed, UIApplication.shared.applicationState == .active,
+              scene?.activationState == .foregroundActive else { return false }
+        if documentSourceOwnerID != nil, documentOwnerIsCurrent?() != true { return false }
+        if requiresVisible {
+            return navigationController?.topViewController === self && presentedViewController == nil
+        }
+        return true
+    }
+
+    func closeForDocumentTabTransition(sourceOwnerID: UUID, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard documentSourceOwnerID == sourceOwnerID, documentOwnerIsCurrent?() == true else {
+            completion(.failure(MobileFailure.unavailable)); return
+        }
+        closeEditor(isCurrent: { [weak self] in
+            guard let self = self, self.documentSourceOwnerID == sourceOwnerID else { return false }
+            return self.currentDocumentOwner(requiresVisible: false)
+        }, completion: completion)
+    }
+
+    // Query the retained source even after background/stale navigation failure.
+    // Root must match its source container + owner, retire it, then await an
+    // explicit foreground intent. A nil receipt does not establish retirement.
+    func documentTabRetirementReceipt(sourceOwnerID: UUID) -> DocumentTabRetirementReceipt? {
+        guard closed, documentSourceOwnerID == sourceOwnerID,
+              let receipt = retirementReceipt, receipt.sourceOwnerID == sourceOwnerID,
+              receipt.containerID == ObjectIdentifier(self),
+              receipt.sessionID == ObjectIdentifier(session) else { return nil }
+        return receipt
+    }
+
+    // Both routes use the same save/ACK/close fence; only this wrapper navigates.
+    func leaveForNativeRoute(completion: @escaping (Bool) -> Void) {
+        // Configured routing belongs to root, including history. A partial hook
+        // installation must never silently fall back to closing/popping locally.
+        guard !documentTabsConfigured else { completion(false); return }
+        if closed {
+            guard legacyClosedReturnIsCurrent, navigationController?.transitionCoordinator == nil else { completion(false); return }
+            completion(true)
+            // An explicit foreground return may retire an already-closed legacy
+            // route. Do not save/close again or notify onClosed a second time.
+            if legacyClosedReturnIsCurrent, navigationController?.transitionCoordinator == nil {
+                navigationController?.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
+            }
+            return
+        }
+        closeEditor(isCurrent: { [weak self] in self?.currentDocumentOwner(requiresVisible: true) == true }) { [weak self] result in
+            guard let self = self else { completion(false); return }
+            switch result {
+            case .success:
+                completion(true)
+                // Completion may synchronously advance navigation itself.
+                if self.navigationController?.topViewController === self {
+                    self.navigationController?.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
+                }
+            case .failure:
                 completion(false)
-                if UIApplication.shared.applicationState == .active {
+                if !self.closed && self.currentDocumentOwner(requiresVisible: true) {
                     self.showMessage("Vault stays open", "The editor has not confirmed that it is safe to leave. Your workspace remains open. Try again after saving is ready.")
                 }
-                return
-            }
-            self.session.close {
-                self.loadingTimeout?.cancel()
-                self.onClosed()
-                completion(true)
-                self.navigationController?.popViewController(animated: !UIAccessibility.isReduceMotionEnabled)
             }
         }
     }
 
-    func enterBackground() {
-        guard backgroundTask == .invalid else { return }
+    private func closeEditor(isCurrent: @escaping () -> Bool, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !leaving, !closed, isCurrent() else { completion(.failure(MobileFailure.unavailable)); return }
+        let ticket = UUID()
+        let epoch = closeReceiptEpoch
+        let sourceOwnerID = documentSourceOwnerID
+        closeTicket = ticket; leaving = true
         editor.vaultPlugin.resetEditorState()
+        updateRouteControls()
+        editor.vaultPlugin.requestLifecycle("switchVault") { [self] ok in
+            guard closeTicket == ticket else { completion(.failure(MobileFailure.unavailable)); return }
+            guard ok else {
+                closeTicket = nil; leaving = false
+                updateToolbarLayout(); updateRouteControls()
+                completion(.failure(MobileFailure.unavailable)); return
+            }
+            // A true ACK has quiesced the web editor. Even if ownership changed,
+            // finish closing this exact session; a stale receipt is never success.
+            let admitted = closeReceiptEpoch == epoch && isCurrent()
+            closeAcknowledged = true
+            session.close { [self] in
+                let stillCurrent = admitted && closeTicket == ticket && closeReceiptEpoch == epoch && isCurrent()
+                closeTicket = nil
+                loadingTimeout?.cancel()
+                if let sourceOwnerID = sourceOwnerID {
+                    retirementReceipt = DocumentTabRetirementReceipt(sourceOwnerID: sourceOwnerID,
+                        containerID: ObjectIdentifier(self), sessionID: ObjectIdentifier(session), closeTicket: ticket)
+                }
+                if !closed { closed = true; onClosed() }
+                updateRouteControls()
+                completion(stillCurrent ? .success(()) : .failure(MobileFailure.unavailable))
+            }
+        }
+    }
+
+    func captureDocumentTabSnapshot(sourceOwnerID: UUID, maximumPixelDimension: Int,
+                                    completion: @escaping (UIImage?) -> Void) {
+        guard maximumPixelDimension > 0, documentSourceOwnerID == sourceOwnerID,
+              !leaving, currentDocumentOwner(requiresVisible: true),
+              editor.vaultPlugin.documentSnapshotReady, let web = editor.webView else { completion(nil); return }
+        let nonce = editor.vaultPlugin.documentValidationNonce
+        let rect = web.bounds.intersection(web.convert(view.safeAreaLayoutGuide.layoutFrame, from: view))
+        guard !rect.isNull, rect.width.isFinite, rect.height.isFinite, rect.width > 0, rect.height > 0 else { completion(nil); return }
+        let limit = CGFloat(min(1024, maximumPixelDimension))
+        let scale = max(1, view.window?.screen.scale ?? 1)
+        let factor = min(1, limit / max(rect.width * scale, rect.height * scale))
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = rect
+        configuration.snapshotWidth = NSNumber(value: Double(rect.width * factor))
+        configuration.afterScreenUpdates = false
+        var completed = false
+        let finish: (UIImage?) -> Void = { image in
+            guard !completed else { return }; completed = true; completion(image)
+        }
+        // Best effort only: callers must never await this to save or close.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { finish(nil) }
+        web.takeSnapshot(with: configuration) { [weak self, weak web] image, _ in
+            guard !completed, let self = self, let web = web, self.editor.webView === web,
+                  !self.leaving, self.documentSourceOwnerID == sourceOwnerID,
+                  self.currentDocumentOwner(requiresVisible: true),
+                  self.editor.vaultPlugin.documentValidationNonce == nonce,
+                  self.editor.vaultPlugin.documentSnapshotReady,
+                  let image = image, let bitmap = image.cgImage,
+                  bitmap.width > 0, bitmap.height > 0,
+                  bitmap.width <= Int(limit), bitmap.height <= Int(limit),
+                  bitmap.bytesPerRow <= 4_194_304 / max(1, bitmap.height) else { finish(nil); return }
+            finish(image)
+        }
+    }
+
+    private var owningScene: UIWindowScene? {
+        navigationController?.viewIfLoaded?.window?.windowScene ?? viewIfLoaded?.window?.windowScene
+    }
+
+    private func installBackgroundObservers() {
+        for name in [UIScene.didEnterBackgroundNotification, UIApplication.didEnterBackgroundNotification] {
+            backgroundObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                guard let self = self else { return }
+                if notification.name == UIScene.didEnterBackgroundNotification {
+                    guard let scene = notification.object as? UIWindowScene, self.owningScene === scene else { return }
+                } else {
+                    guard self.owningScene?.activationState == .background else { return }
+                }
+                self.enterBackground()
+            })
+        }
+        for name in [UIScene.didActivateNotification, UIApplication.didBecomeActiveNotification] {
+            backgroundObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                guard let self = self else { return }
+                if notification.name == UIScene.didActivateNotification {
+                    guard let scene = notification.object as? UIWindowScene, self.owningScene === scene else { return }
+                }
+                guard self.owningScene?.activationState == .foregroundActive else { return }
+                self.backgroundHandled = false
+                self.updateRouteControls()
+            })
+        }
+    }
+
+    func enterBackground() {
+        closeReceiptEpoch = UUID()
+        editor.vaultPlugin.invalidateDocumentValidation()
+        editor.vaultPlugin.resetEditorState()
+        // SceneDelegate and app/scene notifications may all reach this source.
+        // Every delivery invalidates receipts, but only one starts a checkpoint.
+        guard !closed, !closeAcknowledged else { return }
+        if documentSourceOwnerID != nil {
+            guard documentOwnerIsCurrent?() == true else { return }
+        } else {
+            guard navigationController?.topViewController === self else { return }
+        }
+        guard !backgroundHandled else { return }
+        backgroundHandled = true
+        guard backgroundTask == .invalid else { return }
         // Cancel a foreground navigation request; it must never pop on suspension.
         editor.vaultPlugin.cancelLifecycle()
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Vault draft checkpoint") { [weak self] in
@@ -987,7 +1473,131 @@ final class NativeEditorContainer: UIViewController {
 final class NativeVaultPicker: UITableViewController {
     private var catalog: LocalVaultCatalog?
     private var opening = false
-    private var openingHost: UIHostingController<NativeLoadingSkeleton>?
+    private var openingTicket: UUID?
+    private var documentTabs: NativeDocumentTabCoordinator?
+    private var destinationFactory: NativeTabDestinationFactory?
+    private weak var boundPages: NativePagesController?
+    private var boundPagesOwner: UUID?
+    private var lastVaultID: UUID?
+
+    private func ensureDocumentTabs() throws -> NativeDocumentTabCoordinator {
+        if let existing = documentTabs { return existing }
+        let key = "native.document-tabs.v1"
+        let model = NativeDocumentTabs(restoring: UserDefaults.standard.data(forKey: key))
+        let factory = NativeTabDestinationFactory(resolveVault: { [weak self] id in
+            guard let self = self, let catalog = self.catalog else { throw MobileFailure.metadata }
+            let resolved = try catalog.resolve(vaultID: id)
+            self.lastVaultID = id
+            return resolved
+        }, admissionReady: { [weak self] in self?.documentTabs?.canPrepareDestination == true },
+        chooseFile: { [weak self] tabID in
+            guard let self = self, let tabs = self.documentTabs, tabs.model.selectedTabID == tabID,
+                  let presenter = self.navigationController?.topViewController else { return }
+            self.routeToPages(from: presenter, vaultID: nil)
+        }, validatedDocument: { [weak self] document, owner in
+            do { try self?.documentTabs?.bindValidatedDocument(document, sourceOwnerID: owner) }
+            catch {
+                // Let the current native validation/history callback finish
+                // before a modal changes its foreground/visibility witness.
+                DispatchQueue.main.async { [weak self] in
+                    self?.navigationController?.topViewController?.showMessage("Tab information needs attention", "Your document stays open. Open Show tabs to retry its tab information.")
+                }
+            }
+        }, showTabs: { [weak self] presenter in self?.documentTabs?.showDocumentTabs(from: presenter) },
+        returnToNativePages: { [weak self] presenter in
+            guard let self = self else { return }
+            self.routeToPages(from: presenter, vaultID: self.lastVaultID)
+        })
+        destinationFactory = factory
+        let coordinator = NativeDocumentTabCoordinator(model: model, persist: { data in
+            UserDefaults.standard.set(data, forKey: key)
+        }, activate: { [weak factory] tab, owner, done in
+            guard let factory = factory else { done(.failure(MobileFailure.unavailable)); return }
+            factory.prepare(tab, ownerID: owner, completion: done)
+        }, didInstall: { [weak factory] owner, tab, controller in
+            factory?.didInstall(ownerID: owner, tabID: tab, controller: controller) == true
+        }, recoverActivation: { [weak factory] owner, done in
+            guard let factory = factory else { done(.failure(MobileFailure.unavailable)); return }
+            factory.recoverReservation(owner, completion: done)
+        })
+        documentTabs = coordinator
+        return coordinator
+    }
+
+    private func bindPages(_ pages: NativePagesController, vault: LocalVault) throws {
+        let tabs = try ensureDocumentTabs()
+        let owner = UUID()
+        boundPages = pages; boundPagesOwner = owner; lastVaultID = vault.id
+        let current: () -> Bool = { [weak self, weak pages] in
+            guard let self = self, let pages = pages else { return false }
+            return self.boundPages === pages && self.boundPagesOwner == owner
+        }
+        pages.onShowDocumentTabs = { [weak self, weak pages] in
+            guard let self = self, let pages = pages, current() else { return }
+            self.documentTabs?.showDocumentTabs(from: pages)
+        }
+        pages.onOpenDocument = { [weak self, weak pages] entry, inNewTab in
+            guard let self = self, let pages = pages, current() else { return }
+            do {
+                let document = try pages.documentTabDocument(for: entry)
+                self.documentTabs?.performDocumentTabIntent(inNewTab ? .openInNewTab(document) : .replaceSelected(document))
+                if let tabs = self.documentTabs, !tabs.isBusy,
+                   pages.navigationController?.topViewController === pages, let message = tabs.message {
+                    pages.showMessage("Could not open file", message)
+                }
+            } catch { pages.showMessage("File changed", "This file is no longer available from the current list. Refresh Files and try again.") }
+        }
+        pages.onChooseVault = { [weak self, weak pages] in
+            guard let self = self, let pages = pages, current(),
+                  let presenter = pages.navigationController?.topViewController else { return }
+            self.routeToPages(from: presenter, vaultID: nil)
+        }
+        // New Note requires a durable Rust creation request before an existing
+        // entry is launched. A missing callback remains explicitly unavailable;
+        // it must never fall back to replaying web createNoteOnOpen.
+        let source = NativeDocumentTabCoordinator.Source(role: .pages, ownerID: owner,
+            tabID: tabs.model.selectedTabID, resolvedDocument: nil, controller: pages, isCurrent: current,
+            close: { [weak self, weak pages] requestedOwner, done in
+                guard let pages = pages, requestedOwner == owner, current() else { done(.failure(MobileFailure.unavailable)); return }
+                pages.prepareForDocumentTabTransition { result in
+                    if pages.documentTabTransitionRetired, self?.boundPagesOwner == owner {
+                        self?.boundPages = nil; self?.boundPagesOwner = nil
+                    }
+                    done(result)
+                }
+            }, resume: { [weak pages] in pages?.resumeAfterDocumentTabOverview() },
+            hasTerminalRetirementReceipt: { [weak pages] in pages?.documentTabTransitionRetired == true })
+        do { try tabs.bindSource(source) }
+        catch {
+            if boundPagesOwner == owner { boundPages = nil; boundPagesOwner = nil }
+            throw error
+        }
+    }
+
+    private func routeToPages(from presenter: UIViewController, vaultID: UUID?) {
+        guard let tabs = documentTabs else { return }
+        tabs.performNativeRoute(from: presenter, retry: { [weak self] in
+            guard let self = self, let current = self.navigationController?.topViewController else { return }
+            self.routeToPages(from: current, vaultID: vaultID)
+        }) { [weak self] result in
+            guard let self = self, let navigation = self.navigationController else { return }
+            switch result {
+            case .failure:
+                // Coordinator restored the live page or exposed its own native
+                // recovery route. A retired source is never described as open.
+                break
+            case .success:
+                navigation.popToRootViewController(animated: false)
+                guard let vaultID = vaultID else { return }
+                do {
+                    guard let catalog = self.catalog else { throw MobileFailure.metadata }
+                    let (vault, _) = try catalog.resolve(vaultID: vaultID)
+                    self.open(vault)
+                } catch { self.showMessage("Vault unavailable", "Choose an available vault to continue.") }
+            }
+        }
+    }
+
 
     init() { super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -1005,6 +1615,7 @@ final class NativeVaultPicker: UITableViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        navigationItem.rightBarButtonItem?.isEnabled = !opening
         reloadVaults()
     }
 
@@ -1065,56 +1676,203 @@ final class NativeVaultPicker: UITableViewController {
         present(alert, animated: true)
     }
 
-    private func showOpeningSkeleton() {
-        let host = UIHostingController(rootView: NativeLoadingSkeleton(editor: false))
-        openingHost = host
-        addChild(host)
-        host.view.backgroundColor = .systemBackground
-        host.view.frame = CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 300)
-        let inset = UIView(frame: host.view.frame)
-        host.view.frame = inset.bounds.insetBy(dx: 20, dy: 20)
-        inset.addSubview(host.view)
-        tableView.tableHeaderView = inset
-        host.didMove(toParent: self)
-    }
-
-    private func removeOpeningSkeleton() {
-        guard let host = openingHost else { return }
-        host.willMove(toParent: nil)
-        tableView.tableHeaderView = nil
-        host.view.removeFromSuperview()
-        host.removeFromParent()
-        openingHost = nil
-    }
-
     private func open(_ vault: LocalVault) {
-        guard !opening, let catalog = catalog else { return }
-        do {
-            let root = try catalog.root(for: vault)
-            opening = true
-            showOpeningSkeleton()
-            tableView.isUserInteractionEnabled = false
-            navigationItem.rightBarButtonItem?.isEnabled = false
-            NativeMobileSession.open(vault: vault, root: root) { [weak self] result in
-                guard let self = self else {
-                    if case .success(let session) = result { session.close {} }
-                    return
-                }
-                self.opening = false
-                self.removeOpeningSkeleton()
-                self.tableView.isUserInteractionEnabled = true
-                self.navigationItem.rightBarButtonItem?.isEnabled = true
-                switch result {
-                case .success(let session):
-                    let pages = NativePagesController(vault: vault, root: root, session: session)
-                    self.navigationController?.pushViewController(pages, animated: !UIAccessibility.isReduceMotionEnabled)
-                case .failure: self.showMessage("Could not open vault", "The local vault could not be opened. Your files remain on this device. Try again when device storage is available.")
-                }
-            }
-        } catch {
-            showMessage("Vault unavailable", "This local vault folder is unavailable. Refresh the vault list and try again.")
+        guard !opening, documentTabs?.canEnterVault != false,
+              let catalog = catalog, let navigation = navigationController,
+              navigation.topViewController === self else { return }
+        if let alert = presentedViewController as? UIAlertController {
+            alert.dismiss(animated: !UIAccessibility.isReduceMotionEnabled) { [weak self] in self?.open(vault) }
+            return
+        }
+        guard presentedViewController == nil else { return }
+        let ticket = UUID()
+        do { try ensureDocumentTabs().beginVaultOpening(ticket) }
+        catch { showMessage("Session is finishing", "Wait for the current document session to finish before opening another vault."); return }
+        opening = true
+        openingTicket = ticket
+        navigationItem.rightBarButtonItem?.isEnabled = false
+        navigationItem.backButtonTitle = "Vaults"
+        let destination = NativeVaultOpeningController(vault: vault, root: { try catalog.root(for: vault) },
+            preparePages: { [weak self] pages in
+                guard let self = self else { throw MobileFailure.unavailable }
+                try self.bindPages(pages, vault: vault)
+            }) { [weak self] in
+            guard let self = self, self.openingTicket == ticket else { return }
+            self.documentTabs?.finishVaultOpening(ticket)
+            self.openingTicket = nil; self.opening = false
+            self.navigationItem.rightBarButtonItem?.isEnabled = true
+        }
+        navigation.pushViewController(destination, animated: !UIAccessibility.isReduceMotionEnabled)
+    }
+}
+
+// This route exists before storage work starts. Only this controller owns its
+// pending host; a pop/changed route never lends that host to another destination.
+private final class NativeVaultOpeningController: UIViewController {
+    private let vault: LocalVault
+    private let resolveRoot: () throws -> URL
+    private let preparePages: (NativePagesController) throws -> Void
+    private var hosting: UIHostingController<AnyView>?
+    private var observers: [NSObjectProtocol] = []
+    private var attempt = 0
+    private var started = false
+    private var abandoned = false
+    private var replacing = false
+    private var visible = false
+    private var waitingForTransition = false
+    private var received: (session: NativeMobileSession, root: URL)?
+    private var failure: String?
+    private var openPending = false
+    private var reservationFinished: (() -> Void)?
+
+    init(vault: LocalVault, root: @escaping () throws -> URL,
+         preparePages: @escaping (NativePagesController) throws -> Void,
+         reservationFinished: @escaping () -> Void) {
+        self.vault = vault; resolveRoot = root; self.preparePages = preparePages
+        self.reservationFinished = reservationFinished
+        super.init(nibName: nil, bundle: nil)
+        title = vault.name
+    }
+    required init?(coder: NSCoder) { fatalError("Use the native vault picker.") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemGroupedBackground
+        view.accessibilityIdentifier = "native.vault.opening"
+        let host = UIHostingController(rootView: AnyView(EmptyView()))
+        hosting = host; addChild(host); view.addSubview(host.view)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([host.view.topAnchor.constraint(equalTo: safe.topAnchor),
+            host.view.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
+            host.view.bottomAnchor.constraint(equalTo: safe.bottomAnchor)])
+        host.didMove(toParent: self); render()
+        for name in [UIApplication.didBecomeActiveNotification, UIScene.didActivateNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.scheduleSettlement() })
         }
     }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: false)
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated); visible = true
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = true
+        scheduleSettlement()
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        visible = false; super.viewWillDisappear(animated)
+    }
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if !replacing, navigationController?.topViewController !== self { abandon() }
+    }
+    private var current: Bool {
+        !abandoned && visible && navigationController?.topViewController === self
+            && viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive
+            && UIApplication.shared.applicationState == .active && presentedViewController == nil
+    }
+    private func scheduleSettlement() {
+        DispatchQueue.main.async { [weak self] in self?.settle() }
+    }
+    private func settle() {
+        guard current, let navigation = navigationController else { return }
+        if !started { begin(); return }
+        guard let received = received else { return }
+        if let transition = navigation.transitionCoordinator {
+            guard !waitingForTransition else { return }
+            waitingForTransition = true
+            transition.animate(alongsideTransition: nil) { [weak self] _ in
+                self?.waitingForTransition = false; self?.scheduleSettlement()
+            }
+            return
+        }
+        guard navigation.viewControllers.last === self else { return }
+        let pages = NativePagesController(vault: vault, root: received.root, session: received.session)
+        do { try preparePages(pages) }
+        catch {
+            self.received = nil; openPending = true
+            received.session.close { [self] in
+                openPending = false
+                failure = "The previous document session must finish closing before this vault can open."
+                render()
+                if abandoned { finishReservation() }
+            }
+            return
+        }
+        self.received = nil; replacing = true
+        var stack = navigation.viewControllers
+        stack[stack.count - 1] = pages
+        navigation.setViewControllers(stack, animated: false)
+        finishReservation()
+    }
+    private func begin() {
+        guard current, !started else { return }
+        started = true; attempt += 1
+        let ticket = attempt
+        do {
+            let root = try resolveRoot()
+            openPending = true
+            // Keep cleanup ownership through the reply and, after Back, close ACK.
+            // Open/close completions retain this loader only while work is outstanding;
+            // its stored reservation callback captures the picker weakly.
+            NativeMobileSession.open(vault: vault, root: root) { [self] result in
+                openPending = false
+                guard !abandoned, attempt == ticket else {
+                    if case .success(let session) = result {
+                        session.close { [self] in finishReservation() }
+                    } else { finishReservation() }
+                    return
+                }
+                switch result {
+                case .success(let session): self.received = (session, root)
+                case .failure:
+                    self.failure = "The local vault could not be opened. Your files remain on this device. Try again when device storage is available."
+                    self.render()
+                }
+                self.scheduleSettlement()
+            }
+        } catch {
+            failure = "This local vault folder is unavailable. Return to Vaults or try again."
+            render()
+        }
+    }
+    private func retry() {
+        guard current, failure != nil else { return }
+        failure = nil; started = false; render(); scheduleSettlement()
+    }
+    private func render() {
+        hosting?.rootView = AnyView(ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if let message = failure {
+                    Text("Could not open vault").font(.title2.bold()).accessibilityAddTraits(.isHeader)
+                    Text(message).fixedSize(horizontal: false, vertical: true)
+                    Button("Retry") { [weak self] in self?.retry() }
+                        .buttonStyle(.borderedProminent).accessibilityIdentifier("native.vault.open.retry")
+                } else { NativeLoadingSkeleton(editor: false) }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
+        }.background(Color(uiColor: .systemGroupedBackground)))
+    }
+    private func abandon() {
+        guard !abandoned, !replacing else { return }
+        abandoned = true; attempt += 1
+        guard !openPending else { return }
+        let session = received?.session; received = nil
+        if let session = session { session.close { [self] in finishReservation() } }
+        else { finishReservation() }
+    }
+    private func finishReservation() {
+        let callback = reservationFinished; reservationFinished = nil
+        callback?()
+    }
+    deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        let callback = reservationFinished
+        if let session = received?.session { session.close { callback?() } }
+        else { callback?() }
+    }
+
 }
 
 private extension UIViewController {

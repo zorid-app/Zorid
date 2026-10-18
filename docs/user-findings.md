@@ -253,6 +253,58 @@ checks +scopedTS passing. Canonical contract/codec and workspace lifecycle/searc
 unions preserved. Source blocker closed; composed build/link and actual simulator/
 phone behavior remain pending. Existing exclusive native validation grant continues.
 
+
+### 2026-10-17 — native file long-press actions
+
+User Downloads reference shows a native Files context menu. Requested layout:
+Duplicate, Move and Share/export as three horizontal icon-and-label actions;
+divider; Rename; destructive red Delete. Apply to native Recents/Files with
+system lift/dismiss animation and haptic feedback. Only functional supported
+actions should appear, with explicit folder applicability. NativePages371 owns
+UI; d809 independently assesses existing Rust file-command/export seams. Preserve
+stable-ID/revision witnesses, durable retry identities and same-host admission;
+no Swift vault-file mutation or hidden web Workspace. Source implementation and
+actual simulator/device behavior remain pending.
+
+
+### 2026-10-17 — native destination loading, return appearance and tab rules
+
+Vault and file taps must immediately navigate to their native destination, then
+show the skeleton there while storage/editor readiness completes. The picker or
+source list must not carry the destination skeleton. d809 owns vault-picker
+NativeMobile section and explicitly reserved NativePagesCoordinator openEditor/
+transfer functions plus private loaders;371 owns row/lending/model/UI elsewhere.
+Back/cancel/stale callbacks must drain/close owned sessions and never open a late
+or wrong file. User also reports all home rows briefly look opened/active after
+returning from a file;371 audits row busy/pressed/appearance state. Source/runtime
+fix acceptance is pending.
+
+Superseding navigation configuration rule: the bottom navigation bar MUST retain
+at least one implemented item. Empty/malformed/unknown saved membership restores
+Notes; removing or dragging out the final item is rejected. Reviewedc1faeda1
+importede0070be2; actual extracted Foundation preference/drop helpers34/34PASS.
+Old empty-valid design and build8 removal behavior do not satisfy this rule.
+Build9 native/UI proof pending.
+
+User requested a document-tab overview matching supplied native thumbnail-grid
+reference: top-right Show tabs replaces New note; a larger bottom-right floating
+New note button; preview cards with close, bottom+, count, Done. User answered:
+each tab one note/file; ordinary file-open replaces selected tab; separate Open
+in new tab; + starts a Home placeholder, closing final tab leaves fresh Home.
+Home is empty state until file chosen; Recents/Files remain native pages outside
+document tabs. Root grants NEW NativeDocumentTabs.swift/NativeTabOverview.swift
+source-first only. Existing editor/host lifecycle wiring requires concrete API
+review; one active Rust host/editor lease and save/quiesce/close ACK are mandatory.
+No implementation/runtime parity claimed.
+
+
+Native9 follow-up: reviewed minimum-one implementation passed actual Simulator
+final-Remove-disabled smoke and34/34 actual Foundation preference/drop tests.
+Signed Dev9 built and installed on phone (install0); automatic launch refused
+Locked, pending unlock/retry. No document-tabs/new-menu/destination-loader code
+in9; those remain separate source/review/runtime work. Caret no-typing pixel
+criterion still unverified after contaminated8 observation; source85 checks
+alone do not close it.
 ### 2026-10-17 — Vite migration and mobile keyboard continuity
 
 User explicitly authorizes migration to Vite, then Stage5; native mobile UX work
@@ -351,3 +403,8 @@ root via msg5e815eb955cf; no native compiler/helper/server remains active.
   Root owns manifests. No implementation or runtime acceptance claimed yet.
   Share extension/AppGroup/project/signing/CI changes require a subsequent scoped
   coordination decision; the existing wildcard profile does not prove readiness.
+
+2026-10-18 native header finding: user requests removing the vault-name subtitle
+above the Recents/Files heading (reference screenshot AhGuxX). Owner removed only
+that decorative row in NativePages; vault identity remains in selection/settings.
+Source review and current phone build verification pending; not yet deployed.
