@@ -361,6 +361,45 @@ fn status_in(tx: &Connection) -> Result<FamilyStatus> {
         // Status restores committed descriptors; publication validation requires
         // an in-process content proof and runs on mutation/receive snapshots.
         state.metadata_view()?;
+        // Include identities awaiting a bootstrap, which are absent from the
+        // namespace view but still have a Pending materialization. The restored
+        // graph bounds this set; no text or binary bodies are read here.
+        let identities: std::collections::BTreeMap<_, _> = state
+            .records()
+            .values()
+            .flat_map(|record| match record.body() {
+                zorid_file_sync::metadata::GraphRecordBody::Events { events }
+                | zorid_file_sync::metadata::GraphRecordBody::ObservedDelete { events } => {
+                    events.as_slice()
+                }
+                _ => &[],
+            })
+            .map(|event| event.identity.clone())
+            .chain(state.activities().values().map(|activity| {
+                zorid_file_sync::EntryIdentity {
+                    entry_id: activity.identity().entry_id.clone(),
+                    bootstrap_id: activity.namespace().bootstrap_id.clone(),
+                }
+            }))
+            .map(|identity| (identity.entry_id.clone(), identity))
+            .collect();
+        let cached: i64 = tx.query_row("SELECT count(*) FROM family_materializations", [], |r| {
+            r.get(0)
+        })?;
+        if usize::try_from(cached).ok() != Some(identities.len()) {
+            return Err(StoreError::Corrupt(
+                "publication cache identity coverage mismatch".into(),
+            ));
+        }
+        for (id, identity) in identities {
+            if family_materialization::get(tx, &id)?
+                .is_none_or(|record| record.identity != identity)
+            {
+                return Err(StoreError::Corrupt(
+                    "publication cache identity differs from causal authority".into(),
+                ));
+            }
+        }
         output.graph_records = u32::try_from(state.records().len() + state.activities().len())
             .map_err(|_| zorid_client_sync::SyncError::TooLarge)?;
         output.graph_encoded_bytes = serde_json::to_vec(&state)?.len() as u64;
