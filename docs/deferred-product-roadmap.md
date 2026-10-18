@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:32UTC: native owner found factory scanComplete API incompatible with current
+NativeVaultListing.reconciliationComplete. Remove global completeness gate only
+for positively fresh-validated live file open; exact store/stableID/live witness
+required, no absence/deletion inference or missingtarget fallback. UUID witness
+fixcb097b8b source-inspected. Next exclusive bounded composed Swift typing slot
+reserved nativeowner: freeze corrected candidate and report command/handle, no
+Rust/web asset rebuild or installation. Actual composed API check prioritized
+over further speculative source loops; latch/Settings/history UX gates remain.
+
 00:31UTC: native coordinator exact accepted content SHA256a83c45cb... committed
 875fc451 plus minimalPBX membership; not main/runtime verified. Root683f90dd
 header source review approved, configuredhistory remains external route gate.
