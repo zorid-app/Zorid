@@ -78,6 +78,16 @@ final class NativeTabDestinationFactory {
                 self.chooseFile(current.tab.id)
             }
             current.controller = home
+            if showTabs != nil {
+                let owner = current.ownerID, tabID = current.tab.id
+                home.onShowTabs = { [weak self, weak current] controller in
+                    guard let self = self, let current = current, self.reservation === current,
+                          current.ownerID == owner, current.tab.id == tabID, current.controller === controller,
+                          current.tab.isHome, current.session == nil, !current.opening,
+                          !current.closing, !current.cleanupRequested else { return }
+                    self.showTabs?(controller)
+                }
+            }
             deliver(current, .success(Prepared(controller: home, source: nil)))
             return
         }
@@ -293,12 +303,20 @@ final class NativeTabDestinationFactory {
 
 @MainActor
 private final class NativeEmptyTabHomeController: UIViewController {
+    var onShowTabs: ((NativeEmptyTabHomeController) -> Void)?
     private let chooseFile: () -> Void
     init(chooseFile: @escaping () -> Void) { self.chooseFile = chooseFile; super.init(nibName: nil, bundle: nil); title = "Home" }
     required init?(coder: NSCoder) { fatalError("Use the native tab destination factory.") }
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
+        if onShowTabs != nil {
+            let tabs = UIBarButtonItem(image: UIImage(systemName: "square.on.square"), style: .plain,
+                                       target: self, action: #selector(showDocumentTabs))
+            tabs.accessibilityIdentifier = "native.tabs.home.show-tabs"
+            tabs.accessibilityLabel = "Show tabs"
+            navigationItem.rightBarButtonItem = tabs
+        }
         let title = UILabel(); title.text = "Choose a file to open in this tab."
         title.font = .preferredFont(forTextStyle: .body); title.adjustsFontForContentSizeCategory = true; title.numberOfLines = 0
         let button = UIButton(type: .system); button.setTitle("Choose file", for: .normal)
@@ -313,6 +331,15 @@ private final class NativeEmptyTabHomeController: UIViewController {
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
         ])
         button.accessibilityIdentifier = "native.tabs.home.choose-file"
+    }
+    @objc private func showDocumentTabs() {
+        guard UIApplication.shared.applicationState == .active,
+              viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive,
+              let navigation = navigationController, navigation.topViewController === self,
+              navigation.transitionCoordinator == nil, !isBeingDismissed, !isMovingFromParent,
+              !navigation.isBeingDismissed, navigation.presentedViewController == nil,
+              presentedViewController == nil else { return }
+        onShowTabs?(self)
     }
     @objc private func choose() {
         guard UIApplication.shared.applicationState == .active, viewIfLoaded?.window != nil,
