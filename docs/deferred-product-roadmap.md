@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:59UTC canonical integration: mainf7dc7569 merges exact73da2173 portable records
+batch, all11 source/docs/lock files byte-match candidate. Actual33tests17018pass,
+independent root library review approved; no repeatedtests or productionwire/store
+integration. Managed lead next proposes exact family/AAD/adapter transaction APIs
+and existingfile ownership nativefirst/equivalentIDB; no existingseam edits yet.
+Native fullSimulator10owns exclusiveslot; d809 read-only importdestination router
+proposal ACKed (explicitvault/folder/existingloan, no newhost/implementation before
+APIagreement), bd57 importprefix/371Pages/rootnativeowner ownership preserved.
+
 00:58UTC: nativeowner03fc0424 exactreviewed rootwiring committed. Exclusive FULL
 Simulator10 build/install/focusedFile/Home UI slot GRANTED afterrecords17018
 returned. Freeze reviewed HomeShowtabs factory successor ifincluded, reportHEAD/
