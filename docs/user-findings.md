@@ -484,3 +484,13 @@ Direct cache/event identity regression fails old source9/10 then passes correcte
 10/10; foreign readback identity still rejects before publication. Independent
 review approved. Canonical main209368fb; Tasks real saved-body split proof remains
 with the full UI batch, not inferred from these scripted core cases.
+
+### 2026-10-18 — Base status labels expose option IDs
+
+Managed Calendar coordinator directly observed the actual5ea desktop screenshot:
+generic Tasks Base table/group labels show raw stable status option UUIDs, while
+the Tasks destination shows To do/In progress/Done. Queued product UX gap, not
+a newly verified regression. Typed Base rendering should resolve current option
+labels/colors from Type configuration while preserving stored IDs, unknown values
+and exact semantic filter/group identity. Implementation and actual UI verification
+remain pending. Keep separate from the active Base save-freshness reproduction.
