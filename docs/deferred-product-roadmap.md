@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:48UTC: managed newcrate source uses existing crates/* workspaceglob. Named
+isolated Cargo.lock ownership grant for managedlead ONLY new zorid-records
+package/edges to alreadylocked deps; no existing versions/checksums/edges changes,
+network or rootmanifest edits. Exact lockdiff review before integration; compiler
+still separately serialized with nativepriority. Typed authored operation-set/direct
+encoding proposal remains provisional, not production merge-engine approval.
+Require concrete comparison with existingYrs+retainedhistory and causal/delete/
+resource negative cases before persistence/wire integration; no second authority
+or unreviewed custom CRDT choice merely because plan doesn't mandate Yrs.
+
 00:46UTC canonical integration: main3322d30b merges exact reviewed1a350fd2
 (a2702e5+aadda867) managed-data feasibility fixture+7docs, byte comparisons pass.
 All12 tests50530 exit0; log /private/tmp/zorid-managed-record-feasibility.log.
