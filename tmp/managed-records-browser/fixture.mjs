@@ -75,7 +75,13 @@ async function dump(name) {
 }
 async function remove(name) {
   assert(names.has(name)&&name.startsWith(prefix),'Deletion outside run');
-  await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(name);r.onsuccess=resolve;r.onerror=()=>reject(r.error);r.onblocked=()=>reject(new Error('Fixture connection leak'));});
+  return await new Promise((resolve,reject)=>{
+    let blockedEvents=0;const r=indexedDB.deleteDatabase(name),timer=setTimeout(()=>reject(new Error('Fixture deletion did not complete after 5s; blocked events: '+blockedEvents)),5000);
+    r.onsuccess=()=>{clearTimeout(timer);resolve({blockedEvents});};r.onerror=()=>{clearTimeout(timer);reject(r.error);};
+    // A blocked notification is diagnostic. Only actual delete success proves
+    // cleanup; allow already-closing real connections to finish, with a deadline.
+    r.onblocked=()=>{blockedEvents++;};
+  });
 }
 // Observe real Chrome transactions and inject a real abort after a managed state put succeeds.
 // Neither wrapper produces a result or substitutes a storage transaction.
@@ -293,7 +299,7 @@ finally {
   for(const h of handles){try{h.vault.close();}catch{}}
   key?.free();IDBDatabase.prototype.transaction=transaction;IDBObjectStore.prototype.put=put;
   report.cleanup=[];
-  for(const name of names){try{await remove(name);report.cleanup.push({name,status:'deleted'});}catch(error){report.cleanup.push({name,status:'failed',error:String(error)});report.status='failed';}}
+  for(const name of names){try{const deleted=await remove(name);report.cleanup.push({name,status:'deleted',...deleted});}catch(error){report.cleanup.push({name,status:'failed',error:String(error)});report.status='failed';}}
   report.finished=new Date().toISOString();delete report.active;publish();
   window.managedRecordsEvidence=report;window.managedRecordsComplete=true;
 }
