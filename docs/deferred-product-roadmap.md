@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:02UTC: history helper mayretain one boundedscene-level evicted-prefix pageorigin
+to preserve folderReturn beyond100entries, samevault/store/reset, no pertabstack.
+Native NewNote UIhandoff gap: UserDefaults.set isn't throwing durability barrier.
+Later narrow NativeTabMetadataStore.swift app-owned <=128KiB atomic/syncedmetadata
+plus picker persistenceclosure scope ACK, no liveSimulator source changes, broad
+migration/vaultwrites/RustAPI/framework. NotesremainRustdurable independently;
+failedUIhandoff retains exactCID/entry/metadata retry, neverrecreatesnote.
+Actualsourcecontract/review required; occupied-name escape remainsopen.
+
 01:01UTC: native pinnedpnpm12.14 existingabsolute executable verified; isolated
 offline frozeninstall36802 terminal0 in2.5s, no lock/manifest edits/sharedtree
 mutation. Homehook source cherry fb1c04d7, reviewed coordinator/Mobile unchanged.
