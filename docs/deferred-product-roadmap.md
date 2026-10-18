@@ -116,6 +116,13 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:42UTC resource: managed lead run7a10 granted one exclusive bounded
+managed_record_feasibility fixture run (11+TextReplica firewall case, finalSHA
+forthcoming), official existing Rust1.95 binaries/shared stage4-verified, offline
+locked -j1/threads1. No fullsuite/manifest edits; retain handle to terminal and
+explicit slotreturn. Native owner notified msg_00962db333f2; next composed native
+typing/build priority after fixture terminal. Native source review proceeds only.
+
 00:42UTC: actual native picker/root/factory File/Home/Showtabs/Settings/Return
 wiring under2f source review; no compiler. Initial Simulator File/Home candidate
 may verify known incomplete flow, phone9 stays until NewNote/history gates covered.
