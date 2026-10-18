@@ -65,6 +65,12 @@ an editor or full undo capsule for every visit. Eviction/lifetime is explicit.
   lifetime/epoch validation, including role side effects. Passive neighbors must
   not dismiss another editor's menu. Native IPC changes require exact named hunks.
   Existing reviewer term_a0c7b independently reviews exact source; no duplicate audit.
+- Root followup msg_ed12be2af3d5 assigns the existing editor owner a NEW passive
+  document editor-host module/test in a separate successor worktree, after exact
+  API agreement with TS371. It reuses createEditor, opts into managed interaction
+  at construction and receives snapshots/callbacks from Workspace. It does not
+  load NoteBuffer, replay recovery, claim a client or edit Workspace/core/editor.
+  TS371 retains canonical buffer/save/admission and title/property coordination.
 - Native lead owns retained physical host/plugin/gesture presentation. Existing
   helper reviewer term_c6a reviews exact gesture/packet changes. No native document
   history authority may be reintroduced behind the new capability.

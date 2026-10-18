@@ -17,7 +17,23 @@ files and merged canonical editor guards without changing the component.
 | src/ui/mobile-web-router.ts | 89263aa9b0b40876914cc4431242dd6936e68ce1 |
 | tests/mobile-web-router.test.ts | 465533f61c6317a00e42eee5b7f542b169541b63 |
 
-## Verdict: source approval withheld
+## Current successor: approval still withheld
+
+Exact successor4e7a06cfbff42b50162c93a4b2ac7cae22c1d64e fixes the original
+held-resume/open/link/new-drain cases. Reviewer read19 passing cases without
+rerunning them. Reverse ordering remains: drain waits the old queue but does not
+register its own full flush/publication operation in that queue. Hold drain's
+host.flush after revocation, then resume; resume can grant A a writer before the
+held drain completes, leaving a successful drain acknowledgment with a writer.
+Keep resume behind the entire active drain (or reject it), with the reverse-order
+regression. Owner notified msg_3d5800bbca89. Same lifecycle finding, no broader audit.
+
+Owner overwrote web-router-portable.log with the19-case successor run. The16-case
+hash below records root's earlier observation, not a current immutable raw file.
+The successor uses web-router-portable-resume.log; do not claim the overwritten
+path still matches the historical hash.
+
+## Original freeze verdict: source approval withheld
 
 P1: router.resume() clears paused and awaits window.resume() outside the route
 queue. Window resume captures A and its epoch. Hold A admission, then open B:
