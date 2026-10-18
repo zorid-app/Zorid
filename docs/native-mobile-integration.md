@@ -1101,3 +1101,19 @@ Reviewed source queue, NOT composed into phone9:
 Confirmed native9 batch sent sole main integrator msgd455052bc708: first-parent
 b947801b merge delta,0beb0268,e0070be2 plus delivery ledgers. No main mutation or
 push here. Integration hashes/semantic reconciliation remain coordinator-owned.
+
+
+Physical phone9 follow-up — 2026-10-18 00:02 UTC: user explicitly asked to build
+to phone again. Reused exact verified frozen3288 signed Dev9 artifact, no new
+compiler/source/provisioning change. Repeat install AND launch exec65171 both
+EXIT0. Dev9 is now installed and successfully launched on the physical iPhone;
+left running for the user to try. This supersedes prior Locked-only launch
+status, not the remaining phone editing/keyboard/tab/runtime gaps. Private repeat
+logs/private/tmp/mobile-phone9-repeat-{install,launch}.log0600.
+
+Root offered bounded tab harness slot, but terminal revalidation found the worker
+idle and harness not yet prepared: mailbox-only request had not started a turn.
+Explicit followup cce6ebe0 started; preparation source-only. Offered slot returned
+msg62a9ddf75ecd until exact harness ready, no owner compiler run. Root targeted
+Rust checks may proceed. Bounded Share API accepted and focused new test SOURCE
+NativeFileExportTests.swift approved, no registration or execution granted.
