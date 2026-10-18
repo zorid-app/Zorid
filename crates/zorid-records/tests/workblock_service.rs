@@ -140,7 +140,7 @@ fn window_budgets_and_all_candidate_intersection_remain_domain_owned() {
     }
     assert!(validate_window(&q).unwrap().intersects(&domain::read(&merged).unwrap().unwrap()).unwrap());
     for (limit,bytes) in [(0,1),(65,1),(1,0),(1,1_048_577)] {
-        assert_eq!(validate_window(&WindowQuery {limit,bytes,..q.clone()}),Err(ServiceError::InvalidRequest));
+        assert_eq!(validate_window(&WindowQuery {limit,bytes,..q.clone()}),Err(ServiceError::Limit));
     }
     for (from,until) in [("00","1"),("0","2678400001"),("1","1")] {
         assert!(matches!(validate_window(&WindowQuery {from:from.into(),until:until.into(),..q.clone()}),Err(ServiceError::Domain(_))));

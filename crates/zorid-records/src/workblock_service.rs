@@ -290,7 +290,7 @@ pub fn read_value(state: &State) -> Result<Option<WorkBlockValue>> {
 }
 pub fn validate_window(query: &WindowQuery) -> ServiceResult<domain::Window> {
     if !(1..=64).contains(&query.limit) || !(1..=1_048_576).contains(&query.bytes) {
-        return Err(ServiceError::InvalidRequest);
+        return Err(ServiceError::Limit);
     }
     Ok(domain::Window::new(&query.from, &query.until)?)
 }
