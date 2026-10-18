@@ -44,13 +44,30 @@ export interface MobileLifecycle {
   subscribe(handler: (reason: MobileLifecycleReason, ack: () => Promise<void>) => Promise<void>): () => void;
 }
 export type NativeEditorAction = 'insertLink' | 'insertTable' | 'insertCodeBlock' | 'insertHorizontalRule' | 'bold' | 'italic' | 'strikethrough' | 'inlineCode' | 'undo' | 'redo' | 'dismissKeyboard';
-export interface NativeEditorState { focused: boolean; editable: boolean; canUndo: boolean; canRedo: boolean }
+export interface NativeEditorState {
+  focused: boolean; editable: boolean; canUndo: boolean; canRedo: boolean;
+  selectionCollapsed: boolean; composing: boolean; interactionActive: boolean; navigationRevision: number;
+}
 export interface NativeEditorBridge {
   setState(state: NativeEditorState): Promise<void>;
   subscribe(handler: (action: NativeEditorAction) => void | Promise<void>, onStateRequest?: () => void | Promise<void>): () => void;
 }
 const editorActions = new Set<string>(['insertLink','insertTable','insertCodeBlock','insertHorizontalRule','bold','italic','strikethrough','inlineCode','undo','redo','dismissKeyboard']);
-const disabledEditorState: Readonly<NativeEditorState> = Object.freeze({ focused: false, editable: false, canUndo: false, canRedo: false });
+const disabledEditorState: Readonly<NativeEditorState> = Object.freeze({ focused: false, editable: false, canUndo: false, canRedo: false,
+  selectionCollapsed: false, composing: true, interactionActive: true, navigationRevision: 0 });
+const editorStateKeys = ['focused','editable','canUndo','canRedo','selectionCollapsed','composing','interactionActive','navigationRevision'] as const;
+const sameEditorState = (a: NativeEditorState, b: NativeEditorState) => editorStateKeys.every(key => a[key] === b[key]);
+const unsafeEditorState = (state: NativeEditorState) => !state.focused && !state.editable && !state.canUndo && !state.canRedo
+  && !state.selectionCollapsed && state.composing && state.interactionActive;
+function captureEditorState(input: NativeEditorState): Readonly<NativeEditorState> {
+  try {
+    if (!input || Array.isArray(input) || !sameKeys(input,[...editorStateKeys])) throw 0;
+    const copy = Object.fromEntries(editorStateKeys.map(key => [key,input[key]])) as unknown as NativeEditorState;
+    if (!editorStateKeys.slice(0,-1).every(key => typeof copy[key] === 'boolean')
+      || !Number.isSafeInteger(copy.navigationRevision) || copy.navigationRevision < 0) throw 0;
+    return Object.freeze(copy);
+  } catch { throw fail('invalid_editor_state'); }
+}
 // Keep this owned surface until the coordinator lands the PlatformVault declaration.
 type NativeMobilePlatformVault = PlatformVault & { mobileLifecycle: MobileLifecycle; nativeEditor: NativeEditorBridge; editorOnly: true; createNoteOnOpen?: boolean; initialPath?: string; initialEntryId?: string; noteOpened(path: string, entryId: string): Promise<void>; presentationSettled(input: NativePresentationSettled): Promise<void> };
 const FILE_LIMIT = 16 * 1024 * 1024, PLAN_LIMIT = 8 * 1024 * 1024, CHECKPOINT_LIMIT = 32 * 1024 * 1024;
@@ -207,7 +224,8 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   let editorTail: Promise<unknown> = Promise.resolve();
   type EditorSubscription = {
     alive: boolean; ready: Promise<void>; handle?: { remove(): Promise<void> };
-    latest: NativeEditorState; accepted: NativeEditorState; version: number;
+    latest: NativeEditorState; accepted: NativeEditorState; version: number; producerState?: NativeEditorState; hasPublished?: boolean;
+    disablePending?: boolean;
     flushing?: Promise<void>; callbacks: Set<Promise<void>>;
     requestReady?: Promise<void>; requestHandle?: { remove(): Promise<void> };
     requestPending: boolean; querying?: Promise<void>; onStateRequest?: () => void | Promise<void>;
@@ -243,13 +261,33 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
       try {
         await sub.ready;
         let sent = -1;
-        while (sub.handle && editorAlive(sub) && sent !== sub.version) {
+        while (sub.handle && editorAlive(sub) && (sub.disablePending || sent !== sub.version)) {
           if (lifecycleTask || editorLifecyclePaused) { sub.accepted = disabledEditorState; break; }
-          sent = sub.version; const state = sub.latest;
+          const disabling = sub.disablePending;
+          sub.disablePending = false;
+          sent = sub.version; const state = disabling ? disabledEditorState : sub.latest;
+          let disableAcknowledged = false;
           try {
             await bridge.editorState(state);
-            if (editorAlive(sub)) sub.accepted = lifecycleTask || editorLifecyclePaused ? disabledEditorState : state;
-          } catch { /* Optional toolbar failure never fails a save or poisons its queue. */ }
+            disableAcknowledged = unsafeEditorState(state);
+            if (editorAlive(sub)) {
+              sub.hasPublished = true;
+              sub.accepted = lifecycleTask || editorLifecyclePaused || sub.version !== sent ? disabledEditorState : state;
+            }
+          } catch {
+            sub.accepted = disabledEditorState;
+            try { await bridge.editorState(disabledEditorState); disableAcknowledged = true; }
+            catch {
+              // Unknown native presentation state must not be followed by a
+              // fresh enabling frame. Retry the barrier on a later state query.
+              sub.disablePending = true;
+              break; // No tight retry loop and no dependency on the save queue.
+            }
+          }
+          if (disabling && !disableAcknowledged) { sub.disablePending = true; break; }
+          // Unsafe disable is a barrier, never a coalescible eligibility frame.
+          // A newer valid state must follow it, even with the same revision.
+          if (disabling && !sameEditorState(state,sub.latest)) sent = -1;
         }
       } finally { sub.flushing = undefined; }
     });
@@ -278,12 +316,28 @@ export async function openNativeMobileVault(plugin?: NativeVaultPlugin): Promise
   function stopNativeEditor() { if (editorSubscription) retireEditor(editorSubscription); }
   const nativeEditor: NativeEditorBridge = {
     async setState(input) {
-      if (!input || Array.isArray(input) || !sameKeys(input,['focused','editable','canUndo','canRedo'])
-        || ![input.focused,input.editable,input.canUndo,input.canRedo].every(v => typeof v === 'boolean')) throw fail('invalid_editor_state');
       const sub = editorSubscription;
+      let state: Readonly<NativeEditorState>;
+      try {
+        state = captureEditorState(input);
+        const previous = sub?.producerState;
+        // Unsafe disables are never navigation admission and may carry zero or
+        // an older revision. They must not reset the producer high-water mark.
+        if (!unsafeEditorState(state) && previous && (state.navigationRevision < previous.navigationRevision
+          || state.navigationRevision === previous.navigationRevision && !sameEditorState(state,previous))) throw fail('stale_editor_state');
+      } catch (error) {
+        if (sub && editorAlive(sub)) {
+          sub.latest = disabledEditorState; sub.accepted = disabledEditorState; sub.disablePending = true; sub.version++;
+          await publishEditorState(sub);
+        }
+        throw error;
+      }
       if (!sub || !editorAlive(sub)) return;
+      if (unsafeEditorState(state)) { sub.disablePending = true; sub.accepted = disabledEditorState; }
+      if (!sub.producerState || state.navigationRevision > sub.producerState.navigationRevision) sub.producerState = state;
       if (!lifecycleTask) editorLifecyclePaused = false;
-      sub.latest = Object.freeze({ focused: input.focused, editable: input.editable, canUndo: input.canUndo, canRedo: input.canRedo }); sub.version++;
+      if (!sub.disablePending && sub.hasPublished && sameEditorState(sub.latest,state) && sameEditorState(sub.accepted,state) && !sub.flushing) return;
+      if (!sameEditorState(sub.latest,state)) { sub.latest = state; sub.version++; }
       await publishEditorState(sub);
     },
     subscribe(handler,onStateRequest) {

@@ -14,19 +14,53 @@ struct NativeEditorState: Equatable {
     let editable: Bool
     let canUndo: Bool
     let canRedo: Bool
-    static let inactive = NativeEditorState(focused: false, editable: false, canUndo: false, canRedo: false)
+    let selectionCollapsed: Bool
+    let composing: Bool
+    let interactionActive: Bool
+    let navigationRevision: UInt64
+    static let inactive = NativeEditorState(focused: false, editable: false, canUndo: false, canRedo: false,
+                                            selectionCollapsed: false, composing: true, interactionActive: true,
+                                            navigationRevision: 0)
+    var isUnsafeDisable: Bool {
+        !focused && !editable && !canUndo && !canRedo && !selectionCollapsed && composing && interactionActive
+    }
+    var permitsRouteGesture: Bool { !focused && !editable && selectionCollapsed && !composing && !interactionActive }
 
     static func decode(_ payload: [String: Any]) -> NativeEditorState? {
-        guard Set(payload.keys) == Set(["focused", "editable", "canUndo", "canRedo"]) else { return nil }
+        guard Set(payload.keys) == Set(["focused", "editable", "canUndo", "canRedo", "selectionCollapsed",
+                                       "composing", "interactionActive", "navigationRevision"]) else { return nil }
         func boolean(_ key: String) -> Bool? {
             guard let value = payload[key] as? NSNumber,
                   CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
             return value.boolValue
         }
         guard let focused = boolean("focused"), let editable = boolean("editable"),
-              let undo = boolean("canUndo"), let redo = boolean("canRedo") else { return nil }
-        // Exactly four real booleans: no strings, numbers, nested or unbounded data.
-        return NativeEditorState(focused: focused, editable: editable, canUndo: undo, canRedo: redo)
+              let undo = boolean("canUndo"), let redo = boolean("canRedo"),
+              let collapsed = boolean("selectionCollapsed"), let composing = boolean("composing"),
+              let interaction = boolean("interactionActive"),
+              let revision = payload["navigationRevision"] as? NSNumber,
+              CFGetTypeID(revision) != CFBooleanGetTypeID() else { return nil }
+        let number = revision.doubleValue
+        guard number.isFinite, number >= 0, number <= 9_007_199_254_740_991, number.rounded(.down) == number else { return nil }
+        return NativeEditorState(focused: focused, editable: editable, canUndo: undo, canRedo: redo,
+                                 selectionCollapsed: collapsed, composing: composing, interactionActive: interaction,
+                                 navigationRevision: UInt64(number))
+    }
+}
+
+// Per physical editor realm. Temporary/malformed disables never reset the
+// semantic producer watermark or authorize navigation.
+struct NativeEditorStateValidator {
+    enum Failure: Error, Equatable { case invalid, stale }
+    private(set) var lastValidated: NativeEditorState?
+    mutating func validate(_ state: NativeEditorState?) throws -> NativeEditorState {
+        guard let state = state else { throw Failure.invalid }
+        if state.isUnsafeDisable { return .inactive }
+        if let prior = lastValidated,
+           state.navigationRevision < prior.navigationRevision
+            || (state.navigationRevision == prior.navigationRevision && state != prior) { throw Failure.stale }
+        lastValidated = state
+        return state
     }
 }
 

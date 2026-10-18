@@ -1,4 +1,5 @@
 import UIKit
+import SwiftUI
 
 // Depends on the owner's NativeDocumentTabCoordinator/NativeDocumentTabs and
 // d809's 5742f382+a02b7397 container seams (imported as150ad6dd+99be269a).
@@ -6,14 +7,16 @@ import UIKit
 @MainActor
 final class NativeTabDestinationFactory {
     typealias Prepared = NativeDocumentTabCoordinator.PreparedDestination
+    typealias NewNoteRecovery = (@escaping (Result<Void, Error>) -> Void) -> Void
     private enum Failure: LocalizedError {
-        case busy, stale, unavailable, changed
+        case busy, stale, unavailable, changed, newNotePending
         var errorDescription: String? {
             switch self {
             case .busy: return "Close the pending document session before opening another tab."
             case .stale: return "This document reservation is no longer current."
             case .changed: return "The selected file is unavailable or belongs to a different vault."
             case .unavailable: return "The document session could not be prepared safely."
+            case .newNotePending: return "Resume the retained new-note request from Home before opening another document."
             }
         }
     }
@@ -24,6 +27,8 @@ final class NativeTabDestinationFactory {
         var controller: UIViewController?
         var opening = false, closing = false, cleanupRequested = false, installed = false
         var pendingValidation: NativeTabDocument?
+        var newNoteInspection: NativeNewNoteRequest?
+        var newNoteRecoveryRequired = false
         var preparation: ((Result<Prepared, Error>) -> Void)?
         var recovery: [(Result<Void, Error>) -> Void] = []
         init(tab: NativeDocumentTab, ownerID: UUID, completion: @escaping (Result<Prepared, Error>) -> Void) {
@@ -41,6 +46,10 @@ final class NativeTabDestinationFactory {
     private let showTabs: ((UIViewController) -> Void)?
     private let returnToNativePages: ((UIViewController) -> Void)?
     private let navigate: ((NativeEditorContainer, UUID, Int) -> Void)?
+    // Root presents an explicit Resume action. Inspection never authorizes a
+    // create or a handoff. The supplied exact-reservation cleanup is retryable;
+    // root may route to Pages only after its success/actual host-close ACK.
+    private let pendingNewNote: ((@escaping NewNoteRecovery) -> Void)?
     private var reservation: Reservation?
     private var retiredOwners: [UUID] = [] // Idempotent cleanup ACKs, bounded RAM only.
 
@@ -59,11 +68,13 @@ final class NativeTabDestinationFactory {
          validatedDocument: @escaping (NativeTabDocument, UUID) -> Void,
          showTabs: ((UIViewController) -> Void)? = nil,
          returnToNativePages: ((UIViewController) -> Void)? = nil,
-         navigate: ((NativeEditorContainer, UUID, Int) -> Void)? = nil) {
+         navigate: ((NativeEditorContainer, UUID, Int) -> Void)? = nil,
+         pendingNewNote: ((@escaping NewNoteRecovery) -> Void)? = nil) {
         self.resolveVault = resolveVault; self.admissionReady = admissionReady
         self.chooseFile = chooseFile; self.validatedDocument = validatedDocument
         self.showTabs = showTabs; self.returnToNativePages = returnToNativePages
         self.navigate = navigate
+        self.pendingNewNote = pendingNewNote
     }
 
     // Adapter for Activation: { [weak factory] tab, owner, done in
@@ -83,7 +94,7 @@ final class NativeTabDestinationFactory {
         let current = Reservation(tab: tab, ownerID: ownerID, completion: completion)
         reservation = current
         guard let document = tab.document else {
-            let home = NativeEmptyTabHomeController { [weak self, weak current] in
+            let home = NativeVaultHomeOpeningController { [weak self, weak current] in
                 guard let self = self, let current = current, self.reservation === current,
                       current.tab.isHome, current.session == nil else { return }
                 self.chooseFile(current.tab.id)
@@ -125,20 +136,89 @@ final class NativeTabDestinationFactory {
                         if current.cleanupRequested { cleanup(current); return }
                         do {
                             let listing = try result.get()
-                            let matches = listing.entries.filter { $0.id == document.stableFileID }
                             // A global incomplete-reconciliation warning is not
                             // proof that this freshly listed committed file is
                             // absent. Preserve the session warning unchanged;
                             // require this exact store and live stable identity.
-                            guard listing.localStoreId == document.localStoreID,
-                                  matches.count == 1, let entry = matches.first, !entry.deleted, entry.kind == .file,
-                                  NativeFileEntry.isVisiblePath(entry.path) else { throw Failure.changed }
-                            installContainer(current, session: session, entry: entry, document: document)
+                            guard listing.localStoreId == document.localStoreID else { throw Failure.changed }
+                            inspectNewNote(current, session: session, store: listing.localStoreId) { [self, current, session] in
+                                guard reservation === current, current.session === session else { return }
+                                if current.cleanupRequested { cleanup(current); return }
+                                let matches = listing.entries.filter { $0.id == document.stableFileID }
+                                guard matches.count == 1, let entry = matches.first, !entry.deleted, entry.kind == .file,
+                                      NativeFileEntry.isVisiblePath(entry.path) else {
+                                    failAfterCleanup(current, error: Failure.changed); return
+                                }
+                                installContainer(current, session: session, entry: entry, document: document)
+                            }
                         } catch { failAfterCleanup(current, error: error) }
                     }
                 }
             }
         } catch { failAfterCleanup(current, error: error) }
+    }
+
+    private func inspectNewNote(_ current: Reservation, session: NativeMobileSession,
+                                store: String, clear: @escaping () -> Void) {
+        guard reservation === current, current.session === session else { return }
+        let binding = NativeExclusiveSessionBinding(session: session, localStoreId: store,
+            folderId: nil, folderPath: "", finish: { _ in })
+        let helper = NativeNewNoteRequest(binding: binding)
+        current.newNoteInspection = helper
+        current.opening = true // Cleanup must wait for the inspection's exact loan result.
+        helper.execute(.inspectPending) { [self, current, session, helper] result in
+            guard reservation === current, current.session === session,
+                  current.newNoteInspection === helper else { return }
+            current.opening = false
+            switch result {
+            case .success(.clear), .success(.rejected):
+                // Both outcomes include the helper's exact release ACK.
+                current.newNoteInspection = nil
+                clear()
+            case .success(.pending), .success(.ready), .failure:
+                // A pending read can still hold its admission. Never report a
+                // preparation failure (whose contract promises closed hosts)
+                // or discard the helper while that ownership is unresolved.
+                current.newNoteRecoveryRequired = true
+                if current.cleanupRequested { cleanup(current); return }
+                pendingNewNote?({ [weak self, weak current] done in
+                    guard let self = self, let current = current else { done(.failure(Failure.stale)); return }
+                    self.recoverNewNote(current, completion: done)
+                })
+            }
+        }
+    }
+
+    private func recoverNewNote(_ current: Reservation,
+                                completion: @escaping (Result<Void, Error>) -> Void) {
+        guard reservation === current, current.newNoteRecoveryRequired,
+              !current.opening, !current.closing else { completion(.failure(Failure.busy)); return }
+        current.closing = true
+        let close: () -> Void = { [self, current] in
+            let closed: () -> Void = { [self, current] in
+                guard reservation === current else { completion(.failure(Failure.stale)); return }
+                current.closing = false
+                current.newNoteInspection = nil
+                retire(current)
+                deliver(current, .failure(Failure.newNotePending))
+                settleRecovery(current, .success(()))
+                completion(.success(()))
+            }
+            if let session = current.session { session.close(completion: closed) } else { closed() }
+        }
+        if let helper = current.newNoteInspection, helper.retainsReservation {
+            helper.closeRetainedReservation { [self, current] result in
+                guard reservation === current else { completion(.failure(Failure.stale)); return }
+                switch result {
+                case .success: close()
+                case .failure(let error):
+                    // Keep the same helper, session and reservation for retry.
+                    current.closing = false
+                    settleRecovery(current, .failure(error))
+                    completion(.failure(error))
+                }
+            }
+        } else { close() }
     }
 
     private func installContainer(_ current: Reservation, session: NativeMobileSession,
@@ -257,6 +337,10 @@ final class NativeTabDestinationFactory {
     }
     private func cleanup(_ current: Reservation) {
         guard reservation === current, !current.opening, !current.closing else { return }
+        if current.newNoteRecoveryRequired {
+            recoverNewNote(current) { _ in }
+            return
+        }
         if let container = current.controller as? NativeEditorContainer, container.isViewLoaded {
             closeContainer(current) { [self, current] result in
                 if case .success = result { deliver(current, .failure(Failure.stale)) }
@@ -328,11 +412,15 @@ final class NativeTabDestinationFactory {
 }
 
 @MainActor
-private final class NativeEmptyTabHomeController: UIViewController {
-    var onShowTabs: ((NativeEmptyTabHomeController) -> Void)?
+private final class NativeVaultHomeOpeningController: UIViewController {
+    var onShowTabs: ((NativeVaultHomeOpeningController) -> Void)?
     private let chooseFile: () -> Void
     init(chooseFile: @escaping () -> Void) { self.chooseFile = chooseFile; super.init(nibName: nil, bundle: nil); title = "Home" }
     required init?(coder: NSCoder) { fatalError("Use the native tab destination factory.") }
+    private var requestedHome = false
+    private var waitingForTransition = false
+    private var observers: [NSObjectProtocol] = []
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
@@ -343,21 +431,51 @@ private final class NativeEmptyTabHomeController: UIViewController {
             tabs.accessibilityLabel = "Show tabs"
             navigationItem.rightBarButtonItem = tabs
         }
-        let title = UILabel(); title.text = "Choose a file to open in this tab."
-        title.font = .preferredFont(forTextStyle: .body); title.adjustsFontForContentSizeCategory = true; title.numberOfLines = 0
-        let button = UIButton(type: .system); button.setTitle("Choose file", for: .normal)
-        button.titleLabel?.font = .preferredFont(forTextStyle: .body); button.titleLabel?.adjustsFontForContentSizeCategory = true
-        button.addTarget(self, action: #selector(choose), for: .touchUpInside)
-        let stack = UIStackView(arrangedSubviews: [title, button]); stack.axis = .vertical; stack.spacing = 20
-        stack.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(stack)
+        // Home is the current vault's native landing page. This host-free
+        // transition displays shapes while root opens that SAME vault; it never
+        // asks the user to choose a file or selects a different vault.
+        let loading = UIHostingController(rootView: NativeLoadingSkeleton(editor: false).padding(20))
+        addChild(loading); view.addSubview(loading.view)
+        loading.view.backgroundColor = .systemBackground
+        loading.view.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
-            stack.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
-            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+            loading.view.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            loading.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            loading.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
-        button.accessibilityIdentifier = "native.tabs.home.choose-file"
+        loading.didMove(toParent: self)
+        for name in [UIApplication.didBecomeActiveNotification, UIScene.didActivateNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.scheduleHome()
+            })
+        }
     }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        scheduleHome()
+    }
+    private func scheduleHome() {
+        DispatchQueue.main.async { [weak self] in self?.openHomeWhenCurrent() }
+    }
+    private func openHomeWhenCurrent() {
+        guard !requestedHome, UIApplication.shared.applicationState == .active,
+              viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive,
+              let navigation = navigationController, navigation.topViewController === self,
+              !isBeingDismissed, !isMovingFromParent, !navigation.isBeingDismissed,
+              navigation.presentedViewController == nil, presentedViewController == nil else { return }
+        if let transition = navigation.transitionCoordinator {
+            guard !waitingForTransition else { return }
+            waitingForTransition = true
+            transition.animate(alongsideTransition: nil) { [weak self] _ in
+                self?.waitingForTransition = false
+                self?.scheduleHome()
+            }
+            return
+        }
+        requestedHome = true
+        chooseFile() // Existing root coordinator owns admission/save/close/error recovery.
+    }
+    deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
     @objc private func showDocumentTabs() {
         guard UIApplication.shared.applicationState == .active,
               viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive,
@@ -366,10 +484,5 @@ private final class NativeEmptyTabHomeController: UIViewController {
               !navigation.isBeingDismissed, navigation.presentedViewController == nil,
               presentedViewController == nil else { return }
         onShowTabs?(self)
-    }
-    @objc private func choose() {
-        guard UIApplication.shared.applicationState == .active, viewIfLoaded?.window != nil,
-              navigationController?.topViewController === self, presentedViewController == nil else { return }
-        chooseFile()
     }
 }

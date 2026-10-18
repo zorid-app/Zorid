@@ -235,7 +235,7 @@ export class Workspace {
     try{void platform?.nativeEditor?.setState(state).catch(()=>{});}catch{/* Optional native UI unavailable. */}
   }
   private hideNativeEditorToolbar():void{
-    this.sendNativeEditorState({focused:false,editable:false,canUndo:false,canRedo:false});
+    this.sendNativeEditorState({focused:false,editable:false,canUndo:false,canRedo:false,selectionCollapsed:false,composing:true,interactionActive:true,navigationRevision:0});
   }
   private bindNativeEditor():void{
     this.nativeEditorCleanup?.();this.nativeEditorCleanup=undefined;

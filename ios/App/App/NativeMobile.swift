@@ -527,6 +527,7 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     private var timeout: DispatchWorkItem?
     private var closeAuthorized = false
     private var currentEditorState = NativeEditorState.inactive
+    private var editorStateValidator = NativeEditorStateValidator()
     fileprivate var onEditorState: ((NativeEditorState, Bool) -> Void)?
     fileprivate var onNoteOpened: ((String) -> Void)?
     fileprivate var onDocumentValidated: ((NativeTabDocument) -> Void)?
@@ -582,15 +583,22 @@ final class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func editorState(_ call: CAPPluginCall) {
-        guard let state = NativeEditorState.decode(call.jsObjectRepresentation) else {
-            call.reject("Invalid editor state.", "invalid_request")
-            return
-        }
+        let decoded = NativeEditorState.decode(call.jsObjectRepresentation)
         DispatchQueue.main.async {
-            self.currentEditorState = self.hasListeners("editorAction") && !self.closeAuthorized
-                && self.pending == nil && UIApplication.shared.applicationState == .active ? state : .inactive
-            self.publishEditorState()
-            call.resolve()
+            do {
+                let state = try self.editorStateValidator.validate(decoded)
+                self.currentEditorState = self.hasListeners("editorAction") && !self.closeAuthorized
+                    && self.pending == nil && UIApplication.shared.applicationState == .active ? state : .inactive
+                self.publishEditorState()
+                call.resolve()
+            } catch {
+                // Invalid/stale state actively cancels the old eligible gesture;
+                // the validator retains its last genuine producer watermark.
+                self.resetEditorState()
+                let stale = (error as? NativeEditorStateValidator.Failure) == .stale
+                call.reject(stale ? "Editor state is no longer current." : "Invalid editor state.",
+                            stale ? "stale_editor_state" : "invalid_editor_state")
+            }
         }
     }
 
@@ -839,7 +847,6 @@ final class NativeEditorContainer: UIViewController {
     // Factories must weakly capture root/container and recheck their exact owner.
     var onShowDocumentTabs: (() -> Void)? { didSet { installNativeNavigationControls() } }
     var onReturnToNativePages: (() -> Void)? { didSet { installNativeNavigationControls() } }
-    private var returnToPagesItem: UIBarButtonItem?
     private var showDocumentTabsItem: UIBarButtonItem?
     private var documentSourceOwnerID: UUID?
     private var documentOwnerIsCurrent: (() -> Bool)?
@@ -850,7 +857,7 @@ final class NativeEditorContainer: UIViewController {
     private var closed = false
     private var backgroundHandled = false
     private var backgroundObservers: [NSObjectProtocol] = []
-    var onNavigate: ((Int) -> Void)?
+    var onNavigate: ((Int) -> Void)? { didSet { invalidateEditorEdgeContext() } }
     private var canGoBack = false
     private var canGoForward = false
     private var historyContentView: (UIView & UIContentView)?
@@ -867,6 +874,28 @@ final class NativeEditorContainer: UIViewController {
     private var editorBottom: NSLayoutConstraint?
     private var keyboardObservers: [NSObjectProtocol] = []
     private var toolbarVisible = false
+    private var editorEdgeGestures: NativeRouteEdgeGestures?
+    private var editorEdgeGeneration = UUID()
+    private var editorEdgeVisible = false
+    private var editorEdgeBounds = CGRect.zero
+
+    private func invalidateEditorEdgeContext() {
+        editorEdgeGeneration = UUID()
+        editorEdgeGestures?.cancelPendingGesture()
+    }
+
+    private func editorEdgeContext(_ direction: Int) -> UUID? {
+        guard editorEdgeVisible, direction == -1 || direction == 1,
+              direction == -1 ? canGoBack : canGoForward,
+              rootNavigationIsCurrent, onNavigate != nil,
+              toolbarModel.actionsAvailable, toolbarModel.state.permitsRouteGesture,
+              loadingFinished, editor.vaultPlugin.documentSnapshotReady,
+              !hasDockedSoftwareKeyboard, let navigation = navigationController,
+              navigation.transitionCoordinator == nil, transitionCoordinator == nil,
+              navigation.presentedViewController == nil, presentedViewController == nil,
+              viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive else { return nil }
+        return editorEdgeGeneration
+    }
 
     init(session: NativeMobileSession, launch: NativeEditorLaunch, originTitle: String = "Pages", onClosed: @escaping () -> Void = {}) {
         self.session = session
@@ -892,6 +921,7 @@ final class NativeEditorContainer: UIViewController {
         }
         editor.vaultPlugin.onDocumentValidated = { [weak self] document in
             guard let self = self, !self.leaving, self.currentDocumentOwner(requiresVisible: true) else { return }
+            self.invalidateEditorEdgeContext()
             self.onDocumentValidated?(document)
         }
         editor.vaultPlugin.onNoteOpened = { [weak self] id in
@@ -911,6 +941,9 @@ final class NativeEditorContainer: UIViewController {
         updateRouteControls()
         editor.vaultPlugin.onEditorState = { [weak self] state, available in
             guard let self = self else { return }
+            if state.isUnsafeDisable || self.toolbarModel.state != state || self.toolbarModel.actionsAvailable != available {
+                self.invalidateEditorEdgeContext()
+            }
             self.toolbarModel.state = state
             self.toolbarModel.actionsAvailable = available
             self.updateToolbarLayout()
@@ -936,23 +969,53 @@ final class NativeEditorContainer: UIViewController {
         installBackgroundObservers()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Direct New Note activation can arrive from Pages' hidden navigation bar.
+        navigationController?.setNavigationBarHidden(false, animated: false)
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         navigationController?.interactivePopGestureRecognizer?.isEnabled = false
         view.setNeedsLayout()
         updateToolbarLayout()
         updateRouteControls()
+        invalidateEditorEdgeContext()
+        editorEdgeVisible = true
+        if #available(iOS 16, *), editorEdgeGestures == nil {
+            editorEdgeGestures = NativeRouteEdgeGestures(view: view, allowsUnfocusedTextInput: true,
+                context: { [weak self] direction in self?.editorEdgeContext(direction) },
+                navigate: { [weak self] direction in self?.navigateRoute(direction) })
+        }
         if !leaving { editor.vaultPlugin.requestForegroundEditorState() }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        editorEdgeVisible = false
+        invalidateEditorEdgeContext()
         editor.vaultPlugin.resetEditorState()
         editor.vaultPlugin.invalidateDocumentValidation()
     }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        editorEdgeGestures?.invalidate()
+        editorEdgeGestures = nil
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        invalidateEditorEdgeContext()
+        super.viewWillTransition(to: size, with: coordinator)
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if view.bounds != editorEdgeBounds {
+            editorEdgeBounds = view.bounds
+            invalidateEditorEdgeContext()
+        }
         updateToolbarLayout()
     }
 
@@ -1000,6 +1063,7 @@ final class NativeEditorContainer: UIViewController {
                 guard let self = self else { return }
                 // Geometry belongs to the layout guide, including keyboards
                 // retained across focus/app transitions without a new frame event.
+                self.invalidateEditorEdgeContext()
                 self.updateToolbarLayout(notification: notification)
             })
         }
@@ -1077,10 +1141,9 @@ final class NativeEditorContainer: UIViewController {
     }
 
     private var historyControls: NativeHistoryControls {
-        NativeHistoryControls(backEnabled: canGoBack && !leaving, forwardEnabled: canGoForward && !leaving,
-                              identifierPrefix: "native.editor") { [weak self] direction in
-            guard let self = self, !self.leaving else { return }
-            self.onNavigate?(direction)
+        NativeHistoryControls(backEnabled: routeBackEnabled, forwardEnabled: canGoForward && !leaving,
+                              identifierPrefix: "native.editor", backLabel: canGoBack && !legacyClosedReturnIsCurrent ? "Back" : "Return to " + originTitle) { [weak self] direction in
+            self?.navigateRoute(direction)
         }
     }
 
@@ -1127,8 +1190,7 @@ final class NativeEditorContainer: UIViewController {
         button.accessibilityLabel = label
         button.accessibilityIdentifier = identifier
         button.addAction(UIAction { [weak self] _ in
-            guard let self = self, !self.leaving else { return }
-            self.onNavigate?(direction)
+            self?.navigateRoute(direction)
         }, for: .touchUpInside)
         button.widthAnchor.constraint(equalToConstant: 44).isActive = true
         button.heightAnchor.constraint(equalToConstant: 44).isActive = true
@@ -1184,6 +1246,7 @@ final class NativeEditorContainer: UIViewController {
     }
 
     func setRouteAvailability(back: Bool, forward: Bool) {
+        if canGoBack != back || canGoForward != forward { invalidateEditorEdgeContext() }
         canGoBack = back
         canGoForward = forward
         updateRouteControls()
@@ -1193,12 +1256,37 @@ final class NativeEditorContainer: UIViewController {
         if #available(iOS 16, *) {
             historyContentView?.configuration = UIHostingConfiguration { historyControls }.margins(.all, 0)
         }
-        legacyHistoryBack?.isEnabled = canGoBack && !leaving
+        legacyHistoryBack?.isEnabled = routeBackEnabled
+        legacyHistoryBack?.accessibilityLabel = canGoBack && !legacyClosedReturnIsCurrent ? "Back" : "Return to " + originTitle
         legacyHistoryForward?.isEnabled = canGoForward && !leaving
         showDocumentTabsItem?.isEnabled = rootNavigationIsCurrent && onShowDocumentTabs != nil
-        returnToPagesItem?.isEnabled = documentTabsConfigured
+    }
+
+    private var canReturnToOrigin: Bool {
+        documentTabsConfigured
             ? rootNavigationIsCurrent && onReturnToNativePages != nil
             : (!leaving && currentDocumentOwner(requiresVisible: true)) || legacyClosedReturnIsCurrent
+    }
+
+    private var routeBackEnabled: Bool { legacyClosedReturnIsCurrent || (!leaving && (canGoBack || canReturnToOrigin)) }
+
+    private func navigateRoute(_ direction: Int) {
+        // A legacy source whose actual close ACK arrived while backgrounded
+        // stays leaving=true. Foreground explicit return may pop that retired
+        // route without another save or close, as the former Return item did.
+        if direction == -1 && legacyClosedReturnIsCurrent {
+            returnToVaults()
+            return
+        }
+        guard !leaving else { return }
+        if direction == -1 && !canGoBack {
+            guard canReturnToOrigin else { return }
+            // Restored tabs may have no scene-local history yet. Use the same
+            // root-owned save/close route rather than stranding the editor.
+            returnToVaults()
+        } else if (direction == -1 && canGoBack) || (direction == 1 && canGoForward) {
+            onNavigate?(direction)
+        }
     }
 
     private var documentTabsConfigured: Bool {
@@ -1220,20 +1308,16 @@ final class NativeEditorContainer: UIViewController {
 
     private func installNativeNavigationControls() {
         guard isViewLoaded else { return }
-        let done = UIBarButtonItem(title: originTitle, style: .plain, target: self, action: #selector(returnToVaults))
-        done.accessibilityIdentifier = "native.editor.vaults"
-        done.accessibilityLabel = "Return to " + originTitle
-        returnToPagesItem = done
         if onShowDocumentTabs != nil {
             let tabs = UIBarButtonItem(image: UIImage(systemName: "square.on.square"), style: .plain,
                                        target: self, action: #selector(showDocumentTabs))
             tabs.accessibilityIdentifier = "native.editor.showTabs"
             tabs.accessibilityLabel = "Show tabs"
             showDocumentTabsItem = tabs
-            navigationItem.rightBarButtonItems = [tabs, done]
+            navigationItem.rightBarButtonItems = [tabs]
         } else {
             showDocumentTabsItem = nil
-            navigationItem.rightBarButtonItems = [done]
+            navigationItem.rightBarButtonItems = nil
         }
         updateRouteControls()
     }
@@ -1260,6 +1344,7 @@ final class NativeEditorContainer: UIViewController {
         guard !leaving, !closed else { return }
         editor.vaultPlugin.invalidateDocumentValidation()
         retirementReceipt = nil
+        invalidateEditorEdgeContext()
         documentSourceOwnerID = sourceOwnerID
         documentOwnerIsCurrent = isCurrent
         if isViewLoaded { updateRouteControls() }
@@ -1407,6 +1492,11 @@ final class NativeEditorContainer: UIViewController {
     }
 
     private func installBackgroundObservers() {
+        backgroundObservers.append(NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let self = self, let scene = notification.object as? UIWindowScene, self.owningScene === scene else { return }
+            self.invalidateEditorEdgeContext()
+            self.editor.vaultPlugin.resetEditorState()
+        })
         for name in [UIScene.didEnterBackgroundNotification, UIApplication.didEnterBackgroundNotification] {
             backgroundObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 guard let self = self else { return }
@@ -1427,6 +1517,12 @@ final class NativeEditorContainer: UIViewController {
                 guard self.owningScene?.activationState == .foregroundActive else { return }
                 self.backgroundHandled = false
                 self.updateRouteControls()
+                // Scene activation can occur without application activation or
+                // viewDidAppear. Deactivation disabled editor state, so request
+                // a fresh publication without resetting the revision watermark.
+                if !self.leaving, self.currentDocumentOwner(requiresVisible: true) {
+                    self.editor.vaultPlugin.requestForegroundEditorState()
+                }
             })
         }
     }
@@ -1489,10 +1585,267 @@ final class NativeVaultPicker: UITableViewController {
     private weak var boundPages: NativePagesController?
     private var boundPagesOwner: UUID?
     private var lastVaultID: UUID?
-    private let routeHistory = NativeRouteHistory()
+    // Root owns this reservation until creation/ACK loans and the Pages host
+    // have actually retired. An error is never permission to allocate a new CID.
+    private final class NewNoteReservation {
+        let vaultID: UUID
+        let owner: UUID
+        var pages: NativePagesController?
+        var intent: NativeNewNoteRequest.Intent?
+        var helper: NativeNewNoteRequest?
+        var handoff: NativeNewNoteRequest.Handoff?
+        var ticket: NativeDocumentTabs.IntentTicket?
+        var acknowledged = false
+        var busy = false
+        init(vaultID: UUID, owner: UUID, intent: NativeNewNoteRequest.Intent? = nil) {
+            self.vaultID = vaultID; self.owner = owner; self.intent = intent
+        }
+    }
+    private var newNoteReservation: NewNoteReservation?
+    private var newNoteInspectedOwner: UUID?
+    private var pendingFactoryNewNoteRecovery: NativeTabDestinationFactory.NewNoteRecovery?
+    private var factoryNewNoteRecoveryBusy = false
+
+    private func presentFactoryNewNoteRecovery(vaultID: UUID) {
+        guard pendingFactoryNewNoteRecovery != nil, !factoryNewNoteRecoveryBusy,
+              UIApplication.shared.applicationState == .active,
+              let navigation = navigationController, let presenter = navigation.topViewController,
+              presenter.presentedViewController == nil, navigation.presentedViewController == nil,
+              presenter.viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive else { return }
+        if let transition = navigation.transitionCoordinator {
+            transition.animate(alongsideTransition: nil) { [weak self] _ in
+                self?.presentFactoryNewNoteRecovery(vaultID: vaultID)
+            }
+            return
+        }
+        let alert = UIAlertController(title: "New note needs attention",
+            message: "Resume the saved request in Home before opening a document. Its original note and tab are retained.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Resume", style: .default) { [weak self] _ in
+            guard let self = self, let recover = self.pendingFactoryNewNoteRecovery else { return }
+            self.factoryNewNoteRecoveryBusy = true
+            recover { [weak self] result in
+                guard let self = self else { return }
+                self.factoryNewNoteRecoveryBusy = false
+                switch result {
+                case .failure:
+                    DispatchQueue.main.async { [weak self] in self?.presentFactoryNewNoteRecovery(vaultID: vaultID) }
+                case .success:
+                    self.pendingFactoryNewNoteRecovery = nil
+                    guard let presenter = self.navigationController?.topViewController else { return }
+                    self.routeToPages(from: presenter, vaultID: vaultID)
+                }
+            }
+        })
+        presenter.present(alert, animated: !UIAccessibility.isReduceMotionEnabled)
+    }
+
+    private func inspectNewNote(pages: NativePagesController, vault: LocalVault, owner: UUID) {
+        guard boundPages === pages, boundPagesOwner == owner,
+              newNoteReservation == nil, newNoteInspectedOwner != owner,
+              pages.isNativePageRouteRestorationReady else { return }
+        let request = NewNoteReservation(vaultID: vault.id, owner: owner)
+        request.pages = pages
+        newNoteReservation = request
+        executeNewNote(request, pages: pages, action: .inspectPending, explicit: false)
+    }
+
+    private func createNewNote(pages: NativePagesController, vault: LocalVault, owner: UUID) {
+        guard newNoteReservation == nil, newNoteInspectedOwner == owner,
+              boundPages === pages, boundPagesOwner == owner,
+              let tabs = documentTabs, tabs.historyNavigationOwner(for: pages) == owner else { return }
+        let request = NewNoteReservation(vaultID: vault.id, owner: owner,
+            intent: .init(creationID: UUID(), tabID: tabs.model.selectedTabID))
+        request.pages = pages
+        newNoteReservation = request
+        // Persist the ORIGINAL tab before the Rust journal can reference it.
+        do {
+            try Self.retainedTabMetadataStore(vaultID: vault.id).save(tabs.model.encodedMetadata())
+            executeNewNote(request, pages: pages, action: .create(request.intent!), explicit: true)
+        } catch { newNoteFailed(request, pages: pages, error: error) }
+    }
+
+    private func resumeNewNote(pages: NativePagesController, owner: UUID) {
+        guard let request = newNoteReservation, request.owner == owner,
+              boundPages === pages, boundPagesOwner == owner, !request.busy else { return }
+        if request.handoff != nil { finishNewNote(request, pages: pages); return }
+        // A pre-journal failure retries the same reserved CID after saving its
+        // original metadata. Startup recovery has no CID until inspection finds it.
+        if let intent = request.intent {
+            do {
+                guard let tabs = documentTabs, tabs.model.selectedTabID == intent.tabID else { throw NativeDocumentTabsError.unknownTab }
+                try Self.retainedTabMetadataStore(vaultID: request.vaultID).save(tabs.model.encodedMetadata())
+            } catch { newNoteFailed(request, pages: pages, error: error); return }
+            executeNewNote(request, pages: pages, action: .create(intent), explicit: true)
+        } else { executeNewNote(request, pages: pages, action: .resumePending, explicit: true) }
+    }
+
+    private func newNoteFailed(_ request: NewNoteReservation, pages: NativePagesController, error: Error) {
+        guard newNoteReservation === request else { return }
+        request.busy = false
+        pages.setNewNoteState(blocked: true,
+            message: "New note paused. \(error.localizedDescription)", canResume: true)
+    }
+
+    private func executeNewNote(_ request: NewNoteReservation, pages: NativePagesController,
+                                action: NativeNewNoteRequest.Action, explicit: Bool) {
+        guard newNoteReservation === request, !request.busy,
+              boundPages === pages, boundPagesOwner == request.owner else { return }
+        request.busy = true
+        pages.setNewNoteState(blocked: true, message: "Checking new note…")
+        let execute: (NativeNewNoteRequest) -> Void = { [weak self, weak pages] helper in
+            helper.execute(action) { [weak self, weak pages] result in
+                guard let self = self, let pages = pages, self.newNoteReservation === request else { return }
+                request.busy = false
+                guard self.boundPages === pages, self.boundPagesOwner == request.owner,
+                      self.documentTabs?.model.vaultID == request.vaultID else {
+                    if !helper.retainsReservation { request.helper = nil }
+                    if case .success(.ready(let handoff)) = result { request.handoff = handoff }
+                    self.newNoteFailed(request, pages: pages, error: NativeDocumentTabsError.staleTicket); return
+                }
+                switch result {
+                case .failure(let error):
+                    if !helper.retainsReservation { request.helper = nil }
+                    self.newNoteFailed(request, pages: pages, error: error)
+                case .success(.clear), .success(.rejected):
+                    request.helper = nil
+                    self.newNoteReservation = nil; self.newNoteInspectedOwner = request.owner
+                    pages.setNewNoteState(blocked: false)
+                case .success(.pending(let selection)):
+                    guard let cid = UUID(uuidString: selection.creationID), let tab = UUID(uuidString: selection.tabID) else {
+                        self.newNoteFailed(request, pages: pages, error: NativeNewNoteRequest.Failure.invalidJournal); return
+                    }
+                    request.intent = .init(creationID: cid, tabID: tab)
+                    pages.setNewNoteState(blocked: true,
+                        message: "A saved new-note request needs your attention. Resume uses its original note and tab.", canResume: true)
+                case .success(.ready(let handoff)):
+                    request.helper = nil // The creation loan has a release ACK.
+                    request.handoff = handoff
+                    request.intent = .init(creationID: handoff.token.creationID, tabID: handoff.token.tabID)
+                    if explicit { self.finishNewNote(request, pages: pages) }
+                    else {
+                        pages.setNewNoteState(blocked: true,
+                            message: "Your created note is saved. Resume to open it in its original tab.", canResume: true)
+                    }
+                }
+            }
+        }
+        if let helper = request.helper { execute(helper); return }
+        pages.lendNewNoteSession { [weak self, weak pages] result in
+            guard let self = self, let pages = pages, self.newNoteReservation === request else { return }
+            switch result {
+            case .failure(let error): self.newNoteFailed(request, pages: pages, error: error)
+            case .success(let binding):
+                let helper = NativeNewNoteRequest(binding: binding)
+                request.helper = helper; execute(helper)
+            }
+        }
+    }
+
+    private func finishNewNote(_ request: NewNoteReservation, pages: NativePagesController) {
+        guard newNoteReservation === request, !request.busy, let handoff = request.handoff,
+              let tabs = documentTabs, boundPages === pages, boundPagesOwner == request.owner else { return }
+        do {
+            // No invented fallback tab, and no replacement of a different tab.
+            guard tabs.model.vaultID == request.vaultID,
+                  tabs.model.tabs.contains(where: { $0.id == handoff.token.tabID }),
+                  tabs.model.selectedTabID == handoff.token.tabID else { throw NativeDocumentTabsError.unknownTab }
+            if request.ticket == nil {
+                request.ticket = try tabs.model.prepare(.replaceSelected(handoff.document), sourceOwnerID: request.owner)
+            }
+            guard let ticket = request.ticket else { throw NativeDocumentTabsError.staleTicket }
+            try Self.retainedTabMetadataStore(vaultID: request.vaultID).save(tabs.model.encodedMetadata(for: ticket))
+        } catch { newNoteFailed(request, pages: pages, error: error); return }
+        request.busy = true
+        pages.setNewNoteState(blocked: true, message: "Opening your saved note…")
+        let closePages: () -> Void = { [weak self, weak pages] in
+            guard let self = self, let pages = pages, self.newNoteReservation === request else { return }
+            guard self.documentTabs === tabs, self.boundPages === pages, self.boundPagesOwner == request.owner else {
+                self.newNoteFailed(request, pages: pages, error: NativeDocumentTabsError.staleTicket); return
+            }
+            guard let presenter = self.navigationController?.topViewController,
+                  pages.documentTabTransitionRetired || presenter === pages else {
+                self.newNoteFailed(request, pages: pages, error: NativeDocumentTabsError.staleTicket); return
+            }
+            tabs.performNativeRoute(from: presenter, retry: { [weak self, weak pages] in
+                guard let self = self, let pages = pages else { return }
+                request.busy = false; self.finishNewNote(request, pages: pages)
+            }) { [weak self, weak pages] result in
+                guard let self = self, let pages = pages, self.newNoteReservation === request else { return }
+                switch result {
+                case .failure(let error): self.newNoteFailed(request, pages: pages, error: error)
+                case .success:
+                    do {
+                        guard self.documentTabs === tabs, self.boundPages === pages, self.boundPagesOwner == request.owner,
+                              pages.documentTabTransitionRetired, let ticket = request.ticket else { throw NativeDocumentTabsError.staleTicket }
+                        try tabs.model.commit(ticket, acknowledgement: .noActiveEditor(sourceOwnerID: request.owner))
+                        self.newNoteReservation = nil; self.newNoteInspectedOwner = nil
+                        self.boundPages = nil; self.boundPagesOwner = nil
+                        // Public existing activation seam; it does not stage a
+                        // second intent or replay web createNoteOnOpen.
+                        tabs.finishDocumentTabOverview()
+                    } catch { self.newNoteFailed(request, pages: pages, error: error) }
+                }
+            }
+        }
+        if request.acknowledged { closePages(); return }
+        let acknowledge: (NativeNewNoteRequest) -> Void = { [weak self, weak pages] helper in
+            helper.acknowledgeHandoff(handoff.token) { [weak self, weak pages] result in
+                guard let self = self, let pages = pages, self.newNoteReservation === request else { return }
+                switch result {
+                case .failure(let error):
+                    if !helper.retainsReservation { request.helper = nil }
+                    self.newNoteFailed(request, pages: pages, error: error)
+                case .success:
+                    request.helper = nil; request.acknowledged = true
+                    closePages()
+                }
+            }
+        }
+        if let helper = request.helper { acknowledge(helper); return }
+        // Fresh same-vault/store/client Pages loan. The creation helper was
+        // consumed at .ready and must never acknowledge its own handoff.
+        pages.lendNewNoteSession { [weak self, weak pages] result in
+            guard let self = self, let pages = pages, self.newNoteReservation === request else { return }
+            switch result {
+            case .failure(let error): self.newNoteFailed(request, pages: pages, error: error)
+            case .success(let binding):
+                guard binding.session.vault.id == handoff.document.vaultID,
+                      binding.localStoreId == handoff.document.localStoreID else {
+                    binding.finish(.success(()))
+                    self.newNoteFailed(request, pages: pages, error: NativeNewNoteRequest.Failure.invalidJournal); return
+                }
+                let helper = NativeNewNoteRequest(binding: binding)
+                request.helper = helper; acknowledge(helper)
+            }
+        }
+    }
+    private var routeHistories: NativeTabRouteHistories?
+    private struct TabHistoryScope {
+        let contextID: UUID
+        let tabID: UUID
+        let history: NativeRouteHistory
+    }
     private struct HistoryTraversal {
+        let scope: TabHistoryScope
         let ticket: NativeRouteHistory.Ticket
         var expectedDocumentOwner: UUID?
+    }
+
+    private func selectedHistoryScope() throws -> TabHistoryScope {
+        guard let tabs = documentTabs, let contextID = documentTabContextID,
+              let histories = routeHistories, histories.vaultID == tabs.model.vaultID,
+              tabs.model.tabs.contains(where: { $0.id == tabs.model.selectedTabID }) else {
+            throw NativeRouteHistoryError.stale
+        }
+        try histories.retain(tabIDs: Set(tabs.model.tabs.map(\.id)))
+        return TabHistoryScope(contextID: contextID, tabID: tabs.model.selectedTabID,
+                               history: try histories.history(for: tabs.model.selectedTabID))
+    }
+
+    private func historyScopeIsCurrent(_ scope: TabHistoryScope) -> Bool {
+        guard documentTabContextID == scope.contextID,
+              documentTabs?.model.selectedTabID == scope.tabID else { return false }
+        return (try? selectedHistoryScope())?.history === scope.history
     }
     private var historyTraversal: HistoryTraversal?
     private final class InstalledPageReceipt {
@@ -1500,24 +1853,27 @@ final class NativeVaultPicker: UITableViewController {
         weak var pages: NativePagesController?
         let owner: UUID
         let route: NativePageRoute
+        let scope: TabHistoryScope
         let historyID: UUID?
         var checking = false
-        init(pages: NativePagesController, owner: UUID, route: NativePageRoute, historyID: UUID?) {
-            self.pages = pages; self.owner = owner; self.route = route; self.historyID = historyID
+        init(pages: NativePagesController, owner: UUID, route: NativePageRoute, scope: TabHistoryScope, historyID: UUID?) {
+            self.pages = pages; self.owner = owner; self.route = route; self.scope = scope; self.historyID = historyID
         }
     }
     private var installedPageReceipt: InstalledPageReceipt?
     private var historyObservers: [NSObjectProtocol] = []
 
     private func retainInstalledPageRoute(_ route: NativePageRoute, pages: NativePagesController, historyID: UUID?) {
-        guard boundPages === pages, let owner = boundPagesOwner else { return }
-        installedPageReceipt = InstalledPageReceipt(pages: pages, owner: owner, route: route, historyID: historyID)
+        guard boundPages === pages, let owner = boundPagesOwner,
+              let scope = try? selectedHistoryScope(), scope.history.vaultID == route.vaultID else { return }
+        installedPageReceipt = InstalledPageReceipt(pages: pages, owner: owner, route: route, scope: scope, historyID: historyID)
         DispatchQueue.main.async { [weak self] in self?.processInstalledPageRoute() }
     }
 
     private func processInstalledPageRoute() {
         guard let receipt = installedPageReceipt, !receipt.checking else { return }
-        guard let pages = receipt.pages, boundPages === pages, boundPagesOwner == receipt.owner else {
+        guard let pages = receipt.pages, boundPages === pages, boundPagesOwner == receipt.owner,
+              historyScopeIsCurrent(receipt.scope) else {
             installedPageReceipt = nil; return
         }
         if let request = receipt.historyID, historyTraversal?.ticket.id != request {
@@ -1543,12 +1899,13 @@ final class NativeVaultPicker: UITableViewController {
                   self.installedPageReceipt === receipt else { return }
             receipt.checking = false
             guard self.boundPages === pages, self.boundPagesOwner == receipt.owner,
+                  self.historyScopeIsCurrent(receipt.scope),
                   self.documentTabs?.historyNavigationOwner(for: pages) == receipt.owner else { return }
             switch result {
             case .success(let validated):
                 guard validated == receipt.route else { return }
                 self.recordNativePageRoute(validated, pages: pages, historyID: receipt.historyID)
-                if self.routeHistory.currentRoute == .page(validated),
+                if receipt.scope.history.currentRoute == .page(validated),
                    receipt.historyID == nil || self.historyTraversal == nil {
                     self.installedPageReceipt = nil
                 }
@@ -1562,30 +1919,33 @@ final class NativeVaultPicker: UITableViewController {
     private func cancelHistoryTraversal() {
         installedPageReceipt = nil
         if let traversal = historyTraversal {
-            routeHistory.cancel(traversal.ticket, sourceOwnerID: traversal.ticket.sourceOwnerID)
+            traversal.scope.history.cancel(traversal.ticket, sourceOwnerID: traversal.ticket.sourceOwnerID)
         }
         historyTraversal = nil
         refreshHistoryControls()
     }
 
     private func refreshHistoryControls() {
-        boundPages?.setNativeRouteAvailability(back: routeHistory.canGoBack, forward: routeHistory.canGoForward)
-        documentTabs?.setHistoryRouteAvailability(back: routeHistory.canGoBack, forward: routeHistory.canGoForward)
+        let history = (try? selectedHistoryScope())?.history
+        boundPages?.setNativeRouteAvailability(back: history?.canGoBack == true, forward: history?.canGoForward == true)
+        documentTabs?.setHistoryRouteAvailability(back: history?.canGoBack == true, forward: history?.canGoForward == true)
     }
 
     private func recordNativePageRoute(_ route: NativePageRoute, pages: NativePagesController, historyID: UUID? = nil) {
         guard boundPages === pages, let owner = documentTabs?.historyNavigationOwner(for: pages),
               owner == boundPagesOwner else { return }
         do {
+            let scope = try selectedHistoryScope()
             if let request = historyID {
-                guard let traversal = historyTraversal, traversal.ticket.id == request else { return }
-                try routeHistory.commit(traversal.ticket, validatedRoute: .page(route),
+                guard let traversal = historyTraversal, traversal.ticket.id == request,
+                      historyScopeIsCurrent(traversal.scope), traversal.scope.history === scope.history else { return }
+                try traversal.scope.history.commit(traversal.ticket, validatedRoute: .page(route),
                                         sourceOwnerID: traversal.ticket.sourceOwnerID)
                 historyTraversal = nil
             } else {
                 // A restoration owns its one cursor ticket until actual install.
                 guard historyTraversal == nil else { return }
-                try routeHistory.recordValidated(.page(route))
+                try scope.history.recordValidated(.page(route))
             }
             refreshHistoryControls()
         } catch {
@@ -1597,21 +1957,23 @@ final class NativeVaultPicker: UITableViewController {
         guard let controller = navigationController?.topViewController,
               documentTabs?.historyNavigationOwner(for: controller) == owner else { return }
         do {
+            let scope = try selectedHistoryScope()
             let route = try NativeDocumentRoute(vaultID: document.vaultID, localStoreID: document.localStoreID,
                                                 stableFileID: document.stableFileID)
             if let traversal = historyTraversal {
-                guard traversal.expectedDocumentOwner == owner else { return }
+                guard traversal.expectedDocumentOwner == owner, historyScopeIsCurrent(traversal.scope),
+                      traversal.scope.history === scope.history else { return }
                 if traversal.ticket.targetRoute == .document(route) {
-                    try routeHistory.commit(traversal.ticket, validatedRoute: .document(route),
+                    try traversal.scope.history.commit(traversal.ticket, validatedRoute: .document(route),
                                             sourceOwnerID: traversal.ticket.sourceOwnerID)
                     historyTraversal = nil
                 } else {
                     // A newly validated link target is a new route, never proof
                     // that the originally requested history target activated.
                     cancelHistoryTraversal()
-                    try routeHistory.recordValidated(.document(route))
+                    try scope.history.recordValidated(.document(route))
                 }
-            } else { try routeHistory.recordValidated(.document(route)) }
+            } else { try scope.history.recordValidated(.document(route)) }
             refreshHistoryControls()
         } catch {
             controller.showMessage("Navigation needs attention", "The document is open. Its history position could not be updated.")
@@ -1623,8 +1985,9 @@ final class NativeVaultPicker: UITableViewController {
               let owner = tabs.historyNavigationOwner(for: presenter),
               expectedOwner == nil || expectedOwner == owner else { return }
         do {
-            let ticket = try routeHistory.stage(direction: direction, sourceOwnerID: owner)
-            historyTraversal = HistoryTraversal(ticket: ticket)
+            let scope = try selectedHistoryScope()
+            let ticket = try scope.history.stage(direction: direction, sourceOwnerID: owner)
+            historyTraversal = HistoryTraversal(scope: scope, ticket: ticket)
             refreshHistoryControls()
             switch ticket.targetRoute {
             case .document(let route):
@@ -1672,12 +2035,15 @@ final class NativeVaultPicker: UITableViewController {
             let resolved = try catalog.resolve(vaultID: id)
             self.lastVaultID = id
             return resolved
-        }, admissionReady: { [weak self] in contextIsCurrent() && self?.documentTabs?.canPrepareDestination == true },
+        }, admissionReady: { [weak self] in
+            contextIsCurrent() && self?.newNoteReservation == nil
+                && self?.pendingFactoryNewNoteRecovery == nil && self?.documentTabs?.canPrepareDestination == true
+        },
         chooseFile: { [weak self] tabID in
             guard contextIsCurrent(), let self = self, let tabs = self.documentTabs, tabs.model.selectedTabID == tabID,
                   let presenter = self.navigationController?.topViewController else { return }
             self.cancelHistoryTraversal()
-            self.routeToPages(from: presenter, vaultID: vaultID)
+            self.routeToPages(from: presenter, vaultID: vaultID, animated: false)
         }, validatedDocument: { [weak self] document, owner in
             guard contextIsCurrent(), document.vaultID == vaultID else { return }
             self?.recordNativeDocumentRoute(document, owner: owner)
@@ -1696,12 +2062,16 @@ final class NativeVaultPicker: UITableViewController {
             self?.documentTabs?.showDocumentTabs(from: presenter)
         }, returnToNativePages: { [weak self] presenter in
             guard contextIsCurrent(), let self = self else { return }
-            let origin = self.routeHistory.pageOrigin
+            let origin = (try? self.selectedHistoryScope())?.history.pageOrigin
             self.cancelHistoryTraversal()
             self.routeToPages(from: presenter, vaultID: origin?.vaultID ?? self.lastVaultID, restoring: origin)
         }, navigate: { [weak self] presenter, owner, direction in
             guard contextIsCurrent() else { return }
             self?.navigateHistory(direction, from: presenter, expectedOwner: owner)
+        }, pendingNewNote: { [weak self] recover in
+            guard let self = self, contextIsCurrent() else { return }
+            self.pendingFactoryNewNoteRecovery = recover
+            self.presentFactoryNewNoteRecovery(vaultID: vaultID)
         })
         let coordinator = NativeDocumentTabCoordinator(model: model, persist: { data in
             try store.save(data)
@@ -1711,6 +2081,7 @@ final class NativeVaultPicker: UITableViewController {
         }, didInstall: { [weak self, weak factory] owner, tab, controller in
             guard contextIsCurrent() else { return false }
             if let self = self, let traversal = self.historyTraversal,
+               self.historyScopeIsCurrent(traversal.scope),
                case .document(let target) = traversal.ticket.targetRoute,
                let actual = self.documentTabs?.model.selectedTab.document,
                actual.vaultID == target.vaultID, actual.localStoreID == target.localStoreID,
@@ -1730,9 +2101,12 @@ final class NativeVaultPicker: UITableViewController {
         }
         // Publish the new context only after its scoped bytes validate. Failure
         // above leaves the previous vault's coordinator and recovery intact.
-        routeHistory.reset()
+        if let traversal = historyTraversal {
+            traversal.scope.history.cancel(traversal.ticket, sourceOwnerID: traversal.ticket.sourceOwnerID)
+        }
         historyTraversal = nil
         installedPageReceipt = nil
+        routeHistories = NativeTabRouteHistories(vaultID: vaultID)
         documentTabContextID = contextID
         destinationFactory = factory
         documentTabs = coordinator
@@ -1749,12 +2123,12 @@ final class NativeVaultPicker: UITableViewController {
             return self.boundPages === pages && self.boundPagesOwner == owner
         }
         pages.onShowDocumentTabs = { [weak self, weak pages] in
-            guard let self = self, let pages = pages, current() else { return }
+            guard let self = self, let pages = pages, current(), self.newNoteReservation == nil else { return }
             self.cancelHistoryTraversal()
             self.documentTabs?.showDocumentTabs(from: pages)
         }
         pages.onNativeRouteNavigate = { [weak self, weak pages] direction in
-            guard let self = self, let pages = pages, current() else { return }
+            guard let self = self, let pages = pages, current(), self.newNoteReservation == nil else { return }
             self.navigateHistory(direction, from: pages, expectedOwner: owner)
         }
         pages.onNativePageRouteValidated = { [weak self, weak pages] route in
@@ -1771,7 +2145,7 @@ final class NativeVaultPicker: UITableViewController {
             } else { self.recordNativePageRoute(route, pages: pages) }
         }
         pages.onOpenDocument = { [weak self, weak pages] entry, inNewTab in
-            guard let self = self, let pages = pages, current() else { return }
+            guard let self = self, let pages = pages, current(), self.newNoteReservation == nil else { return }
             do {
                 let document = try pages.documentTabDocument(for: entry)
                 self.cancelHistoryTraversal()
@@ -1783,20 +2157,31 @@ final class NativeVaultPicker: UITableViewController {
             } catch { pages.showMessage("File changed", "This file is no longer available from the current list. Refresh Files and try again.") }
         }
         pages.onChooseVault = { [weak self, weak pages] in
-            guard let self = self, let pages = pages, current(),
+            guard let self = self, let pages = pages, current(), self.newNoteReservation == nil,
                   let presenter = pages.navigationController?.topViewController else { return }
             self.cancelHistoryTraversal()
             self.routeToPages(from: presenter, vaultID: nil)
         }
-        // New Note requires a durable Rust creation request before an existing
-        // entry is launched. A missing callback remains explicitly unavailable;
-        // it must never fall back to replaying web createNoteOnOpen.
+        pages.setNewNoteState(blocked: true, message: "Checking saved new-note requests…")
+        pages.onCreateNote = { [weak self, weak pages] in
+            guard let self = self, let pages = pages, current() else { return }
+            self.createNewNote(pages: pages, vault: vault, owner: owner)
+        }
+        pages.onInspectNewNote = { [weak self, weak pages] in
+            guard let self = self, let pages = pages, current() else { return }
+            self.inspectNewNote(pages: pages, vault: vault, owner: owner)
+        }
+        pages.onResumeNewNote = { [weak self, weak pages] in
+            guard let self = self, let pages = pages, current() else { return }
+            self.resumeNewNote(pages: pages, owner: owner)
+        }
         let source = NativeDocumentTabCoordinator.Source(role: .pages, ownerID: owner,
             tabID: tabs.model.selectedTabID, resolvedDocument: nil, controller: pages, isCurrent: current,
             close: { [weak self, weak pages] requestedOwner, done in
                 guard let pages = pages, requestedOwner == owner, current() else { done(.failure(MobileFailure.unavailable)); return }
                 pages.prepareForDocumentTabTransition { result in
-                    if pages.documentTabTransitionRetired, self?.boundPagesOwner == owner {
+                    if pages.documentTabTransitionRetired, self?.boundPagesOwner == owner,
+                       self?.newNoteReservation?.owner != owner {
                         self?.boundPages = nil; self?.boundPagesOwner = nil
                     }
                     done(result)
@@ -1811,11 +2196,12 @@ final class NativeVaultPicker: UITableViewController {
     }
 
     private func routeToPages(from presenter: UIViewController, vaultID: UUID?,
-                              restoring route: NativePageRoute? = nil, historyID: UUID? = nil) {
+                              restoring route: NativePageRoute? = nil, historyID: UUID? = nil,
+                              animated: Bool = true) {
         guard let tabs = documentTabs else { return }
         tabs.performNativeRoute(from: presenter, retry: { [weak self] in
             guard let self = self, let current = self.navigationController?.topViewController else { return }
-            self.routeToPages(from: current, vaultID: vaultID, restoring: route, historyID: historyID)
+            self.routeToPages(from: current, vaultID: vaultID, restoring: route, historyID: historyID, animated: animated)
         }) { [weak self] result in
             guard let self = self, let navigation = self.navigationController else { return }
             switch result {
@@ -1829,7 +2215,7 @@ final class NativeVaultPicker: UITableViewController {
                 do {
                     guard let catalog = self.catalog else { throw MobileFailure.metadata }
                     let (vault, _) = try catalog.resolve(vaultID: vaultID)
-                    self.open(vault, restoring: route, historyID: historyID)
+                    self.open(vault, restoring: route, historyID: historyID, animated: animated)
                 } catch { self.showMessage("Vault unavailable", "Choose an available vault to continue.") }
             }
         }
@@ -1847,7 +2233,12 @@ final class NativeVaultPicker: UITableViewController {
                     guard let self = self else { return }
                     if let scene = notification.object as? UIWindowScene,
                        self.navigationController?.viewIfLoaded?.window?.windowScene !== scene { return }
-                    DispatchQueue.main.async { [weak self] in self?.processInstalledPageRoute() }
+                    DispatchQueue.main.async { [weak self] in
+                        self?.processInstalledPageRoute()
+                        if let vaultID = self?.documentTabs?.model.vaultID {
+                            self?.presentFactoryNewNoteRecovery(vaultID: vaultID)
+                        }
+                    }
                 }
             })
         }
@@ -1858,6 +2249,13 @@ final class NativeVaultPicker: UITableViewController {
         navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .refresh, target: self, action: #selector(reloadVaults))
         navigationItem.leftBarButtonItem?.accessibilityLabel = "Refresh local vaults"
         navigationItem.leftBarButtonItem?.accessibilityIdentifier = "native.vaults.refresh"
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Native Pages hides UIKit chrome for its own SwiftUI header. The
+        // picker must restore its bar on every return, not only first launch.
+        navigationController?.setNavigationBarHidden(false, animated: false)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -1923,14 +2321,15 @@ final class NativeVaultPicker: UITableViewController {
         present(alert, animated: true)
     }
 
-    private func open(_ vault: LocalVault, restoring route: NativePageRoute? = nil, historyID: UUID? = nil) {
+    private func open(_ vault: LocalVault, restoring route: NativePageRoute? = nil, historyID: UUID? = nil,
+                      animated: Bool = true) {
         if historyID == nil { cancelHistoryTraversal() }
         guard route == nil || route?.vaultID == vault.id else { return }
         guard !opening, documentTabs?.canEnterVault != false,
               let catalog = catalog, let navigation = navigationController,
               navigation.topViewController === self else { return }
         if let alert = presentedViewController as? UIAlertController {
-            alert.dismiss(animated: !UIAccessibility.isReduceMotionEnabled) { [weak self] in self?.open(vault, restoring: route, historyID: historyID) }
+            alert.dismiss(animated: !UIAccessibility.isReduceMotionEnabled) { [weak self] in self?.open(vault, restoring: route, historyID: historyID, animated: animated) }
             return
         }
         guard presentedViewController == nil else { return }
@@ -1956,7 +2355,7 @@ final class NativeVaultPicker: UITableViewController {
             self.openingTicket = nil; self.opening = false
             self.navigationItem.rightBarButtonItem?.isEnabled = true
         }
-        navigation.pushViewController(destination, animated: !UIAccessibility.isReduceMotionEnabled)
+        navigation.pushViewController(destination, animated: animated && !UIAccessibility.isReduceMotionEnabled)
     }
     deinit { for observer in historyObservers { NotificationCenter.default.removeObserver(observer) } }
 

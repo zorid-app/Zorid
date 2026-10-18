@@ -3,7 +3,7 @@ import Foundation
 // Scene-local native navigation metadata. Paths, labels, editor state, leases
 // and tab persistence never authorize or form the identity of these routes.
 enum NativeRouteHistoryError: Error, Equatable {
-    case invalidRoute, busy, unavailable, stale, mismatched
+    case invalidRoute, busy, unavailable, stale, mismatched, tabLimit
 }
 
 private func nativeRouteToken(_ value: String) -> Bool {
@@ -53,7 +53,7 @@ enum NativeHistoryRoute: Hashable {
     }
 }
 
-// One instance per scene, independent of document-tab metadata. Root alone
+// One scene-local instance per owning tab, independent of tab persistence. Root alone
 // verifies close ACK, foreground/install eligibility and fresh activation; a
 // ticket only protects this RAM cursor from stale/foreign callbacks.
 @MainActor
@@ -71,6 +71,12 @@ final class NativeRouteHistory {
             self.targetRoute = targetRoute; self.historyID = historyID; self.targetIndex = targetIndex
         }
     }
+
+    // nil preserves the original unscoped API for existing callers. Registry
+    // histories are always scoped and never accept another vault's route.
+    let vaultID: UUID?
+    init() { vaultID = nil }
+    init(vaultID: UUID) { self.vaultID = vaultID }
 
     private let id = UUID()
     private var entries: [NativeHistoryRoute] = []
@@ -99,6 +105,7 @@ final class NativeRouteHistory {
     // duplicate callback must preserve the forward branch after a traversal.
     func recordValidated(_ route: NativeHistoryRoute) throws {
         guard pending == nil else { throw NativeRouteHistoryError.busy }
+        guard vaultID == nil || route.vaultID == vaultID else { throw NativeRouteHistoryError.invalidRoute }
         if currentRoute == route { return }
         if let current = currentRoute, !route.sharesScope(with: current) {
             entries = []; cursor = -1; evictedPageOrigin = nil
@@ -157,5 +164,41 @@ final class NativeRouteHistory {
 
     private func matches(_ ticket: Ticket, sourceOwnerID: UUID) -> Bool {
         ticket.historyID == id && ticket.sourceOwnerID == sourceOwnerID && ticket.historyRevision == revision && pending == ticket
+    }
+}
+
+// Scene RAM only: root supplies IDs from its current scoped document-tab model.
+// This registry does not create tabs, persist backstacks, admit a client, or
+// authorize a host. Keep the originating history object in any async traversal;
+// looking up the currently selected tab later could target a different cursor.
+@MainActor
+final class NativeTabRouteHistories {
+    // Deliberately Foundation-only. Must match NativeDocumentTabs.maximumTabs.
+    static let maximumTabs = 64
+    let vaultID: UUID
+    private var histories: [UUID: NativeRouteHistory] = [:]
+    var count: Int { histories.count }
+
+    init(vaultID: UUID) { self.vaultID = vaultID }
+
+    // A checked getter never evicts an unrelated live tab at capacity. The
+    // caller must pass an actual current model ID and prune closed IDs first.
+    func history(for tabID: UUID) throws -> NativeRouteHistory {
+        if let history = histories[tabID] { return history }
+        guard histories.count < Self.maximumTabs else { throw NativeRouteHistoryError.tabLimit }
+        let history = NativeRouteHistory(vaultID: vaultID)
+        histories[tabID] = history
+        return history
+    }
+
+    // Retain only already-admitted histories; missing IDs are not manufactured.
+    // Validate before pruning so an invalid model snapshot changes no cursor.
+    // Reset removed objects too: a root-held old reference cannot redeem its
+    // pending ticket after closing and reintroducing the same tab UUID.
+    func retain(tabIDs: Set<UUID>) throws {
+        guard tabIDs.count <= Self.maximumTabs else { throw NativeRouteHistoryError.tabLimit }
+        for tabID in Array(histories.keys) where !tabIDs.contains(tabID) {
+            histories.removeValue(forKey: tabID)?.reset()
+        }
     }
 }

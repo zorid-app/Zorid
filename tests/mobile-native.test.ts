@@ -721,8 +721,8 @@ for(const [path,entryId] of [['Note.md','Selected'],['Note.md',undefined],[undef
   assert.equal(f.requests.length,0);assert.equal(f.removals,1);assert.deepEqual(f.openedRefs,[]);
 });
 
-const enabledEditor:NativeEditorState={focused:true,editable:true,canUndo:true,canRedo:true};
-const disabledEditor:NativeEditorState={focused:false,editable:false,canUndo:false,canRedo:false};
+const enabledEditor:NativeEditorState={focused:true,editable:true,canUndo:true,canRedo:true,selectionCollapsed:true,composing:false,interactionActive:false,navigationRevision:1};
+const disabledEditor:NativeEditorState={focused:false,editable:false,canUndo:false,canRedo:false,selectionCollapsed:false,composing:true,interactionActive:true,navigationRevision:0};
 const toolbarActions:NativeEditorAction[]=['insertLink','insertTable','insertCodeBlock','insertHorizontalRule','bold','italic','strikethrough','inlineCode','undo','redo','dismissKeyboard'];
 
 test('toolbar enabling awaits subscriber listener readiness without blocking durable saves',async()=>{
@@ -745,7 +745,7 @@ test('no subscriber can enable native toolbar or replay an old state into a new 
 test('toolbar states coalesce in order and snapshot caller booleans',async()=>{
   const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred();const stop=v.nativeEditor.subscribe(()=>{});
   f.onEditorState(async()=>{await gate.promise;});const first=v.nativeEditor.setState(enabledEditor);await until(()=>f.editorStates.length===1);
-  const skipped=v.nativeEditor.setState({...enabledEditor,canUndo:false});const input={...disabledEditor};const latest=v.nativeEditor.setState(input);input.focused=true;input.editable=true;
+  const skipped=v.nativeEditor.setState({...enabledEditor,canUndo:false,navigationRevision:2});const input={...disabledEditor};const latest=v.nativeEditor.setState(input);input.focused=true;input.editable=true;
   gate.resolve();await Promise.all([first,skipped,latest]);assert.deepEqual(f.editorStates,[enabledEditor,disabledEditor]);stop();await v.release!();
 });
 
@@ -761,9 +761,9 @@ test('toolbar rejects malformed state and action payloads without touching stora
 
 test('toolbar actions honor current edit/history state and pending read-mode transition',async()=>{
   const f=fixture(),v=await openNativeMobileVault(f.plugin),calls:string[]=[];v.nativeEditor.subscribe(action=>{calls.push(action);});
-  await v.nativeEditor.setState({...enabledEditor,canUndo:false,canRedo:false});f.action({action:'undo'});f.action({action:'redo'});f.action({action:'bold'});await until(()=>calls.length===1);
+  await v.nativeEditor.setState({...enabledEditor,canUndo:false,canRedo:false,navigationRevision:2});f.action({action:'undo'});f.action({action:'redo'});f.action({action:'bold'});await until(()=>calls.length===1);
   f.action({action:'italic'});await v.nativeEditor.setState(disabledEditor);await new Promise<void>(r=>setImmediate(r));assert.deepEqual(calls,['bold']);
-  await v.nativeEditor.setState({...enabledEditor,editable:false});f.action({action:'bold'});await new Promise<void>(r=>setImmediate(r));assert.equal(calls.length,1);await v.release!();
+  await v.nativeEditor.setState({...enabledEditor,editable:false,navigationRevision:3});f.action({action:'bold'});await new Promise<void>(r=>setImmediate(r));assert.equal(calls.length,1);await v.release!();
 });
 
 test('unsubscribe during listener installation cannot publish a stale enabling state',async()=>{
@@ -826,7 +826,7 @@ test('negative lifecycle ACK replays latest workspace-restored toolbar state wit
   f.onEditorState(async state=>{if(pending&&state.focused)throw new Error('native lifecycle still pending');applied={...state};});
   f.onAck(async input=>{if(!input.ok){await negativeGate.promise;pending=false;}});
   v.nativeEditor.subscribe(()=>{calls++;});await v.nativeEditor.setState(enabledEditor);const before=f.editorStates.length;
-  const actual={...enabledEditor,canUndo:false};
+  const actual={...enabledEditor,canUndo:false,navigationRevision:2};
   v.mobileLifecycle.subscribe(async()=>{try{throw new Error('workspace flush rejected');}finally{await v.nativeEditor.setState(actual);restored.resolve();}});
   pending=true;f.emit('switchVault');await restored.promise;await until(()=>f.acks.some(a=>!a.ok));await until(()=>applied.focused===false);
   assert.equal(f.editorStates.slice(before).some(s=>s.focused),false); // Restoration cannot race the pending native ACK.
@@ -854,7 +854,7 @@ test('successful background does not replay handler restoration until a fresh fo
 
 test('strict foreground state requests coalesce and query current state without editing',async()=>{
   const f=fixture(),v=await openNativeMobileVault(f.plugin);let queries=0;
-  const actual={focused:false,editable:false,canUndo:true,canRedo:false};
+  const actual={...enabledEditor,focused:false,editable:false,canRedo:false};
   v.nativeEditor.subscribe(()=>assert.fail('state query is not an editor action'),async()=>{queries++;await v.nativeEditor.setState(actual);});
   await until(()=>f.requestInstalls===1);for(const event of [null,[],{},{reason:'background'},{reason:'foreground',extra:true}])f.stateRequest(event);
   await new Promise<void>(r=>setImmediate(r));assert.equal(queries,0);
@@ -1133,6 +1133,89 @@ for(const witness of [null,{}, {entryId:'entry'}, {revision:'rev1'}, {entryId:''
 test('legacy rename without witness still follows current source metadata',async()=>{
   const f=fixture(),v=await openNativeMobileVault(f.plugin),resume=await pauseNamespaceQueue(f,v);const move=v.adapter.rename('Note.md','Moved.md');f.replaceIdentity('replacement','legacy replacement');await resume();await move;
   const command=f.requests.find(r=>r.command.method==='file_command').command.family.request.mutation;assert.equal(command.id,'replacement');assert.equal(command.expected,'replacement-rev');await v.release!();
+});
+
+test('strict navigation eligibility rejects malformed fields and actively disables a previously enabled source',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);let actions=0;v.nativeEditor.subscribe(()=>{actions++;});
+  const invalid:any[]=[{focused:false,editable:false,canUndo:false,canRedo:false},
+    ...['selectionCollapsed','composing','interactionActive'].flatMap(key=>[{...enabledEditor,[key]:1},{...enabledEditor,[key]:'false'}]),
+    ...[-1,0.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1,'1',true].map(navigationRevision=>({...enabledEditor,navigationRevision})),
+    {...enabledEditor,unknown:false}];
+  for(const input of invalid){
+    await v.nativeEditor.setState(enabledEditor);
+    await assert.rejects(v.nativeEditor.setState(input),{code:'invalid_editor_state'});
+    assert.deepEqual(f.editorStates.at(-1),disabledEditor);
+    f.action({action:'bold'});await new Promise<void>(r=>setImmediate(r));assert.equal(actions,0);
+  }
+  await v.adapter.write('Note.md','invalid presentation did not close storage');await v.release!();assert.equal(f.closes,0);
+});
+
+test('unsafe disable never resets producer watermark; identical fresh state coalesces and changed same revision rejects',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);v.nativeEditor.subscribe(()=>{});
+  const current={...enabledEditor,navigationRevision:7};await v.nativeEditor.setState(current);
+  const count=f.editorStates.length;await v.nativeEditor.setState({...current});assert.equal(f.editorStates.length,count);
+  await v.nativeEditor.setState(disabledEditor);
+  await assert.rejects(v.nativeEditor.setState(enabledEditor),{code:'stale_editor_state'});
+  assert.deepEqual(f.editorStates.at(-1),disabledEditor);
+  await assert.rejects(v.nativeEditor.setState({...current,selectionCollapsed:false}),{code:'stale_editor_state'});
+  await v.nativeEditor.setState({...current});assert.deepEqual(f.editorStates.at(-1),current,'fresh identical foreground state can restore presentation');
+  await v.nativeEditor.setState({...current,selectionCollapsed:false,navigationRevision:8});
+  assert.equal(f.editorStates.at(-1)!.selectionCollapsed,false);await v.release!();
+});
+
+test('coalesced selection A-B-A retains the final revision and cannot accept an obsolete in-flight state',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),firstGate=deferred(),lastGate=deferred();let actions=0;
+  v.nativeEditor.subscribe(()=>{actions++;});
+  f.onEditorState(async state=>{if(state.navigationRevision===11)await firstGate.promise;if(state.navigationRevision===13)await lastGate.promise;});
+  const first=v.nativeEditor.setState({...enabledEditor,navigationRevision:11});await until(()=>f.editorStates.length===1);
+  const middle=v.nativeEditor.setState({...enabledEditor,selectionCollapsed:false,navigationRevision:12});
+  const final={...enabledEditor,navigationRevision:13};const last=v.nativeEditor.setState(final);
+  firstGate.resolve();await until(()=>f.editorStates.at(-1)?.navigationRevision===13);
+  f.action({action:'bold'});await new Promise<void>(r=>setImmediate(r));assert.equal(actions,0,'obsolete publication must not become accepted');
+  lastGate.resolve();await Promise.all([first,middle,last]);
+  assert.deepEqual(f.editorStates.map(state=>state.navigationRevision),[11,13]);
+  f.action({action:'bold'});await until(()=>actions===1);await v.release!();
+});
+
+test('failed optional state publication attempts unsafe disable without failing durable writes',async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin);v.nativeEditor.subscribe(()=>{});
+  await v.nativeEditor.setState(enabledEditor);
+  f.onEditorState(async state=>{if(state.navigationRevision===2)throw new Error('native rejected state');});
+  await v.nativeEditor.setState({...enabledEditor,navigationRevision:2});assert.deepEqual(f.editorStates.at(-1),disabledEditor);
+  await v.adapter.write('Note.md','still open');assert.equal(f.content,'still open');await v.release!();
+});
+
+for(const mode of ['malformed','same-revision-change','unsafe'] as const)test(`unsafe disable barrier survives coalescing with a fresh identical republish: ${mode}`,async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred();v.nativeEditor.subscribe(()=>{});
+  const current={...enabledEditor,navigationRevision:10};let held=false;
+  f.onEditorState(async state=>{if(state.navigationRevision===10&&!held){held=true;await gate.promise;}});
+  const first=v.nativeEditor.setState(current);await until(()=>f.editorStates.length===1);
+  const disable=mode==='unsafe'?v.nativeEditor.setState(disabledEditor)
+    : assert.rejects(v.nativeEditor.setState(mode==='malformed'?null as any:{...current,selectionCollapsed:false}),
+      {code:mode==='malformed'?'invalid_editor_state':'stale_editor_state'});
+  const restore=v.nativeEditor.setState({...current});
+  gate.resolve();await Promise.all([first,disable,restore]);
+  assert.deepEqual(f.editorStates.map(state=>state.navigationRevision),[10,0,10]);
+  assert.deepEqual(f.editorStates[1],disabledEditor);assert.deepEqual(f.editorStates.at(-1),current);
+  await v.release!();
+});
+
+for(const mode of ['malformed','unsafe'] as const)test(`unacknowledged disable fences later enabling until a successful retry: ${mode}`,async()=>{
+  const f=fixture(),v=await openNativeMobileVault(f.plugin),gate=deferred();let held=false,allowDisable=false,actions=0;
+  v.nativeEditor.subscribe(()=>{actions++;});const current={...enabledEditor,navigationRevision:10};
+  f.onEditorState(async state=>{
+    if(state.navigationRevision===10&&!held){held=true;await gate.promise;}
+    if(state.navigationRevision===0&&!allowDisable)throw new Error('disable reply lost');
+  });
+  const first=v.nativeEditor.setState(current);await until(()=>f.editorStates.length===1);
+  const disable=mode==='unsafe'?v.nativeEditor.setState(disabledEditor)
+    :assert.rejects(v.nativeEditor.setState(null as any),{code:'invalid_editor_state'});
+  const restore=v.nativeEditor.setState({...current});gate.resolve();await Promise.all([first,disable,restore]);
+  assert.deepEqual(f.editorStates.map(state=>state.navigationRevision),[10,0,0],'failed disable must not be followed by valid10');
+  f.action({action:'bold'});await new Promise<void>(r=>setImmediate(r));assert.equal(actions,0);
+  allowDisable=true;await v.nativeEditor.setState({...current});
+  assert.deepEqual(f.editorStates.slice(-2).map(state=>state.navigationRevision),[0,10]);
+  f.action({action:'bold'});await until(()=>actions===1);await v.release!();
 });
 
 

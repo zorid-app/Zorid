@@ -1,6 +1,7 @@
 import UIKit
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
 
 // UI metadata only. Rust remains the sole authority for vault entries/content.
 struct NativeFilePresentation: Decodable {
@@ -1011,6 +1012,17 @@ private final class NativePagesCoordinator {
         }
     }
 
+    // Explicit New Note retry may reopen only after the failed owned host's
+    // close ACK has made this coordinator idle. No replacement while busy.
+    func lendNewNoteSession(completion: @escaping (Result<NativeExclusiveSessionBinding, Error>) -> Void) {
+        let lend = { [weak self] in
+            guard let self = self else { completion(.failure(NativeFileActionFailure.unavailable)); return }
+            self.lendSession(review: false, refreshOnReturn: false) { completion($0.map { $0.0 }) }
+        }
+        if session == nil, !busy, !tabSourceClosed { load(completion: lend) }
+        else { lend() }
+    }
+
     // Every borrowed admission first checks this native consumer's durable
     // intent. Review is the only caller allowed to borrow with one pending.
     func lendSession(review: Bool = false, refreshOnReturn: Bool = true, completion: @escaping (Result<(NativeExclusiveSessionBinding, NativeVaultListing), Error>) -> Void) {
@@ -1667,6 +1679,7 @@ private struct NativeFileContextRow<Content: View>: UIViewRepresentable {
     let content: Content
     let enabled: Bool
     let menu: () -> UIMenu
+    let menuPresentationChanged: (UUID, Bool) -> Void
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> NativeFileContextView {
         let view = NativeFileContextView()
@@ -1675,7 +1688,14 @@ private struct NativeFileContextRow<Content: View>: UIViewRepresentable {
     }
     func updateUIView(_ uiView: NativeFileContextView, context: Context) {
         context.coordinator.makeMenu = enabled ? menu : nil
+        context.coordinator.menuPresentationChanged = menuPresentationChanged
         uiView.update(UIHostingConfiguration { content }.margins(.all, 0))
+    }
+    static func dismantleUIView(_ uiView: NativeFileContextView, coordinator: Coordinator) {
+        for interaction in uiView.interactions {
+            (interaction as? UIContextMenuInteraction)?.dismissMenu()
+        }
+        coordinator.detach()
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: NativeFileContextView, context: Context) -> CGSize? {
         uiView.systemLayoutSizeFitting(CGSize(width: proposal.width ?? 0, height: 0),
@@ -1684,11 +1704,39 @@ private struct NativeFileContextRow<Content: View>: UIViewRepresentable {
     }
     final class Coordinator: NSObject, UIContextMenuInteractionDelegate {
         var makeMenu: (() -> UIMenu)?
+        var menuPresentationChanged: ((UUID, Bool) -> Void)?
+        private var menuID: UUID?
+        func detach() {
+            // The interaction's delegate is weak. Row removal must retire its
+            // own presentation even if UIKit can no longer deliver willEnd.
+            if let id = menuID { menuPresentationChanged?(id, false) }
+            menuID = nil
+            makeMenu = nil
+            menuPresentationChanged = nil
+        }
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
             guard let menu = makeMenu?() else { return nil }
             // The actions retain this exact menu-open identity/revision witness.
             return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in menu }
+        }
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    willDisplayMenuFor configuration: UIContextMenuConfiguration,
+                                    animator: UIContextMenuInteractionAnimating?) {
+            let id = UUID()
+            menuID = id
+            menuPresentationChanged?(id, true)
+        }
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    willEndFor configuration: UIContextMenuConfiguration,
+                                    animator: UIContextMenuInteractionAnimating?) {
+            guard let id = menuID else { return }
+            let finish: () -> Void = { [self] in
+                if menuID == id { menuID = nil }
+                menuPresentationChanged?(id, false)
+            }
+            if let animator = animator { animator.addCompletion(finish) }
+            else { finish() }
         }
     }
 }
@@ -2041,8 +2089,19 @@ private final class NativePagesModel: ObservableObject {
     @Published var canRouteChooseVault = true
     @Published var recovery: NativeMenuRecovery = .checking
     @Published var ownershipRecoveryBusy = false
-    var admissionBlocked: Bool { recovery != .clear }
+    @Published var newNoteBlocked = false
+    @Published var newNoteMessage = ""
+    @Published var newNoteCanResume = false
+    var admissionBlocked: Bool { recovery != .clear || newNoteBlocked }
     @Published var nativeOperationBusy = false
+    @Published var searchFieldFocused = false
+    @Published private(set) var contextMenuPresented = false
+    private var presentedContextMenus: Set<UUID> = []
+    func setContextMenuPresented(_ id: UUID, _ presented: Bool) {
+        if presented { presentedContextMenus.insert(id) }
+        else { presentedContextMenus.remove(id) }
+        contextMenuPresented = !presentedContextMenus.isEmpty
+    }
     @Published var fileActionStatus = ""
     @Published var fileActionPending = false
     var fileActionsAvailable: Bool { !loading && !searchLoading && !searchAdmissionBusy && !nativeOperationBusy && !admissionBlocked && !documentTabSourceSuspended }
@@ -2388,10 +2447,54 @@ final class NativePagesController: UIViewController {
     private let coordinator: NativePagesCoordinator
     private var hosting: UIHostingController<NativePagesView>?
     private var activityObservers: [NSObjectProtocol] = []
+    private var edgeGestures: NativeRouteEdgeGestures?
+    private var edgeModelObservation: AnyCancellable?
+    private var edgeContextGeneration = UUID() // UI supersession only, never a lease.
+    private var edgeSourceVisible = false
+    private var edgeKeyboardObstructing = false
+    private func invalidateEdgeContext() {
+        edgeContextGeneration = UUID()
+        edgeGestures?.cancelPendingGesture()
+    }
+    private func edgeContext(_ direction: Int) -> UUID? {
+        guard edgeSourceVisible, !edgeKeyboardObstructing, !model.searchFieldFocused,
+              model.searchQuery.isEmpty, !model.contextMenuPresented,
+              rootNativeRouteIsReady(direction) else { return nil }
+        return edgeContextGeneration
+    }
+    private func updateEdgeKeyboard(_ notification: Notification) {
+        invalidateEdgeContext()
+        if notification.name == UIResponder.keyboardDidHideNotification {
+            edgeKeyboardObstructing = false
+            return
+        }
+        guard let window = viewIfLoaded?.window,
+              let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              frame.origin.x.isFinite, frame.origin.y.isFinite,
+              frame.width.isFinite, frame.height.isFinite, !frame.isNull else {
+            edgeKeyboardObstructing = true // Unknown keyboard geometry fails closed.
+            return
+        }
+        let localFrame = view.convert(window.convert(frame, from: window.screen.coordinateSpace), from: window)
+        let overlaps = !localFrame.isEmpty && view.bounds.intersects(localFrame)
+        edgeKeyboardObstructing = notification.name == UIResponder.keyboardWillChangeFrameNotification
+            ? edgeKeyboardObstructing || overlaps : overlaps
+    }
     // Root owns tab metadata/activation. No dependency on its draft coordinator.
     var onShowDocumentTabs: (() -> Void)? { didSet { updateDocumentTabRouting() } }
     var onOpenDocument: ((NativeFileEntry, Bool) -> Void)? { didSet { updateDocumentTabRouting() } }
     var onCreateNote: (() -> Void)? { didSet { updateDocumentTabRouting() } }
+    var onInspectNewNote: (() -> Void)?
+    var onResumeNewNote: (() -> Void)?
+    func setNewNoteState(blocked: Bool, message: String = "", canResume: Bool = false) {
+        model.newNoteBlocked = blocked
+        model.newNoteMessage = message
+        model.newNoteCanResume = canResume
+    }
+    // Only Pages' idle exclusive host may be borrowed. Never an editor loan.
+    func lendNewNoteSession(completion: @escaping (Result<NativeExclusiveSessionBinding, Error>) -> Void) {
+        coordinator.lendNewNoteSession(completion: completion)
+    }
     var onChooseVault: (() -> Void)? { didSet { updateDocumentTabRouting() } }
     // Root history ownership is also one-way. A cleared callback disables
     // navigation; it must never revive the retired local history path.
@@ -2408,20 +2511,26 @@ final class NativePagesController: UIViewController {
         model.setNativeRouteAvailability(back: back, forward: forward)
     }
     private func updateNativeRouteNavigation() {
+        invalidateEdgeContext()
         model.configureNativeRouteNavigation(configured: nativeRouteNavigationConfigured,
                                               callbackAvailable: onNativeRouteNavigate != nil)
     }
     private func navigateNativeRoute(_ direction: Int) {
         guard direction == -1 || direction == 1 else { return }
         guard nativeRouteNavigationConfigured else { coordinator.traverse(direction); return }
-        guard (direction == -1 ? model.canGoBack : model.canGoForward),
-              let navigate = onNativeRouteNavigate, let navigation = navigationController,
+        guard rootNativeRouteIsReady(direction), let navigate = onNativeRouteNavigate else { return }
+        navigate(direction) // Root owns the history ticket and all host transitions.
+    }
+    private func rootNativeRouteIsReady(_ direction: Int) -> Bool {
+        guard direction == -1 || direction == 1, nativeRouteNavigationConfigured,
+              (direction == -1 ? model.canGoBack : model.canGoForward),
+              onNativeRouteNavigate != nil, let navigation = navigationController,
               navigation.topViewController === self, let window = viewIfLoaded?.window,
               navigation.viewIfLoaded?.window === window, let scene = window.windowScene,
               scene.activationState == .foregroundActive, UIApplication.shared.applicationState == .active,
               transitionCoordinator == nil, navigation.transitionCoordinator == nil,
-              presentedViewController == nil, navigation.presentedViewController == nil else { return }
-        navigate(direction) // Root owns the history ticket and all host transitions.
+              presentedViewController == nil, navigation.presentedViewController == nil else { return false }
+        return true
     }
     var onNativePageRouteValidated: ((NativePageRoute) -> Void)?
     private var nativeRouteReadinessCallbackQueued = false
@@ -2436,6 +2545,7 @@ final class NativePagesController: UIViewController {
             // Read the CURRENT route after the owned startup/menu loan settles.
             // This observer is not permission to claim or open a second host.
             self.emitNativePageRouteValidated()
+            self.onInspectNewNote?()
         }
     }
     func nativePageRoute() throws -> NativePageRoute { try model.nativePageRoute() }
@@ -2450,6 +2560,7 @@ final class NativePagesController: UIViewController {
     // never resurrect a legacy path on a controller that root has admitted.
     private var documentTabRoutingConfigured = false
     private func updateDocumentTabRouting() {
+        invalidateEdgeContext()
         if onShowDocumentTabs != nil || onOpenDocument != nil || onCreateNote != nil || onChooseVault != nil {
             documentTabRoutingConfigured = true
         }
@@ -2484,13 +2595,16 @@ final class NativePagesController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // Published UI state invalidates synchronously before every mutation,
+        // including busy/availability changing away and back during one pan.
+        edgeModelObservation = model.objectWillChange.sink { [weak self] _ in self?.invalidateEdgeContext() }
         model.onSearch = { [weak self] query in self?.coordinator.search(query) }
         model.onRouteChanged = { [weak self] route in
             self?.coordinator.recordPageNavigation(route)
             self?.emitNativePageRouteValidated()
         }
         coordinator.record(model.currentRoute)
-        let pages = NativePagesView(model: model, fileAction: { [weak self] action, entry in self?.fileAction(action, entry: entry) }, retryFileAction: { [weak self] in self?.retryFileAction() }, checkOwnership: { [weak self] in self?.coordinator.recheckOwnership() }, navigate: { [weak self] direction in self?.navigateNativeRoute(direction) }, open: { [weak self] entry in
+        let pages = NativePagesView(model: model, fileAction: { [weak self] action, entry in self?.fileAction(action, entry: entry) }, retryFileAction: { [weak self] in self?.retryFileAction() }, resumeNewNote: { [weak self] in self?.onResumeNewNote?() }, checkOwnership: { [weak self] in self?.coordinator.recheckOwnership() }, navigate: { [weak self] direction in self?.navigateNativeRoute(direction) }, open: { [weak self] entry in
             guard let self = self else { return }
             self.requestOpen(entry, inNewTab: false)
         }, showDocumentTabs: { [weak self] in
@@ -2519,10 +2633,17 @@ final class NativePagesController: UIViewController {
             hosting.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
         hosting.didMove(toParent: self)
+        for name in [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardDidChangeFrameNotification,
+                     UIResponder.keyboardDidHideNotification] {
+            activityObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                self?.updateEdgeKeyboard(notification)
+            })
+        }
         activityObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.coordinator.foregroundRefresh()
         })
         activityObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.invalidateEdgeContext()
             self?.coordinator.cancelQueuedRefresh()
         })
         activityObservers.append(NotificationCenter.default.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] notification in
@@ -2533,6 +2654,7 @@ final class NativePagesController: UIViewController {
         activityObservers.append(NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: nil, queue: .main) { [weak self] notification in
             guard let self = self, let scene = notification.object as? UIWindowScene,
                   scene === self.viewIfLoaded?.window?.windowScene else { return }
+            self.invalidateEdgeContext()
             self.coordinator.cancelQueuedRefresh()
         })
     }
@@ -2540,17 +2662,38 @@ final class NativePagesController: UIViewController {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(true, animated: false)
     }
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        invalidateEdgeContext()
+        super.viewWillTransition(to: size, with: coordinator)
+    }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         // Do not disable an in-progress Settings swipe-back in viewWillAppear.
         // Once settled, root/editor admission regains the existing pop guard.
         navigationController?.interactivePopGestureRecognizer?.isEnabled = false
         coordinator.setVisible(true)
+        if coordinator.isNativePageRouteRestorationReady { onInspectNewNote?() }
+        invalidateEdgeContext()
+        edgeSourceVisible = true
+        // iOS 15's SwiftUI context-menu fallback has no owned presentation
+        // callback. Keep its accessible arrows, rather than guess menu state.
+        if #available(iOS 16, *), edgeGestures == nil {
+            edgeGestures = NativeRouteEdgeGestures(view: view, context: { [weak self] direction in
+                self?.edgeContext(direction)
+            }, navigate: { [weak self] direction in self?.navigateNativeRoute(direction) })
+        }
     }
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        edgeSourceVisible = false
+        invalidateEdgeContext()
         coordinator.setVisible(false)
         navigationController?.setNavigationBarHidden(false, animated: false)
+    }
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        edgeGestures?.invalidate()
+        edgeGestures = nil
     }
     deinit {
         for observer in activityObservers { NotificationCenter.default.removeObserver(observer) }
@@ -2807,6 +2950,7 @@ private struct NativePagesView: View {
     @ObservedObject var model: NativePagesModel
     let fileAction: (NativeFileRowAction, NativeFileEntry) -> Void
     let retryFileAction: () -> Void
+    let resumeNewNote: () -> Void
     let checkOwnership: () -> Void
     let navigate: (Int) -> Void
     let open: (NativeFileEntry?) -> Void
@@ -2848,6 +2992,8 @@ private struct NativePagesView: View {
             }
         }
         .background(Color(uiColor: .systemBackground))
+        .onChange(of: fieldFocused) { model.searchFieldFocused = $0 }
+        .onDisappear { model.searchFieldFocused = false }
     }
 
     @ViewBuilder private func navigationPage(_ item: NativeNavigationItem) -> some View {
@@ -2904,6 +3050,16 @@ private struct NativePagesView: View {
                 Text(model.fileActionStatus).font(.footnote).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 20)
                     .accessibilityIdentifier("native.file-action.status")
+            }
+            if !model.newNoteMessage.isEmpty {
+                Text(model.newNoteMessage).font(.footnote)
+                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 20)
+                    .accessibilityIdentifier("native.new-note.status")
+            }
+            if model.newNoteCanResume {
+                Button("Resume new note", action: resumeNewNote)
+                    .frame(minHeight: 44).padding(.horizontal, 20)
+                    .accessibilityIdentifier("native.new-note.resume")
             }
             if model.recovery == .blocked {
                 Text("Another native operation still owns this session. Wait for it to finish, then check ownership. This page will not close or release that operation.")
@@ -3107,7 +3263,9 @@ private struct NativePagesView: View {
     @ViewBuilder private func contextRow<Content: View>(_ entry: NativeFileEntry, @ViewBuilder content: () -> Content) -> some View {
         if #available(iOS 16, *) {
             NativeFileContextRow(content: content(), enabled: model.fileActionsAvailable,
-                                 menu: { fileMenu(entry) })
+                                 menu: { fileMenu(entry) }, menuPresentationChanged: { id, presented in
+                                     model.setContextMenuPresented(id, presented)
+                                 })
                 .accessibilityActions {
                     if entry.kind == .file, model.canOpenInNewTab {
                         Button("Open in new tab") { if model.fileActionsAvailable { openInNewTab(entry) } }

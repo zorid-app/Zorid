@@ -6,13 +6,27 @@ import { runEditorCommand } from '../editor/editor-commands.ts';
 import { canInsert } from '../editor/insertion-commands.ts';
 import type { InsertionCommandId } from '../editor/insertion-commands.ts';
 
-export interface NativeEditorState { focused: boolean; editable: boolean; canUndo: boolean; canRedo: boolean }
+export interface NativeEditorState {
+  focused: boolean; editable: boolean; canUndo: boolean; canRedo: boolean;
+  selectionCollapsed: boolean; composing: boolean; interactionActive: boolean; navigationRevision: number;
+}
 export type NativeEditorAction = 'insertLink' | 'insertTable' | 'insertCodeBlock' | 'insertHorizontalRule'
   | 'bold' | 'italic' | 'strikethrough' | 'inlineCode' | 'undo' | 'redo' | 'dismissKeyboard';
 const commands = { insertLink: 'editor-insert-link', insertTable: 'editor-insert-table', insertCodeBlock: 'editor-insert-code-block',
   insertHorizontalRule: 'editor-insert-rule', bold: 'editor-bold', italic: 'editor-italic',
   strikethrough: 'editor-strikethrough', inlineCode: 'editor-code' } as const;
-const disabled = (): NativeEditorState => ({focused:false,editable:false,canUndo:false,canRedo:false});
+// Shared across producer recreation in this JS realm. This is a UI witness,
+// never a vault revision/lease. Exhaustion fails closed without wrapping.
+let navigationClock = 0, navigationExhausted = false;
+const nextRevision = () => {
+  if (navigationClock === Number.MAX_SAFE_INTEGER) navigationExhausted = true;
+  else navigationClock++;
+  return navigationClock;
+};
+const disabled = (navigationRevision: number): NativeEditorState => ({focused:false,editable:false,canUndo:false,canRedo:false,
+  selectionCollapsed:false,composing:true,interactionActive:true,navigationRevision});
+const overlays = '.modal-overlay,[aria-modal="true"],[role="menu"],[role="dialog"],.cm-tooltip-autocomplete,.cm-search,.zorid-image-resizing,.zorid-image-selected';
+const interactive = 'a,button,input,textarea,select,audio,video,iframe,object,embed,canvas,summary,[role="button"],[contenteditable="false"],.interactive-child,.cm-live-embed,.cm-embed-block,.cm-live-table';
 
 /** A native control has no DOM focus target. Retain exactly the body/cell which
  * owned focus, never resolve a replacement cell after UIKit takes keyboard focus. */
@@ -21,6 +35,15 @@ export function nativeEditorCommands(owner: EditorView, options: {
 }) {
   const document = owner.dom.ownerDocument;
   let dead = false, queued = false, composing = false, dismissed = false;
+  let selecting = false, dragging = false, contextInteraction = false;
+  const interactionPointers = new Set<number>();
+  let navigationRevision = 0;
+  type Witness = {
+    current: boolean; target: EditorView; doc: Text; selection: EditorSelection; targetDoc: Text; targetSelection: EditorSelection;
+    focus: Element | null; anchor: Node | null; anchorOffset: number; head: Node | null; headOffset: number; ranges: number;
+    flags: string;
+  };
+  let witness: Witness | undefined;
   let captured: { target: EditorView; ownerDoc: Text; doc: Text; ownerSelection: EditorSelection; selection: EditorSelection; release: () => void } | undefined;
   let previous = '';
   const clear = () => { const old = captured; captured = undefined; old?.release(); };
@@ -51,15 +74,39 @@ export function nativeEditorCommands(owner: EditorView, options: {
       && owner.state.doc === c.ownerDoc && c.target.state.doc === c.doc
       && owner.state.selection.eq(c.ownerSelection) && c.target.state.selection.eq(c.selection);
   };
-  const state = (): NativeEditorState => {
-    if (dead) return disabled();
-    capture();
+  const state = (captureFocus = true): NativeEditorState => {
+    if (dead || navigationExhausted) return disabled(navigationRevision);
+    if(captureFocus)capture();
+    const target = activeTableEditor(owner) ?? owner;
+    const selection = document.getSelection();
+    const isCurrent = current();
+    const inComposition = composing || owner.composing || owner.compositionStarted || target.composing || target.compositionStarted;
+    const active = document.activeElement;
+    const interactionActive = !isCurrent || selecting || dragging || contextInteraction || interactionPointers.size > 0
+      || !!document.querySelector(overlays) || (!body() && active !== document.body);
     const editable = valid();
-    return {focused:!!body() && !dismissed && current(), editable,
-      canUndo:editable && undoDepth(owner.state)>0, canRedo:editable && redoDepth(owner.state)>0};
+    const next = {focused:!!body() && !dismissed && isCurrent, editable,
+      canUndo:editable && undoDepth(owner.state)>0, canRedo:editable && redoDepth(owner.state)>0,
+      selectionCollapsed:!!selection && selection.isCollapsed && owner.state.selection.ranges.every(range => range.empty)
+        && target.state.selection.ranges.every(range => range.empty),
+      composing:inComposition, interactionActive};
+    const now: Witness = {current:isCurrent,target,doc:owner.state.doc,selection:owner.state.selection,
+      targetDoc:target.state.doc,targetSelection:target.state.selection,focus:active,
+      anchor:selection?.anchorNode ?? null,anchorOffset:selection?.anchorOffset ?? 0,
+      head:selection?.focusNode ?? null,headOffset:selection?.focusOffset ?? 0,ranges:selection?.rangeCount ?? -1,
+      flags:JSON.stringify(next)};
+    if (!witness || witness.current !== now.current || witness.target !== now.target || witness.doc !== now.doc
+      || !witness.selection.eq(now.selection) || witness.targetDoc !== now.targetDoc || !witness.targetSelection.eq(now.targetSelection)
+      || witness.focus !== now.focus || witness.anchor !== now.anchor || witness.anchorOffset !== now.anchorOffset
+      || witness.head !== now.head || witness.headOffset !== now.headOffset || witness.ranges !== now.ranges || witness.flags !== now.flags) {
+      navigationRevision = nextRevision(); witness = now;
+    }
+    return navigationExhausted || !isCurrent ? disabled(navigationRevision) : {...next,navigationRevision};
   };
   const publish = () => { const next=state(), encoded=JSON.stringify(next); if(encoded!==previous){previous=encoded;try{options.onNativeEditorState(next);}catch{/* Native presentation cannot fail an editor transaction. */}} };
-  const update = () => { if(dead||queued)return;queued=true;queueMicrotask(()=>{queued=false;if(!dead)publish();}); };
+  // Sample before coalescing: selection/document A->B->A still invalidates the
+  // native gesture's original witness, even if only the final state is sent.
+  const update = () => { if(dead)return;state(false);if(queued)return;queued=true;queueMicrotask(()=>{queued=false;if(!dead)publish();}); };
   const focus = (event: FocusEvent) => {
     // Widgets/search/properties inside the owner are not the body. Once any
     // such control owns input, a later blur must not resurrect its old caret.
@@ -70,12 +117,49 @@ export function nativeEditorCommands(owner: EditorView, options: {
   const blur = () => { capture(); update(); };
   const start = () => { composing=true;update(); };
   const end = () => { composing=false;update(); };
+  const selectionChanged = () => { update(); };
+  const selectStart = () => { selecting=true;update(); };
+  const pointerDown = (event: PointerEvent) => {
+    contextInteraction=false;
+    const element = event.target instanceof document.defaultView!.Element ? event.target : null;
+    // Plain body pans stay eligible. Only known interactive surfaces claim a
+    // pointer; do not rewrite editor gestures or prevent any DOM event.
+    if(element?.closest(interactive))interactionPointers.add(event.pointerId);
+    update();
+  };
+  const pointerEnd = (event: PointerEvent) => { interactionPointers.delete(event.pointerId);selecting=false;update(); };
+  const dragStart = () => { dragging=true;update(); };
+  const dragEnd = () => { dragging=false;update(); };
+  const contextMenu = () => { contextInteraction=true;update(); };
+  const key = () => { contextInteraction=false;selecting=false;update(); };
+  const deactivate = () => { interactionPointers.clear();selecting=false;dragging=false;contextInteraction=true;update(); };
   document.addEventListener('focusin',focus,true);
   owner.dom.addEventListener('focusout',blur,true);
   owner.dom.addEventListener('compositionstart',start,true);
   owner.dom.addEventListener('compositionend',end,true);
-  const observer = new (document.defaultView!.MutationObserver)(update);
-  observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['aria-modal','role','class']});
+  document.addEventListener('selectionchange',selectionChanged);
+  owner.dom.addEventListener('selectstart',selectStart,true);
+  document.addEventListener('pointerdown',pointerDown,true);
+  document.addEventListener('pointerup',pointerEnd,true);
+  document.addEventListener('pointercancel',pointerEnd,true);
+  document.addEventListener('dragstart',dragStart,true);
+  document.addEventListener('dragend',dragEnd,true);
+  document.addEventListener('drop',dragEnd,true);
+  document.addEventListener('contextmenu',contextMenu,true);
+  document.addEventListener('keydown',key,true);
+  document.defaultView!.addEventListener('blur',deactivate);
+  const observer = new (document.defaultView!.MutationObserver)(records => {
+    // A menu can open and close within one observer delivery. Invalidate even
+    // when its final DOM state matches the previous sample.
+    const relevantNode = (node: Node) => node instanceof document.defaultView!.Element
+      && (node.matches(overlays) || !!node.querySelector(overlays));
+    if (records.some(record => record.type === 'childList'
+      ? [...record.addedNodes,...record.removedNodes].some(relevantNode)
+      : record.attributeName !== 'class' || relevantNode(record.target)
+        || /(?:^|\s)(?:modal-overlay|cm-tooltip-autocomplete|cm-search|zorid-image-(?:resizing|selected))(?:\s|$)/.test(record.oldValue ?? ''))) navigationRevision=nextRevision();
+    update();
+  });
+  observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeOldValue:true,attributeFilter:['aria-modal','role','class']});
   update();
   return {
     update, state,
@@ -96,6 +180,11 @@ export function nativeEditorCommands(owner: EditorView, options: {
       capture();update();return owner.state.doc!==before;
     },
     destroy(){if(dead)return;dead=true;observer.disconnect();document.removeEventListener('focusin',focus,true);owner.dom.removeEventListener('focusout',blur,true);
-      owner.dom.removeEventListener('compositionstart',start,true);owner.dom.removeEventListener('compositionend',end,true);clear();try{options.onNativeEditorState(disabled());}catch{/* Presentation only. */}},
+      owner.dom.removeEventListener('compositionstart',start,true);owner.dom.removeEventListener('compositionend',end,true);
+      document.removeEventListener('selectionchange',selectionChanged);owner.dom.removeEventListener('selectstart',selectStart,true);
+      document.removeEventListener('pointerdown',pointerDown,true);document.removeEventListener('pointerup',pointerEnd,true);document.removeEventListener('pointercancel',pointerEnd,true);
+      document.removeEventListener('dragstart',dragStart,true);document.removeEventListener('dragend',dragEnd,true);document.removeEventListener('drop',dragEnd,true);
+      document.removeEventListener('contextmenu',contextMenu,true);document.removeEventListener('keydown',key,true);document.defaultView!.removeEventListener('blur',deactivate);
+      clear();navigationRevision=nextRevision();try{options.onNativeEditorState(disabled(navigationRevision));}catch{/* Presentation only. */}},
   };
 }

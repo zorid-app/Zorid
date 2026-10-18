@@ -61,17 +61,19 @@ function cellEditor(host: HTMLElement, dom: JSDOM) {
 }
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+const toolbarState = ({focused,editable,canUndo,canRedo}:NativeEditorState) => ({focused,editable,canUndo,canRedo});
 
 test('native allowlist preserves reversed selection, shared undo/redo and reports body state', async t => {
   const f=setup(t,'alpha beta','source');
   f.view.dispatch({selection:EditorSelection.single(5,0)});await flush();
-  assert.deepEqual(f.editor.nativeState!(),{focused:true,editable:true,canUndo:false,canRedo:false});
+  assert.deepEqual(toolbarState(f.editor.nativeState!()),{focused:true,editable:true,canUndo:false,canRedo:false});
   assert.equal(f.editor.nativeAction!('bold'),true);assert.equal(f.editor.getValue(),'**alpha** beta');
   assert.equal(f.editor.nativeState!().canUndo,true);
   assert.equal(f.editor.nativeAction!('undo'),true);assert.equal(f.editor.getValue(),'alpha beta');
   assert.equal(f.editor.nativeState!().canRedo,true);assert.equal(f.editor.nativeAction!('redo'),true);
   assert.equal(f.editor.nativeAction!('deleteEverything' as any),false);
-  f.destroy();assert.deepEqual(f.states.at(-1),{focused:false,editable:false,canUndo:false,canRedo:false});
+  f.destroy();assert.deepEqual(toolbarState(f.states.at(-1)!),{focused:false,editable:false,canUndo:false,canRedo:false});
+  assert.deepEqual({...f.states.at(-1),navigationRevision:0},{focused:false,editable:false,canUndo:false,canRedo:false,selectionCollapsed:false,composing:true,interactionActive:true,navigationRevision:0});
   assert.equal(f.editor.nativeAction!('bold'),false);
 });
 
@@ -155,4 +157,104 @@ test('disabled-state callback can reenter teardown without recursion or double d
   const f=setup(t,'alpha','source',{onNativeEditorState:state=>{if(!state.focused&&!state.editable&&teardown){disabledCalls++;teardown();}}});
   await flush();teardown=()=>f.editor.destroy();f.destroy();
   assert.equal(disabledCalls,1);assert.equal(f.editor.nativeAction!('bold'),false);f.editor.destroy();assert.equal(disabledCalls,1);
+});
+
+// These exercise the real producer and CodeMirror state. They do not prove WK
+// selection handles, native IME, media controls or UIKit edge arbitration.
+test('navigation revision is stable on identical polls but observes synchronous CM selection and document round trips', async t => {
+  const f=setup(t,'alpha','source');await flush();
+  const initial=f.editor.nativeState!();
+  assert.equal(f.editor.nativeState!().navigationRevision,initial.navigationRevision);
+  assert.equal(initial.selectionCollapsed,true);
+  f.cursor(2);f.cursor(0);
+  const moved=f.editor.nativeState!();
+  assert.ok(moved.navigationRevision>initial.navigationRevision);
+  assert.equal(moved.selectionCollapsed,true);
+  assert.equal(f.editor.nativeState!().navigationRevision,moved.navigationRevision);
+  f.editor.setValue('temporary');f.editor.setValue('alpha');
+  assert.ok(f.editor.nativeState!().navigationRevision>moved.navigationRevision);
+});
+
+test('DOM and multiple CM selections block collapsed eligibility and advance the semantic witness', async t => {
+  const f=setup(t,'alpha beta','source');await flush();
+  const before=f.editor.nativeState!().navigationRevision;
+  const text=f.line(0).firstChild!;
+  const selection=document.getSelection()!;
+  selection.setBaseAndExtent(text,5,text,0);
+  document.dispatchEvent(new f.dom.window.Event('selectionchange'));
+  assert.equal(f.editor.nativeState!().selectionCollapsed,false);
+  assert.ok(f.editor.nativeState!().navigationRevision>before);
+  selection.collapse(text,0);
+  f.view.dispatch({selection:EditorSelection.create([EditorSelection.range(0,5),EditorSelection.cursor(8)],1)});
+  assert.equal(f.editor.nativeState!().selectionCollapsed,false);
+});
+
+test('composition and known overlays are reported, including an overlay removed before observer delivery', async t => {
+  const f=setup(t,'alpha','source');await flush();
+  const before=f.editor.nativeState!().navigationRevision;
+  const menu=document.createElement('div');menu.setAttribute('role','menu');document.body.append(menu);
+  assert.equal(f.editor.nativeState!().interactionActive,true);
+  menu.remove();await flush();
+  assert.equal(f.editor.nativeState!().interactionActive,false);
+  const settled=f.editor.nativeState!().navigationRevision;
+  assert.ok(settled>before);
+  const transient=document.createElement('div');transient.setAttribute('role','menu');document.body.append(transient);transient.remove();
+  await flush();assert.ok(f.editor.nativeState!().navigationRevision>settled,'coalesced menu A-B-A invalidates the original gesture');
+  const classOverlay=document.createElement('div');document.body.append(classOverlay);await flush();
+  const beforeClass=f.editor.nativeState!().navigationRevision;
+  classOverlay.classList.add('modal-overlay');classOverlay.classList.remove('modal-overlay');
+  await flush();assert.ok(f.editor.nativeState!().navigationRevision>beforeClass,'class-only modal A-B-A also invalidates');
+  for(const className of ['cm-search','cm-tooltip-autocomplete','zorid-image-resizing']){
+    const overlay=document.createElement('div');overlay.className=className;f.view.dom.append(overlay);
+    assert.equal(f.editor.nativeState!().interactionActive,true,className);overlay.remove();
+  }
+  f.view.contentDOM.dispatchEvent(new f.dom.window.CompositionEvent('compositionstart',{bubbles:true}));
+  assert.equal(f.editor.nativeState!().composing,true);
+  f.view.contentDOM.dispatchEvent(new f.dom.window.CompositionEvent('compositionend',{bubbles:true}));
+  await new Promise(resolve=>setTimeout(resolve,60));
+  assert.equal(f.editor.nativeState!().composing,false);
+});
+
+test('plain body pointer pans stay unclaimed while known embed/control and text interactions block', async t => {
+  const f=setup(t,'alpha','source');await flush();
+  const pointer=(target:EventTarget,type:string,id:number)=>{
+    const event=new f.dom.window.Event(type,{bubbles:true});Object.defineProperty(event,'pointerId',{value:id});target.dispatchEvent(event);
+  };
+  pointer(f.line(0),'pointerdown',1);
+  assert.equal(f.editor.nativeState!().interactionActive,false,'do not disable all body edge pans');
+  pointer(document,'pointerup',1);
+  const embed=document.createElement('div');embed.className='cm-live-embed';f.view.dom.append(embed);
+  pointer(embed,'pointerdown',2);assert.equal(f.editor.nativeState!().interactionActive,true);
+  pointer(document,'pointercancel',2);assert.equal(f.editor.nativeState!().interactionActive,false);
+  for(const tag of ['video','audio','canvas']){
+    const media=document.createElement(tag);f.view.dom.append(media);
+    pointer(media,'pointerdown',2);assert.equal(f.editor.nativeState!().interactionActive,true,tag);
+    pointer(document,'pointercancel',2);assert.equal(f.editor.nativeState!().interactionActive,false);media.remove();
+  }
+  f.line(0).dispatchEvent(new f.dom.window.Event('dragstart',{bubbles:true}));
+  assert.equal(f.editor.nativeState!().interactionActive,true);
+  document.dispatchEvent(new f.dom.window.Event('dragend'));assert.equal(f.editor.nativeState!().interactionActive,false);
+  f.view.contentDOM.dispatchEvent(new f.dom.window.Event('selectstart',{bubbles:true}));
+  assert.equal(f.editor.nativeState!().interactionActive,true);
+  pointer(document,'pointerup',3);assert.equal(f.editor.nativeState!().interactionActive,false);
+  const input=document.createElement('input');document.body.append(input);input.focus();
+  assert.equal(f.editor.nativeState!().interactionActive,true);
+});
+
+test('stale owners and destruction emit unsafe state; producer recreation does not reuse a revision', async t => {
+  let current=true;const f=setup(t,'alpha','source',{isCurrent:()=>current});await flush();
+  const initial=f.editor.nativeState!().navigationRevision;
+  current=false;const stale=f.editor.nativeState!();
+  assert.equal(stale.selectionCollapsed,false);assert.equal(stale.composing,true);assert.equal(stale.interactionActive,true);
+  assert.ok(stale.navigationRevision>initial);
+  f.destroy();const final=f.states.at(-1)!;
+  assert.ok(final.navigationRevision>stale.navigationRevision);
+  const count=f.states.length;
+  document.dispatchEvent(new f.dom.window.Event('selectionchange'));
+  document.dispatchEvent(new f.dom.window.Event('pointerdown',{bubbles:true}));await flush();
+  assert.equal(f.states.length,count,'destroy removes gesture-state listeners');
+  const host=document.createElement('div');document.body.append(host);
+  const replacement=createEditor(host,{value:'next',mode:'source',paths:()=>[],onChange(){},open(){},onNativeEditorState(){}});
+  try { assert.ok(replacement.nativeState!().navigationRevision>final.navigationRevision); }
+  finally { replacement.destroy(); }
 });

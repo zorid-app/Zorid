@@ -18,6 +18,7 @@ struct NativeHistoryControls: View {
     let backEnabled: Bool
     let forwardEnabled: Bool
     let identifierPrefix: String
+    var backLabel = "Back"
     let navigate: (Int) -> Void
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -37,7 +38,7 @@ struct NativeHistoryControls: View {
         HStack(spacing: 0) {
             Button { navigate(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .disabled(!backEnabled)
-                .accessibilityLabel("Back")
+                .accessibilityLabel(backLabel)
                 .accessibilityIdentifier(identifierPrefix + ".back")
             Button { navigate(1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .disabled(!forwardEnabled)
