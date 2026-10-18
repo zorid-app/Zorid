@@ -108,7 +108,7 @@ test('receipt reconciliation publishes cache, metadata and event atomically with
     events.push(change.path);
     // Vault isolates listener errors, so assert captured observations outside it.
     observations.push([f.vault.entries.get(change.path)?.revision,
-      f.vault.metadata.get(change.path)?.headings[0].heading]);
+      f.vault.metadata.get(change.path)?.headings[0].heading, f.vault.entries.get(change.path)?.entryId]);
   });
   const receipt = await f.commit();
   assert.equal(f.vault.metadata.get('One.md')?.headings[0].heading, 'Old', 'commit does not publish');
@@ -116,7 +116,8 @@ test('receipt reconciliation publishes cache, metadata and event atomically with
   assert.equal((await f.vault.reconcileDurableWrite(f.ref, receipt)).status, 'current');
   assert.equal(await f.vault.cachedRead('One.md'), '# Saved');
   assert.deepEqual(events, ['One.md']); assert.equal(f.adapter.writes, 0);
-  assert.deepEqual(observations, [['revision-saved', 'Saved']]);
+  assert.deepEqual(observations, [['revision-saved', 'Saved', f.ref.entryId]]);
+  assert.equal(f.vault.entries.get('One.md')?.entryId, f.ref.entryId);
   await f.vault.reconcileDurableWrite(f.ref, receipt);
   assert.deepEqual(events, ['One.md'], 'same snapshot is not republished');
   assert.equal(f.calls.filter(call => call.startsWith('commit:')).length, 1);
@@ -218,4 +219,14 @@ test('commit returns copied receipt identities and rejects invalid receipt witne
     f.capability.commit = async () => ({ ...retained, ref: f.ref, receipt: { ...result.receipt, sequence } });
     await assert.rejects(f.vault.commitDurableWrite(f.ref), { code: 'intent_outcome_mismatch' });
   }
+});
+
+test('receipt readback with a replacement identity cannot publish the saved body or rebind cache', async () => {
+  const f = await fixture(), receipt = await f.commit(), entries = f.vault.entries;
+  const replacement = { ...f.current!, entryId: 'replacement' };
+  f.capability.readTextById = async () => replacement;
+  const events: string[] = []; f.vault.on('modify', change => events.push(change.path));
+  await assert.rejects(f.vault.reconcileDurableWrite(f.ref, receipt), { code: 'durable_read_invalid' });
+  assert.equal(f.vault.entries, entries); assert.equal(await f.vault.cachedRead('One.md'), '# Old');
+  assert.deepEqual(events, []); assert.equal(f.adapter.writes, 0);
 });

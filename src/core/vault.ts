@@ -232,7 +232,7 @@ export class Vault {
 
       const path = current.path, old = this.entries.get(path), oldContent = this.contents.get(path);
       if (old && old.type !== 'file') throw durableFailure('durable_read_invalid', 'Committed file conflicts with a cached folder; refresh the namespace');
-      const entry: VaultEntry = { path, type: 'file', revision: current.revision,
+      const entry: VaultEntry = { path, type: 'file', entryId: current.entryId, revision: current.revision,
         ctime: current.stat.ctime, mtime: current.stat.mtime, size: current.stat.size };
       const entries = new Map(this.entries), contents = new Map(this.contents);
       entries.set(path, entry);
