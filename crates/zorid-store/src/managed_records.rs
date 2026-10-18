@@ -106,6 +106,33 @@ pub struct ManagedRetryPage {
     /// continuation resets so the next pass revisits earlier dependencies.
     pub exhausted: bool,
 }
+/// Collection-wide receipt evidence. `None` is established only at index EOF;
+/// partial scans and any non-accepted receipt conservatively yield `Unknown`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManagedUnresolvedEvidence {
+    Unknown,
+    None,
+}
+/// Native-only retained continuation. No receipt keys or payloads cross the UI
+/// boundary, and caller strings cannot manufacture or rebind this capability.
+#[derive(Clone, Debug)]
+pub struct ManagedUnresolvedCursor {
+    collection: ManagedCollection,
+    watermark: String,
+    after: String,
+    unresolved: bool,
+}
+#[derive(Clone, Debug)]
+pub struct ManagedUnresolvedSummary {
+    pub evidence: ManagedUnresolvedEvidence,
+    /// True only after walking the entire receipt index at the bound fence.
+    pub complete: bool,
+    pub examined: u32,
+    /// Conservatively charged source payload bytes; no payload is loaded.
+    /// The native caller shares these bytes and this step with export budgets.
+    pub bytes: u32,
+    pub next: Option<ManagedUnresolvedCursor>,
+}
 fn invalid(reason: &str) -> StoreError {
     ContractError::InvalidMutation {
         reason: reason.into(),
@@ -612,6 +639,115 @@ impl Store {
         }
         tx.commit()?;
         Ok(ManagedExportPage { records, next })
+    }
+    /// Receipt-only rows can precede accepted state, so exported records and
+    /// their per-record unresolved counts cannot establish collection absence.
+    /// Walk the existing collection receipt index, including accepted rows, in
+    /// bounded steps. The host retains `next` and charges each step against its
+    /// aggregate scan ceiling; stopping early must preserve unknown evidence.
+    pub fn managed_unresolved_summary(
+        &self,
+        handle: &ManagedCollection,
+        expected_watermark: &str,
+        continuation: Option<&ManagedUnresolvedCursor>,
+        limit: u32,
+        byte_limit: u32,
+    ) -> Result<ManagedUnresolvedSummary> {
+        limit_page(limit)?;
+        decimal(expected_watermark)?;
+        if !(1..=1024 * 1024).contains(&byte_limit) {
+            return Err(invalid("managed summary byte limit must be 1..=1048576"));
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        authorize(&tx, &self.document_query_owner, handle)?;
+        if let Some(cursor) = continuation {
+            let bound = &cursor.collection;
+            if bound.store != handle.store
+                || bound.process != handle.process
+                || bound.key != handle.key
+                || bound.revision != handle.revision
+                || cursor.watermark != expected_watermark
+            {
+                return Err(invalid("managed summary continuation scope/fence mismatch"));
+            }
+        }
+        let watermark = || -> Result<String> {
+            let value: i64 = tx.query_row(
+                "SELECT coalesce(max(sequence),0) FROM managed_changes WHERE collection_key=?1",
+                [&handle.key],
+                |r| r.get(0),
+            )?;
+            Ok(value.to_string())
+        };
+        if watermark()? != expected_watermark {
+            return Err(invalid(
+                "managed summary watermark changed; refresh required",
+            ));
+        }
+        let after = continuation.map(|cursor| cursor.after.as_str());
+        // Only bounded metadata is fetched: never receipt plaintext or record keys.
+        // A direct range seek avoids rescanning an accepted prefix on each step.
+        let sql = if after.is_some() {
+            "SELECT update_id,status,payload_bytes FROM managed_receipts INDEXED BY managed_receipts_retry WHERE collection_key=?1 AND update_id>?2 ORDER BY update_id LIMIT ?3"
+        } else {
+            "SELECT update_id,status,payload_bytes FROM managed_receipts INDEXED BY managed_receipts_retry WHERE collection_key=?1 AND update_id>=?2 ORDER BY update_id LIMIT ?3"
+        };
+        let rows: Vec<(String, String, i64)> = tx
+            .prepare(sql)?
+            .query_map(params![handle.key, after.unwrap_or(""), limit], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut complete = rows.len() < limit as usize;
+        let mut unresolved = continuation.is_some_and(|cursor| cursor.unresolved);
+        let mut examined = 0;
+        let mut bytes = 0;
+        let mut last = None;
+        for (update, status, size) in rows {
+            if !(1..=1024 * 1024).contains(&size) {
+                return Err(StoreError::Corrupt("managed receipt length invalid".into()));
+            }
+            let size = size as u32;
+            if bytes + size > byte_limit {
+                if examined == 0 {
+                    return Err(invalid("managed summary receipt exceeds step byte budget"));
+                }
+                complete = false;
+                break;
+            }
+            examined += 1;
+            bytes += size;
+            unresolved |= status != "accepted";
+            last = Some(update);
+        }
+        if watermark()? != expected_watermark {
+            return Err(invalid(
+                "managed summary watermark changed; refresh required",
+            ));
+        }
+        let next = if complete {
+            None
+        } else {
+            Some(ManagedUnresolvedCursor {
+                collection: handle.clone(),
+                watermark: expected_watermark.into(),
+                after: last.ok_or_else(|| invalid("managed summary made no progress"))?,
+                unresolved,
+            })
+        };
+        let evidence = if complete && !unresolved {
+            ManagedUnresolvedEvidence::None
+        } else {
+            ManagedUnresolvedEvidence::Unknown
+        };
+        tx.commit()?;
+        Ok(ManagedUnresolvedSummary {
+            evidence,
+            complete,
+            examined,
+            bytes,
+            next,
+        })
     }
     pub fn managed_retry_unresolved(
         &mut self,
