@@ -55,6 +55,7 @@ immediate milestone. This manual describes architecture rather than scheduling.
 | [Rust core map](rust-core.md) | Crate/system responsibilities and dependency boundaries |
 | [Module interfaces](interfaces.md) | Consumer-operation coverage and storage/index/cache contract review |
 | [Storage](storage.md) | Authoritative vault state, managed records and platform persistence |
+| [Browser storage contract](browser-storage-contract.md) | Current IndexedDB commit, acknowledgment, scope, recovery and cache boundaries |
 | [SQLite infrastructure](sqlite.md) | Current Store implementation and planned unified access layer |
 | [Saving and recovery](saving-recovery.md) | Editor drafts, durable saves, physical files and planned snapshot history |
 | [Documents and indexing](indexing.md) | Shared parsing, cached metadata, generation publication and optimization |
