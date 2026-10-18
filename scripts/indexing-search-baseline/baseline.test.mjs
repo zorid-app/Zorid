@@ -4,7 +4,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {generate,noteSource,noteSize,notePath,noteId,queries,literalOracle,expectedCount,sha256,json} from './workload.mjs';
-import {validateSearch,invoke,buildSource,validateWarmStatus,decodeReadyFrame,liveImportCoverage,importProgress} from './cli.mjs';
+import {validateSearch,invoke,buildSource,validateWarmStatus,decodeReadyFrame,liveImportCoverage,importProgress,finalImportCoverage} from './cli.mjs';
 
 test('v1 exact template, UTF8 byte budgets and fixed source digest remain reproducible',()=>{
   const expected='---\nproject: project-0\nstatus: todo\nrank: 0\n---\n# Note 000000\n\ncommon-marker café 😀\nunique-000000\nrare-marker\nprefixSUBSTRsuffix\n[[/Notes/G000/Note-000001]]\n- [ ] Task\n';
@@ -66,4 +66,11 @@ test('family import observes durable file identity growth after inventory comple
  assert.equal(importProgress(scan,{...scan,imported:100},before,before),false,'duplicate imported counters are not progress');
  assert.throws(()=>importProgress(scan,scan,before,[]));assert.throws(()=>importProgress(scan,scan,before,[{...before[0],revision:'changed'}]));
  assert.throws(()=>liveImportCoverage({entries:[a,a]},allowed));assert.throws(()=>liveImportCoverage({entries:[{...a,path:'unexpected'}]},allowed));
+});
+
+test('final completed import cannot adopt changed, missing or duplicate observed identities',()=>{
+ const a={path:'a.md',id:'a',revision:'ra',kind:'file',deleted:false},b={path:'b.md',id:'b',revision:'rb',kind:'file',deleted:false},allowed=new Set(['a.md','b.md']);
+ const before=liveImportCoverage({entries:[a]},allowed);
+ assert.equal(finalImportCoverage({entries:[b,a]},allowed,before).length,2);
+ for(const entries of [[{...a,id:'new'},b],[{...a,revision:'new'},b],[b],[a,a],[a,{...b,id:a.id}]])assert.throws(()=>finalImportCoverage({entries},allowed,before));
 });

@@ -33,8 +33,14 @@ export function liveImportCoverage(listing,expectedPaths){
     return {path:entry.path,id:entry.id,revision:entry.revision};
   });files.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);return files;
 }
-export function importProgress(previous,current,before,after){
+function assertImportContinuity(before,after){
   if(before){const byPath=new Map(after.map(e=>[e.path,e]));for(const entry of before)assert.deepEqual(byPath.get(entry.path),entry,'committed source changed during static import');}
+}
+export function finalImportCoverage(listing,expectedPaths,before){
+  const after=liveImportCoverage(listing,expectedPaths);assert.equal(after.length,expectedPaths.size,'final source map must include every generated file');assertImportContinuity(before,after);return after;
+}
+export function importProgress(previous,current,before,after){
+  assertImportContinuity(before,after);
   const sourceGrew=after.length>(before?.length??0);
   const inventoryGrew=previous&&current.run?.scan_id===previous.run?.scan_id&&(current.run.observed>previous.run.observed||current.run.finished&&!previous.run.finished);
   return sourceGrew||!!inventoryGrew;
@@ -122,7 +128,7 @@ export async function runBaseline({out,binary,notes=100,timeoutMs=60000,buildSha
       if(stalls>=3)throw Object.assign(Error('bounded family import made no proven source or inventory progress'),{kind:'incomplete-import'});
     }
     if(!lastScan?.complete)throw Object.assign(Error('bounded source import pass limit reached'),{kind:'incomplete-import'});
-    const list=await command('source-map',['list']);assert.ok(Array.isArray(list.entries));
+    const list=await command('source-map',['list']);finalImportCoverage(list,expectedPaths,lastCoverage);
     const byPath=new Map(list.entries.filter(e=>e.kind==='file'&&!e.deleted).map(e=>[e.path,e]));
     assert.equal(byPath.size,fixture.manifest.entries.length,'source map must include every generated file');
     const mapping=fixture.manifest.entries.map(e=>{const actual=byPath.get(e.path);assert.ok(actual);assert.equal(typeof actual.id,'string');assert.equal(typeof actual.revision,'string');return {logicalId:e.logicalId,expectedSha256:e.sha256,entry:actual};});
