@@ -77,6 +77,22 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Navigation implementation ownership (2026-10-18 03:17 UTC): revised one-WK
+contract accepted for a first bounded Markdown same-vault slice. Worker371
+owns mobile-native.ts finite optional request/result channel, mobile-only
+Workspace staged stable-ID navigation, and note-buffer.ts/note-durable-state.ts
+immutable expected-ID admission before recovery. Native owner owns paired
+plugin/root/factory/history validators and physical-host versus logical-route
+generation fences. Source flush and target admission precede visible commit;
+native cursor advances only on correlated fresh validation. Path-keyed buffers
+must reuse/rekey the witnessed stable-ID writer atomically or reject drift
+before recovery. Preserve retained drafts and normal revision reconciliation.
+Three real retained views/adjacent preparation is a subsequent scoped slice;
+Native Files shared-host service is separate. No generic pool or editor-internal
+rewrite. Tasks C retains separate Workspace capture and Vault.create optional
+synchronous pre-dispatch validation hunks; managed R reviews the queued-refresh
+race fix. Owners coordinate hunks directly, preserving canonical Calendar.
+
 Native isolation delivery (2026-10-18 03:15 UTC): main35f38950 integrates coherent
 per-vault model/store/picker/factory batch d7265e54. All four Swift files match
 built/tested51fad6d8 exactly. Combined16 build passed; actual fresh-vault A/B
