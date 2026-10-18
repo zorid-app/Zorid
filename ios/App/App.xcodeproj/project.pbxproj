@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BB610C65FC774A5DB972FAEE /* NativeDocumentTabCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03BE9176620455F968E8CBF /* NativeDocumentTabCoordinator.swift */; };
 		D6A2F76C6B814A808C21DCFC /* NativeTabOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */; };
 		2C5840EE8C5446409840312D /* NativeDocumentTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */; };
         C4918AC6B7374CA39C883D70 /* NativeShellComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D38D54610AD4BE88C5D9C34 /* NativeShellComponents.swift */; };
@@ -28,6 +29,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F03BE9176620455F968E8CBF /* NativeDocumentTabCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDocumentTabCoordinator.swift; sourceTree = "<group>"; };
 		0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTabOverview.swift; sourceTree = "<group>"; };
 		62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDocumentTabs.swift; sourceTree = "<group>"; };
         7D38D54610AD4BE88C5D9C34 /* NativeShellComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeShellComponents.swift; sourceTree = "<group>"; };
@@ -94,6 +96,7 @@
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
                 111111111111111111111102 /* NativeMobile.swift */,
                 111111111111111111111104 /* NativePages.swift */,
+				F03BE9176620455F968E8CBF /* NativeDocumentTabCoordinator.swift */,
 				0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */,
 				62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */,
                 7D38D54610AD4BE88C5D9C34 /* NativeShellComponents.swift */,
@@ -207,6 +210,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BB610C65FC774A5DB972FAEE /* NativeDocumentTabCoordinator.swift in Sources */,
 				D6A2F76C6B814A808C21DCFC /* NativeTabOverview.swift in Sources */,
 				2C5840EE8C5446409840312D /* NativeDocumentTabs.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
