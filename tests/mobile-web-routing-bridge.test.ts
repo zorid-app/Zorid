@@ -78,3 +78,18 @@ test('closing fences and rejects retained unpublished receipts rather than hangi
   const result=f.channel.service.result({id:crypto.randomUUID(),webSessionId:f.webSessionId,status:'applied',version:'2'});
   const rejected=assert.rejects(result,/retired/);await f.channel.close();await rejected;assert.equal(f.results.length,0);
 });
+
+test('command flood is bounded before handler scheduling and overflow retries with its original ID',async()=>{
+  const f=await fixture(),pending=gate(),seen:string[]=[];
+  await f.channel.service.publish(f.state());
+  f.channel.service.subscribe(async command=>{seen.push(command.id);await pending.promise;},()=>{});
+  const commands=Array.from({length:1024},()=>({id:crypto.randomUUID(),webSessionId:f.webSessionId,expectedVersion:'1',action:{type:'newTab'}}));
+  for(const command of commands)f.emit('webRouteCommand',command);
+  // Duplicate admissions in the same synchronous burst cannot consume capacity.
+  for(let n=0;n<100;n++)f.emit('webRouteCommand',commands[0]);
+  await until(()=>seen.length===128);await new Promise<void>(yes=>setImmediate(yes));
+  assert.equal(seen.length,128);assert.equal(new Set(seen).size,128);assert.equal(f.results.length,0);
+  pending.resolve();await new Promise<void>(yes=>setImmediate(yes));
+  f.emit('webRouteCommand',commands[128]);await until(()=>seen.length===129);
+  assert.equal(seen[128],commands[128].id);await f.channel.close();
+});

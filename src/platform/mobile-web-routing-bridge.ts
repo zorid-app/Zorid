@@ -35,6 +35,7 @@ export async function createNativeWebRoutingChannel(plugin:NativeWebRoutingPlugi
   let repumpResults=false;
   let latestProgress:Readonly<WebRouteProgress>|undefined,frame:unknown;
   const calls=new Set<Promise<void>>();
+  const admittedCommands=new Set<string>();
   const active=()=>!stopped&&isCurrent();
   const track=(task:Promise<void>)=>{calls.add(task);void task.finally(()=>calls.delete(task)).catch(()=>{});};
   const pumpResults=():Promise<void>=>{
@@ -55,9 +56,18 @@ export async function createNativeWebRoutingChannel(plugin:NativeWebRoutingPlugi
   const command=(input:unknown)=>{
     let captured:Readonly<WebRouteCommand>;try{captured=captureWebRouteCommand(input);}catch{return;}
     const owner=handler,epoch=generation;if(!active()||!owner)return;
+    const key=`${captured.webSessionId}/${captured.id}`;
+    // Backpressure is admission-only: overflow has no route side effect and no
+    // synthetic receipt. Native retains the command ID for an exact retry.
+    // Duplicates of an admitted command must not invoke its handler twice.
+    if(admittedCommands.has(key)||admittedCommands.size>=128)return;
+    admittedCommands.add(key);
     // The router owns its transaction queue; wrapping it in the storage or
     // publication queue would deadlock begin/end or source-flush admission.
-    track(Promise.resolve().then(async()=>{if(active()&&epoch===generation&&handler===owner)await owner(captured);}));
+    track(Promise.resolve().then(async()=>{
+      try{if(active()&&epoch===generation&&handler===owner)await owner(captured);}
+      finally{admittedCommands.delete(key);}
+    }));
   };
   const progress=(input:unknown)=>{
     let captured:Readonly<WebRouteProgress>;try{captured=captureWebRouteProgress(input);}catch{return;}
