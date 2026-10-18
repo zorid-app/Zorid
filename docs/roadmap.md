@@ -8,11 +8,13 @@ Older plans remain detailed capability inventories, not competing delivery order
 
 ## Current focus
 
-**S0 — Storage, saving and local recovery is implementing.** The user explicitly made the
-storage layer the immediate priority. Review storage contracts during S0 design; the new
-**S0A modular-interface gate** follows S0 and precedes S1 optimization and downstream
-feature work. Implementation ownership and verification are tracked in the execution checkpoint;
-no complete S0 acceptance is claimed. Existing feature/iOS work is preserved.
+**S0 — Storage, saving and local recovery is accepted within the recorded native
+scope. S0A modular-interface gate is verifying.** S0's reviewed implementation and
+actual macOS save/close/quit/history/concurrent-CLI/interruption evidence are in the
+[execution checkpoint](deferred-product-roadmap.md#latest-integration-checkpoint--2026-10-18).
+S0A closes the remaining browser binary-helper admission seam before S1 changes
+live paths. S1.0 baseline tooling/fixtures are being prepared in isolation.
+Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
 before resuming iOS implementation. The browser is a connected sync-group client
@@ -48,8 +50,8 @@ that invalidate a closed gate reopen that bounded gate, not every earlier milest
 
 ## Delivery order
 
-S0 is **implementing**; later milestones remain **planned**. Earlier integrated
-foundations are credited below; complete S0 acceptance still requires its exit checks.
+S0 is **accepted** within its explicit scope/limitations; S0A is **verifying**.
+Later milestones remain **planned**, with isolated S1.0 preparation underway.
 
 | ID | Milestone | Prerequisite |
 | --- | --- | --- |
@@ -84,15 +86,18 @@ SQLite connection policy, separate app-local recovery snapshots, automatic openi
 recovery and settled backup retirement. The second batch, integrated as `eb6d6bb2`, separates native disposable document
 caches into app-local `cache.sqlite` and adds entry-scoped version preview/restore.
 Clipboard images, native dirty-window close, live-window normal AppKit quit, history
-restoration and restart have passed scoped actual Electron checks. S0 remains
-implementing: superseded-rename recovery, no-window quit and the final concurrent
-CLI/interruption exercise remain open. Complete S0 is not accepted.
+restoration and restart have passed scoped actual Electron checks. Main `0bbeb61b`
+adds reviewed superseded-move recovery, definite conflict handling and normal
+no-window quit. The final actual lifecycle42 and concurrent-CLI/interruption6
+checks pass. S0's native delivery gate is accepted; this does not establish browser
+history, power-loss, foreground traffic-light or other-platform parity. The original
+real-vault warning's historical cause remains unconfirmed and that vault untouched.
 
 Scope:
 
 - [x] Inventory current transaction boundaries, save state and pending/settled
   `.previous`/`.namespace` artifacts before changing their lifecycle.
-- [ ] Review storage service contracts against existing feature needs before
+- [x] Review storage service contracts against existing feature needs before
   implementing the SQLite layer; carry unresolved cross-system seams into S0A.
 - [x] Introduce shared Rust SQLite infrastructure for native connections,
   configuration, transactions, schemas, errors/locking and diagnostics. Keep
@@ -102,15 +107,16 @@ Scope:
   CLI; handle moved/copied vaults and identically named vaults explicitly.
 - [x] Separate app-local per-vault `cache.sqlite` (rebuildable) and
   `recovery.sqlite` (retained history) without breaking authoritative transactions.
-- [ ] Match the inspected Obsidian autosave/File Recovery behavior: coalesced
+- [x] Deliver the agreed autosave/File Recovery behavior: coalesced
   roughly two-second saves, blur/close/graceful-quit flush, five-minute snapshots,
   seven-day expiry, unchanged-content dedupe, best-effort failed-save capture and
   manual preview/restore. Do not promise every unsaved keystroke survives a crash.
 - [x] Stop accumulating per-save backups; reconcile current Rust DB/file authority,
   external-writer handling and safe artifact cleanup before save-strategy cutover.
-- [ ] Reproduce and fix the persistent import/reconciliation warning's actual cause;
-  normal operation should settle automatically. Real unresolved recovery remains
-  visible with an actionable message, rather than being hidden.
+- [x] Reproduce and fix the superseded captured-move recovery failure identified
+  from read-only candidate metadata; normal fixture operation settles automatically.
+  The original screenshot's historical cause remains unconfirmed. Real unresolved
+  recovery stays actionable; unknown evidence is preserved rather than hidden.
 - [x] Specify browser service/storage interfaces for connected working state.
   Persistent browser SQLite/OPFS is optional and does not block native S0 delivery.
 
@@ -121,8 +127,9 @@ share a bucket and copies remain separate. Settled backup retirement never sweep
 unresolved namespace evidence. The [browser contract](architecture/browser-storage-contract.md)
 maps current IndexedDB services; connected onboarding and attachment eviction
 remain later browser work. Autosave/history behavior is implemented and scoped
-checks pass, but the lifecycle gate still includes the separate no-window quit
-case. S0A will complete the cross-feature interface audit.
+checks and actual no-window/live-window quit gates pass. S0A completes the
+cross-feature interface audit before live S1 optimization. Existing large-stream
+performance checks remain incomplete and move to S1 measurement, not a stress pass.
 
 **Exit:** actual desktop create/edit/save/reopen/restart works through the new
 layer; meaningful interruption, external-change and CLI/application-concurrency
@@ -137,7 +144,9 @@ Design: [storage](architecture/storage.md), [SQLite](architecture/sqlite.md),
 
 ## S0A — Modular interfaces and feature-consumer contracts
 
-**Status:** planned; this document does not certify an interface audit. Storage
+**Status:** verifying; the reviewed operation/consumer inventory and proposed
+runtime contract are recorded in the review guide. The current browser direct
+binary-helper FIFO seam is being corrected before acceptance. Storage
 contract review begins during S0 design so we do not build the wrong layer first.
 S0A then checks storage, indexing and caching together against actual consumers
 before S1 changes internals or downstream feature work resumes. Existing milestone

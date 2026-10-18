@@ -22,7 +22,14 @@ The user accepts an engine-supported regex subset, clear unsupported-pattern
 messages and equivalent rewrites only where meaning is preserved. Design and
 implementation slices are updated; S0/S0A gates remain in force.
 
-## CLI/editor conflict recognition — open 2026-10-18
+## CLI/editor conflict recognition — verified and integrated 2026-10-18
+
+Main `0bbeb61b` preserves definite preflight conflict status across desktop IPC and
+browser planning. Focused browser/retained-draft44 checks pass. Actual Electron/CLI
+competition and host interruption/restart preserved both exact versions and saved
+the retained draft through ordinary recovery-copy UI; evidence:
+`/private/tmp/zorid-s0-concurrency-final-evidence/evidence.json`. Browser UI runtime
+and seamless stale-editor merging are not claimed. Earlier failing evidence follows.
 
 Reviewed actual concurrency harness on frozen `bf1feb0a` observed successful shared
 cache/search, CLI competing commit, exact receipt replay and stale-CAS rejection.
@@ -34,7 +41,14 @@ All owned processes closed; source/artifact hashes unchanged. `storage_recovery_
 owns isolated error-classification diagnosis and a deterministic regression before
 any fix. No loss is established, and no user action is blamed.
 
-## Candidate interrupted-rename recovery — investigating 2026-10-18
+## Candidate interrupted-rename recovery — reproduced fix integrated 2026-10-18
+
+Main `0bbeb61b` adds exact-proof namespace responsibility succession (Store13) and
+native recovery. Store105/1 ignored and namespace13 focused checks pass, including
+restart windows, changed bytes and replaced parents. Original real vault remains
+untouched and is not confirmed as the screenshot's historical cause. The synthetic
+superseded-move failure is fixed; genuine competing evidence remains preserved.
+Earlier read-only diagnosis follows.
 
 Read-only inspection of the default recent vault found a captured, unpublished
 namespace move whose destination was superseded by a later logical move. The

@@ -50,6 +50,32 @@ S1 replacement. Root retains sole main integration, no push.
 
 ### Latest integration checkpoint — 2026-10-18
 
+Main `0bbeb61b` now integrates the independently reviewed superseded namespace-move
+recovery, definite planning-conflict handling (desktop and browser), next-turn
+desktop quit and CLI competition/interruption harness. Production source is
+identical to frozen runtime `24a728e3`; reconciliation changed docs/tests only.
+Store schema13 explicitly journals successor responsibility without rewriting
+predecessor evidence. Unknown/competing bytes or replaced parents remain preserved.
+
+Recorded focused results: Store105 passed/1 ignored, namespace native13, cache22,
+CLI13 and host35; browser planning/retained-draft44; reconciled shell/editor-core8.
+Actual macOS lifecycle/history42 passed at
+`/private/tmp/zorid-s0-quit-fixed-evidence/evidence.json`: dirty native close,
+no-window and live-window AppKit quit, exact reopen and history preview/restore.
+All four apps exited0 without cleanup signals. Actual independent CLI competition,
+exact receipt replay/stale-CAS rejection, retained conflict, targeted host SIGKILL,
+restart and recovery-copy gates passed at
+`/private/tmp/zorid-s0-concurrency-final-evidence/evidence.json` (six checks).
+Hashes remained frozen and owned processes were closed. This does not establish
+power-loss, traffic-light input, browser UI, phone or other-OS runtime parity.
+Original user vault remains untouched and its historical warning cause unconfirmed;
+the reproduced superseded-move failure is fixed with focused exact-proof checks.
+
+Root retains sole main integration and is completing the S0/S0A acceptance record.
+S1.0 workers prepare only the accepted workload/baseline tooling and query-language
+fixtures in isolated worktrees; no optimization or new sync-group design starts
+from those preparation tasks. Heavy builds remain serialized; no push authorized.
+
 Latest user steering: current runtime verification targets are macOS Electron,
 web and the independent CLI on macOS; defer other OS/mobile runtime verification.
 CLI must be tested both independently and alongside Electron, not treated only as
@@ -59,15 +85,14 @@ creation/membership, joining and leaving/rejoining before S2 enrollment work.
 Group/key/data/pending-edit policies remain open; this is not a request to start
 that implementation or a one-day completion expectation.
 
-Main `eb6d6bb21e3e277745990eaa1b5d6645bda53eac` integrates the reviewed cache/history
+Earlier main `eb6d6bb21e3e277745990eaa1b5d6645bda53eac` integrates the reviewed cache/history
 batch. Application source (`src`, `desktop`, `crates`) was verified identical to
 reconciled integration `bf1feb0a`; reconciliation with main changed documentation
 only. The matching frontend build passed on main. Earlier clipboard delivery is
 `a98cb04f`; browser contract is `1b4bb432`. No push by this coordinator.
-S0 is still implementing; the open namespace recovery, no-window quit and final
-CLI/interruption checks below remain required. Completed component checkboxes in
-the roadmap are not complete milestone acceptance. Root retains sole main
-integration; all unfinished namespace work stays isolated.
+The entries below retain the earlier open-gate history; namespace recovery,
+no-window quit and CLI/interruption checks are superseded by the verified batch
+above. Component checkboxes alone never establish milestone acceptance.
 
 ### S0 continuation ownership
 
