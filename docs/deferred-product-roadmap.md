@@ -116,6 +116,15 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+01:12UTC: signedDev10build21794 terminal0 frozen2add282b, verifiedDevbundle/
+version10/development/iPhoneOS+strictcodesign/entitlements. Installattempts both
+terminal1 CoreDevice1011/tunnelunavailable, notsigningfailure; useralreadyasked
+by nativeowner to reconnect/unlock. NOinstall/launchsuccessyet. Allcompilersclosed/
+simcleanupconfirmed, rootreleased compiler slot; ownerretainsdevice-onlydeployment
+and existingartifact, no rebuild/newpairing/profile/accountchange. No rootheavyjob.
+Managed sourcecorrects wrapperper-opstructural vsStorecontextinvalidclassification
+and record/gen-scoped operationcommitments; sameapprovedcontract, no newgate.
+
 01:11UTC: rootreconciling merge-ready native2add282b tocurrentmain. Merge-tree
 dryrun CLEAN d6b1d8b6...,14native/docpaths only; integration source review assigned,
 no Rust/rootmanifest/editor changes. Preserveownerphonebuild21794/sourcefreeze.
