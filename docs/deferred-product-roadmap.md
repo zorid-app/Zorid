@@ -2,8 +2,17 @@
 
 ## Maintained product roadmap — latest priority
 
+**New interface milestone:** S0A follows S0 and gates S1/downstream feature work.
+Review storage APIs during S0 design, then audit storage/indexing/caching contracts
+against actual consumers: supported operations, scope, atomicity, statuses/errors,
+subscriptions, cancellation/release and native/browser differences. The interface
+review is planned, not certified by adding this documentation. See
+[the review guide](architecture/interfaces.md). Existing stage IDs stay stable.
+
+
 The [roadmap](roadmap.md) is the single high-level delivery order: **S0 storage,
-saving and recovery is immediate**, S1 Rust indexing/search/cache performance next,
+saving and recovery is immediate**, then S0A modular interfaces before S1 Rust
+indexing/search/cache performance,
 then sync/managed foundations and complete desktop Bases/Tasks/Calendar/Google,
 then hosted/web and native iOS. One milestone implements at a time with explicit
 integrated exit evidence. This is planning, not new implementation acceptance.

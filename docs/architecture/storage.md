@@ -54,6 +54,13 @@ destination. They are neither history nor caches and require explicit settlement
 and cleanup. Existing `.previous`/`.namespace` artifacts cannot be bulk-deleted
 merely because their enclosing database commit succeeded.
 
+## Interface review gate
+
+[S0A module interface review](interfaces.md) checks supported consumer operations,
+identity/transaction boundaries, errors, lifecycle and platform capabilities before
+S1 optimization/downstream feature work. Storage contracts are reviewed during S0
+design as well; the gate must not wait until an incompatible layer is built.
+
 ## Source map
 
 [Store](../../crates/zorid-store/src/lib.rs),

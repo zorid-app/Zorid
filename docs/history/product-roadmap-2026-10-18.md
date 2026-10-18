@@ -19,3 +19,14 @@ current-sequencing banner rather than losing their capability inventory.
 Validation: independent platform/flow and core/scope reviews, local documentation
 link checks and `git diff --check`. No runtime source, generated assets, dependencies,
 databases, app builds, live services or real user content changed.
+
+## Modular-interface follow-up
+
+User added explicit storage/index/cache interface review. Documentation coordinator
+owns isolated `tingkai-c/module-interface-roadmap`, based on `5a4e7d46`, under
+one-commit docs-only grant `msg_e63b7dc758f2`. S0 reviews storage contracts during
+design; S0A formally gates S1 using supported-operation/consumer coverage, concrete
+service semantics and meaningful existing-consumer proof. Existing stage IDs are
+preserved. `architecture/interfaces.md` is a review guide, not a frozen new API.
+Independent core review approved; relative links across18 roadmap/architecture
+pages and whitespace checks pass. No implementation/build/goal changes occurred.

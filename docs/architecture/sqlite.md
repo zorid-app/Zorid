@@ -53,6 +53,13 @@ infrastructure with managed records.
 These are design obligations, not completed migrations. No blanket replacement of
 IndexedDB or the existing authority schema is authorized by a diagram alone.
 
+## Interface review gate
+
+[S0A module interface review](interfaces.md) checks supported consumer operations,
+identity/transaction boundaries, errors, lifecycle and platform capabilities before
+S1 optimization/downstream feature work. Storage contracts are reviewed during S0
+design as well; the gate must not wait until an incompatible layer is built.
+
 ## Source anchors
 
 [Native Store](../../crates/zorid-store/src/lib.rs),

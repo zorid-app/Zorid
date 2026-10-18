@@ -9,7 +9,9 @@ Older plans remain detailed capability inventories, not competing delivery order
 ## Current focus
 
 **S0 — Storage, saving and local recovery is next.** The user explicitly made the
-storage layer the immediate priority. This roadmap is documentation, not a claim
+storage layer the immediate priority. Review storage contracts during S0 design; the new
+**S0A modular-interface gate** follows S0 and precedes S1 optimization and downstream
+feature work. This roadmap is documentation, not a claim
 that its implementation has started. Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
@@ -45,14 +47,15 @@ credited below, but no complete milestone is newly certified by this document.
 | ID | Milestone | Prerequisite |
 | --- | --- | --- |
 | S0 | Storage layer, saving and local recovery — immediate priority | Current source/retained-artifact inventory |
-| S1 | Rust parsing, indexing, caching and search performance | S0 |
+| S0A | Modular interfaces and feature-consumer contract review | S0; storage contract design starts within S0 |
+| S1 | Rust parsing, indexing, caching and search performance | S0A |
 | S2 | Shared sync backend and usable self-hosted native-client sync | S1 |
 | S3 | Managed-data services and feature contracts | S2 |
 | S4 | Fully usable desktop Types and Bases | S3 |
 | S5 | Fully usable desktop Tasks | S4 |
 | S6 | Fully usable desktop Calendar and planning | S5 |
 | S7 | Google Calendar two-way integration | S6; provider job/credential decisions |
-| S8 | Complete desktop experience and distribution gate | S0–S7 |
+| S8 | Complete desktop experience and distribution gate | S0–S7, including S0A |
 | S9 | Hosted Zorid Cloud service | S2 and S8 |
 | S10 | Connected web client at web.zorid.app | S9; self-hosted service from S2 |
 | S11 | Native iOS app | S8; hosted/web completion is not a hard prerequisite |
@@ -76,6 +79,8 @@ Scope:
 
 - [ ] Inventory current transaction boundaries, save state and pending/settled
   `.previous`/`.namespace` artifacts before changing their lifecycle.
+- [ ] Review storage service contracts against existing feature needs before
+  implementing the SQLite layer; carry unresolved cross-system seams into S0A.
 - [ ] Introduce shared Rust SQLite infrastructure for native connections,
   configuration, transactions, schemas, errors/locking and diagnostics. Keep
   domain operations in services; no arbitrary frontend SQL API.
@@ -106,6 +111,47 @@ never bulk-delete unresolved artifacts or real vault data to make a test pass.
 
 Design: [storage](architecture/storage.md), [SQLite](architecture/sqlite.md),
 [saving/recovery](architecture/saving-recovery.md).
+
+## S0A — Modular interfaces and feature-consumer contracts
+
+**Status:** planned; this document does not certify an interface audit. Storage
+contract review begins during S0 design so we do not build the wrong layer first.
+S0A then checks storage, indexing and caching together against actual consumers
+before S1 changes internals or downstream feature work resumes. Existing milestone
+IDs stay stable.
+
+- [ ] Inventory current Rust service contracts, TypeScript platform capabilities,
+  host/WASM/mobile bindings and consumers. Reuse working interfaces; identify
+  concrete gaps rather than inventing a general framework.
+- [ ] Build a supported-operation matrix covering files/attachments, managed records,
+  retained recovery, disposable caches, parse/index/search and relationships. Map
+  Bases/Tasks/Calendar, editor, sync and independent CLI needs to owning services.
+- [ ] Specify inputs/results, identity/revision/scope, transaction boundaries,
+  local-commit versus publication/sync status, subscriptions, pagination/limits,
+  cancellation, release and error/uncertain-retry behavior.
+- [ ] Check indexing snapshots, incremental updates, source/version fences, query
+  pins and rebuild/progress APIs; features must not read private index tables.
+- [ ] Check cache keys/versioning, hit/miss/stale/error behavior, invalidation,
+  eviction/budgets and rebuild APIs. Pending edits, provider receipts and recovery
+  history must never be routed through disposable-cache deletion.
+- [ ] Review native durable-vault and browser connected-working-state differences.
+  Shared services do not require identical persistence guarantees. Document missing
+  capabilities explicitly rather than silently falling back to another authority.
+- [ ] Prove representative consumer flows through the service boundary; add focused
+  behavior/contract checks only for meaningful boundaries. Resolve incompatible
+  seams and document each interface in its owning module page.
+
+**Exit:** independent review accepts the supported-operation/consumer matrix and
+concrete interface contracts. Existing representative consumers work through the
+intended APIs without private-table access, direct database plumbing or duplicated
+semantics. Error/lifecycle/transaction and cross-platform differences are explicit;
+material gaps are resolved, or future unimplemented capabilities have named owning
+milestones and cannot be mistaken for currently supported operations. No complete
+mobile/runtime or future feature acceptance follows from this contract gate.
+
+Review guide: [module interfaces](architecture/interfaces.md). Subsequent milestones
+recheck interfaces they extend; this is not a one-time promise to support every
+future feature or a public plugin API freeze.
 
 ## S1 — Rust parsing, indexing, caching and search performance
 

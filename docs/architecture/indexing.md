@@ -36,6 +36,13 @@ Separate app-local `cache.sqlite` is accepted native placement direction, not
 current code. Browser indexes operate on the joined group working state; persistent
 cache storage is optional and need not mirror native databases.
 
+## Interface review gate
+
+[S0A module interface review](interfaces.md) checks supported consumer operations,
+identity/transaction boundaries, errors, lifecycle and platform capabilities before
+S1 optimization/downstream feature work. Storage contracts are reviewed during S0
+design as well; the gate must not wait until an incompatible layer is built.
+
 ## Source map
 
 [Parser](../../crates/zorid-document/src/lib.rs),

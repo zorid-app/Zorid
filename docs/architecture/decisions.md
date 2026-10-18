@@ -13,6 +13,7 @@ implementation or authorize discarding existing vault/recovery content.
 | Storage layer, saving and local recovery first; Rust indexing/search/cache performance next | Latest user priority; editor correctness is mostly satisfactory |
 | Complete desktop Bases, Tasks, Calendar, Google integration and core performance before resuming iOS implementation | Current delivery order; preserve paused native work |
 | Use SQLite and a unified Rust database infrastructure layer | Accepted direction; native Store exists, unified layer does not |
+| Explicit modular-interface review for storage, indexing and caching | S0A gate after S0 and before S1; storage contract review starts during S0 design |
 | Browser joins existing sync groups rather than owning an independent durable vault | Latest user correction; standalone IndexedDB startup is current code, not target UX |
 | Browser SQLite/WASM + OPFS | Optional implementation choice; earlier mandatory persistence target superseded |
 | Keep authoritative native state in vault `.zorid/vault.sqlite` | Current and accepted placement |
@@ -25,7 +26,8 @@ implementation or authorize discarding existing vault/recovery content.
 ## Delivery sequence
 
 The [product roadmap](../roadmap.md) is the single maintained order and capability
-register. **S0 storage/saving/recovery is immediate**, followed by S1 indexing/search
+register. **S0 storage/saving/recovery is immediate**, then S0A interface review
+before S1 indexing/search
 performance, sync and managed-data foundations, usable desktop features/Google,
 then hosted/web and native iOS delivery. Read the roadmap's dependencies and exit
 gates rather than interpreting older execution-stage numbers as a competing plan.
