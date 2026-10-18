@@ -2,7 +2,7 @@
 
 `zorid-records` is a pure, in-memory, one-record-generation engine. It is not a
 public plugin API, durable receipt, storage adapter, sync family or namespace
-sandbox. It uses existing serde/serde_json dependencies only. No I/O, allocator,
+sandbox. It uses existing serde/serde_json dependencies only. No I/O, ID allocation,
 clock, random source, crypto, authorization, migration callback or Yrs state is
 present. Source is based on the managed-data-foundation proposal
 `docs/managed-data/portable-record-contract.md`, Git blob
@@ -18,6 +18,18 @@ membership, deletion and pending IDs are derived. Operation union converges only
 within the compatible, non-equivocating, bounded domain. ID collision, schema
 incompatibility and capacity errors are observable integrity/admission failures,
 not first-seen-wins convergence or eviction policies.
+
+The existing text engine uses Yrs. A Yrs document per record generation plus
+retained authored history is a viable alternative: Yrs supplies causal transport
+and integration, while a separate authored archive must still preserve losing
+writes, exact replay identity, validated set tags and generation tombstones.
+A winner-only mutable Yrs field map cannot itself supply that archive. This slice
+chooses one immutable typed operation set to make admission, unknown-field
+preservation and full-history snapshots directly inspectable without maintaining
+two independently authoritative states. It implements its own bounded causal
+projection and ancestry scratch index as the cost of that choice. No comparative
+benchmark, superior performance claim or record wire-family decision is implied;
+Yrs-per-generation with retained history remains a comparison for wire review.
 
 The host supplies validated trusted `Schema`, authorized `Scope` and durable
 unique operation IDs. All IDs are nonempty ASCII without whitespace/control,
@@ -62,6 +74,11 @@ publication. If that closure contains an invalid remove, the **whole arrival
 fails**, including the parent; prior pending state is unchanged. This can block a
 record until a host-level recovery/quarantine policy is provided. This crate has
 no silent drop, discard-pending or durable unresolved-receipt mechanism.
+This is an explicit pending-activation **liveness gap**: an invalid descendant
+can prevent otherwise valid parents from being admitted. A later host quarantine
+and recovery policy is required **before wire integration**, including durable
+unresolved receipt/cursor rules; portable transactional rejection alone does not
+close that gate.
 
 ## Schemas, codec and plans
 
@@ -126,29 +143,54 @@ their last concurrent write and reject their 4097-operation union. A pending-fil
 budget may block its dependency arrival. These are bounded-domain backpressure,
 not final convergence. More than 32 concurrent heads block local authorship;
 there is no merge-only bridging command. History externalization/compaction,
-capacity recovery and scalable ancestry indexing are required before production
+capacity recovery and production workload evaluation are required before
 long-lived records. No GC, old-generation tombstone disposal, schema migration,
 provider operation semantics, task/calendar model or public plugin surface exists.
 
-With N operations, E parent edges (at most 32N), A field actions and B retained
-encoded bytes, admission clones O(B) state and serializes the complete snapshot.
-Topological traversal uses sorted maps/sets; transitive ancestor storage is
-O(N²) IDs in the worst case, with O(E*N*log N) conservative construction cost.
-Projection additionally compares candidates within each field (up to O(A² log N))
-and tracks observed add/removal tags. These are bounded correctness algorithms,
-not measured performance budgets. Limits are not an untrusted allocation sandbox:
-serde decoding/programmatic batches can allocate before semantic bounds are
-checked; callers must budget input and protect their process boundary.
+Ancestry is ephemeral, using sorted-ID ordinals and a dense `u64` bit matrix;
+ordinals never enter operation identity or snapshots. With n retained operations,
+e present parent edges (e <= 32n), and w = ceil(n/64), the raw matrix is exactly
+n*w*8 bytes: at n=4096, w=64 this is 2,097,152 bytes (2 MiB), independent of chain
+shape. This is **not** the entire process memory bound. The ordinal map retains
+one ID per operation (at most 128n ID bytes plus map/String allocation overhead),
+accepted flags and indegrees take O(n), ready queue/operation references take
+O(n), and adjacency uses O(n+e) machine-sized indices/vector headers. Unavailable
+parent IDs remain in operations (at most 32n parent entries), with no separate
+transitive ID copies; pending and unknown-field state count in retained history
+and its 1 MiB snapshot cap. Projection has additional candidate values and
+add/removal-tag collections; the matrix is dropped after admission/projection.
+
+Let a be retained field-action count, t total removal-tag references, and b
+retained encoded bytes. Admission clones state and serializes its complete
+snapshot (O(b) bytes plus container overhead), scans bounded actions for stable
+field types, and constructs the matrix afresh. Graph/ordinal construction and
+ready-queue traversal cost O((n+e) log n); zeroing costs O(n*w), and inherited
+ancestor rows cost O(e*w) word operations. Accepted-remove checks add
+O(t*(log n + MAX_ACTIONS)) conservative work for ordinal lookup and finding the
+matching add action. Pending branches skip row inheritance until all parents
+are accepted, but their present edges still participate in cycle detection.
+Projection rebuilds this analysis and compares field candidates pairwise:
+O(sum over fields of write_count² * log n), bounded above by O(a² log n),
+where write_count includes all accepted writes before filtering maximal candidates,
+for two ordinal lookups and one constant-time bit test per comparison. It also
+clones candidate data and builds sorted add/removal-tag collections, with
+O((a+t) log(a+t+1)) conservative collection work. These bounds describe the
+implementation, **not measured latency, allocation totals or performance**.
+Limits are not an untrusted allocation sandbox: serde decoding/programmatic
+batches can allocate before semantic bounds are checked; callers must budget
+input and protect their process boundary.
 
 ## Verification status
 
-23 source-authored trace tests cover offline fields, same-field history,
+24 source-authored trace tests cover offline fields, same-field history,
 field-specific ancestry, equal values, null/unset, atomic objects, sets and tag
 theft, deletion/restoration, reordered/duplicate/pending dependencies, cycles and
 pending activation failure, malformed codec/type/schema/ID/limit failures,
 additive unknown fields, defaults/CAS, canonical full-history snapshots and
-capacity divergence. These tests have **not been compiled or run** in this
-worker: coordinator reserved compiler priority for native work. No runtime,
+capacity divergence, plus a 256-operation reverse-ID dependency chain that spans
+bitset words, retains a pending tail across snapshot reload, authorizes a deep
+observed remove, preserves a concurrent field conflict and causally resolves it.
+These tests have **not been compiled or run** in this worker: coordinator reserved compiler priority for native work. No runtime,
 durable/native/browser/security/UI parity is claimed.
 
 One bounded requested validation command (coordinator must grant a slot and

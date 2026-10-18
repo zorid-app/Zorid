@@ -192,6 +192,46 @@ fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 fn ordered(ids: &[Id]) -> bool { ids.windows(2).all(|w| w[0] < w[1]) }
+
+/// Ephemeral sorted-ID ordinals, never serialized or used as operation identity.
+/// The dense matrix uses N * ceil(N / 64) words, at most 2 MiB at MAX_HISTORY.
+struct Ancestry {
+    ordinals: BTreeMap<Id, usize>,
+    accepted: Vec<bool>,
+    words: usize,
+    bits: Vec<u64>,
+}
+impl Ancestry {
+    fn new(operations: &BTreeMap<Id, Operation>) -> Self {
+        let count = operations.len();
+        let words = (count + 63) / 64;
+        Self {
+            ordinals: operations.keys().enumerate().map(|(i, id)| (id.clone(), i)).collect(),
+            accepted: vec![false; count], words, bits: vec![0; count * words],
+        }
+    }
+    fn accepts(&self, id: &Id) -> bool {
+        self.ordinals.get(id).is_some_and(|i| self.accepted[*i])
+    }
+    /// Strict ancestor lookup; absent IDs and pending rows never imply ancestry.
+    fn contains(&self, descendant: &Id, ancestor: &Id) -> bool {
+        match (self.ordinals.get(descendant), self.ordinals.get(ancestor)) {
+            (Some(&d), Some(&a)) if self.accepted[d] => self.row_contains(d, a),
+            _ => false,
+        }
+    }
+    fn row_contains(&self, descendant: usize, ancestor: usize) -> bool {
+        self.bits[descendant * self.words + ancestor / 64] & (1u64 << (ancestor % 64)) != 0
+    }
+    fn inherit(&mut self, child: usize, parent: usize) {
+        for word in 0..self.words {
+            let inherited = self.bits[parent * self.words + word];
+            self.bits[child * self.words + word] |= inherited;
+        }
+        self.bits[child * self.words + parent / 64] |= 1u64 << (parent % 64);
+    }
+}
+
 impl State {
     pub fn new(schema: Schema, scope: Scope) -> Result<Self> {
         schema.validate()?; scope.validate()?;
@@ -340,34 +380,37 @@ impl State {
         }
         Ok(())
     }
-    /// Returns accepted operations' transitive ancestors; missing chains remain pending.
-    fn analyze(&self) -> Result<BTreeMap<Id, BTreeSet<Id>>> {
-        // Kahn traversal over present edges also detects cycles hidden behind missing parents.
-        let mut indegree = BTreeMap::new();
-        let mut children: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
-        for (id, op) in &self.operations {
-            let mut count = 0usize;
-            for p in &op.parents {
-                if self.operations.contains_key(p) {
-                    count += 1; children.entry(p.clone()).or_default().push(id.clone());
+    /// Compact transitive ancestry for accepted operations; missing chains stay pending.
+    fn analyze(&self) -> Result<Ancestry> {
+        // Sorted-ID ordinals only index scratch storage; Kahn order establishes causality.
+        // Present-edge traversal detects cycles even behind unavailable parents.
+        let operations: Vec<&Operation> = self.operations.values().collect();
+        let mut ancestors = Ancestry::new(&self.operations);
+        let mut indegree = vec![0usize; operations.len()];
+        let mut children = vec![Vec::new(); operations.len()];
+        for (index, op) in operations.iter().enumerate() {
+            for parent in &op.parents {
+                if let Some(&p) = ancestors.ordinals.get(parent) {
+                    indegree[index] += 1;
+                    children[p].push(index);
                 }
             }
-            indegree.insert(id.clone(), count);
         }
-        let mut queue: BTreeSet<Id> = indegree.iter().filter(|(_, n)| **n == 0)
-            .map(|(id, _)| id.clone()).collect();
+        let mut queue: BTreeSet<usize> = indegree.iter().enumerate()
+            .filter(|(_, n)| **n == 0).map(|(i, _)| i).collect();
         let mut visited = 0;
-        let mut ancestors: BTreeMap<Id, BTreeSet<Id>> = BTreeMap::new();
-        while let Some(id) = queue.pop_first() {
+        while let Some(index) = queue.pop_first() {
             visited += 1;
-            let op = &self.operations[&id];
-            if op.parents.iter().all(|p| ancestors.contains_key(p)) {
-                let mut seen = BTreeSet::new();
-                for p in &op.parents {
-                    seen.insert(p.clone()); seen.extend(ancestors[p].iter().cloned());
+            let op = operations[index];
+            if op.parents.iter().all(|p| ancestors.accepts(p)) {
+                for parent in &op.parents {
+                    let p = ancestors.ordinals[parent];
+                    ancestors.inherit(index, p);
                 }
-                if !matches!(op.command, Command::Create(_)) && !seen.contains(&self.scope.generation) {
-                    return Err(Error::InvalidOperation);
+                if !matches!(op.command, Command::Create(_)) {
+                    let root = ancestors.ordinals.get(&self.scope.generation)
+                        .ok_or(Error::InvalidOperation)?;
+                    if !ancestors.row_contains(index, *root) { return Err(Error::InvalidOperation); }
                 }
                 let actions = match &op.command {
                     Command::Create(a) | Command::Patch(a) => a.as_slice(), Command::Delete => &[],
@@ -375,8 +418,12 @@ impl State {
                 for action in actions {
                     if let Action::Remove { field, member, tags } = action {
                         for tag in tags {
-                            if !seen.contains(tag) { return Err(Error::InvalidOperation); }
-                            let source = &self.operations[tag];
+                            let source_index = ancestors.ordinals.get(tag)
+                                .ok_or(Error::InvalidOperation)?;
+                            if !ancestors.row_contains(index, *source_index) {
+                                return Err(Error::InvalidOperation);
+                            }
+                            let source = operations[*source_index];
                             let adds = match &source.command {
                                 Command::Create(a) | Command::Patch(a) => a.as_slice(), _ => &[],
                             };
@@ -385,27 +432,24 @@ impl State {
                         }
                     }
                 }
-                ancestors.insert(id.clone(), seen);
+                ancestors.accepted[index] = true;
             }
-            if let Some(list) = children.get(&id) {
-                for child in list {
-                    let n = indegree.get_mut(child).ok_or(Error::InvalidOperation)?;
-                    *n -= 1;
-                    if *n == 0 { queue.insert(child.clone()); }
-                }
+            for &child in &children[index] {
+                indegree[child] -= 1;
+                if indegree[child] == 0 { queue.insert(child); }
             }
         }
-        if visited != self.operations.len() { return Err(Error::Cycle); }
+        if visited != operations.len() { return Err(Error::Cycle); }
         Ok(ancestors)
     }
     pub fn projection(&self) -> Result<Projection> {
         let ancestors = self.analyze()?;
-        let mut out = Projection { created: ancestors.contains_key(&self.scope.generation),
+        let mut out = Projection { created: ancestors.accepts(&self.scope.generation),
             deleted: false, fields: BTreeMap::new(), sets: BTreeMap::new(),
-            pending: self.operations.keys().filter(|id| !ancestors.contains_key(*id)).cloned().collect() };
+            pending: self.operations.keys().filter(|id| !ancestors.accepts(id)).cloned().collect() };
         let mut adds: BTreeMap<(Id, Id), BTreeSet<Id>> = BTreeMap::new();
         let mut removed = BTreeSet::new();
-        for id in ancestors.keys() {
+        for id in self.operations.keys().filter(|id| ancestors.accepts(id)) {
             let op = &self.operations[id];
             let actions = match &op.command {
                 Command::Create(a) | Command::Patch(a) => a,
@@ -427,7 +471,7 @@ impl State {
         for candidates in out.fields.values_mut() {
             let all = candidates.clone();
             candidates.retain(|c| !all.iter().any(|other|
-                ancestors[&other.operation].contains(&c.operation)));
+                ancestors.contains(&other.operation, &c.operation)));
         }
         for ((field, member), tags) in adds {
             if tags.iter().any(|tag| !removed.contains(&(field.clone(), tag.clone()))) {

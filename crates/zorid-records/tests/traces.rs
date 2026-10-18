@@ -357,3 +357,44 @@ fn operation_limits_and_invalid_decoded_id_reject_before_mutation() {
     assert_eq!(State::new(bad_schema, s.scope().clone()), Err(Error::InvalidSchema));
     assert_eq!(s.snapshot().unwrap(), before);
 }
+#[test]
+fn dependency_chain_crosses_bitset_words_with_pending_tags_and_field_conflicts() {
+    let mut s = seed();
+    let branch = patch(&s, "B", vec![write("title", "concurrent")]);
+    // Reverse lexical IDs ensure ordinals cannot be mistaken for causal order.
+    // 256 dependencies cross multiple 64-bit words in both directions.
+    let mut chain = Vec::new();
+    let mut parent = "C".to_owned();
+    let first_add = "chain0256";
+    for step in 1..=256 {
+        let name = format!("chain{:04}", 257 - step);
+        let mut actions = vec![write("color", &format!("step{step}"))];
+        if step == 1 { actions.push(add("member")); }
+        if step == 65 { actions.push(write("title", "deep candidate")); }
+        if step == 193 { actions.push(remove("member", &[first_add])); }
+        chain.push(op(&name, &[&parent], Command::Patch(actions)));
+        parent = name;
+    }
+    let tail = chain.last().unwrap().clone();
+    s.union(&[tail.clone(), branch]).unwrap();
+    let pending = s.projection().unwrap();
+    assert_eq!(pending.pending, BTreeSet::from([tail.id.clone()]));
+    assert!(!pending.fields.contains_key(&id("color")));
+    assert_eq!(title(&s)[0].operation, id("B"));
+    s = State::restore(schema(), &s.snapshot().unwrap()).unwrap();
+    // Completing the missing chain in reverse delivery order must activate its
+    // removal only after the exact add is in its transitive ancestor bitset.
+    let predecessors: Vec<_> = chain[..255].iter().rev().cloned().collect();
+    s.union(&predecessors).unwrap();
+    let complete = s.projection().unwrap();
+    assert!(complete.pending.is_empty());
+    assert_eq!(complete.fields[&id("color")][0].operation, tail.id);
+    assert_eq!(title(&s).iter().map(|c| c.operation.clone()).collect::<Vec<_>>(),
+        vec![id("B"), id("chain0192")]);
+    assert!(complete.sets.is_empty());
+    assert_eq!(s.history().len(), 258);
+    local(&mut s, "R", Command::Patch(vec![write("title", "causal resolution")]));
+    assert_eq!(title(&s)[0].operation, id("R")); assert_eq!(title(&s).len(), 1);
+    assert_eq!(State::restore(schema(), &s.snapshot().unwrap()).unwrap(), s);
+    assert_eq!(s.history().len(), 259);
+}
