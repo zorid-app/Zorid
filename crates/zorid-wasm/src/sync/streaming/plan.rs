@@ -636,6 +636,7 @@ impl WasmSyncUpdate {
         match &self.family {
             AuthenticatedFamily::Text(text) => text.activity().payload_bytes().to_vec(),
             AuthenticatedFamily::Files(file) => file.payload_bytes().to_vec(),
+            AuthenticatedFamily::Records(value) => value.exact.clone(),
         }
     }
     #[wasm_bindgen(js_name=authenticatedDescriptorJson)]
@@ -648,6 +649,9 @@ impl WasmSyncUpdate {
                         &value!({"kind":"files","scope":file.payload().scope,"update_id":file.payload().id,"record":record,"summary_digest":domain(record.summary_digest())?}),
                     )
                 }
+                AuthenticatedFamily::Records(_) => json(
+                    &value!({"kind":"records","record":null,"activity":null,"summary_digest":null}),
+                ),
                 AuthenticatedFamily::Text(text) => {
                     let activity = text.activity();
                     let stored = value!({"identity":activity.identity(),"update_id":activity.update_id(),"namespace":activity.namespace(),"payload_bytes":activity.payload_bytes().len(),"payload_digest":Sha256Digest::of(activity.payload_bytes())});

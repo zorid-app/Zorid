@@ -2220,5 +2220,6 @@ dependencies = [
  "zorid-document",
  "zorid-file-sync",
  "zorid-index",
+ "zorid-records",
  "zorid-sync-protocol",
 ]

@@ -6,6 +6,7 @@ mod crypto;
 mod document;
 mod document_index;
 mod rpc;
+mod records;
 mod sync;
 
 use serde::{Deserialize, Serialize};

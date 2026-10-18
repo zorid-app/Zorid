@@ -499,13 +499,18 @@ impl WasmReceivedFilePlan {
             .map_err(error)
     }
 }
-enum AuthenticatedFamily {
+pub(super) struct AuthenticatedRecords {
+    pub(super) payload: zorid_records::wire::Payload,
+    exact: Vec<u8>,
+}
+pub(super) enum AuthenticatedFamily {
     Text(v2::AuthenticatedText),
     Files(files::AuthenticatedPayload),
+    Records(AuthenticatedRecords),
 }
 #[wasm_bindgen]
 pub struct WasmSyncUpdate {
-    family: AuthenticatedFamily,
+    pub(super) family: AuthenticatedFamily,
     metadata: serde_json::Value,
     wire: Vec<u8>,
 }
@@ -526,15 +531,20 @@ pub(crate) fn open_update(
     }
     let tag: Tag =
         serde_json::from_slice(opened.plaintext()).map_err(|_| "invalid sync payload")?;
-    if tag.format_version != 2 {
-        return Err("unsupported sync format".into());
-    }
-    let family = match tag.family.as_str() {
-        "text" => AuthenticatedFamily::Text(domain(v2::AuthenticatedText::from_opened(&opened))?),
-        "files" => {
+    let family = match (tag.family.as_str(), tag.format_version) {
+        ("text", 2) => AuthenticatedFamily::Text(domain(v2::AuthenticatedText::from_opened(&opened))?),
+        ("files", 2) => {
             AuthenticatedFamily::Files(domain(files::AuthenticatedPayload::from_opened(&opened))?)
         }
-        _ => return Err("unsupported sync family".into()),
+        ("records", 1) => {
+            let payload = zorid_records::wire::Payload::decode(opened.plaintext())
+                .map_err(|e| format!("records {e:?}"))?;
+            payload.check_context(opened.header().realm_id().as_str(),
+                opened.header().vault_id().as_str(), opened.header().update_id().as_str())
+                .map_err(|e| format!("records {e:?}"))?;
+            AuthenticatedFamily::Records(AuthenticatedRecords { payload, exact: opened.plaintext().to_vec() })
+        }
+        _ => return Err("unsupported sync family/version".into()),
     };
     let identity = match &family {
         AuthenticatedFamily::Text(value) => Some(value.identity()),
@@ -576,7 +586,7 @@ fn metadata(
     };
     Ok(
         serde_json::json!({"key":{"realm_id":realm,"vault_id":vault,"update_id":update},
-        "family":family,"format_version":2,"payload_digest":zorid_file_sync::Sha256Digest::of(payload),
+        "family":family,"format_version":if family == "records" {1} else {2},"payload_digest":zorid_file_sync::Sha256Digest::of(payload),
         "payload_bytes":payload.len() as u32,"text_binding":binding}),
     )
 }
@@ -591,6 +601,7 @@ impl WasmSyncUpdate {
         match &self.family {
             AuthenticatedFamily::Text(value) => value.activity().payload_bytes() == payload,
             AuthenticatedFamily::Files(value) => value.payload_bytes() == payload,
+            AuthenticatedFamily::Records(value) => value.exact == payload,
         }
     }
     #[wasm_bindgen(js_name = metadataJson)]
@@ -673,10 +684,9 @@ struct StoredMetadata {
 }
 fn stored_metadata(input: &str) -> Result<StoredMetadata> {
     let value: StoredMetadata = control(input)?;
-    if value.format_version != 2
+    if !matches!((value.family.as_str(),value.format_version), ("text",2)|("files",2)|("records",1))
         || value.payload_bytes == 0
         || value.payload_bytes as usize > zorid_sync_protocol::MAX_PLAINTEXT_BYTES
-        || !matches!(value.family.as_str(), "text" | "files")
         || (value.family == "text") != value.text_binding.is_some()
     {
         return Err("invalid stored sync metadata".into());
@@ -698,7 +708,7 @@ fn validate_payload(input: &str, payload: &[u8]) -> Result<()> {
             payload,
             Some(&inspected.identity),
         )?
-    } else {
+    } else if expected.family == "files" {
         let inspected = domain(files::Payload::decode(payload))?;
         metadata(
             "files",
@@ -708,6 +718,11 @@ fn validate_payload(input: &str, payload: &[u8]) -> Result<()> {
             payload,
             None,
         )?
+    } else {
+        let inspected = zorid_records::wire::Payload::decode(payload).map_err(|e|format!("records {e:?}"))?;
+        inspected.check_context(expected.key.realm_id.as_str(),expected.key.vault_id.as_str(),expected.key.update_id.as_str()).map_err(|e|format!("records {e:?}"))?;
+        metadata("records", &expected.key.realm_id, &expected.key.vault_id,
+            &expected.key.update_id, payload, None)?
     };
     if serde_json::to_value(expected).map_err(|_| "invalid stored sync metadata")? != actual {
         return Err("stored sync payload mismatch".into());

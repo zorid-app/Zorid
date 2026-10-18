@@ -21,3 +21,4 @@ zorid-file-sync = { path = "../zorid-file-sync" }
 zorid-document = { path = "../zorid-document" }
 zorid-bases = { path = "../zorid-bases" }
 zorid-index = { path = "../zorid-index" }
+zorid-records = { path = "../zorid-records" }

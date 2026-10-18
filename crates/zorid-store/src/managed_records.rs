@@ -10,6 +10,7 @@ use super::family_ledger::{self, EnvelopeKey, EnvelopeMetadata, Family};
 use super::*;
 use zorid_core::OperationId;
 use zorid_records::wire::Payload;
+use zorid_records::admission::{self, Admission, StateUsage};
 use zorid_records::{Command, Id, Operation, Policy, Schema, Scope, State};
 use zorid_sync_protocol::{RealmId, UpdateId, VaultId};
 
@@ -17,8 +18,6 @@ const MAX_PAGE: u32 = 64;
 const MAX_PAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RECEIPTS: i64 = 4096;
 const MAX_RECEIPT_BYTES: i64 = 16 * 1024 * 1024;
-const MAX_RECORDS: i64 = 1024;
-const MAX_STATE_BYTES: i64 = 32 * 1024 * 1024;
 const MAX_CHANGES: i64 = 65536;
 const MAX_RETRY_COUNT: u32 = 16;
 const MAX_RETRY_BYTES: usize = 1024 * 1024;
@@ -184,18 +183,19 @@ fn authorize(
     require_enrolled(tx, &registration.realm, &registration.vault)?;
     Ok(registration)
 }
+fn portable(registration: &ManagedRegistration) -> admission::Registration {
+    admission::Registration { realm: registration.realm.clone(), vault: registration.vault.clone(),
+        owner: registration.owner.clone(), schema: registration.schema.clone() }
+}
 fn check_scope(registration: &ManagedRegistration, scope: &Scope) -> Result<()> {
-    if registration.realm != scope.realm
-        || registration.vault != scope.vault
-        || registration.owner != scope.owner
-        || registration.schema.collection != scope.collection
-    {
+    // Keep the existing invalid-scope error distinct from engine validation.
+    if registration.realm != scope.realm || registration.vault != scope.vault
+        || registration.owner != scope.owner || registration.schema.collection != scope.collection {
         return Err(invalid("managed collection scope mismatch"));
     }
-    // Revalidate deserializable IDs and restore/generation invariants via core.
-    State::new(registration.schema.clone(), scope.clone()).map_err(engine)?;
-    Ok(())
+    admission::check_scope(&portable(registration), scope).map_err(engine)
 }
+
 fn load(
     tx: &Connection,
     key: &str,
@@ -232,26 +232,9 @@ fn load(
     Ok(state)
 }
 fn projection(state: &State) -> Result<serde_json::Value> {
-    let p = state.projection().map_err(engine)?;
-    let fields: std::collections::BTreeMap<_, _> = p
-        .fields
-        .iter()
-        .map(|(id, candidates)| {
-            (
-                id.as_str(),
-                candidates
-                    .iter()
-                    .map(|c| {
-                        serde_json::json!({
-                            "operation": c.operation, "cell": c.cell,
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect();
-    Ok(serde_json::json!({"created":p.created,"deleted":p.deleted,"fields":fields,"sets":p.sets}))
+    admission::projection_value(state).map_err(engine)
 }
+
 fn snapshot(
     tx: &Connection,
     key: &str,
@@ -307,9 +290,8 @@ fn write_state(tx: &Connection, key: &str, record: &str, state: &State) -> Resul
     let (count, used, old): (i64, i64, i64) = tx.query_row(
         "SELECT count(*),coalesce(sum(length(state)+length(projection)),0),coalesce((SELECT length(state)+length(projection) FROM managed_records WHERE collection_key=?1 AND record_key=?2),0) FROM managed_records",
         params![key, record], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
-    if (old == 0 && count >= MAX_RECORDS)
-        || used - old + bytes.len() as i64 + derived.len() as i64 > MAX_STATE_BYTES
-    {
+    if !admission::state_fits(StateUsage { count: count as u64, used_bytes: used as u64,
+        replaced_bytes: old as u64 }, bytes.len(), derived.len()) {
         return Err(invalid("managed state quota exhausted"));
     }
     tx.execute("INSERT INTO managed_records(collection_key,record_key,state,projection) VALUES(?1,?2,?3,?4) ON CONFLICT(collection_key,record_key) DO UPDATE SET state=excluded.state,projection=excluded.projection", params![key, record, bytes, derived])?;
@@ -354,7 +336,7 @@ fn check_restore(
             "incomplete managed restore source".into(),
         ));
     }
-    Ok(projection.created && projection.deleted)
+    admission::restore_ready(scope, Some(&state)).map_err(engine)
 }
 fn metadata(payload: &Payload, bytes: &[u8]) -> Result<EnvelopeMetadata> {
     Ok(EnvelopeMetadata {
@@ -415,12 +397,7 @@ impl Store {
                 }
                 // A schema replacement must revalidate EVERY accepted state. It
                 // may not relabel old operations or change an existing field type.
-                if registration.schema.version <= old.schema.version
-                    || old
-                        .schema
-                        .fields
-                        .iter()
-                        .any(|(id, field)| registration.schema.fields.get(id) != Some(field))
+                if admission::registration_change(&portable(&old), &portable(registration)).is_err()
                 {
                     return Err(invalid("managed schema update must be additive"));
                 }
@@ -489,7 +466,7 @@ impl Store {
         let resolved_scope = target_scope(&registration, target);
         let scope = &resolved_scope;
         check_scope(&registration, scope)?;
-        let request = encode(&(scope, expected, &command))?;
+        let request = admission::local_request(scope, &expected.0.0, &command).map_err(engine)?;
         if request.len() > MAX_PAGE_BYTES {
             return Err(invalid("managed request too large"));
         }
@@ -773,7 +750,7 @@ fn bind_sources(tx: &Connection, key: &str, payload: &Payload) -> Result<()> {
     let added = payload
         .operations()
         .iter()
-        .map(encode)
+        .map(|op| admission::canonical_operation(op).map_err(engine))
         .collect::<Result<Vec<_>>>()?
         .iter()
         .map(Vec::len)
@@ -782,13 +759,13 @@ fn bind_sources(tx: &Connection, key: &str, payload: &Payload) -> Result<()> {
         return Err(invalid("managed operation source quota exhausted"));
     }
     for operation in payload.operations() {
-        tx.execute("INSERT INTO managed_operation_sources(collection_key,record_key,operation_id,content,realm_id,vault_id,update_id) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![key, scope_key(payload.scope())?, operation.id.as_str(), encode(operation)?, payload.scope().realm.as_str(), payload.scope().vault.as_str(), payload.id().as_str()])?;
+        tx.execute("INSERT INTO managed_operation_sources(collection_key,record_key,operation_id,content,realm_id,vault_id,update_id) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![key, scope_key(payload.scope())?, operation.id.as_str(), admission::canonical_operation(operation).map_err(engine)?, payload.scope().realm.as_str(), payload.scope().vault.as_str(), payload.id().as_str()])?;
     }
     Ok(())
 }
 fn equivocated(tx: &Connection, key: &str, operations: &[Operation]) -> Result<bool> {
     for operation in operations {
-        let differs: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM managed_operation_sources WHERE collection_key=?1 AND record_key=?2 AND operation_id=?3 AND content!=?4)", params![key, scope_key(&operation.scope)?, operation.id.as_str(), encode(operation)?], |r|r.get(0))?;
+        let differs: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM managed_operation_sources WHERE collection_key=?1 AND record_key=?2 AND operation_id=?3 AND content!=?4)", params![key, scope_key(&operation.scope)?, operation.id.as_str(), admission::canonical_operation(operation).map_err(engine)?], |r|r.get(0))?;
         if differs {
             return Ok(true);
         }
@@ -824,15 +801,8 @@ fn activate(tx: &Connection, key: &str, payload: &Payload) -> Result<String> {
     let Some((_, registration)) = registered(tx, key)? else {
         return Ok("missing_registration".into());
     };
-    if registration.schema.policy != Policy::Synced {
-        return Ok("policy_mismatch".into());
-    }
-    if payload
-        .operations()
-        .iter()
-        .any(|op| op.schema_version != registration.schema.version)
-    {
-        return Ok("incompatible_schema".into());
+    if let Some(status) = admission::received_gate(payload, Some(&portable(&registration)), false) {
+        return Ok(status.as_str().into());
     }
     // Same generation cannot be split by conflicting restores metadata.
     let prior: Option<Vec<u8>> = tx
@@ -848,31 +818,23 @@ fn activate(tx: &Connection, key: &str, payload: &Payload) -> Result<String> {
             return Ok("integrity_conflict".into());
         }
     }
-    let mut state = load(tx, key, &registration, payload.scope())?;
+    let state = load(tx, key, &registration, payload.scope())?;
     // Structural/semantic invalidity is retained without touching accepted state.
     if !check_restore(tx, key, &registration, payload.scope())? {
         return Ok("waiting_restore_source".into());
     }
-    match state.union(payload.operations()) {
-        Err(zorid_records::Error::Limit) => return Ok("capacity".into()),
-        Err(_) => return Ok("invalid_operation".into()),
-        Ok(()) => (),
-    }
-    if !state.projection().map_err(engine)?.pending.is_empty() {
-        return Ok("waiting_dependencies".into());
-    }
-    // A finite state quota becomes a durable unresolved reason; SQL/IO errors
-    // still abort the enclosing exact receipt+cursor commit.
-    let bytes = state.snapshot().map_err(engine)?;
-    let derived = encode(&projection(&state)?)?;
+    let accepted = match admission::admit_received(state, payload, true).map_err(engine)? {
+        Admission::Retained(status) => return Ok(status.as_str().into()),
+        Admission::Accepted(value) => value,
+    };
+    let bytes = &accepted.state_bytes;
+    let derived = &accepted.projection_bytes;
     let (count, used, old):(i64,i64,i64) = tx.query_row("SELECT count(*),coalesce(sum(length(state)+length(projection)),0),coalesce((SELECT length(state)+length(projection) FROM managed_records WHERE collection_key=?1 AND record_key=?2),0) FROM managed_records", params![key,scope_key(payload.scope())?],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-    if derived.len() > zorid_records::MAX_BYTES
-        || (old == 0 && count >= MAX_RECORDS)
-        || used - old + bytes.len() as i64 + derived.len() as i64 > MAX_STATE_BYTES
-    {
+    if !admission::state_fits(StateUsage { count: count as u64, used_bytes: used as u64,
+        replaced_bytes: old as u64 }, bytes.len(), derived.len()) {
         return Ok("capacity".into());
     }
-    write_state(tx, key, &scope_key(payload.scope())?, &state)?;
+    write_state(tx, key, &scope_key(payload.scope())?, &accepted.state)?;
     Ok("accepted".into())
 }
 /// Returns (exact_duplicate, durable_status). Caller MUST check delivery, invoke

@@ -1,5 +1,6 @@
 //! Internal, in-memory managed-record authority. No durable receipt or authorization.
 pub mod wire;
+pub mod admission;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
