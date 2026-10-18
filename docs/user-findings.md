@@ -1,5 +1,27 @@
 # User findings queue
 
+## Clipboard image transfer — fixed 2026-10-18
+
+Integrated `a98cb04f` on main. Concurrent attachment reads and paste uploads could
+collide with desktop single-command admission (`binary_busy`) after files already
+committed. Complete-transfer scheduling now preserves identity, cancellation and
+cleanup without blocking ordinary text saves. Independent source review passed;
+28 focused tests and desktop TypeScript/build passed on main.
+
+Actual Electron regression passed on composed integration source `bbf121ea`:
+`/private/tmp/zorid-clipboard-final-verified/evidence.json`. Two exact PNG files,
+saved embeds and four target-specific 128×64 decoded pixel hashes matched with no
+transfer errors. Hidden ClipboardEvent/File pipeline used explicit eager decoding;
+this does not establish OS clipboard or foreground lazy-loading parity. User-owned
+visible Playground was left on its existing copied build.
+
+The larger cache/history batch remains isolated in `storage-foundation` /
+`tingkai-c/storage-cache-integration` (latest `5b8c83d9`); S0 is not accepted.
+Dirty JS `window.close()` did not finish in 15 seconds, although exact edits
+subsequently autosaved. Native OS close, normal quit and history runtime checks
+remain open; evidence `/private/tmp/zorid-runtime-handoff.json`. Original import
+warning and large-stream limitations remain open. No push performed.
+
 ## Large-file validation performance — 2026-10-18
 
 Broader S0 verification exposed an overlong existing 17 MiB compound-stream
