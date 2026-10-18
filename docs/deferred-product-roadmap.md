@@ -77,6 +77,22 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Runtime checkpoint (2026-10-18 02:15 UTC): diagnostic13 actual touch trace proves
+the fallback cleanup microtask runs before CodeMirror's actual touch-end handler,
+clearing the saved gesture; no default-guard relaxation is justified. d809 owns
+cleanup-order fix/regression, native owner owns reviewed WK retest. Temporary
+diagnostics must be fully removed before final source/assets freeze. Phone has
+reconnected: exact signed Dev10 installed and launched successfully7774, replacing
+the earlier pending-connectivity status; it does NOT contain the failed link fix.
+Native owner has next device build/install slot after final link WK proof and
+current cleanup, no duplicate approval loop. Browser normal-worker phase reports
+five actual Chrome groups +17 focused/full TS pass at804c9fd5; final exact source
+and proof review pending, not integrated yet. Loading module-overlap followup
+workspace.ts hunk assigned2f via native owner, separate isolated source; no speed
+claim or recovery/listing bypass. NewNote caller exact model/coordinator/Pages/
+Mobile/factory/project hunks are authorized to native owner on future successor,
+with durable prospective snapshot and same-session startup inspection preserved.
+
 Canonical browser-storage checkpoint (2026-10-18 02:04 UTC): main901c6ff3..
 b5d9d510 integrates the13 reviewed managed-records browser commits through
 8bf1ca06. Root verified all affected crates/src/scripts/manifests/lock/harness/
