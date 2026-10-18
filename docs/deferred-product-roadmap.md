@@ -116,6 +116,16 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:34UTC: root approved staged factory narrow correction (no scanComplete gate,
+weak installed-owner toolbar bridge), commit pending. Settings callbackf9c7 and
+UUIDfixcb097 ready; exactf9c7 still lacked ever-root-configured latch, correction
+reiterated371 msg_ce240626bb8a. Nativeowner prepares isolated current-main/import
+composition for reserved Swift typing; no compiler started. Configured editor
+history is a required functional followup, proposal msg_e3a6384fb4a1: reuse existing
+onNavigate/availability and bounded native route history, no legacy Boolpop.
+No new history implementation before composed typing; arrows accurately disabled
+until wired, not a completed feature. Do not lose this gap or Newnote factory work.
+
 00:32UTC: native owner found factory scanComplete API incompatible with current
 NativeVaultListing.reconciliationComplete. Remove global completeness gate only
 for positively fresh-validated live file open; exact store/stableID/live witness
