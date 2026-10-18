@@ -6,11 +6,11 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(read,test,message){const end=Date.now()+10000;while(Date.now()<end){const value=await read();if(test(value))return value;await pause(20);}throw new Error(message);}
 const enc=value=>new TextEncoder().encode(JSON.stringify(value));
 const scope={realm_id:'host-realm',vault_id:'host-vault'};
-const recordScope=record=>({realm:scope.realm_id,vault:scope.vault_id,owner:'host-fixture',collection:'lifecycle',record,generation:'generation',restores:null});
+const recordScope=(record,generation)=>({realm:scope.realm_id,vault:scope.vault_id,owner:'host-fixture',collection:'lifecycle',record,generation,restores:null});
 const command=(kind,title)=>({command:kind,actions:[{action:'Write',field:'title',cell:{state:'Value',value:{type:'String',value:title}}}]});
 let wasm,key;
 function wire(id,record,parents,kind='Create'){
-  const s=recordScope(record),payload=enc({family:'records',format_version:1,id,scope:s,operations:[{id,parents,scope:s,schema_version:1,command:command(kind,id)}]});
+  const s=recordScope(record,kind==='Create'?id:parents[0]),payload=enc({family:'records',format_version:1,id,scope:s,operations:[{id,parents,scope:s,schema_version:1,command:command(kind,id)}]});
   return key.seal(JSON.stringify({envelope_version:1,purpose:'vault_update',suite:'xchacha20poly1305',...scope,update_id:id,key_epoch:1,
     origin_device_id:'host-fixture',document_format_version:1,required_features:[],optional_extensions:{}}),payload);
 }
@@ -70,7 +70,8 @@ async function main(){
   });
   await group('release fences maintenance and exact client lease reacquires on worker restart',async()=>{
     const observer=await connect(name);try{await observer.sync.receive('shutdown',wire('shutdown','shutdown',[]),key);}finally{observer.close();}
-    const refresh=h.call('refresh');const release=h.call('release-client');await Promise.all([refresh,release]);
+    const refresh=h.call('refresh').catch(error=>assert(error.code==='client_not_admitted','Unexpected releasing guard'));
+    const release=h.call('release-client');await Promise.all([refresh,release]);
     const after=(await rows(name,'managed_changes')).length,delivered=h.events.filter(e=>e.event==='fixture-durable-changes').length;
     await pause(80);assert((await rows(name,'managed_changes')).length===after,'Writes continued after release');
     assert(h.events.filter(e=>e.event==='fixture-durable-changes').length===delivered,'Stale notification after release');

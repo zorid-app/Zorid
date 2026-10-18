@@ -110,7 +110,7 @@ finally {
     if(!chromeDone()){chrome.kill('SIGKILL');await Promise.race([new Promise(resolve=>chrome.once('exit',resolve)),delay(4000)]);}}
   if(stderr)await writeFile(path.join(out,'chrome-stderr.log'),stderr);
   await server?.close();
-  if(chromeDone())await rm(profile,{recursive:true,force:true});
+  if(chromeDone())await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:100});
   else {console.error('Owned Chrome did not confirm exit; profile retained: '+profile);failure??=new Error('Chrome cleanup unverified');}
 }
 if(failure)process.exitCode=1;
