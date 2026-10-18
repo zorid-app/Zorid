@@ -77,6 +77,19 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Canonical integration checkpoint (2026-10-18 01:54 UTC): main71c2bb7d..a49d6d72
+integrates reviewed native history + durable tab metadata batch through1f7ecc59,
+including readiness correction2cdbd86f. Root verified the entire ios/App tree
+byte-identical to that candidate; project/plist lint and diff check pass. Only
+documentation conflicts were resolved, retaining both sessions' findings. Native
+owner reports actual Simulator Back/Forward/exact folder return, nonregular
+metadata activation block + Retry, typed Rust save/reopen, malformed metadata
+explicit error and healthy restart preserving tab UUID/body all pass. App/helper
+closed; Simulator remains booted. Software keyboard toolbar is NOT proved (its
+control lookup failed); no broad mobile parity, NewNote/import/edge completion.
+Separate link candidate5bc70762 (exact89be64c8) is NOT included; native owner
+holds next iOS slot for frontend/copy/incremental build and actual WK proof.
+
 Actual UI checkpoint (2026-10-18 01:39 UTC): Simulator11 confirmed native Files,
 folder/nested note, header removal, durable tab metadata save and editor Back
 availability. Back restores the exact folder but Forward stays disabled: root

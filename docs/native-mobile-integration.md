@@ -1,5 +1,19 @@
 # Native mobile integration
 
+## Canonical history and durable tab metadata — 2026-10-18
+
+Main71c2bb7d..a49d6d72 integrates the reviewed batch through1f7ecc59. Root
+verified all ios/App files byte-identical to that tested candidate; project/plist
+lint and diff check pass. Managed-data/core work is preserved. Documentation
+conflicts retain both coordinators' findings; no source conflict was changed.
+
+Actual Simulator evidence includes Back/Forward/exact folder return, metadata
+failure blocking activation and Retry recovery, typed Rust save/reopen, malformed
+metadata explicit error and healthy restart preserving tab UUID/body. The app
+and helper are closed. Keyboard-toolbar interaction remains unverified; no
+NewNote/import/edge-swipe or full mobile parity is claimed. The subsequent link
+candidate5bc70762/89be64c8 is excluded pending actual WK verification.
+
 ## Canonical connected File/Home tabs — 2026-10-18
 
 Main a56c2d16 integrates exact reviewed native candidate2add282b. All iOS files
