@@ -116,6 +116,24 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:10UTC source checkpoint: import runtime boundary fix5a226480 independently
+reviewed, targeted reproduction101→fixed58276exit0/1pass. Root composed only fix
+as d9836528 in native-import-integration; no duplicate dependency change. Host
+module rerun awaits native two-file frontend check slot return, not main yet.
+Atomic menu authority12933f3c independently source-approved, uncompiled; composed
+as3e88c1da in native-menu-wire. stage4_native_consumer owns only hostfamily/narrow
+lib wire endpoints file_command_compact/status, strict leases and bounded original
+root status. Exact snake_case wire frozen to371; UI retains full selected parent
+witness and same operation journal. No new compiler or schema by source workers.
+
+Tab source integration grants:2f owns only model active-document binding/Home
+replacement and overview busy/error callbacks;371 Pages header/FAB/new-tab/read
+drain;d809 NativeMobile editor close/snapshot/current validation; native owner
+assigns single root/catalog coordinator hunk owner after bd57 reconciliation and
+owns minimal five Swift project registrations. No JS/Rust/entitlement/CI changes.
+New-note unknown outcomes never auto-create another file; metadata retry retains
+the live editor. Existing two-file527fe77e remains frozen during its typecheck.
+
 00:06UTC resource checkpoint: actual-source tab model harness42964 compiled/ran
 terminal0 PASS207 assertions for exact5824bbfe; log tmp/native-tabs-model-harness.log.
 This is model/metadata/persistence proof only, no SwiftUI or editor lease proof.
