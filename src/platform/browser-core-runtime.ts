@@ -1,6 +1,6 @@
 import {createBrowserWorkBlocks,workBlockFailure} from './browser-workblocks.ts';
 import type {WorkBlockService} from '../core/workblocks.ts';
-import type {BrowserDocumentIndex} from '../core/browser-document-index.ts';
+import {captureBrowserTaskQuery,type BrowserDocumentIndex} from '../core/browser-document-index.ts';
 import type { BrowserSyncFixtureCredentials, BrowserSyncSweep } from './browser-sync-worker.ts';
 import { BrowserVaultError } from '../core/browser-vault.ts';
 import type { BrowserVaultIntent, BrowserVaultRead, BrowserVaultOutcome } from '../core/browser-vault.ts';
@@ -129,6 +129,7 @@ export class BrowserCoreRuntime implements BrowserCoreBackend {
         pump:id=>runtime.call('document-index-pump',id),publish:id=>runtime.call('document-index-publish',id),
         open:()=>runtime.call('document-index-open'),closePin:id=>runtime.call('document-index-close-pin',id),
         search:input=>runtime.call('document-index-search',structuredClone(input)),
+        tasks:async input=>runtime.call('document-index-tasks',captureBrowserTaskQuery(input)),
         metadata:input=>runtime.call('document-index-metadata',structuredClone(input)),base:input=>runtime.call('document-index-base',structuredClone(input)),
         resolve:input=>runtime.call('document-index-resolve',structuredClone(input)),
         backlinks:input=>runtime.call('document-index-backlinks',structuredClone(input)),rebuild:()=>runtime.call('document-index-rebuild'),

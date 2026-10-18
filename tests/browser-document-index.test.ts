@@ -16,14 +16,14 @@ function fixture(){
   const records=new Map<string,Map<string,any>>(['control','metadata','presentation','content','sync_materialization_refs'].map(n=>[n,new Map()]));
   const seed=(store:string,key:string,value:any)=>records.get(store)!.set(key,clone(value));
   seed('control','local-store-id',{key:'local-store-id',value:authority});seed('control','sequence',{key:'sequence',value:'0'});
-  const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false;
+  const calls:{store:string;op:string;key?:any}[]=[],transactions:string[][]=[];let failCommit=false,denied=false;let afterRead:((store:string,key:any)=>void)|undefined;
   const db:any={transaction(names:string[],mode:string,options:any){
     if(mode==='readwrite')assert.deepEqual(options,{durability:'strict'});transactions.push(names);
     const local=new Map(names.map(n=>[n,clone(records.get(n)!)])),writes=new Set<string>();let pending=0,aborted=false,completed=false,scheduled=false;
     const tx:any={durability:'strict',abort(){if(aborted||completed)return;aborted=true;queueMicrotask(()=>tx.onabort?.());},
       objectStore(name:string){assert.ok(local.has(name));
         const request=(op:string,key:any,action:()=>any)=>{const result:any={};calls.push({store:name,op,key});pending++;
-          queueMicrotask(()=>{if(aborted)return;try{result.result=clone(action());result.onsuccess?.();}catch{tx.abort();}finally{pending--;schedule();}});return result;};
+          queueMicrotask(()=>{if(aborted)return;try{result.result=clone(action());if(op==='get')afterRead?.(name,key);result.onsuccess?.();}catch{tx.abort();}finally{pending--;schedule();}});return result;};
         const put=(row:any,add:boolean)=>request(add?'add':'put',row.key??row.id,()=>{assert.equal(mode,'readwrite');const key=row.key??row.id;if(add&&local.get(name)!.has(key))throw new Error('duplicate');local.get(name)!.set(key,clone(row));writes.add(name);return key;});
         return {get:(key:string)=>request('get',key,()=>local.get(name)!.get(key)),put:(row:any)=>put(row,false),add:(row:any)=>put(row,true),
           getAll(){assert.fail('aggregate source/control scan is forbidden');},
@@ -39,7 +39,8 @@ function fixture(){
     };
     function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;if(aborted||completed||pending)return;if(failCommit&&mode==='readwrite'){failCommit=false;tx.abort();return;}completed=true;for(const n of writes)records.set(n,local.get(n)!);tx.oncomplete?.();});}schedule();return tx;
   }};
-  let textExtractions=0,reuses=0;const baseCalls:{id:string;text:string;facts:any[];options:any;viewName?:string|null}[]=[];
+  let textExtractions=0,reuses=0;const taskCalls:{sources:{id:string;source:string}[];options:any;snapshot:unknown}[]= [];
+  const baseCalls:{id:string;text:string;facts:any[];options:any;viewName?:string|null}[]=[];
   class MockBuilder {
     header:BrowserIndexHeader;rows=new Map<string,any>();constructor(input:string){this.header=JSON.parse(input);this.header.entries=this.header.entries.map(({id,path,kind,revision,deleted})=>({id,path,kind,revision,deleted}));}
     free(){}headerJson(){return JSON.stringify(this.header);}beginPump(){}
@@ -52,6 +53,7 @@ function fixture(){
     finish(){const header=this.header,rows=this.rows;assert.ok(this.ready());return {
       free(){},headerJson:()=>JSON.stringify(header),snapshotJson:()=>JSON.stringify(header.nextIndex),coverageComplete:()=>true,rowJson:(id:string)=>JSON.stringify(rows.get(id)),
       metadataJson:(id:string)=>JSON.stringify({fixture:'opaque-metadata-transport',id,snapshot:header.nextIndex}),
+      tasksJson:(sources:string,options:string)=>{const captured=JSON.parse(sources);for(const source of captured)assert.deepEqual(sha(new TextEncoder().encode(source.source)),rows.get(source.id).digest);taskCalls.push({sources:captured,options:JSON.parse(options),snapshot:header.nextIndex});return JSON.stringify({fixture:'opaque-tasks-transport',snapshot:header.nextIndex});},
       baseJson:(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null)=>{assert.deepEqual(sha(bytes),rows.get(id).digest);baseCalls.push({id,text:new TextDecoder().decode(bytes),facts:JSON.parse(facts),options:JSON.parse(options),viewName});return JSON.stringify({fixture:'opaque-base-transport',snapshot:header.nextIndex});},
       resolveJson:()=>'{"fixture":"opaque-rust-transport"}',backlinksJson:()=>'{"fixture":"opaque-rust-transport"}',
       openLiteral(query:string,token:string){if(query==='fixture-page')assert.ok(token===''||token==='1');let position=0;const observed:string[]=[];const files=header.entries.filter(e=>e.kind==='file'&&rows.get(e.id)?.digest);return {
@@ -75,7 +77,7 @@ function fixture(){
   }
   const source=()=>clone(new Map([...records].filter(([n])=>n!=='control').map(([n,m])=>[n,m])));
   const build=async(index:ReturnType<typeof open>)=>{let stage=await index.begin();do{stage=await index.pump(stage.stageId);}while(!stage.ready);return index.publish(stage.stageId);};
-  return {records,calls,transactions,file,open,build,source,seed,baseCalls,stats:()=>({textExtractions,reuses}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},deny(){denied=true;}};
+  return {records,calls,transactions,file,open,build,source,seed,baseCalls,taskCalls,stats:()=>({textExtractions,reuses}),sequence(value:string){seed('control','sequence',{key:'sequence',value});},delete(id:string){for(const store of ['metadata','presentation','content','sync_materialization_refs'])records.get(store)!.delete(id);},fail(){failCommit=true;},deny(){denied=true;},afterRead(action:(store:string,key:any)=>void){afterRead=action;}};
 }
 
 test('strict derived publication retains source bytes and uses no aggregate control scan',async()=>{
@@ -193,3 +195,47 @@ test('discard of an already-pruning own published locator makes no cache writes'
 });
 
 test.after(()=>{(globalThis as any).IDBKeyRange=range;});
+
+
+test('Tasks transport reads exact retained Type YAML across edits, moves, deletes and reopen',async()=>{
+  const f=fixture(),oldYaml='\ufeffversion: 1\nlabel: 舊 Task\n';f.file('type',oldYaml,{path:'Types/Task.yaml'});f.file('task','task body');
+  const index=f.open();await f.build(index);const old=await index.open();
+  f.file('type','new YAML',{path:'Moved.yaml',revision:'r2'});f.sequence('1');await f.build(index);const fresh=await index.open();
+  f.delete('type');f.sequence('2');await f.build(index);
+  await index.tasks({pinId:old.pinId,typeIds:['type'],options:{filter:'today',clockMs:0,timezone:'America/Toronto'}});
+  await index.tasks({pinId:fresh.pinId,typeIds:['type']});
+  assert.equal(f.taskCalls[0]!.sources[0]!.source,oldYaml,'BOM and Unicode retained losslessly');assert.equal(f.taskCalls[1]!.sources[0]!.source,'new YAML');
+  assert.deepEqual(f.taskCalls[0]!.snapshot,old.snapshot);assert.deepEqual(f.taskCalls[0]!.options,{filter:'today',clockMs:0,timezone:'America/Toronto'});
+  await index.close();
+  const reopened=f.open(),pin=await reopened.open();await assert.rejects(reopened.tasks({pinId:pin.pinId,typeIds:['type']}),{code:'index_missing_source'});
+  await reopened.tasks({pinId:pin.pinId,typeIds:[]});assert.deepEqual(f.taskCalls.at(-1)!.sources,[]);await reopened.close();
+});
+test('Tasks bounds selectors/options/projection bytes and rejects unavailable sources before Rust',async()=>{
+  const f=fixture();f.file('type','type');f.file('binary','binary',{binary:true});f.file('large','x'.repeat(256*1024+1));
+  const index=f.open();await f.build(index);const pin=await index.open(),before=f.calls.length;
+  for(const input of [{typeIds:['type','type']},{typeIds:Array.from({length:129},(_,i)=>'t'+i)},{typeIds:['../Task.yaml']},{typeIds:['type'],options:null},{typeIds:['type'],options:{clockMs:null}},{typeIds:['type'],options:{maxRows:0}},{typeIds:['type'],options:{showDone:'true'}},{typeIds:['type'],options:{configuration:{}}},{typeIds:['type'],options:{timezone:'x'.repeat(129)}}]){
+    await assert.rejects(index.tasks({pinId:pin.pinId,...input} as any),{code:'index_invalid_request'});
+  }
+  assert.equal(f.calls.length,before,'invalid request never reads index storage');
+  await assert.rejects(index.tasks({pinId:pin.pinId,typeIds:['binary']}),{code:'index_source_unavailable'});
+  await assert.rejects(index.tasks({pinId:pin.pinId,typeIds:['large']}),{code:'index_input_limit'});
+  assert.deepEqual(f.taskCalls,[]);await index.close();
+});
+test('Tasks total source budget is enforced before Rust evaluation',async()=>{
+  const f=fixture();for(let i=0;i<5;i++)f.file('type'+i,'x'.repeat(220*1024));const index=f.open();await f.build(index);const pin=await index.open();
+  await assert.rejects(index.tasks({pinId:pin.pinId,typeIds:['type0','type1','type2','type3','type4']}),{code:'index_input_limit'});
+  assert.deepEqual(f.taskCalls,[]);await index.close();
+});
+test('Tasks pin ownership/expiry and request mutation cannot redirect retained source reads',async()=>{
+  const f=fixture();f.file('type','original');f.file('other','other');const a=f.open(),b=f.open('client-b');await f.build(a);const pin=await a.open();
+  await assert.rejects(b.tasks({pinId:pin.pinId,typeIds:['type']}),{code:'index_snapshot_expired'});
+  const input={pinId:pin.pinId,typeIds:['type'],options:{clockMs:0}};const read=a.tasks(input);input.typeIds[0]='other';input.options.clockMs=99;await read;
+  assert.deepEqual(f.taskCalls[0]!.sources,[{id:'type',source:'original'}]);assert.equal(f.taskCalls[0]!.options.clockMs,0);
+  await a.closePin(pin.pinId);await assert.rejects(a.tasks({pinId:pin.pinId,typeIds:['type']}),{code:'index_snapshot_expired'});
+  const next=await a.open();await a.rebuild();await assert.rejects(a.tasks({pinId:next.pinId,typeIds:['type']}),{code:'index_snapshot_expired'});await a.close();await b.close();
+});
+test('Tasks rechecks pin/session after asynchronous retained projection fetch',async()=>{
+  const f=fixture();f.file('type','original');const index=f.open();await f.build(index);const pin=await index.open();
+  let fetched=false;f.afterRead((store,key)=>{if(store==='control'&&String(key).endsWith('/row/type')){fetched=true;f.deny();}});
+  await assert.rejects(index.tasks({pinId:pin.pinId,typeIds:['type']}),{code:'owner_retired'});assert.equal(fetched,true);assert.deepEqual(f.taskCalls,[]);
+});

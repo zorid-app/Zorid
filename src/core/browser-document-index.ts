@@ -1,3 +1,4 @@
+import type {DocumentTaskOptions} from './document-semantics.ts';
 import {BrowserVaultError} from './browser-vault.ts';
 import type {BrowserVaultPresentation, EntryState} from './browser-vault.ts';
 import {decimalU64, normalizedTransact} from './browser-normalized-idb.ts';
@@ -22,7 +23,7 @@ export interface BrowserIndexSource {localStoreId:string;watermark:string}
 export interface BrowserIndexSnapshot {localStoreId:string;generationEpoch:string;generation:string;versions:unknown}
 export interface BrowserIndexHeader {source:{localStoreId:string;watermark:string};entries:EntryState[];expectedIndex:BrowserIndexSnapshot|null;nextIndex:BrowserIndexSnapshot}
 interface Builder extends Free {headerJson():string;pendingJson():string;beginPump():void;addText(id:string,bytes:Uint8Array):void;addBinary(id:string):void;addUnreadable(id:string):void;addPersisted(id:string,row:string):void;rowJson(id:string):string;ready():boolean;finish():Generation}
-interface Generation extends Free {headerJson():string;snapshotJson():string;rowJson(id:string):string;coverageComplete():boolean;metadataJson(id:string):string;baseJson(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null):string;resolveJson(id:string,destination:string):string;backlinksJson(id:string,token:string,limit:number):string;openLiteral(query:string,token:string,limit:number):LiteralPage}
+interface Generation extends Free {headerJson():string;snapshotJson():string;rowJson(id:string):string;coverageComplete():boolean;metadataJson(id:string):string;tasksJson(sources:string,options:string):string;baseJson(id:string,bytes:Uint8Array,facts:string,options:string,viewName?:string|null):string;resolveJson(id:string,destination:string):string;backlinksJson(id:string,token:string,limit:number):string;openLiteral(query:string,token:string,limit:number):LiteralPage}
 interface LiteralPage extends Free {nextReadJson():string;accept(bytes:Uint8Array):void;finishJson():string}
 export interface BrowserDocumentIndexWasm {documentIndexVersionsJson():string;WasmDocumentIndexBuilder:new(input:string)=>Builder}
 export interface BrowserDocumentIndexHost {
@@ -40,6 +41,7 @@ export interface BrowserDocumentIndex {
   resolve(input:{pinId:string;sourceId:string;destination:string}):Promise<unknown>;
   backlinks(input:{pinId:string;targetId:string;cursor?:string;limit?:number}):Promise<unknown>;
   metadata(input:{pinId:string;id:string}):Promise<unknown>;
+  tasks(input:{pinId:string;typeIds:string[];options?:DocumentTaskOptions}):Promise<unknown>;
   base(input:{pinId:string;id:string;viewName?:string|null;options?:{viewIndex?:number;searchTerms?:string[];ignorePaths?:string[];clockMs?:number;timezone?:string;maxRows?:number;currentEntryId?:string;maxSteps?:number}}):Promise<unknown>;
   rebuild():Promise<void>;close():Promise<void>;
 }
@@ -69,6 +71,23 @@ function baseOptions(input:unknown):string {
   if(value.timezone!==undefined)result.timezone=inputText(value.timezone,256);
   for(const key of ['searchTerms','ignorePaths'])if(value[key]!==undefined){const array=value[key];if(!Array.isArray(array)||array.length>1000)throw fail('index_input_limit');result[key]=array.map(item=>inputText(item,4096));}
   const raw=JSON.stringify(result);if(size(raw)>65536)throw fail('index_input_limit');return raw;
+}
+function taskOptions(input:unknown):string {
+  if(input===undefined)input={};if(!input||typeof input!=='object'||Array.isArray(input))throw fail('index_invalid_request');
+  const value=input as Record<string,unknown>,allowed=new Set(['filter','clockMs','timezone','showDone','maxRows']);
+  if(Object.keys(value).some(key=>!allowed.has(key)))throw fail('index_invalid_request');
+  const result:Record<string,unknown>={};
+  if(value.filter!==undefined){if(!['all','today','unscheduled'].includes(value.filter as string))throw fail('index_invalid_request');result.filter=value.filter;}
+  const clock=value.clockMs===undefined?Date.now():value.clockMs;if(typeof clock!=='number'||!Number.isSafeInteger(clock))throw fail('index_invalid_request');result.clockMs=clock;
+  if(value.timezone!==undefined)result.timezone=inputText(value.timezone,128);
+  if(value.showDone!==undefined){if(typeof value.showDone!=='boolean')throw fail('index_invalid_request');result.showDone=value.showDone;}
+  if(value.maxRows!==undefined){if(typeof value.maxRows!=='number'||!Number.isInteger(value.maxRows)||value.maxRows<1||value.maxRows>10000)throw fail('index_invalid_request');result.maxRows=value.maxRows;}
+  return JSON.stringify(result);
+}
+/** Bound task requests before structured-cloning them into the normal worker. */
+export function captureBrowserTaskQuery(input:Parameters<BrowserDocumentIndex['tasks']>[0]):Parameters<BrowserDocumentIndex['tasks']>[0] {
+  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['pinId','typeIds','options'].includes(key))||!validId(input.pinId)||!Array.isArray(input.typeIds)||input.typeIds.length>128||input.typeIds.some(id=>!validId(id))||new Set(input.typeIds).size!==input.typeIds.length)throw fail('index_invalid_request');
+  return {pinId:input.pinId,typeIds:[...input.typeIds],options:JSON.parse(taskOptions(input.options)) as DocumentTaskOptions};
 }
 function inputText(value:unknown,maxBytes:number):string{if(typeof value!=='string'||value.length>maxBytes||size(value)>maxBytes)throw fail('index_invalid_request');for(let i=0;i<value.length;i++){const code=value.charCodeAt(i);if(code>=0xd800&&code<=0xdbff){const next=value.charCodeAt(++i);if(!(next>=0xdc00&&next<=0xdfff))throw fail('index_invalid_request');}else if(code>=0xdc00&&code<=0xdfff)throw fail('index_invalid_request');}return value;}
 const validId=(id:unknown):id is string=>typeof id==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(id);
@@ -292,6 +311,22 @@ export function browserDocumentIndex(host:BrowserDocumentIndexHost):BrowserDocum
     async resolve(input){const g=await assertPin(input.pinId),result=json<unknown>(rust(()=>g.resolveJson(inputText(input.sourceId,128),inputText(input.destination,4096))));await assertPin(input.pinId);return result;},
     async backlinks(input){const g=await assertPin(input.pinId),result=pinPage(input.pinId,rust(()=>g.backlinksJson(inputText(input.targetId,128),tokenForPin(input.pinId,input.cursor),pageLimit(input.limit))));await assertPin(input.pinId);return result;},
     async metadata(input){const g=await assertPin(input.pinId),result=json<unknown>(rust(()=>g.metadataJson(inputText(input.id,128))));await assertPin(input.pinId);return result;},
+    async tasks(input){
+      // Capture bounded selectors/options before any await. Caller mutation must
+      // not redirect an admitted read to current or unrelated configuration.
+      const captured=captureBrowserTaskQuery(input),ids=captured.typeIds,options=JSON.stringify(captured.options),pinId=captured.pinId,g=await assertPin(pinId),pin=pins.get(pinId)!;
+      const sources:{id:string;source:string}[]=[];let bytes=0;
+      for(const id of ids){
+        const entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
+        const row=await readRow(pin.generation,entry);await assertPin(pinId);
+        if(!row.projection)throw fail('index_source_unavailable');
+        bytes+=row.projection.byteLength;if(row.projection.byteLength>256*1024||bytes>1024*1024)throw fail('index_input_limit');
+        let source:string;try{source=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(row.projection);}catch{throw fail('index_source_unavailable');}
+        sources.push({id,source});
+      }
+      const sourcesJson=JSON.stringify(sources);if(size(sourcesJson)>7*1024*1024)throw fail('index_input_limit');
+      await assertPin(pinId);const result=json<unknown>(rust(()=>g.tasksJson(sourcesJson,options)));await assertPin(pinId);return result;
+    },
     async base(input){const options=baseOptions(input.options),g=await assertPin(input.pinId),pin=pins.get(input.pinId)!,id=inputText(input.id,128),entry=pin.header.entries.find(e=>e.id===id&&e.kind==='file');if(!entry)throw fail('index_missing_source');
       const files=pin.header.entries.filter(e=>e.kind==='file');if(files.length>LIMITS.baseRecords)throw fail('index_input_limit');
       const presentations=new Map<string,BrowserVaultPresentation>();for(const row of pin.capture.publication.presentation){if(presentations.has(row.id))throw fail('index_rebuild_required');presentations.set(row.id,row);}

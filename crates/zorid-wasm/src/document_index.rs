@@ -317,6 +317,128 @@ fn base_error(code: &str, diagnostic: &impl Serialize) -> JsValue {
             .unwrap_or_else(|_| "{\"code\":\"index_invalid_record\"}".into()),
     )
 }
+// Selectors carry only lossless retained source text. Witnesses and paths are
+// always recovered from this generation, never accepted from the caller.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TaskSource {
+    id: EntryId,
+    source: String,
+}
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TaskReadOptions {
+    #[serde(default, deserialize_with = "present_option")]
+    filter: Option<zorid_bases::tasks::TaskFilter>,
+    #[serde(default, deserialize_with = "present_option")]
+    clock_ms: Option<i64>,
+    #[serde(default, deserialize_with = "present_option")]
+    timezone: Option<String>,
+    #[serde(default, deserialize_with = "present_option")]
+    show_done: Option<bool>,
+    #[serde(default, deserialize_with = "present_option")]
+    max_rows: Option<usize>,
+}
+impl TaskReadOptions {
+    fn options(self) -> zorid_bases::tasks::TaskQueryOptions {
+        let mut options = zorid_bases::tasks::TaskQueryOptions::default();
+        if let Some(value) = self.filter {
+            options.filter = value;
+        }
+        if let Some(value) = self.clock_ms {
+            options.clock_ms = value;
+        }
+        if let Some(value) = self.timezone {
+            options.timezone = value;
+        }
+        if let Some(value) = self.show_done {
+            options.show_done = value;
+        }
+        if let Some(value) = self.max_rows {
+            options.max_rows = value;
+        }
+        options
+    }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TasksRead {
+    definitions: Vec<EntryState>,
+    types: Vec<zorid_bases::types::TaskTypeSummary>,
+    result: zorid_bases::tasks::TaskQueryResult,
+}
+#[derive(Debug)]
+enum TaskReadError {
+    Index(IndexError),
+    Limit,
+    Duplicate,
+    Compile(zorid_bases::ExpressionDiagnostic),
+    Evaluation(zorid_bases::ExpressionDiagnostic),
+}
+impl TaskReadError {
+    fn js(self) -> JsValue {
+        match self {
+            Self::Index(error) => contract(error),
+            Self::Limit => error("index_input_limit"),
+            Self::Duplicate => error("index_invalid_request"),
+            Self::Compile(diagnostic) => base_error("index_type_compile", &diagnostic),
+            Self::Evaluation(diagnostic) => base_error("index_task_evaluation", &diagnostic),
+        }
+    }
+}
+fn read_tasks(
+    generation: &Generation,
+    projections: Vec<TaskSource>,
+    options: &zorid_bases::tasks::TaskQueryOptions,
+) -> Result<TasksRead, TaskReadError> {
+    use zorid_bases::types::{
+        compile_type_yaml, task_type_summaries, TypeYamlSource, MAX_TYPE_BYTES, MAX_TYPE_SOURCES,
+        MAX_TYPE_SOURCE_BYTES,
+    };
+    if projections.len() > MAX_TYPE_SOURCES {
+        return Err(TaskReadError::Limit);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut total = 0usize;
+    let mut sources = Vec::with_capacity(projections.len());
+    let mut definitions = Vec::with_capacity(projections.len());
+    for projection in projections {
+        if !seen.insert(projection.id.clone()) {
+            return Err(TaskReadError::Duplicate);
+        }
+        total = total
+            .checked_add(projection.source.len())
+            .ok_or(TaskReadError::Limit)?;
+        if projection.source.len() > MAX_TYPE_SOURCE_BYTES || total > MAX_TYPE_BYTES {
+            return Err(TaskReadError::Limit);
+        }
+        let record = generation
+            .record(&projection.id)
+            .ok_or(TaskReadError::Index(IndexError::MissingSource))?;
+        record
+            .check_text(projection.source.as_bytes())
+            .map_err(TaskReadError::Index)?;
+        let entry = record.witness().entry().clone();
+        sources.push(TypeYamlSource {
+            witness: zorid_bases::RecordWitness {
+                entry_id: entry.id.clone(),
+                revision: entry.revision.clone(),
+            },
+            path: entry.path.to_string(),
+            source: projection.source,
+        });
+        definitions.push(entry);
+    }
+    let registry = compile_type_yaml(sources).map_err(TaskReadError::Compile)?;
+    let result = zorid_bases::tasks::query_tasks(generation, &registry, options)
+        .map_err(TaskReadError::Evaluation)?;
+    let types = task_type_summaries(&registry).map_err(TaskReadError::Compile)?;
+    Ok(TasksRead {
+        definitions,
+        types,
+        result,
+    })
+}
 #[wasm_bindgen]
 pub struct WasmDocumentIndexGeneration {
     header: Header,
@@ -400,6 +522,18 @@ impl WasmDocumentIndexGeneration {
             metadata: record.metadata(),
             exclusion: record.exclusion(),
         })
+    }
+    #[wasm_bindgen(js_name=tasksJson)]
+    pub fn tasks_json(&self, sources_json: &str, options_json: &str) -> Result<String, JsValue> {
+        // JSON escaping can expand the bounded 1 MiB source payload sixfold.
+        if sources_json.len() > 7 * 1024 * 1024 || options_json.len() > 4096 {
+            return Err(error("index_input_limit"));
+        }
+        let sources: Vec<TaskSource> = decode(sources_json)?;
+        let options: TaskReadOptions = decode(options_json)?;
+        self.report(
+            read_tasks(&self.generation, sources, &options.options()).map_err(TaskReadError::js)?,
+        )
     }
     #[wasm_bindgen(js_name=baseJson)]
     pub fn base_json(
@@ -694,6 +828,165 @@ mod tests {
             1
         );
         assert_eq!(report["value"]["result"]["rows"][0]["entryId"], "a");
+    }
+    fn task_generation(type_source: &str, task: &str) -> WasmDocumentIndexGeneration {
+        let mut h: serde_json::Value = serde_json::from_str(&header()).unwrap();
+        h["entries"][0]["path"] = serde_json::json!("Task.yaml");
+        let mut builder = WasmDocumentIndexBuilder::new(&h.to_string()).unwrap();
+        builder.add_text("a", type_source.as_bytes()).unwrap();
+        builder.add_text("b", task.as_bytes()).unwrap();
+        builder.finish().unwrap()
+    }
+    fn task_source(source: &str) -> Vec<TaskSource> {
+        vec![TaskSource {
+            id: EntryId::new("a").unwrap(),
+            source: source.into(),
+        }]
+    }
+    #[test]
+    fn tasks_use_retained_yaml_and_metadata_witnesses_with_date_only_today_and_reopen() {
+        let yaml = include_str!("../../../tests/fixtures/tasks/task-type.json");
+        let generation = task_generation(yaml, "---\ntype: type-task\nstate: active\nplan: 2026-10-18\ndue: 2026-10-17\n---\nTask body\n");
+        let options = r#"{"filter":"today","clockMs":1792324800000,"timezone":"America/Toronto"}"#;
+        let sources = serde_json::json!([{"id":"a","source":yaml}]).to_string();
+        let raw = generation.tasks_json(&sources, options).unwrap();
+        let report: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(report["snapshot"], report["value"]["result"]["snapshotId"]);
+        assert_eq!(report["value"]["definitions"][0]["revision"], "r1");
+        assert_eq!(report["value"]["definitions"][0]["path"], "Task.yaml");
+        assert_eq!(report["value"]["types"][0]["witness"]["entryId"], "a");
+        assert_eq!(
+            report["value"]["result"]["typeWitnesses"][0]["revision"],
+            "r1"
+        );
+        assert_eq!(
+            report["value"]["result"]["rows"][0]["witness"]["revision"],
+            "r2"
+        );
+        assert_eq!(
+            report["value"]["result"]["rows"][0]["plannedDay"],
+            "2026-10-18"
+        );
+        let mut restored =
+            WasmDocumentIndexBuilder::new(&generation.header_json().unwrap()).unwrap();
+        restored
+            .add_persisted("a", &generation.row_json("a").unwrap())
+            .unwrap();
+        restored
+            .add_persisted("b", &generation.row_json("b").unwrap())
+            .unwrap();
+        assert_eq!(
+            restored
+                .finish()
+                .unwrap()
+                .tasks_json(&sources, options)
+                .unwrap(),
+            raw
+        );
+    }
+    #[test]
+    fn tasks_today_uses_explicit_timezone_without_shifting_date_only_fields() {
+        let yaml = include_str!("../../../tests/fixtures/tasks/task-type.json");
+        let generation = task_generation(yaml, "---\ntype: type-task\nplan: 2026-10-18\n---\n");
+        let mut options = zorid_bases::tasks::TaskQueryOptions::default();
+        options.filter = zorid_bases::tasks::TaskFilter::Today;
+        options.clock_ms = 1792290600000; // Oct 18 02:30 UTC, still Oct 17 in Toronto.
+        options.timezone = "America/Toronto".into();
+        let local = read_tasks(&generation.generation, task_source(yaml), &options).unwrap();
+        assert!(local.result.rows.is_empty());
+        options.timezone = "UTC".into();
+        let utc = read_tasks(&generation.generation, task_source(yaml), &options).unwrap();
+        assert_eq!(utc.result.rows.len(), 1);
+        assert_eq!(
+            utc.result.rows[0].planned_day.as_deref(),
+            Some("2026-10-18")
+        );
+    }
+    #[test]
+    fn tasks_reject_detached_sources_duplicates_binary_and_byte_budgets() {
+        let yaml = include_str!("../../../tests/fixtures/tasks/task-type.json");
+        let generation = task_generation(yaml, "---\ntype: type-task\n---\n");
+        let options = zorid_bases::tasks::TaskQueryOptions::default();
+        assert!(matches!(
+            read_tasks(&generation.generation, task_source("version: 1"), &options),
+            Err(TaskReadError::Index(IndexError::ContentMismatch))
+        ));
+        let mut duplicate = task_source(yaml);
+        duplicate.extend(task_source(yaml));
+        assert!(matches!(
+            read_tasks(&generation.generation, duplicate, &options),
+            Err(TaskReadError::Duplicate)
+        ));
+        assert!(matches!(
+            read_tasks(
+                &generation.generation,
+                task_source(&"x".repeat(256 * 1024 + 1)),
+                &options
+            ),
+            Err(TaskReadError::Limit)
+        ));
+        let sources = (0..129)
+            .map(|_| TaskSource {
+                id: EntryId::new("a").unwrap(),
+                source: yaml.into(),
+            })
+            .collect();
+        assert!(matches!(
+            read_tasks(&generation.generation, sources, &options),
+            Err(TaskReadError::Limit)
+        ));
+        let mut missing = task_source(yaml);
+        missing[0].id = EntryId::new("missing").unwrap();
+        assert!(matches!(
+            read_tasks(&generation.generation, missing, &options),
+            Err(TaskReadError::Index(IndexError::MissingSource))
+        ));
+        let mut binary = WasmDocumentIndexBuilder::new(&header()).unwrap();
+        binary.add_binary("a").unwrap();
+        binary.add_binary("b").unwrap();
+        assert!(matches!(
+            read_tasks(
+                &binary.finish().unwrap().generation,
+                task_source(yaml),
+                &options
+            ),
+            Err(TaskReadError::Index(_))
+        ));
+    }
+    #[test]
+    fn malformed_task_yaml_is_retained_diagnostic_and_options_decode_strictly() {
+        let yaml = "properties: [\n";
+        let generation = task_generation(yaml, "---\ntype: type-task\n---\n");
+        let report = read_tasks(
+            &generation.generation,
+            task_source(yaml),
+            &zorid_bases::tasks::TaskQueryOptions::default(),
+        )
+        .unwrap();
+        assert!(report.types.is_empty());
+        assert!(report.result.rows.is_empty());
+        assert!(!report.result.coverage_complete);
+        assert_eq!(report.result.type_diagnostics[0].code, "invalid_type_yaml");
+        assert_eq!(report.result.type_diagnostics[0].witness.revision, "r1");
+        for raw in [
+            r#"{"filter":null}"#,
+            r#"{"clockMs":null}"#,
+            r#"{"showDone":null}"#,
+            r#"{"maxRows":null}"#,
+            r#"{"timezone":null}"#,
+            r#"{"filter":"checkboxes"}"#,
+            r#"{"clockMs":0,"clockMs":1}"#,
+            r#"{"configuration":{}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<TaskReadOptions>(raw).is_err(),
+                "{raw}"
+            );
+        }
+        assert!(serde_json::from_str::<TaskReadOptions>("{}").is_ok());
+        assert!(
+            serde_json::from_str::<TaskSource>(r#"{"id":"a","source":"x","witness":{}}"#).is_err()
+        );
     }
     #[test]
     fn corrupted_projection_and_cached_versions_request_derived_rebuild_only() {
