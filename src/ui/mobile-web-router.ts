@@ -36,6 +36,7 @@ export class MobileWebRouter<V extends MobileDocumentView> {
   private generation=0;
   private paused=false;
   private closed=false;
+  private closing=false;
   private started=false;
   private presentation:WebRouteState['presentation']='editor';
   private publication:Promise<void>=Promise.resolve();
@@ -52,7 +53,7 @@ export class MobileWebRouter<V extends MobileDocumentView> {
   private selected(model=this.model):RouterTab{return model.tabs.find(tab=>tab.id===model.selectedTabId)!;}
   private current(tab=this.selected()):Visit{return tab.visits[tab.cursor];}
   private check(generation=this.generation):void{
-    if(this.closed||this.paused||generation!==this.generation||!this.host.isCurrent())throw new Error('Stale web router');
+    if(this.closed||this.closing||this.paused||generation!==this.generation||!this.host.isCurrent())throw new Error('Stale web router');
   }
   snapshot():WebRouteState{
     return copy({...this.scope,webSessionId:this.webSessionId,version:String(this.version),status:this.window.blocked?'blocked':this.status,presentation:this.presentation,
@@ -203,14 +204,16 @@ export class MobileWebRouter<V extends MobileDocumentView> {
     return this.enqueue(()=>this.execute({id:crypto.randomUUID(),webSessionId:this.webSessionId,expectedVersion:String(this.version),action:{type:'open',entryId,disposition:'current'}}));
   }
   /** Invalidate first; drain admitted navigation/cleanup before lifecycle ACK. */
-  async drain():Promise<void>{
+  drain():Promise<void>{
     this.paused=true;this.generation++;this.window.invalidate();this.gesture=undefined;
-    await this.tail;await this.window.drain();this.status='busy';this.advancePresentation();await this.publish();
+    // The ENTIRE flush/publication owns the shared tail. Awaiting the old tail
+    // and flushing outside it would let resume overtake a still-active drain.
+    return this.enqueue(async()=>{await this.window.drain();this.status='busy';this.advancePresentation();await this.publish();});
   }
   resume():Promise<void>{
     const generation=this.generation;
     return this.enqueue(async()=>{
-      if(this.closed||generation!==this.generation||!this.host.isCurrent())throw new Error('Stale web router resume');
+      if(this.closed||this.closing||generation!==this.generation||!this.host.isCurrent())throw new Error('Stale web router resume');
       this.paused=false;this.check(generation);
       const tabId=this.model.selectedTabId,visitId=this.current().id;
       try{
@@ -222,7 +225,7 @@ export class MobileWebRouter<V extends MobileDocumentView> {
       await this.publish();
     });
   }
-  async destroy():Promise<void>{if(this.closed)return;await this.drain();await this.window.destroy();this.closed=true;}
+  async destroy():Promise<void>{if(this.closed)return;this.closing=true;await this.drain();await this.window.destroy();this.closed=true;}
   encode(model=this.model):string{const encoded=JSON.stringify({version:1,localStoreId:this.scope.localStoreId,...model});if(encoded.length>4*1024*1024)throw new Error('Router state too large');return encoded;}
   private restore(encoded:string):Model{
     if(encoded.length>4*1024*1024)throw new Error('Router state too large');

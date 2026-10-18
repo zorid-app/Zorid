@@ -192,3 +192,11 @@ test('new lifecycle drain invalidates a held resume and leaves all writers revok
   const pending=gate();f.holdAdmit(pending.promise);const resume=f.router.resume();await until(()=>f.admitEntered);const drain=f.router.drain();
   pending.resolve();await assert.rejects(resume,/Stale/);await drain;assert.equal(f.active(),undefined);
 });
+test('resume cannot overtake the flush/publication phase of an active drain',async()=>{
+  const f=fixture();await f.router.start();await f.run({type:'open',entryId:'A',disposition:'current'});
+  const pending=gate();f.holdAdmit(undefined);f.holdFlush(pending.promise);let drainSawWriter=false;
+  const drain=f.router.drain().then(()=>{drainSawWriter=!!f.active();});await until(()=>f.flushEntered);
+  let resumed=false;const resume=f.router.resume().then(()=>{resumed=true;});await new Promise<void>(yes=>setImmediate(yes));
+  assert.equal(resumed,false);assert.equal(f.admitEntered,false);assert.equal(f.active(),undefined);
+  pending.resolve();await drain;await resume;assert.equal(drainSawWriter,false);assert.equal(f.active()?.entryId,'A');
+});
