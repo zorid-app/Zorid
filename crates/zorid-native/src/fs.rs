@@ -133,6 +133,26 @@ pub(crate) fn rename_new(from: &File, old: &str, to: &File, new: &str) -> Result
     to.sync_all()?;
     Ok(())
 }
+/// Retire one proven regular file in an already verified private directory.
+/// The caller must revalidate captured content immediately before this call.
+/// Unix has no compare-inode-and-unlink operation: this uses the same private,
+/// current-user-owned directory trust boundary as the native staging renames.
+/// It is not an unlink primitive for concurrently hostile public directories.
+pub(crate) fn unlink_regular_identity(parent: &File, name: &str, expected: &str) -> Result<()> {
+    if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\\', '\0']) {
+        return Err(Error::UnsafePath(
+            "unlink requires an exact leaf name".into(),
+        ));
+    }
+    if regular_identity(parent, name)?.as_deref() != Some(expected) {
+        return Err(Error::Busy(
+            "retained file identity changed before retirement",
+        ));
+    }
+    fs::unlinkat(parent, name, fs::AtFlags::empty())?;
+    parent.sync_all()?;
+    Ok(())
+}
 pub(crate) fn stage(dir: &File, name: &str, bytes: &[u8]) -> Result<String> {
     exact(dir, name)?;
     let mut f: File = fs::openat(

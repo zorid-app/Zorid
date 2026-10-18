@@ -53,6 +53,7 @@ fn capture(
 
 // Own every child and both pipe drainers, including when an assertion panics.
 struct Running {
+    _local_data: tempfile::TempDir,
     child: Option<Child>,
     stdout: Option<JoinHandle<Capture>>,
     stderr: Option<JoinHandle<Capture>>,
@@ -61,7 +62,9 @@ struct Running {
 
 impl Running {
     fn spawn(root: &Path, args: &[&str]) -> Self {
+        let local_data = tempfile::tempdir().unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_zorid"))
+            .env("ZORID_LOCAL_DATA_DIR", local_data.path())
             .arg("--vault")
             .arg(root)
             .args(args)
@@ -76,6 +79,7 @@ impl Running {
         let stdout = capture(child.stdout.take().unwrap(), Some(sender));
         let stderr = capture(child.stderr.take().unwrap(), None);
         Self {
+            _local_data: local_data,
             child: Some(child),
             stdout: Some(stdout),
             stderr: Some(stderr),

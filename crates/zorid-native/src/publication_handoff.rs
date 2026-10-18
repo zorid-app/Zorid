@@ -68,13 +68,15 @@ impl NativeVault {
                     "published namespace source changed during handoff",
                 ));
             }
-            return Ok(self.store.finish_projection_for_namespace(
+            self.store.finish_projection_for_namespace(
                 a,
                 Some(&PhysicalIdentity {
                     inode: disk.identity.clone(),
                     parent_inode: proof.parent_inode,
                 }),
-            )?);
+            )?;
+            let _ = self.retire_settled_previous(&a.attempt_id);
+            return Ok(());
         }
         // A recorded stage must still exist privately before cancellation. Its
         // disappearance could mean publication followed by an external replace.
@@ -136,6 +138,7 @@ impl NativeVault {
             return Err(Error::Busy("namespace source changed before cancellation"));
         }
         self.store.finish_projection_for_namespace(a, None)?;
+        let _ = self.retire_settled_previous(&a.attempt_id);
         Ok(())
     }
 }

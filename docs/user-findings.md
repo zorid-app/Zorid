@@ -1,5 +1,23 @@
 # User findings queue
 
+## Large-file validation performance — 2026-10-18
+
+Broader S0 verification exposed an overlong existing 17 MiB compound-stream
+fixture (>8 minutes, stopped; not a pass). Owned process sampling showed repeated
+immutable payload decoding/descriptor checks during manifest verification. The
+large stdio stream case also reached its existing 60-second watchdog. Preserve
+this as a Rust performance/validation follow-up; do not silently count these
+stress scenarios as passing or weaken their content assertions.
+
+## Automatic storage recovery — 2026-10-18
+
+User authorizes S0 implementation and requires recovery to run automatically,
+without technical details in product UI. Scoped implementation is in progress:
+quiet bounded retry UI, checked SQLite, retained local snapshots, settled backup
+retirement. Verification and remaining work are tracked separately in the
+execution checkpoint; original user-vault warning cause is not yet reproduced.
+
+
 ## Confirmed query performance and browser persistence design — 2026-10-18
 
 User confirmed the consolidated [S1 design](architecture/indexing-search-design.md):

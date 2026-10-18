@@ -71,10 +71,14 @@ mod document_index;
 mod workblocks;
 pub use workblocks::*;
 
+#[path = "local_recovery.rs"]
+mod local_recovery;
+
 pub struct NativeVault {
     paths: Paths,
     store: Store,
     options: Options,
+    recovery: Option<zorid_recovery::RecoveryStore>,
     #[cfg(test)]
     pub(crate) fault: Option<fn(&str)>,
 }
@@ -113,6 +117,7 @@ impl NativeVault {
             paths,
             store,
             options,
+            recovery: None,
             #[cfg(test)]
             fault: None,
         })
@@ -312,7 +317,16 @@ impl NativeVault {
         Ok(ApplyOutcome { commit, projection })
     }
     fn project_status(&mut self, id: &EntryId) -> ProjectionStatus {
-        match self.project(id) {
+        let result = self.project(id);
+        // Retained history is secondary to the durable save receipt. Failure here
+        // must never turn a committed save into an ambiguous retry.
+        let provenance = if result.is_ok() {
+            zorid_recovery::SnapshotProvenance::Periodic
+        } else {
+            zorid_recovery::SnapshotProvenance::SaveFailure
+        };
+        let _ = self.capture_local_recovery(id, local_recovery::now_ms(), provenance);
+        match result {
             Ok(()) => ProjectionStatus::Projected,
             Err(e) => ProjectionStatus::Pending(e.to_string()),
         }
@@ -377,26 +391,18 @@ impl NativeVault {
                 }
             }
         }
-        // Retained old inodes can still be edited through external open handles.
+        // Retry only exact artifacts belonging to durable settled attempts.
+        // Pending stages/displacements and unrelated private files are untouched.
         for a in self
             .store
             .projection_attempts(true)?
             .into_iter()
             .filter(|a| a.completed())
         {
-            let previous = format!("{}.previous", a.attempt_id.as_str());
-            if let Some(old) = file_snapshot(&self.paths.private, &previous)? {
-                if a.baseline
-                    .as_ref()
-                    .is_none_or(|b| !snapshot_matches_content(&old, &b.content))
-                {
-                    let private = self.paths.private.try_clone()?;
-                    self.capture_projection_file(&a, &private, &previous)?;
-                    report.blocked.push((
-                        a.target.state.path.clone(),
-                        "retained external divergence needs reconciliation".into(),
-                    ));
-                }
+            if let Err(error) = self.retire_settled_previous(&a.attempt_id) {
+                report
+                    .blocked
+                    .push((a.target.state.path, error.to_string()));
             }
         }
         for a in self.store.projection_attempts(false)? {
@@ -748,6 +754,60 @@ impl NativeVault {
         }
         Ok(())
     }
+    /// This retires a temporary displaced inode, not historical recovery data.
+    /// A durable completed attempt and its saved physical proof authorize the
+    /// exact name/inode. Changed bytes become a durable inert observation first.
+    /// Failure leaves the artifact for recover_locked to retry; it cannot undo
+    /// the already committed publication or authorize a new save operation ID.
+    pub(super) fn retire_settled_previous(&mut self, id: &OperationId) -> Result<()> {
+        let attempt = self.store.projection_attempt(id)?;
+        if !attempt.completed() {
+            return Err(Error::Busy("pending projection retains its displaced file"));
+        }
+        self.paths.verify()?;
+        let previous = format!("{}.previous", attempt.attempt_id.as_str());
+        let private = self.paths.private.try_clone()?;
+        let Some(old) = file_snapshot(&private, &previous)? else {
+            return Ok(());
+        };
+        let proof = self.store.publication_proof(id)?.ok_or(Error::Busy(
+            "settled displacement has no saved physical proof",
+        ))?;
+        if proof.kind != PublicationKind::File
+            || proof.entry_id != attempt.target.state.id
+            || proof
+                .expected_binding
+                .as_ref()
+                .is_none_or(|binding| binding.physical.inode != old.identity)
+        {
+            return Err(Error::Busy(
+                "settled displacement identity differs from saved proof",
+            ));
+        }
+        if attempt
+            .baseline
+            .as_ref()
+            .is_none_or(|baseline| !snapshot_matches_content(&old, &baseline.content))
+        {
+            self.point("before_previous_capture");
+            self.capture_projection_snapshot(&attempt, &private, &previous, &old)?;
+            self.point("previous_captured");
+        }
+        self.point("before_previous_unlink");
+        self.paths.verify()?;
+        let current = file_snapshot(&private, &previous)?.ok_or(Error::Busy(
+            "settled displacement disappeared before retirement",
+        ))?;
+        if current != old {
+            return Err(Error::Busy(
+                "settled displacement changed before retirement",
+            ));
+        }
+        fs::unlink_regular_identity(&private, &previous, &old.identity)?;
+        self.paths.verify()?;
+        Ok(())
+    }
+
     fn resume(&mut self, original: &ProjectionAttempt) -> Result<()> {
         if !self.store.is_visible_entry(&original.target.state.id)? {
             return Err(Error::Busy("hidden entry retains its physical publication"));
@@ -837,6 +897,8 @@ impl NativeVault {
                     parent_inode: proof.parent_inode.clone(),
                 },
             )?;
+            self.point("projection_finished");
+            let _ = self.retire_settled_previous(&a.attempt_id);
             return if changed {
                 Err(Error::Busy("published content externally edited; retained"))
             } else {
@@ -866,6 +928,7 @@ impl NativeVault {
                 }
             }
             self.store.finish_projection(&a.attempt_id, false)?;
+            let _ = self.retire_settled_previous(&a.attempt_id);
             return Ok(());
         }
         if let Some(old) = &backup {
@@ -1016,6 +1079,8 @@ impl NativeVault {
                 parent_inode: proof.parent_inode,
             },
         )?;
+        self.point("projection_finished");
+        let _ = self.retire_settled_previous(&a.attempt_id);
         if changed {
             return Err(Error::Busy("published content externally edited; retained"));
         }

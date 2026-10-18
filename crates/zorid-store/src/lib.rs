@@ -1,7 +1,7 @@
 //! Native database authority. File projection and encrypted networking are separate
 //! adapters; a database commit must never be mistaken for either of those outcomes.
 
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 mod binary_commit;
 mod blob_read;
@@ -109,7 +109,8 @@ pub use directory::{DirectoryAttempt, DirectoryBaseline, DirectoryPhase};
 pub use projection::{ExternalObservation, ProjectionAttempt, ProjectionBaseline, ProjectionPhase};
 pub use scan::{DirectoryCoverage, ScanObservation, ScanObservationKind, ScanRun};
 use serde::{Deserialize, Serialize};
-use std::{fmt, path::Path, time::Duration};
+use std::{fmt, path::Path};
+use zorid_sqlite::{open_checked, OpenMode};
 pub use text_sync::{AuthoredTextStatus, AuthorityIdentity, TextReceiveOutcome};
 use zorid_core::{
     check_idempotency, plan_mutation, CommitResult, ContractError, EntryId, EntryKind, EntryState,
@@ -412,27 +413,18 @@ impl Store {
         Self::open_mode(path.as_ref(), true, true)
     }
     fn open_mode(path: &Path, no_follow: bool, existing: bool) -> Result<Self> {
-        let mut flags = OpenFlags::default();
-        if no_follow {
-            flags |= OpenFlags::SQLITE_OPEN_NOFOLLOW;
-        }
-        if existing {
-            flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
-        }
-        let mut connection = Connection::open_with_flags(path, flags)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
-        // Inspect before changing journal mode: do not mutate unknown newer stores.
-        {
-            let snapshot = connection.transaction()?;
-            let version = check_schema(&snapshot)?;
+        let mode = match (no_follow, existing) {
+            (_, true) => OpenMode::ExistingNoFollow,
+            (true, false) => OpenMode::CreateNoFollow,
+            (false, false) => OpenMode::Create,
+        };
+        let mut connection = open_checked(path, mode, |snapshot| -> Result<()> {
+            let version = check_schema(snapshot)?;
             if existing && version == 0 {
                 return Err(StoreError::Corrupt("vault is not initialized".into()));
             }
-            snapshot.commit()?;
-        }
-        connection.pragma_update(None, "journal_mode", "WAL")?;
-        connection.pragma_update(None, "synchronous", "FULL")?;
-        connection.pragma_update(None, "foreign_keys", true)?;
+            Ok(())
+        })?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version = check_schema(&tx)?;
         if existing && version == 0 {

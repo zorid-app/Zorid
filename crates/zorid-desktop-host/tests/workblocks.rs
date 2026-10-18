@@ -156,12 +156,14 @@ fn admitted_semantic_host_replay_release_reopen_and_strict_envelope() {
 #[test]
 fn actual_stdio_process_creates_and_reopens_without_network() {
     let dir = tempfile::tempdir().unwrap();
+    let local_data = tempfile::tempdir().unwrap();
     let mut original = None;
     for pass in 0..2 {
         let mut child = Command::new(env!("CARGO_BIN_EXE_zorid-desktop-host"))
             .arg("--vault")
             .arg(dir.path())
             .arg("--initialize-local")
+            .env("ZORID_LOCAL_DATA_DIR", local_data.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

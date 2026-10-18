@@ -11,6 +11,7 @@ description = "Transactional native persistence for Zorid's shared vault core"
 intent-test-fixtures = ["zorid-records/intent-test-fixtures"]
 
 [dependencies]
+zorid-sqlite = { path = "../zorid-sqlite" }
 zorid-records = { path = "../zorid-records" }
 zorid-index = { path = "../zorid-index" }
 zorid-core = { path = "../zorid-core" }

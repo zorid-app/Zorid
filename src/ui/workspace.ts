@@ -181,7 +181,13 @@ export class Workspace {
   private importStatusCleanup?:()=>void;
 
   constructor(root: HTMLElement, editorFactory?: EditorFactory, viewFactories: WorkspaceViewFactories = {}) { this.root = root; this.editorFactory = editorFactory; this.viewFactories = viewFactories; }
-  private run(operation: () => unknown | Promise<unknown>): void { Promise.resolve().then(operation).catch(error => notice(error instanceof Error ? error.message : String(error))); }
+  private noteStorageFailure(error:unknown,message='This note couldn’t be saved. Keep it open and try again.'):void {
+    console.error('Note storage operation failed',error);notice(message);
+  }
+  private run(operation: () => unknown | Promise<unknown>): void { Promise.resolve().then(operation).catch(error => {
+    if([...this.buffers.values()].some(buffer=>buffer.error!==null&&buffer.error===error)){this.noteStorageFailure(error);return;}
+    notice(error instanceof Error ? error.message : String(error));
+  }); }
   private sessionKey(): string { return this.storageScope.sessionKey(this.platform.id); }
 
   async start(platform: PlatformVault | null): Promise<void> {
@@ -1146,11 +1152,12 @@ export class Workspace {
           onChange:value=>{this.updateMarkdownBuffer(buffer,value);runtime.touch();this.renderStatus();for(const other of this.loadedViews()){if(this.current(other)?.path===path){if(other!==pane)other.editor?.setValue(value);clearTimeout(other.propertyTimer);const properties=other.properties,preview=other.refreshPreview;other.propertyTimer=setTimeout(()=>{properties?.refresh();preview?.();},150);}}},open:(target,kind)=>{if(generation===this.vaultGeneration&&pane.renderVersion===version&&pane.viewPath===path)this.run(()=>this.followLink(path,target,pane,kind));}});
       }
       if(tab.viewState){if(tab.viewState.editor)pane.editor?.restoreViewState?.(tab.viewState.editor);if(Number.isFinite(tab.viewState.scrollTop))scroll.scrollTop=Math.max(0,tab.viewState.scrollTop);if(Number.isFinite(tab.viewState.scrollLeft))scroll.scrollLeft=Math.max(0,tab.viewState.scrollLeft);}
-      if(buffer.error)notice(buffer.error.message);
+      if(buffer.error)this.noteStorageFailure(buffer.error);
     }catch(error){
       if(version!==pane.renderVersion)return;
       destroyMarkdown(scroll);pane.embeds?.destroy();pane.embeds=undefined;pane.refreshPreview=undefined;
-      scroll.append(el('p','error-message',error instanceof Error?error.message:String(error)));
+      console.error('Note could not be opened',error);
+      scroll.append(el('p','error-message','This note couldn’t be opened. Please try opening it again.'));
     }
     if(version===pane.renderVersion)pane.viewReady=true;this.renderStatus();
   }
@@ -1792,7 +1799,8 @@ export class Workspace {
         notice(result.resolved?`Draft saved to “${result.path}”. The original now shows its latest version.`:`Draft saved to “${result.path}”. Newer edits are still retained here.`);
         // Every pane sharing this buffer must follow its newly adopted text.
         if(result.resolved)for(const view of this.loadedViews())if(view.viewPath===buffer.path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
-      }finally{busy=false;save.disabled=false;refresh();}
+      }catch(error){this.noteStorageFailure(error,'Your draft couldn’t be saved as a separate note. Keep this note open and try again.');}
+      finally{busy=false;save.disabled=false;refresh();}
     }),'mod-cta');
     actions.append(copy,save);banner.append(message,actions);content.insertBefore(banner,content.querySelector('.note-scroll'));
     const refresh=()=>{banner.hidden=!buffer.hasRecoveryConflict;};refresh();
@@ -1817,7 +1825,7 @@ export class Workspace {
       if(conflict&&this.activePane?.viewPath===path)continue;
       if(!buffer.error&&!conflict)continue;
       const row=el('div','native-document-notice');
-      row.append(el('p','',conflict?`Retained draft for “${nameOf(path)}” needs attention.`:`Could not save “${nameOf(path)}”. Your draft is retained. ${buffer.error?.message??''}`));
+      row.append(el('p','',conflict?`Retained draft for “${nameOf(path)}” needs attention.`:`Could not save “${nameOf(path)}”. Keep this note open and try again.`));
       const current=()=>generation===this.vaultGeneration&&this.buffers.get(path)===buffer&&!this.platformReleased;
       const actions=el('div','note-recovery-actions');
       if(conflict&&this.vault.entries.get(path)?.type==='file')actions.append(textButton('Review draft',()=>{if(current())this.run(()=>this.openNote(path));}));
@@ -1830,7 +1838,8 @@ export class Workspace {
             if(current()&&result.resolved)for(const view of this.loadedViews())if(view.viewPath===path){view.editor?.setValue(buffer.text);view.refreshPreview?.();view.properties?.refresh();}
             notice(`Draft saved to “${result.path}”.`);
           }else await buffer.flush();
-        }finally{this.nativeRecoveryBusy.delete(buffer);if(current())this.renderStatus();}
+        }catch(error){this.noteStorageFailure(error);}
+        finally{this.nativeRecoveryBusy.delete(buffer);if(current())this.renderStatus();}
       }));
       save.disabled=this.nativeRecoveryBusy.has(buffer);actions.append(save);row.append(actions);status.append(row);
     }
@@ -1843,7 +1852,7 @@ export class Workspace {
     this.status.replaceChildren();
     if(tab?.kind!=='note')return;
     if(tab?.path&&!isMarkdown(tab.path)){this.status.append(el('span','',`${this.vault.entries.get(tab.path)?.size??0} bytes`));return;}
-    this.status.append(el('span','save-state',buffer?.error?'Save failed — draft retained':buffer?.dirty?'Saving…':''));
+    this.status.append(el('span','save-state',buffer?.error?'Couldn’t save — keep this note open':buffer?.dirty?'Saving…':''));
     const mode=textButton(tab?.mode==='reading'?'Reading view':'Live Edit',()=>this.modeMenu(mode),'status-mode');
     this.status.append(mode,el('span','',`${text.trim()?text.trim().split(/\s+/u).length:0} words`),el('span','',`${[...text].length} characters`));
   }

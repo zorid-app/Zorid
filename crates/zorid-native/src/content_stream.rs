@@ -223,6 +223,19 @@ impl NativeVault {
     ) -> Result<()> {
         let snapshot = file_snapshot(parent, name)?
             .ok_or(Error::Busy("projection capture source disappeared"))?;
+        self.capture_projection_snapshot(attempt, parent, name, &snapshot)
+    }
+
+    /// Bind retention to the caller's exact observed bytes and inode. Taking a
+    /// fresh unrelated snapshot here could preserve B while a caller authorizes
+    /// deleting A after an A -> B -> A sequence.
+    pub(super) fn capture_projection_snapshot(
+        &mut self,
+        attempt: &ProjectionAttempt,
+        parent: &File,
+        name: &str,
+        snapshot: &StreamSnapshot,
+    ) -> Result<()> {
         let content = self.capture_observed_file(
             &attempt.target.state.path,
             parent,
@@ -230,7 +243,7 @@ impl NativeVault {
             &attempt.attempt_id,
             attempt.baseline.as_ref(),
             None,
-            &snapshot,
+            snapshot,
             attempt
                 .baseline
                 .as_ref()

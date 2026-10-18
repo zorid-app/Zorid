@@ -85,6 +85,9 @@ impl NativeVault {
         } else {
             self.apply_locked(&request)
         };
+        if applied.is_err() {
+            let _ = self.capture_failed_save_request(&request);
+        }
         match applied {
             Ok(outcome) => {
                 self.point("host_intent_core_committed");

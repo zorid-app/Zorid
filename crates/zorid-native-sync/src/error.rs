@@ -95,6 +95,7 @@ impl From<zorid_native::Error> for Error {
             }
             Store(zorid_store::StoreError::Crypto(_)) => ("sync_crypto_failed", 1),
             Store(_) => ("storage_io", 1),
+            Recovery(_) => ("local_recovery_unavailable", 1),
             Io(_) => ("filesystem_io", 1),
         };
         Self::new(code, exit)

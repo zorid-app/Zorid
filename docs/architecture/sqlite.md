@@ -4,10 +4,14 @@
 
 ## Current
 
-Native SQLite access is implemented in `zorid-store` using `rusqlite`; Store
-coordinates related authoritative changes inside transactions. Optional document
-cache tables live on that Store connection. There is no unified three-platform
-SQLite infrastructure layer yet, and the browser still uses IndexedDB.
+`zorid-sqlite` provides checked connection opening for native `zorid-store` and
+`zorid-recovery`: read-transaction schema validation before WAL changes, a five-second
+busy timeout, WAL, FULL synchronization and foreign keys. Each domain still owns
+its schema and revalidates under IMMEDIATE transaction before initialization.
+No-follow paths reject symlinks throughout the filename, so trusted hosts resolve
+canonical parent directories first. Store preserves authoritative joint commits.
+Optional document cache tables still live on the Store connection; cache extraction
+is pending. Browser still uses IndexedDB.
 
 ## Accepted direction
 

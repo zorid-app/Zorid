@@ -1,5 +1,57 @@
 # Product discussions after the editor foundation
 
+## Active S0 execution — 2026-10-18
+
+User authorizes implementation and requires automatic recovery with no technical
+details in product UI. Ambiguous competing versions must still be preserved.
+Storage coordinator owns sole main integration under native relay msg_d791657afb5c,
+starting clean d07a869b; no push authorization. iOS/features remain paused.
+Integration worktree: `storage-foundation` / `tingkai-c/storage-foundation`.
+Workers: `storage-sqlite` owns checked SQLite open + Store seam;
+`storage-recovery` owns local snapshot module and settled publication cleanup;
+`storage-recovery-ui` owns quiet automatic retry UI + desktop-host hookup.
+Root owns native snapshot integration, dependency lock and combined validation.
+Independent core/platform reviewers inspect scoped changes. Heavy Rust checks
+serialized. Implementation commits and integrated verification will be recorded
+here; module-level tests alone do not establish desktop runtime acceptance.
+
+
+### S0 first verified batch
+
+Frozen source `736eddcd1a59f4c7a79402d0aee6c66e3787bf2a`: checked native SQLite,
+app-local retained history, desktop/CLI path resolution, settled `.previous`
+retirement, automatic discovery→recovery and ordinary-language note storage UI.
+Scoped source reviews approved; capture ABA/schema validation/enrolled-save gaps
+were corrected before delivery. Worker UI ownership additionally covers narrow
+Workspace note save/load/recovery presentation (editor polish remains paused).
+
+Focused final checks: native local-history 4, core save/crash/identity 59,
+SQLite/recovery 18, Store-open policy 2, host library 33, host subprocess 14,
+CLI commands 13, historical-parent regression 1; all passed. Frontend build/TS
+and 84 UI tests passed. These are scoped results, not the full Rust suite.
+The old CLI late-open-handle test now checks the documented finite-retirement
+contract; a stale historical-parent test now reads immutable payload storage.
+
+Actual Electron evidence: `/private/tmp/zorid-s0-electron-evidence/evidence.json`
+(22 checks, screenshots and frozen hashes): normal create, five keyboard autosaves,
+exact disk/bridge bytes, normal window-close host drain, restart/reopen, no settled
+publication artifacts, retained external snapshot bytes and quiet UI passed.
+Owned app/host processes closed. Mac no-window Electron shells needed forced
+cleanup after their hosts drained; graceful app quit is not established.
+
+Broader large-stream checks are explicitly incomplete: stdio stream hit its
+existing 60-second watchdog; native compound-stream run was stopped after >8 min.
+Sampling points to repeated immutable payload decoding/validation; see findings.
+No stress/performance pass, mobile/browser parity or original user-vault diagnosis
+is claimed. No real vault artifacts were swept.
+
+Next S0 slice: `storage_sqlite_impl` owns isolated `storage-cache` extraction of
+rebuildable document caches, preserving source fences with independent SQLite
+connections and authority→cache lock ordering. Root retains sole main integration
+and Cargo.lock/build coordination. Cache extraction/history interfaces and broader
+S0 exit checks remain open; S0A/S1/features/iOS do not advance from this batch.
+
+
 ## Confirmed query performance and browser persistence design — 2026-10-18
 
 User confirmed the consolidated [S1 design](architecture/indexing-search-design.md):

@@ -88,7 +88,9 @@ impl Drop for Server {
     }
 }
 fn cli(vault: &Path, args: &[&str]) -> Output {
+    let local_data = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_zorid"))
+        .env("ZORID_LOCAL_DATA_DIR", local_data.path())
         .arg("--vault")
         .arg(vault)
         .args(args)

@@ -187,6 +187,7 @@ fn process_death_at_each_publication_boundary_recovers() {
         "displaced",
         "published_before_record",
         "before_baseline",
+        "projection_finished",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -208,6 +209,16 @@ fn process_death_at_each_publication_boundary_recovers() {
         assert_eq!(disk(root), b"desired", "{phase}");
         assert_eq!(v.status().unwrap().pending_projection, "0");
         assert_eq!(v.status().unwrap().pending_outbox, "2");
+        assert!(
+            !stdfs::read_dir(root.join(".zorid")).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".previous")
+            }),
+            "{phase}: settled displacement must be retired"
+        );
     }
 }
 #[test]
@@ -384,7 +395,7 @@ fn partial_stage_process_death_is_quarantined_and_rebuilt() {
         .contains(".partial-")));
 }
 #[test]
-fn late_external_write_to_completed_displacement_is_captured() {
+fn settled_displacement_is_retired_even_when_an_external_handle_remains_open() {
     use std::io::{Seek, SeekFrom, Write};
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -400,22 +411,32 @@ fn late_external_write_to_completed_displacement_is_captured() {
             .projection,
         ProjectionStatus::Projected
     ));
+    assert!(!stdfs::read_dir(root.join(".zorid")).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".previous")
+    }));
+    // Atomic replacement has a finite displacement lifetime. External writers
+    // holding the old unlinked inode must reopen the public path; writes after
+    // retirement cannot be observed or promised as recoverable by this app.
     external.seek(SeekFrom::Start(0)).unwrap();
     external.set_len(0).unwrap();
     external.write_all(b"late external write").unwrap();
     external.sync_all().unwrap();
     let report = v.recover().unwrap();
-    assert!(report.blocked.iter().any(|(p, _)| *p == path()));
+    assert!(report.blocked.is_empty(), "{report:?}");
     assert_eq!(disk(root), b"new bytes");
     let observations = Store::open(root.join(".zorid/vault.sqlite"))
         .unwrap()
         .external_observations()
         .unwrap();
-    assert!(observations.iter().any(|o| {
+    assert!(!observations.iter().any(|o| {
         v.test_content_bytes(None, &o.content).unwrap() == b"late external write"
             && o.resolution.is_none()
     }));
-    assert!(v
+    assert!(!v
         .status()
         .unwrap()
         .observations
@@ -424,8 +445,254 @@ fn late_external_write_to_completed_displacement_is_captured() {
     drop(v);
     let mut reopened = NativeVault::open_existing(root).unwrap();
     let report = reopened.recover().unwrap();
-    assert!(report.blocked.iter().any(|(p, _)| *p == path()));
+    assert!(report.blocked.is_empty(), "{report:?}");
     assert_eq!(disk(root), b"new bytes");
+}
+
+fn private_previous(root: &Path) -> Vec<std::path::PathBuf> {
+    stdfs::read_dir(root.join(".zorid"))
+        .unwrap()
+        .filter_map(|entry| {
+            let entry = entry.unwrap();
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".previous")
+                .then(|| entry.path())
+        })
+        .collect()
+}
+
+#[test]
+fn repeated_saves_retire_only_their_settled_displacements() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    let unrelated = root.join(".zorid/not-a-projection.previous");
+    stdfs::write(&unrelated, b"unrelated").unwrap();
+    for n in 0..20 {
+        let content = format!("save {n}");
+        let outcome = v
+            .apply(&write(
+                &format!("save-{n}"),
+                revision(&v),
+                content.as_bytes(),
+            ))
+            .unwrap();
+        assert!(matches!(outcome.projection, ProjectionStatus::Projected));
+        assert_eq!(disk(root), content.as_bytes());
+        assert_eq!(private_previous(root), [unrelated.clone()]);
+    }
+    drop(v);
+    let mut v = NativeVault::open_existing(root).unwrap();
+    assert!(v.recover().unwrap().blocked.is_empty());
+    assert_eq!(stdfs::read(unrelated).unwrap(), b"unrelated");
+}
+
+#[test]
+fn changed_displacement_is_durably_captured_before_retirement() {
+    thread_local! { static ROOT: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) }; }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    ROOT.with(|slot| *slot.borrow_mut() = Some(root.to_owned()));
+    v.fault = Some(|point| {
+        if point == "projection_finished" {
+            ROOT.with(|slot| {
+                let root = slot.borrow_mut().take().unwrap();
+                let previous = private_previous(&root);
+                assert_eq!(previous.len(), 1);
+                stdfs::write(&previous[0], b"external before retirement").unwrap();
+            });
+        }
+    });
+    let outcome = v.apply(&write("write", revision(&v), b"desired")).unwrap();
+    assert!(matches!(outcome.projection, ProjectionStatus::Projected));
+    assert!(private_previous(root).is_empty());
+    assert_eq!(disk(root), b"desired");
+    drop(v);
+    let mut v = NativeVault::open_existing(root).unwrap();
+    let observations = Store::open(root.join(".zorid/vault.sqlite"))
+        .unwrap()
+        .external_observations()
+        .unwrap();
+    assert!(observations.iter().any(|observation| {
+        v.test_content_bytes(None, &observation.content).unwrap() == b"external before retirement"
+    }));
+}
+
+#[test]
+fn displacement_changed_during_capture_remains_until_a_verified_retry() {
+    thread_local! { static ROOT: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) }; }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    ROOT.with(|slot| *slot.borrow_mut() = Some(root.to_owned()));
+    v.fault = Some(|point| {
+        let bytes: &[u8] = match point {
+            "projection_finished" => b"first external version",
+            "previous_captured" => b"second external version",
+            _ => return,
+        };
+        ROOT.with(|slot| {
+            let slot = slot.borrow();
+            let previous = private_previous(slot.as_ref().unwrap());
+            stdfs::write(&previous[0], bytes).unwrap();
+        });
+    });
+    let outcome = v.apply(&write("write", revision(&v), b"desired")).unwrap();
+    assert!(matches!(outcome.projection, ProjectionStatus::Projected));
+    assert_eq!(private_previous(root).len(), 1);
+    drop(v);
+    let mut v = NativeVault::open_existing(root).unwrap();
+    assert!(v.recover().unwrap().blocked.is_empty());
+    assert!(private_previous(root).is_empty());
+    assert_eq!(disk(root), b"desired");
+    let observations = Store::open(root.join(".zorid/vault.sqlite"))
+        .unwrap()
+        .external_observations()
+        .unwrap();
+    for expected in [
+        b"first external version".as_slice(),
+        b"second external version".as_slice(),
+    ] {
+        assert!(observations.iter().any(|observation| {
+            v.test_content_bytes(None, &observation.content).unwrap() == expected
+        }));
+    }
+}
+
+#[test]
+fn displacement_capture_is_bound_to_the_exact_retirement_snapshot() {
+    thread_local! {
+        static ROOT: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+        static UNBOUND_CAPTURE_COMPLETED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    ROOT.with(|slot| *slot.borrow_mut() = Some(root.to_owned()));
+    v.fault = Some(|point| {
+        let bytes: &[u8] = match point {
+            "projection_finished" => b"version A",
+            // A was the cleanup authorization snapshot. An unbound capture
+            // would now retain B, then accept A again and unlink uncaptured A.
+            "before_previous_capture" => b"version B",
+            "previous_captured" => {
+                UNBOUND_CAPTURE_COMPLETED.with(|flag| flag.set(true));
+                b"version A"
+            }
+            _ => return,
+        };
+        ROOT.with(|slot| {
+            let previous = private_previous(slot.borrow().as_ref().unwrap());
+            stdfs::write(&previous[0], bytes).unwrap();
+        });
+    });
+    let outcome = v.apply(&write("write", revision(&v), b"desired")).unwrap();
+    assert!(matches!(outcome.projection, ProjectionStatus::Projected));
+    UNBOUND_CAPTURE_COMPLETED.with(|flag| assert!(!flag.get()));
+    let previous = private_previous(root);
+    assert_eq!(previous.len(), 1);
+    assert_eq!(stdfs::read(&previous[0]).unwrap(), b"version B");
+    assert_eq!(disk(root), b"desired");
+    drop(v);
+    let mut v = NativeVault::open_existing(root).unwrap();
+    assert!(v.recover().unwrap().blocked.is_empty());
+    assert!(private_previous(root).is_empty());
+    let observations = Store::open(root.join(".zorid/vault.sqlite"))
+        .unwrap()
+        .external_observations()
+        .unwrap();
+    assert!(observations.iter().any(|observation| {
+        v.test_content_bytes(None, &observation.content).unwrap() == b"version B"
+    }));
+}
+
+#[test]
+fn replacement_private_inode_is_not_deleted_as_a_settled_displacement() {
+    thread_local! { static ROOT: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) }; }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    ROOT.with(|slot| *slot.borrow_mut() = Some(root.to_owned()));
+    v.fault = Some(|point| {
+        if point == "projection_finished" {
+            ROOT.with(|slot| {
+                let root = slot.borrow_mut().take().unwrap();
+                let previous = private_previous(&root).pop().unwrap();
+                stdfs::rename(&previous, root.join(".zorid/unrelated-retained-inode")).unwrap();
+                stdfs::write(previous, b"replacement inode").unwrap();
+            });
+        }
+    });
+    let outcome = v.apply(&write("write", revision(&v), b"desired")).unwrap();
+    assert!(matches!(outcome.projection, ProjectionStatus::Projected));
+    drop(v);
+    let mut v = NativeVault::open_existing(root).unwrap();
+    assert!(!v.recover().unwrap().blocked.is_empty());
+    let previous = private_previous(root);
+    assert_eq!(previous.len(), 1);
+    assert_eq!(stdfs::read(&previous[0]).unwrap(), b"replacement inode");
+    assert_eq!(disk(root), b"desired");
+}
+
+#[test]
+fn pending_projection_displacement_is_never_retired() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    drop(v);
+    assert_eq!(
+        child(root, "crash")
+            .env("ZORID_NATIVE_TEST_PHASE", "displaced")
+            .status()
+            .unwrap()
+            .code(),
+        Some(77)
+    );
+    let mut v = NativeVault::open_existing(root).unwrap();
+    let attempt = v.status().unwrap().attempts.pop().unwrap();
+    assert!(v.retire_settled_previous(&attempt.attempt_id).is_err());
+    assert_eq!(private_previous(root).len(), 1);
+    assert_eq!(stdfs::read(&private_previous(root)[0]).unwrap(), b"base");
+}
+
+#[test]
+fn restart_captures_changed_completed_displacement_before_retiring_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut v = NativeVault::open(root).unwrap();
+    v.apply(&create()).unwrap();
+    drop(v);
+    assert_eq!(
+        child(root, "crash")
+            .env("ZORID_NATIVE_TEST_PHASE", "projection_finished")
+            .status()
+            .unwrap()
+            .code(),
+        Some(77)
+    );
+    let previous = private_previous(root);
+    assert_eq!(previous.len(), 1);
+    stdfs::write(&previous[0], b"external after process death").unwrap();
+    let mut v = NativeVault::open_existing(root).unwrap();
+    assert!(v.recover().unwrap().blocked.is_empty());
+    assert!(private_previous(root).is_empty());
+    assert_eq!(disk(root), b"desired");
+    let observations = Store::open(root.join(".zorid/vault.sqlite"))
+        .unwrap()
+        .external_observations()
+        .unwrap();
+    assert!(observations.iter().any(|observation| {
+        v.test_content_bytes(None, &observation.content).unwrap() == b"external after process death"
+    }));
 }
 #[test]
 fn observed_parent_relocation_stops_publication() {

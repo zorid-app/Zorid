@@ -2042,6 +2042,7 @@ dependencies = [
  "zorid-native",
  "zorid-native-sync",
  "zorid-proto",
+ "zorid-recovery",
  "zorid-store",
 ]
 
@@ -2100,6 +2101,7 @@ dependencies = [
  "zorid-crypto",
  "zorid-index",
  "zorid-records",
+ "zorid-recovery",
  "zorid-store",
  "zorid-sync-protocol",
 ]
@@ -2146,6 +2148,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zorid-recovery"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "sha2",
+ "zorid-sqlite",
+]
+
+[[package]]
+name = "zorid-sqlite"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+]
+
+[[package]]
 name = "zorid-store"
 version = "0.1.0"
 dependencies = [
@@ -2160,6 +2179,7 @@ dependencies = [
  "zorid-file-sync",
  "zorid-index",
  "zorid-records",
+ "zorid-sqlite",
  "zorid-sync-protocol",
 ]
 

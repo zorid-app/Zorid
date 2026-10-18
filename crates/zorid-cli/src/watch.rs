@@ -87,6 +87,7 @@ fn cycle(
     sync: Option<&FixtureSync>,
     limits: SyncLimits,
     expected: &mut Option<Value>,
+    snapshot_due: bool,
 ) -> Result<Option<Value>> {
     // Reopen each cycle: no stale in-memory core cache or filesystem lock spans
     // the wait, and replacement of a previously selected authority fails closed.
@@ -110,6 +111,7 @@ fn cycle(
     if STOP.load(Ordering::Relaxed) {
         return Ok(None);
     }
+    super::enable_local_recovery(&mut vault, root, snapshot_due);
     let scan = if family.scope.is_some() {
         // Discover before recovery. Recovering an unobserved external move or
         // deletion can recreate the old physical path and lose its evidence.
@@ -189,10 +191,13 @@ pub fn run(
     let mut cycles = 0_u64;
     let mut failures = 0_u32;
     let mut last_complete = false;
+    let mut next_recovery_snapshot = Instant::now();
     while !STOP.load(Ordering::Relaxed) && max_cycles.is_none_or(|limit| cycles < limit) {
         cycles += 1;
         last_complete = false;
-        match cycle(&root, sync.as_ref(), limits, &mut expected) {
+        let snapshot_due = Instant::now() >= next_recovery_snapshot;
+        if snapshot_due { next_recovery_snapshot = Instant::now() + Duration::from_secs(5 * 60); }
+        match cycle(&root, sync.as_ref(), limits, &mut expected, snapshot_due) {
             Ok(None) => break,
             Ok(Some(mut result)) => {
                 failures = 0;

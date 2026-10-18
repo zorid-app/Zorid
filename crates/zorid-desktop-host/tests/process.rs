@@ -5,6 +5,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use zorid_native::NativeVault;
 
 struct Host {
+    _local_data: tempfile::TempDir,
     child: Arc<Mutex<Child>>,
     input: Option<ChildStdin>,
     output: ChildStdout,
@@ -32,7 +33,9 @@ impl Host {
         initialize: bool,
         timeout_secs: u64,
     ) -> Self {
+        let local_data = tempfile::tempdir().unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_zorid-desktop-host"));
+        command.env("ZORID_LOCAL_DATA_DIR", local_data.path());
         command.args([std::ffi::OsStr::new("--vault"), root.as_os_str()]);
         if let Some(config) = config {
             command.arg("--fixture-sync-config").arg(config);
@@ -64,6 +67,7 @@ impl Host {
             }
         });
         Self {
+            _local_data: local_data,
             child,
             input,
             output,
@@ -457,6 +461,12 @@ fn default_local_startup_imports_bytes_and_mutates_without_relay_credentials() {
     std::fs::write(root.path().join("data.bin"), binary).unwrap();
     let mut host = Host::spawn_options(root.path(), None, true);
     assert_eq!(host.recv().0["ok"], true);
+    // The explicit environment root keeps the actual process's recovery history
+    // out of both this vault and the developer's real application profile.
+    let local_vaults = host._local_data.path().join("vaults");
+    let histories: Vec<_> = std::fs::read_dir(&local_vaults).unwrap().map(|entry| entry.unwrap().path()).collect();
+    assert_eq!(histories.len(), 1);
+    assert!(histories[0].join("recovery.sqlite").is_file());
     let status = host.request(json!({"method":"local_family_status"}), &[]).0;
     assert_eq!(status["ok"], true, "{status}");
     let scope = status["result"]["family"]["scope"].clone();

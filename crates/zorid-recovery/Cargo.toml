@@ -1,0 +1,11 @@
+[package]
+name = "zorid-recovery"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Device-local retained recovery snapshots, separate from pending saves"
+
+[dependencies]
+zorid-sqlite = { path = "../zorid-sqlite" }
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+sha2 = "=0.11.0"

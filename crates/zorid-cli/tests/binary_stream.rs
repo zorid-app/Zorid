@@ -55,7 +55,9 @@ fn invoke(
     stdin_seed: Option<usize>,
     output: &Path,
 ) -> (ExitStatus, Vec<u8>) {
+    let local_data = tempfile::tempdir().unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_zorid"));
+    command.env("ZORID_LOCAL_DATA_DIR", local_data.path());
     command
         .arg("--vault")
         .arg(root)

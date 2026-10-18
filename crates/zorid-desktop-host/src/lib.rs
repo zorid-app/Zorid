@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 use zorid_core::{EntryId, EntryKind, Mutation, MutationRequest, OperationId, Revision, VaultPath};
 use zorid_native::{
     ClientAdmissionError, ClientLease, ClientLeaseRef, HostIntentAcknowledgment, HostIntentRef,
@@ -208,6 +209,7 @@ fn native_fault(error: zorid_native::Error) -> Value {
         Store(zorid_store::StoreError::Protocol(_)) => "protocol_failed",
         Store(_) => "storage_io",
         Io(_) => "filesystem_io",
+        Recovery(_) => "local_recovery_unavailable",
     })
 }
 
@@ -350,6 +352,7 @@ fn report(report: zorid_native::ReconcileReport) -> Value {
 }
 #[derive(Default)]
 struct ClientLeases {
+    next_recovery_snapshot_ms: Option<i64>,
     staged_import: Option<staged_import::StagedImport>,
     documents: documents::Sessions,
     workblocks: workblocks::Sessions,
@@ -881,9 +884,59 @@ fn initialize_desktop_vault(vault: &mut NativeVault) -> Result<ReconciliationSta
             zorid_native::ExternalFileMode::Auto,
         )
         .map_err(native_fault)?;
-    // Incomplete coverage/recovery is diagnostic state, not a failed database.
-    // The UI must keep this visible and never present an empty ready vault.
-    Ok(reconciliation_status(&report))
+    // Discovery must precede publication recovery so externally moved/deleted
+    // branches are observed before pending journal state is retried.
+    let recovered = vault.recover().map_err(native_fault)?;
+    let mut status = reconciliation_status(&report);
+    for (path, _) in recovered.blocked {
+        status.complete = false;
+        status.issue_count += 1;
+        if status.issues.len() < 32 {
+            status.issues.push(ReconciliationIssue { path: Some(path.as_str().to_owned()), code: "recovery_retained" });
+        } else {
+            status.issues_truncated = true;
+        }
+    }
+    // Diagnostics remain transport state; product UI supplies ordinary language.
+    Ok(status)
+}
+
+const RECOVERY_SNAPSHOT_INTERVAL_MS: i64 = 5 * 60 * 1_000;
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+fn local_recovery_path(root: &Path, data_root: &Path, local_store_id: &OperationId) -> io::Result<PathBuf> {
+    Ok(zorid_native::LocalStoragePaths::resolve(root, local_store_id, data_root)?.recovery)
+}
+
+fn app_local_data_root() -> io::Result<PathBuf> {
+    zorid_native::LocalStoragePaths::app_data_root()
+}
+
+fn enable_local_recovery(vault: &mut NativeVault, root: &Path, data_root: &Path) -> Result<(), Value> {
+    let identity = vault.identity().map_err(native_fault)?;
+    let path = local_recovery_path(root, data_root, &identity.local_store_id)
+        .map_err(|_| fault("local_recovery_unavailable"))?;
+    std::fs::create_dir_all(path.parent().expect("recovery bucket has a parent"))
+        .map_err(|_| fault("local_recovery_unavailable"))?;
+    vault.enable_local_recovery(path, now_ms()).map_err(native_fault)
+}
+
+fn snapshot_local_recovery_if_due(vault: &mut NativeVault, leases: &mut ClientLeases, now: i64) {
+    if leases.next_recovery_snapshot_ms.is_some_and(|next| now < next) {
+        return;
+    }
+    // Secondary storage must never change an authoritative save's result.
+    // Throttle whole-vault maintenance; native saves capture touched notes.
+    leases.next_recovery_snapshot_ms = Some(now.saturating_add(RECOVERY_SNAPSHOT_INTERVAL_MS));
+    if let Err(error) = vault.snapshot_local_recovery(now) {
+        eprintln!("Local recovery maintenance failed: {error}");
+    }
 }
 
 /// Trusted in-process native host. The shell supplies a selected filesystem root;
@@ -900,12 +953,23 @@ impl EmbeddedHost {
         let reconciliation = initialize_desktop_vault(&mut vault)?;
         Ok(Self { vault, leases: ClientLeases::default(), reconciliation, fixture_sync: None })
     }
+    /// Shell-selected app-private data root. The ordinary constructor remains
+    /// path-neutral for fixtures and shells that have not configured recovery.
+    pub fn open_local_with_data_root(root: &Path, data_root: &Path) -> Result<Self, Value> {
+        let mut vault = NativeVault::open(root).map_err(native_fault)?;
+        enable_local_recovery(&mut vault, root, data_root)?;
+        let reconciliation = initialize_desktop_vault(&mut vault)?;
+        let mut leases = ClientLeases::default();
+        snapshot_local_recovery_if_due(&mut vault, &mut leases, now_ms());
+        Ok(Self { vault, leases, reconciliation, fixture_sync: None })
+    }
     pub fn reconciliation(&self) -> Value {
         serde_json::to_value(&self.reconciliation).expect("serializable status")
     }
     /// Native-owned bounded reconciliation, separate from editor command dispatch.
     pub fn refresh_local(&mut self) -> Result<Value, Value> {
         self.reconciliation = initialize_desktop_vault(&mut self.vault)?;
+        snapshot_local_recovery_if_due(&mut self.vault, &mut self.leases, now_ms());
         Ok(self.reconciliation())
     }
     /// Exactly one complete request frame and one bounded response frame.
@@ -937,6 +1001,7 @@ impl EmbeddedHost {
                 .and_then(|()| execute(&mut self.vault, &mut self.leases, None, request.command, body))
         } else { Err(fault("unsupported_protocol")) };
         let mut output = Vec::new();
+        snapshot_local_recovery_if_due(&mut self.vault, &mut self.leases, now_ms());
         reply(&mut output, &request.request_id, answer, may_commit)?;
         Ok(output)
     }
@@ -984,6 +1049,16 @@ pub fn run_stdio() -> io::Result<()> {
             return Ok(());
         }
     };
+    if initialize_local {
+        // Configure history before reconciliation, which may settle interrupted
+        // writes. Failure here is diagnostic; it must not prevent opening notes.
+        let enabled = app_local_data_root()
+            .map_err(|_| fault("local_recovery_unavailable"))
+            .and_then(|data_root| enable_local_recovery(&mut vault, Path::new(&args[1]), &data_root));
+        if let Err(error) = enabled {
+            eprintln!("Local recovery initialization failed: {error}");
+        }
+    }
     // The trusted main process selects a protected config path once. No framed
     // command accepts credential bytes, paths, endpoints or key material.
     let sync = if let Some(config) = config {
@@ -1017,13 +1092,14 @@ pub fn run_stdio() -> io::Result<()> {
     } else {
         None
     };
+    let mut leases = ClientLeases::default();
+    if initialize_local { snapshot_local_recovery_if_due(&mut vault, &mut leases, now_ms()); }
     write_frame(
         &mut output,
         &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["workblocks","documents","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();
-    let mut leases = ClientLeases::default();
     while let Some((header, body)) = read_frame(&mut input)? {
         // Parse directly into typed input: reject duplicate/unknown fields.
         let request: Request = match serde_json::from_slice(&header) {
@@ -1056,6 +1132,7 @@ pub fn run_stdio() -> io::Result<()> {
         } else {
             Err(fault("unsupported_protocol"))
         };
+        if initialize_local { snapshot_local_recovery_if_due(&mut vault, &mut leases, now_ms()); }
         reply(&mut output, &request.request_id, answer, may_commit)?;
     }
     Ok(())
@@ -1227,5 +1304,86 @@ mod embedded_admission_tests {
             assert_eq!(header["error"]["code"], "client_operation_unsupported");
         }
         assert!(host.vault.list().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod local_recovery_tests {
+    use super::*;
+    use zorid_recovery::{RecoveryScope, RecoveryStore};
+
+    #[test]
+    fn local_history_key_is_stable_isolated_and_outside_vault() {
+        let roots = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let first = roots.path().join("one");
+        let second = roots.path().join("two");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        let identity = OperationId::new("authority-one").unwrap();
+        let path = local_recovery_path(&first, data.path(), &identity).unwrap();
+        assert!(path.starts_with(std::fs::canonicalize(data.path()).unwrap().join("vaults")));
+        assert!(!path.starts_with(&first));
+        assert_eq!(path.file_name().unwrap(), "recovery.sqlite");
+        assert_eq!(path, local_recovery_path(&first.join("."), data.path(), &identity).unwrap());
+        assert_ne!(path, local_recovery_path(&second, data.path(), &identity).unwrap());
+        assert_ne!(path, local_recovery_path(&first, data.path(), &OperationId::new("authority-two").unwrap()).unwrap());
+        assert!(local_recovery_path(&first, Path::new("relative"), &identity).is_err());
+        assert!(local_recovery_path(&first, &first.join("new-data"), &identity).is_err());
+        assert!(!first.join("new-data").exists());
+        let new_data = data.path().join("not-created-yet/nested");
+        assert!(local_recovery_path(&first, &new_data, &identity).unwrap().starts_with(std::fs::canonicalize(data.path()).unwrap()));
+        assert!(!new_data.exists());
+        #[cfg(unix)] {
+            let alias = roots.path().join("alias");
+            std::os::unix::fs::symlink(&first, &alias).unwrap();
+            assert_eq!(path, local_recovery_path(&alias, data.path(), &identity).unwrap());
+            let inside_alias = data.path().join("inside-alias");
+            std::os::unix::fs::symlink(&first, &inside_alias).unwrap();
+            assert!(local_recovery_path(&first, &inside_alias.join("new-data"), &identity).is_err());
+            assert!(!first.join("new-data").exists());
+            std::os::unix::fs::symlink(&first, data.path().join("vaults")).unwrap();
+            assert!(local_recovery_path(&first, data.path(), &identity).is_err());
+            assert_eq!(std::fs::read_dir(&first).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn explicit_data_root_captures_note_bytes_and_reuses_history_on_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let data_root = data.path().join("new-app-data/nested");
+        let bytes = b"Recovery note\n";
+        std::fs::write(root.path().join("Note.md"), bytes).unwrap();
+        let mut host = EmbeddedHost::open_local_with_data_root(root.path(), &data_root).unwrap();
+        let authority = host.vault.identity().unwrap().local_store_id;
+        let entry = host.vault.read_path(&VaultPath::new("Note.md").unwrap()).unwrap().unwrap();
+        let id = entry.state.id.as_str();
+        let path = local_recovery_path(root.path(), &data_root, &authority).unwrap();
+        assert!(path.is_file());
+        let scope = RecoveryScope { vault_id: authority.as_str().to_owned(), replica_id: "native-local".into() };
+        let snapshots = RecoveryStore::open(std::fs::canonicalize(&path).unwrap(), &scope, now_ms()).unwrap();
+        let versions = snapshots.list(id, None, 10).unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(snapshots.read(versions[0].id).unwrap().unwrap().content, bytes);
+        drop(snapshots);
+        drop(host);
+        let reopened = EmbeddedHost::open_local_with_data_root(root.path(), &data_root).unwrap();
+        let snapshots = RecoveryStore::open(std::fs::canonicalize(&path).unwrap(), &scope, now_ms()).unwrap();
+        assert_eq!(snapshots.list(id, None, 10).unwrap(), versions);
+        assert_eq!(std::fs::read(root.path().join("Note.md")).unwrap(), bytes);
+        drop(reopened);
+    }
+
+    #[test]
+    fn whole_vault_snapshot_work_is_throttled_at_command_boundaries() {
+        let root = tempfile::tempdir().unwrap();
+        let mut vault = NativeVault::open(root.path()).unwrap();
+        let mut leases = ClientLeases::default();
+        leases.next_recovery_snapshot_ms = Some(1_000);
+        snapshot_local_recovery_if_due(&mut vault, &mut leases, 999);
+        assert_eq!(leases.next_recovery_snapshot_ms, Some(1_000));
+        snapshot_local_recovery_if_due(&mut vault, &mut leases, 1_000);
+        assert_eq!(leases.next_recovery_snapshot_ms, Some(1_000 + RECOVERY_SNAPSHOT_INTERVAL_MS));
     }
 }

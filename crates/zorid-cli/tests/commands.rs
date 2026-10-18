@@ -16,7 +16,9 @@ fn command(root: &Path, args: &[&str]) -> Command {
     cmd
 }
 fn invoke(root: &Path, args: &[&str], bytes: Option<&[u8]>) -> Output {
+    let local_data = tempfile::tempdir().unwrap();
     let mut cmd = command(root, args);
+    cmd.env("ZORID_LOCAL_DATA_DIR", local_data.path());
     cmd.stdin(if bytes.is_some() {
         Stdio::piped()
     } else {
@@ -349,7 +351,7 @@ fn committed_but_projection_pending_is_success_with_receipt() {
 }
 
 #[test]
-fn recovery_reports_late_displaced_writes_as_incomplete_across_invocations() {
+fn settled_retirement_and_exact_receipts_survive_late_old_handle_writes() {
     use std::io::{Seek, SeekFrom};
     let dir = tempfile::tempdir().unwrap();
     init(dir.path());
@@ -358,36 +360,59 @@ fn recovery_reports_late_displaced_writes_as_incomplete_across_invocations() {
         .write(true)
         .open(dir.path().join(".unknown.bin"))
         .unwrap();
+    let write_args = [
+        "write",
+        "--id",
+        "file1",
+        "--expected-revision",
+        revision(&created),
+        "--operation-id",
+        "write1",
+        "--input",
+        "-",
+    ];
     let written = success(invoke(
         dir.path(),
-        &[
-            "write",
-            "--id",
-            "file1",
-            "--expected-revision",
-            revision(&created),
-            "--operation-id",
-            "write1",
-            "--input",
-            "-",
-        ],
+        &write_args,
         Some(b"new committed bytes"),
     ));
     assert_eq!(written["projection"]["state"], "projected");
+    let assert_no_previous = || {
+        assert!(!fs::read_dir(dir.path().join(".zorid"))
+            .unwrap()
+            .any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".previous")
+            }));
+    };
+    assert_no_previous();
+    // Settled replacement retires the old inode. An external writer retaining
+    // its descriptor must reopen the public path; later writes to that unlinked
+    // inode cannot alter current content or remain an app recovery obligation.
     external.seek(SeekFrom::Start(0)).unwrap();
     external.set_len(0).unwrap();
     external.write_all(b"late private external text").unwrap();
     external.sync_all().unwrap();
+    let replayed = success(invoke(
+        dir.path(),
+        &write_args,
+        Some(b"new committed bytes"),
+    ));
+    assert_eq!(replayed["commit"], written["commit"]);
+    assert_eq!(replayed["projection"]["state"], "projected");
     for _ in 0..2 {
         let output = invoke(dir.path(), &["recover"], None);
         assert!(!String::from_utf8_lossy(&output.stdout).contains("late private external text"));
         let recovered = success(output);
-        assert_eq!(recovered["complete"], false);
+        assert_eq!(recovered["complete"], true);
         assert!(recovered["report"]["blocked"]
             .as_array()
             .unwrap()
-            .iter()
-            .any(|entry| entry["path"] == ".unknown.bin"));
+            .is_empty());
+        assert_no_previous();
         assert_eq!(
             fs::read(dir.path().join(".unknown.bin")).unwrap(),
             b"new committed bytes"
@@ -495,4 +520,24 @@ fn bounded_rescan_reports_incomplete_then_can_retry_full_coverage() {
             .len(),
         2
     );
+}
+
+#[test]
+fn cli_uses_shared_native_app_local_recovery_location() {
+    let vault_root = tempfile::tempdir().unwrap();
+    let local_data = tempfile::tempdir().unwrap();
+    std::fs::write(vault_root.path().join("Note.md"), b"Local recovery note\n").unwrap();
+    for args in [&["init"][..], &["rescan"][..], &["list"][..]] {
+        let output = command(vault_root.path(), args)
+            .env("ZORID_LOCAL_DATA_DIR", local_data.path())
+            .output().unwrap();
+        success(output);
+    }
+    let vault = zorid_native::NativeVault::open_existing(vault_root.path()).unwrap();
+    let identity = vault.identity().unwrap();
+    let paths = zorid_native::LocalStoragePaths::resolve(vault_root.path(), &identity.local_store_id, local_data.path()).unwrap();
+    assert!(paths.recovery.is_file());
+    assert!(!paths.recovery.starts_with(std::fs::canonicalize(vault_root.path()).unwrap()));
+    assert!(!paths.cache.exists(), "path planning does not create a cache database");
+    assert_eq!(&std::fs::read(paths.recovery).unwrap()[..16], b"SQLite format 3\0");
 }

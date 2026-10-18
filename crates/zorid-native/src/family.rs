@@ -103,8 +103,14 @@ impl NativeVault {
             Ok(report) if report.blocked.is_empty() => {
                 self.family_project_status(id)
             }
-            Ok(report) => ProjectionStatus::Pending(report.blocked[0].1.clone()),
-            Err(error) => ProjectionStatus::Pending(error.to_string()),
+            Ok(report) => {
+                let _ = self.capture_local_recovery(id, super::local_recovery::now_ms(), zorid_recovery::SnapshotProvenance::SaveFailure);
+                ProjectionStatus::Pending(report.blocked[0].1.clone())
+            }
+            Err(error) => {
+                let _ = self.capture_local_recovery(id, super::local_recovery::now_ms(), zorid_recovery::SnapshotProvenance::SaveFailure);
+                ProjectionStatus::Pending(error.to_string())
+            }
         };
         ApplyOutcome { commit, projection }
     }
@@ -213,6 +219,8 @@ impl NativeVault {
             self.store.family_assert_projected(id)?;
             Ok(())
         })();
+        let provenance = if result.is_ok() { zorid_recovery::SnapshotProvenance::Periodic } else { zorid_recovery::SnapshotProvenance::SaveFailure };
+        let _ = self.capture_local_recovery(id, super::local_recovery::now_ms(), provenance);
         match result {
             Ok(()) => ProjectionStatus::Projected,
             Err(error) => ProjectionStatus::Pending(error.to_string()),

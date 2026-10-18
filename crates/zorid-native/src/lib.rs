@@ -7,6 +7,8 @@ use zorid_core::{
 };
 mod client_admission;
 mod document_api;
+mod local_storage;
+pub use local_storage::LocalStoragePaths;
 pub use document_api::*;
 pub use client_admission::{ClientAdmissionError, ClientLease, ClientLeaseRef};
 pub use zorid_store::{
@@ -41,6 +43,7 @@ use zorid_store::{DirectoryPhase, ProjectionPhase, ScanRun, StoredEntry};
 #[derive(Debug)]
 pub enum Error {
     Io(std::io::Error),
+    Recovery(zorid_recovery::RecoveryError),
     Store(zorid_store::StoreError),
     Contract(zorid_core::ContractError),
     UnsafePath(String),
@@ -52,6 +55,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(e) => e.fmt(f),
+            Self::Recovery(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
             Self::Contract(e) => e.fmt(f),
             Self::UnsafePath(s) => write!(f, "Unsafe filesystem path: {s}"),
@@ -62,6 +66,9 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+impl From<zorid_recovery::RecoveryError> for Error {
+    fn from(e: zorid_recovery::RecoveryError) -> Self { Self::Recovery(e) }
+}
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Self::Io(e)
@@ -240,6 +247,8 @@ pub enum ExternalFileMode {
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 impl NativeVault {
+    pub fn enable_local_recovery(&mut self, _: impl AsRef<std::path::Path>, _: i64) -> Result<()> { unsupported() }
+    pub fn snapshot_local_recovery(&mut self, _: i64) -> Result<()> { unsupported() }
     pub fn open(_: impl AsRef<std::path::Path>) -> Result<Self> {
         unsupported()
     }

@@ -140,11 +140,15 @@ test('native selected document does not restore unrelated workspace panes',async
 
 test('native editor-only autosave errors stay visible and retry the shared save',async t=>{
   const f=await setup(t,{editorOnly:true,initialPath:'A.md',initialEntryId:'id_A_md'});
-  const write=f.adapter.write.bind(f.adapter);f.adapter.write=async()=>{throw new Error('Disk unavailable');};
+  const write=f.adapter.write.bind(f.adapter);f.adapter.write=async()=>{throw new Error('Disk unavailable: IPC checkpoint_cas operation-uuid schema_version');};
   const input=document.querySelector('textarea')!;input.value='Retained after failure';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
   await assert.rejects(f.workspace.flush(),/Disk unavailable/);
   const status=document.querySelector<HTMLElement>('.native-document-status')!;
-  assert.equal(status.hidden,false);assert.match(status.textContent??'',/Could not save.*A.*draft is retained.*Disk unavailable/);
+  assert.equal(status.hidden,false);assert.match(status.textContent??'',/Could not save.*A.*Keep this note open and try again/);
+  assert.doesNotMatch(document.body.textContent??'',/IPC|checkpoint_cas|operation-uuid|schema_version|Disk unavailable/);
+  status.querySelector<HTMLButtonElement>('button')!.click();await new Promise(done=>setTimeout(done,0));
+  assert.match(document.querySelector('.notice')?.textContent??'',/Keep it open and try again/);
+  assert.doesNotMatch(document.body.innerHTML,/IPC|checkpoint_cas|operation-uuid|schema_version|Disk unavailable/);
   f.adapter.write=write;status.querySelector<HTMLButtonElement>('button')!.click();
   await new Promise(done=>setTimeout(done,0));await f.workspace.flush();
   assert.equal(await f.adapter.read('A.md'),'Retained after failure');assert.equal(status.hidden,true);
@@ -526,4 +530,46 @@ test('durable native PDF launch retains binary viewer path without text checkpoi
   const f=await finiteNavigationFixture(t,'Document.pdf');
   assert.ok(f.workspace.activePane.pdfView);assert.equal(f.workspace.activePane.viewPath,'Document.pdf');
   assert.deepEqual(f.textReads,[]);assert.equal(f.workspace.buffers.size,0);assert.equal(f.heads.size,0);
+});
+
+
+test('note opening errors preserve diagnostics internally and show ordinary-language copy',async t=>{
+  const f=await setup(t);
+  const read=f.adapter.read.bind(f.adapter);
+  const diagnostic=new Error('IPC checkpoint_load operation-uuid schema_version /private/vault.sqlite');
+  const logged:unknown[][]=[];t.mock.method(console,'error',(...args:unknown[])=>{logged.push(args);});
+  f.adapter.read=async path=>{if(path==='B.md')throw diagnostic;return read(path);};
+  await f.workspace.openNote('B.md');
+  assert.match(document.querySelector('.error-message')?.textContent??'',/couldn’t be opened/);
+  assert.doesNotMatch(document.body.innerHTML,/IPC|checkpoint_load|operation-uuid|schema_version|private|sqlite/);
+  assert.ok(logged.some(args=>args.includes(diagnostic)));
+  f.adapter.read=read;
+});
+
+test('shared note-save command failures never surface checkpoint internals in notices',async t=>{
+  const f=await setup(t,{initialPath:'A.md',initialEntryId:'id_A_md'});
+  const write=f.adapter.write.bind(f.adapter);
+  t.mock.method(console,'error',()=>{});
+  f.adapter.write=async()=>{throw new Error('IPC checkpoint_cas operation-uuid schema_version');};
+  const input=document.querySelector('textarea')!;input.value='Pending edit';input.dispatchEvent(new f.dom.window.Event('input',{bubbles:true}));
+  (f.workspace as any).run(()=>f.workspace.flush());
+  await new Promise(done=>setTimeout(done,0));
+  assert.match(document.querySelector('.notice')?.textContent??'',/Keep it open and try again/);
+  assert.doesNotMatch(document.body.innerHTML,/IPC|checkpoint_cas|operation-uuid|schema_version/);
+  f.adapter.write=write;await f.workspace.flush();
+});
+
+
+test('recovery-copy failures show an actionable message without native details',async t=>{
+  const recovered=await durableRecoveryFixture();
+  const f=await setup(t,{editorOnly:true},false,{},undefined,recovered.adapter);
+  t.mock.method(console,'error',()=>{});
+  await f.workspace.openNote('One.md');
+  const buffer=f.workspace.buffers.get('One.md')!,save=buffer.saveRecoveryCopy.bind(buffer);
+  buffer.saveRecoveryCopy=async()=>{throw new Error('IPC operation-uuid checkpoint_cas schema_version');};
+  const button=[...document.querySelectorAll<HTMLButtonElement>('.note-recovery button')].find(button=>button.textContent==='Save recovery copy')!;
+  assert.ok(button);button.click();await new Promise(done=>setTimeout(done,0));
+  assert.match([...document.querySelectorAll('.notice')].at(-1)?.textContent??'',/Keep this note open and try again/);
+  assert.doesNotMatch(document.body.innerHTML,/IPC|operation-uuid|checkpoint_cas|schema_version/);
+  buffer.saveRecoveryCopy=save;await save();await f.workspace.flush();
 });

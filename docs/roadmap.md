@@ -8,11 +8,11 @@ Older plans remain detailed capability inventories, not competing delivery order
 
 ## Current focus
 
-**S0 — Storage, saving and local recovery is next.** The user explicitly made the
+**S0 — Storage, saving and local recovery is implementing.** The user explicitly made the
 storage layer the immediate priority. Review storage contracts during S0 design; the new
 **S0A modular-interface gate** follows S0 and precedes S1 optimization and downstream
-feature work. This roadmap is documentation, not a claim
-that its implementation has started. Existing feature/iOS work is preserved.
+feature work. Implementation ownership and verification are tracked in the execution checkpoint;
+no complete S0 acceptance is claimed. Existing feature/iOS work is preserved.
 
 Design for desktop, browser and mobile now; finish the usable desktop feature set
 before resuming iOS implementation. The browser is a connected sync-group client
@@ -42,8 +42,8 @@ that invalidate a closed gate reopen that bounded gate, not every earlier milest
 
 ## Delivery order
 
-All rows remain **planned** at roadmap level: earlier integrated foundations are
-credited below, but no complete milestone is newly certified by this document.
+S0 is **implementing**; later milestones remain **planned**. Earlier integrated
+foundations are credited below; complete S0 acceptance still requires its exit checks.
 
 | ID | Milestone | Prerequisite |
 | --- | --- | --- |
@@ -72,9 +72,10 @@ choice at the desktop gate rather than silently expanding the prerequisite.
 ## S0 — Storage layer, saving and local recovery
 
 **Current:** native Store/SQLite authority, physical projection journals and local
-checkpoints exist. Browser uses IndexedDB. Native index cache tables currently
-share the authority database. Unified SQLite infrastructure, separate app-local
-cache/recovery databases and the discussed snapshot behavior are not delivered.
+checkpoints exist. Browser uses IndexedDB. The first reviewed S0 batch adds shared
+SQLite connection policy, separate app-local recovery snapshots, automatic opening
+recovery and settled backup retirement. Native document caches still share the
+authority database; extraction is the next S0 slice. Complete S0 is not accepted.
 
 Scope:
 

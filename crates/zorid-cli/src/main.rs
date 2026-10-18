@@ -267,6 +267,25 @@ fn write_json(writer: &mut impl Write, value: &Value) -> io::Result<()> {
     writer.flush()
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn enable_local_recovery(vault: &mut zorid_native::NativeVault, root: &std::path::Path, snapshot: bool) {
+    use zorid_native::LocalStoragePaths;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64).unwrap_or(0);
+    let enabled = (|| -> zorid_native::Result<()> {
+        let identity = vault.identity()?;
+        let data = LocalStoragePaths::app_data_root()?;
+        let paths = LocalStoragePaths::resolve(root, &identity.local_store_id, &data)?;
+        std::fs::create_dir_all(paths.recovery.parent().expect("recovery bucket has a parent"))?;
+        vault.enable_local_recovery(paths.recovery, now)
+    })();
+    if enabled.is_err() {
+        eprintln!("Local recovery history is temporarily unavailable.");
+    } else if snapshot && vault.snapshot_local_recovery(now).is_err() {
+        eprintln!("Local recovery history could not be updated.");
+    }
+}
+
 fn main() -> ExitCode {
     let args = match Args::try_parse() {
         Ok(args) => args,
@@ -372,6 +391,7 @@ impl From<zorid_native::Error> for Failure {
     fn from(error: zorid_native::Error) -> Self {
         use zorid_native::Error::*;
         match error {
+            Recovery(_) => Self::new("local_recovery_unavailable", "Local recovery is temporarily unavailable", 1),
             Contract(error) | Store(zorid_store::StoreError::Contract(error)) => error.into(),
             UnsafePath(_) => Self::new("unsafe_path", "Filesystem safety checks rejected this path", 1),
             Busy(_) => Self::new("filesystem_changed", "Filesystem changed during the operation; reconcile before retrying", 3),
@@ -501,6 +521,7 @@ fn run(args: Args) -> Result<Output> {
     } else {
         NativeVault::open_existing(&args.vault)?
     };
+    enable_local_recovery(&mut vault, &args.vault, true);
     // Binary requests select their durable original operation before reading
     // input. Each append is bounded; no native lock spans a caller's input read.
     if matches!(

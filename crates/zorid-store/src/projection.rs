@@ -271,6 +271,10 @@ impl Store {
     pub fn projection_baseline(&self, id: &EntryId) -> Result<Option<ProjectionBaseline>> {
         baseline(&self.connection, id)
     }
+    /// Read one validated historical attempt without scanning every saved job.
+    pub fn projection_attempt(&self, id: &OperationId) -> Result<ProjectionAttempt> {
+        attempt(&self.connection, id)
+    }
     /// Retained completed attempts account for retained recovery files. No GC yet.
     pub fn projection_attempts(&self, include_completed: bool) -> Result<Vec<ProjectionAttempt>> {
         let mut stmt = self.connection.prepare("SELECT attempt_id,entry_id,completed,record FROM projection_attempts WHERE ?1 OR completed=0 ORDER BY rowid")?;

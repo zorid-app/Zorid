@@ -694,9 +694,11 @@ fn external_namespace_hidden_recovery_move_keeps_unseen_text_and_historical_pare
         b"base"
     );
     let sql = rusqlite::Connection::open(root.path().join(".zorid/vault.sqlite")).unwrap();
+    // file_state.rs retains graph membership keys; immutable_payloads.rs owns
+    // the exact authenticated payload. Join the complete scope, not update ID alone.
     let (count, parent): (i64, String) = sql.query_row(
-        "SELECT json_array_length(json_extract(CAST(payload AS TEXT),'$.body.events[0].parents')),json_extract(CAST(payload AS TEXT),'$.body.events[0].parents[0]') FROM family_file_records WHERE update_id=?1",
-        [receipt.authored[0].as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
+        "SELECT json_array_length(json_extract(CAST(p.payload AS TEXT),'$.body.events[0].parents')),json_extract(CAST(p.payload AS TEXT),'$.body.events[0].parents[0]') FROM family_file_records f JOIN immutable_payloads p USING(realm_id,vault_id,update_id) WHERE f.realm_id=?1 AND f.vault_id=?2 AND f.update_id=?3 AND p.family='files'",
+        ["namespace-realm", "namespace-vault", receipt.authored[0].as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
     ).unwrap();
     assert_eq!(count, 1);
     assert_eq!(

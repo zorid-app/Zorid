@@ -1,0 +1,13 @@
+[package]
+name = "zorid-sqlite"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+description = "Checked native SQLite connection policy shared by Zorid storage modules"
+
+[dependencies]
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"

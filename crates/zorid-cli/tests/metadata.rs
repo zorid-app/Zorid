@@ -10,7 +10,9 @@ use zorid_native::{FamilyScope, NativeVault};
 use zorid_sync_protocol::{RealmId, VaultId};
 
 fn invoke(root: &Path, args: &[&str]) -> Output {
+    let local_data = tempfile::tempdir().unwrap();
     Command::new(env!("CARGO_BIN_EXE_zorid"))
+        .env("ZORID_LOCAL_DATA_DIR", local_data.path())
         .arg("--vault")
         .arg(root)
         .args(args)
