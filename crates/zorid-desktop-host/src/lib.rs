@@ -2,6 +2,7 @@
 //! to NativeVault. No listener, daemon, filesystem writes or alternate store here.
 mod binary;
 mod documents;
+mod workblocks;
 mod embedded_fixture_sync;
 mod staged_import;
 pub use staged_import::{
@@ -40,6 +41,7 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    Workblocks { client_id: OperationId, request: workblocks::Request },
     Documents {
         client_id: OperationId,
         request: documents::Request,
@@ -308,6 +310,7 @@ fn reply(
     }
 }
 fn command_may_commit(command: &Command) -> bool {
+    if let Command::Workblocks { request, .. } = command { return request.may_commit(); }
     matches!(
         command,
         Command::Apply { .. }
@@ -349,6 +352,7 @@ fn report(report: zorid_native::ReconcileReport) -> Value {
 struct ClientLeases {
     staged_import: Option<staged_import::StagedImport>,
     documents: documents::Sessions,
+    workblocks: workblocks::Sessions,
     active: BTreeMap<String, ClientLease>,
     binary_reads: BTreeMap<(OperationId, OperationId), zorid_store::BinaryReadSession>,
     released: BTreeMap<String, ClientLeaseRef>,
@@ -370,6 +374,7 @@ impl ClientLeases {
         let client = match command {
             Command::Binary { client_id }
             | Command::Documents { client_id, .. }
+            | Command::Workblocks { client_id, .. }
             | Command::PrepareIntent { client_id, .. }
             | Command::ListIntents { client_id, .. }
             | Command::CreateText { client_id, .. }
@@ -500,6 +505,12 @@ fn execute(
     body: Vec<u8>,
 ) -> Result<(Value, Vec<u8>), Value> {
     let result = match command {
+        Command::Workblocks { client_id, request } => {
+            empty(&body)?;
+            let lease = leases.active.values().find(|lease| lease.reference().client_id == client_id)
+                .ok_or_else(|| fault("client_not_admitted"))?;
+            return workblocks::execute(vault, &mut leases.workblocks, lease, request);
+        }
         Command::Documents { client_id, request } => {
             empty(&body)?;
             let token = leases.active.values()
@@ -544,6 +555,7 @@ fn execute(
                     .binary_reads
                     .retain(|(client, _), _| client != &reference.client_id);
                 leases.documents.release(&reference.client_id);
+                leases.workblocks.release(&reference.client_id);
                 leases.active.remove(reference.token.as_str()); // Drop releases kernel ownership; NEVER unlink.
                 leases
                     .released
@@ -1007,7 +1019,7 @@ pub fn run_stdio() -> io::Result<()> {
     };
     write_frame(
         &mut output,
-        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["documents","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
+        &json!({"version":1,"request_id":"0","ok":true,"result":{"transport":"zorid-native-stdio","max_header":MAX_HEADER,"max_body":MAX_BODY,"max_checkpoint_body":MAX_CHECKPOINT_BODY,"max_binary_frame":binary::MAX_FRAME,"binary_limits":{"maxFileBytes":"67108864","maxChunkBytes":binary::MAX_CHUNK,"smallReadBytes":binary::SMALL_READ.to_string()},"reconciliation":reconciliation,"capabilities":["workblocks","documents","binary_streams","reconciliation_status","local_family_status","file_command","file_command_compact","file_command_status","create_text","claim_client","release_client","checkpoint_load","checkpoint_cas","checkpoint_list","checkpoint_changes","identity","list","read","apply","reconcile","recover","status","list_snapshot","read_path","read_presented","changes_after","rescan","prepare_intent","commit_intent","query_intent","list_intents","acknowledge_intent","fixture_family_enroll","fixture_family_status","fixture_family_once","fixture_family_apply"]}}),
         &[],
     )?;
     let mut input = io::stdin().lock();

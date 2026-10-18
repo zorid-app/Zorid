@@ -537,6 +537,17 @@ impl Store {
         tx.commit()?;
         Ok(result)
     }
+    /// Collection-scoped fence for bounded host reads; not an independent sync cursor.
+    pub fn managed_watermark(&self, handle: &ManagedCollection) -> Result<String> {
+        let tx = self.connection.unchecked_transaction()?;
+        authorize(&tx, &self.document_query_owner, handle)?;
+        let sequence: i64 = tx.query_row(
+            "SELECT coalesce(max(sequence),0) FROM managed_changes WHERE collection_key=?1",
+            params![handle.key], |r| r.get(0),
+        )?;
+        tx.commit()?;
+        Ok(sequence.to_string())
+    }
     pub fn managed_changes(
         &self,
         handle: &ManagedCollection,

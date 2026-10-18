@@ -67,6 +67,10 @@ mod text_sync;
 #[path = "document_index.rs"]
 mod document_index;
 
+#[path = "workblocks.rs"]
+mod workblocks;
+pub use workblocks::*;
+
 pub struct NativeVault {
     paths: Paths,
     store: Store,

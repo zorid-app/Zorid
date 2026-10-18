@@ -214,8 +214,18 @@ mod fs_stream;
 mod native;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub use native::{select_external_file_mode, ExternalFileMode, NativeVault};
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
+pub use native::{WorkBlockCommand, WorkBlockError, WorkBlockRange, WorkBlockRangeCandidate,
+    WorkBlockTitleCandidate, WorkBlockValue, WorkBlockRead, WorkBlockWindowPage,
+    WorkBlockReply, WorkBlockResult, WorkBlockSession};
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 pub struct NativeVault;
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
+#[path = "workblocks.rs"]
+mod unsupported_workblocks;
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
+pub use unsupported_workblocks::*;
+
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
