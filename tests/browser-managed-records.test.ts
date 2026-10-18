@@ -170,7 +170,7 @@ function engine(f:ReturnType<typeof fixture>,synced=false){
       localRequest(){return requestBytes;},operationBindings(){return bindings;},free(){frees++;}};
   };
   const guardRead=(request:any,callback:(row:any)=>void,abort:any)=>{request.onsuccess=()=>{try{active();callback(request.result);}catch(error){abort(error);}};};
-  const common={storedSource(tx:any,key:any,done:any,abort:any){getExactSource(tx,key,'payload',source=>{if(!source){done(null);return;}guardRead(tx.objectStore('sync_authored').get([key.realmId,key.vaultId,key.updateId]),authored=>done({source,authored:!!authored}),abort);},abort);},stores:['sync_state','sync_authored','sync_envelopes','sync_cursors','sync_source_headers','sync_source_payloads','sync_source_wires'],
+  const common={authenticatedContext(){return {key_epoch:1};},storedSource(tx:any,key:any,done:any,abort:any){getExactSource(tx,key,'payload',source=>{if(!source){done(null);return;}guardRead(tx.objectStore('sync_authored').get([key.realmId,key.vaultId,key.updateId]),authored=>done({source,authored:!!authored}),abort);},abort);},stores:['sync_state','sync_authored','sync_envelopes','sync_cursors','sync_source_headers','sync_source_payloads','sync_source_wires'],
     readContext(tx:any,_scope:any,done:any,abort:any){guardRead(tx.objectStore('sync_cursors').get(['realm','vault']),row=>done(row?.value??null),abort);},
     authored(tx:any,metadataJson:string,payload:Uint8Array,done:any,abort:any){
       const metadata=JSON.parse(metadataJson),key=['realm','vault',metadata.key.update_id];

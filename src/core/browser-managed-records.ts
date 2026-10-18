@@ -172,10 +172,12 @@ export interface ManagedCommonLedger {
   /** Existing common ledger owner rechecks enrollment/session and returns the shared cursor.
    * Must include exact wire/dedupe/source/quota checks at commit, not trust prepared facts. */
   stores: readonly string[];
+  /** Only the actual streaming AEAD opener can retain this private context. */
+  authenticatedContext(update:AuthenticatedRecordsUpdate):unknown;
   storedSource(tx: IDBTransaction, key: SourceKey, done: (value: {source:SourceRead;authored:boolean}|null) => void, abort: Abort): void;
   readContext(tx: IDBTransaction, scope: ManagedScope, done: (cursor: RecordsFacts['cursor']) => void, abort: Abort): void;
   authored(tx: IDBTransaction, metadataJson: string, payload: Uint8Array, done: () => void, abort: Abort): void;
-  received(tx: IDBTransaction, input: { metadataJson: string; payload: Uint8Array; wire: Uint8Array; delivery?: unknown; duplicateOnly?: boolean; assertActive?(): void },
+  received(tx: IDBTransaction, input: { metadataJson: string; payload: Uint8Array; wire: Uint8Array; delivery?: unknown; enrolledContext: unknown; duplicateOnly?: boolean; assertActive?(): void },
     done: (result: { duplicate: boolean; authored: boolean }) => void, abort: Abort): void;
   /** AEAD-open exact retained wire using the enrolled key; never construct an update from plaintext. */
   retainedSession(): { assertActive(): void; open(receipt: ManagedReceiptHead): Promise<AuthenticatedRecordsUpdate> };
@@ -407,11 +409,12 @@ export function createBrowserManagedRecords(host: ManagedRecordsHost) {
 
   interface Incoming {
     scope: ManagedScope; metadataJson: string; payload: Uint8Array; wire: Uint8Array; updateId: string;
-    expected: FactsSnapshot; receipt?: ManagedReceiptHead; plan: RecordsPlan; delivery?: unknown; used: boolean; assertExtra?: () => void;
+    expected: FactsSnapshot; receipt?: ManagedReceiptHead; plan: RecordsPlan; delivery?: unknown; enrolledContext: unknown; used: boolean; assertExtra?: () => void;
   }
   const prepared = new WeakMap<object, Incoming>();
   async function prepareReceive(update: AuthenticatedRecordsUpdate, delivery?: unknown, assertExtra?: () => void): Promise<{ dispose(): void }> {
     active(); assertExtra?.();
+    const enrolledContext=structuredClone(sync(host.common.authenticatedContext(update)));
     const description = JSON.parse(sync(update.recordsReadSetJson())) as { scope: ManagedScope; operations: string[] };
     const scope = description.scope, key = scopeKey(scope), metadataJson = sync(update.metadataJson());
     const metadata = JSON.parse(metadataJson), updateId = metadata.key.update_id;
@@ -430,7 +433,7 @@ export function createBrowserManagedRecords(host: ManagedRecordsHost) {
     active(); assertExtra?.();
     const plan = sync(update.prepareRecords(JSON.stringify(captured.expected.facts)));
     const incoming: Incoming = { scope: structuredClone(scope), metadataJson, payload, wire, updateId, ...captured,
-      plan, delivery: structuredClone(delivery), used: false, assertExtra };
+      plan, delivery: structuredClone(delivery), enrolledContext, used: false, assertExtra };
     const token = Object.freeze({ dispose() { const value = prepared.get(token); if (value) { prepared.delete(token); value.plan.free(); } } });
     prepared.set(token, incoming); return token;
   }
@@ -450,7 +453,7 @@ export function createBrowserManagedRecords(host: ManagedRecordsHost) {
           try { sync(plan.checkPreconditions(JSON.stringify(actual.facts))); } catch (error) { throw new BrowserVaultError('managed_snapshot_conflict', 'Managed facts changed before commit', { reason: String(error) }); }
           if (receipt && (receipt.record !== scope.record || receipt.generation !== scope.generation || receipt.restores !== scope.restores || receipt.payloadBytes !== String(value.payload.byteLength))) throw failure('storage_corrupt');
           host.common.received(tx, { metadataJson: value.metadataJson, payload: value.payload.slice(), wire: value.wire.slice(),
-            delivery: retry ? undefined : value.delivery, assertActive: () => { active(); transactionGuards.get(tx)?.(); } }, common => {
+            delivery: retry ? undefined : value.delivery, enrolledContext:value.enrolledContext, assertActive: () => { active(); transactionGuards.get(tx)?.(); } }, common => {
             try {
               active();
               if (common.duplicate && !retry) {
@@ -511,11 +514,12 @@ export function createBrowserManagedRecords(host: ManagedRecordsHost) {
   }
   async function receive(update: AuthenticatedRecordsUpdate, delivery?: unknown) {
     // Exact immutable replay precedes any accepted-state decoding or fresh quotas.
+    const enrolledContext=structuredClone(sync(host.common.authenticatedContext(update)));
     const metadataJson = sync(update.metadataJson()), metadata = JSON.parse(metadataJson);
     const description = JSON.parse(sync(update.recordsReadSetJson())) as { scope: ManagedScope };
     const payload = boundedBytes(sync(update.exactPlaintext()), 1024 * 1024), wire = boundedBytes(sync(update.exactWire()), 1052720);
     const duplicate = await transact<{ duplicate: true; status: string; changed: false } | null>('readwrite', (tx, done, abort) => {
-      host.common.received(tx, { metadataJson, payload, wire, delivery: structuredClone(delivery), duplicateOnly: true }, common => {
+      host.common.received(tx, { metadataJson, payload, wire, delivery: structuredClone(delivery), enrolledContext, duplicateOnly: true }, common => {
         try {
           active();
           if (!common.duplicate) { done(null); return; }

@@ -203,6 +203,7 @@ interface RecordsSessionContext { current?:{key:BrowserSyncKey;assertActive():vo
 export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContext:RecordsSessionContext={}):BrowserStreamingSyncEngine {
   for(const name of ['WasmMetadataStateBuilder','WasmAuthoredMetadataBatch','validateFamilyCommand','checkFamilyCommandReplay','validateAuthoredSyncPayload','validateSyncWire','encodeFilePayload','materializeTextState','createEmptyTextState','rebindTextState'] as const)if(typeof host.wasm[name]!=='function')throw failure('sync_bindings_unavailable');
   const prepared=new WeakMap<PreparedStreamingMutation,InternalPrepared>();
+  const openedRecordsContexts=new WeakMap<AuthenticatedRecordsUpdate,Configuration>();
   const active=()=>host.assertActive();
   const transact=<T>(mode:IDBTransactionMode,start:(tx:IDBTransaction,done:(value:T)=>void,abort:Abort)=>void)=>normalizedTransact(host.db,{authorityId:host.authorityId,stores:baseStores(),mode,assertActive:active},start);
   const fresh=()=>crypto.randomUUID();
@@ -712,6 +713,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       if(metadata.family==='records'){
         if(!managedRecords)throw failure('records_bindings_unavailable');
         recordsContext.current={key:keyInput,assertActive:active};
+        openedRecordsContexts.set(opened as unknown as AuthenticatedRecordsUpdate,copy(config));
         const result=await managedAdapter!.receive(opened as unknown as AuthenticatedRecordsUpdate,delivery);
         return {duplicate:result.duplicate,sequence:s.publication.sequence};
       }
@@ -810,6 +812,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
   const managedBindings=['validateRecordsRegistration','validateRecordsAccepted','canonicalRecordsLocalRequest','finalizeRecordsLocalResult','prepareRecordsLocal','recordsSnapshot','recordsRetryEligible','validateRecordsStoredOperation','validateRecordsStoredReplay','validateRecordsStoredBinding','recordsStoredReadSet'] as const;
   const managedAdapter=managedBindings.every(name=>typeof host.wasm[name]==='function')?createBrowserManagedRecords({db:host.db,authorityId:host.authorityId,assertActive:active,wasm:host.wasm as ManagedRecordsWasm,common:{
     stores:baseStores(),
+    authenticatedContext(update){const context=openedRecordsContexts.get(update);if(!context)throw failure('records_authentication_unavailable');return copy(context);},
     storedSource(tx,identity,done,abort){
       read(tx,tx.objectStore('sync_authored').get(key(identity)),authored=>{
         read(tx,tx.objectStore('sync_envelopes').get(key(identity)),envelope=>{
@@ -846,6 +849,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       if(input.assertActive){input.assertActive();managedTransactionGuards.set(tx,input.assertActive);}
       const metadata=boundedJson(input.metadataJson,128*1024) as EnvelopeMetadata,identity=sourceKey(metadata),header=sourceHeader(metadata,null,null,null);
       managedConfiguration(tx,{realm:identity.realmId,vault:identity.vaultId} as ManagedScope,true,(config,cursor)=>{
+        if(!equals(config,input.enrolledContext))throw failure('sync_snapshot_conflict');
         const delivery=input.delivery as SyncDelivery|undefined;
         checkDelivery({config,head:{},cursor} as Snapshot,delivery);
         read(tx,tx.objectStore('sync_envelopes').get(key(identity)),envelope=>{
@@ -893,7 +897,7 @@ export function browserStreamingSync(host:BrowserStreamingSyncHost,recordsContex
       const opened=rust(()=>retainedKey.openSyncUpdate(stringify({realm_id:config.realm_id,vault_id:config.vault_id,update_id:receipt.updateId,key_epoch:config.key_epoch}),retained.bytes)) as unknown as StreamingOpenedUpdate&AuthenticatedRecordsUpdate;
       try{const metadata=descriptor(retained.header).metadata;
         if(!equals(boundedJson(opened.metadataJson()),metadata)||String(opened.exactPlaintext().byteLength)!==receipt.payloadBytes)throw failure('storage_corrupt');
-        admitted();return opened;
+        admitted();openedRecordsContexts.set(opened,copy(config));return opened;
       }catch(error){opened.free();throw error;}
       }};
     },

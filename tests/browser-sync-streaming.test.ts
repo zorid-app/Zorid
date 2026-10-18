@@ -796,3 +796,16 @@ test('new records receive respects mixed common envelope capacity and cannot bri
   // The prior integrated snapshot remains usable after rejected insertion.
   await h.engine.validate();
 });
+
+test('records exact AEAD-open capability pins enrolled epoch through the final common transaction',async()=>{
+  const h=harness(true);await h.engine.api.enroll({...scope,key_epoch:1});await h.engine.managedRecords!.register(managedCollection,managedRegistration);
+  const record=managedEmission('record_epoch_race'),wire=h.wire(record);
+  const wrapped={...h.key,openSyncUpdate(context:string,bytes:Uint8Array){
+    const opened=h.key.openSyncUpdate(context,bytes),config=h.f.row('sync_state','config');
+    h.f.seed('sync_state','config',{...config,value:{...config.value,key_epoch:2}});return opened;
+  }};
+  const original=clone(h.f.records);
+  await assert.rejects(h.engine.api.receive('record_epoch_race',wire,wrapped),{code:'sync_snapshot_conflict'});
+  original.get('sync_state')!.set(JSON.stringify('config'),h.f.row('sync_state','config'));
+  assert.deepEqual(h.f.records,original);assert.equal(h.f.records.get('managed_receipts')!.size,0);
+});

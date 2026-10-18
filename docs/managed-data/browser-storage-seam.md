@@ -127,3 +127,13 @@ and `git diff --check` pass. Final review correction binds Local/Cache local-row
 commitment-row and accepted-row **complete** scope, including `restores`; received
 bindings likewise match the exact source scope. No browser/native result is
 inferred from these Node fixtures.
+
+Post-freeze self-review found the records facts DTO alone did not pin the full
+configuration used for AEAD open. The followup binds each actual opened update
+in a closure-private WeakMap to a copied enrolled configuration, including key
+epoch/replica/incarnation; both duplicate and new-source writers compare the
+fresh configuration before writes. Retained reopening installs the same private
+context. The adapter cannot obtain it from an arbitrary update object. A new
+post-open epoch-change regression passes with all records/common rows unchanged.
+Final followup run: **83/83**, including 40 streaming tests; the remaining counts
+are unchanged. Scoped TypeScript and whitespace checks pass again.
