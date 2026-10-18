@@ -2,6 +2,17 @@
 
 ## Current resume — 2026-10-18 05:25 UTC
 
+Root reconciliation at05:28 UTC: this two-file checkpoint is accepted for canonical
+integration after root review; historical evidence below remains bounded to its
+recorded timestamp. Main5abd4509 subsequently integrates the optional mobile
+web-routing bridge, helper8e8732ea and assignment55051226. Browser task queries
+and Type configuration modules are being implemented in isolated root-owned
+worktrees; no actual WASM/UI result is established for them. Managed lead reports
+the bounded Store turn now18/18 and terminal, but independent result review and
+source integration are still pending. See root-next-assignments.md and the main
+roadmap for these newer states; do not interpret the older “just begun” below as
+a current process handle. No compiler/app was run for this docs reconciliation.
+
 **The amended full goal remains active.** Spaced repetition was removed by direct
 user instruction, not deferred. Google two-way integration, desktop and native
 mobile feature UI, secrets, jobs, version/migration verticals and public plugin
