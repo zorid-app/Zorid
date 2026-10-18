@@ -350,3 +350,118 @@ remain intentionally available in this source-only slice. Source review does
 not establish those gates, mobile/native/reference parity, or product activation.
 Any later main composition or source successor must identify changed affected
 bytes and receive appropriate revalidation; this verdict binds only 6078c333.
+
+## Actual SQLite receipts and author-report follow-up
+
+Follow-up owner is the same reviewer, task `task_290c00486842`, dispatch
+`ctx_43fddc69334d`, following review commit
+`e9df538f69182bb0be1d1593904329dea4ad5a12`. Only this document changes.
+**Scoped verdict: PASS for the actual 18 SQLite checks and exact author report;
+no remaining blocking receipt/report findings.** This section supersedes the
+earlier unexecuted status only for the checks explicitly listed below.
+
+Tested source remains `6078c333d9c6838c07cbfbedaa3951d7df483245`. Final author
+report commit `64325db140cddc2d4fc9d67dddca5ecaddb5b29c` changes only
+`docs/managed-data/origin-store-adapter.md`, whose SHA256 is
+`99b906438776cb6c83010a1cdc96c198ad4f2246389899547df896e38383d517`.
+Independent Git comparison confirms unchanged source/test/manifests; worktree
+status is clean. The earlier source witness remains applicable to the frozen
+implementation, with the report's later bytes identified separately.
+
+Read actual persistent logs, per-command JSON, binary hashes and cleanup receipt
+under `/Users/ctk/orca/artifacts/zorid-origin-store-20261018/task_b677f7629e9b/`.
+Independently recomputed all five log hashes and seven source hashes retained
+in the first receipt, and all three executable hashes; all match. Each command
+uses the same explicit cargo/rustc/rustdoc toolchain directory recorded below,
+`--offline --locked -p zorid-store`, `CARGO_BUILD_JOBS=1`,
+`CARGO_INCREMENTAL=0`, target directory
+`/Users/ctk/Projects/Zorid/target/stage4-verified`, and `--test-threads=1`.
+Recorded start times plus elapsed times establish sequential nonoverlapping
+commands, including the three short checkpoint commands. No selected test failed
+or was ignored; unrelated filtered unit tests were not counted as passes.
+
+| Receipt/log basename | Scope | Actual result / total elapsed | Log SHA256 |
+| --- | --- | --- | --- |
+| `v1-managed-intents` | `--test managed_intents` | 11/11, exit0, 18.612s; build16.96s/test0.97s | `2410dedc3c1f8ba5ffe1a576809dbe78110201445ba0f71d3c1ca40263ad74b5` |
+| `reserved-checkpoint` | Exact reserved namespace/ordinary OperationId regression | 1/1, exit0, 3.914s | `0d1061c277cf87790d93edf87f0f6dc3607b6ea2a9f3d90598b25b98bb4cda0b` |
+| `ordinary-tombstone` | Exact current retry/tombstone fences | 1/1, exit0, 0.349s | `4035748e6602a92fa6d102860d34f59f1c1917793c0374f1d57389ee12c4bce5` |
+| `ordinary-scope` | Exact scope/cursor/input bounds | 1/1, exit0, 0.240s | `1939140558334625ecaf30a0b123950b1df398d007f127fac563e48d8fa66947` |
+| `featured-upgrade-held` | `--features intent-test-fixtures --lib managed_records::origin_sqlite_fixtures::` | 4/4, exit0, 12.626s; build11.69s/test0.31s;96 filtered | `b5e6bdb889a9141ef3146eabe15ce41a4bf495603038387075665d2675ab7167` |
+
+Verified executable identities in the shared target directory's `debug/deps`:
+
+| Executable | SHA256 |
+| --- | --- |
+| `managed_intents-bb31664929a24c82` | `aecd03cd2e4565f410519739dc6ddc4ea50131212a4adefadd2fb1b5764b4713` |
+| `checkpoints-7d8efda900136a79` | `5569a26dd4f8ef98de1b0203be801b85a2b598d64a6215b91514ddf765c5a1a3` |
+| `zorid_store-572fc49b61647e1f` | `2ad250ae1fdeb2cacdb42912a035fc2f55182d9d39642d3c424ad2e90ee6d15b` |
+
+Receipt `v1-managed-intents.json` records compiler identity
+`rustc 1.95.0 (59807616e 2026-04-14)`. Tool paths resolve within
+`/Users/ctk/Projects/Zorid/tmp/shared-rust-toolchain/toolchains/stable-aarch64-apple-darwin/bin`.
+Reviewer read the existing tool bytes without launching a build or test:
+cargo SHA256 `c512bff73c86143b557463f021d0c3d5b0490d97d65040ba59ea2b3427784758`,
+rustc `b829b733131d4e1673eeebd1f34d06ae1e9ff4977b051313cf42e2a9e79ecf1c`,
+rustdoc `59bc6a1caf617032284a2edc2aa03916396e70589c435a8b51e3957887f90ce5`.
+
+Source-to-result assessment confirms the important distinction: the no-journal
+fixture captures v1 empty Create, injects a real precommit SQL abort and checks
+zero domain/journal effects, upgrades to optional-default v2 while empty digest
+stays identical, reopens and gets exact `intent_origin_mismatch`. It retains the
+original ref/pending evidence, explicitly retires it and proves only a fresh v2
+intent can author the new default. The separate committed-before-upgrade fixture
+returns the exact original receipt after reopen/v2, adds no defaults or authored
+echo, and repeats exact settlement/replay after tombstoning. These are distinct
+executed SQLite cases, not inference from a held registration CAS test.
+
+Other executed cases establish patch lost-ACK replay after newer state, original
+raw/semantic RemoveRef tags after re-add, exact lost-settlement-response retry,
+current Store/ref/receipt rejection, foreign predecessor rejection, old tuple
+refusal while ordinary v1 adapter exact replay remains available,32-live-slot
+reconciliation/no-ID-reuse, and4096 retained-key rejection. Featured held-writer
+tests use two actual SQLite connections with zero contender busy timeout and
+exercise both IMMEDIATE serialization orders. Retirement-first blocks and then
+rejects publication; apply-first blocks reconciliation until commit and then
+returns the original committed receipt rather than false cancellation. No new
+tests or duplicated unchanged pure checks were requested or run by reviewer.
+
+### Fixture graph exclusion and cleanup evidence
+
+Rechecked fixed fixture declaration, unchanged production validator, Store's
+combined `cfg(all(test, feature = "intent-test-fixtures"))` trust branch and
+records' `cfg(all(feature = "intent-test-fixtures", not(debug_assertions)))`
+compile_error. Reviewed author cleanup/feature receipt
+`final-source-feature-cleanup.json`, SHA256
+`b78a0ae2dea259d1de4f778046d9d80d30d645d546d1db9b989b3b251531fc0f`,
+which records clean source/status, no remaining compiler processes, resolver2,
+the only two fixture feature definition/forwarding edges and latest canonical
+`2972911c` native/WASM manifests without fixture requests.
+
+Reviewer independently resolved read-only feature graphs using that same cargo,
+`cargo tree --offline --locked -p <package> -e features`, once with defaults and
+once with `--no-default-features`; WASM additionally uses
+`--target wasm32-unknown-unknown`. All four exit0 with empty stderr and zero
+`intent-test-fixtures` occurrences. Default and no-default graphs are identical
+for each selected package here:
+
+| Selected package | Stdout bytes / SHA256 (each configuration) |
+| --- | --- |
+| `zorid-native` | 43820 / `d458474f8f1b3dc679441fe409f4de1cde65c177b8c49bde20cb3666e223541e` |
+| `zorid-wasm` | 40527 / `4abadc2a70a056fc0a2952d5e9acdb82a5cf12f906cd570926dab79be60c3df1` |
+
+These are dependency-resolution/source observations, not native/WASM builds or
+release artifact inspection. No negative release build was executed or invented;
+the release guard remains source-reviewed only. No source/lockfile changes were
+made by the read-only graph queries. Author reports cargo PID12830 exited and
+load returned in `msg_509a9e7fab5a`; reviewer independently observed PID12830 and
+the three exact test executable processes absent. No app was launched or left
+running during this follow-up.
+
+The exact final author report accurately limits its claims and is accepted for
+this scoped evidence. Broader existing suites were not run and are not implied
+by18 passes. Request/live-byte boundary execution remains unproved; metadata cap
+is mathematically dominated by retained-key cap under this charge formula.
+Ordinary native/browser client-claim denial, real session/lease authority,
+semantic caller recovery, generated WASM/strict IDB cutover, old-apply bypass
+closure, encrypted/product/native/mobile verification and main integration
+remain separate gates. No whole vertical or product activation is accepted.
