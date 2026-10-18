@@ -1283,3 +1283,29 @@ configured editor <> history must use root route intent, not legacy Boolean
 return. That routehistory integration remains mandatory. Newnote separate
 once-only/durability contract still pending root review, no genericHomehost.
 Phone9 unchanged, simulator retained booted without test app/helper.
+
+
+Composed API typing evidence — 2026-10-18 00:35 UTC:
+Canonical main consumed ONLY in isolated ownerbranch merge37da1be0; two additive
+ledger conflicts preserve both sessions' records. Approved import admission
+source2ab4+979 composed80887ea6+12b58a05; frozen NativePages f9c7cc27 composed
+as c39f525c (explicit provenance; owner already had7128 loader). Header hooks
+683f composed3e002a1d. No main mutation/push.
+
+Coordinator-granted bounded Swift frontend exec54060 TERMINAL0 for EXACT frozen
+c39f525ca6eaa586ee59cdb41d9ce40896086db6 TWELVE app Swift sources, actual
+integrated C bridgingheader, arm64 iOS15 Simulator target/SDK26.2/Swift5, cached
+Simulator9 dependencies. Command+source hashes+result.log in
+/private/tmp/zorid-mobile-composed-typing-c39f525c. Zero errors, concurrency/
+Sendable warnings remain in import closures and Pages main-queue observers.
+Not a warning-free/Swift6/link/project-membership/runtime pass. Factory excluded.
+Slot explicitly returned44cbd86376d2; new grant required before morecompilers.
+
+Factory sourcea83f+3acc composed2bf146e6+47f64497 AFTER compiler terminal; root
+approved3acc source8450. Fixed nonexistent listing.scanComplete and removed
+global reconciliation-complete admission gate: known freshly listed exactstore/
+stableID livefile remains openable, unknown/missingtarget still rejected.
+Reconciliation warning remains distinct; no empty/complete assertion. Actual
+File/Home factory integration and project source membership stillpending; no
+newcompile/runtime proof from54060. Configuredhistory/Settings/latch/rootpicker
+wiring and separate Newnote remain acceptance gates. Phone9 unchanged.
