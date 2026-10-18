@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0A3702956004402C8D734F2F /* NativeTabDestinationFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EAA4934EE83492495923617 /* NativeTabDestinationFactory.swift */; };
+		E55E7D8F29294C62A79ED1C1 /* NativeImportStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5203AC6086A4E3981341F85 /* NativeImportStaging.swift */; };
+		CE5C06DFD4CA48ECA9359B89 /* NativeImportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C98DBBF2AEBC4C79BBF6BD9E /* NativeImportCoordinator.swift */; };
 		BB610C65FC774A5DB972FAEE /* NativeDocumentTabCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03BE9176620455F968E8CBF /* NativeDocumentTabCoordinator.swift */; };
 		D6A2F76C6B814A808C21DCFC /* NativeTabOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */; };
 		2C5840EE8C5446409840312D /* NativeDocumentTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */; };
@@ -29,6 +32,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		7EAA4934EE83492495923617 /* NativeTabDestinationFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTabDestinationFactory.swift; sourceTree = "<group>"; };
+		F5203AC6086A4E3981341F85 /* NativeImportStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeImportStaging.swift; sourceTree = "<group>"; };
+		C98DBBF2AEBC4C79BBF6BD9E /* NativeImportCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeImportCoordinator.swift; sourceTree = "<group>"; };
 		F03BE9176620455F968E8CBF /* NativeDocumentTabCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDocumentTabCoordinator.swift; sourceTree = "<group>"; };
 		0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTabOverview.swift; sourceTree = "<group>"; };
 		62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDocumentTabs.swift; sourceTree = "<group>"; };
@@ -96,6 +102,9 @@
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
                 111111111111111111111102 /* NativeMobile.swift */,
                 111111111111111111111104 /* NativePages.swift */,
+				7EAA4934EE83492495923617 /* NativeTabDestinationFactory.swift */,
+				F5203AC6086A4E3981341F85 /* NativeImportStaging.swift */,
+				C98DBBF2AEBC4C79BBF6BD9E /* NativeImportCoordinator.swift */,
 				F03BE9176620455F968E8CBF /* NativeDocumentTabCoordinator.swift */,
 				0A47C4B65B2644DD9CE6DC2E /* NativeTabOverview.swift */,
 				62B11016CF644ADE9A6A105B /* NativeDocumentTabs.swift */,
@@ -210,6 +219,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0A3702956004402C8D734F2F /* NativeTabDestinationFactory.swift in Sources */,
+				E55E7D8F29294C62A79ED1C1 /* NativeImportStaging.swift in Sources */,
+				CE5C06DFD4CA48ECA9359B89 /* NativeImportCoordinator.swift in Sources */,
 				BB610C65FC774A5DB972FAEE /* NativeDocumentTabCoordinator.swift in Sources */,
 				D6A2F76C6B814A808C21DCFC /* NativeTabOverview.swift in Sources */,
 				2C5840EE8C5446409840312D /* NativeDocumentTabs.swift in Sources */,

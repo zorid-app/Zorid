@@ -45,9 +45,20 @@ final class NativeDocumentTabCoordinator: ObservableObject {
     private var transitionID: UUID?
     private var foregroundEpoch = UUID()
     private var activationPending = false
+    private var nativeRouteTicket: UUID?
+    private var vaultOpeningTicket: UUID?
+    private var nativeRecovery: (id: UUID, owner: UUID?, routes: [ObjectIdentifier])?
+    private var pendingNativeRouteRetry: (() -> Void)?
+    private struct PendingBinding {
+        let document: NativeTabDocument
+        let owner: UUID
+        let tab: NativeDocumentTab
+    }
+    private var pendingBinding: PendingBinding?
     private var retryAction: (() -> Void)?
     private weak var navigation: UINavigationController?
     private weak var overview: UIViewController?
+    private weak var openingRoute: UIViewController?
     private let activate: Activation
     private let persist: (Data) throws -> Void
     private let didInstall: (UUID, UUID, UIViewController) -> Bool
@@ -56,8 +67,20 @@ final class NativeDocumentTabCoordinator: ObservableObject {
 
     // Factory admission is expected while the coordinator is busy preparing one
     // destination. It is not a client lease and never permits a parallel host.
+    var canEnterVault: Bool {
+        source == nil && !isBusy && !activationPending && nativeRouteTicket == nil && vaultOpeningTicket == nil && pendingBinding == nil && nativeRecovery == nil && !admissionQuarantined && !metadataPending
+    }
+
     var canPrepareDestination: Bool {
         activationPending && source == nil && !admissionQuarantined && !metadataPending
+    }
+
+    func beginVaultOpening(_ ticket: UUID) throws {
+        guard canEnterVault else { throw NativeDocumentTabsError.busy }
+        vaultOpeningTicket = ticket
+    }
+    func finishVaultOpening(_ ticket: UUID) {
+        if vaultOpeningTicket == ticket { vaultOpeningTicket = nil }
     }
 
     init(model: NativeDocumentTabs, persist: @escaping (Data) throws -> Void,
@@ -72,6 +95,16 @@ final class NativeDocumentTabCoordinator: ObservableObject {
                 MainActor.assumeIsolated {
                     self?.snapshots.removeAll()
                     if name != UIApplication.didReceiveMemoryWarningNotification { self?.foregroundEpoch = UUID() }
+                }
+            })
+        }
+        for name in [UIApplication.didBecomeActiveNotification, UIScene.didActivateNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    guard let self = self else { return }
+                    if let scene = notification.object as? UIWindowScene,
+                       self.navigation?.viewIfLoaded?.window?.windowScene !== scene { return }
+                    DispatchQueue.main.async { [weak self] in self?.presentNativeRecovery() }
                 }
             })
         }
@@ -90,9 +123,9 @@ final class NativeDocumentTabCoordinator: ObservableObject {
     }
 
     func showDocumentTabs(from presenter: UIViewController) {
-        guard overview == nil, !isBusy, let nav = presenter.navigationController,
+        guard overview == nil, !isBusy, nativeRouteTicket == nil, vaultOpeningTicket == nil, let nav = presenter.navigationController,
               nav.topViewController === presenter,
-              source == nil || source?.controller === presenter else { return }
+              source == nil || source?.controller === presenter || openingRoute === presenter else { return }
         navigation = nav
         let host = NativeDocumentTabOverviewController(rootView: NativeCoordinatedTabOverview(coordinator: self))
         overview = host
@@ -100,18 +133,24 @@ final class NativeDocumentTabCoordinator: ObservableObject {
         nav.pushViewController(host, animated: !UIAccessibility.isReduceMotionEnabled)
         // A quarantined installed host needs its reservation-bound recovery;
         // ordinary drain must not discard that path or leave quarantine stuck.
-        if !admissionQuarantined { drainSource() }
+        if pendingBinding != nil { publishBindingRecovery() }
+        else if !admissionQuarantined { drainSource() }
     }
 
     func performDocumentTabIntent(_ intent: NativeDocumentTabs.Intent) {
-        guard !isBusy, !activationPending, !admissionQuarantined, !metadataPending,
+        guard !isBusy, !activationPending, nativeRouteTicket == nil, vaultOpeningTicket == nil, nativeRecovery == nil, pendingBinding == nil, !admissionQuarantined, !metadataPending,
               UIApplication.shared.applicationState == .active else { return }
         navigation = source?.controller.navigationController ?? navigation
         message = nil; retryAction = nil; canRetry = false
         let epoch = foregroundEpoch
-        postCleanupIntent = nil
+        postCleanupIntent = nil; pendingNativeRouteRetry = nil
         do {
             let ticket = try model.prepare(intent, sourceOwnerID: ownerID)
+            if overview == nil, !showOpeningRoute(title: ticket.destinationTab.displayTitle) {
+                try model.cancel(ticket)
+                message = "Navigation is still settling. Try opening the file again."
+                return
+            }
             drainSource { [weak self] result in
                 guard let self = self else { return }
                 switch result {
@@ -150,8 +189,123 @@ final class NativeDocumentTabCoordinator: ObservableObject {
         } catch { message = error.localizedDescription }
     }
 
+    // Settings, native Return, and Home's Choose file all share the same host
+    // retirement gate. Their caller may route only after this foreground receipt.
+    func performNativeRoute(from presenter: UIViewController,
+                            retry: (() -> Void)? = nil,
+                            completion: @escaping (Result<Void, Error>) -> Void) {
+        if nativeRecovery != nil {
+            presentNativeRecovery()
+            completion(.failure(NativeDocumentTabsError.busy)); return
+        }
+        if pendingBinding != nil || metadataPending {
+            showDocumentTabs(from: presenter)
+            completion(.failure(NativeDocumentTabsError.busy)); return
+        }
+        guard !isBusy, !activationPending, nativeRouteTicket == nil, vaultOpeningTicket == nil,
+              pendingBinding == nil, !admissionQuarantined, !metadataPending,
+              UIApplication.shared.applicationState == .active,
+              let nav = presenter.navigationController, nav.topViewController === presenter else {
+            completion(.failure(NativeDocumentTabsError.busy)); return
+        }
+        navigation = nav
+        let epoch = foregroundEpoch, ticket = UUID()
+        pendingNativeRouteRetry = retry
+        let recoveryRoutes = nav.viewControllers
+        nativeRouteTicket = ticket
+        drainSource { [weak self, weak presenter, weak nav] result in
+            guard let self = self, self.nativeRouteTicket == ticket else { return }
+            guard case .success = result else {
+                self.nativeRouteTicket = nil
+                if let source = self.source, source.isCurrent() {
+                    source.resume() // Restore a failed Pages source before alerting.
+                    if UIApplication.shared.applicationState == .active {
+                        self.showNativeRouteFailure(from: presenter)
+                    }
+                } else {
+                    self.queueNativeRecovery(routes: recoveryRoutes)
+                }
+                completion(result); return
+            }
+            self.isBusy = true // Keep admission reserved through UIKit completion.
+            guard let presenter = presenter, let nav = nav else {
+                self.nativeRouteTicket = nil; self.isBusy = false
+                self.queueNativeRecovery(routes: recoveryRoutes)
+                completion(.failure(NativeDocumentTabsError.staleTicket)); return
+            }
+            self.afterNavigationTransition(nav) { [weak self, weak nav, weak presenter] in
+                guard let self = self, self.nativeRouteTicket == ticket else { return }
+                guard let nav = nav, let presenter = presenter,
+                      self.foregroundEpoch == epoch, UIApplication.shared.applicationState == .active,
+                      nav.topViewController === presenter, self.source == nil,
+                      !self.activationPending, !self.admissionQuarantined else {
+                    self.nativeRouteTicket = nil; self.isBusy = false
+                    self.queueNativeRecovery(routes: recoveryRoutes)
+                    completion(.failure(NativeDocumentTabsError.staleTicket)); return
+                }
+                self.openingRoute = nil; self.overview = nil
+                // This synchronous callback consumes the receipt; a caller cannot
+                // yield and later use it to compete with another activation.
+                self.nativeRouteTicket = nil; self.isBusy = false
+                self.pendingNativeRouteRetry = nil
+                completion(.success(()))
+            }
+        }
+    }
+
+    private func showNativeRouteFailure(from presenter: UIViewController?) {
+        guard let presenter = presenter, navigation?.topViewController === presenter,
+              presenter.presentedViewController == nil, UIApplication.shared.applicationState == .active else { return }
+        let alert = UIAlertController(title: "Could not change page",
+            message: "Your current page remains available. Try again when saving is ready.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        presenter.present(alert, animated: !UIAccessibility.isReduceMotionEnabled)
+    }
+
+    private func queueNativeRecovery(routes: [UIViewController]) {
+        nativeRecovery = (UUID(), source?.ownerID, routes.map(ObjectIdentifier.init))
+        if message == nil { message = "The page change paused. Choose how to continue." }
+        presentNativeRecovery()
+    }
+
+    private func presentNativeRecovery() {
+        guard let pending = nativeRecovery, let nav = navigation,
+              UIApplication.shared.applicationState == .active,
+              nav.viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive,
+              !isBusy, !activationPending, nativeRouteTicket == nil, vaultOpeningTicket == nil,
+              source?.ownerID == pending.owner,
+              nav.topViewController.map { pending.routes.contains(ObjectIdentifier($0)) } == true else { return }
+        afterNavigationTransition(nav) { [weak self, weak nav] in
+            guard let self = self, let nav = nav, self.nativeRecovery?.id == pending.id,
+                  self.source?.ownerID == pending.owner,
+                  UIApplication.shared.applicationState == .active,
+                  nav.viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive,
+                  !self.isBusy, !self.activationPending, self.nativeRouteTicket == nil,
+                  self.vaultOpeningTicket == nil,
+                  nav.topViewController.map { pending.routes.contains(ObjectIdentifier($0)) } == true else { return }
+            if self.showOpeningRoute(title: "Session recovery") {
+                self.nativeRecovery = nil
+                if self.source == nil { self.publishRetiredRecovery() }
+            }
+        }
+    }
+
+    @discardableResult
+    private func showOpeningRoute(title: String) -> Bool {
+        guard let nav = navigation else { return false }
+        if let opening = openingRoute, nav.topViewController === opening {
+            opening.title = title; return true
+        }
+        guard nav.transitionCoordinator == nil else { return false }
+        let controller = NativeDocumentTabOpeningController(coordinator: self)
+        controller.title = title
+        openingRoute = controller
+        nav.pushViewController(controller, animated: !UIAccessibility.isReduceMotionEnabled)
+        return true
+    }
+
     func finishDocumentTabOverview() {
-        guard !isBusy, source == nil, !activationPending, !admissionQuarantined, !metadataPending,
+        guard !isBusy, source == nil, !activationPending, nativeRouteTicket == nil, vaultOpeningTicket == nil, nativeRecovery == nil, pendingBinding == nil, !admissionQuarantined, !metadataPending,
               UIApplication.shared.applicationState == .active else { return }
         activateSelected()
     }
@@ -180,14 +334,46 @@ final class NativeDocumentTabCoordinator: ObservableObject {
     // callback. Metadata failure retains the live editor; retry never creates
     // another note or navigates the shared editor.
     func bindValidatedDocument(_ document: NativeTabDocument, sourceOwnerID: UUID) throws {
-        guard !isBusy, UIApplication.shared.applicationState == .active, let source = source, source.role == .editor, source.ownerID == sourceOwnerID,
-              ownerID == sourceOwnerID, source.tabID == model.selectedTabID, source.isCurrent() else { throw NativeDocumentTabsError.staleTicket }
-        let ticket = try model.prepareActiveDocumentBinding(tabID: model.selectedTabID, sourceOwnerID: sourceOwnerID)
-        try model.bindActiveDocument(document, using: ticket, currentOwnerID: sourceOwnerID)
-        snapshots.retainSnapshots(for: model.tabs)
-        captureCurrentPreview()
+        guard !isBusy, UIApplication.shared.applicationState == .active, let source = source,
+              source.role == .editor, source.ownerID == sourceOwnerID, ownerID == sourceOwnerID,
+              source.tabID == model.selectedTabID, source.isCurrent() else { return } // Stale event.
+        let retained = PendingBinding(document: document, owner: sourceOwnerID, tab: model.selectedTab)
+        pendingBinding = retained
+        try applyPendingBinding(retained)
+    }
+
+    private func applyPendingBinding(_ binding: PendingBinding) throws {
+        guard let source = source, source.role == .editor, source.ownerID == binding.owner,
+              ownerID == binding.owner, source.tabID == binding.tab.id,
+              source.isCurrent(), model.selectedTab == binding.tab,
+              UIApplication.shared.applicationState == .active else {
+            throw NativeDocumentTabsError.staleTicket
+        }
+        do {
+            let ticket = try model.prepareActiveDocumentBinding(tabID: binding.tab.id, sourceOwnerID: binding.owner)
+            try model.bindActiveDocument(binding.document, using: ticket, currentOwnerID: binding.owner)
+            pendingBinding = nil
+            snapshots.retainSnapshots(for: model.tabs)
+            captureCurrentPreview()
+        } catch {
+            publishBindingRecovery()
+            throw error
+        }
         do { try persist(model.encodedMetadata()) }
         catch { metadataSaveFailed(error); throw error }
+    }
+
+    private func publishBindingRecovery() {
+        guard pendingBinding != nil else { return }
+        message = "The open document’s tab information needs to be updated. Retry before changing tabs."
+        canRetry = true; canResume = source?.isCurrent() == true
+        retryAction = { [weak self] in
+            guard let self = self, let pending = self.pendingBinding else { return }
+            do {
+                try self.applyPendingBinding(pending)
+                if !self.metadataPending { self.message = nil; self.retryAction = nil; self.canRetry = false }
+            } catch { /* Preserve the exact document and executable metadata retry. */ }
+        }
     }
 
     func captureCurrentPreview() {
@@ -286,6 +472,9 @@ final class NativeDocumentTabCoordinator: ObservableObject {
         guard source == nil else { return }
         if metadataPending {
             message = persistenceMessage; retryAction = persistenceRetry; canRetry = persistenceRetry != nil
+        } else if let retryNativeRoute = pendingNativeRouteRetry {
+            message = "The previous session is closed. Retry the page change when you are ready."
+            retryAction = retryNativeRoute; canRetry = true
         } else if let intent = postCleanupIntent {
             message = "The previous session is closed. Retry opening the selected file."
             retryAction = { [weak self] in self?.performDocumentTabIntent(intent) }; canRetry = true
@@ -297,9 +486,10 @@ final class NativeDocumentTabCoordinator: ObservableObject {
     }
 
     private func activateSelected() {
-        guard !isBusy, source == nil, !activationPending, !admissionQuarantined, !metadataPending,
+        guard !isBusy, source == nil, !activationPending, nativeRouteTicket == nil, vaultOpeningTicket == nil, nativeRecovery == nil, pendingBinding == nil, !admissionQuarantined, !metadataPending,
               UIApplication.shared.applicationState == .active else { return }
         let tab = model.selectedTab
+        pendingNativeRouteRetry = nil
         let attempt = UUID(), nextOwner = UUID()
         let epoch = foregroundEpoch
         transitionID = attempt; activationPending = true; isBusy = true
@@ -357,7 +547,7 @@ final class NativeDocumentTabCoordinator: ObservableObject {
                         self.retryAction = { [weak self] in self?.recoverQuarantinedActivation(nextOwner) }
                         return
                     }
-                    self.message = nil; self.overview = nil
+                    self.message = nil; self.overview = nil; self.openingRoute = nil
                     self.captureCurrentPreview()
                 }
             case .failure(let error):
@@ -452,4 +642,46 @@ private final class NativeDocumentTabOverviewController: UIHostingController<Nat
         navigationItem.hidesBackButton = true
         navigationController?.interactivePopGestureRecognizer?.isEnabled = false
     }
+}
+
+
+@MainActor
+private struct NativeDocumentTabOpeningView: View {
+    @ObservedObject var coordinator: NativeDocumentTabCoordinator
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+            if coordinator.isBusy {
+                NativeEditorLoadingView()
+            } else {
+                VStack(spacing: 20) {
+                    Text(coordinator.message ?? "Choose how to continue.")
+                        .font(.body).multilineTextAlignment(.center)
+                    if coordinator.canRetry { Button("Retry") { coordinator.retryTransition() }.frame(minHeight: 44) }
+                    if coordinator.canResume { Button("Return to document") { coordinator.resumeSource() }.frame(minHeight: 44) }
+                }.padding(24)
+            }
+        }.accessibilityIdentifier("native.tabs.opening")
+    }
+}
+
+@MainActor
+private final class NativeDocumentTabOpeningController: UIHostingController<NativeDocumentTabOpeningView> {
+    private weak var coordinator: NativeDocumentTabCoordinator?
+    init(coordinator: NativeDocumentTabCoordinator) {
+        self.coordinator = coordinator
+        super.init(rootView: NativeDocumentTabOpeningView(coordinator: coordinator))
+    }
+    required init?(coder: NSCoder) { fatalError("Use the native document coordinator.") }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: false)
+        navigationItem.hidesBackButton = true
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = false
+        let tabs = UIBarButtonItem(image: UIImage(systemName: "square.on.square"), style: .plain,
+                                   target: self, action: #selector(showTabs))
+        tabs.accessibilityLabel = "Show tabs"; tabs.accessibilityIdentifier = "native.tabs.opening.showTabs"
+        navigationItem.rightBarButtonItem = tabs
+    }
+    @objc private func showTabs() { coordinator?.showDocumentTabs(from: self) }
 }

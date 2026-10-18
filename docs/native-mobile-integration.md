@@ -1309,3 +1309,51 @@ Reconciliation warning remains distinct; no empty/complete assertion. Actual
 File/Home factory integration and project source membership stillpending; no
 newcompile/runtime proof from54060. Configuredhistory/Settings/latch/rootpicker
 wiring and separate Newnote remain acceptance gates. Phone9 unchanged.
+
+
+Connected File/Home root wiring checkpoint — 2026-10-18 00:55 UTC:
+Owner remains native-mobile-recovery / tingkai-c/native-mobile-recovery, committed
+HEAD ae81678d. Current uncommitted owned changes are NativeMobile picker/loader,
+NativeDocumentTabCoordinator and minimal project membership for import/factory
+files. Root now injects a single coordinator/factory, binds Pages callbacks,
+shows editor destination loading before asynchronous host drain, reserves vault
+opening/native routing through exact receipt consumption, and retains validated
+document identity when tab metadata binding fails. Native page changes require
+actual close receipts; no second editor/host is opened while admission is held.
+
+Independent review b8a0/f560 found missing recovery after successful close plus
+a late foreground-invalidated UIKit receipt. Corrected source retains matching
+owner/original route identities until foreground recovery presentation; it does
+not automatically reopen a destination. Final review explicitly started via
+Orca request 9d5f48d7; SOURCE acceptance remains pending.
+
+Immutable 13-file first typecheck30104 TERMINAL1 caught one fileprivate
+showMessage access. Fixed with a private coordinator alert, without widening
+shared visibility. Original failed snapshot remains unchanged in
+/private/tmp/zorid-connected-tabs-source-snapshot. Corrected immutable snapshot
+/private/tmp/zorid-connected-tabs-retry-20261018 includes command.json,
+source-hashes.json, provenance.txt, result.log and exit-code.txt. Hash manifest
+SHA256 d1aff3f450949e636871b5a23215fc5537366251aa6bd420e643c4f3347d90ec.
+Granted retry25349 TERMINAL0, SDK26.2 / Swift5 / arm64 iOS15 Simulator / all13 app
+Swift sources including factory / actual integrated C header / cached Sim9
+dependencies. Zero errors; existing concurrency and Sendable warnings remain.
+Not a full project, link, simulator UI, Swift6 or phone validation. Slot explicitly
+returned 5dfe2132d4ba; coordinator acknowledged6340 and assigned another owner.
+
+Phone remains successfully installed/launched Dev9 (3288c1bb); no newer phone
+app is implied by source checks. NewNote FAB stays disabled: helper f00ebadc
+is library-only source ready, root conditional review requires honoring original
+creation/tab identity and recoverable occupied-name handling before UI exposure.
+Configured editor history and stable folder-origin restoration remain required;
+371 worker explicitly resumed request db178915 to propose minimal scene-RAM
+history and scoped Pages stable-route restoration. External import router and
+Share/Duplicate UI wiring remain incomplete. Full Simulator build follows
+reviewed source freeze and a fresh acknowledged slot, independently of those
+remaining feature gates. Apple agreement API403/support case unchanged.
+
+Final independent source acceptance 6dd0cb36048c received00:55:22UTC for exact
+Coordinator SHA256 d6b0a0a992db6eb5cd10b50334752f9ba1eb736cb2b6a2f71a6c070e8812e8c2
+and NativeMobile SHA256130cb790e63f676e9e4aba08526b765105f1ca9f38db04533fb83d371a1473bd.
+Owner verified matching bytes before commit. Acceptance covers initial connected
+File/Home wiring only; all compilation/runtime and feature limitations above
+remain distinct. Project plist validation and git diff check passed.

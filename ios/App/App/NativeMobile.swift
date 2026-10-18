@@ -1474,6 +1474,130 @@ final class NativeVaultPicker: UITableViewController {
     private var catalog: LocalVaultCatalog?
     private var opening = false
     private var openingTicket: UUID?
+    private var documentTabs: NativeDocumentTabCoordinator?
+    private var destinationFactory: NativeTabDestinationFactory?
+    private weak var boundPages: NativePagesController?
+    private var boundPagesOwner: UUID?
+    private var lastVaultID: UUID?
+
+    private func ensureDocumentTabs() throws -> NativeDocumentTabCoordinator {
+        if let existing = documentTabs { return existing }
+        let key = "native.document-tabs.v1"
+        let model = NativeDocumentTabs(restoring: UserDefaults.standard.data(forKey: key))
+        let factory = NativeTabDestinationFactory(resolveVault: { [weak self] id in
+            guard let self = self, let catalog = self.catalog else { throw MobileFailure.metadata }
+            let resolved = try catalog.resolve(vaultID: id)
+            self.lastVaultID = id
+            return resolved
+        }, admissionReady: { [weak self] in self?.documentTabs?.canPrepareDestination == true },
+        chooseFile: { [weak self] tabID in
+            guard let self = self, let tabs = self.documentTabs, tabs.model.selectedTabID == tabID,
+                  let presenter = self.navigationController?.topViewController else { return }
+            self.routeToPages(from: presenter, vaultID: nil)
+        }, validatedDocument: { [weak self] document, owner in
+            do { try self?.documentTabs?.bindValidatedDocument(document, sourceOwnerID: owner) }
+            catch {
+                // Let the current native validation/history callback finish
+                // before a modal changes its foreground/visibility witness.
+                DispatchQueue.main.async { [weak self] in
+                    self?.navigationController?.topViewController?.showMessage("Tab information needs attention", "Your document stays open. Open Show tabs to retry its tab information.")
+                }
+            }
+        }, showTabs: { [weak self] presenter in self?.documentTabs?.showDocumentTabs(from: presenter) },
+        returnToNativePages: { [weak self] presenter in
+            guard let self = self else { return }
+            self.routeToPages(from: presenter, vaultID: self.lastVaultID)
+        })
+        destinationFactory = factory
+        let coordinator = NativeDocumentTabCoordinator(model: model, persist: { data in
+            UserDefaults.standard.set(data, forKey: key)
+        }, activate: { [weak factory] tab, owner, done in
+            guard let factory = factory else { done(.failure(MobileFailure.unavailable)); return }
+            factory.prepare(tab, ownerID: owner, completion: done)
+        }, didInstall: { [weak factory] owner, tab, controller in
+            factory?.didInstall(ownerID: owner, tabID: tab, controller: controller) == true
+        }, recoverActivation: { [weak factory] owner, done in
+            guard let factory = factory else { done(.failure(MobileFailure.unavailable)); return }
+            factory.recoverReservation(owner, completion: done)
+        })
+        documentTabs = coordinator
+        return coordinator
+    }
+
+    private func bindPages(_ pages: NativePagesController, vault: LocalVault) throws {
+        let tabs = try ensureDocumentTabs()
+        let owner = UUID()
+        boundPages = pages; boundPagesOwner = owner; lastVaultID = vault.id
+        let current: () -> Bool = { [weak self, weak pages] in
+            guard let self = self, let pages = pages else { return false }
+            return self.boundPages === pages && self.boundPagesOwner == owner
+        }
+        pages.onShowDocumentTabs = { [weak self, weak pages] in
+            guard let self = self, let pages = pages, current() else { return }
+            self.documentTabs?.showDocumentTabs(from: pages)
+        }
+        pages.onOpenDocument = { [weak self, weak pages] entry, inNewTab in
+            guard let self = self, let pages = pages, current() else { return }
+            do {
+                let document = try pages.documentTabDocument(for: entry)
+                self.documentTabs?.performDocumentTabIntent(inNewTab ? .openInNewTab(document) : .replaceSelected(document))
+                if let tabs = self.documentTabs, !tabs.isBusy,
+                   pages.navigationController?.topViewController === pages, let message = tabs.message {
+                    pages.showMessage("Could not open file", message)
+                }
+            } catch { pages.showMessage("File changed", "This file is no longer available from the current list. Refresh Files and try again.") }
+        }
+        pages.onChooseVault = { [weak self, weak pages] in
+            guard let self = self, let pages = pages, current(),
+                  let presenter = pages.navigationController?.topViewController else { return }
+            self.routeToPages(from: presenter, vaultID: nil)
+        }
+        // New Note requires a durable Rust creation request before an existing
+        // entry is launched. A missing callback remains explicitly unavailable;
+        // it must never fall back to replaying web createNoteOnOpen.
+        let source = NativeDocumentTabCoordinator.Source(role: .pages, ownerID: owner,
+            tabID: tabs.model.selectedTabID, resolvedDocument: nil, controller: pages, isCurrent: current,
+            close: { [weak self, weak pages] requestedOwner, done in
+                guard let pages = pages, requestedOwner == owner, current() else { done(.failure(MobileFailure.unavailable)); return }
+                pages.prepareForDocumentTabTransition { result in
+                    if pages.documentTabTransitionRetired, self?.boundPagesOwner == owner {
+                        self?.boundPages = nil; self?.boundPagesOwner = nil
+                    }
+                    done(result)
+                }
+            }, resume: { [weak pages] in pages?.resumeAfterDocumentTabOverview() },
+            hasTerminalRetirementReceipt: { [weak pages] in pages?.documentTabTransitionRetired == true })
+        do { try tabs.bindSource(source) }
+        catch {
+            if boundPagesOwner == owner { boundPages = nil; boundPagesOwner = nil }
+            throw error
+        }
+    }
+
+    private func routeToPages(from presenter: UIViewController, vaultID: UUID?) {
+        guard let tabs = documentTabs else { return }
+        tabs.performNativeRoute(from: presenter, retry: { [weak self] in
+            guard let self = self, let current = self.navigationController?.topViewController else { return }
+            self.routeToPages(from: current, vaultID: vaultID)
+        }) { [weak self] result in
+            guard let self = self, let navigation = self.navigationController else { return }
+            switch result {
+            case .failure:
+                // Coordinator restored the live page or exposed its own native
+                // recovery route. A retired source is never described as open.
+                break
+            case .success:
+                navigation.popToRootViewController(animated: false)
+                guard let vaultID = vaultID else { return }
+                do {
+                    guard let catalog = self.catalog else { throw MobileFailure.metadata }
+                    let (vault, _) = try catalog.resolve(vaultID: vaultID)
+                    self.open(vault)
+                } catch { self.showMessage("Vault unavailable", "Choose an available vault to continue.") }
+            }
+        }
+    }
+
 
     init() { super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -1553,20 +1677,28 @@ final class NativeVaultPicker: UITableViewController {
     }
 
     private func open(_ vault: LocalVault) {
-        guard !opening, let catalog = catalog, let navigation = navigationController,
+        guard !opening, documentTabs?.canEnterVault != false,
+              let catalog = catalog, let navigation = navigationController,
               navigation.topViewController === self else { return }
         if let alert = presentedViewController as? UIAlertController {
             alert.dismiss(animated: !UIAccessibility.isReduceMotionEnabled) { [weak self] in self?.open(vault) }
             return
         }
         guard presentedViewController == nil else { return }
-        opening = true
         let ticket = UUID()
+        do { try ensureDocumentTabs().beginVaultOpening(ticket) }
+        catch { showMessage("Session is finishing", "Wait for the current document session to finish before opening another vault."); return }
+        opening = true
         openingTicket = ticket
         navigationItem.rightBarButtonItem?.isEnabled = false
         navigationItem.backButtonTitle = "Vaults"
-        let destination = NativeVaultOpeningController(vault: vault, root: { try catalog.root(for: vault) }) { [weak self] in
+        let destination = NativeVaultOpeningController(vault: vault, root: { try catalog.root(for: vault) },
+            preparePages: { [weak self] pages in
+                guard let self = self else { throw MobileFailure.unavailable }
+                try self.bindPages(pages, vault: vault)
+            }) { [weak self] in
             guard let self = self, self.openingTicket == ticket else { return }
+            self.documentTabs?.finishVaultOpening(ticket)
             self.openingTicket = nil; self.opening = false
             self.navigationItem.rightBarButtonItem?.isEnabled = true
         }
@@ -1579,6 +1711,7 @@ final class NativeVaultPicker: UITableViewController {
 private final class NativeVaultOpeningController: UIViewController {
     private let vault: LocalVault
     private let resolveRoot: () throws -> URL
+    private let preparePages: (NativePagesController) throws -> Void
     private var hosting: UIHostingController<AnyView>?
     private var observers: [NSObjectProtocol] = []
     private var attempt = 0
@@ -1592,8 +1725,10 @@ private final class NativeVaultOpeningController: UIViewController {
     private var openPending = false
     private var reservationFinished: (() -> Void)?
 
-    init(vault: LocalVault, root: @escaping () throws -> URL, reservationFinished: @escaping () -> Void) {
-        self.vault = vault; resolveRoot = root
+    init(vault: LocalVault, root: @escaping () throws -> URL,
+         preparePages: @escaping (NativePagesController) throws -> Void,
+         reservationFinished: @escaping () -> Void) {
+        self.vault = vault; resolveRoot = root; self.preparePages = preparePages
         self.reservationFinished = reservationFinished
         super.init(nibName: nil, bundle: nil)
         title = vault.name
@@ -1654,9 +1789,21 @@ private final class NativeVaultOpeningController: UIViewController {
             return
         }
         guard navigation.viewControllers.last === self else { return }
+        let pages = NativePagesController(vault: vault, root: received.root, session: received.session)
+        do { try preparePages(pages) }
+        catch {
+            self.received = nil; openPending = true
+            received.session.close { [self] in
+                openPending = false
+                failure = "The previous document session must finish closing before this vault can open."
+                render()
+                if abandoned { finishReservation() }
+            }
+            return
+        }
         self.received = nil; replacing = true
         var stack = navigation.viewControllers
-        stack[stack.count - 1] = NativePagesController(vault: vault, root: received.root, session: received.session)
+        stack[stack.count - 1] = pages
         navigation.setViewControllers(stack, animated: false)
         finishReservation()
     }
