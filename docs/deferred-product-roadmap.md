@@ -77,6 +77,21 @@ This discussion records recommendations; no public enrollment API is frozen.
 
 ### Resume procedure and status rules
 
+Native delivery checkpoint (2026-10-18 04:33 UTC): main `3cfff3f7` integrates
+reviewed nonwarm native/NewNote source and `24c4ec40` approved JS reattestation,
+preserving desktop Tasks. Composed299Node/fullTS0 and exact isolated-tree match.
+Simulator19 direct-create chrome/save/Back/loaded-editor reopen passes; Dev19
+signed/installed/launched successfully on physical iPhone, intentionally left open.
+Root inspected actual artifacts; physical UI and in-flight create recovery remain
+unproved. See `native-main-integration-preparation.md` for scope/hashes.
+Root isolated `native-warm-main-candidate` at `ddbc83a7` composes the separately
+reviewed helper/packets/native consumer atop `8e438ca5`; exact independent
+composition approved. It is NOT on main. Next exclusive iOS slot granted to native
+after managed bounded Store/projection Rust checks return; compile then actual
+positiveACK/rejectedready/source-reattest/lifecycle proof. Two actual adjacent
+editor views during interactive swipe remain a required subsequent slice. NewNote
+busy-skeleton polish is separately source-owned and excluded from frozen Dev19.
+
 Desktop Tasks delivered (2026-10-18 04:22 UTC): canonical `aa0a2f37` integrates
 isolated `7dda4aa1`. All13 production/test files byte-match actual-tested15ff377b;
 main enhanced core identity assertions are preserved. Root44/44 affected checks,
