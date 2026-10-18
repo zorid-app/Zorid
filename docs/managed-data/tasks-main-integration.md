@@ -16,7 +16,11 @@ normal editor save/split identity regression remains included.
 The module and Workspace source reports retain their independent approvals.
 Managed reviewer R additionally accepted the actual three-group run, relayed in
 Orca `msg_126c0f5a7195`; root independently read the raw result and inspected narrow
-and unconfirmed-capture screenshots. Final owner runtime report follows separately.
+and unconfirmed-capture screenshots. Final reports are retained as
+[actual runtime results](tasks-electron-results.md), exact `d17fc749`, and
+[independent composed review](tasks-composed-review.md), exact `f4dc6752`.
+Canonical product integration is `aa0a2f37`; all16 integrated files match the
+isolated reviewed candidate. These report imports change no product source.
 
 ## Observed verification
 
