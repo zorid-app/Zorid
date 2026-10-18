@@ -451,7 +451,7 @@ fn split_month_windows_share_fence_and_preserve_original_link_labels() {
     );
     let p = pin(&mut v);
     let mut j = CalendarJoinState::default();
-    let mut watermark = None;
+    let mut watermark: Option<Value> = None;
     let mut dedup = std::collections::BTreeSet::new();
     for (from, until) in [("0", "2678400000"), ("2678400000", "3628800000")] {
         let mut q = json!({"kind":"window","scope":{"kind":"tasks","typeIds":["type-file"]},"context":{"clockMs":0,"timezone":"UTC"},"fromMs":from,"untilMs":until,"limit":64,"byteLimit":1048576});
