@@ -44,6 +44,14 @@ final class NativeTabDestinationFactory {
     private var reservation: Reservation?
     private var retiredOwners: [UUID] = [] // Idempotent cleanup ACKs, bounded RAM only.
 
+    // A scope change may discard only an empty factory or its settled,
+    // host-free Home reservation. This never substitutes for a close ACK.
+    var canRetireVaultContext: Bool {
+        guard let current = reservation else { return true }
+        return current.tab.isHome && current.session == nil && !current.opening && !current.closing
+            && !current.cleanupRequested && current.preparation == nil && current.recovery.isEmpty
+    }
+
     // Root retains the factory; injected callbacks must capture root weakly.
     init(resolveVault: @escaping (UUID) throws -> (LocalVault, URL),
          admissionReady: @escaping () -> Bool,

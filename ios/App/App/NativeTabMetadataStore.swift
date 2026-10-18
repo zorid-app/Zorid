@@ -3,7 +3,7 @@ import Darwin
 
 // One app-owned, main-actor writer retained by the root coordinator. These are
 // UI tab identities, not note content or Rust commit/lease receipts. No caller
-// supplies a URL; UserDefaults compatibility policy remains root-owned.
+// supplies a URL. Global v1 metadata is neither read nor migrated here.
 @MainActor
 final class NativeTabMetadataStore {
     enum LoadResult { case absent, restored(Data) }
@@ -30,7 +30,8 @@ final class NativeTabMetadataStore {
         }
     }
     private static let limit = 131_072
-    private static let fileName = "native-document-tabs-v1.json"
+    let vaultID: UUID
+    private let fileName: String
     private let library: URL
     private let supportName: String
     // This cache is never a claim about current disk bytes or a handoff ACK.
@@ -39,7 +40,9 @@ final class NativeTabMetadataStore {
     private var uncertainReplacement: Data?
     var requiresDurabilityRetry: Bool { uncertainReplacement != nil }
 
-    init() throws {
+    init(vaultID: UUID) throws {
+        self.vaultID = vaultID
+        fileName = "native-document-tabs-v2." + vaultID.uuidString.lowercased() + ".json"
         guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
               support.isFileURL, support.path.hasPrefix("/"), !support.path.utf8.contains(0),
               !support.lastPathComponent.isEmpty, support.lastPathComponent != ".", support.lastPathComponent != ".." else {
@@ -59,7 +62,7 @@ final class NativeTabMetadataStore {
         var result: LoadResult = .absent
         do {
             if let directory = try openStore(create: false, descriptors: &descriptors) {
-                let fd = Darwin.openat(directory, Self.fileName, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+                let fd = Darwin.openat(directory, fileName, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
                 if fd < 0 {
                     if errno != ENOENT { throw problem(.unreadable, .openFile) }
                 } else {
@@ -102,7 +105,7 @@ final class NativeTabMetadataStore {
             }
             directory = opened
             _ = try inspectTarget(opened)
-            let name = ".native-document-tabs-v1." + UUID().uuidString.lowercased() + ".tmp"
+            let name = "." + fileName + "." + UUID().uuidString.lowercased() + ".tmp"
             tempFD = Darwin.openat(opened, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
             guard tempFD >= 0 else { throw problem(.write, .createTemp) }
             tempName = name // Only an actually O_EXCL-created name is ours to unlink.
@@ -130,9 +133,9 @@ final class NativeTabMetadataStore {
             }
             _ = try inspectTarget(opened)
             replacementAttempted = true // Even a rename I/O error is not a rollback promise.
-            guard Darwin.renameat(opened, name, opened, Self.fileName) == 0 else { throw problem(.write, .replace) }
+            guard Darwin.renameat(opened, name, opened, fileName) == 0 else { throw problem(.write, .replace) }
             tempName = nil
-            guard try sameNamedFile(opened, name: Self.fileName, identity: identity) else {
+            guard try sameNamedFile(opened, name: fileName, identity: identity) else {
                 throw Issue(kind: .unsafePath, stage: .replace, posixCode: nil)
             }
             try sync(opened, stage: .syncDirectory)
@@ -166,7 +169,7 @@ final class NativeTabMetadataStore {
 
     private func validate(_ bytes: Data) throws {
         guard !bytes.isEmpty, bytes.count <= Self.limit, String(data: bytes, encoding: .utf8) != nil,
-              NativeDocumentTabs(restoring: bytes).restoreDisposition == .restored else {
+              (try? NativeDocumentTabs(restoring: bytes, vaultID: vaultID)) != nil else {
             throw Issue(kind: .invalidMetadata, stage: .validateMetadata, posixCode: nil)
         }
     }
@@ -207,7 +210,7 @@ final class NativeTabMetadataStore {
     }
     private func inspectTarget(_ directory: Int32) throws -> stat? {
         var info = stat()
-        if Darwin.fstatat(directory, Self.fileName, &info, AT_SYMLINK_NOFOLLOW) != 0 {
+        if Darwin.fstatat(directory, fileName, &info, AT_SYMLINK_NOFOLLOW) != 0 {
             if errno == ENOENT { return nil }; throw problem(.unreadable, .inspectTarget)
         }
         guard info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else {
@@ -245,7 +248,7 @@ final class NativeTabMetadataStore {
               after.st_nlink == 1, bytes.count == after.st_size,
               before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec, before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec,
               before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec, before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec,
-              try sameNamedFile(directory, name: Self.fileName, identity: after) else {
+              try sameNamedFile(directory, name: fileName, identity: after) else {
             throw Issue(kind: .unreadable, stage: .readFile, posixCode: nil)
         }
         return bytes

@@ -439,3 +439,10 @@ and actual visual verification pending. Source change is not a load-time fix.
 Fresh WebView and whole-vault indexing are observed source paths; comparative
 runtime costs and Obsidian behavior are unmeasured. Warm reuse/pooling remains
 a proposal; no session-lifetime redesign has been implemented from discussion.
+
+Vault-scoped tabs source: model/store6a composed with native picker/factory
+callers in native-vault-context; trusted vault UUID partitions restored tabs,
+no old-global fallback, prior context must fully drain before switching. Same
+vault reuses its coordinator; Home Choose file stays in that vault. Source
+review and syntax checks pass, including final deferred-alert guard ACK4127.
+Actual A/B switch/restart isolation remains unverified; not installed on phone.

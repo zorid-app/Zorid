@@ -104,6 +104,7 @@ enum NativeDocumentTabsError: LocalizedError {
 
 @MainActor
 final class NativeDocumentTabs: ObservableObject {
+    let vaultID: UUID
     static let maximumTabs = 64
     static let maximumMetadataBytes = 131_072
 
@@ -120,6 +121,7 @@ final class NativeDocumentTabs: ObservableObject {
         let id: UUID
         let intent: Intent
         let sourceOwnerID: UUID
+        fileprivate let modelID: UUID
         fileprivate let sourceRevision: UUID
         let sourceTab: NativeDocumentTab
         let destinationTab: NativeDocumentTab
@@ -171,16 +173,24 @@ final class NativeDocumentTabs: ObservableObject {
     }
     var canAddTab: Bool { tabs.count < Self.maximumTabs && pendingIntent == nil }
 
-    init(restoring data: Data? = nil) {
-        if let data = data, !data.isEmpty, data.count <= Self.maximumMetadataBytes,
-           let metadata = try? JSONDecoder().decode(Metadata.self, from: data), metadata.isValid {
-            state = State(tabs: metadata.tabs, selectedTabID: metadata.selectedTabID)
-            restoreDisposition = .restored
-        } else {
-            let home = NativeDocumentTab()
-            state = State(tabs: [home], selectedTabID: home.id)
-            restoreDisposition = data == nil ? .fresh : .rejected
+    // Only explicit absence creates Home. Invalid persisted bytes must enter
+    // caller recovery, never manufacture a replacement for a pending tab UUID.
+    init(vaultID: UUID) {
+        self.vaultID = vaultID
+        let home = NativeDocumentTab()
+        state = State(tabs: [home], selectedTabID: home.id)
+        restoreDisposition = .fresh
+    }
+
+    init(restoring data: Data, vaultID: UUID) throws {
+        guard !data.isEmpty, data.count <= Self.maximumMetadataBytes,
+              let metadata = try? JSONDecoder().decode(Metadata.self, from: data),
+              metadata.isValid, metadata.vaultID == vaultID else {
+            throw NativeDocumentTabsError.invalidMetadata
         }
+        self.vaultID = vaultID
+        state = State(tabs: metadata.tabs, selectedTabID: metadata.selectedTabID)
+        restoreDisposition = .restored
     }
 
     // Callers freshly resolve destinationTab.document using its own vault UUID,
@@ -200,12 +210,14 @@ final class NativeDocumentTabs: ObservableObject {
             guard let tab = proposed.first(where: { $0.id == id }) else { throw NativeDocumentTabsError.unknownTab }
             destination = tab
         case .replaceSelected(let document):
+            guard document.vaultID == vaultID else { throw NativeDocumentTabsError.invalidMetadata }
             destination = NativeDocumentTab(id: selectedTabID, document: document)
             proposed[proposed.firstIndex(where: { $0.id == selectedTabID })!] = destination
         case .replaceSelectedWithHome:
             destination = NativeDocumentTab(id: selectedTabID)
             proposed[proposed.firstIndex(where: { $0.id == selectedTabID })!] = destination
         case .openInNewTab(let document):
+            guard document.vaultID == vaultID else { throw NativeDocumentTabsError.invalidMetadata }
             guard proposed.count < Self.maximumTabs else { throw NativeDocumentTabsError.tabLimit }
             destination = NativeDocumentTab(document: document)
             proposed.append(destination)
@@ -225,12 +237,10 @@ final class NativeDocumentTabs: ObservableObject {
         }
         // Escaped JSON can exceed the byte budget even with individually valid
         // titles. Reject before admitting a plan that could not be persisted.
-        let metadata = Metadata(version: 1, tabs: proposed, selectedTabID: destination.id)
-        guard try JSONEncoder().encode(metadata).count <= Self.maximumMetadataBytes else {
-            throw NativeDocumentTabsError.metadataLimit
-        }
+        let metadata = Metadata(vaultID: vaultID, tabs: proposed, selectedTabID: destination.id)
+        _ = try encode(metadata)
         let ticket = IntentTicket(id: UUID(), intent: intent, sourceOwnerID: sourceOwnerID,
-                                  sourceRevision: state.revision, sourceTab: selectedTab,
+                                  modelID: modelID, sourceRevision: state.revision, sourceTab: selectedTab,
                                   destinationTab: destination, proposedTabs: proposed)
         admissionRevision = UUID()
         pendingIntent = ticket
@@ -238,7 +248,7 @@ final class NativeDocumentTabs: ObservableObject {
     }
 
     func commit(_ ticket: IntentTicket, acknowledgement: Acknowledgement) throws {
-        guard pendingIntent == ticket, state.revision == ticket.sourceRevision,
+        guard ticket.modelID == modelID, pendingIntent == ticket, state.revision == ticket.sourceRevision,
               selectedTab == ticket.sourceTab else { throw NativeDocumentTabsError.staleTicket }
         switch acknowledgement {
         case .editorClosed(let sourceTabID, let sourceOwnerID):
@@ -279,24 +289,40 @@ final class NativeDocumentTabs: ObservableObject {
               ticket.admissionRevision == admissionRevision, ticket.tabID == selectedTabID,
               ticket.sourceTab == selectedTab else { throw NativeDocumentTabsError.staleTicket }
         guard ticket.sourceOwnerID == currentOwnerID else { throw NativeDocumentTabsError.invalidAcknowledgement }
+        guard document.vaultID == vaultID else { throw NativeDocumentTabsError.invalidMetadata }
         var proposed = tabs
         proposed[proposed.firstIndex(where: { $0.id == selectedTabID })!] =
             NativeDocumentTab(id: selectedTabID, document: document)
-        let metadata = Metadata(version: 1, tabs: proposed, selectedTabID: selectedTabID)
-        guard try JSONEncoder().encode(metadata).count <= Self.maximumMetadataBytes else {
-            throw NativeDocumentTabsError.metadataLimit
-        }
+        let metadata = Metadata(vaultID: vaultID, tabs: proposed, selectedTabID: selectedTabID)
+        _ = try encode(metadata)
         // A new revision consumes this ticket and all competing bindings, even
         // when document metadata is identical. Selection and other tabs stay put.
         state = State(tabs: proposed, selectedTabID: selectedTabID)
     }
 
-    // Only committed metadata is encoded; an in-flight intent never reaches disk.
+    // Normal checkpoints describe only committed UI state.
     func encodedMetadata() throws -> Data {
-        let metadata = Metadata(version: 1, tabs: tabs, selectedTabID: selectedTabID)
-        guard metadata.isValid else { throw NativeDocumentTabsError.invalidMetadata }
-        let bytes = try JSONEncoder().encode(metadata)
-        guard bytes.count <= Self.maximumMetadataBytes else { throw NativeDocumentTabsError.invalidMetadata }
+        try encode(Metadata(vaultID: vaultID, tabs: tabs, selectedTabID: selectedTabID))
+    }
+
+    // A durable prospective handoff, not a selection or host mutation. The
+    // coordinator must retain this exact plan through its save/ACK/close gates;
+    // persisting these bytes never authorizes commit or creates a close receipt.
+    func encodedMetadata(for ticket: IntentTicket) throws -> Data {
+        guard ticket.modelID == modelID, pendingIntent == ticket,
+              state.revision == ticket.sourceRevision, selectedTab == ticket.sourceTab else {
+            throw NativeDocumentTabsError.staleTicket
+        }
+        return try encode(Metadata(vaultID: vaultID, tabs: ticket.proposedTabs,
+                                   selectedTabID: ticket.destinationTab.id))
+    }
+
+    private func encode(_ metadata: Metadata) throws -> Data {
+        guard metadata.isValid, metadata.vaultID == vaultID else { throw NativeDocumentTabsError.invalidMetadata }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let bytes = try encoder.encode(metadata)
+        guard bytes.count <= Self.maximumMetadataBytes else { throw NativeDocumentTabsError.metadataLimit }
         return bytes
     }
 
@@ -309,21 +335,24 @@ final class NativeDocumentTabs: ObservableObject {
 
     private struct Metadata: Codable {
         let version: Int
+        let vaultID: UUID
         let tabs: [NativeDocumentTab]
         let selectedTabID: UUID
         var isValid: Bool {
-            version == 1 && (1...64).contains(tabs.count) && Set(tabs.map(\.id)).count == tabs.count &&
+            version == 2 && tabs.allSatisfy({ $0.document == nil || $0.document?.vaultID == vaultID }) && (1...64).contains(tabs.count) && Set(tabs.map(\.id)).count == tabs.count &&
                 tabs.contains(where: { $0.id == selectedTabID })
         }
-        private enum CodingKeys: String, CodingKey, CaseIterable { case version, tabs, selectedTabID }
-        init(version: Int, tabs: [NativeDocumentTab], selectedTabID: UUID) {
-            self.version = version
+        private enum CodingKeys: String, CodingKey, CaseIterable { case version, vaultID, tabs, selectedTabID }
+        init(vaultID: UUID, tabs: [NativeDocumentTab], selectedTabID: UUID) {
+            self.version = 2
+            self.vaultID = vaultID
             self.tabs = tabs
             self.selectedTabID = selectedTabID
         }
         func encode(to encoder: Encoder) throws {
             var values = encoder.container(keyedBy: CodingKeys.self)
             try values.encode(version, forKey: .version)
+            try values.encode(vaultID.uuidString.lowercased(), forKey: .vaultID)
             try values.encode(tabs, forKey: .tabs)
             try values.encode(selectedTabID.uuidString.lowercased(), forKey: .selectedTabID)
         }
@@ -331,7 +360,8 @@ final class NativeDocumentTabs: ObservableObject {
             try rejectUnknownTabKeys(decoder, allowed: CodingKeys.allCases.map(\.rawValue))
             let values = try decoder.container(keyedBy: CodingKeys.self)
             version = try values.decode(Int.self, forKey: .version)
-            guard version == 1 else { throw NativeDocumentTabsError.invalidMetadata }
+            guard version == 2 else { throw NativeDocumentTabsError.invalidMetadata }
+            vaultID = try values.decode(UUID.self, forKey: .vaultID)
             // Bound element allocation too, rather than decoding an arbitrary array
             // before checking the limit. The outer byte cap bounds string parsing.
             var collection = try values.nestedUnkeyedContainer(forKey: .tabs)

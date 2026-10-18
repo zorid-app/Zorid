@@ -1631,3 +1631,45 @@ Clean Simulator14 build/install succeeded for reviewed link source11c91da1,
 but final matching tap/caret proof is still pending. No newer phone build or
 install is claimed. Prior Simulator app/helper cleanup68963 exited0; device
 remains booted. Retained resource slot returned to coordinator msg_4bb6b32ee050.
+
+
+Bounded existing-artifact Simulator14 short-fixture attempt — 2026-10-18:
+Coordinator ecd6/c2 granted one no-build pass. Launch/attach49363 exited0,
+App PID80084, helper80377. Existing actual link14 artifact was unchanged.
+Probe67283 exited0 but printed no file targets (AX returned empty application).
+Probe46046 exited1 missing short-note; screenshot short-current2 showed a folder
+route. Probe82674 exited1 missing short-editor-open; final screenshot showed an
+audio player rather than the requested43-byte Markdown fixture. These target/
+route misses mean no controlled rendered external-link tap, browser activation
+or no-refocus caret measurement was delivered. This is INCONCLUSIVE tooling/
+interaction evidence, not a pass or a demonstrated link regression. No new
+fixture body was typed and no performance conclusion follows. Screenshots and
+AX records remain /private/tmp/zorid-link14-short-*.png and link14-evidence.
+No phone15 build/install. Cleanup process55623 terminates only the owned test
+app/helper and keeps the existing Simulator booted; terminal result sent to the
+coordinator separately. Future verification needs reliable visible-coordinate
+input and fresh screenshot observation before measuring the editor behavior.
+
+
+Vault-scoped native caller composition — 2026-10-18:
+Owner branch/worktree remains tingkai-c/native-vault-context. Reviewed source
+6a5a6d7404937b91c9c7a1ef0ad4070ce8c4828a is composed with NativeMobile picker/
+coordinator/factory callers in one batch, not integrated alone. Explicit trusted
+catalog UUID chooses the model/store; current v2 invalid bytes throw, absence
+alone creates Home. Old global/defaults metadata remains untouched and unread.
+Existing same-vault coordinator is reused. Switching vault requires the current
+coordinator canEnterVault, empty/settled host-free Home factory, picker at top,
+no opening ticket and no bound Pages. All actual editor/host retirement retains
+its original close ACK. New scoped data validates before context publication;
+exact UUID/context fences reject old callbacks, including deferred error alerts.
+Home Choose file now opens Pages in its current vault. Scope change clears only
+scene route-history metadata, never notes or storage authority.
+
+Model/store hashes match source6a exactly; its85 actual-source host checks were
+already observed and are not presented as new caller/runtime proof. Owner Swift
+frontend parse and diff checks pass. Independent reviewa18fcce9 accepts caller
+flow; final deferred-alert guard source469aadfb ACK4127d14c confirms exactly
+that one additional guard and no other delta.
+No Xcode compile, A/B vault switch/restart or corrupt-vault UI proof yet for this
+batch. NewNote caller handoff/ACK and strict8 gesture consumer remain queued;
+this batch does not expose or acknowledge NewNote. No warm WebView/pool change.

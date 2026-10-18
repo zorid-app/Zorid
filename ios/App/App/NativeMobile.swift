@@ -1471,18 +1471,20 @@ final class NativeEditorContainer: UIViewController {
 }
 
 final class NativeVaultPicker: UITableViewController {
-    // One app-owned main-actor writer, retained across picker lifetimes.
-    private static var tabMetadataStore: NativeTabMetadataStore?
-    private static func retainedTabMetadataStore() throws -> NativeTabMetadataStore {
-        if let store = tabMetadataStore { return store }
-        let store = try NativeTabMetadataStore()
-        tabMetadataStore = store
+    // One app-owned main-actor writer per trusted catalog vault identity.
+    // Neither a note path nor a restored document can select another store.
+    private static var tabMetadataStores: [UUID: NativeTabMetadataStore] = [:]
+    private static func retainedTabMetadataStore(vaultID: UUID) throws -> NativeTabMetadataStore {
+        if let store = tabMetadataStores[vaultID] { return store }
+        let store = try NativeTabMetadataStore(vaultID: vaultID)
+        tabMetadataStores[vaultID] = store
         return store
     }
     private var catalog: LocalVaultCatalog?
     private var opening = false
     private var openingTicket: UUID?
     private var documentTabs: NativeDocumentTabCoordinator?
+    private var documentTabContextID: UUID?
     private var destinationFactory: NativeTabDestinationFactory?
     private weak var boundPages: NativePagesController?
     private var boundPagesOwner: UUID?
@@ -1643,58 +1645,71 @@ final class NativeVaultPicker: UITableViewController {
     }
 
 
-    private func ensureDocumentTabs() throws -> NativeDocumentTabCoordinator {
-        if let existing = documentTabs { return existing }
-        let store = try Self.retainedTabMetadataStore()
-        let restored: Data?
-        switch try store.load() {
-        case .restored(let bytes): restored = bytes
-        case .absent:
-            // Read-only compatibility for the disposable development app. A
-            // corrupt/unreadable existing file never falls back to defaults.
-            restored = AppVariant.current == .development
-                ? UserDefaults.standard.data(forKey: "native.document-tabs.v1") : nil
+    private func ensureDocumentTabs(vaultID: UUID) throws -> NativeDocumentTabCoordinator {
+        if let existing = documentTabs {
+            if existing.model.vaultID == vaultID { return existing }
+            // A picker selection can change scope only after the old source's
+            // actual close ACK and all factory reservations have drained.
+            guard existing.canEnterVault, destinationFactory?.canRetireVaultContext == true,
+                  !opening, openingTicket == nil, boundPages == nil,
+                  navigationController?.topViewController === self else {
+                throw NativeDocumentTabsError.busy
+            }
         }
-        let model = NativeDocumentTabs(restoring: restored)
+        let store = try Self.retainedTabMetadataStore(vaultID: vaultID)
+        let model: NativeDocumentTabs
+        switch try store.load() {
+        case .restored(let bytes): model = try NativeDocumentTabs(restoring: bytes, vaultID: vaultID)
+        case .absent: model = NativeDocumentTabs(vaultID: vaultID)
+        }
+        let contextID = UUID()
+        let contextIsCurrent: () -> Bool = { [weak self] in
+            self?.documentTabContextID == contextID && self?.documentTabs?.model.vaultID == vaultID
+        }
         let factory = NativeTabDestinationFactory(resolveVault: { [weak self] id in
-            guard let self = self, let catalog = self.catalog else { throw MobileFailure.metadata }
+            guard contextIsCurrent(), id == vaultID,
+                  let self = self, let catalog = self.catalog else { throw MobileFailure.metadata }
             let resolved = try catalog.resolve(vaultID: id)
             self.lastVaultID = id
             return resolved
-        }, admissionReady: { [weak self] in self?.documentTabs?.canPrepareDestination == true },
+        }, admissionReady: { [weak self] in contextIsCurrent() && self?.documentTabs?.canPrepareDestination == true },
         chooseFile: { [weak self] tabID in
-            guard let self = self, let tabs = self.documentTabs, tabs.model.selectedTabID == tabID,
+            guard contextIsCurrent(), let self = self, let tabs = self.documentTabs, tabs.model.selectedTabID == tabID,
                   let presenter = self.navigationController?.topViewController else { return }
             self.cancelHistoryTraversal()
-            self.routeToPages(from: presenter, vaultID: nil)
+            self.routeToPages(from: presenter, vaultID: vaultID)
         }, validatedDocument: { [weak self] document, owner in
+            guard contextIsCurrent(), document.vaultID == vaultID else { return }
             self?.recordNativeDocumentRoute(document, owner: owner)
             do { try self?.documentTabs?.bindValidatedDocument(document, sourceOwnerID: owner) }
             catch {
                 // Let the current native validation/history callback finish
                 // before a modal changes its foreground/visibility witness.
                 DispatchQueue.main.async { [weak self] in
+                    guard contextIsCurrent() else { return }
                     self?.navigationController?.topViewController?.showMessage("Tab information needs attention", "Your document stays open. Open Show tabs to retry its tab information.")
                 }
             }
         }, showTabs: { [weak self] presenter in
+            guard contextIsCurrent() else { return }
             self?.cancelHistoryTraversal()
             self?.documentTabs?.showDocumentTabs(from: presenter)
         }, returnToNativePages: { [weak self] presenter in
-            guard let self = self else { return }
+            guard contextIsCurrent(), let self = self else { return }
             let origin = self.routeHistory.pageOrigin
             self.cancelHistoryTraversal()
             self.routeToPages(from: presenter, vaultID: origin?.vaultID ?? self.lastVaultID, restoring: origin)
         }, navigate: { [weak self] presenter, owner, direction in
+            guard contextIsCurrent() else { return }
             self?.navigateHistory(direction, from: presenter, expectedOwner: owner)
         })
-        destinationFactory = factory
         let coordinator = NativeDocumentTabCoordinator(model: model, persist: { data in
             try store.save(data)
         }, activate: { [weak factory] tab, owner, done in
             guard let factory = factory else { done(.failure(MobileFailure.unavailable)); return }
             factory.prepare(tab, ownerID: owner, completion: done)
         }, didInstall: { [weak self, weak factory] owner, tab, controller in
+            guard contextIsCurrent() else { return false }
             if let self = self, let traversal = self.historyTraversal,
                case .document(let target) = traversal.ticket.targetRoute,
                let actual = self.documentTabs?.model.selectedTab.document,
@@ -1709,13 +1724,24 @@ final class NativeVaultPicker: UITableViewController {
             guard let factory = factory else { done(.failure(MobileFailure.unavailable)); return }
             factory.recoverReservation(owner, completion: done)
         })
-        coordinator.onSourceResumed = { [weak self] in self?.cancelHistoryTraversal() }
+        coordinator.onSourceResumed = { [weak self] in
+            guard contextIsCurrent() else { return }
+            self?.cancelHistoryTraversal()
+        }
+        // Publish the new context only after its scoped bytes validate. Failure
+        // above leaves the previous vault's coordinator and recovery intact.
+        routeHistory.reset()
+        historyTraversal = nil
+        installedPageReceipt = nil
+        documentTabContextID = contextID
+        destinationFactory = factory
         documentTabs = coordinator
+        lastVaultID = vaultID
         return coordinator
     }
 
     private func bindPages(_ pages: NativePagesController, vault: LocalVault) throws {
-        let tabs = try ensureDocumentTabs()
+        let tabs = try ensureDocumentTabs(vaultID: vault.id)
         let owner = UUID()
         boundPages = pages; boundPagesOwner = owner; lastVaultID = vault.id
         let current: () -> Bool = { [weak self, weak pages] in
@@ -1909,7 +1935,7 @@ final class NativeVaultPicker: UITableViewController {
         }
         guard presentedViewController == nil else { return }
         let ticket = UUID()
-        do { try ensureDocumentTabs().beginVaultOpening(ticket) }
+        do { try ensureDocumentTabs(vaultID: vault.id).beginVaultOpening(ticket) }
         catch { showMessage("Could not prepare tabs", error.localizedDescription); return }
         opening = true
         openingTicket = ticket
