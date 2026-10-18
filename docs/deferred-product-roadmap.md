@@ -116,6 +116,17 @@ areas rather than claiming that every upstream edge case has been exhausted.
 
 ### Integration checkpoint — 2026-10-17
 
+00:38UTC: native NewNote proposal source-confirmed existing create_text and
+file_command_status reconstruct identical empty Text FamilyCommand. Narrow NEW
+NativeNewNoteRequest.swift helper scope ACKea787cadb5de; nativeowner assigns one
+worker, exact checkpoint-before-dispatch, same-ID uncertain retry/status and no
+JSnewNote/doublecreate, rootfolder only. No compiler grant; file/Home composition
+continues independently. Full helper still requires review and UI handoff recovery.
+Managed lead may instead own NEW crates/zorid-crdt/tests/managed_record_feasibility.rs
+plus docs/managed-data/** (no existing library/manifest edits) for bounded Yrs
+semantics probe. Source first; send testcount/command for exclusive compiler slot,
+native composedtyping retains next priority. No production merge policy frozen.
+
 00:37UTC: full Pages09a4→cb097→f9c7→62c7381d independently source-approved,
 all scoped blockers closed; native typing/runtime still separate. No compiler live.
 Managed lead run_7a10da5526b5 isolated managed-data-foundation base d06eccd9 owns
