@@ -8,6 +8,8 @@ import type { BrowserVault, BrowserVaultWasm } from '../core/browser-vault.ts';
 import { afterDurableCommit } from './browser-core-events.ts';
 import { claimBrowserClient } from './browser-client-lease.ts';
 import type { BrowserClientLease } from './browser-client-lease.ts';
+import { createBrowserManagedRecordsHost } from './browser-managed-records-host.ts';
+import { browserManagedRecordConsumers } from './browser-managed-records-registry.ts';
 
 // DOM builds and worker builds share this file without mixing lib.dom/lib.webworker.
 const port = self as unknown as {onmessage: ((event: MessageEvent) => void) | null; postMessage(value: unknown): void};
@@ -18,6 +20,10 @@ let lease: BrowserClientLease | undefined, released = false;
 let sync:BrowserSyncWorker|undefined;
 let storageFailed=false,closing=false;
 let binary:BinaryStreams|undefined;
+let managed:ReturnType<typeof createBrowserManagedRecordsHost>|undefined;
+const assertManagedActive=()=>{assertOwner();if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');};
+let releasingCleanup=false;
+const assertVaultActive=()=>{assertOwner();if(closing&&!releasingCleanup)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');};
 const detached=new Set<Promise<unknown>>();
 const streaming=()=>vault&&'validateStorage'in vault?vault as BrowserStreamingVault:undefined;
 function storageDiagnostic(details:unknown):Record<string,string|boolean>|undefined {
@@ -31,7 +37,7 @@ function storageDiagnostic(details:unknown):Record<string,string|boolean>|undefi
 }
 function failStorage(code:string,details?:unknown):void {
   if(closing||storageFailed||!['storage_closed','storage_corrupt','client_ownership_lost'].includes(code))return;
-  storageFailed=true;sync?.revoke();channel?.close();vault?.close();
+  storageFailed=true;managed?.stop();sync?.revoke();channel?.close();vault?.close();
   try{const diagnostic=storageDiagnostic(details);port.postMessage({event:'storage-error',code,...(diagnostic?{details:diagnostic}:{})});}catch{/* Worker transport already failed. */}
 }
 function local<T>(operation:()=>Promise<T>):Promise<T> {
@@ -49,6 +55,7 @@ async function refresh(assertSession?:()=>void): Promise<void> {
   assertOwner();
   assertSession?.();
   if (next.sequence !== sequence) { port.postMessage({event:'change',paths:next.paths}); sequence = next.sequence; }
+  void managed?.trigger();
 }
 async function execute(intentId: string): Promise<string> {
   const receipt = await vault!.executeIntent(clientId, intentId);
@@ -65,7 +72,8 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
     const wasm = await import(/* @vite-ignore */ /* webpackIgnore: true */ moduleUrl.href) as BrowserVaultWasm & {default(): Promise<unknown>};
     await wasm.default();
     clientId=payload.clientId;
-    vault=payload.legacyFixture===true?await openBrowserVault({name:payload.database,wasm}):await openBrowserStreamingVault({name:payload.database,wasm:wasm as unknown as BrowserStreamingVaultOptions['wasm'],clientId,assertActive:assertOwner});
+    vault=payload.legacyFixture===true?await openBrowserVault({name:payload.database,wasm}):await openBrowserStreamingVault({name:payload.database,wasm:wasm as unknown as BrowserStreamingVaultOptions['wasm'],clientId,assertActive:assertVaultActive,
+      managedRecordsSession:()=>{assertManagedActive();return sync?.recordsSession();}});
     try {
       // Open only reads the persisted authority. No intent replay/checkpoint access
       // occurs before this lifetime lease; no IDB transaction spans the wait.
@@ -79,9 +87,15 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         assertOwner();
       }
       if(streaming()){await streaming()!.validateStorage();await streaming()!.cleanupReadPins();binary=await streaming()!.binaryStreams().catch(error=>{if(payload.initializeLocal!==true&&error instanceof BrowserVaultError&&error.code==='not_enrolled')return undefined;throw error;});assertOwner();}
-      sync = new BrowserSyncWorker({storage:vault.sync,wasm:wasm as unknown as BrowserSyncCodec,assertOwner,local,fatal:failStorage,
+      sync = new BrowserSyncWorker({storage:vault.sync,wasm:wasm as unknown as BrowserSyncCodec,assertOwner:assertManagedActive,local,fatal:failStorage,
         changed:async assertSession=>{assertSession();await refresh(assertSession);assertSession();channel?.postMessage({changed:true});}});
       channel = new BroadcastChannel(`zorid-core:${payload.database}`);
+      const records=streaming()?.managedRecords;
+      if(records)managed=createBrowserManagedRecordsHost({records,consumers:browserManagedRecordConsumers,local,assertActive:assertManagedActive,
+        scope:async()=>{const inspected=await vault!.sync.inspect();return inspected.scope;},hasSession:()=>!!sync?.recordsSession(),
+        notify:()=>{assertManagedActive();port.postMessage({event:'change',paths:[]});channel?.postMessage({changed:true});},
+        failed:error=>{const code=error instanceof BrowserVaultError?error.code:'managed_host_failed';failStorage(code);
+          if(!closing&&!storageFailed)port.postMessage({event:'managed-records-error',code});}});
       let recoveredCommit = false;
       for (const intent of await vault.intents(clientId)) if (!intent.acknowledged && ['commit_requested','committed'].includes(intent.status)) {
         try { assertOwner(); await vault.executeIntent(clientId, intent.intent_id); recoveredCommit = true; }
@@ -94,10 +108,11 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
         queue = queue.then(()=>refresh()).catch(error => port.postMessage({event:'storage-error', code:error.code ?? 'storage_failure'}));
       };
       recovery = new Set((await vault.intents(clientId)).filter(intent => !intent.acknowledged && intent.status !== 'prepared').map(intent=>intent.intent_id));
-      assertOwner();
+      assertManagedActive();
+      void managed?.trigger();
       return {ready:true, sequence, authorityId:vault.authorityId, recovery:[...recovery],...(binary?{binaryLimits:binary.limits}:{}),documentIndexAvailable:!!streaming()?.documentIndex};
     } catch (error) {
-      sync?.revoke(); channel?.close(); channel = undefined; vault.close(); vault = undefined;
+      managed?.stop();sync?.revoke(); channel?.close(); channel = undefined; vault.close(); vault = undefined;
       if (lease) { try { await lease.release(); } catch { /* Original open failure remains uncertain. */ } }
       throw error;
     }
@@ -106,8 +121,11 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
   if (operation === 'release-client') {
     if (released) return; // Exact retry after a lost release acknowledgement.
     assertOwner();
+    await managed?.drain();
     await Promise.allSettled([...detached]);
-    if(streaming()){await streaming()!.documentIndex?.close();await streaming()!.cleanupReadPins();}
+    releasingCleanup=true;
+    try{if(streaming()){await streaming()!.documentIndex?.close();await streaming()!.cleanupReadPins();}}
+    finally{releasingCleanup=false;}
     // Serialized behind all earlier dispatches, including timed-out RPCs/hints.
     sync?.revoke(); channel?.close(); channel = undefined; vault.close();
     await lease!.release(); released = true; return;
@@ -174,7 +192,7 @@ async function dispatch(operation: string, payload: any): Promise<unknown> {
 port.onmessage = ({data}) => {
   const {id, operation, payload} = data;
   // Revoke before queued storage dispatch. Network work never occupies the local-operation tail.
-  if (operation === 'release-client') {closing=true;sync?.revoke();}
+  if (operation === 'release-client') {closing=true;managed?.stop();sync?.revoke();}
   if(typeof operation==='string'&&operation.startsWith('binary-')){
     const task=(async()=>{try{if(closing)throw new BrowserVaultError('client_not_admitted','Browser client is releasing');assertOwner();const result=await dispatch(operation,payload);
       const transfer=operation==='binary-read'&&result&&typeof result==='object'&&'bytes'in result&&result.bytes instanceof Uint8Array&&result.bytes.buffer instanceof ArrayBuffer?[result.bytes.buffer]:undefined;
@@ -185,12 +203,14 @@ port.onmessage = ({data}) => {
   if (['sync-configure','sync-once','sync-revoke'].includes(operation)) {
     void (async()=>{
       try {
-        assertOwner();if(!sync)throw new BrowserVaultError('not_open','Open worker vault first');
+        assertManagedActive();if(!sync)throw new BrowserVaultError('not_open','Open worker vault first');
         let result:unknown;
         if(operation==='sync-configure'){
           const configured=sync.configure(payload);
           if(payload){payload.bearerToken='';if(payload.keyBytes instanceof Uint8Array)payload.keyBytes.fill(0);}
           result=await configured;
+          assertManagedActive();
+          void managed?.trigger();
         }else result=operation==='sync-once'?await sync.once():sync.revoke();
         port.postMessage({id,ok:true,result});
       } catch(error) {

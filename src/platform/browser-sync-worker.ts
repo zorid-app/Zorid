@@ -55,6 +55,14 @@ export class BrowserSyncWorker {
   constructor(host:Host, transportFactory=createBrowserSyncTransport, grpcTransportFactory:typeof createBrowserSyncTransport=createBrowserGrpcTransport) {
     this.host=host;this.transportFactory=transportFactory;this.grpcTransportFactory=grpcTransportFactory;
   }
+  /** Internal retained-record provider. Stable identity and the exact guarded
+   * key survive retries; revocation fences the captured provider immediately. */
+  recordsSession():{key:BrowserSyncKey;sessionToken:object;assertActive():void}|undefined {
+    const session=this.session;
+    if(!session)return;
+    session.assert();
+    return {key:session.key,sessionToken:session,assertActive:session.assert};
+  }
   revoke():void {
     this.generation++;
     const previous=this.session; this.session=undefined;
