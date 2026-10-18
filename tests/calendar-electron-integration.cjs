@@ -72,7 +72,19 @@ async function electronProof(){
   async function calendarView(value){await evaluate(`const e=document.querySelector('select[aria-label="Calendar view"]');e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('change',{bubbles:true}));`);await wait("return !document.querySelector('.calendar-status')?.textContent;",'visible range loaded');await sleep(150);}
   async function eventElement(){return evaluate("const e=[...document.querySelectorAll('.calendar-grid [tabindex]')].find(e=>e.textContent.includes('Calendar proof'));if(!e)return null;e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,text:e.textContent};");}
   async function openEvent(){await wait("return [...document.querySelectorAll('.calendar-grid [tabindex]')].some(e=>e.textContent.includes('Calendar proof'));",'fixture event');await evaluate("[...document.querySelectorAll('.calendar-grid [tabindex]')].find(e=>e.textContent.includes('Calendar proof')).focus();");owned.webContents.sendInputEvent({type:'keyDown',keyCode:'Return'});owned.webContents.sendInputEvent({type:'keyUp',keyCode:'Return'});await wait("return document.querySelector('.calendar-editor')?.hidden===false;",'keyboard event editor');}
-  async function screenshot(name){await sleep(150);const file=path.join(output,phase+'-'+name+'.png');fs.writeFileSync(file,(await owned.capturePage()).toPNG());report.screenshots.push(file);persist();}
+  async function screenshot(name){
+    owned.show();owned.focus();
+    await evaluate('return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));');
+    // Native captures can return the previous compositor frame immediately after
+    // a modal/theme change. Warm the capture, await another presented frame,
+    // and save the settled capture with its DOM theme/modal metadata.
+    await owned.capturePage();await sleep(500);
+    await evaluate('return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));');
+    const state=await evaluate("return {theme:document.documentElement.dataset.theme,modals:document.querySelectorAll('.modal-overlay').length,background:getComputedStyle(document.documentElement).getPropertyValue('--background-primary'),calendarCount:document.querySelectorAll('.calendar-grid').length};");
+    if(name.startsWith('light-')){assert.equal(state.theme,'light');assert.equal(state.modals,0);}
+    if(name.startsWith('dark-')){assert.equal(state.theme,'dark');assert.equal(state.modals,0);}
+    const file=path.join(output,phase+'-'+name+'.png');fs.writeFileSync(file,(await owned.capturePage()).toPNG());report.screenshots.push(file);step('screenshot-'+name,{state});
+  }
   async function theme(value){await evaluate("document.querySelector('[data-hotkey-command=\"settings\"]').click();");await click('Appearance',"document.querySelector('.settings-modal')");await evaluate(`const e=document.querySelector('[aria-label="Base color scheme"]');e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('change',{bubbles:true}));`);owned.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});owned.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await wait(`return !document.querySelector('.modal-overlay')&&document.documentElement.dataset.theme===${JSON.stringify(value)};`,'theme applied');}
   async function gesture(resize){
     const rect=await eventElement();assert.ok(rect&&rect.height>8,'visible event geometry');
